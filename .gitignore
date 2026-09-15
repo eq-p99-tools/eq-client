@@ -1,0 +1,14 @@
+/target/
+/.cache/
+/.env
+*.log
+*.pcap
+*.pcapng
+
+# EverQuest data must remain in the user's local installation.
+*.s3d
+*.eqg
+*.wld
+*.pak
+eqstr_*.txt
+spells_*.txt

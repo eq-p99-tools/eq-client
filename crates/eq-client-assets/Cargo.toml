@@ -1,0 +1,16 @@
+[package]
+name = "eq-client-assets"
+description = "Load user-supplied classic EverQuest zone assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+image.workspace = true
+libeq.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

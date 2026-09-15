@@ -1,0 +1,53 @@
+[workspace]
+members = [
+  "apps/eq-client",
+  "crates/eq-client-assets",
+  "crates/eq-client-core",
+  "crates/eq-client-render",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/eq-p99-tools/eq-client"
+rust-version = "1.95"
+
+[workspace.dependencies]
+bevy = { version = "0.19.1", default-features = false, features = [
+  "3d_bevy_render",
+  "async_executor",
+  "bevy_asset",
+  "bevy_log",
+  "bevy_state",
+  "bevy_winit",
+  "multi_threaded",
+  "reflect_auto_register",
+  "std",
+  "wayland",
+  "x11",
+] }
+clap = { version = "4.5", features = ["derive", "env"] }
+eq-client-assets = { path = "crates/eq-client-assets" }
+eq-client-core = { path = "crates/eq-client-core" }
+eq-client-render = { path = "crates/eq-client-render" }
+image = { version = "0.25", default-features = false, features = ["bmp", "dds", "tga"] }
+libeq = { git = "https://github.com/cjab/libeq", rev = "e06ae17dd38b624983663505e25b99a259ea0b15" }
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
