@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use bevy::asset::RenderAssetUsages;
+use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -204,7 +205,7 @@ fn create_materials(
     textures
         .into_iter()
         .map(|texture| {
-            let image = images.add(Image::new(
+            let mut image = Image::new(
                 Extent3d {
                     width: texture.width,
                     height: texture.height,
@@ -214,7 +215,13 @@ fn create_materials(
                 texture.rgba8,
                 TextureFormat::Rgba8UnormSrgb,
                 RenderAssetUsages::RENDER_WORLD,
-            ));
+            );
+            image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                ..ImageSamplerDescriptor::linear()
+            });
+            let image = images.add(image);
             materials.add(StandardMaterial {
                 base_color_texture: Some(image),
                 perceptual_roughness: 0.95,
