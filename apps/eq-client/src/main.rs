@@ -17,7 +17,7 @@ enum CameraStyle {
 struct Arguments {
     /// Path to a locally installed `EverQuest` client.
     #[arg(long, env = "EQ_CLIENT_DIR")]
-    eq_dir: PathBuf,
+    eq_dir: Option<PathBuf>,
 
     /// Zone short name to load from `<zone>.s3d`.
     #[arg(long, default_value = "ecommons")]
@@ -30,11 +30,22 @@ struct Arguments {
     /// Validate and summarize the zone without opening a window.
     #[arg(long)]
     inspect_only: bool,
+
+    /// Save a rendered frame to this PNG path, then exit.
+    #[arg(long)]
+    screenshot: Option<PathBuf>,
 }
 
 fn main() {
     let arguments = Arguments::parse();
-    let zone = match eq_client_assets::load_zone(&arguments.eq_dir, &arguments.zone) {
+    let eq_directory = arguments
+        .eq_dir
+        .or_else(default_eq_directory)
+        .unwrap_or_else(|| {
+            eprintln!("error: pass --eq-dir or set EQ_CLIENT_DIR");
+            std::process::exit(2);
+        });
+    let zone = match eq_client_assets::load_zone(&eq_directory, &arguments.zone) {
         Ok(zone) => zone,
         Err(error) => {
             eprintln!("error: {error}");
@@ -55,8 +66,23 @@ fn main() {
                 CameraStyle::Perspective => ProjectionStyle::Perspective,
                 CameraStyle::Orthographic => ProjectionStyle::Orthographic,
             },
+            screenshot: arguments.screenshot,
         },
     );
+}
+
+fn default_eq_directory() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("PROGRAMFILES(X86)")
+            .map(PathBuf::from)
+            .map(|directory| directory.join("Sony").join("EverQuest"))
+            .filter(|directory| directory.is_dir())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
 }
 
 fn print_summary(zone: &ZoneAsset) {

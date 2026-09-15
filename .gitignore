@@ -1,4 +1,6 @@
 /target/
+/target-windows/
+/offline-demo.png
 /.cache/
 /.env
 *.log

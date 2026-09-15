@@ -1,10 +1,13 @@
 #![doc = "Bevy scene and camera support for renderer-independent EQ zone assets."]
 
+use std::path::PathBuf;
+
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::view::screenshot::{Captured, Screenshot, save_to_disk};
 use eq_client_assets::ZoneAsset;
 
 /// The projection used by the top-down camera.
@@ -18,10 +21,12 @@ pub enum ProjectionStyle {
 }
 
 /// Settings for an offline viewer window.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ViewerConfig {
     /// Initial camera projection.
     pub projection: ProjectionStyle,
+    /// Optional PNG destination captured after the scene has settled.
+    pub screenshot: Option<PathBuf>,
 }
 
 #[derive(Resource)]
@@ -29,6 +34,12 @@ struct PendingZone(Option<ZoneAsset>);
 
 #[derive(Resource)]
 struct ViewerSettings(ViewerConfig);
+
+#[derive(Resource)]
+struct CaptureRequest {
+    path: PathBuf,
+    frames_remaining: u8,
+}
 
 #[derive(Component)]
 struct OrbitCamera {
@@ -40,8 +51,9 @@ struct OrbitCamera {
 
 /// Opens a window and renders a loaded zone until the user closes it.
 pub fn run(zone: ZoneAsset, config: ViewerConfig) {
-    App::new()
-        .insert_resource(PendingZone(Some(zone)))
+    let screenshot = config.screenshot.clone();
+    let mut app = App::new();
+    app.insert_resource(PendingZone(Some(zone)))
         .insert_resource(ViewerSettings(config))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -51,13 +63,23 @@ pub fn run(zone: ZoneAsset, config: ViewerConfig) {
             ..default()
         }))
         .add_systems(Startup, setup_scene)
-        .add_systems(Update, orbit_camera)
-        .run();
+        .add_systems(
+            Update,
+            (orbit_camera, schedule_screenshot, exit_after_screenshot),
+        );
+    if let Some(path) = screenshot {
+        app.insert_resource(CaptureRequest {
+            path,
+            frames_remaining: 120,
+        });
+    }
+    app.run();
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn setup_scene(
     mut commands: Commands,
+    mut ambient_light: ResMut<GlobalAmbientLight>,
     mut pending: ResMut<PendingZone>,
     settings: Res<ViewerSettings>,
     mut images: ResMut<Assets<Image>>,
@@ -113,11 +135,11 @@ fn setup_scene(
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.0, -0.8, 0.0)),
     ));
-    commands.spawn(AmbientLight {
+    *ambient_light = GlobalAmbientLight {
         color: Color::srgb(0.62, 0.68, 0.8),
         brightness: 150.0,
         affects_lightmapped_meshes: true,
-    });
+    };
 
     let orbit = OrbitCamera {
         focus,
@@ -126,10 +148,16 @@ fn setup_scene(
         pitch: -0.8,
     };
     let projection = match settings.0.projection {
-        ProjectionStyle::Perspective => Projection::Perspective(PerspectiveProjection::default()),
+        ProjectionStyle::Perspective => Projection::Perspective(PerspectiveProjection {
+            near: 1.0,
+            far: radius * 10.0,
+            ..default()
+        }),
         ProjectionStyle::Orthographic => {
             let mut projection = OrthographicProjection::default_3d();
             projection.scale = radius / 400.0;
+            projection.near = -radius * 10.0;
+            projection.far = radius * 10.0;
             Projection::Orthographic(projection)
         }
     };
@@ -139,6 +167,33 @@ fn setup_scene(
         orbit_transform(&orbit),
         orbit,
     ));
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+fn schedule_screenshot(mut commands: Commands, request: Option<ResMut<CaptureRequest>>) {
+    let Some(mut request) = request else {
+        return;
+    };
+    if request.frames_remaining > 0 {
+        request.frames_remaining -= 1;
+        return;
+    }
+
+    let path = request.path.clone();
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path));
+    commands.remove_resource::<CaptureRequest>();
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+fn exit_after_screenshot(
+    captured: RemovedComponents<Captured>,
+    mut app_exit: MessageWriter<AppExit>,
+) {
+    if !captured.is_empty() {
+        app_exit.write(AppExit::Success);
+    }
 }
 
 fn create_materials(

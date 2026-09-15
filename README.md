@@ -46,9 +46,19 @@ To validate asset loading without opening a graphics window:
 cargo run -p eq-client -- --eq-dir "/path/to/EverQuest" --inspect-only
 ```
 
+For a repeatable visual smoke test, save a frame after the scene loads:
+
+```console
+cargo run -p eq-client --release -- \
+  --eq-dir "/path/to/EverQuest" \
+  --screenshot offline-demo.png
+```
+
 `EQ_CLIENT_DIR` may be used instead of `--eq-dir`. Zone archives, extracted
 files, caches, credentials, and packet captures must remain outside the
-repository.
+repository. On Windows, the viewer also detects the standard
+`Program Files (x86)\Sony\EverQuest` installation when neither setting is
+provided.
 
 ## Status
 

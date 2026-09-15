@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use image::ImageError;
 use libeq::pfs::PfsReader;
+use libeq::wld::parser::{DrawStyle, MaterialType, RenderMethod};
 use thiserror::Error;
 
 /// A decoded image referenced by a zone material.
@@ -141,6 +142,10 @@ pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, Loa
     for mesh in world.meshes() {
         let center = mesh.center();
         for primitive in mesh.primitives() {
+            let material = primitive.material();
+            if !should_render(*material.render_method()) {
+                continue;
+            }
             let positions = primitive
                 .positions()
                 .into_iter()
@@ -152,8 +157,7 @@ pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, Loa
                     ]
                 })
                 .collect();
-            let texture = primitive
-                .material()
+            let texture = material
                 .base_color_texture()
                 .and_then(|value| value.source())
                 .and_then(|name| {
@@ -177,6 +181,21 @@ pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, Loa
         primitives,
         textures,
     })
+}
+
+fn should_render(method: RenderMethod) -> bool {
+    !matches!(
+        method,
+        RenderMethod::Standard {
+            draw_style: DrawStyle::Transparent,
+            ..
+        } | RenderMethod::UserDefined {
+            material_type: MaterialType::Boundary
+                | MaterialType::InvisibleUnknown
+                | MaterialType::InvisibleUnknown2
+                | MaterialType::InvisibleUnknown3,
+        }
+    )
 }
 
 fn load_texture(
@@ -211,11 +230,36 @@ fn load_texture(
 mod tests {
     use std::path::Path;
 
-    use super::{LoadError, load_zone};
+    use libeq::wld::parser::{
+        DrawStyle, Lighting, MaterialType, RenderMethod, Shading, TextureStyle,
+    };
+
+    use super::{LoadError, load_zone, should_render};
 
     #[test]
     fn rejects_names_that_could_escape_the_install_directory() {
         let result = load_zone(Path::new("unused"), "../secrets");
         assert!(matches!(result, Err(LoadError::InvalidZoneName(_))));
+    }
+
+    #[test]
+    fn excludes_boundary_and_non_drawing_materials() {
+        let transparent = RenderMethod::Standard {
+            draw_style: DrawStyle::Transparent,
+            lighting: Lighting::ZeroIntensity,
+            shading: Shading::None1,
+            texture_style: TextureStyle::None,
+            unknown_bits: 0,
+        };
+        let boundary = RenderMethod::UserDefined {
+            material_type: MaterialType::Boundary,
+        };
+        let diffuse = RenderMethod::UserDefined {
+            material_type: MaterialType::Diffuse,
+        };
+
+        assert!(!should_render(transparent));
+        assert!(!should_render(boundary));
+        assert!(should_render(diffuse));
     }
 }
