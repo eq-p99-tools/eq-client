@@ -25,7 +25,6 @@ bevy = { version = "0.19.1", default-features = false, features = [
   "multi_threaded",
   "reflect_auto_register",
   "std",
-  "wayland",
   "x11",
 ] }
 clap = { version = "4.5", features = ["derive", "env"] }
