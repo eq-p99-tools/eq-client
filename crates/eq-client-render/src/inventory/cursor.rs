@@ -1,0 +1,186 @@
+//! Non-interactive display of the actual inventory cursor slot.
+use super::{InventorySlot, InventoryState, icons};
+use bevy::{prelude::*, ui::FocusPolicy, window::PrimaryWindow};
+
+#[derive(Component)]
+pub(crate) struct Overlay;
+
+pub(super) fn spawn(commands: &mut Commands) {
+    commands.spawn((
+        Overlay,
+        crate::hud::HudRoot,
+        GlobalZIndex(100),
+        FocusPolicy::Pass,
+        Node {
+            position_type: PositionType::Absolute,
+            display: Display::None,
+            column_gap: px(6),
+            align_items: AlignItems::Center,
+            max_width: px(260),
+            padding: UiRect::all(px(4)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.02, 0.03, 0.04, 0.88)),
+    ));
+}
+
+/// Follows the pointer using confirmed/predicted inventory state, never a selected slot.
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub(crate) fn update(
+    mut commands: Commands,
+    state: Res<InventoryState>,
+    settings: Option<Res<crate::ViewerSettings>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    scale: Option<Res<UiScale>>,
+    mut root: Query<(Entity, &mut Node), With<Overlay>>,
+    mut stamp: Local<Option<(Entity, u64)>>,
+    mut icons: Local<icons::Icons>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let Ok((entity, mut node)) = root.single_mut() else {
+        return;
+    };
+    let item = state.data.items().get(&InventorySlot(30));
+    let pointer = windows
+        .single()
+        .ok()
+        .filter(|window| window.focused)
+        .and_then(|window| {
+            window
+                .cursor_position()
+                .map(|pointer| (pointer, window.size()))
+        });
+    node.display = if item.is_some() && pointer.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    if let Some((pointer, viewport)) = pointer {
+        let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
+        place(&mut node, pointer / factor, viewport / factor);
+    }
+    if *stamp == Some((entity, state.revision)) {
+        return;
+    }
+    *stamp = Some((entity, state.revision));
+    commands.entity(entity).despawn_children();
+    let Some(item) = item else {
+        return;
+    };
+    let directory = settings
+        .as_ref()
+        .and_then(|settings| settings.0.eq_directory.as_deref());
+    let icon = icons.get(item.icon, directory, &mut images);
+    let mut text = item.details.name.clone();
+    if let Some(count) = item.stack_count {
+        use std::fmt::Write;
+        let _ = write!(text, " x{count}");
+    }
+    if state.data.stale() {
+        text.push_str("\nAwaiting inventory update");
+    }
+    commands.entity(entity).with_children(|parent| {
+        if let Some(icon) = icon {
+            parent.spawn((
+                icon,
+                FocusPolicy::Pass,
+                Node {
+                    width: px(32),
+                    height: px(32),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+            ));
+        }
+        parent.spawn((
+            Text::new(text),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.88, 0.85, 0.73)),
+            FocusPolicy::Pass,
+        ));
+    });
+}
+
+/// Anchors away from the nearest edges without waiting for text layout measurements.
+fn place(node: &mut Node, pointer: Vec2, viewport: Vec2) {
+    let pointer = pointer.clamp(Vec2::ZERO, viewport);
+    let offset = 16.0;
+    let available_width = if pointer.x <= viewport.x * 0.5 {
+        node.left = px((pointer.x + offset).min(viewport.x));
+        node.right = Val::Auto;
+        viewport.x - pointer.x - offset
+    } else {
+        node.left = Val::Auto;
+        node.right = px((viewport.x - pointer.x + offset).min(viewport.x));
+        pointer.x - offset
+    };
+    node.max_width = px(available_width.clamp(0.0, 260.0));
+    if pointer.y <= viewport.y * 0.5 {
+        node.top = px((pointer.y + offset).min(viewport.y));
+        node.bottom = Val::Auto;
+    } else {
+        node.top = Val::Auto;
+        node.bottom = px((viewport.y - pointer.y + offset).min(viewport.y));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_tracks_real_slot_when_inventory_is_closed_and_hides_after_clear() {
+        let mut app = App::new();
+        app.init_resource::<InventoryState>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(UiScale(2.0))
+            .add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
+            .add_systems(Update, update);
+        let mut window = Window {
+            focused: true,
+            ..default()
+        };
+        window.set_cursor_position(Some(Vec2::new(100.0, 80.0)));
+        let window_id = app.world_mut().spawn((window, PrimaryWindow)).id();
+        app.world_mut().resource_mut::<InventoryState>().apply(
+            eq_client_core::inventory::InventoryUpdate::Snapshot(super::super::demo_items()),
+        );
+        app.update();
+        let world = app.world_mut();
+        let mut overlays = world.query_filtered::<(&Node, &FocusPolicy), With<Overlay>>();
+        let (node, policy) = overlays.single(world).unwrap();
+        assert_eq!(
+            (node.left, node.top, node.display),
+            (px(66), px(56), Display::Flex)
+        );
+        assert_eq!(*policy, FocusPolicy::Pass);
+        let mut texts = world.query::<&Text>();
+        assert!(texts.iter(world).any(|text| text.0 == "Preview lantern"));
+        let mut window = world.get_mut::<Window>(window_id).unwrap();
+        let edge = window.size() - Vec2::splat(2.0);
+        window.set_cursor_position(Some(edge));
+        app.update();
+        let world = app.world_mut();
+        let node = overlays.single(world).unwrap().0;
+        assert_eq!((node.left, node.top), (Val::Auto, Val::Auto));
+        assert_eq!((node.right, node.bottom), (px(17), px(17)));
+        // Moving back resets the opposite anchors instead of stretching the overlay.
+        world
+            .get_mut::<Window>(window_id)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(100.0, 80.0)));
+        app.update();
+        let world = app.world_mut();
+        let node = overlays.single(world).unwrap().0;
+        assert_eq!((node.left, node.top), (px(66), px(56)));
+        assert_eq!((node.right, node.bottom), (Val::Auto, Val::Auto));
+        world.resource_mut::<InventoryState>().clear();
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(overlays.single(world).unwrap().0.display, Display::None);
+        assert_eq!(texts.iter(world).count(), 0);
+    }
+}

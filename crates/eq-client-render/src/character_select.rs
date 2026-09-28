@@ -1,0 +1,366 @@
+//! Pre-zone character selection uses occupied server slots, never typed names.
+use super::{hud::HudState, online::OnlineState, target::CommandsToServer};
+use bevy::{prelude::*, window::PrimaryWindow};
+use eq_client_core::{CharacterChoice, ClientCommand};
+
+pub(super) struct Selection {
+    id: u64,
+    entries: Vec<CharacterChoice>,
+    selected: Option<u8>,
+    submitted: bool,
+    message: String,
+}
+
+/// Provides synthetic names only for explicit offline screenshot validation.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn demo(settings: Res<super::ViewerSettings>, mut state: ResMut<OnlineState>) {
+    if settings.0.demo_character_select && !state.enabled {
+        state.enabled = true;
+        state.selection = Some(Selection::new(
+            1,
+            vec![
+                CharacterChoice {
+                    slot: 0,
+                    name: "Examplewarrior".into(),
+                    level: Some(12),
+                    zone_id: Some(22),
+                },
+                CharacterChoice {
+                    slot: 3,
+                    name: "Examplecleric".into(),
+                    level: Some(5),
+                    zone_id: Some(9),
+                },
+            ],
+        ));
+    }
+}
+
+impl Selection {
+    pub fn new(id: u64, entries: Vec<CharacterChoice>) -> Self {
+        Self {
+            id,
+            entries,
+            selected: None,
+            submitted: false,
+            message: String::new(),
+        }
+    }
+
+    /// Queues once; a full queue leaves the choice available for another click.
+    fn enter(&mut self, sender: &CommandsToServer) {
+        if self.submitted {
+            return;
+        }
+        let Some(slot) = self.selected else {
+            return;
+        };
+        if !self.entries.iter().any(|entry| entry.slot == slot) {
+            return;
+        }
+        let result = sender
+            .0
+            .as_ref()
+            .ok_or("Connection unavailable")
+            .and_then(|sender| {
+                sender
+                    .try_send(ClientCommand::SelectCharacter {
+                        selection_id: self.id,
+                        slot,
+                    })
+                    .map_err(|_| "Could not queue selection; try again")
+            });
+        match result {
+            Ok(()) => {
+                self.submitted = true;
+                self.message = "Entering world...".into();
+            }
+            Err(reason) => self.message = reason.into(),
+        }
+    }
+}
+
+#[derive(Component)]
+pub(super) struct Root;
+#[derive(Component)]
+pub(super) enum Action {
+    Choose(u8),
+    Enter,
+}
+
+/// Applies selection input and rebuilds the small panel only when its state changes.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+pub(super) fn update(
+    mut commands: Commands,
+    mut online: ResMut<OnlineState>,
+    hud: Res<HudState>,
+    sender: Res<CommandsToServer>,
+    keys: Res<ButtonInput<KeyCode>>,
+    navigation: Res<super::navigation::NavigationKeys>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    buttons: Query<(Ref<Interaction>, &Action)>,
+    roots: Query<Entity, With<Root>>,
+    mut previous: Local<String>,
+) {
+    let keys = navigation.sample(&keys);
+    let visible = online.enabled && online.session_id.is_none();
+    if visible
+        && windows.single().is_ok_and(|window| window.focused)
+        && let Some(selection) = online.selection.as_mut()
+        && !selection.submitted
+    {
+        for (interaction, action) in &buttons {
+            if !interaction.is_changed() || *interaction != Interaction::Pressed {
+                continue;
+            }
+            match action {
+                Action::Choose(slot) => selection.selected = Some(*slot),
+                Action::Enter => selection.enter(&sender),
+            }
+        }
+        if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::ArrowUp) {
+            let index = selection
+                .entries
+                .iter()
+                .position(|entry| Some(entry.slot) == selection.selected);
+            let count = selection.entries.len();
+            if count != 0 {
+                let next = index.map_or(0, |index| {
+                    if keys.just_pressed(KeyCode::ArrowUp) {
+                        (index + count - 1) % count
+                    } else {
+                        (index + 1) % count
+                    }
+                });
+                selection.selected = Some(selection.entries[next].slot);
+            }
+        }
+        if keys.just_pressed(KeyCode::Enter) {
+            selection.enter(&sender);
+        }
+    }
+    let signature = format!(
+        "{visible}:{}:{:?}",
+        hud.status,
+        online
+            .selection
+            .as_ref()
+            .map(|s| (s.id, s.selected, s.submitted, &s.message))
+    );
+    if *previous == signature {
+        return;
+    }
+    *previous = signature;
+    for root in &roots {
+        commands.entity(root).despawn();
+    }
+    if visible {
+        spawn(&mut commands, online.selection.as_ref(), &hud.status);
+    }
+}
+
+/// Covers the zone preview until a character has completed zone admission.
+fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
+    commands
+        .spawn((
+            Root,
+            Button,
+            GlobalZIndex(500),
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    width: px(440),
+                    max_width: percent(95),
+                    padding: UiRect::all(px(24)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(12),
+                    border_radius: BorderRadius::all(px(8)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.055, 0.067, 0.078)),
+            ))
+            .with_children(|panel| {
+                label(panel, "CHARACTER SELECT", 20.0);
+                let Some(selection) = selection else {
+                    label(panel, status, 14.0);
+                    return;
+                };
+                if selection.entries.is_empty() {
+                    label(
+                        panel,
+                        "No characters on this server. Create one with the official client first.",
+                        14.0,
+                    );
+                    return;
+                }
+                for entry in &selection.entries {
+                    let detail = entry
+                        .level
+                        .map_or_else(String::new, |level| format!("  |  Level {level}"));
+                    button(
+                        panel,
+                        Action::Choose(entry.slot),
+                        &format!("{}{detail}", entry.name),
+                        selection.selected == Some(entry.slot),
+                    );
+                }
+                if selection.selected.is_some() && !selection.submitted {
+                    button(panel, Action::Enter, "Enter World", true);
+                }
+                label(
+                    panel,
+                    if selection.message.is_empty() {
+                        "Select a character | Up/Down to browse | Enter to connect"
+                    } else {
+                        &selection.message
+                    },
+                    12.0,
+                );
+            });
+        });
+}
+
+fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32) {
+    parent.spawn((
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(size),
+            ..default()
+        },
+        TextColor(Color::srgb(0.84, 0.85, 0.82)),
+    ));
+}
+
+fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selected: bool) {
+    parent
+        .spawn((
+            Button,
+            action,
+            Node {
+                padding: UiRect::all(px(10)),
+                ..default()
+            },
+            BackgroundColor(if selected {
+                Color::srgb(0.22, 0.25, 0.23)
+            } else {
+                Color::srgb(0.09, 0.11, 0.13)
+            }),
+        ))
+        .with_children(|button| label(button, text, 15.0));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn keyboard_selection_queues_the_server_slot_and_disappears_after_admission() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut state = OnlineState::new(true);
+        state.selection = Some(Selection::new(
+            7,
+            vec![CharacterChoice {
+                slot: 3,
+                name: "Example".into(),
+                level: Some(1),
+                zone_id: None,
+            }],
+        ));
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(CommandsToServer(Some(tx)))
+            .init_resource::<HudState>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<super::super::navigation::NavigationKeys>()
+            .add_systems(Update, update);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+        assert!(rx.try_recv().is_err());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ArrowDown);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            ClientCommand::SelectCharacter {
+                selection_id: 7,
+                slot: 3
+            }
+        );
+        app.update();
+        assert!(rx.try_recv().is_err());
+        app.world_mut().resource_mut::<OnlineState>().session_id = Some(8);
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<Root>>()
+                .iter(world)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn entry_requires_selection_and_never_duplicates_or_discards_a_full_queue() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let sender = CommandsToServer(Some(tx));
+        let mut selection = Selection::new(
+            7,
+            vec![CharacterChoice {
+                slot: 3,
+                name: "Example".into(),
+                level: Some(1),
+                zone_id: Some(22),
+            }],
+        );
+        selection.enter(&sender);
+        assert!(rx.try_recv().is_err());
+        selection.selected = Some(3);
+        sender
+            .0
+            .as_ref()
+            .unwrap()
+            .try_send(ClientCommand::SelectCharacter {
+                selection_id: 6,
+                slot: 1,
+            })
+            .unwrap();
+        selection.enter(&sender);
+        assert!(!selection.submitted);
+        rx.try_recv().unwrap();
+        selection.enter(&sender);
+        selection.enter(&sender);
+        assert!(selection.submitted);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            ClientCommand::SelectCharacter {
+                selection_id: 7,
+                slot: 3
+            }
+        );
+        assert!(rx.try_recv().is_err());
+    }
+}

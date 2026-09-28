@@ -8,8 +8,11 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 bevy.workspace = true
 eq-client-assets.workspace = true
+eq-client-core.workspace = true
+image.workspace = true
 
 [lints]
 workspace = true

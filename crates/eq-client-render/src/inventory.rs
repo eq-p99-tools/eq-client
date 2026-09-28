@@ -1,0 +1,851 @@
+//! Compact inventory drawer with validated slot moves and local item inspection.
+pub(super) mod colors;
+pub(super) mod cursor;
+pub(super) mod icons;
+mod interaction;
+mod layout;
+
+use bevy::prelude::*;
+use eq_client_core::inventory::{Inventory, InventorySlot, InventoryUpdate};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum Tab {
+    #[default]
+    Inventory,
+    Bank,
+}
+
+#[derive(Resource, Default)]
+#[allow(clippy::struct_excessive_bools)] // These flags represent independent UI and server state.
+pub(super) struct InventoryState {
+    colors: colors::Colors,
+    pub data: Inventory,
+    pub hovered: bool,
+    open: bool,
+    demo: bool,
+    tab: Tab,
+    revision: u64,
+    next_use_id: u64,
+    bank_open: bool,
+    actions: interaction::Actions,
+}
+impl InventoryState {
+    /// Current request feedback, also shown when inventory is closed for hotbar use.
+    pub(crate) fn action_message(&self) -> &str {
+        &self.actions.message
+    }
+    /// Uses the same item controller for action-bar and inventory activation.
+    pub(crate) fn activate_shortcut(
+        &mut self,
+        slot: InventorySlot,
+        online: &super::online::OnlineState,
+        sender: &super::target::CommandsToServer,
+        target: Option<u16>,
+        casting: bool,
+    ) -> String {
+        self.use_slot(slot, online, sender, target, casting);
+        self.actions.message.clone()
+    }
+    /// Closes personal banking as soon as admission, life, or banker proximity changes.
+    fn refresh_bank_access(&mut self, online: &super::online::OnlineState) {
+        if self.demo && !online.enabled {
+            return;
+        }
+        let available = !self.demo
+            && online.connected
+            && online.death.is_none()
+            && online.session_id.is_some()
+            && online.player.as_ref().is_some_and(|player| {
+                online
+                    .spawns
+                    .values()
+                    .any(|spawn| eq_client_core::inventory::banker_in_range(player.position, spawn))
+            });
+        if self.bank_open != available {
+            self.bank_open = available;
+            self.actions.split = None;
+            if !available && self.tab == Tab::Bank {
+                self.tab = Tab::Inventory;
+            }
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    pub fn apply(&mut self, update: InventoryUpdate) {
+        self.data.apply(update);
+        if self.data.stale() {
+            self.actions.auto_store = false;
+            self.actions.split = None;
+        }
+        self.revision = self.revision.wrapping_add(1);
+    }
+    pub fn clear(&mut self) {
+        self.data = Inventory::default();
+        self.cancel_actions();
+        self.demo = false;
+        self.bank_open = false;
+        self.revision = self.revision.wrapping_add(1);
+        self.hovered = false;
+    }
+}
+#[derive(Component)]
+pub(super) struct Toggle;
+#[derive(Component)]
+pub(super) struct Panel;
+#[derive(Component)]
+pub(super) struct Rows;
+#[derive(Component)]
+pub(super) struct Status;
+#[derive(Component)]
+pub(super) struct HoverLabel;
+#[derive(Component)]
+pub(super) struct TabButton(Tab);
+#[derive(Component)]
+pub(super) struct SlotButton(pub(super) InventorySlot);
+#[derive(Component)]
+pub(super) struct StoreCursor;
+#[derive(Component)]
+pub(super) struct SplitStack(InventorySlot);
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) struct RenderStamp {
+    revision: u64,
+    tab: Tab,
+    open: bool,
+    bank_open: bool,
+    root: Entity,
+}
+
+/// Creates the inventory toggle and an initially closed drawer.
+pub(super) fn spawn(commands: &mut Commands) {
+    cursor::spawn(commands);
+    commands
+        .spawn((
+            super::hud::HudRoot,
+            Button,
+            Toggle,
+            GlobalZIndex(25),
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(76),
+                left: px(20),
+                padding: UiRect::axes(px(12), px(7)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.95)),
+        ))
+        .with_children(|button| {
+            label(button, "Inventory [I]", 12.0);
+        });
+    let frame = commands
+        .spawn((
+            super::hud::HudRoot,
+            Panel,
+            GlobalZIndex(25),
+            ScrollPosition::default(),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(20),
+                top: px(110),
+                width: px(600),
+                max_width: percent(95),
+                max_height: percent(53),
+                overflow: Overflow::scroll_y(),
+                padding: UiRect::all(px(8)),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(6),
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
+        ))
+        .id();
+    super::windows::interactive(commands, frame);
+    commands.entity(frame).with_children(|panel| {
+        super::windows::title_bar(panel, frame, "INVENTORY");
+        panel
+            .spawn(Node {
+                column_gap: px(6),
+                ..default()
+            })
+            .with_children(|tabs| {
+                for (tab, name) in [(Tab::Inventory, "Inventory"), (Tab::Bank, "Bank")] {
+                    tabs.spawn((
+                        Button,
+                        TabButton(tab),
+                        Node {
+                            padding: UiRect::axes(px(12), px(6)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.08, 0.10, 0.13)),
+                    ))
+                    .with_children(|button| {
+                        label(button, name, 12.0);
+                    });
+                }
+            });
+        panel.spawn((
+            Status,
+            Text::new("Inventory not received"),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.75, 0.72, 0.60)),
+        ));
+        panel.spawn((
+            HoverLabel,
+            Text::new("Click: move / count: split / right-click: inspect / Alt+right-click: use"),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.88, 0.87, 0.80)),
+            Node {
+                min_height: px(14),
+                ..default()
+            },
+        ));
+        panel.spawn((
+            Rows,
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(3),
+                ..default()
+            },
+        ));
+    });
+}
+fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32) {
+    parent.spawn((
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(size),
+            ..default()
+        },
+        TextColor(Color::srgb(0.88, 0.89, 0.91)),
+    ));
+}
+
+/// Left-click moves through the cursor, Shift opens a quantity picker, and right-click inspects.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+pub(super) fn input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    online: Res<super::online::OnlineState>,
+    sender: Res<super::target::CommandsToServer>,
+    toggles: Query<&Interaction, (With<Toggle>, Changed<Interaction>)>,
+    tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
+    slots: Query<(&Interaction, &SlotButton)>,
+    store: Query<&Interaction, (With<StoreCursor>, Changed<Interaction>)>,
+    split_buttons: Query<(&Interaction, &interaction::SplitAction), Changed<Interaction>>,
+    stack_counts: Query<(&Interaction, &SplitStack), Changed<Interaction>>,
+    mut state: ResMut<InventoryState>,
+    mut items: ResMut<super::items::ItemState>,
+    chat: Res<super::chat::ChatState>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    target: Option<Res<super::target::TargetState>>,
+    hud: Option<Res<super::hud::HudState>>,
+) {
+    state.refresh_bank_access(&online);
+    if !windows.single().is_ok_and(|window| window.focused) {
+        state.actions.auto_store = false;
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) {
+        state.actions.auto_store = false;
+        state.actions.split = None;
+        if state.actions.pending.is_none() {
+            state.actions.message.clear();
+        }
+        state.revision = state.revision.wrapping_add(1);
+    }
+    if (!chat.composing && keys.just_pressed(KeyCode::KeyI))
+        || toggles.iter().any(|i| *i == Interaction::Pressed)
+    {
+        state.open = !state.open;
+    }
+    if !state.open {
+        state.actions.auto_store = false;
+        state.actions.split = None;
+        return;
+    }
+    // A nested quantity button consumes the click before its enclosing item slot.
+    if let Some((_, stack)) = stack_counts
+        .iter()
+        .find(|(interaction, _)| **interaction == Interaction::Pressed)
+    {
+        if state.data.items().contains_key(&InventorySlot(30)) {
+            state.click_slot(stack.0, false, &online, &sender);
+        } else {
+            state.select_split(stack.0);
+        }
+        return;
+    }
+    if store
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        state.actions.split = None;
+        state.actions.auto_store = true;
+    }
+    state.store_cursor(&online, &sender);
+    for (interaction, action) in &split_buttons {
+        if *interaction == Interaction::Pressed {
+            state.split_action(*action, &online, &sender);
+        }
+    }
+    for (interaction, tab) in &tabs {
+        if *interaction == Interaction::Pressed && (tab.0 != Tab::Bank || state.bank_open) {
+            state.tab = tab.0;
+        }
+    }
+    for (interaction, slot) in &slots {
+        if *interaction == Interaction::None {
+            continue;
+        }
+        if mouse.just_pressed(MouseButton::Right) {
+            if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
+                if !chat.composing {
+                    let casting = hud
+                        .as_ref()
+                        .is_none_or(|hud| hud.casting.is_some() || hud.pending_cast.is_some());
+                    state.use_slot(
+                        slot.0,
+                        &online,
+                        &sender,
+                        target.as_ref().and_then(|target| target.selected),
+                        casting,
+                    );
+                }
+            } else if let Some(item) = state.data.items().get(&slot.0) {
+                items.open_received(item.details.clone());
+            }
+        } else if mouse.just_pressed(MouseButton::Left) && *interaction == Interaction::Pressed {
+            if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+                state.select_split(slot.0);
+            } else {
+                state.click_slot(slot.0, false, &online, &sender);
+            }
+        }
+    }
+}
+
+fn visible_slots(state: &InventoryState, tab: Tab) -> Vec<InventorySlot> {
+    let roots: Vec<_> = match tab {
+        Tab::Inventory => (0..31).map(InventorySlot).collect(),
+        Tab::Bank => (2000..=2007).map(InventorySlot).collect(),
+    };
+    let mut slots = Vec::new();
+    for root in roots {
+        slots.push(root);
+        if let Some(item) = state.data.items().get(&root) {
+            slots.extend((0..item.bag_slots).filter_map(|index| root.child(index)));
+        }
+    }
+    // Preserve unusual addresses and partial child-only updates visibly.
+    if tab == Tab::Inventory {
+        for slot in state.data.items().keys() {
+            if !(0..22).contains(&slot.0) && slot.0 < 2000 && !slots.contains(slot) {
+                slots.push(*slot);
+            }
+        }
+    }
+    slots
+}
+
+/// Rebuilds rows only when contents or the selected tab change.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+pub(super) fn update(
+    mut commands: Commands,
+    state: Res<InventoryState>,
+    settings: Res<super::ViewerSettings>,
+    mut icons: Local<icons::Icons>,
+    mut images: ResMut<Assets<Image>>,
+    mut previous: Local<Option<RenderStamp>>,
+    mut panels: Query<&mut Node, (With<Panel>, Without<TabButton>)>,
+    rows: Query<Entity, With<Rows>>,
+    mut statuses: Query<&mut Text, With<Status>>,
+    mut tabs: Query<(&TabButton, &mut BackgroundColor, &mut Node), Without<Panel>>,
+) {
+    for mut panel in &mut panels {
+        panel.display = if state.open {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    let Ok(root) = rows.single() else {
+        return;
+    };
+    let stamp = RenderStamp {
+        revision: state.revision,
+        tab: state.tab,
+        open: state.open,
+        bank_open: state.bank_open,
+        root,
+    };
+    if *previous == Some(stamp) {
+        return;
+    }
+    *previous = Some(stamp);
+    for mut status in &mut statuses {
+        status.0 = if state.demo {
+            "Offline demo / click to pick up / click count: choose quantity".into()
+        } else if state.data.awaiting_correction() {
+            "Server corrected inventory / waiting for remaining slots".into()
+        } else if state.data.stale() {
+            "Contents may be outdated - awaiting refresh".into()
+        } else if !state.data.received() {
+            "Inventory not received in full".into()
+        } else {
+            "Click to pick up, place or swap / click count: choose quantity".into()
+        };
+    }
+    for mut status in &mut statuses {
+        if state.data.received() && !state.data.stale() && !state.actions.message.is_empty() {
+            status.0.clone_from(&state.actions.message);
+        } else if state.data.predicted() && !state.data.stale() && !state.demo {
+            status.0 = "Move sent / contents include local prediction".into();
+        }
+    }
+    if !state.bank_open && state.tab == Tab::Bank {
+        return;
+    }
+    for (tab, mut color, mut node) in &mut tabs {
+        node.display = if tab.0 == Tab::Bank && !state.bank_open {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        color.0 = if tab.0 == state.tab {
+            Color::srgb(0.20, 0.22, 0.28)
+        } else {
+            Color::srgb(0.08, 0.10, 0.13)
+        };
+    }
+    commands.entity(root).despawn_children();
+    commands.entity(root).with_children(|list| {
+        layout::contents(
+            list,
+            &state,
+            &mut icons,
+            settings.0.eq_directory.as_deref(),
+            &mut images,
+        );
+    });
+}
+
+/// Highlights squares and shows full names without crowding the slot grid.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn feedback(
+    state: Res<InventoryState>,
+    mut slots: Query<(&SlotButton, &Interaction, &mut BorderColor)>,
+    mut labels: Query<&mut Text, With<HoverLabel>>,
+) {
+    let mut description =
+        "Click: move / count: split / right-click: inspect / Alt+right-click: use".to_owned();
+    for (slot, interaction, mut border) in &mut slots {
+        let item = state.data.items().get(&slot.0);
+        let hovered = *interaction != Interaction::None;
+        let tint = if slot.0 == InventorySlot(30) && item.is_some() {
+            Color::srgb(0.45, 0.82, 1.0)
+        } else if hovered {
+            Color::srgb(0.88, 0.77, 0.45)
+        } else if item.is_some() {
+            Color::srgb(0.48, 0.43, 0.31)
+        } else {
+            Color::srgb(0.22, 0.25, 0.28)
+        };
+        *border = BorderColor::all(tint);
+        if hovered {
+            let value = item.map_or_else(
+                || {
+                    if state.data.received() && !state.data.stale() {
+                        "Empty".into()
+                    } else {
+                        "Unknown".into()
+                    }
+                },
+                |item| {
+                    let count = item
+                        .stack_count
+                        .map_or_else(String::new, |n| format!(" x{n}"));
+                    let charges = if item.stack_count.is_none() && item.charges > 0 {
+                        format!(" / {} charges", item.charges)
+                    } else {
+                        String::new()
+                    };
+                    format!("{}{count}{charges}", item.details.name)
+                },
+            );
+            description = format!("{}: {value}", slot.0.label());
+            if let Some(effect) = item.and_then(|item| item.activation.effect.as_ref()) {
+                use std::fmt::Write;
+                let _ = write!(
+                    description,
+                    "\nAlt+right-click: use spell {} / level {}",
+                    effect.spell_id, effect.required_level
+                );
+            }
+        }
+    }
+    for mut text in &mut labels {
+        if text.0 != description {
+            text.0.clone_from(&description);
+        }
+    }
+}
+
+/// Scrolls inventory without zooming or dragging the camera through the drawer.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn scroll(
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut panels: Query<(&UiGlobalTransform, &ComputedNode, &mut ScrollPosition), With<Panel>>,
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut state: ResMut<InventoryState>,
+) {
+    state.hovered = false;
+    let delta: f32 = wheel
+        .read()
+        .map(|event| match event.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => event.y * 24.0,
+            bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
+        })
+        .sum();
+    if !state.open {
+        return;
+    }
+    let Some(cursor) = windows
+        .single()
+        .ok()
+        .and_then(Window::physical_cursor_position)
+    else {
+        return;
+    };
+    for (transform, node, mut position) in &mut panels {
+        if transform.try_inverse().is_some_and(|inverse| {
+            inverse
+                .transform_point2(cursor)
+                .abs()
+                .cmple(node.size() * 0.5)
+                .all()
+        }) {
+            state.hovered = true;
+            position.y = (position.y - delta).max(0.0);
+        }
+    }
+}
+
+/// Supplies clearly labelled synthetic contents for offline visual validation.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn demo(
+    settings: Res<super::ViewerSettings>,
+    online: Res<super::online::OnlineState>,
+    mut state: ResMut<InventoryState>,
+) {
+    if !settings.0.demo_inventory || online.enabled {
+        return;
+    }
+    state.apply(InventoryUpdate::Snapshot(demo_items()));
+    state.open = true;
+    state.bank_open = settings.0.demo_bank;
+    state.tab = if state.bank_open {
+        Tab::Bank
+    } else {
+        Tab::Inventory
+    };
+    state.demo = true;
+}
+
+pub(crate) fn demo_items() -> Vec<eq_client_core::inventory::InventoryItem> {
+    use eq_client_core::{ItemDetails, inventory::InventoryItem};
+    let mut items = Vec::new();
+    for (slot, id, name, count, bag) in [
+        (13, 1, "Preview sword", None, 0),
+        (22, 2, "Preview backpack", None, 8),
+        (23, 7, "Preview satchel", None, 10),
+        (261, 8, "Preview arrows", Some(50), 0),
+        (251, 3, "Preview rations", Some(20), 0),
+        (252, 4, "Preview bandages", Some(7), 0),
+        (30, 5, "Preview lantern", None, 0),
+        (2000, 6, "Preview bank item", None, 0),
+    ] {
+        items.push(InventoryItem {
+            activation: eq_client_core::inventory::ItemActivation::default(),
+            scroll_spell: None,
+            rules: eq_client_core::inventory::ItemPlacement {
+                stack_size: if id == 8 { 100 } else { 20 },
+                size: 1,
+                bag_size: 4,
+                item_type: if id == 8 { 27 } else { 0 },
+                ..default()
+            },
+            slot: InventorySlot(slot),
+            icon: match id {
+                2 => 557,
+                7 => 539,
+                3 => 537,
+                4 => 538,
+                8 => 598,
+                _ => 519,
+            },
+            stack_count: count,
+            charges: 0,
+            bag_slots: bag,
+            details: ItemDetails {
+                equipment: None,
+                bonuses: None,
+                id,
+                name: name.into(),
+                lore: String::new(),
+                weight_tenths: 10,
+                slots: if id == 1 {
+                    1 << 13
+                } else if id == 8 {
+                    1 << 21
+                } else {
+                    0
+                },
+                classes: u32::MAX,
+                races: u32::MAX,
+                flags: Vec::new(),
+                stats: Vec::new(),
+            },
+        });
+    }
+    items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn app() -> App {
+        let mut app = App::new();
+        app.init_resource::<InventoryState>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(super::super::ViewerSettings(
+                super::super::ViewerConfig::default(),
+            ))
+            .init_resource::<super::super::items::ItemState>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .insert_resource(super::super::online::OnlineState::new(false))
+            .insert_resource(super::super::target::CommandsToServer(None))
+            .add_systems(Startup, |mut commands: Commands| {
+                spawn(&mut commands);
+                super::super::items::spawn(&mut commands);
+            })
+            .add_systems(
+                Update,
+                (input, update, feedback, super::super::items::update).chain(),
+            );
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        app
+    }
+    #[test]
+    fn chat_typing_and_unfocused_keys_do_not_toggle_inventory() {
+        let mut app = app();
+        app.world_mut()
+            .resource_mut::<super::super::chat::ChatState>()
+            .composing = true;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyI);
+        app.update();
+        assert!(!app.world().resource::<InventoryState>().open);
+        app.world_mut()
+            .resource_mut::<super::super::chat::ChatState>()
+            .composing = false;
+        let world = app.world_mut();
+        let mut windows = world.query::<&mut Window>();
+        windows.single_mut(world).unwrap().focused = false;
+        app.update();
+        assert!(!app.world().resource::<InventoryState>().open);
+    }
+
+    #[test]
+    fn inventory_toggle_tabs_and_local_inspection_work_without_a_network_sender() {
+        let mut app = app();
+        app.world_mut()
+            .resource_mut::<InventoryState>()
+            .apply(InventoryUpdate::Snapshot(demo_items()));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyI);
+        app.update();
+        assert!(app.world().resource::<InventoryState>().open);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.world_mut().resource_mut::<InventoryState>().tab = Tab::Inventory;
+        app.update();
+        let world = app.world_mut();
+        let mut rows = world.query::<(&SlotButton, &mut Interaction)>();
+        let (_, mut interaction) = rows
+            .iter_mut(world)
+            .find(|(slot, _)| slot.0 == InventorySlot(251))
+            .unwrap();
+        *interaction = Interaction::Hovered;
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.update();
+        let cache = &app
+            .world()
+            .resource::<super::super::items::ItemState>()
+            .cache;
+        assert_eq!(cache[&3].name, "Preview rations");
+        let world = app.world_mut();
+        let mut text = world.query_filtered::<&Text, With<super::super::items::ItemText>>();
+        assert!(text.single(world).unwrap().0.contains("Preview rations"));
+        app.world_mut().resource_mut::<InventoryState>().clear();
+        app.update();
+        let world = app.world_mut();
+        let mut text = world.query::<&Text>();
+        assert!(text.iter(world).any(|t| t.0 == "?"));
+        assert!(!text.iter(world).any(|t| t.0 == "Preview rations x20"));
+    }
+    #[test]
+    fn bags_show_empty_capacity_and_bank_items_are_separate() {
+        let mut state = InventoryState::default();
+        state.apply(InventoryUpdate::Snapshot(demo_items()));
+        state.tab = Tab::Inventory;
+        let packs = visible_slots(&state, state.tab);
+        assert!(packs.contains(&InventorySlot(254)));
+        assert!(!packs.contains(&InventorySlot(2000)));
+        assert!(!state.bank_open);
+        state.tab = Tab::Bank;
+        assert_eq!(
+            visible_slots(&state, state.tab),
+            (2000..=2007).map(InventorySlot).collect::<Vec<_>>()
+        );
+        state.apply(InventoryUpdate::Invalidated);
+        assert!(state.data.stale());
+    }
+    #[test]
+    fn shift_click_opens_picker_and_buttons_pick_up_the_selected_quantity() {
+        let mut app = app();
+        {
+            let mut state = app.world_mut().resource_mut::<InventoryState>();
+            state.apply(InventoryUpdate::Snapshot(
+                demo_items()
+                    .into_iter()
+                    .filter(|item| item.slot != InventorySlot(30))
+                    .collect(),
+            ));
+            state.demo = true;
+            state.open = true;
+        }
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
+        press_slot(&mut app, 251);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        assert!(
+            app.world()
+                .resource::<InventoryState>()
+                .actions
+                .split
+                .is_some()
+        );
+        for choose_more in [true, false] {
+            let world = app.world_mut();
+            let mut buttons = world.query::<(&interaction::SplitAction, &mut Interaction)>();
+            for (action, mut interaction) in buttons.iter_mut(world) {
+                if matches!(
+                    (choose_more, action),
+                    (true, interaction::SplitAction::More)
+                        | (false, interaction::SplitAction::Confirm)
+                ) {
+                    *interaction = Interaction::Pressed;
+                }
+            }
+            app.update();
+        }
+        let state = app.world().resource::<InventoryState>();
+        assert!(state.actions.split.is_none());
+        assert_eq!(state.data.items()[&InventorySlot(30)].stack_count, Some(2));
+        assert_eq!(
+            state.data.items()[&InventorySlot(251)].stack_count,
+            Some(18)
+        );
+    }
+
+    #[test]
+    fn left_click_uses_the_cursor_and_escape_does_not_discard_a_held_item() {
+        let mut app = app();
+        {
+            let mut state = app.world_mut().resource_mut::<InventoryState>();
+            state.apply(InventoryUpdate::Snapshot(
+                demo_items()
+                    .into_iter()
+                    .filter(|item| item.slot != InventorySlot(30))
+                    .collect(),
+            ));
+            state.demo = true;
+            state.open = true;
+            state.tab = Tab::Inventory;
+        }
+        app.update();
+        press_slot(&mut app, 251);
+        assert_eq!(
+            app.world().resource::<InventoryState>().data.items()[&InventorySlot(30)].stack_count,
+            Some(20)
+        );
+        press_slot(&mut app, 24);
+        let state = app.world().resource::<InventoryState>();
+        assert_eq!(state.data.items()[&InventorySlot(24)].stack_count, Some(20));
+        assert!(!state.data.items().contains_key(&InventorySlot(251)));
+        press_slot(&mut app, 24);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<InventoryState>()
+                .data
+                .items()
+                .contains_key(&InventorySlot(30))
+        );
+        assert!(
+            app.world()
+                .resource::<InventoryState>()
+                .data
+                .items()
+                .contains_key(&InventorySlot(30))
+        );
+    }
+    fn press_slot(app: &mut App, slot: i32) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .reset_all();
+        let world = app.world_mut();
+        let mut slots = world.query::<(&SlotButton, &mut Interaction)>();
+        for (button, mut interaction) in slots.iter_mut(world) {
+            *interaction = if button.0 == InventorySlot(slot) {
+                Interaction::Pressed
+            } else {
+                Interaction::None
+            };
+        }
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .reset_all();
+    }
+}
