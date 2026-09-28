@@ -590,6 +590,12 @@ pub(super) fn receive(
                     .as_ref()
                     .is_some_and(|player| u32::from(player.spawn_id) == update.entity_id)
                 {
+                    debug!(
+                        spell_id = update.spell_id,
+                        slot = update.slot,
+                        removed = update.buff.is_none(),
+                        "Own buff slot update"
+                    );
                     hud.buff_update(update);
                 }
             }
@@ -599,6 +605,12 @@ pub(super) fn receive(
                     .as_ref()
                     .is_some_and(|player| player.spawn_id == effect.target_id)
                 {
+                    debug!(
+                        spell_id = effect.spell_id,
+                        caster_level = effect.caster_level,
+                        effect_flag = effect.effect_flag,
+                        "Own spell effect"
+                    );
                     hud.spell_effect(effect, spell_names.as_deref());
                 }
             }
