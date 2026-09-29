@@ -36,6 +36,181 @@ fn inspect_path() {
     );
 }
 
+/// Checks whether a server's spawn positions sit in this client's zone geometry:
+/// each named point should have a floor a little below it. Points in empty space
+/// mean the server's zone data was laid out for different zone files.
+/// `EQ_PROBE_POINTS` lists `name=x,y,z` renderer points separated by `;`; the
+/// swapped column exchanges the two horizontal axes as a mapping cross-check.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE and EQ_PROBE_POINTS"]
+fn inspect_points() {
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone =
+        eq_client_assets::load_zone(&install, &std::env::var("EQ_PROBE_ZONE").unwrap()).unwrap();
+    let points: Vec<(String, Vec3)> = std::env::var("EQ_PROBE_POINTS")
+        .unwrap()
+        .split(';')
+        .map(|entry| {
+            let (name, at) = entry.split_once('=').unwrap();
+            let v: Vec<f32> = at.split(',').map(|n| n.parse().unwrap()).collect();
+            (name.to_owned(), Vec3::new(v[0], v[1], v[2]))
+        })
+        .collect();
+    let (low, high) = zone.collision.iter().flatten().fold(
+        (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+        |(low, high), p| {
+            let p = Vec3::from_array(*p);
+            (low.min(p), high.max(p))
+        },
+    );
+    println!("terrain_bounds={low:?}..{high:?}");
+    let everything = build_collision(&zone).unwrap();
+    for (name, at) in &points {
+        let swapped = Vec3::new(at.z, at.y, at.x);
+        let around = |p: Vec3| {
+            (
+                everything.ray_distance(p + Vec3::Y, -Vec3::Y, 50.0),
+                everything.ray_distance(p + Vec3::Y, Vec3::Y, 50.0),
+            )
+        };
+        println!(
+            "point={name} standard(below,above)={:?} swapped(below,above)={:?}",
+            around(*at),
+            around(swapped)
+        );
+    }
+}
+
+/// The terrain's collision, then each object's within 120 units of `near`, by model
+/// name; prints each object's placement and bounds.
+fn collision_parts(
+    zone: &ZoneAsset,
+    near: Vec3,
+) -> Vec<(String, eq_client_core::movement::CollisionWorld)> {
+    use eq_client_core::movement::CollisionWorld;
+    let mut parts = Vec::new();
+    if let Ok(terrain) = CollisionWorld::new(zone.collision.clone()) {
+        parts.push(("terrain".into(), terrain));
+    }
+    for object in &zone.objects {
+        let Some(model) = zone.models.get(object.model) else {
+            continue;
+        };
+        if Vec3::from_array(object.translation).distance(near) > 120.0 {
+            continue;
+        }
+        let rotation = object.rotation_degrees.map(f32::to_radians);
+        let transform = Mat4::from_scale_rotation_translation(
+            Vec3::from_array(object.scale),
+            Quat::from_euler(EulerRot::XYZ, rotation[0], rotation[1], rotation[2]),
+            Vec3::from_array(object.translation),
+        );
+        let triangles: Vec<[[f32; 3]; 3]> = model
+            .collision
+            .iter()
+            .map(|triangle| {
+                triangle.map(|p| transform.transform_point3(Vec3::from_array(p)).to_array())
+            })
+            .collect();
+        let (low, high) = triangles.iter().flatten().fold(
+            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+            |(low, high), p| {
+                (
+                    low.min(Vec3::from_array(*p)),
+                    high.max(Vec3::from_array(*p)),
+                )
+            },
+        );
+        println!(
+            "object={} at={:?} rotation={:?} scale={:?} solid_triangles={} bounds={low:?}..{high:?}",
+            model.name,
+            object.translation,
+            object.rotation_degrees,
+            object.scale,
+            triangles.len()
+        );
+        if let Ok(part) = CollisionWorld::new(triangles) {
+            parts.push((model.name.clone(), part));
+        }
+    }
+    parts
+}
+
+/// Reports which geometry encloses the area a path search can reach: for each
+/// reached position's unreachable neighbor, the terrain or object model whose
+/// collision stands in the way at knee, waist and head height.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_FEET and EQ_PROBE_GOAL"]
+fn inspect_enclosure() {
+    use eq_client_core::movement::{PathProgress, PathSearch};
+    use std::collections::{BTreeMap, HashSet};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone =
+        eq_client_assets::load_zone(&install, &std::env::var("EQ_PROBE_ZONE").unwrap()).unwrap();
+    let world = build_collision(&zone).unwrap();
+    let (feet, goal) = (probe_point("EQ_PROBE_FEET"), probe_point("EQ_PROBE_GOAL"));
+    // A human-sized model, as measured at admission.
+    let mut search = PathSearch::new(feet, goal, 10.0, 6.7);
+    let found = loop {
+        match search.advance(&world, 5000) {
+            PathProgress::Searching => (),
+            done => break matches!(done, PathProgress::Found(_)),
+        }
+    };
+    println!("found={found}");
+    let reached: Vec<Vec3> = search.positions().collect();
+    let (low, high) = reached.iter().fold(
+        (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+        |(low, high), p| (low.min(*p), high.max(*p)),
+    );
+    println!("reached={} bounds={low:?}..{high:?}", reached.len());
+    let parts = collision_parts(&zone, feet);
+    #[allow(clippy::cast_possible_truncation)] // Two-unit grid cells.
+    let cell = |p: Vec3| ((p.x / 2.0).round() as i32, (p.z / 2.0).round() as i32);
+    let seen: HashSet<(i32, i32)> = reached.iter().map(|p| cell(*p)).collect();
+    let mut blockers: BTreeMap<String, usize> = BTreeMap::new();
+    let mut ledges = 0;
+    for p in &reached {
+        for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            let direction = Vec3::new(dx, 0.0, dz);
+            if seen.contains(&cell(*p + direction * 2.0)) {
+                continue;
+            }
+            let hits: Vec<&str> = parts
+                .iter()
+                .filter(|(_, part)| {
+                    [0.9, 3.0, 5.5].iter().any(|height| {
+                        part.ray_distance(*p + Vec3::Y * height, direction, 2.5)
+                            .is_some()
+                    })
+                })
+                .map(|(name, _)| name.as_str())
+                .collect();
+            if hits.is_empty() {
+                ledges += 1;
+                let beyond = *p + direction * 2.0;
+                let floor = world.ground(beyond, 2.0, 200.0);
+                let ceiling = |at: Vec3| world.ray_distance(at + Vec3::Y * 0.5, Vec3::Y, 30.0);
+                println!(
+                    "open_edge from={p:?} direction={direction:?} drop={:?} clearance_here={:?} clearance_beyond={:?}",
+                    floor.map(|floor| p.y - floor),
+                    ceiling(*p).map(|d| d + 0.5),
+                    floor.and_then(
+                        |floor| ceiling(Vec3::new(beyond.x, floor, beyond.z)).map(|d| d + 0.5)
+                    ),
+                );
+            }
+            for name in hits {
+                *blockers.entry(name.to_owned()).or_default() += 1;
+            }
+        }
+    }
+    println!("open_edges_without_a_wall={ledges}");
+    for (name, count) in blockers {
+        println!("blocked_by={name} edges={count}");
+    }
+}
+
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_POSITION and EQ_PROBE_MODEL"]
 fn inspect_admission_support() {
