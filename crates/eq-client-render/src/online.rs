@@ -292,12 +292,15 @@ pub(super) fn receive(
                 backward_units_per_second,
                 walk_units_per_second,
                 strafe_units_per_second,
+                falls,
             }) => {
                 if state.session_id == Some(session_id) {
                     motion.reset(units_per_second);
                     motion.backward_speed = backward_units_per_second;
                     motion.walk_speed = walk_units_per_second;
                     motion.strafe_speed = strafe_units_per_second;
+                    motion.airborne =
+                        falls.then(eq_client_core::movement::AirborneController::default);
                 }
             }
             WorldUpdate::Game(WorldEvent::MotionSent {

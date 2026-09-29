@@ -1,7 +1,11 @@
 //! Conservative ground locomotion and continuous collision queries.
 
 mod airborne;
-pub use airborne::{AirborneController, Landing, MotionStep, VerticalPhysics};
+mod path;
+mod route;
+pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
+pub use path::{PathProgress, PathSearch};
+pub use route::{Route, RouteStep};
 
 #[derive(Clone, Copy)]
 enum Support {
@@ -10,7 +14,7 @@ enum Support {
     Airborne,
 }
 
-use eq_network_game::movement::MAX_GROUNDED_STEP;
+pub use eq_network_game::movement::{MAX_FALL_SPEED, MAX_GROUNDED_STEP};
 use glam::Vec3;
 use parry3d::{
     math::{Pose, Vector},

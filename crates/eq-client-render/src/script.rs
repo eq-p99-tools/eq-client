@@ -21,6 +21,9 @@ const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_ONLINE_WAIT: Duration = Duration::from_mins(3);
 const MAX_RUNTIME: Duration = Duration::from_mins(15);
 const FOLLOW_POLL: Duration = Duration::from_millis(250);
+const MAX_WALK: Duration = Duration::from_mins(1);
+/// Path positions searched per frame, keeping each frame short.
+const SEARCH_BUDGET: usize = 1500;
 /// `EQEmu` GM commands a script may send, without the leading `#`.
 const GM_COMMANDS: [&str; 8] = [
     "summon",
@@ -73,6 +76,9 @@ pub enum Step {
     /// Holds W toward the current target until it is within a distance, for a
     /// bounded duration.
     Approach(f32, Duration),
+    /// Walks a searched path around walls to within a distance of the current
+    /// target, for a bounded duration.
+    Walk(f32, Duration),
     /// Left-clicks one UI control through Bevy's ordinary interaction state.
     Click(ClickTarget),
     /// Logs a numeric summary of player, resource, cast and buff state.
@@ -191,6 +197,9 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("face", []) => Step::Face,
         ("approach", [range, duration]) => {
             Step::Approach(number(range, 1.0, 200.0)?, millis(duration, MAX_HOLD)?)
+        }
+        ("walk", [range, duration]) => {
+            Step::Walk(number(range, 1.0, 200.0)?, millis(duration, MAX_WALK)?)
         }
         ("click", ["slot", slot]) => Step::Click(ClickTarget::Slot(
             slot.parse()
@@ -382,6 +391,8 @@ pub struct Script {
     accepted: usize,
     /// Whether `gm` steps may send `#` commands (a local `EQEmu` session).
     gm: bool,
+    /// The route a `walk` step is searching for or following.
+    route: Option<eq_client_core::movement::Route>,
 }
 
 struct Follow {
@@ -406,6 +417,7 @@ impl Script {
             chat_seen: 0,
             follow: None,
             gm: false,
+            route: None,
         }
     }
 
@@ -488,6 +500,7 @@ impl Script {
         self.steps.clear();
         self.current = None;
         self.follow = None;
+        self.route = None;
         info!("Script stopped: {reason}");
     }
 }
@@ -536,6 +549,8 @@ pub(super) fn drive(
     mut chat: ResMut<super::chat::ChatState>,
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
+    bodies: Query<&super::PlayerBody, With<super::Player>>,
+    collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
     mut buttons: Buttons,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -597,6 +612,50 @@ pub(super) fn drive(
                 let distance = face(&online, &observed, &players, &mut cameras);
                 distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
             }
+            Step::Walk(_, duration) => {
+                use eq_client_core::movement::RouteStep;
+                let ends = bodies
+                    .single()
+                    .ok()
+                    .and_then(|body| walk_ends((&*online, &observed), *body));
+                let world = collision
+                    .as_ref()
+                    .and_then(|collision| collision.0.as_ref());
+                let (Some((feet, goal)), Some(world)) = (ends, world) else {
+                    script.stop(&mut keys, &mut mouse, "walk lost its target or collision");
+                    return;
+                };
+                let Some(route) = script.route.as_mut() else {
+                    script.stop(&mut keys, &mut mouse, "walk lost its route");
+                    return;
+                };
+                let searching = route.is_searching();
+                let step = route.next(world, feet, goal, SEARCH_BUDGET);
+                if searching && !route.is_searching() {
+                    let (waypoints, partial) = (route.remaining(), route.partial());
+                    info!(waypoints, partial, "Script route ready");
+                }
+                match step {
+                    RouteStep::Unreachable => {
+                        script.stop(&mut keys, &mut mouse, "no walkable path from here");
+                        return;
+                    }
+                    RouteStep::Arrived => true,
+                    RouteStep::Searching => elapsed >= *duration,
+                    RouteStep::Toward(next) => {
+                        let to = next - feet;
+                        // W walks along the camera's forward direction, opposite its orbit offset.
+                        for mut camera in &mut cameras {
+                            camera.yaw = to.x.atan2(to.z) + std::f32::consts::PI;
+                        }
+                        if script.held.is_empty() {
+                            keys.press(KeyCode::KeyW);
+                            script.held = vec![KeyCode::KeyW];
+                        }
+                        elapsed >= *duration
+                    }
+                }
+            }
             // Held movement keys are traced too, to measure motion cadence.
             Step::Hold(_, duration) | Step::Trace(duration) => {
                 if let Ok(transform) = players.single() {
@@ -644,6 +703,7 @@ pub(super) fn drive(
         }
         script.release(&mut keys, &mut mouse);
         script.current = None;
+        script.route = None;
     }
     let Some(step) = script.steps.pop_front() else {
         return;
@@ -768,6 +828,22 @@ pub(super) fn drive(
             keys.press(KeyCode::KeyW);
             script.held = vec![KeyCode::KeyW];
         }
+        Step::Walk(range, _) => {
+            let route = bodies.single().ok().and_then(|body| {
+                let (feet, goal) = walk_ends((&*online, &observed), *body)?;
+                Some(eq_client_core::movement::Route::new(
+                    feet,
+                    goal,
+                    *range,
+                    body.height,
+                ))
+            });
+            let Some(route) = route else {
+                script.stop(&mut keys, &mut mouse, "walk needs a visible target");
+                return;
+            };
+            script.route = Some(route);
+        }
         Step::WaitSelect
         | Step::WaitOnline
         | Step::WaitZone(_)
@@ -814,6 +890,18 @@ fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
         }
     }
     false
+}
+
+type Seen<'a, 'w> = (&'a super::online::OnlineState, &'a Observed<'w>);
+
+/// The player's feet at its accepted position and the target's position, in
+/// render coordinates.
+fn walk_ends((online, observed): Seen, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
+    let player = online.player.as_ref()?;
+    let spawn = observed.2.selected.and_then(|id| online.spawns.get(&id))?;
+    let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+    let goal = Vec3::from_array(eq_client_core::render_position(spawn.position));
+    Some((origin - Vec3::Y * body.feet_offset, goal))
 }
 
 /// Points the camera from the player toward the target and returns the flat
@@ -988,7 +1076,7 @@ mod tests {
         let steps = parse(
             "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
              gm summon\ngm givemoney 0 0 5 0\npress F1 # self\n\
-             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nclick slot 23\n\
+             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\nreport after cast\nscreenshot a.png\nquit\n",
             base,
         )
@@ -1030,6 +1118,7 @@ mod tests {
                 Step::Trace(Duration::from_secs(2)),
                 Step::Face,
                 Step::Approach(12.0, Duration::from_secs(5)),
+                Step::Walk(8.0, Duration::from_secs(30)),
                 Step::Click(ClickTarget::Slot(23)),
                 Step::Click(ClickTarget::Scribe),
                 Step::Click(ClickTarget::Store),
@@ -1063,6 +1152,8 @@ mod tests {
             "create lowercase 1 2 0 212 1 4",
             "create Testbad 1 17 0 212 1 4",
             "slash ooc",
+            "walk 8 90000",
+            "walk 0 1000",
             "gm",
             "gm shutdown",
             "gm SUMMON",

@@ -171,8 +171,8 @@ fn main() {
     // Validate every local input before the session logs in.
     let (script, script_follow) = script_input(&arguments);
     let protocol = online_protocol(arguments.online);
-    let local_gm_commands = protocol == Some(ServerProtocol::EqEmu);
-    if let Err(error) = check_gm_steps(script.as_deref(), local_gm_commands) {
+    let local_eqemu = protocol == Some(ServerProtocol::EqEmu);
+    if let Err(error) = check_gm_steps(script.as_deref(), local_eqemu) {
         eprintln!("error: {error}");
         std::process::exit(2);
     }
@@ -258,7 +258,7 @@ fn main() {
             },
             script,
             script_follow,
-            local_gm_commands,
+            local_gm_commands: local_eqemu,
             window_position: arguments.window_position,
         },
         updates,
