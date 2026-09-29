@@ -266,6 +266,13 @@ fn install_script(app: &mut App, steps: Vec<script::Step>) {
 fn install_overlays(app: &mut App) {
     app.init_resource::<combat::CombatState>()
         .init_resource::<trade::TradeState>()
+        .init_resource::<hud::action_bar::ActionRequests>()
+        .add_systems(
+            Update,
+            hud::action_bar::update
+                .after(online::receive)
+                .after(hud::update),
+        )
         .add_systems(Startup, trade::demo)
         .add_systems(
             Update,

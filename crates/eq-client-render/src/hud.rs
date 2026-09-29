@@ -1,5 +1,6 @@
 //! Offline character panel and empty action slots, ready for session data.
 
+pub(super) mod action_bar;
 mod cooldowns;
 pub(crate) mod hotbar;
 pub(crate) mod messages;
@@ -289,6 +290,7 @@ pub(super) fn spawn(commands: &mut Commands) {
     super::items::spawn(commands);
     super::inventory::spawn(commands);
     super::spellbook::spawn(commands);
+    action_bar::spawn(commands);
 
     let character = panel(commands, root, 186.0);
     super::windows::identify(commands, character, "CHARACTER");
