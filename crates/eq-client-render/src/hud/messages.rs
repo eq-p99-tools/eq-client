@@ -38,6 +38,16 @@ impl Messages {
 
     /// Interrupt packets supply a reason ID but no format arguments; never invent them.
     pub(super) fn interruption(&self, id: u32) -> String {
+        self.argument_free(id)
+            .unwrap_or_else(|| format!("Casting interrupted (server reason {id})"))
+    }
+
+    /// Returns a local argument-free message, or the fallback when unavailable.
+    pub(super) fn text(&self, id: u32, fallback: &str) -> String {
+        self.argument_free(id).unwrap_or_else(|| fallback.into())
+    }
+
+    fn argument_free(&self, id: u32) -> Option<String> {
         self.0
             .get(&id)
             .filter(|text| {
@@ -47,7 +57,6 @@ impl Messages {
                     .any(|pair| pair[0] == b'%' && pair[1].is_ascii_digit())
             })
             .cloned()
-            .unwrap_or_else(|| format!("Casting interrupted (server reason {id})"))
     }
 }
 

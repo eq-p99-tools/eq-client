@@ -424,6 +424,7 @@ pub(super) fn actions(
     bar_clicks: Query<(&Interaction, &hotbar::Slot), Changed<Interaction>>,
     bindings: Res<hotbar::Bindings>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    definitions: (Res<super::spellbook::SpellNames>, Res<messages::Messages>),
 ) {
     if !online.connected
         || online.death.is_some()
@@ -467,14 +468,25 @@ pub(super) fn actions(
         _ => None,
     });
     if let Some(gem) = gem {
+        let (names, messages) = definitions;
+        let mana_cost = player
+            .memorized_spells
+            .get(usize::from(gem))
+            .copied()
+            .flatten()
+            .and_then(|spell| names.mana(spell));
         requests::spell(
             &mut hud,
             player,
             sender,
-            session_id,
-            gem,
-            target.selected.unwrap_or(player.spawn_id),
-            forgetting,
+            &requests::Request {
+                session_id,
+                gem,
+                target_id: target.selected.unwrap_or(player.spawn_id),
+                forgetting,
+                mana_cost,
+            },
+            &messages,
         );
     }
     let posture = if keys.just_pressed(KeyCode::KeyC) {

@@ -4,16 +4,32 @@ use super::HudState;
 use eq_client_core::{ClientCommand, PlayerState};
 use std::{sync::mpsc::SyncSender, time::Instant};
 
+/// One user attempt to cast or forget a memorized gem.
+#[derive(Clone, Copy)]
+pub(super) struct Request {
+    pub session_id: u64,
+    pub gem: u8,
+    pub target_id: u16,
+    pub forgetting: bool,
+    /// Unmodified installation mana cost; None leaves the decision to the server.
+    pub mana_cost: Option<u32>,
+}
+
 /// Validates local availability and queues a fresh request without predicting its result.
 pub(super) fn spell(
     hud: &mut HudState,
     player: &PlayerState,
     sender: &SyncSender<ClientCommand>,
-    session_id: u64,
-    gem: u8,
-    target_id: u16,
-    forgetting: bool,
+    request: &Request,
+    messages: &super::messages::Messages,
 ) {
+    let Request {
+        session_id,
+        gem,
+        target_id,
+        forgetting,
+        mana_cost,
+    } = *request;
     let now = Instant::now();
     let message = match player
         .memorized_spells
@@ -25,6 +41,16 @@ pub(super) fn spell(
         Some(_) if hud.casting.is_some() => "Already casting — duck [C] to interrupt".into(),
         Some(_) if hud.pending_cast.is_some() => {
             "Waiting for the server to acknowledge the cast".into()
+        }
+        // Like the official client, refuse locally when server-reported mana is short;
+        // P99 otherwise answers with a generic interruption.
+        Some(_)
+            if !forgetting
+                && mana_cost
+                    .zip(hud.mana)
+                    .is_some_and(|(cost, mana)| cost > mana) =>
+        {
+            messages.text(199, "Insufficient Mana to cast this spell!")
         }
         Some(spell_id) => {
             let remaining = hud.cooldowns.remaining(spell_id, now);

@@ -390,6 +390,8 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         .init_resource::<TargetState>()
         .init_resource::<HudState>()
         .init_resource::<hotbar::Bindings>()
+        .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<messages::Messages>()
         .add_systems(Update, actions);
     app.world_mut().spawn((
         Window {
@@ -564,7 +566,19 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         .clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let mut hud = HudState::default();
-    requests::spell(&mut hud, &player, &sender, 7, 1, 12, false);
+    requests::spell(
+        &mut hud,
+        &player,
+        &sender,
+        &requests::Request {
+            session_id: 7,
+            gem: 1,
+            target_id: 12,
+            forgetting: false,
+            mana_cost: None,
+        },
+        &messages::Messages::default(),
+    );
     assert!(
         hud.action_feedback
             .as_ref()
@@ -573,11 +587,35 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             .contains("Empty spell gem")
     );
     assert!(receiver.try_recv().is_err());
-    requests::spell(&mut hud, &player, &sender, 7, 0, 99, false);
+    requests::spell(
+        &mut hud,
+        &player,
+        &sender,
+        &requests::Request {
+            session_id: 7,
+            gem: 0,
+            target_id: 99,
+            forgetting: false,
+            mana_cost: None,
+        },
+        &messages::Messages::default(),
+    );
     assert!(hud.action_feedback.as_ref().unwrap().1.contains("queued"));
     assert!(hud.pending_cast.is_none());
     assert!(hud.casting.is_none());
-    requests::spell(&mut hud, &player, &sender, 7, 0, 99, false);
+    requests::spell(
+        &mut hud,
+        &player,
+        &sender,
+        &requests::Request {
+            session_id: 7,
+            gem: 0,
+            target_id: 99,
+            forgetting: false,
+            mana_cost: None,
+        },
+        &messages::Messages::default(),
+    );
     assert!(
         hud.action_feedback
             .as_ref()
@@ -591,7 +629,19 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     ));
     assert!(receiver.try_recv().is_err());
     drop(receiver);
-    requests::spell(&mut hud, &player, &sender, 7, 0, 99, false);
+    requests::spell(
+        &mut hud,
+        &player,
+        &sender,
+        &requests::Request {
+            session_id: 7,
+            gem: 0,
+            target_id: 99,
+            forgetting: false,
+            mana_cost: None,
+        },
+        &messages::Messages::default(),
+    );
     assert!(
         hud.action_feedback
             .as_ref()
@@ -599,4 +649,69 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             .1
             .contains("was not sent")
     );
+}
+
+#[test]
+fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
+    let mut gems = [None; 8];
+    gems[0] = Some(73);
+    let player = PlayerState {
+        base_attributes: None,
+        deity: None,
+        class: Some(2),
+        spawn_id: 12,
+        race: 1,
+        gender: 0,
+        level: 1,
+        position: WorldPosition::default(),
+        mana: 50,
+        endurance: None,
+        skills: None,
+        spell_refresh_ms: None,
+        memorized_spells: gems,
+        size: 6.0,
+        walk_speed: 0.0,
+        run_speed: 0.0,
+        hp_percent: Some(100),
+    };
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    let messages = messages::Messages::parse(
+        "EQST0002
+0
+199 Synthetic short mana
+",
+    );
+    let mut request = requests::Request {
+        session_id: 7,
+        gem: 0,
+        target_id: 12,
+        forgetting: false,
+        mana_cost: Some(10),
+    };
+    let mut hud = HudState {
+        mana: Some(9),
+        ..HudState::default()
+    };
+    requests::spell(&mut hud, &player, &sender, &request, &messages);
+    assert_eq!(
+        hud.action_feedback.as_ref().unwrap().1,
+        "Synthetic short mana"
+    );
+    assert!(receiver.try_recv().is_err());
+    request.forgetting = true;
+    requests::spell(&mut hud, &player, &sender, &request, &messages);
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        ClientCommand::ForgetSpell { gem: 0, .. }
+    ));
+    request.forgetting = false;
+    for (mana, cost) in [(Some(10), Some(10)), (None, Some(10)), (Some(0), None)] {
+        hud.mana = mana;
+        request.mana_cost = cost;
+        requests::spell(&mut hud, &player, &sender, &request, &messages);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            ClientCommand::CastSpell { spell_id: 73, .. }
+        ));
+    }
 }

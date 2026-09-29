@@ -47,6 +47,19 @@ impl Selection {
         }
     }
 
+    /// Highlights a listed character by exact server spelling, ignoring case.
+    pub(super) fn choose_named(&mut self, name: &str) -> bool {
+        let slot = self
+            .entries
+            .iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(name))
+            .map(|entry| entry.slot);
+        if slot.is_some() && !self.submitted {
+            self.selected = slot;
+        }
+        slot.is_some()
+    }
+
     /// Queues once; a full queue leaves the choice available for another click.
     fn enter(&mut self, sender: &CommandsToServer) {
         if self.submitted {

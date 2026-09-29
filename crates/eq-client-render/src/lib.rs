@@ -239,7 +239,7 @@ pub fn run(
     install_overlays(&mut app);
     if let Some(steps) = steps {
         app.insert_resource(script::Script::new(steps));
-        app.add_systems(PreUpdate, script::drive.after(bevy::input::InputSystems));
+        app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
     }
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
@@ -570,7 +570,8 @@ fn exit_after_screenshot(
     if online.finished && settings.0.screenshot.is_some() {
         app_exit.write(AppExit::error());
     }
-    if !captured.is_empty() {
+    // Scripted screenshots keep the session running; only `--screenshot` is one-shot.
+    if !captured.is_empty() && settings.0.screenshot.is_some() {
         app_exit.write(AppExit::Success);
     }
 }

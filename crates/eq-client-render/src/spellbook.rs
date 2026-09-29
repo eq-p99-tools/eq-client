@@ -15,9 +15,9 @@ pub(super) struct GemHint;
 #[derive(Component)]
 pub(super) struct PageButton(bool);
 #[derive(Component)]
-pub(super) struct BookEntry(usize);
+pub(super) struct BookEntry(pub(super) usize);
 #[derive(Component)]
-pub(super) struct GemChoice(u8);
+pub(super) struct GemChoice(pub(super) u8);
 #[derive(Component)]
 pub(super) struct ScribeCursor;
 
@@ -226,6 +226,11 @@ impl SpellNames {
                     .alternate_duration
                     .is_some_and(|alternate| alternate.formula == 0 && alternate.duration == 0)
         })
+    }
+
+    /// Unmodified installation mana cost.
+    pub(super) fn mana(&self, id: u32) -> Option<u32> {
+        self.spells.get(&id).and_then(|spell| spell.mana)
     }
 
     pub(super) fn icon(&self, id: u32) -> Option<u32> {
