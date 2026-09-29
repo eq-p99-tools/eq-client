@@ -18,6 +18,32 @@ use std::{
     time::Duration,
 };
 
+/// Chat lines keep their text; string-table messages are resolved by presentation.
+fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
+    if let Some(string_id) = event.string_id {
+        return Some(WorldUpdate::ServerMessage {
+            string_id,
+            arguments: event
+                .arguments
+                .unwrap_or_default()
+                .into_iter()
+                .map(|argument| argument.text)
+                .collect(),
+        });
+    }
+    event
+        .message
+        .filter(|message| !message.text.is_empty())
+        .map(|message| {
+            WorldUpdate::Chat(eq_client_core::chat::ChatLine {
+                channel: event.channel_name,
+                sender: event.sender,
+                target: event.target,
+                message,
+            })
+        })
+}
+
 /// Owns shutdown: closing the viewer cancels and joins its network worker.
 pub struct SessionWorker {
     cancel: CancellationToken,
@@ -80,17 +106,7 @@ impl SessionWorker {
                         }),
                         ClientEvent::Progress(stage) => Some(progress_update(stage)),
                         ClientEvent::Record(record) => match record.event {
-                            RecordEvent::Chat(event) => event
-                                .message
-                                .filter(|message| !message.text.is_empty())
-                                .map(|message| {
-                                    WorldUpdate::Chat(eq_client_core::chat::ChatLine {
-                                        channel: event.channel_name,
-                                        sender: event.sender,
-                                        target: event.target,
-                                        message,
-                                    })
-                                }),
+                            RecordEvent::Chat(event) => chat_update(event),
                             _ => None,
                         },
                         ClientEvent::Diagnostic(message) => {

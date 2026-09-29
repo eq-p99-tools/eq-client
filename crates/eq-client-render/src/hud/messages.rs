@@ -16,7 +16,7 @@ impl Messages {
     }
 
     /// Skips the format header and count line rather than treating them as messages.
-    pub(super) fn parse(text: &str) -> Self {
+    pub(crate) fn parse(text: &str) -> Self {
         let mut lines = text.lines();
         if lines.next().map(str::trim) != Some("EQST0002") {
             return Self::default();
@@ -40,6 +40,40 @@ impl Messages {
     pub(super) fn interruption(&self, id: u32) -> String {
         self.argument_free(id)
             .unwrap_or_else(|| format!("Casting interrupted (server reason {id})"))
+    }
+
+    /// Substitutes server-supplied `%1`..`%9` arguments into a local string.
+    /// Missing strings stay identifiable instead of being silently dropped.
+    pub(crate) fn format(&self, id: u32, arguments: &[String]) -> String {
+        let Some(template) = self.0.get(&id) else {
+            return if arguments.is_empty() {
+                format!("Server message {id}")
+            } else {
+                format!("Server message {id}: {}", arguments.join(", "))
+            };
+        };
+        let mut text = String::with_capacity(template.len());
+        let mut characters = template.chars().peekable();
+        while let Some(character) = characters.next() {
+            let index = characters
+                .peek()
+                .and_then(|next| next.to_digit(10))
+                .filter(|digit| character == '%' && *digit != 0);
+            if let Some(index) = index {
+                characters.next();
+                if let Some(argument) =
+                    arguments.get(usize::try_from(index - 1).unwrap_or(usize::MAX))
+                {
+                    text.push_str(argument);
+                } else {
+                    text.push('%');
+                    text.push(char::from_digit(index, 10).unwrap_or('?'));
+                }
+            } else {
+                text.push(character);
+            }
+        }
+        text
     }
 
     /// Returns a local argument-free message, or the fallback when unavailable.
@@ -81,5 +115,21 @@ mod tests {
             Messages::load(None).interruption(73),
             "Casting interrupted (server reason 73)"
         );
+    }
+
+    #[test]
+    fn server_arguments_fill_numbered_placeholders_in_order() {
+        let table = Messages::parse(
+            "EQST0002
+0 2
+80 %1 hits %2 for %3.
+81 100% sure, %9 missing
+",
+        );
+        let arguments = ["A rat".to_owned(), "YOU".to_owned(), "2 points".to_owned()];
+        assert_eq!(table.format(80, &arguments), "A rat hits YOU for 2 points.");
+        assert_eq!(table.format(81, &[]), "100% sure, %9 missing");
+        assert_eq!(table.format(99, &[]), "Server message 99");
+        assert_eq!(table.format(99, &["x".to_owned()]), "Server message 99: x");
     }
 }

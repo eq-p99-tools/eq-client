@@ -256,6 +256,7 @@ pub(super) fn input(
 pub(super) fn update(
     online: Res<OnlineState>,
     target: Res<TargetState>,
+    combat: Option<Res<super::combat::CombatState>>,
     mut texts: Query<(&mut Text, Option<&TargetName>, Option<&TargetDetails>)>,
     mut bars: Query<&mut Node, With<TargetHp>>,
 ) {
@@ -312,13 +313,22 @@ pub(super) fn update(
                         SpawnKind::Npc => "NPC",
                         _ => "Corpse",
                     };
+                    let attacking = combat.as_ref().is_some_and(|combat| combat.auto_attack);
                     format!(
-                        "{kind}   HP {}   {}",
+                        "{kind}   HP {}   {}
+{}",
                         hp.map_or_else(|| "--".into(), |v| format!("{v}%")),
-                        if target.sent {
+                        if attacking {
+                            "Attacking"
+                        } else if target.sent {
                             "Request sent"
                         } else {
                             &target.status
+                        },
+                        if attacking {
+                            "G stop attacking | K consider | H hail"
+                        } else {
+                            "K consider | G attack | H hail"
                         }
                     )
                 },

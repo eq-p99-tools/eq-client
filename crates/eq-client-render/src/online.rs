@@ -73,12 +73,16 @@ pub(super) fn receive(
     definitions: (
         Res<ViewerSettings>,
         Option<Res<super::spellbook::SpellNames>>,
+        Option<Res<hud::messages::Messages>>,
     ),
     mut state: ResMut<OnlineState>,
     mut hud: ResMut<hud::HudState>,
     mut motion: ResMut<super::motion::Controls>,
     mut chat: ResMut<super::chat::ChatState>,
-    mut target: ResMut<super::target::TargetState>,
+    (mut target, mut combat): (
+        ResMut<super::target::TargetState>,
+        ResMut<super::combat::CombatState>,
+    ),
     mut items: ResMut<super::items::ItemState>,
     mut inventory: ResMut<super::inventory::InventoryState>,
     entities: Query<Entity, SceneRoots>,
@@ -88,7 +92,7 @@ pub(super) fn receive(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let (settings, spell_names) = definitions;
+    let (settings, spell_names, messages) = definitions;
     let Ok(receiver) = updates.0.lock() else {
         return;
     };
@@ -137,6 +141,16 @@ pub(super) fn receive(
             }
             WorldUpdate::Chat(message) => {
                 chat.history.push(message);
+            }
+            WorldUpdate::ServerMessage {
+                string_id,
+                arguments,
+            } => {
+                let text = messages.as_deref().map_or_else(
+                    || format!("Server message {string_id}"),
+                    |messages| messages.format(string_id, &arguments),
+                );
+                chat.history.push(super::chat::system_line(text));
             }
             WorldUpdate::Game(WorldEvent::CharacterSelection {
                 selection_id,
@@ -367,17 +381,8 @@ pub(super) fn receive(
                 state.pending_transfer = None;
                 state.connected = state.death.is_none();
                 hud.status = reason.to_string();
-                chat.history.push(eq_client_core::chat::ChatLine {
-                    channel: eq_client_core::chat::ChannelName::System,
-                    sender: None,
-                    target: None,
-                    message: eq_client_core::chat::Message {
-                        message: None,
-                        message_hex: None,
-                        text: reason.to_string(),
-                        item_links: Vec::new(),
-                    },
-                });
+                chat.history
+                    .push(super::chat::system_line(reason.to_string()));
             }
             WorldUpdate::Game(WorldEvent::ZoneLineRejected { session_id, reason }) => {
                 if state.session_id == Some(session_id) {
@@ -629,6 +634,42 @@ pub(super) fn receive(
                     hud.spell_effect(effect, spell_names.as_deref());
                 }
             }
+            WorldUpdate::Game(WorldEvent::Consideration(consideration)) => {
+                let name = state
+                    .spawns
+                    .get(&consideration.target_id)
+                    .map_or_else(String::new, |spawn| {
+                        super::combat::display_name(&spawn.name)
+                    });
+                if let Some(messages) = messages.as_deref() {
+                    chat.history
+                        .push(super::chat::system_line(super::combat::consideration_text(
+                            messages,
+                            &name,
+                            &consideration,
+                        )));
+                }
+                combat
+                    .considered
+                    .insert(consideration.target_id, consideration.color);
+            }
+            WorldUpdate::Game(WorldEvent::Damage(damage)) => {
+                if let (Some(player), Some(messages)) = (state.player.as_ref(), messages.as_deref())
+                    && let Some(text) = super::combat::damage_text(
+                        messages,
+                        player.spawn_id,
+                        |id| {
+                            state.spawns.get(&id).map_or_else(
+                                || "someone".to_owned(),
+                                |spawn| super::combat::display_name(&spawn.name),
+                            )
+                        },
+                        &damage,
+                    )
+                {
+                    chat.history.push(super::chat::system_line(text));
+                }
+            }
             WorldUpdate::Game(WorldEvent::SpellBook(book)) => hud.spell_book = Some(book),
             WorldUpdate::Game(WorldEvent::BookAction(status)) => {
                 hud.book_action = (!matches!(status, eq_client_core::BookActionStatus::Confirmed))
@@ -681,6 +722,7 @@ mod tests {
             .init_resource::<super::super::motion::Controls>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<super::super::target::TargetState>()
+            .init_resource::<super::super::combat::CombatState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
             .init_resource::<Assets<Image>>()

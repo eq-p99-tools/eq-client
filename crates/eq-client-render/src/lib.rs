@@ -7,6 +7,7 @@ mod buffs;
 mod character;
 mod character_select;
 mod chat;
+mod combat;
 mod doors;
 mod entities;
 mod hud;
@@ -252,6 +253,13 @@ pub fn run(
 
 /// Registers overlay updates with their required network and layout ordering.
 fn install_overlays(app: &mut App) {
+    app.init_resource::<combat::CombatState>().add_systems(
+        Update,
+        (
+            combat::input.after(target::input).before(target::update),
+            combat::target_color.after(target::update),
+        ),
+    );
     app.add_systems(Update, windows::input);
     app.add_systems(
         Update,

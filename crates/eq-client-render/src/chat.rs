@@ -7,9 +7,24 @@ use bevy::{
 };
 use eq_client_core::{
     ClientCommand, OutboundChat,
-    chat::{ChatHistory, ChatTab, channel_rgb},
+    chat::{ChannelName, ChatHistory, ChatLine, ChatTab, Message, channel_rgb},
 };
 use std::collections::BTreeMap;
+
+/// A locally produced line in the System channel.
+pub(super) fn system_line(text: String) -> ChatLine {
+    ChatLine {
+        channel: ChannelName::System,
+        sender: None,
+        target: None,
+        message: Message {
+            message: None,
+            message_hex: None,
+            text,
+            item_links: Vec::new(),
+        },
+    }
+}
 
 #[derive(Clone, Copy)]
 struct TabView {

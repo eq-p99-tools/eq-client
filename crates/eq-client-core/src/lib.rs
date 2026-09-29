@@ -8,6 +8,7 @@ pub mod resources;
 pub mod targeting;
 pub use eq_network_game::characters::CharacterChoice;
 pub use eq_network_game::chat::OutboundChat;
+pub use eq_network_game::combat;
 pub use eq_network_game::command::GameCommand as ClientCommand;
 pub use eq_network_game::command::Posture;
 pub use eq_network_game::doors;
@@ -45,6 +46,13 @@ pub enum WorldUpdate {
     },
     /// A decoded line for the on-screen communication log.
     Chat(chat::ChatLine),
+    /// A server string-table message; presentation resolves the ID locally.
+    ServerMessage {
+        /// Index into the user's installed `eqstr_us.txt`.
+        string_id: u32,
+        /// Ordered `%1`, `%2`, ... substitutions supplied by the server.
+        arguments: Vec<String>,
+    },
 }
 
 /// Resolves classic playable race/gender identifiers without guessing NPC models.
