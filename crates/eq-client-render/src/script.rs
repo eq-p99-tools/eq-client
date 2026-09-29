@@ -430,8 +430,9 @@ pub(super) fn drive(
     if let Some((step, since)) = script.current.clone() {
         let elapsed = now.saturating_sub(since);
         let done = match &step {
-            Step::Hold(_, duration) | Step::Wait(duration) => elapsed >= *duration,
-            Step::Trace(duration) => {
+            Step::Wait(duration) => elapsed >= *duration,
+            // Held movement keys are traced too, to measure motion cadence.
+            Step::Hold(_, duration) | Step::Trace(duration) => {
                 if let Ok(transform) = players.single() {
                     let (x, y, z, heading) = placement(transform);
                     debug!(
