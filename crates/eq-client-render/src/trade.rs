@@ -53,6 +53,23 @@ impl TradeState {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Like the Titanium client, applies coin changes the server reports without a
+    /// money update (loot coins, purchase prices). Only the total is tracked exactly;
+    /// the next server money update restores the true denominations.
+    fn adjust_coins(&mut self, copper: i64) {
+        if let Some(coins) = &mut self.coins {
+            let total = i64::try_from(coins.total_copper()).unwrap_or(i64::MAX);
+            let total = u64::try_from(total.saturating_add(copper).max(0)).unwrap_or(0);
+            let denomination = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+            *coins = Coins {
+                platinum: denomination(total / 1000),
+                gold: denomination(total / 100 % 10),
+                silver: denomination(total / 10 % 10),
+                copper: denomination(total % 10),
+            };
+        }
+    }
+
     /// Applies one loot update and returns chat feedback.
     pub(super) fn apply_loot(&mut self, update: LootUpdate) -> Option<String> {
         self.changed();
@@ -73,6 +90,7 @@ impl TradeState {
                     self.loot = None;
                     return Some(refusal.into());
                 }
+                self.adjust_coins(i64::try_from(coins.total_copper()).unwrap_or(0));
                 (coins.total_copper() > 0).then(|| {
                     format!(
                         "You receive {} from the corpse.",
@@ -129,7 +147,9 @@ impl TradeState {
                 window.stock.remove(&slot);
             }
             MerchantUpdate::Closed => self.merchant = None,
-            MerchantUpdate::Bought { .. } | MerchantUpdate::Sold { .. } => (),
+            MerchantUpdate::Bought { price, .. } => self.adjust_coins(-i64::from(price)),
+            // Sales are followed by a server money update.
+            MerchantUpdate::Sold { .. } => (),
         }
         None
     }
@@ -592,6 +612,56 @@ mod tests {
         );
         assert!(trade.loot.is_none());
         assert_eq!(trade.apply_loot(LootUpdate::Closed), None);
+    }
+
+    #[test]
+    fn loot_coins_and_purchases_adjust_the_carried_total() {
+        let mut trade = TradeState {
+            coins: Some(Coins {
+                platinum: 1,
+                gold: 0,
+                silver: 0,
+                copper: 0,
+            }),
+            loot: Some(LootWindow {
+                corpse_id: 9,
+                name: "a rat".into(),
+                items: BTreeMap::new(),
+                listed: false,
+                pending: None,
+                loot_all: false,
+            }),
+            merchant: Some(MerchantWindow {
+                merchant_id: 8,
+                name: "Merchant".into(),
+                stock: BTreeMap::new(),
+            }),
+            ..TradeState::default()
+        };
+        trade.apply_loot(LootUpdate::Opened {
+            response: LootResponse::Normal,
+            coins: Coins {
+                platinum: 0,
+                gold: 0,
+                silver: 1,
+                copper: 5,
+            },
+        });
+        assert_eq!(trade.coins.unwrap().total_copper(), 1015);
+        trade.apply_merchant(MerchantUpdate::Bought {
+            slot: 2,
+            quantity: 1,
+            price: 20,
+        });
+        assert_eq!(
+            trade.coins.unwrap(),
+            Coins {
+                platinum: 0,
+                gold: 9,
+                silver: 9,
+                copper: 5,
+            }
+        );
     }
 
     #[test]
