@@ -314,9 +314,14 @@ pub(super) fn update(
                         _ => "Corpse",
                     };
                     let attacking = combat.as_ref().is_some_and(|combat| combat.auto_attack);
+                    let keys = match s.kind {
+                        _ if attacking => "G stop attacking | K consider",
+                        SpawnKind::Npc => "K consider | G attack | H hail | U trade",
+                        SpawnKind::Player => "K consider | H hail",
+                        _ => "L loot",
+                    };
                     format!(
-                        "{kind}   HP {}   {}
-{}",
+                        "{kind}   HP {}   {}\n{keys}",
                         hp.map_or_else(|| "--".into(), |v| format!("{v}%")),
                         if attacking {
                             "Attacking"
@@ -325,11 +330,6 @@ pub(super) fn update(
                         } else {
                             &target.status
                         },
-                        if attacking {
-                            "G stop attacking | K consider | H hail"
-                        } else {
-                            "K consider | G attack | H hail"
-                        }
                     )
                 },
             );
