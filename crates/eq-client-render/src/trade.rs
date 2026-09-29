@@ -472,9 +472,10 @@ pub(super) fn present(
         };
         spawn_panel(
             &mut commands,
-            &format!("LOOT {}", window.name.to_uppercase()),
-            (px(24), px(96)),
-            status,
+            // Stable titles keep a dragged window in place for every corpse.
+            "LOOT",
+            (px(24), Val::Auto, px(110)),
+            &format!("{}: {status}", window.name),
             &rows,
             &[(Action::TakeAll, "Loot all"), (Action::EndLoot, "Done")],
         );
@@ -512,9 +513,9 @@ pub(super) fn present(
             .map_or_else(|| "--".into(), |coins| coin_text(coins.total_copper()));
         spawn_panel(
             &mut commands,
-            &format!("MERCHANT {}", window.name.to_uppercase()),
-            (px(24), px(96)),
-            &format!("Your coin: {coins}"),
+            "MERCHANT",
+            (Val::Auto, px(24), px(96)),
+            &format!("{}   Your coin: {coins}", window.name),
             &rows,
             &[(Action::EndShop, "Done")],
         );
@@ -536,7 +537,7 @@ fn item_label(item: &InventoryItem) -> String {
 fn spawn_panel(
     commands: &mut Commands,
     title: &str,
-    (right, top): (Val, Val),
+    (left, right, top): (Val, Val, Val),
     status: &str,
     rows: &[(Action, String)],
     footer: &[(Action, &str)],
@@ -547,6 +548,7 @@ fn spawn_panel(
             windows::Frame::default(),
             Node {
                 position_type: PositionType::Absolute,
+                left,
                 right,
                 top,
                 width: px(300),
