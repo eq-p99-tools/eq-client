@@ -519,11 +519,20 @@ fn submit_draft(
         if !online.connected || online.death.is_some() {
             return Err("Connect before sending chat".into());
         }
-        let message = outbound(state.active, state.draft.trim())?;
-        sender
+        let sender = sender
             .0
             .as_ref()
-            .ok_or_else(|| "Network worker is unavailable".to_owned())?
+            .ok_or_else(|| "Network worker is unavailable".to_owned())?;
+        if let Some(commands) = game_commands(state.draft.trim(), online) {
+            for command in commands? {
+                sender
+                    .try_send(command)
+                    .map_err(|_| "Command could not be queued".to_owned())?;
+            }
+            return Ok(());
+        }
+        let message = outbound(state.active, state.draft.trim())?;
+        sender
             .try_send(ClientCommand::SendChat(message))
             .map_err(|_| "Chat could not be queued".to_owned())?;
         Ok(())
@@ -535,6 +544,40 @@ fn submit_draft(
         }
         Err(error) => state.status = error,
     }
+}
+
+/// Slash commands that are game actions rather than chat; None means ordinary chat.
+fn game_commands(
+    input: &str,
+    online: &super::online::OnlineState,
+) -> Option<Result<Vec<ClientCommand>, String>> {
+    let name = input.strip_prefix('/')?.trim().to_ascii_lowercase();
+    let posture = |posture| {
+        let (Some(session_id), Some(player)) = (online.session_id, online.player.as_ref()) else {
+            return Err("Enter the world first".to_owned());
+        };
+        Ok(ClientCommand::SetPosture {
+            session_id,
+            spawn_id: player.spawn_id,
+            posture,
+            created: std::time::Instant::now(),
+        })
+    };
+    Some(match name.as_str() {
+        "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
+        "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
+        // Camping requires sitting, so sit first as a player would.
+        "camp" => posture(eq_client_core::Posture::Sitting).map(|sit| {
+            vec![
+                sit,
+                ClientCommand::Camp {
+                    session_id: online.session_id.unwrap_or_default(),
+                    created: std::time::Instant::now(),
+                },
+            ]
+        }),
+        _ => return None,
+    })
 }
 
 fn outbound(tab: ChatTab, input: &str) -> Result<OutboundChat, String> {
@@ -652,6 +695,57 @@ pub(super) fn seed_demo(history: &mut ChatHistory) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camp_sits_first_and_game_commands_never_become_chat() {
+        let mut online = super::super::online::OnlineState::new(true);
+        assert!(game_commands("/say hello", &online).is_none());
+        assert!(game_commands("hello", &online).is_none());
+        assert!(game_commands("/camp", &online).unwrap().is_err());
+        online.session_id = Some(4);
+        online.player = Some(eq_client_core::PlayerState {
+            base_attributes: None,
+            deity: None,
+            class: Some(2),
+            spawn_id: 12,
+            race: 1,
+            gender: 0,
+            level: 1,
+            position: eq_client_core::WorldPosition::default(),
+            mana: 0,
+            endurance: None,
+            skills: None,
+            spell_refresh_ms: None,
+            memorized_spells: [None; 8],
+            size: 6.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            hp_percent: Some(100),
+        });
+        let commands = game_commands("/CAMP", &online).unwrap().unwrap();
+        assert!(matches!(
+            commands.as_slice(),
+            [
+                ClientCommand::SetPosture {
+                    session_id: 4,
+                    spawn_id: 12,
+                    posture: eq_client_core::Posture::Sitting,
+                    ..
+                },
+                ClientCommand::Camp { session_id: 4, .. }
+            ]
+        ));
+        assert!(matches!(
+            game_commands("/stand", &online)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::SetPosture {
+                posture: eq_client_core::Posture::Standing,
+                ..
+            }]
+        ));
+    }
     #[test]
     fn character_selection_enter_does_not_open_chat_or_leak_after_admission() {
         let mut app = App::new();

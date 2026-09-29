@@ -634,6 +634,40 @@ pub(super) fn receive(
                     hud.spell_effect(effect, spell_names.as_deref());
                 }
             }
+            WorldUpdate::Game(WorldEvent::Camp(status)) => {
+                let text = match &status {
+                    eq_client_core::CampStatus::Preparing => messages
+                        .as_deref()
+                        .map(|messages| messages.format(12293, &[])),
+                    eq_client_core::CampStatus::Abandoned => messages
+                        .as_deref()
+                        .map(|messages| messages.format(12290, &[])),
+                    eq_client_core::CampStatus::LoggingOut => Some("Logging out...".into()),
+                    eq_client_core::CampStatus::Camped => {
+                        // Leave the zone; the world server sends a fresh character list.
+                        state.session_id = None;
+                        state.player = None;
+                        state.connected = false;
+                        state.pending_transfer = None;
+                        state.spawns.clear();
+                        state.revisions.clear();
+                        state.health.clear();
+                        state.postures.clear();
+                        hud.spell_book = None;
+                        hud.buff_state.clear();
+                        hud.casting = None;
+                        hud.pending_cast = None;
+                        inventory.clear();
+                        motion.reset(None);
+                        hud.status = "Camped - choose a character".into();
+                        None
+                    }
+                    eq_client_core::CampStatus::Rejected(reason) => Some(reason.clone()),
+                };
+                if let Some(text) = text {
+                    chat.history.push(super::chat::system_line(text));
+                }
+            }
             WorldUpdate::Game(WorldEvent::Consideration(consideration)) => {
                 let name = state
                     .spawns
