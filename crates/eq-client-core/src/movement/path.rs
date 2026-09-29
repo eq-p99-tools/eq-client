@@ -199,6 +199,11 @@ impl PathSearch {
         self.nodes.len()
     }
 
+    /// Every feet position the search has reached, for diagnostics.
+    pub fn positions(&self) -> impl Iterator<Item = Vec3> + '_ {
+        self.nodes.values().map(|node| node.feet)
+    }
+
     fn arrived(&self, feet: Vec3) -> bool {
         Vec2::new(feet.x - self.goal.x, feet.z - self.goal.z).length() <= self.reach
             && (feet.y - self.goal.y).abs() <= self.reach.max(10.0)

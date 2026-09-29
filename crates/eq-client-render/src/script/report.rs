@@ -81,13 +81,16 @@ pub(super) fn state(
     );
 }
 
+/// Spawn id, shown name, kind, class, distance and rounded EQ x, y, z.
+type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
+
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
 pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, combat): &Observed) {
     let origin = online
         .player
         .as_ref()
         .map(|player| Vec3::from_array(eq_client_core::render_position(player.position)));
-    let mut nearby: Vec<(u16, String, String, Option<u8>, i32)> = online
+    let mut nearby: Vec<NearbySpawn> = online
         .spawns
         .iter()
         .filter(|(id, spawn)| {
@@ -99,14 +102,18 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
         })
         .map(|(id, spawn)| {
             let position = Vec3::from_array(eq_client_core::render_position(spawn.position));
-            #[allow(clippy::cast_possible_truncation)] // Rounded report distances.
-            let distance = origin.map_or(-1, |origin| position.distance(origin).round() as i32);
+            #[allow(clippy::cast_possible_truncation)] // Rounded report distances and coordinates.
+            let (distance, at) = (
+                origin.map_or(-1, |origin| position.distance(origin).round() as i32),
+                [spawn.position.x, spawn.position.y, spawn.position.z].map(|v| v.round() as i32),
+            );
             (
                 *id,
                 crate::combat::display_name(&spawn.name),
                 format!("{:?}", spawn.kind),
                 spawn.class,
                 distance,
+                at,
             )
         })
         .collect();
@@ -115,13 +122,7 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
         .iter()
         .filter(|entry| entry.1.starts_with(|c: char| c.is_ascii_lowercase()))
         .take(10)
-        .map(|(id, name, kind, _, distance)| {
-            let spawn = &online.spawns[id];
-            #[allow(clippy::cast_possible_truncation)] // Rounded report coordinates.
-            let at =
-                [spawn.position.x, spawn.position.y, spawn.position.z].map(|v| v.round() as i32);
-            (*id, name.clone(), kind.clone(), *distance, at)
-        })
+        .map(|(id, name, kind, _, distance, at)| (*id, name.clone(), kind.clone(), *distance, *at))
         .collect();
     nearby.truncate(12);
     info!(
