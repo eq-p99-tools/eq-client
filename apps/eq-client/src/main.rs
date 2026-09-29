@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use eq_client_assets::ZoneAsset;
 use eq_client_core::WorldPosition;
-use eq_client_render::{ProjectionStyle, ValidationAction, ViewerConfig};
+use eq_client_render::{ProjectionStyle, ValidationAction, ViewerConfig, script::Step};
+use eq_network::client::ServerProtocol;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum CameraStyle {
@@ -116,6 +117,11 @@ struct Arguments {
     #[arg(long)]
     script: Option<PathBuf>,
 
+    /// Keep running steps appended to the script file until it quits or reaches
+    /// the runtime limit.
+    #[arg(long, requires = "script")]
+    script_follow: bool,
+
     /// Top-left window corner as `X,Y` in physical desktop pixels (either may be
     /// negative on multi-monitor desktops).
     #[arg(long, value_parser = parse_window_position, allow_hyphen_values = true)]
@@ -134,13 +140,26 @@ fn parse_window_position(value: &str) -> Result<(i32, i32), String> {
     Ok((coordinate(x)?, coordinate(y)?))
 }
 
-/// Enables provisional Titanium capacities only for the matching online dialect.
-fn titanium_resource_estimates(online: bool) -> bool {
+/// The protocol an online session selects with `EQ_PROTOCOL` (P99 by default).
+fn online_protocol(online: bool) -> Option<ServerProtocol> {
     online
-        && std::env::var("EQ_PROTOCOL")
-            .unwrap_or_else(|_| "p99".into())
-            .parse::<eq_network::client::ServerProtocol>()
-            .is_ok_and(eq_network::client::ServerProtocol::is_titanium)
+        .then(|| {
+            std::env::var("EQ_PROTOCOL")
+                .unwrap_or_else(|_| "p99".into())
+                .parse::<ServerProtocol>()
+                .ok()
+        })
+        .flatten()
+}
+
+/// Refuses `gm` script steps unless the session is on a local `EQEmu` server, so
+/// `#` commands can never reach P99 or Quarm.
+fn check_gm_steps(steps: Option<&[Step]>, local_eqemu: bool) -> Result<(), &'static str> {
+    let gm = steps.is_some_and(|steps| steps.iter().any(|step| matches!(step, Step::Gm(_))));
+    if gm && !local_eqemu {
+        return Err("gm script steps need --online with EQ_PROTOCOL=eqemu (a local EQEmu server)");
+    }
+    Ok(())
 }
 
 fn main() {
@@ -150,7 +169,13 @@ fn main() {
         .as_deref()
         .map(load_calibration);
     // Validate every local input before the session logs in.
-    let script = arguments.script.as_deref().map(load_script);
+    let (script, script_follow) = script_input(&arguments);
+    let protocol = online_protocol(arguments.online);
+    let local_gm_commands = protocol == Some(ServerProtocol::EqEmu);
+    if let Err(error) = check_gm_steps(script.as_deref(), local_gm_commands) {
+        eprintln!("error: {error}");
+        std::process::exit(2);
+    }
     require_positive_distance(arguments.entity_distance);
     let eq_directory = arguments
         .eq_dir
@@ -198,7 +223,7 @@ fn main() {
         zone,
         character,
         ViewerConfig {
-            estimate_titanium_resources: titanium_resource_estimates(arguments.online),
+            estimate_titanium_resources: protocol.is_some_and(ServerProtocol::is_titanium),
             projection: match arguments.camera {
                 CameraStyle::Perspective => ProjectionStyle::Perspective,
                 CameraStyle::Orthographic => ProjectionStyle::Orthographic,
@@ -232,6 +257,8 @@ fn main() {
                 None
             },
             script,
+            script_follow,
+            local_gm_commands,
             window_position: arguments.window_position,
         },
         updates,
@@ -260,8 +287,26 @@ fn load_calibration(path: &std::path::Path) -> eq_client_core::MotionCalibration
     })
 }
 
-/// Reads and validates an attended key script, exiting on any invalid line.
-fn load_script(path: &std::path::Path) -> Vec<eq_client_render::script::Step> {
+/// The validated script and, when following, where to keep reading it.
+type ScriptInput = (
+    Option<Vec<eq_client_render::script::Step>>,
+    Option<(PathBuf, usize)>,
+);
+
+fn script_input(arguments: &Arguments) -> ScriptInput {
+    let Some(path) = arguments.script.as_deref() else {
+        return (None, None);
+    };
+    let (steps, read) = load_script(path);
+    (
+        Some(steps),
+        arguments.script_follow.then(|| (path.to_path_buf(), read)),
+    )
+}
+
+/// Reads and validates an attended key script, exiting on any invalid line;
+/// also returns how many bytes were read, where following resumes.
+fn load_script(path: &std::path::Path) -> (Vec<eq_client_render::script::Step>, usize) {
     std::fs::read_to_string(path)
         .map_err(|error| error.to_string())
         .and_then(|text| {
@@ -269,6 +314,7 @@ fn load_script(path: &std::path::Path) -> Vec<eq_client_render::script::Step> {
                 &text,
                 path.parent().unwrap_or_else(|| std::path::Path::new(".")),
             )
+            .map(|steps| (steps, text.len()))
         })
         .unwrap_or_else(|error| {
             eprintln!("Invalid script: {error}");
@@ -304,7 +350,16 @@ fn print_summary(zone: &ZoneAsset) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_window_position;
+    use super::{Step, check_gm_steps, parse_window_position};
+
+    #[test]
+    fn gm_steps_are_refused_outside_a_local_eqemu_session() {
+        let gm = [Step::Gm("summon".into())];
+        assert!(check_gm_steps(Some(&gm), false).is_err());
+        assert!(check_gm_steps(Some(&gm), true).is_ok());
+        assert!(check_gm_steps(Some(&[Step::Face]), false).is_ok());
+        assert!(check_gm_steps(None, false).is_ok());
+    }
 
     #[test]
     fn window_positions_accept_negative_multi_monitor_coordinates() {
