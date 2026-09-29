@@ -70,6 +70,25 @@ pub enum ClickTarget {
     BookRow(usize),
     /// The spellbook's memorize button for a gem, from zero.
     MemorizeGem(u8),
+    /// A loot, merchant or window-closing button.
+    Trade(TradeClick),
+}
+
+/// Loot and merchant window buttons.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TradeClick {
+    /// Take one corpse slot.
+    Take(u16),
+    /// Take everything.
+    TakeAll,
+    /// Close the loot window.
+    EndLoot,
+    /// Buy one unit from a merchant slot.
+    Buy(u32),
+    /// Sell an inventory slot.
+    Sell(i32),
+    /// Close the merchant window.
+    EndShop,
 }
 
 /// Parses a script: one step per line, `#` starts a comment.
@@ -145,6 +164,21 @@ fn parse_step(line: &str) -> Result<Step, String> {
             row.parse()
                 .map_err(|_| String::from("expected a book row number"))?,
         )),
+        ("click", ["loot", slot]) => Step::Click(ClickTarget::Trade(TradeClick::Take(
+            slot.parse()
+                .map_err(|_| String::from("expected a corpse slot"))?,
+        ))),
+        ("click", ["loot_all"]) => Step::Click(ClickTarget::Trade(TradeClick::TakeAll)),
+        ("click", ["loot_done"]) => Step::Click(ClickTarget::Trade(TradeClick::EndLoot)),
+        ("click", ["buy", slot]) => Step::Click(ClickTarget::Trade(TradeClick::Buy(
+            slot.parse()
+                .map_err(|_| String::from("expected a merchant slot"))?,
+        ))),
+        ("click", ["sell", slot]) => Step::Click(ClickTarget::Trade(TradeClick::Sell(
+            slot.parse()
+                .map_err(|_| String::from("expected an inventory slot"))?,
+        ))),
+        ("click", ["shop_done"]) => Step::Click(ClickTarget::Trade(TradeClick::EndShop)),
         ("click", ["memorize", gem]) => Step::Click(ClickTarget::MemorizeGem(
             gem.parse::<u8>()
                 .ok()
@@ -312,6 +346,7 @@ type Buttons<'w, 's> = Query<
         Has<super::inventory::StoreCursor>,
         Option<&'static super::spellbook::BookEntry>,
         Option<&'static super::spellbook::GemChoice>,
+        Option<&'static super::trade::Action>,
     ),
 >;
 
@@ -510,13 +545,25 @@ pub(super) fn drive(
 
 /// Marks the first visible matching control pressed; the focus system clears it next frame.
 fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
-    for (mut interaction, visibility, slot, scribe, store, row, gem) in buttons.iter_mut() {
+    for (mut interaction, visibility, slot, scribe, store, row, gem, trade) in buttons.iter_mut() {
         let matches = match target {
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
             ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
+            ClickTarget::Trade(click) => trade.is_some_and(|action| {
+                use super::trade::Action;
+                *action
+                    == match click {
+                        TradeClick::Take(slot) => Action::Take(slot),
+                        TradeClick::TakeAll => Action::TakeAll,
+                        TradeClick::EndLoot => Action::EndLoot,
+                        TradeClick::Buy(slot) => Action::Buy(slot),
+                        TradeClick::Sell(slot) => Action::Sell(slot),
+                        TradeClick::EndShop => Action::EndShop,
+                    }
+            }),
         };
         if matches && visibility.get() {
             *interaction = Interaction::Pressed;
@@ -609,7 +656,7 @@ mod tests {
         let steps = parse(
             "wait_select\nselect Someone\nwait_online\nwait_zone TOX\npress F1 # self\n\
              press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nclick slot 23\n\
-             click scribe\nclick store\nclick book 0\nclick memorize 2\nreport after cast\nscreenshot a.png\nquit\n",
+             click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\nreport after cast\nscreenshot a.png\nquit\n",
             base,
         )
         .unwrap();
@@ -640,6 +687,11 @@ mod tests {
                 Step::Click(ClickTarget::Store),
                 Step::Click(ClickTarget::BookRow(0)),
                 Step::Click(ClickTarget::MemorizeGem(1)),
+                Step::Click(ClickTarget::Trade(TradeClick::Take(22))),
+                Step::Click(ClickTarget::Trade(TradeClick::TakeAll)),
+                Step::Click(ClickTarget::Trade(TradeClick::Buy(3))),
+                Step::Click(ClickTarget::Trade(TradeClick::Sell(23))),
+                Step::Click(ClickTarget::Trade(TradeClick::EndShop)),
                 Step::Report("after cast".into()),
                 Step::Screenshot(base.join("a.png")),
                 Step::Quit,

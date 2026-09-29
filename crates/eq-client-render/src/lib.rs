@@ -23,6 +23,7 @@ pub mod script;
 mod spell_icons;
 mod spellbook;
 mod target;
+mod trade;
 mod windows;
 
 use bevy::asset::RenderAssetUsages;
@@ -253,13 +254,19 @@ pub fn run(
 
 /// Registers overlay updates with their required network and layout ordering.
 fn install_overlays(app: &mut App) {
-    app.init_resource::<combat::CombatState>().add_systems(
-        Update,
-        (
-            combat::input.after(target::input).before(target::update),
-            combat::target_color.after(target::update),
-        ),
-    );
+    app.init_resource::<combat::CombatState>()
+        .init_resource::<trade::TradeState>()
+        .add_systems(
+            Update,
+            (
+                combat::input.after(target::input).before(target::update),
+                combat::target_color.after(target::update),
+                (trade::input, trade::present)
+                    .chain()
+                    .after(online::receive)
+                    .after(target::input),
+            ),
+        );
     app.add_systems(Update, windows::input);
     app.add_systems(
         Update,

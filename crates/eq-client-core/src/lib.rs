@@ -13,6 +13,8 @@ pub use eq_network_game::command::GameCommand as ClientCommand;
 pub use eq_network_game::command::Posture;
 pub use eq_network_game::doors;
 pub use eq_network_game::inventory;
+pub use eq_network_game::loot;
+pub use eq_network_game::merchant;
 pub use eq_network_game::movement::{
     BackwardCalibration, MotionCalibration, MovementMode, MovementRequest, StrafeCalibration,
     WalkCalibration,
@@ -26,8 +28,8 @@ pub use eq_network_game::zoning::ZoneRejection;
 
 pub use eq_network_game::buffs::{Buff, BuffUpdate, SpellEffect};
 pub use eq_network_game::world::{
-    BaseAttributes, CampStatus, PlayerState, Position as WorldPosition, PostureState, SpawnKind,
-    SpawnState, WorldEvent,
+    BaseAttributes, CampStatus, Coins, PlayerState, Position as WorldPosition, PostureState,
+    SpawnKind, SpawnState, WorldEvent,
 };
 
 /// Messages crossing the worker/presentation boundary. Queues are bounded by the host.

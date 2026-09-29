@@ -79,9 +79,10 @@ pub(super) fn receive(
     mut hud: ResMut<hud::HudState>,
     mut motion: ResMut<super::motion::Controls>,
     mut chat: ResMut<super::chat::ChatState>,
-    (mut target, mut combat): (
+    (mut target, mut combat, mut trade): (
         ResMut<super::target::TargetState>,
         ResMut<super::combat::CombatState>,
+        ResMut<super::trade::TradeState>,
     ),
     mut items: ResMut<super::items::ItemState>,
     mut inventory: ResMut<super::inventory::InventoryState>,
@@ -668,6 +669,17 @@ pub(super) fn receive(
                     chat.history.push(super::chat::system_line(text));
                 }
             }
+            WorldUpdate::Game(WorldEvent::Coins(coins)) => trade.coins = Some(coins),
+            WorldUpdate::Game(WorldEvent::Loot(update)) => {
+                if let Some(text) = trade.apply_loot(update) {
+                    chat.history.push(super::chat::system_line(text));
+                }
+            }
+            WorldUpdate::Game(WorldEvent::Merchant(update)) => {
+                if let Some(text) = trade.apply_merchant(update) {
+                    chat.history.push(super::chat::system_line(text));
+                }
+            }
             WorldUpdate::Game(WorldEvent::Consideration(consideration)) => {
                 let name = state
                     .spawns
@@ -757,6 +769,7 @@ mod tests {
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<super::super::target::TargetState>()
             .init_resource::<super::super::combat::CombatState>()
+            .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
             .init_resource::<Assets<Image>>()
