@@ -115,6 +115,23 @@ struct Arguments {
     /// while the client window is focused. Screenshots are saved beside it.
     #[arg(long)]
     script: Option<PathBuf>,
+
+    /// Top-left window corner as `X,Y` in physical desktop pixels (either may be
+    /// negative on multi-monitor desktops).
+    #[arg(long, value_parser = parse_window_position, allow_hyphen_values = true)]
+    window_position: Option<(i32, i32)>,
+}
+
+fn parse_window_position(value: &str) -> Result<(i32, i32), String> {
+    let (x, y) = value
+        .split_once(',')
+        .ok_or_else(|| "expected X,Y".to_owned())?;
+    let coordinate = |text: &str| {
+        text.trim()
+            .parse::<i32>()
+            .map_err(|error| format!("{text:?}: {error}"))
+    };
+    Ok((coordinate(x)?, coordinate(y)?))
 }
 
 /// Enables provisional Titanium capacities only for the matching online dialect.
@@ -130,18 +147,8 @@ fn main() {
     let arguments = Arguments::parse();
     let calibration = arguments
         .movement_calibration
-        .as_ref()
-        .map(|path| {
-            let bytes = std::fs::read(path)?;
-            let calibration: eq_client_core::MotionCalibration = serde_json::from_slice(&bytes)?;
-            calibration.validate()?;
-            Ok::<_, anyhow::Error>(calibration)
-        })
-        .transpose()
-        .unwrap_or_else(|error| {
-            eprintln!("Invalid movement calibration: {error}");
-            std::process::exit(2);
-        });
+        .as_deref()
+        .map(load_calibration);
     // Validate every local input before the session logs in.
     let script = arguments.script.as_deref().map(load_script);
     require_positive_distance(arguments.entity_distance);
@@ -225,6 +232,7 @@ fn main() {
                 None
             },
             script,
+            window_position: arguments.window_position,
         },
         updates,
         worker.as_ref().map(session::SessionWorker::commands),
@@ -236,6 +244,20 @@ fn require_positive_distance(distance: f32) {
         eprintln!("error: --entity-distance must be a finite positive number");
         std::process::exit(2);
     }
+}
+
+/// Reads independently measured movement calibration, exiting when it is invalid.
+fn load_calibration(path: &std::path::Path) -> eq_client_core::MotionCalibration {
+    (|| {
+        let bytes = std::fs::read(path)?;
+        let calibration: eq_client_core::MotionCalibration = serde_json::from_slice(&bytes)?;
+        calibration.validate()?;
+        Ok::<_, anyhow::Error>(calibration)
+    })()
+    .unwrap_or_else(|error| {
+        eprintln!("Invalid movement calibration: {error}");
+        std::process::exit(2);
+    })
 }
 
 /// Reads and validates an attended key script, exiting on any invalid line.
@@ -277,5 +299,18 @@ fn print_summary(zone: &ZoneAsset) {
     println!("Placed objects: {}", zone.objects.len());
     if let Some((min, max)) = zone.bounds() {
         println!("Bounds: {min:?} to {max:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_window_position;
+
+    #[test]
+    fn window_positions_accept_negative_multi_monitor_coordinates() {
+        assert_eq!(parse_window_position("2592,-980"), Ok((2592, -980)));
+        assert_eq!(parse_window_position(" -40 , 32 "), Ok((-40, 32)));
+        assert!(parse_window_position("32").is_err());
+        assert!(parse_window_position("x,1").is_err());
     }
 }

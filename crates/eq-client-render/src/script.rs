@@ -51,6 +51,11 @@ pub enum Step {
     },
     /// Logs the player's position and frame time every frame for a bounded duration.
     Trace(Duration),
+    /// Turns the camera so W walks toward the current target.
+    Face,
+    /// Holds W toward the current target until it is within a distance, for a
+    /// bounded duration.
+    Approach(f32, Duration),
     /// Left-clicks one UI control through Bevy's ordinary interaction state.
     Click(ClickTarget),
     /// Logs a numeric summary of player, resource, cast and buff state.
@@ -148,6 +153,9 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("slash", [command]) if matches!(*command, "camp" | "sit" | "stand") => {
             Step::Slash(format!("/{command}"))
         }
+        ("slash", ["target", name @ ..]) if !name.is_empty() => {
+            Step::Slash(format!("/target {}", name.join(" ")))
+        }
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
         ("wait", [duration]) => Step::Wait(millis(duration, MAX_WAIT)?),
@@ -162,6 +170,10 @@ fn parse_step(line: &str) -> Result<Step, String> {
             pitch: number(pitch, -83.0, -8.0)?,
         },
         ("trace", [duration]) => Step::Trace(millis(duration, MAX_TRACE)?),
+        ("face", []) => Step::Face,
+        ("approach", [range, duration]) => {
+            Step::Approach(number(range, 1.0, 200.0)?, millis(duration, MAX_HOLD)?)
+        }
         ("click", ["slot", slot]) => Step::Click(ClickTarget::Slot(
             slot.parse()
                 .map_err(|_| String::from("expected a slot number"))?,
@@ -325,6 +337,8 @@ pub struct Script {
     clicked: bool,
     started: Option<Duration>,
     paused: bool,
+    /// Newest chat line already included in a report.
+    chat_seen: u64,
 }
 
 impl Script {
@@ -338,6 +352,7 @@ impl Script {
             clicked: false,
             started: None,
             paused: false,
+            chat_seen: 0,
         }
     }
 
@@ -383,6 +398,8 @@ type Observed<'w> = (
     Res<'w, super::inventory::InventoryState>,
     Res<'w, super::target::TargetState>,
     Res<'w, super::target::CommandsToServer>,
+    Res<'w, super::trade::TradeState>,
+    Res<'w, super::combat::CombatState>,
 );
 
 type Input<'w> = (
@@ -402,6 +419,7 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
+    mut chat: ResMut<super::chat::ChatState>,
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
     mut cameras: Query<&mut super::OrbitCamera>,
@@ -414,14 +432,15 @@ pub(super) fn drive(
     };
     let (mut keys, mut mouse) = input;
     let now = time.elapsed();
-    if script.current.is_none() && script.steps.is_empty() {
-        commands.remove_resource::<Script>();
-        info!("Script finished");
-        return;
-    }
     let started = *script.started.get_or_insert(now);
     if now.saturating_sub(started) > MAX_RUNTIME {
         script.stop(&mut keys, &mut mouse, "maximum runtime reached");
+        commands.remove_resource::<Script>();
+        return;
+    }
+    if script.current.is_none() && script.steps.is_empty() {
+        commands.remove_resource::<Script>();
+        info!("Script finished");
         return;
     }
     let window = windows.single().ok();
@@ -454,6 +473,10 @@ pub(super) fn drive(
         let elapsed = now.saturating_sub(since);
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
+            Step::Approach(range, duration) => {
+                let distance = face(&online, &observed, &players, &mut cameras);
+                distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
+            }
             // Held movement keys are traced too, to measure motion cadence.
             Step::Hold(_, duration) | Step::Trace(duration) => {
                 if let Ok(transform) = players.single() {
@@ -528,7 +551,11 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
-            if let Err(error) = super::chat::submit_game_command(command, &online, &observed.3) {
+            let queued = match super::chat::target_request(command) {
+                Some(request) => request.map(|name| chat.requested_target = Some(name)),
+                None => super::chat::submit_game_command(command, &online, &observed.3),
+            };
+            if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);
             }
             return;
@@ -577,6 +604,8 @@ pub(super) fn drive(
         }
         Step::Report(label) => {
             report(label, &online, &observed, players.single().ok());
+            report_surroundings(&online, &observed);
+            report_game_messages(&mut script.chat_seen, &chat);
             return;
         }
         Step::Screenshot(path) => {
@@ -589,6 +618,20 @@ pub(super) fn drive(
             script.stop(&mut keys, &mut mouse, "quit requested");
             exit.write(AppExit::Success);
             return;
+        }
+        Step::Face => {
+            if face(&online, &observed, &players, &mut cameras).is_none() {
+                script.stop(&mut keys, &mut mouse, "face needs a visible target");
+            }
+            return;
+        }
+        Step::Approach(..) => {
+            if face(&online, &observed, &players, &mut cameras).is_none() {
+                script.stop(&mut keys, &mut mouse, "approach needs a visible target");
+                return;
+            }
+            keys.press(KeyCode::KeyW);
+            script.held = vec![KeyCode::KeyW];
         }
         Step::WaitSelect
         | Step::WaitOnline
@@ -629,6 +672,94 @@ fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
     false
 }
 
+/// Points the camera from the player toward the target and returns the flat
+/// distance between them, or None without a player and a known target.
+fn face(
+    online: &super::online::OnlineState,
+    observed: &Observed,
+    players: &Query<&Transform, With<super::Player>>,
+    cameras: &mut Query<&mut super::OrbitCamera>,
+) -> Option<f32> {
+    let spawn = observed.2.selected.and_then(|id| online.spawns.get(&id))?;
+    let transform = players.single().ok()?;
+    let to =
+        Vec3::from_array(eq_client_core::render_position(spawn.position)) - transform.translation;
+    let flat = Vec2::new(to.x, to.z);
+    if flat.length() > f32::EPSILON {
+        for mut camera in cameras.iter_mut() {
+            // W walks along the camera's forward direction, opposite its orbit offset.
+            camera.yaw = flat.x.atan2(flat.y) + std::f32::consts::PI;
+        }
+    }
+    Some(flat.length())
+}
+
+/// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
+fn report_surroundings(online: &super::online::OnlineState, (.., trade, combat): &Observed) {
+    let origin = online
+        .player
+        .as_ref()
+        .map(|player| Vec3::from_array(eq_client_core::render_position(player.position)));
+    let mut nearby: Vec<(u16, String, String, Option<u8>, i32)> = online
+        .spawns
+        .iter()
+        .filter(|(id, spawn)| {
+            !spawn.invisible
+                && online
+                    .player
+                    .as_ref()
+                    .is_none_or(|player| player.spawn_id != **id)
+        })
+        .map(|(id, spawn)| {
+            let position = Vec3::from_array(eq_client_core::render_position(spawn.position));
+            #[allow(clippy::cast_possible_truncation)] // Rounded report distances.
+            let distance = origin.map_or(-1, |origin| position.distance(origin).round() as i32);
+            (
+                *id,
+                super::combat::display_name(&spawn.name),
+                format!("{:?}", spawn.kind),
+                spawn.class,
+                distance,
+            )
+        })
+        .collect();
+    nearby.sort_by_key(|entry| entry.4);
+    let creatures: Vec<(u16, String, String, i32, [i32; 3])> = nearby
+        .iter()
+        .filter(|entry| entry.1.starts_with(|c: char| c.is_ascii_lowercase()))
+        .take(10)
+        .map(|(id, name, kind, _, distance)| {
+            let spawn = &online.spawns[id];
+            #[allow(clippy::cast_possible_truncation)] // Rounded report coordinates.
+            let at =
+                [spawn.position.x, spawn.position.y, spawn.position.z].map(|v| v.round() as i32);
+            (*id, name.clone(), kind.clone(), *distance, at)
+        })
+        .collect();
+    nearby.truncate(12);
+    info!(
+        ?nearby,
+        ?creatures,
+        coins = ?trade.coins,
+        trade = trade.summary(),
+        auto_attack = combat.auto_attack,
+        "Script surroundings"
+    );
+}
+
+/// Logs game messages (lines without a speaker) received since the last report.
+fn report_game_messages(seen: &mut u64, chat: &super::chat::ChatState) {
+    for (id, line) in chat.history.lines(eq_client_core::chat::ChatTab::All) {
+        if id > *seen && line.sender.as_deref().is_none_or(str::is_empty) {
+            info!(text = line.message.text, "Script game message");
+        }
+        *seen = (*seen).max(id);
+    }
+}
+
+/// Slot, item id, stack count, scroll spell and whether it is NO DROP.
+type ReportedItem = (i32, u32, Option<u32>, Option<u32>, bool);
+
 /// EQ coordinates and heading of the movement root.
 fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
     let world = super::world_position(transform.translation.to_array(), 0.0);
@@ -640,7 +771,7 @@ fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
 fn report(
     label: &str,
     online: &super::online::OnlineState,
-    (hud, inventory, target, _): &Observed,
+    (hud, inventory, target, ..): &Observed,
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
@@ -654,7 +785,7 @@ fn report(
         .player
         .as_ref()
         .and_then(|player| online.postures.get(&player.spawn_id));
-    let items: Vec<(i32, u32, Option<u32>, Option<u32>)> = inventory
+    let items: Vec<ReportedItem> = inventory
         .data
         .items()
         .values()
@@ -664,6 +795,7 @@ fn report(
                 item.details.id,
                 item.stack_count,
                 item.scroll_spell,
+                item.details.flags.iter().any(|flag| flag == "NO DROP"),
             )
         })
         .collect();
@@ -710,8 +842,8 @@ mod tests {
     fn parses_bounded_steps_and_rejects_unsafe_input() {
         let base = Path::new("private");
         let steps = parse(
-            "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\npress F1 # self\n\
-             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nclick slot 23\n\
+            "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\npress F1 # self\n\
+             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nclick slot 23\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\nreport after cast\nscreenshot a.png\nquit\n",
             base,
         )
@@ -733,6 +865,7 @@ mod tests {
                 Step::WaitOnline,
                 Step::WaitZone("tox".into()),
                 Step::Slash("/camp".into()),
+                Step::Slash("/target a cave rat".into()),
                 Step::Press(vec![KeyCode::F1]),
                 Step::Press(vec![KeyCode::AltLeft, KeyCode::Digit1]),
                 Step::Hold(vec![KeyCode::KeyW], Duration::from_millis(1500)),
@@ -748,6 +881,8 @@ mod tests {
                     pitch: -15.0
                 },
                 Step::Trace(Duration::from_millis(2000)),
+                Step::Face,
+                Step::Approach(12.0, Duration::from_millis(5000)),
                 Step::Click(ClickTarget::Slot(23)),
                 Step::Click(ClickTarget::Scribe),
                 Step::Click(ClickTarget::Store),

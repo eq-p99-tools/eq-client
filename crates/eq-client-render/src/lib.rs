@@ -95,6 +95,8 @@ pub struct ViewerConfig {
     pub validation: Option<ValidationAction>,
     /// Optional attended key script driven through the normal input paths.
     pub script: Option<Vec<script::Step>>,
+    /// Optional top-left window corner in physical desktop pixels.
+    pub window_position: Option<(i32, i32)>,
 }
 
 #[derive(Resource)]
@@ -158,6 +160,7 @@ pub fn run(
     let steps = config.script.clone();
     let online = updates.is_some();
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
+    let window = primary_window(online, screenshot.is_none(), config.window_position);
     let mut app = App::new();
     app.insert_resource(spellbook::SpellNames::load(config.eq_directory.as_deref()));
     app.insert_resource(hud::messages::Messages::load(
@@ -184,7 +187,7 @@ pub fn run(
     .init_resource::<windows::DragState>()
     .init_resource::<windows::Layouts>()
     .add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(primary_window(online, screenshot.is_none())),
+        primary_window: Some(window),
         ..default()
     }))
     .add_systems(Startup, (setup_scene, inventory::demo, spellbook::demo))
@@ -242,8 +245,7 @@ pub fn run(
     navigation::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
-        app.insert_resource(script::Script::new(steps));
-        app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
+        install_script(&mut app, steps);
     }
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
@@ -252,6 +254,12 @@ pub fn run(
         });
     }
     app.run();
+}
+
+/// Drives an attended script after UI focus.
+fn install_script(app: &mut App, steps: Vec<script::Step>) {
+    app.insert_resource(script::Script::new(steps));
+    app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
 }
 
 /// Registers overlay updates with their required network and layout ordering.
@@ -285,7 +293,7 @@ fn install_overlays(app: &mut App) {
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
-fn primary_window(online: bool, visible: bool) -> Window {
+fn primary_window(online: bool, visible: bool, position: Option<(i32, i32)>) -> Window {
     Window {
         title: if online {
             "eq-client"
@@ -294,6 +302,9 @@ fn primary_window(online: bool, visible: bool) -> Window {
         }
         .to_owned(),
         visible,
+        position: position.map_or(WindowPosition::Automatic, |(x, y)| {
+            WindowPosition::At(IVec2::new(x, y))
+        }),
         ..default()
     }
 }

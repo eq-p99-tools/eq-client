@@ -49,6 +49,8 @@ pub(super) struct ChatState {
     pub hovered: bool,
     pub composing: bool,
     pub escape_consumed: bool,
+    /// A `/target Name` request waiting for target selection to resolve it.
+    pub requested_target: Option<String>,
     draft: String,
     status: String,
 }
@@ -523,6 +525,10 @@ fn submit_draft(
             .0
             .as_ref()
             .ok_or_else(|| "Network worker is unavailable".to_owned())?;
+        if let Some(request) = target_request(state.draft.trim()) {
+            state.requested_target = Some(request?);
+            return Ok(());
+        }
         if let Some(commands) = game_commands(state.draft.trim(), online) {
             for command in commands? {
                 sender
@@ -564,6 +570,21 @@ pub(super) fn submit_game_command(
             .map_err(|_| "Command could not be queued".to_owned())?;
     }
     Ok(())
+}
+
+/// The name in a `/target Name` command; underscores match spaces as in spawn names.
+pub(super) fn target_request(input: &str) -> Option<Result<String, String>> {
+    let command = input.strip_prefix('/')?;
+    let (name, rest) = command.split_once(' ').unwrap_or((command, ""));
+    if !name.eq_ignore_ascii_case("target") {
+        return None;
+    }
+    let rest = rest.trim().replace('_', " ");
+    Some(if rest.is_empty() {
+        Err("Use /target Name".into())
+    } else {
+        Ok(rest)
+    })
 }
 
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
@@ -715,6 +736,18 @@ pub(super) fn seed_demo(history: &mut ChatHistory) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_requests_are_names_not_chat() {
+        assert_eq!(
+            target_request("/target a_cave rat"),
+            Some(Ok("a cave rat".into()))
+        );
+        assert_eq!(target_request("/TARGET Arias"), Some(Ok("Arias".into())));
+        assert!(target_request("/target  ").unwrap().is_err());
+        assert_eq!(target_request("/targetx rat"), None);
+        assert_eq!(target_request("target rat"), None);
+    }
 
     #[test]
     fn camp_sits_first_and_game_commands_never_become_chat() {
