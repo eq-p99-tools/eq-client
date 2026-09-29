@@ -45,6 +45,10 @@ impl Messages {
     /// Substitutes server-supplied `%1`..`%9` arguments into a local string.
     /// Missing strings stay identifiable instead of being silently dropped.
     pub(crate) fn format(&self, id: u32, arguments: &[String]) -> String {
+        self.format_nested(id, arguments, 0)
+    }
+
+    fn format_nested(&self, id: u32, arguments: &[String], depth: u8) -> String {
         let Some(template) = self.0.get(&id) else {
             return if arguments.is_empty() {
                 format!("Server message {id}")
@@ -52,7 +56,8 @@ impl Messages {
                 format!("Server message {id}: {}", arguments.join(", "))
             };
         };
-        // EQ placeholders: %1, %T1 (text argument) and %B1(...) (bold argument).
+        // EQ placeholders: %1, %T1 (an argument naming another string, formatted
+        // with the same arguments) and %B1(...) (bold argument).
         let mut text = String::with_capacity(template.len());
         let mut rest = template.as_str();
         while let Some(position) = rest.find('%') {
@@ -80,7 +85,17 @@ impl Messages {
             {
                 consumed += close + 1;
             }
+            let nested = |argument: &String| {
+                argument
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|nested| depth < 2 && self.0.contains_key(nested))
+                    .map(|nested| self.format_nested(nested, arguments, depth + 1))
+            };
             match arguments.get(usize::try_from(index - 1).unwrap_or(usize::MAX)) {
+                Some(argument) if after.starts_with('T') => {
+                    text.push_str(&nested(argument).unwrap_or_else(|| argument.clone()));
+                }
                 Some(argument) => text.push_str(argument),
                 None => text.push_str(&rest[position..position + 1 + consumed]),
             }
@@ -155,5 +170,30 @@ mod tests {
         );
         assert_eq!(table.format(99, &[]), "Server message 99");
         assert_eq!(table.format(99, &["x".to_owned()]), "Server message 99: x");
+    }
+
+    #[test]
+    fn text_placeholders_naming_strings_are_formatted_with_the_same_arguments() {
+        let table = Messages::parse(
+            "EQST0002
+0 2
+554 %1 says '%T2'
+1146 Greetings, %3. You look like you could use a %4.
+",
+        );
+        let arguments = ["Rowyl", "1146", "Examplecleric", "Bread"].map(str::to_owned);
+        assert_eq!(
+            table.format(554, &arguments),
+            "Rowyl says 'Greetings, Examplecleric. You look like you could use a Bread.'"
+        );
+        // Unknown ids and plain text stay literal.
+        assert_eq!(
+            table.format(554, &["Nura".into(), "9999".into()]),
+            "Nura says '9999'"
+        );
+        assert_eq!(
+            table.format(554, &["Nura".into(), "Hello".into()]),
+            "Nura says 'Hello'"
+        );
     }
 }

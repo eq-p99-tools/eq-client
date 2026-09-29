@@ -12,6 +12,9 @@ use std::collections::BTreeMap;
 
 use super::windows;
 
+/// The NPC class that answers ordinary shop requests; servers ignore other classes.
+const MERCHANT_CLASS: u8 = 41;
+
 /// Open loot and merchant sessions for the current admission.
 #[derive(Resource, Default)]
 pub(super) struct TradeState {
@@ -51,6 +54,31 @@ impl TradeState {
 
     fn changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Open windows as `(slot, item id)` lists, for script reports.
+    pub(super) fn summary(&self) -> String {
+        let loot = self.loot.as_ref().map(|window| {
+            let items: Vec<_> = window
+                .items
+                .iter()
+                .map(|(slot, item)| (*slot, item.details.id))
+                .collect();
+            format!("loot corpse={} items={items:?}", window.corpse_id)
+        });
+        let merchant = self.merchant.as_ref().map(|window| {
+            let stock: Vec<_> = window
+                .stock
+                .values()
+                .map(|entry| (entry.slot, entry.item.details.id, entry.price))
+                .collect();
+            format!("merchant {} stock={stock:?}", window.merchant_id)
+        });
+        [loot, merchant]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     /// Like the Titanium client, applies coin changes the server reports without a
@@ -310,9 +338,11 @@ pub(super) fn input(
     if focused && keys.just_pressed(KeyCode::KeyU) {
         if trade.merchant.is_some() {
             clicked.push(Action::EndShop);
-        } else if let Some((merchant_id, spawn)) =
-            targeted.filter(|(_, spawn)| spawn.kind == SpawnKind::Npc && !spawn.invisible)
-        {
+        } else if let Some((merchant_id, spawn)) = targeted.filter(|(_, spawn)| {
+            spawn.kind == SpawnKind::Npc
+                && !spawn.invisible
+                && spawn.class.is_none_or(|class| class == MERCHANT_CLASS)
+        }) {
             if send(ClientCommand::Shop {
                 session_id,
                 merchant_id,
@@ -379,11 +409,17 @@ pub(super) fn input(
                 }
             }
             Action::Sell(slot) => {
-                let quantity = inventory
+                let item = inventory
                     .data
                     .items()
-                    .get(&eq_client_core::inventory::InventorySlot(slot))
-                    .map_or(1, |item| item.stack_count.unwrap_or(1).max(1));
+                    .get(&eq_client_core::inventory::InventorySlot(slot));
+                if item.is_some_and(no_drop) {
+                    chat.history.push(super::chat::system_line(
+                        "The merchant will not buy NO DROP items.".into(),
+                    ));
+                    continue;
+                }
+                let quantity = item.map_or(1, |item| item.stack_count.unwrap_or(1).max(1));
                 if let Some(window) = &trade.merchant {
                     send(ClientCommand::Sell {
                         session_id,
@@ -500,7 +536,7 @@ pub(super) fn present(
                 .data
                 .items()
                 .values()
-                .filter(|item| sellable_slot(item.slot.0))
+                .filter(|item| sellable_slot(item.slot.0) && !no_drop(item))
                 .map(|item| {
                     (
                         Action::Sell(item.slot.0),
@@ -525,6 +561,11 @@ pub(super) fn present(
 /// Carried slots and their bag contents; equipment and the cursor are excluded.
 fn sellable_slot(slot: i32) -> bool {
     (22..=29).contains(&slot) || (251..=330).contains(&slot)
+}
+
+/// Merchants silently ignore offers of NO DROP items, so they are never offered.
+fn no_drop(item: &InventoryItem) -> bool {
+    item.details.flags.iter().any(|flag| flag == "NO DROP")
 }
 
 fn item_label(item: &InventoryItem) -> String {

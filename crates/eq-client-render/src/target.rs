@@ -122,7 +122,7 @@ pub(super) fn input(
     collision: Option<Res<super::Collision>>,
     nearby: Res<NearbyEntities>,
     online: Res<OnlineState>,
-    chat: Res<super::chat::ChatState>,
+    mut chat: ResMut<super::chat::ChatState>,
     commands: Res<CommandsToServer>,
     mut target: ResMut<TargetState>,
     ui: super::windows::pointer::PointerUi,
@@ -133,6 +133,7 @@ pub(super) fn input(
             ..default()
         };
     }
+    let requested = chat.requested_target.take();
     if !online.connected || online.death.is_some() {
         target.selected = None;
         target.sent = false;
@@ -178,7 +179,12 @@ pub(super) fn input(
     let accepts_input = !chat.composing
         && !chat.escape_consumed
         && windows.single().is_ok_and(|window| window.focused);
-    if accepts_input && keys.just_pressed(KeyCode::Escape) {
+    if let Some(name) = requested {
+        match named(&ids, &online, &name) {
+            Some(id) => proposal = Some(Some(id)),
+            None => target.status = format!("No nearby target named {name}"),
+        }
+    } else if accepts_input && keys.just_pressed(KeyCode::Escape) {
         proposal = Some(None);
     } else if accepts_input && keys.just_pressed(KeyCode::F1) {
         proposal = own_id.map(Some);
@@ -249,6 +255,29 @@ pub(super) fn input(
     } else {
         "Offline selection".into()
     };
+}
+
+/// The nearest visible spawn whose shown name starts with `query`, ignoring case.
+fn named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
+    let query = query.to_lowercase();
+    let origin = online
+        .player
+        .as_ref()
+        .map(|player| Vec3::from_array(eq_client_core::render_position(player.position)));
+    ids.iter()
+        .filter_map(|id| {
+            let spawn = online.spawns.get(id)?;
+            let shown = super::combat::display_name(&spawn.name).to_lowercase();
+            shown.starts_with(&query).then(|| {
+                let position = Vec3::from_array(eq_client_core::render_position(spawn.position));
+                (
+                    *id,
+                    origin.map_or(0.0, |origin| position.distance_squared(origin)),
+                )
+            })
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id)
 }
 
 /// Shows server-supplied target identity and HP; unknown HP is never shown as full.
