@@ -142,9 +142,10 @@ Implemented locally:
   reconciliation; the client never adds both sides of an unresolved replacement.
   The engine-independent `eq-client-core::buffs::BuffTracker` owns buff snapshots,
   identified removals, explicit slot replacements, and observed unslotted effects.
-  Icons and resource calculations consume that shared tracker. Its replacement
-  sequence tests are synthetic; P99 replacement event ordering still needs a
-  dedicated live trace before relying on it for resource-changing buffs.
+  Icons and resource calculations consume that shared tracker. A live P99 self
+  recast of Courage arrived as an identified slot fade, an empty-slot fade and the
+  new action (no slot update), which is replayed as a tracker test; replacement by
+  a different, resource-changing buff has not been traced yet.
 - Initial/incremental spawn batches, despawns, and interpolated nearby players/NPCs.
   `--entity-distance 200` selects a three-dimensional EQ-unit radius; entities
   already drawn remain until 240 units to avoid boundary flicker. At most 200
@@ -459,6 +460,48 @@ not a claim about the server's spell line-of-sight rules; Tab selection keeps it
 existing nearby-entity behavior. Texture transparency is not sampled by picking.
 
 For explicit stationary live checks, `--online --target-nearest-player-once` selects one nearby player, while `--online --inspect-first-chat-item-once` inspects one actual incoming item link. Both use the same typed command path as the UI and are disabled by default.
+
+## Combat, looting, merchants and camping
+
+The target panel lists the keys that apply to the current target:
+
+- **K** considers the target. The reply prints the Titanium standing and level
+  text and colors the target name by level; the level phrases are a best-effort
+  mapping from the server's color code.
+- **H** hails the target with `/say Hail, <name>`.
+- **G** toggles melee auto-attack against a creature. The client stops
+  attacking when the target changes, dies or goes away.
+- **L** opens the targeted corpse: coins received are reported in chat, items are
+  listed in the LOOT window, clicking one takes it into the inventory, and
+  **Loot all** takes one item at a time, waiting for each acknowledgement. Killed
+  creatures become corpses in place, keeping their spawn ID.
+- **U** opens the targeted merchant: stock with the server's prices, one-click
+  purchases, and a sell button for each carried item. The window shows the coins
+  last reported by the server, adjusted for loot and purchases as the Titanium
+  client does. **Escape** closes both windows.
+- **/camp** sits, waits the 30-second preparation, logs out and returns to
+  character selection. Standing, moving, zoning or dying abandons it. **/sit** and
+  **/stand** change posture from chat.
+
+Melee and non-melee damage involving the player prints Titanium-style combat
+text. Server string-table messages (for example experience, skill-up and range
+errors) are formatted from the installed `eqstr_us.txt`. Casting with less
+server-reported mana than the installed spell cost is refused locally, like the
+official client. These paths have synthetic tests; live verification is pending.
+`--demo-trade` previews the loot and merchant windows offline.
+
+## Attended scripts
+
+`--script <file>` runs a bounded key script through the ordinary input paths, for
+repeatable live or offline checks. One step per line, `#` starts a comment:
+`wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
+`press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
+`camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done ...`,
+`slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
+Keys combine with `+` (for example `alt+1`). Scripts only run while the client
+window is focused, stop if focus is lost while a key is held, cap each hold, wait
+and the whole run, inject clicks only while the real pointer is outside the
+window, never send chat, and save screenshots beside the script file.
 
 The P99 lifecycle decodes own-character death, pauses old-zone actions, acknowledges server-directed zoning/bind offers, and returns through world with the zoning flag before admitting the destination session. The new admission supplies the zone, position and character resources; Freeport is not hard-coded. Packet-layout and presentation tests cover these paths, but live death/respawn, calibrated movement, and client-generated boundary transfers remain unverified. Movement bounds are optional; timing, stale-session and speed validation remain required.
 
