@@ -1,6 +1,41 @@
 //! Opt-in local geometry probes; require user-owned assets and explicit coordinates.
 use super::*;
 
+fn probe_point(name: &str) -> Vec3 {
+    let values: Vec<f32> = std::env::var(name)
+        .unwrap()
+        .split(',')
+        .map(|number| number.parse().unwrap())
+        .collect();
+    assert_eq!(values.len(), 3, "expected renderer X,Y,Z in {name}");
+    Vec3::new(values[0], values[1], values[2])
+}
+
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_FEET and EQ_PROBE_GOAL"]
+fn inspect_path() {
+    use eq_client_core::movement::{PathProgress, PathSearch};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone =
+        eq_client_assets::load_zone(&install, &std::env::var("EQ_PROBE_ZONE").unwrap()).unwrap();
+    let world = build_collision(&zone).unwrap();
+    let (feet, goal) = (probe_point("EQ_PROBE_FEET"), probe_point("EQ_PROBE_GOAL"));
+    let mut search = PathSearch::new(feet, goal, 10.0, 6.0);
+    let result = loop {
+        match search.advance(&world, 5000) {
+            PathProgress::Searching => (),
+            done => break done,
+        }
+    };
+    let closest = search.closest().and_then(|path| path.last().copied());
+    println!(
+        "found={} reached={} closest={closest:?} closest_flat_distance={:?}",
+        matches!(result, PathProgress::Found(_)),
+        search.reached(),
+        closest.map(|end| Vec2::new(end.x - goal.x, end.z - goal.z).length()),
+    );
+}
+
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_POSITION and EQ_PROBE_MODEL"]
 fn inspect_admission_support() {

@@ -13,6 +13,15 @@ pub struct VerticalPhysics {
     pub jump_speed: f32,
 }
 
+/// Provisional tuning shared by the offline preview, online falls and path search.
+/// Not measured EQ gravity or jump impulse; the terminal speed is the fastest
+/// descent the network accepts for a fall.
+pub const PROVISIONAL_PHYSICS: VerticalPhysics = VerticalPhysics {
+    gravity: 32.0,
+    terminal_speed: super::MAX_FALL_SPEED,
+    jump_speed: 10.0,
+};
+
 /// One bounded local simulation step, using renderer Y-up coordinates.
 #[derive(Clone, Copy)]
 pub struct MotionStep {

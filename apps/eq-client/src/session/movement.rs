@@ -91,6 +91,7 @@ impl Continuity {
                 backward_units_per_second,
                 walk_units_per_second,
                 strafe_units_per_second,
+                ..
             } => {
                 if let Some(active) = &mut self.admission
                     && active.session == *session_id
@@ -209,6 +210,7 @@ mod tests {
             strafe_units_per_second: None,
             walk_units_per_second: None,
             backward_units_per_second: None,
+            falls: false,
         }
     }
     fn transfer(to_bind: bool) -> WorldEvent {
@@ -234,6 +236,7 @@ mod tests {
                 strafe_units_per_second: None,
                 walk_units_per_second: None,
                 backward_units_per_second: None,
+                falls: false,
             },
             now,
         );

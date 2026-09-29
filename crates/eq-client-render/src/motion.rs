@@ -23,6 +23,9 @@ pub(super) struct Controls {
     boundary: BoundaryTracker,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
+    /// Vertical momentum, present only when the session accepts falls; without it,
+    /// stepping off a ledge stops at the edge.
+    pub airborne: Option<eq_client_core::movement::AirborneController>,
 }
 impl Default for Controls {
     fn default() -> Self {
@@ -40,6 +43,7 @@ impl Default for Controls {
             boundary: BoundaryTracker::default(),
             taps: TapBuffer::default(),
             visual: None,
+            airborne: None,
         }
     }
 }
@@ -220,7 +224,11 @@ fn sample_keys(keys: &ButtonInput<KeyCode>) -> ButtonInput<KeyCode> {
 }
 
 /// Produces at most one in-flight proposal; renderer stalls never accumulate distance.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 pub(super) fn input(
     keyboard: Res<ButtonInput<KeyCode>>,
     navigation: Res<super::navigation::NavigationKeys>,
@@ -302,7 +310,12 @@ pub(super) fn input(
         turn,
         preserve_facing,
     } = intent;
-    if direction == Vec3::ZERO && turn == 0.0 && !controls.moving {
+    // A fall keeps going after the keys are released.
+    let falling = controls
+        .airborne
+        .as_ref()
+        .is_some_and(|airborne| airborne.velocity() < 0.0);
+    if direction == Vec3::ZERO && turn == 0.0 && !controls.moving && !falling {
         return;
     }
     let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
@@ -310,7 +323,16 @@ pub(super) fn input(
     // Clock starts at receipt of the last locally accepted sample, not render delta.
     let span = controls.span(elapsed);
     let delta = direction * speed * span;
-    let position = world.step(feet, delta, body.height) + Vec3::Y * body.feet_offset;
+    let (landing, mode) = match controls.airborne.as_mut() {
+        Some(airborne) => {
+            let landing = fall_step(airborne, world, feet, delta, span, body.height);
+            let falling = airborne.velocity() < 0.0
+                || feet.y - landing.y > eq_client_core::movement::MAX_GROUNDED_STEP;
+            (landing, if falling { MovementMode::Fall } else { mode })
+        }
+        None => (world.step(feet, delta, body.height), mode),
+    };
+    let position = landing + Vec3::Y * body.feet_offset;
     let position = stop_at_zone_line(&online.regions, origin, position);
     trace_proposal(mode, delta, position - origin);
     let turn_limit = 240.0 * span;
@@ -334,6 +356,36 @@ pub(super) fn input(
         || (heading - current_heading).abs() > f32::EPSILON;
     controls.waiting = true;
     controls.queued_at = now;
+}
+
+/// Walks like a grounded step but keeps going past ledges and falls under gravity,
+/// in the 50 ms slices the airborne controller integrates.
+fn fall_step(
+    airborne: &mut eq_client_core::movement::AirborneController,
+    world: &eq_client_core::movement::CollisionWorld,
+    feet: Vec3,
+    delta: Vec3,
+    span: f32,
+    height: f32,
+) -> Vec3 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // At most five slices.
+    let slices = (span / 0.05).ceil().clamp(1.0, 5.0) as u8;
+    let slice = f32::from(slices);
+    let mut position = feet;
+    for _ in 0..slices {
+        position = airborne.step(
+            world,
+            position,
+            eq_client_core::movement::PROVISIONAL_PHYSICS,
+            eq_client_core::movement::MotionStep {
+                horizontal: delta / slice,
+                jump: false,
+                seconds: span / slice,
+                height,
+            },
+        );
+    }
+    position
 }
 
 /// A bounded visual transition; never extrapolates past the accepted destination.
