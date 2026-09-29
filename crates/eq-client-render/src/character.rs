@@ -92,11 +92,11 @@ pub(super) fn spawn_prepared(
         .fold(f32::INFINITY, f32::min);
     let child = commands
         .spawn((
-            // Classic character meshes face opposite the movement root's +Z
-            // forward convention. Keep protocol heading on the root and correct
-            // the model-forward convention once here.
+            // Classic character meshes face +X (installed HUM/ERM/ELM/DWM toes
+            // extend along +X), not the movement root's +Z forward convention.
+            // Keep protocol heading on the root and correct the model once here.
             Transform::from_xyz(0.0, -feet_offset - bottom, 0.0)
-                .with_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
+                .with_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2)),
             Visibility::Inherited,
         ))
         .with_children(|parent| {

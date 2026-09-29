@@ -136,6 +136,24 @@ mod tests {
     }
 
     #[test]
+    fn observed_p99_self_recast_leaves_one_unslotted_effect() {
+        let mut state = BuffTracker::empty_snapshot();
+        let mut begin = effect(42);
+        begin.effect_flag = 0;
+        // First cast: begin action, then landed action; no slot update followed.
+        state.observe_effect(begin.clone());
+        state.observe_effect(effect(42));
+        // Recast: begin action, identified fade of slot 0, empty-slot fade, landed action.
+        state.observe_effect(begin);
+        state.apply(update(0, 42, false));
+        assert!(state.effects().is_empty());
+        state.apply(update(0, u32::MAX, false));
+        state.observe_effect(effect(42));
+        assert!(state.slots().unwrap().is_empty());
+        assert_eq!(state.effects().keys().copied().collect::<Vec<_>>(), [42]);
+    }
+
+    #[test]
     fn new_admission_discards_old_effects_and_preserves_snapshot_holes() {
         let mut state = BuffTracker::empty_snapshot();
         state.observe_effect(effect(42));

@@ -432,6 +432,13 @@ pub(super) fn receive(
                             .as_ref()
                             .is_some_and(|player| player.spawn_id == spawn_id))
                 {
+                    if state
+                        .player
+                        .as_ref()
+                        .is_some_and(|player| player.spawn_id == spawn_id)
+                    {
+                        debug!(?posture, "Own posture update");
+                    }
                     state.postures.insert(spawn_id, posture);
                 }
             }
@@ -472,6 +479,14 @@ pub(super) fn receive(
                 }
                 let active = state.connected && state.death.is_none();
                 if let Some(player) = state.player.as_mut() {
+                    if let eq_client_core::SpellUpdate::Interrupted {
+                        caster_id,
+                        message_id,
+                    } = update
+                        && caster_id == u32::from(player.spawn_id)
+                    {
+                        debug!(message_id, "Own cast interrupted");
+                    }
                     update.apply_gems(&mut player.memorized_spells);
                     hud.spells = player.memorized_spells;
                     if active {
