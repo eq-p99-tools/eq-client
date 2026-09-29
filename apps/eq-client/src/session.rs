@@ -68,8 +68,8 @@ impl SessionWorker {
                 .unwrap_or_else(|_| "p99".into())
                 .parse()?;
             anyhow::ensure!(
-                protocol == ServerProtocol::Project1999,
-                "calibrated movement is P99-only"
+                protocol.is_titanium(),
+                "calibrated movement requires the Titanium protocol"
             );
         }
         let client = client_from_environment(install)?;
@@ -161,13 +161,20 @@ fn client_from_environment(install: &Path) -> Result<Client> {
     let protocol: ServerProtocol = env::var("EQ_PROTOCOL")
         .unwrap_or_else(|_| "p99".into())
         .parse()?;
-    let config = ClientConfig::for_protocol(
+    let mut config = ClientConfig::for_protocol(
         protocol,
         value("EQ_ACCOUNT")?,
         value("EQ_PASSWORD")?,
         value("EQ_SERVER")?,
         env::var("EQ_CHARACTER").unwrap_or_default(),
     );
+    // Local servers (for example stock EQEmu) name their own login endpoint.
+    if let Ok(host) = env::var("EQ_LOGIN_HOST") {
+        config.host = host;
+    }
+    if let Ok(port) = env::var("EQ_LOGIN_PORT") {
+        config.port = port.parse().context("EQ_LOGIN_PORT is not a port number")?;
+    }
     let hostname = env::var("COMPUTERNAME")
         .or_else(|_| env::var("HOSTNAME"))
         .unwrap_or_else(|_| "EQCLIENT".into());
@@ -181,7 +188,7 @@ fn client_from_environment(install: &Path) -> Result<Client> {
             username.chars().take(15).collect::<String>(),
         ),
     )?;
-    let client = if protocol == ServerProtocol::Project1999 {
+    let client = if protocol.is_titanium() {
         client.with_assets(Assets::scan_all(install)?)?
     } else {
         client

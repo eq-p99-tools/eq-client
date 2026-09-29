@@ -123,7 +123,7 @@ fn titanium_resource_estimates(online: bool) -> bool {
         && std::env::var("EQ_PROTOCOL")
             .unwrap_or_else(|_| "p99".into())
             .parse::<eq_network::client::ServerProtocol>()
-            .is_ok_and(|protocol| protocol == eq_network::client::ServerProtocol::Project1999)
+            .is_ok_and(eq_network::client::ServerProtocol::is_titanium)
 }
 
 fn main() {
