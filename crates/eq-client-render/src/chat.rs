@@ -546,6 +546,26 @@ fn submit_draft(
     }
 }
 
+/// Queues a game slash command for scripts; ordinary chat is never sent this way.
+pub(super) fn submit_game_command(
+    input: &str,
+    online: &super::online::OnlineState,
+    sender: &super::target::CommandsToServer,
+) -> Result<(), String> {
+    let commands =
+        game_commands(input, online).ok_or_else(|| format!("{input} is not a game command"))??;
+    let sender = sender
+        .0
+        .as_ref()
+        .ok_or_else(|| "Network worker is unavailable".to_owned())?;
+    for command in commands {
+        sender
+            .try_send(command)
+            .map_err(|_| "Command could not be queued".to_owned())?;
+    }
+    Ok(())
+}
+
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
     input: &str,

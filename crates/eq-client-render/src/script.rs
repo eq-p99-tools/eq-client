@@ -30,6 +30,8 @@ pub enum Step {
     WaitOnline,
     /// Waits until the named zone is admitted with a player present.
     WaitZone(String),
+    /// Runs a game slash command such as `/camp`; chat text is refused.
+    Slash(String),
     /// Presses keys together for one frame, modifiers first.
     Press(Vec<KeyCode>),
     /// Holds keys together for a bounded duration.
@@ -140,6 +142,9 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("select", [name]) => Step::Select((*name).to_owned()),
         ("wait_online", []) => Step::WaitOnline,
         ("wait_zone", [zone]) => Step::WaitZone(zone.to_ascii_lowercase()),
+        ("slash", [command]) if matches!(*command, "camp" | "sit" | "stand") => {
+            Step::Slash(format!("/{command}"))
+        }
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
         ("wait", [duration]) => Step::Wait(millis(duration, MAX_WAIT)?),
@@ -354,6 +359,7 @@ type Observed<'w> = (
     Res<'w, super::hud::HudState>,
     Res<'w, super::inventory::InventoryState>,
     Res<'w, super::target::TargetState>,
+    Res<'w, super::target::CommandsToServer>,
 );
 
 type Input<'w> = (
@@ -477,6 +483,12 @@ pub(super) fn drive(
     };
     info!(?step, "Script step");
     match &step {
+        Step::Slash(command) => {
+            if let Err(error) = super::chat::submit_game_command(command, &online, &observed.3) {
+                script.stop(&mut keys, &mut mouse, &error);
+            }
+            return;
+        }
         Step::Press(chord) | Step::Hold(chord, _) => {
             for key in chord {
                 keys.press(*key);
@@ -584,7 +596,7 @@ fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
 fn report(
     label: &str,
     online: &super::online::OnlineState,
-    (hud, inventory, target): &Observed,
+    (hud, inventory, target, _): &Observed,
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
@@ -654,7 +666,7 @@ mod tests {
     fn parses_bounded_steps_and_rejects_unsafe_input() {
         let base = Path::new("private");
         let steps = parse(
-            "wait_select\nselect Someone\nwait_online\nwait_zone TOX\npress F1 # self\n\
+            "wait_select\nselect Someone\nwait_online\nwait_zone TOX\nslash camp\npress F1 # self\n\
              press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nclick slot 23\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\nreport after cast\nscreenshot a.png\nquit\n",
             base,
@@ -667,6 +679,7 @@ mod tests {
                 Step::Select("Someone".into()),
                 Step::WaitOnline,
                 Step::WaitZone("tox".into()),
+                Step::Slash("/camp".into()),
                 Step::Press(vec![KeyCode::F1]),
                 Step::Press(vec![KeyCode::AltLeft, KeyCode::Digit1]),
                 Step::Hold(vec![KeyCode::KeyW], Duration::from_millis(1500)),
@@ -711,6 +724,8 @@ mod tests {
             "click anything",
             "click memorize 9",
             "click memorize 0",
+            "slash say hello",
+            "slash ooc",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
