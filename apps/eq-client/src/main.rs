@@ -113,7 +113,7 @@ struct Arguments {
 
     /// Attended key script (press/hold/wait/report/screenshot/quit), run only
     /// while the client window is focused. Screenshots are saved beside it.
-    #[arg(long, requires = "online")]
+    #[arg(long)]
     script: Option<PathBuf>,
 }
 
