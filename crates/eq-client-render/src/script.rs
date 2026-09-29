@@ -14,9 +14,9 @@ use bevy::window::PrimaryWindow;
 
 const MAX_STEPS: usize = 500;
 const MAX_HOLD: Duration = Duration::from_secs(10);
-const MAX_WAIT: Duration = Duration::from_secs(120);
+const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
-const MAX_ONLINE_WAIT: Duration = Duration::from_secs(180);
+const MAX_ONLINE_WAIT: Duration = Duration::from_mins(3);
 const MAX_RUNTIME: Duration = Duration::from_mins(15);
 
 /// One scripted action.
@@ -880,9 +880,9 @@ mod tests {
                     relative: true,
                     pitch: -15.0
                 },
-                Step::Trace(Duration::from_millis(2000)),
+                Step::Trace(Duration::from_secs(2)),
                 Step::Face,
-                Step::Approach(12.0, Duration::from_millis(5000)),
+                Step::Approach(12.0, Duration::from_secs(5)),
                 Step::Click(ClickTarget::Slot(23)),
                 Step::Click(ClickTarget::Scribe),
                 Step::Click(ClickTarget::Store),

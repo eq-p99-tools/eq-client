@@ -403,7 +403,7 @@ pub(super) fn update(
     inventory: Option<Res<super::inventory::InventoryState>>,
     actions: BookActions,
 ) {
-    let (scribe, mut deletion) = actions;
+    let (scribe, mut deletion, mut requests) = actions;
     let session = online.as_ref().and_then(|online| online.session_id);
     if selection.reset_session(session) {
         state.page = 0;
@@ -431,16 +431,18 @@ pub(super) fn update(
             .iter()
             .any(|interaction| *interaction == Interaction::Pressed)
     {
-        let result = request_scribe(
+        selection.message = match request_scribe(
             online.as_deref(),
             inventory.as_deref(),
             hud.spell_book.as_ref(),
             sender.as_deref(),
-        );
-        selection.message = result.map_or_else(
-            |error| error.to_string(),
-            |()| "Scribe request queued; waiting for server updates".into(),
-        );
+        ) {
+            Ok(spell) => {
+                let _ = note(&mut requests, format!("Scribing {}", names.label(spell)));
+                "Scribe request queued; waiting for server updates".into()
+            }
+            Err(error) => error.to_string(),
+        };
     }
     let entries = known_entries(hud.spell_book.as_ref());
     if selection
@@ -482,20 +484,33 @@ pub(super) fn update(
         accepts_input,
     );
     if let Some(gem) = requested {
-        selection.message = request_memorize(
+        let queued = request_memorize(
             online.as_deref(),
             hud.spell_book.as_ref(),
             sender.as_deref(),
             selection.selected,
             gem,
-        )
-        .map_or_else(
-            |error| error.to_string(),
-            |()| format!("Queued for gem {}; waiting for worker", gem + 1),
         );
+        selection.message = match queued {
+            Ok(spell) => {
+                let label = format!("Memorizing {} into gem {}", names.label(spell), gem + 1);
+                let _ = note(&mut requests, label);
+                format!("Queued for gem {}; waiting for worker", gem + 1)
+            }
+            Err(error) => error.to_string(),
+        };
     }
     let label = book_label(&hud, &names, &selection, &entries, state.page, pages);
     refresh_labels(&mut text, &label, gem_hint.as_deref());
+}
+
+/// Names the queued book change for the action bar.
+fn note(
+    requests: &mut Option<ResMut<super::hud::action_bar::ActionRequests>>,
+    label: String,
+) -> Option<()> {
+    requests.as_mut()?.book = Some((std::time::Instant::now(), label));
+    Some(())
 }
 
 /// Updates book status and hover details without rebuilding the controls.
@@ -532,6 +547,7 @@ fn turn_page(
 type BookActions<'w, 's> = (
     Query<'w, 's, &'static Interaction, (With<ScribeCursor>, Changed<Interaction>)>,
     DeleteControls<'w, 's>,
+    Option<ResMut<'w, super::hud::action_bar::ActionRequests>>,
 );
 
 type DeleteControls<'w, 's> = Query<
@@ -859,7 +875,7 @@ fn request_memorize(
     sender: Option<&super::target::CommandsToServer>,
     selected: Option<u32>,
     gem: u8,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<u32> {
     use anyhow::{Context, ensure};
     let spell_id = selected.context("Select a spell first")?;
     ensure!(gem < 8, "Choose a gem from 1 to 8");
@@ -884,7 +900,7 @@ fn request_memorize(
             created: std::time::Instant::now(),
         })
         .context("Memorization request could not be queued")?;
-    Ok(())
+    Ok(spell_id)
 }
 
 /// Queues the current cursor scroll without consuming or inserting it locally.
@@ -893,15 +909,18 @@ fn request_scribe(
     inventory: Option<&super::inventory::InventoryState>,
     book: Option<&eq_client_core::SpellBook>,
     sender: Option<&super::target::CommandsToServer>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<u32> {
     use anyhow::Context;
     let command = prepare_scribe(online, inventory, book, sender)?;
+    let eq_client_core::ClientCommand::ScribeSpell { spell_id, .. } = command else {
+        anyhow::bail!("Scribe request was not a scribe");
+    };
     sender
         .and_then(|sender| sender.0.as_ref())
         .context("Network worker unavailable")?
         .try_send(command)
         .context("Scribe request could not be queued")?;
-    Ok(())
+    Ok(spell_id)
 }
 
 /// Shares admission, cursor and book validation between presentation and submission.

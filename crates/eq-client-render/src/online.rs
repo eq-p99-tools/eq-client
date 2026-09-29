@@ -79,10 +79,11 @@ pub(super) fn receive(
     mut hud: ResMut<hud::HudState>,
     mut motion: ResMut<super::motion::Controls>,
     mut chat: ResMut<super::chat::ChatState>,
-    (mut target, mut combat, mut trade): (
+    (mut target, mut combat, mut trade, mut actions): (
         ResMut<super::target::TargetState>,
         ResMut<super::combat::CombatState>,
         ResMut<super::trade::TradeState>,
+        Option<ResMut<hud::action_bar::ActionRequests>>,
     ),
     mut items: ResMut<super::items::ItemState>,
     mut inventory: ResMut<super::inventory::InventoryState>,
@@ -655,6 +656,21 @@ pub(super) fn receive(
                 }
             }
             WorldUpdate::Game(WorldEvent::Camp(status)) => {
+                if let Some(actions) = actions.as_mut() {
+                    actions.camp = match &status {
+                        eq_client_core::CampStatus::Preparing => {
+                            Some((std::time::Instant::now(), false))
+                        }
+                        eq_client_core::CampStatus::LoggingOut => Some(
+                            actions
+                                .camp
+                                .map_or((std::time::Instant::now(), true), |(since, _)| {
+                                    (since, true)
+                                }),
+                        ),
+                        _ => None,
+                    };
+                }
                 let text = match &status {
                     eq_client_core::CampStatus::Preparing => messages
                         .as_deref()
