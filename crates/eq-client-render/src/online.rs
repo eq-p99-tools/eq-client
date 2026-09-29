@@ -217,22 +217,9 @@ pub(super) fn receive(
                 let height = asset
                     .as_ref()
                     .map_or(6.0, eq_client_assets::characters::CharacterAsset::height);
-                let ground = surface.height_below(position.x, position.z, position.y + 0.5);
-                let valid = |ground: f32| {
-                    let offset = position.y - ground;
-                    (-0.5..=height * 2.0).contains(&offset).then_some(offset)
-                };
-                // Terrain first, then any solid collision surface (floors of dungeons
-                // such as the Gloomingdeep tutorial are objects, not terrain).
-                let feet_offset = ground
-                    .and_then(valid)
-                    .or_else(|| {
-                        collision
-                            .as_ref()
-                            .and_then(|world| world.ground(position, 0.5, height * 2.0))
-                            .and_then(valid)
-                    })
-                    .unwrap_or(height * 0.5);
+                let feet_offset = feet_offset(&surface, collision.as_ref(), position, height);
+                // Lets a logged session be replayed offline with the same feet height.
+                debug!("Admission feet offset {feet_offset} for model height {height}");
                 commands.insert_resource(Collision(collision));
                 let body = PlayerBody {
                     feet_offset,
@@ -763,6 +750,30 @@ pub(super) fn receive(
             WorldUpdate::Game(_) => (),
         }
     }
+}
+
+/// How far the server's reported origin sits above the ground at admission: the
+/// rendered terrain first, then any solid collision floor (dungeon floors such as
+/// the Gloomingdeep tutorial's are objects, not terrain), else half the model height.
+pub(super) fn feet_offset(
+    surface: &TerrainSurface,
+    collision: Option<&eq_client_core::movement::CollisionWorld>,
+    position: Vec3,
+    height: f32,
+) -> f32 {
+    let valid = |ground: f32| {
+        let offset = position.y - ground;
+        (-0.5..=height * 2.0).contains(&offset).then_some(offset)
+    };
+    surface
+        .height_below(position.x, position.z, position.y + 0.5)
+        .and_then(valid)
+        .or_else(|| {
+            collision
+                .and_then(|world| world.ground(position, 0.5, height * 2.0))
+                .and_then(valid)
+        })
+        .unwrap_or(height * 0.5)
 }
 
 #[cfg(test)]

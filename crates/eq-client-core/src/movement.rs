@@ -18,10 +18,21 @@ pub use eq_network_game::movement::{MAX_FALL_SPEED, MAX_GROUNDED_STEP};
 use glam::Vec3;
 use parry3d::{
     math::{Pose, Vector},
-    query::{Ray, RayCast, ShapeCastOptions, cast_shapes},
+    query::{Ray, RayCast, ShapeCastOptions, cast_shapes, contact},
     shape::{Capsule, TriMesh},
 };
 use std::sync::Arc;
+
+/// The character's collision capsule at `feet`. Its base floats above the feet so
+/// floors, stairs and uneven ground never register as walls.
+fn body(feet: Vec3, height: f32) -> (Pose, Capsule) {
+    let radius = 0.4;
+    let center = feet + Vec3::Y * (height * 0.5 + 0.85);
+    (
+        Pose::translation(center.x, center.y, center.z),
+        Capsule::new_y(height * 0.5 - radius, radius),
+    )
+}
 
 /// Shared solid geometry accelerated by Parry's triangle-mesh BVH.
 pub struct CollisionMesh {
@@ -119,6 +130,28 @@ impl CollisionWorld {
         }
         let floor = origin.y - hit.time_of_impact;
         (floor >= position.y - drop && floor <= position.y + step_up).then_some(floor)
+    }
+
+    /// Signed distance from the character's collision capsule to the nearest solid
+    /// within `range`; a negative value is how deep the capsule overlaps it.
+    pub fn clearance(&self, feet: Vec3, height: f32, range: f32) -> Option<f32> {
+        if !feet.is_finite()
+            || !height.is_finite()
+            || height < 1.0
+            || !range.is_finite()
+            || range < 0.0
+        {
+            return None;
+        }
+        let (pose, capsule) = body(feet, height);
+        self.meshes()
+            .filter_map(|mesh| {
+                contact(&pose, &capsule, &Pose::IDENTITY, mesh, range)
+                    .ok()
+                    .flatten()
+            })
+            .map(|contact| contact.dist)
+            .min_by(f32::total_cmp)
     }
 
     /// Sweeps the character capsule and slides along walls without crossing cliffs or steep slopes.
@@ -250,15 +283,14 @@ impl CollisionWorld {
         delta: Vec3,
         height: f32,
     ) -> Result<Option<parry3d::query::ShapeCastHit>, parry3d::query::Unsupported> {
-        let radius = 0.4;
-        let capsule = Capsule::new_y(height * 0.5 - radius, radius);
-        let center = feet + Vec3::Y * (height * 0.5 + 0.85);
-        let pose = Pose::translation(center.x, center.y, center.z);
+        let (pose, capsule) = body(feet, height);
+        // A sweep that starts inside the margin (or overlapping) is refused only when it
+        // goes deeper; one that stops there would pin the character in every direction.
         let options = ShapeCastOptions {
             max_time_of_impact: 1.0,
             target_distance: 0.03,
-            stop_at_penetration: true,
-            ..Default::default()
+            stop_at_penetration: false,
+            compute_impact_geometry_on_penetration: true,
         };
         let mut nearest: Option<parry3d::query::ShapeCastHit> = None;
         for mesh in self.meshes() {
@@ -408,6 +440,43 @@ mod tests {
         let next = world.step(position, requested, 6.0);
         assert!(next.x < 0.1 && next.z > 1.8, "{next:?}");
     }
+    #[test]
+    fn starting_in_contact_refuses_only_moves_that_go_deeper() {
+        let wall = [
+            [[0.5, 0.0, -10.0], [0.5, 10.0, -10.0], [0.5, 10.0, 10.0]],
+            [[0.5, 0.0, -10.0], [0.5, 10.0, 10.0], [0.5, 0.0, 10.0]],
+        ];
+        let world = CollisionWorld::new(floor(0.0).into_iter().chain(wall)).unwrap();
+        // Inside the sweep's contact margin, then overlapping the wall slightly.
+        for gap in [0.01, -0.02] {
+            let start = Vec3::new(0.1 - gap, 0.0, 0.0);
+            let clearance = world.clearance(start, 6.0, 1.0).unwrap();
+            assert!((clearance - gap).abs() < 0.001, "{clearance}");
+            let away = world.step(start, -Vec3::X * 0.5, 6.0);
+            assert!(away.distance(start - Vec3::X * 0.5) < 0.001, "{away:?}");
+            let along = world.step(start, Vec3::Z * 0.5, 6.0);
+            assert!(along.distance(start + Vec3::Z * 0.5) < 0.001, "{along:?}");
+            let into = world.step(start, Vec3::X * 0.5, 6.0);
+            assert!(into.x <= start.x + 0.000_1, "{into:?}");
+            let diagonal = world.step(start, Vec3::new(0.5, 0.0, 0.5), 6.0);
+            assert!(diagonal.x <= start.x + 0.000_1, "{diagonal:?}");
+            assert!(diagonal.z > 0.49, "{diagonal:?}");
+            // Online falls walk through the airborne controller instead.
+            let online = AirborneController::default().step(
+                &world,
+                start,
+                PROVISIONAL_PHYSICS,
+                MotionStep {
+                    horizontal: -Vec3::X * 0.5,
+                    jump: false,
+                    seconds: 0.05,
+                    height: 6.0,
+                },
+            );
+            assert!(online.distance(start - Vec3::X * 0.5) < 0.001, "{online:?}");
+        }
+    }
+
     #[test]
     fn sliding_into_a_corner_cannot_cross_either_wall() {
         let walls = [

@@ -244,10 +244,7 @@ fn inspect_admission_support() {
     );
     let surface = TerrainSurface::from_primitives(&zone.primitives);
     let rendered = surface.height_below(position.x, position.z, position.y + 0.5);
-    let offset = rendered
-        .map(|ground| position.y - ground)
-        .filter(|offset| *offset >= -0.5 && *offset <= height * 2.0)
-        .unwrap_or(height * 0.5);
+    let offset = online::feet_offset(&surface, Some(&world), position, height);
     let feet = position - Vec3::Y * offset;
     println!("model_height={height} rendered_ground={rendered:?} feet_offset={offset}");
     println!(
@@ -313,4 +310,59 @@ fn inspect_admission_support() {
         "grounded_return={grounded:?} distance_from_start={}",
         grounded.distance(feet)
     );
+}
+
+/// Replays a spot where a live character stopped moving: the feet offset admission
+/// derived at `EQ_PROBE_ADMISSION`, then, from `EQ_PROBE_POSITION` (renderer points
+/// of the logged EQ positions), the capsule's clearance, the parts it touches, and
+/// a short step in 16 directions, grounded and through the online fall controller.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_MODEL, EQ_PROBE_ADMISSION and EQ_PROBE_POSITION"]
+fn inspect_stuck() {
+    use eq_client_core::movement::{AirborneController, MotionStep, PROVISIONAL_PHYSICS};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone =
+        eq_client_assets::load_zone(&install, &std::env::var("EQ_PROBE_ZONE").unwrap()).unwrap();
+    let height = eq_client_assets::characters::load_character(
+        &install.join("global_chr.s3d"),
+        &std::env::var("EQ_PROBE_MODEL").unwrap(),
+    )
+    .unwrap()
+    .height();
+    let world = build_collision(&zone).unwrap();
+    let surface = TerrainSurface::from_primitives(&zone.primitives);
+    let admission = probe_point("EQ_PROBE_ADMISSION");
+    let offset = online::feet_offset(&surface, Some(&world), admission, height);
+    let feet = probe_point("EQ_PROBE_POSITION") - Vec3::Y * offset;
+    println!(
+        "height={height} feet_offset={offset} feet={feet:?} clearance={:?}",
+        world.clearance(feet, height, 2.0)
+    );
+    for (name, part) in collision_parts(&zone, feet) {
+        if let Some(clearance) = part.clearance(feet, height, 0.5) {
+            println!("near={name} clearance={clearance}");
+        }
+    }
+    let mut refused = 0;
+    for turn in 0..16_u8 {
+        let angle = f32::from(turn) * std::f32::consts::TAU / 16.0;
+        let step = Vec3::new(angle.sin(), 0.0, angle.cos()) * 0.5;
+        let grounded = world.step(feet, step, height) - feet;
+        let online = AirborneController::default().step(
+            &world,
+            feet,
+            PROVISIONAL_PHYSICS,
+            MotionStep {
+                horizontal: step,
+                jump: false,
+                seconds: 0.05,
+                height,
+            },
+        ) - feet;
+        if grounded.length() < 0.001 && online.length() < 0.001 {
+            refused += 1;
+        }
+        println!("direction={step:?} grounded={grounded:?} online={online:?}");
+    }
+    println!("refused_directions={refused}/16");
 }
