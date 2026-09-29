@@ -337,6 +337,13 @@ pub(super) fn receive(
             WorldUpdate::Game(WorldEvent::Death(death)) => {
                 if let Ok(id) = u16::try_from(death.spawn_id) {
                     state.health.insert(id, 0);
+                    // Titanium corpses keep the spawn ID; redraw the entity as a corpse.
+                    if let Some(spawn) = state.spawns.get_mut(&id) {
+                        spawn.kind = spawn.kind.corpse();
+                        state.revision = state.revision.wrapping_add(1);
+                        let revision = state.revision;
+                        state.revisions.insert(id, revision);
+                    }
                 }
                 if state
                     .player
