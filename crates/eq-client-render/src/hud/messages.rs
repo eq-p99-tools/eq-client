@@ -52,27 +52,41 @@ impl Messages {
                 format!("Server message {id}: {}", arguments.join(", "))
             };
         };
+        // EQ placeholders: %1, %T1 (text argument) and %B1(...) (bold argument).
         let mut text = String::with_capacity(template.len());
-        let mut characters = template.chars().peekable();
-        while let Some(character) = characters.next() {
-            let index = characters
-                .peek()
-                .and_then(|next| next.to_digit(10))
-                .filter(|digit| character == '%' && *digit != 0);
-            if let Some(index) = index {
-                characters.next();
-                if let Some(argument) =
-                    arguments.get(usize::try_from(index - 1).unwrap_or(usize::MAX))
-                {
-                    text.push_str(argument);
-                } else {
-                    text.push('%');
-                    text.push(char::from_digit(index, 10).unwrap_or('?'));
-                }
-            } else {
-                text.push(character);
+        let mut rest = template.as_str();
+        while let Some(position) = rest.find('%') {
+            text.push_str(&rest[..position]);
+            let after = &rest[position + 1..];
+            let (marker, digits) = match after.as_bytes().first() {
+                Some(b'T' | b'B') => (1, &after[1..]),
+                _ => (0, after),
+            };
+            let Some(index) = digits
+                .chars()
+                .next()
+                .and_then(|digit| digit.to_digit(10))
+                .filter(|digit| *digit != 0)
+            else {
+                text.push('%');
+                rest = after;
+                continue;
+            };
+            let mut consumed = marker + 1;
+            if marker == 1
+                && after.as_bytes().first() == Some(&b'B')
+                && digits[1..].starts_with('(')
+                && let Some(close) = digits[1..].find(')')
+            {
+                consumed += close + 1;
             }
+            match arguments.get(usize::try_from(index - 1).unwrap_or(usize::MAX)) {
+                Some(argument) => text.push_str(argument),
+                None => text.push_str(&rest[position..position + 1 + consumed]),
+            }
+            rest = &after[consumed..];
         }
+        text.push_str(rest);
         text
     }
 
@@ -129,6 +143,16 @@ mod tests {
         let arguments = ["A rat".to_owned(), "YOU".to_owned(), "2 points".to_owned()];
         assert_eq!(table.format(80, &arguments), "A rat hits YOU for 2 points.");
         assert_eq!(table.format(81, &[]), "100% sure, %9 missing");
+        let table = Messages::parse(
+            "EQST0002
+0 1
+82 You gained \"%B1(1)\" at a cost of %2 ability %T3.
+",
+        );
+        assert_eq!(
+            table.format(82, &["Innate".into(), "0".into(), "points".into()]),
+            "You gained \"Innate\" at a cost of 0 ability points."
+        );
         assert_eq!(table.format(99, &[]), "Server message 99");
         assert_eq!(table.format(99, &["x".to_owned()]), "Server message 99: x");
     }

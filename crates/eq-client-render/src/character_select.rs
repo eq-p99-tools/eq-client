@@ -47,6 +47,11 @@ impl Selection {
         }
     }
 
+    /// Identity the server list was published with.
+    pub(super) const fn id(&self) -> u64 {
+        self.id
+    }
+
     /// Highlights a listed character by exact server spelling, ignoring case.
     pub(super) fn choose_named(&mut self, name: &str) -> bool {
         let slot = self

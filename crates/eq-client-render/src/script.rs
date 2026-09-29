@@ -26,6 +26,8 @@ pub enum Step {
     WaitSelect,
     /// Highlights a listed character by name and presses Enter.
     Select(String),
+    /// Creates a character from the selection screen (local test servers).
+    Create(eq_client_core::creation::NewCharacter),
     /// Waits until the zone is admitted with a player present.
     WaitOnline,
     /// Waits until the named zone is admitted with a player present.
@@ -140,6 +142,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
     Ok(match (command, rest.as_slice()) {
         ("wait_select", []) => Step::WaitSelect,
         ("select", [name]) => Step::Select((*name).to_owned()),
+        ("create", arguments) => parse_create(arguments)?,
         ("wait_online", []) => Step::WaitOnline,
         ("wait_zone", [zone]) => Step::WaitZone(zone.to_ascii_lowercase()),
         ("slash", [command]) if matches!(*command, "camp" | "sit" | "stand") => {
@@ -205,6 +208,26 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("quit", []) => Step::Quit,
         _ => return Err("unknown or malformed step".into()),
     })
+}
+
+/// `create <Name> <race> <class> <gender> <deity> <start zone> <stat for free points>`.
+fn parse_create(arguments: &[&str]) -> Result<Step, String> {
+    let [name, race, class, gender, deity, zone, primary] = arguments else {
+        return Err("create takes a name and six numbers".into());
+    };
+    let value = |text: &str| {
+        text.parse::<u32>()
+            .map_err(|_| String::from("expected a number"))
+    };
+    let character = eq_client_core::creation::NewCharacter::with_points_in(
+        *name,
+        (value(race)?, value(class)?, value(gender)?),
+        (value(deity)?, value(zone)?),
+        usize::try_from(value(primary)?).map_err(|_| String::from("bad stat"))?,
+    )
+    .map_err(|error| error.to_string())?;
+    character.validate().map_err(|error| error.to_string())?;
+    Ok(Step::Create(character))
 }
 
 fn keys_from(text: &str) -> Option<Vec<KeyCode>> {
@@ -484,6 +507,26 @@ pub(super) fn drive(
     };
     info!(?step, "Script step");
     match &step {
+        Step::Create(character) => {
+            let sent = online.selection.as_ref().is_some_and(|selection| {
+                observed.3.0.as_ref().is_some_and(|sender| {
+                    sender
+                        .try_send(eq_client_core::ClientCommand::CreateCharacter {
+                            selection_id: selection.id(),
+                            character: character.clone(),
+                        })
+                        .is_ok()
+                })
+            });
+            if !sent {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "character creation could not be sent",
+                );
+            }
+            return;
+        }
         Step::Slash(command) => {
             if let Err(error) = super::chat::submit_game_command(command, &online, &observed.3) {
                 script.stop(&mut keys, &mut mouse, &error);
@@ -667,7 +710,7 @@ mod tests {
     fn parses_bounded_steps_and_rejects_unsafe_input() {
         let base = Path::new("private");
         let steps = parse(
-            "wait_select\nselect Someone\nwait_online\nwait_zone TOX\nslash camp\npress F1 # self\n\
+            "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\npress F1 # self\n\
              press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nclick slot 23\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\nreport after cast\nscreenshot a.png\nquit\n",
             base,
@@ -678,6 +721,15 @@ mod tests {
             [
                 Step::WaitSelect,
                 Step::Select("Someone".into()),
+                Step::Create(
+                    eq_client_core::creation::NewCharacter::with_points_in(
+                        "Testcleric",
+                        (1, 2, 0),
+                        (212, 1),
+                        4
+                    )
+                    .unwrap()
+                ),
                 Step::WaitOnline,
                 Step::WaitZone("tox".into()),
                 Step::Slash("/camp".into()),
@@ -726,6 +778,8 @@ mod tests {
             "click memorize 9",
             "click memorize 0",
             "slash say hello",
+            "create lowercase 1 2 0 212 1 4",
+            "create Testbad 1 17 0 212 1 4",
             "slash ooc",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");

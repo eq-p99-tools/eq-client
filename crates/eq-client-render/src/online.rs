@@ -209,7 +209,7 @@ pub(super) fn receive(
                 for entity in &entities {
                     commands.entity(entity).despawn();
                 }
-                commands.insert_resource(Collision(build_collision(&zone)));
+                let collision = build_collision(&zone);
                 state.regions = zone.regions.clone();
                 let surface = TerrainSurface::from_primitives(&zone.primitives);
                 let position = Vec3::from_array(render_position(player.position));
@@ -217,10 +217,22 @@ pub(super) fn receive(
                     .as_ref()
                     .map_or(6.0, eq_client_assets::characters::CharacterAsset::height);
                 let ground = surface.height_below(position.x, position.z, position.y + 0.5);
+                let valid = |ground: f32| {
+                    let offset = position.y - ground;
+                    (-0.5..=height * 2.0).contains(&offset).then_some(offset)
+                };
+                // Terrain first, then any solid collision surface (floors of dungeons
+                // such as the Gloomingdeep tutorial are objects, not terrain).
                 let feet_offset = ground
-                    .map(|ground| position.y - ground)
-                    .filter(|offset| *offset >= -0.5 && *offset <= height * 2.0)
+                    .and_then(valid)
+                    .or_else(|| {
+                        collision
+                            .as_ref()
+                            .and_then(|world| world.ground(position, 0.5, height * 2.0))
+                            .and_then(valid)
+                    })
                     .unwrap_or(height * 0.5);
+                commands.insert_resource(Collision(collision));
                 let body = PlayerBody {
                     feet_offset,
                     height,

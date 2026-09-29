@@ -121,6 +121,9 @@ impl Continuity {
             {
                 self.invalidate();
             }
+            // A server correction resets the session's movement grant; the measured
+            // speed is unchanged, so grant it again for the same admission. Stock
+            // EQEmu corrects the position right after zone entry.
             WorldEvent::Position { spawn_id, .. }
                 if self
                     .admission
@@ -128,6 +131,14 @@ impl Continuity {
                     .is_some_and(|active| active.spawn == *spawn_id) =>
             {
                 self.invalidate();
+                let session_id = self.admission.as_ref()?.session;
+                return self
+                    .calibration
+                    .map(|calibration| ClientCommand::ConfigureMotion {
+                        session_id,
+                        calibration,
+                        created: now,
+                    });
             }
             WorldEvent::Death(death)
                 if self
@@ -247,6 +258,27 @@ mod tests {
         policy.observe(&transfer(false), later);
         assert!(policy.observe(&entered(3, 0.7), later).is_none());
     }
+    #[test]
+    fn a_position_correction_grants_movement_again_in_the_same_zone() {
+        let now = Instant::now();
+        let mut policy = Continuity::new(Some(calibration()));
+        policy.observe(&entered(1, 0.7), now);
+        policy.observe(&grant(1), now);
+        let correction = WorldEvent::Position {
+            spawn_id: 7,
+            position: WorldPosition::default(),
+        };
+        assert!(matches!(
+            policy.observe(&correction, now),
+            Some(ClientCommand::ConfigureMotion { session_id: 1, .. })
+        ));
+        let other = WorldEvent::Position {
+            spawn_id: 8,
+            position: WorldPosition::default(),
+        };
+        assert!(policy.observe(&other, now).is_none());
+    }
+
     #[test]
     fn changed_speed_death_correction_and_unsolicited_admission_do_not_resume() {
         let now = Instant::now();

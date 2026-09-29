@@ -11,6 +11,7 @@ pub use eq_network_game::chat::OutboundChat;
 pub use eq_network_game::combat;
 pub use eq_network_game::command::GameCommand as ClientCommand;
 pub use eq_network_game::command::Posture;
+pub use eq_network_game::creation;
 pub use eq_network_game::doors;
 pub use eq_network_game::inventory;
 pub use eq_network_game::loot;
