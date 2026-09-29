@@ -155,6 +155,59 @@ impl TradeState {
     }
 }
 
+/// Fills both windows with synthetic items for an explicitly offline preview.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn demo(
+    settings: Res<super::ViewerSettings>,
+    online: Res<super::online::OnlineState>,
+    mut trade: ResMut<TradeState>,
+) {
+    if !settings.0.demo_trade || online.enabled {
+        return;
+    }
+    let items = super::inventory::demo_items();
+    trade.coins = Some(Coins {
+        platinum: 3,
+        gold: 1,
+        silver: 4,
+        copper: 7,
+    });
+    trade.loot = Some(LootWindow {
+        corpse_id: 1,
+        name: "a preview rat".into(),
+        items: items
+            .iter()
+            .take(3)
+            .zip(22u16..)
+            .map(|(item, slot)| (slot, item.clone()))
+            .collect(),
+        listed: true,
+        pending: None,
+        loot_all: false,
+    });
+    trade.merchant = Some(MerchantWindow {
+        merchant_id: 2,
+        name: "Preview merchant".into(),
+        stock: items
+            .into_iter()
+            .skip(3)
+            .zip(1u32..)
+            .map(|(item, slot)| {
+                (
+                    slot,
+                    MerchantItem {
+                        slot,
+                        price: slot * 137,
+                        quantity: 0,
+                        item,
+                    },
+                )
+            })
+            .collect(),
+    });
+    trade.changed();
+}
+
 /// `1p 2g 3s 4c`, omitting empty denominations.
 pub(super) fn coin_text(copper: u64) -> String {
     let parts: Vec<String> = [
@@ -420,7 +473,7 @@ pub(super) fn present(
         spawn_panel(
             &mut commands,
             &format!("LOOT {}", window.name.to_uppercase()),
-            (px(20), px(160)),
+            (px(24), px(96)),
             status,
             &rows,
             &[(Action::TakeAll, "Loot all"), (Action::EndLoot, "Done")],
@@ -460,7 +513,7 @@ pub(super) fn present(
         spawn_panel(
             &mut commands,
             &format!("MERCHANT {}", window.name.to_uppercase()),
-            (px(20), px(420)),
+            (px(24), px(96)),
             &format!("Your coin: {coins}"),
             &rows,
             &[(Action::EndShop, "Done")],
@@ -483,7 +536,7 @@ fn item_label(item: &InventoryItem) -> String {
 fn spawn_panel(
     commands: &mut Commands,
     title: &str,
-    (left, top): (Val, Val),
+    (right, top): (Val, Val),
     status: &str,
     rows: &[(Action, String)],
     footer: &[(Action, &str)],
@@ -494,17 +547,18 @@ fn spawn_panel(
             windows::Frame::default(),
             Node {
                 position_type: PositionType::Absolute,
-                left,
+                right,
                 top,
                 width: px(300),
-                max_height: px(360),
+                max_height: px(400),
                 padding: UiRect::all(px(6)),
                 row_gap: px(4),
                 flex_direction: FlexDirection::Column,
                 overflow: Overflow::clip_y(),
                 ..default()
             },
-            GlobalZIndex(18),
+            // Above inventory and spellbook, below item inspection.
+            GlobalZIndex(26),
             BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.94)),
         ))
         .id();

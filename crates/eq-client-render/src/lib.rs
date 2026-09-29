@@ -89,6 +89,8 @@ pub struct ViewerConfig {
     pub demo_spellbook: bool,
     /// Preview character selection without a network worker.
     pub demo_character_select: bool,
+    /// Preview loot and merchant windows with synthetic items.
+    pub demo_trade: bool,
     /// Optional read-only live validation action.
     pub validation: Option<ValidationAction>,
     /// Optional attended key script driven through the normal input paths.
@@ -256,6 +258,7 @@ pub fn run(
 fn install_overlays(app: &mut App) {
     app.init_resource::<combat::CombatState>()
         .init_resource::<trade::TradeState>()
+        .add_systems(Startup, trade::demo)
         .add_systems(
             Update,
             (

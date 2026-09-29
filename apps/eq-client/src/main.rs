@@ -74,6 +74,9 @@ struct Arguments {
     /// Preview character selection with synthetic names and no network connection.
     #[arg(long, conflicts_with = "online")]
     demo_character_select: bool,
+    /// Preview loot and merchant windows with synthetic items and no network connection.
+    #[arg(long, conflicts_with = "online")]
+    demo_trade: bool,
 
     /// Select the nearest rendered player once, without moving or attacking.
     #[arg(long)]
@@ -213,6 +216,7 @@ fn main() {
             demo_bank: arguments.demo_bank,
             demo_spellbook: arguments.demo_spellbook,
             demo_character_select: arguments.demo_character_select,
+            demo_trade: arguments.demo_trade,
             validation: if arguments.target_nearest_player_once {
                 Some(ValidationAction::TargetNearestPlayer)
             } else if arguments.inspect_first_chat_item_once {
