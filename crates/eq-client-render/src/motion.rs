@@ -18,6 +18,8 @@ pub(super) struct Controls {
     pub last_accepted: Instant,
     queued_at: Instant,
     moving: bool,
+    /// Seconds between the last two accepted samples while moving continuously.
+    cycle: f32,
     boundary: BoundaryTracker,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
@@ -34,6 +36,7 @@ impl Default for Controls {
             last_accepted: Instant::now(),
             queued_at: Instant::now(),
             moving: false,
+            cycle: 0.1,
             boundary: BoundaryTracker::default(),
             taps: TapBuffer::default(),
             visual: None,
@@ -85,6 +88,7 @@ impl Controls {
                 position.heading,
             ))),
             elapsed: 0.0,
+            duration: self.cycle,
         });
     }
     /// Selects a granted locomotion mode without modifying its timing budget.
@@ -135,11 +139,31 @@ impl Controls {
             ..Self::default()
         };
     }
+    /// Continuous motion covers the whole cycle, including the proposal round trip;
+    /// a fresh start covers at most 0.1 s so an idle gap never becomes a jump.
+    fn span(&self, elapsed: Duration) -> f32 {
+        elapsed
+            .as_secs_f32()
+            .min(if self.moving { MAX_CYCLE } else { 0.1 })
+    }
     pub fn accepted(&mut self) {
+        let now = Instant::now();
+        // Spread each sample over the whole proposal cycle so continuous motion
+        // does not pause while the next proposal is in flight.
+        self.cycle = if self.moving {
+            now.saturating_duration_since(self.last_accepted)
+                .as_secs_f32()
+                .clamp(0.05, MAX_CYCLE)
+        } else {
+            0.1
+        };
         self.waiting = false;
-        self.last_accepted = Instant::now();
+        self.last_accepted = now;
     }
 }
+
+/// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
+const MAX_CYCLE: f32 = 0.25;
 
 /// Movement bindings whose press edges may arrive between network updates.
 const MOTION_KEYS: [KeyCode; 10] = [
@@ -284,11 +308,12 @@ pub(super) fn input(
     let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
     let feet = origin - Vec3::Y * body.feet_offset;
     // Clock starts at receipt of the last locally accepted sample, not render delta.
-    let delta = direction * speed * elapsed.as_secs_f32().min(0.1);
+    let span = controls.span(elapsed);
+    let delta = direction * speed * span;
     let position = world.step(feet, delta, body.height) + Vec3::Y * body.feet_offset;
     let position = stop_at_zone_line(&online.regions, origin, position);
     trace_proposal(mode, delta, position - origin);
-    let turn_limit = 240.0 * elapsed.as_secs_f32().min(0.1);
+    let turn_limit = 240.0 * span;
     let heading = if direction == Vec3::ZERO || preserve_facing {
         (current_heading + turn * turn_limit).rem_euclid(512.0)
     } else {
@@ -316,12 +341,13 @@ struct VisualMotion {
     from: Transform,
     to: Transform,
     elapsed: f32,
+    duration: f32,
 }
 
 impl VisualMotion {
     fn advance(&mut self, seconds: f32, transform: &mut Transform) {
         self.elapsed += seconds;
-        let fraction = (self.elapsed / 0.1).clamp(0.0, 1.0);
+        let fraction = (self.elapsed / self.duration.max(0.01)).clamp(0.0, 1.0);
         transform.translation = self.from.translation.lerp(self.to.translation, fraction);
         transform.rotation = self.from.rotation.slerp(self.to.rotation, fraction);
     }
@@ -345,7 +371,7 @@ pub(super) fn interpolate(
     for mut camera in &mut cameras {
         camera.focus = transform.translation;
     }
-    if visual.elapsed >= 0.1 {
+    if visual.elapsed >= visual.duration {
         controls.visual = None;
     }
 }
@@ -451,6 +477,7 @@ mod tests {
             from: bevy::prelude::Transform::IDENTITY,
             to: bevy::prelude::Transform::from_xyz(10.0, 0.0, 0.0),
             elapsed: 0.0,
+            duration: 0.1,
         };
         let mut transform = bevy::prelude::Transform::from_scale(bevy::prelude::Vec3::splat(2.0));
         visual.advance(0.05, &mut transform);
@@ -458,6 +485,31 @@ mod tests {
         visual.advance(1.0, &mut transform);
         assert_eq!(transform.translation, visual.to.translation);
         assert_eq!(transform.scale, bevy::prelude::Vec3::splat(2.0));
+    }
+
+    #[test]
+    fn continuous_samples_are_displayed_over_their_whole_cycle() {
+        let mut controls = super::Controls::default();
+        controls.accepted();
+        assert!((controls.cycle - 0.1).abs() < f32::EPSILON);
+        controls.moving = true;
+        controls.last_accepted = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(150))
+            .unwrap();
+        controls.accepted();
+        assert!((controls.cycle - 0.15).abs() < 0.02, "{}", controls.cycle);
+        controls.moving = true;
+        controls.last_accepted = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(3))
+            .unwrap();
+        controls.accepted();
+        assert!((controls.cycle - super::MAX_CYCLE).abs() < f32::EPSILON);
+        controls.display_sample(
+            bevy::prelude::Transform::IDENTITY,
+            eq_client_core::world_position([10.0, 0.0, 0.0], 0.0),
+        );
+        let visual = controls.visual.as_ref().unwrap();
+        assert!((visual.duration - super::MAX_CYCLE).abs() < f32::EPSILON);
     }
 
     #[test]
