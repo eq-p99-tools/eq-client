@@ -107,6 +107,11 @@ struct Arguments {
     /// Hide placed objects to inspect terrain and material transitions.
     #[arg(long)]
     terrain_only: bool,
+
+    /// Attended key script (press/hold/wait/report/screenshot/quit), run only
+    /// while the client window is focused. Screenshots are saved beside it.
+    #[arg(long, requires = "online")]
+    script: Option<PathBuf>,
 }
 
 /// Enables provisional Titanium capacities only for the matching online dialect.
@@ -134,10 +139,9 @@ fn main() {
             eprintln!("Invalid movement calibration: {error}");
             std::process::exit(2);
         });
-    if !arguments.entity_distance.is_finite() || arguments.entity_distance <= 0.0 {
-        eprintln!("error: --entity-distance must be a finite positive number");
-        std::process::exit(2);
-    }
+    // Validate every local input before the session logs in.
+    let script = arguments.script.as_deref().map(load_script);
+    require_positive_distance(arguments.entity_distance);
     let eq_directory = arguments
         .eq_dir
         .or_else(default_eq_directory)
@@ -216,10 +220,34 @@ fn main() {
             } else {
                 None
             },
+            script,
         },
         updates,
         worker.as_ref().map(session::SessionWorker::commands),
     );
+}
+
+fn require_positive_distance(distance: f32) {
+    if !distance.is_finite() || distance <= 0.0 {
+        eprintln!("error: --entity-distance must be a finite positive number");
+        std::process::exit(2);
+    }
+}
+
+/// Reads and validates an attended key script, exiting on any invalid line.
+fn load_script(path: &std::path::Path) -> Vec<eq_client_render::script::Step> {
+    std::fs::read_to_string(path)
+        .map_err(|error| error.to_string())
+        .and_then(|text| {
+            eq_client_render::script::parse(
+                &text,
+                path.parent().unwrap_or_else(|| std::path::Path::new(".")),
+            )
+        })
+        .unwrap_or_else(|error| {
+            eprintln!("Invalid script: {error}");
+            std::process::exit(2);
+        })
 }
 
 fn default_eq_directory() -> Option<PathBuf> {

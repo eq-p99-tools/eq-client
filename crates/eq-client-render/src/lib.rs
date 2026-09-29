@@ -18,6 +18,7 @@ mod online;
 #[cfg(test)]
 mod probes;
 mod resources;
+pub mod script;
 mod spell_icons;
 mod spellbook;
 mod target;
@@ -88,6 +89,8 @@ pub struct ViewerConfig {
     pub demo_character_select: bool,
     /// Optional read-only live validation action.
     pub validation: Option<ValidationAction>,
+    /// Optional attended key script driven through the normal input paths.
+    pub script: Option<Vec<script::Step>>,
 }
 
 #[derive(Resource)]
@@ -148,6 +151,7 @@ pub fn run(
     commands: Option<std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>>,
 ) {
     let screenshot = config.screenshot.clone();
+    let steps = config.script.clone();
     let online = updates.is_some();
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
     let mut app = App::new();
@@ -233,6 +237,10 @@ pub fn run(
     );
     navigation::install(&mut app);
     install_overlays(&mut app);
+    if let Some(steps) = steps {
+        app.insert_resource(script::Script::new(steps));
+        app.add_systems(PreUpdate, script::drive.after(bevy::input::InputSystems));
+    }
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
             path,
