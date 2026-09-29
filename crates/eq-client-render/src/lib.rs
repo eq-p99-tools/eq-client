@@ -95,6 +95,10 @@ pub struct ViewerConfig {
     pub validation: Option<ValidationAction>,
     /// Optional attended key script driven through the normal input paths.
     pub script: Option<Vec<script::Step>>,
+    /// Script file and byte offset to keep reading appended steps from.
+    pub script_follow: Option<(PathBuf, usize)>,
+    /// Let script `gm` steps send `#` commands; set only for a local `EQEmu` session.
+    pub local_gm_commands: bool,
     /// Optional top-left window corner in physical desktop pixels.
     pub window_position: Option<(i32, i32)>,
 }
@@ -158,6 +162,8 @@ pub fn run(
 ) {
     let screenshot = config.screenshot.clone();
     let steps = config.script.clone();
+    let follow = config.script_follow.clone();
+    let gm_commands = config.local_gm_commands;
     let online = updates.is_some();
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
     let window = primary_window(online, screenshot.is_none(), config.window_position);
@@ -245,7 +251,7 @@ pub fn run(
     navigation::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
-        install_script(&mut app, steps);
+        install_script(&mut app, steps, follow, gm_commands);
     }
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
@@ -256,9 +262,18 @@ pub fn run(
     app.run();
 }
 
-/// Drives an attended script after UI focus.
-fn install_script(app: &mut App, steps: Vec<script::Step>) {
-    app.insert_resource(script::Script::new(steps));
+/// Drives an attended script after UI focus, optionally following its file.
+fn install_script(
+    app: &mut App,
+    steps: Vec<script::Step>,
+    follow: Option<(PathBuf, usize)>,
+    gm_commands: bool,
+) {
+    let script = match follow {
+        Some((path, offset)) => script::Script::following(steps, path, offset),
+        None => script::Script::new(steps),
+    };
+    app.insert_resource(script.with_gm_commands(gm_commands));
     app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
 }
 

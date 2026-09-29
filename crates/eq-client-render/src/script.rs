@@ -3,7 +3,9 @@
 //! A script never runs unattended: it pauses until the client window is focused,
 //! stops if focus is lost while a key is held, and ends after a bounded time.
 //! Scripted clicks are only injected while the real pointer is outside the window,
-//! so they cannot also press whatever the pointer happens to be over.
+//! so they cannot also press whatever the pointer happens to be over. A followed
+//! script keeps reading complete lines appended to its file, under the same limits.
+//! `gm` steps send `#` commands only to a local `EQEmu` server.
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,6 +20,18 @@ const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_ONLINE_WAIT: Duration = Duration::from_mins(3);
 const MAX_RUNTIME: Duration = Duration::from_mins(15);
+const FOLLOW_POLL: Duration = Duration::from_millis(250);
+/// `EQEmu` GM commands a script may send, without the leading `#`.
+const GM_COMMANDS: [&str; 8] = [
+    "summon",
+    "givemoney",
+    "zone",
+    "goto",
+    "level",
+    "heal",
+    "kill",
+    "repop",
+];
 
 /// One scripted action.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,6 +48,9 @@ pub enum Step {
     WaitZone(String),
     /// Runs a game slash command such as `/camp`; chat text is refused.
     Slash(String),
+    /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
+    /// the step stops the script on any other server.
+    Gm(String),
     /// Presses keys together for one frame, modifiers first.
     Press(Vec<KeyCode>),
     /// Holds keys together for a bounded duration.
@@ -156,6 +173,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("slash", ["target", name @ ..]) if !name.is_empty() => {
             Step::Slash(format!("/target {}", name.join(" ")))
         }
+        ("gm", words) => parse_gm(words)?,
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
         ("wait", [duration]) => Step::Wait(millis(duration, MAX_WAIT)?),
@@ -220,6 +238,26 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("quit", []) => Step::Quit,
         _ => return Err("unknown or malformed step".into()),
     })
+}
+
+/// `gm <command> [arguments]`: an allowed `EQEmu` command without its `#`, with up
+/// to four plain arguments.
+fn parse_gm(words: &[&str]) -> Result<Step, String> {
+    let [command, arguments @ ..] = words else {
+        return Err("gm takes a command".into());
+    };
+    if !GM_COMMANDS.contains(command) {
+        return Err(format!("gm allows only {}", GM_COMMANDS.join(", ")));
+    }
+    let plain = |argument: &&str| {
+        argument
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+    };
+    if arguments.len() > 4 || !arguments.iter().all(plain) {
+        return Err("gm takes up to four plain arguments".into());
+    }
+    Ok(Step::Gm(words.join(" ")))
 }
 
 /// `create <Name> <race> <class> <gender> <deity> <start zone> <stat for free points>`.
@@ -339,6 +377,18 @@ pub struct Script {
     paused: bool,
     /// Newest chat line already included in a report.
     chat_seen: u64,
+    /// Script file still being appended to, with the bytes already read.
+    follow: Option<Follow>,
+    accepted: usize,
+    /// Whether `gm` steps may send `#` commands (a local `EQEmu` session).
+    gm: bool,
+}
+
+struct Follow {
+    path: PathBuf,
+    offset: usize,
+    next_poll: Duration,
+    idle: bool,
 }
 
 impl Script {
@@ -346,6 +396,7 @@ impl Script {
     #[must_use]
     pub fn new(steps: Vec<Step>) -> Self {
         Self {
+            accepted: steps.len(),
             steps: steps.into(),
             current: None,
             held: Vec::new(),
@@ -353,6 +404,68 @@ impl Script {
             started: None,
             paused: false,
             chat_seen: 0,
+            follow: None,
+            gm: false,
+        }
+    }
+
+    /// Queues validated steps, then keeps reading complete lines appended to `path`
+    /// after the first `offset` bytes.
+    #[must_use]
+    pub fn following(steps: Vec<Step>, path: PathBuf, offset: usize) -> Self {
+        Self {
+            follow: Some(Follow {
+                path,
+                offset,
+                next_poll: Duration::ZERO,
+                idle: false,
+            }),
+            ..Self::new(steps)
+        }
+    }
+
+    /// Lets `gm` steps send `#` commands; only for a local `EQEmu` session.
+    #[must_use]
+    pub fn with_gm_commands(mut self, allowed: bool) -> Self {
+        self.gm = allowed;
+        self
+    }
+
+    /// Queues complete appended lines; an invalid batch is skipped and logged.
+    fn poll(&mut self, now: Duration) {
+        let Some(follow) = &mut self.follow else {
+            return;
+        };
+        if now < follow.next_poll {
+            return;
+        }
+        follow.next_poll = now + FOLLOW_POLL;
+        let Ok(bytes) = std::fs::read(&follow.path) else {
+            return;
+        };
+        let Some(fresh) = bytes.get(follow.offset..) else {
+            return;
+        };
+        let Some(end) = fresh.iter().rposition(|byte| *byte == b'\n') else {
+            if !std::mem::replace(&mut follow.idle, true) {
+                info!("Script waiting for appended steps");
+            }
+            return;
+        };
+        follow.offset += end + 1;
+        follow.idle = false;
+        let text = String::from_utf8_lossy(&fresh[..=end]).into_owned();
+        let base = follow
+            .path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        match parse(&text, &base) {
+            Ok(steps) if self.accepted + steps.len() <= MAX_STEPS => {
+                self.accepted += steps.len();
+                self.steps.extend(steps);
+            }
+            Ok(_) => warn!("Ignored appended steps beyond the {MAX_STEPS}-step limit"),
+            Err(error) => warn!("Ignored appended script lines: {error}"),
         }
     }
 
@@ -374,6 +487,7 @@ impl Script {
         self.release(keys, mouse);
         self.steps.clear();
         self.current = None;
+        self.follow = None;
         info!("Script stopped: {reason}");
     }
 }
@@ -439,9 +553,15 @@ pub(super) fn drive(
         return;
     }
     if script.current.is_none() && script.steps.is_empty() {
-        commands.remove_resource::<Script>();
-        info!("Script finished");
-        return;
+        if script.follow.is_none() {
+            commands.remove_resource::<Script>();
+            info!("Script finished");
+            return;
+        }
+        script.poll(now);
+        if script.steps.is_empty() {
+            return;
+        }
     }
     let window = windows.single().ok();
     if !window.is_some_and(|window| window.focused) {
@@ -560,6 +680,21 @@ pub(super) fn drive(
             }
             return;
         }
+        Step::Gm(command) => {
+            let sent = gm_chat(command, script.gm).and_then(|chat| {
+                observed
+                    .3
+                    .0
+                    .as_ref()
+                    .ok_or_else(|| String::from("Network worker is unavailable"))?
+                    .try_send(eq_client_core::ClientCommand::SendChat(chat))
+                    .map_err(|_| String::from("GM command could not be queued"))
+            });
+            if let Err(error) = sent {
+                script.stop(&mut keys, &mut mouse, &error);
+            }
+            return;
+        }
         Step::Press(chord) | Step::Hold(chord, _) => {
             for key in chord {
                 keys.press(*key);
@@ -640,6 +775,15 @@ pub(super) fn drive(
         | Step::Trace(_) => (),
     }
     script.current = Some((step, now));
+}
+
+/// The say line carrying a `gm` step's `#` command, refused unless the session is
+/// on a local `EQEmu` server.
+fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat, String> {
+    if !allowed {
+        return Err("gm steps only run on a local EQEmu server (EQ_PROTOCOL=eqemu)".into());
+    }
+    Ok(eq_client_core::OutboundChat::Say(format!("#{command}")))
 }
 
 /// Marks the first visible matching control pressed; the focus system clears it next frame.
@@ -842,7 +986,8 @@ mod tests {
     fn parses_bounded_steps_and_rejects_unsafe_input() {
         let base = Path::new("private");
         let steps = parse(
-            "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\npress F1 # self\n\
+            "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
+             gm summon\ngm givemoney 0 0 5 0\npress F1 # self\n\
              press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nclick slot 23\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\nreport after cast\nscreenshot a.png\nquit\n",
             base,
@@ -866,6 +1011,8 @@ mod tests {
                 Step::WaitZone("tox".into()),
                 Step::Slash("/camp".into()),
                 Step::Slash("/target a cave rat".into()),
+                Step::Gm("summon".into()),
+                Step::Gm("givemoney 0 0 5 0".into()),
                 Step::Press(vec![KeyCode::F1]),
                 Step::Press(vec![KeyCode::AltLeft, KeyCode::Digit1]),
                 Step::Hold(vec![KeyCode::KeyW], Duration::from_millis(1500)),
@@ -916,9 +1063,52 @@ mod tests {
             "create lowercase 1 2 0 212 1 4",
             "create Testbad 1 17 0 212 1 4",
             "slash ooc",
+            "gm",
+            "gm shutdown",
+            "gm SUMMON",
+            "gm zone a b c d e",
+            "gm goto 1;2",
+            "gm summon Name,Other",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+        // `#` starts a comment, so a script can never smuggle one into a step.
+        assert_eq!(
+            parse("gm zone qeynos #givemoney 999", base).unwrap(),
+            [Step::Gm("zone qeynos".into())]
+        );
+    }
+
+    #[test]
+    fn gm_commands_only_reach_a_local_eqemu_session() {
+        assert!(gm_chat("summon", false).is_err());
+        assert_eq!(
+            gm_chat("givemoney 0 0 5 0", true).unwrap(),
+            eq_client_core::OutboundChat::Say("#givemoney 0 0 5 0".into())
+        );
+        assert!(!Script::new(vec![Step::Gm("summon".into())]).gm);
+        assert!(Script::new(Vec::new()).with_gm_commands(true).gm);
+    }
+
+    #[test]
+    fn following_queues_only_complete_appended_lines() {
+        let path =
+            std::env::temp_dir().join(format!("eq-client-follow-{}.txt", std::process::id()));
+        std::fs::write(&path, "wait 10\n").unwrap();
+        let mut script = Script::following(Vec::new(), path.clone(), 8);
+        script.poll(Duration::ZERO);
+        assert!(script.steps.is_empty());
+        std::fs::write(&path, "wait 10\nreport a\nwait 2").unwrap();
+        script.poll(Duration::from_secs(1));
+        assert_eq!(script.steps, [Step::Report("a".into())]);
+        // An invalid batch is skipped whole; later batches still run.
+        std::fs::write(&path, "wait 10\nreport a\nwait 20\nbogus\n").unwrap();
+        script.poll(Duration::from_secs(2));
+        assert_eq!(script.steps.len(), 1);
+        std::fs::write(&path, "wait 10\nreport a\nwait 20\nbogus\nquit\n").unwrap();
+        script.poll(Duration::from_secs(3));
+        assert_eq!(script.steps.back(), Some(&Step::Quit));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
