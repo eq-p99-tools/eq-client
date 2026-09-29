@@ -146,9 +146,12 @@ pub(super) fn input(
         .filter(|id| online.spawns.get(id).is_some_and(|s| !s.invisible))
         .collect();
     let own_id = online.player.as_ref().map(|player| player.spawn_id);
+    // A target lasts until its spawn despawns, is replaced or turns invisible, however
+    // far away it goes; drawing range only limits what can be clicked or cycled.
     let invalid = target.selected.is_some_and(|id| {
         Some(id) != own_id
-            && (!ids.contains(&id) || online.revisions.get(&id).copied() != target.revision)
+            && (online.spawns.get(&id).is_none_or(|spawn| spawn.invisible)
+                || online.revisions.get(&id).copied() != target.revision)
     });
     let mut proposal = invalid.then_some(None);
     if !*attempted
@@ -257,7 +260,9 @@ pub(super) fn input(
     };
 }
 
-/// The nearest visible spawn whose shown name starts with `query`, ignoring case.
+/// The nearest visible spawn whose shown name, or full server name such as
+/// `a_whiskered_bat002` (as EQ's `/target` also accepts), starts with `query`,
+/// ignoring case; underscores in the query already read as spaces.
 fn named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
     let query = query.to_lowercase();
     let origin = online
@@ -268,7 +273,8 @@ fn named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
         .filter_map(|id| {
             let spawn = online.spawns.get(id)?;
             let shown = super::combat::display_name(&spawn.name).to_lowercase();
-            shown.starts_with(&query).then(|| {
+            let full = spawn.name.replace('_', " ").to_lowercase();
+            (shown.starts_with(&query) || full.starts_with(&query)).then(|| {
                 let position = Vec3::from_array(eq_client_core::render_position(spawn.position));
                 (
                     *id,
@@ -394,11 +400,36 @@ mod tests {
     use eq_client_core::{SpawnState, WorldPosition};
 
     #[test]
+    fn named_targets_accept_the_shown_or_full_server_name() {
+        let mut online = OnlineState::new(false);
+        for (id, name) in [(2, "a_whiskered_bat002"), (3, "a_whiskered_bat005")] {
+            online.spawns.insert(
+                id,
+                SpawnState {
+                    class: None,
+                    spawn_id: id,
+                    name: name.into(),
+                    kind: SpawnKind::Npc,
+                    race: 1,
+                    gender: 0,
+                    position: WorldPosition::default(),
+                    size: 0.0,
+                    invisible: false,
+                },
+            );
+        }
+        assert!(named(&[2, 3], &online, "a whiskered bat").is_some());
+        // `/target a_whiskered_bat005` arrives with its underscores read as spaces.
+        assert_eq!(named(&[2, 3], &online, "a whiskered bat005"), Some(3));
+        assert_eq!(named(&[2, 3], &online, "a whiskered bat009"), None);
+    }
+
+    #[test]
     #[allow(
         clippy::too_many_lines,
         reason = "Keep the ordered integration scenario and its assertions together"
     )]
-    fn keyboard_cycles_only_rendered_entities_and_clears_stale_targets() {
+    fn keyboard_cycles_only_rendered_entities_and_keeps_targets_until_they_are_gone() {
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
@@ -522,6 +553,19 @@ mod tests {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .reset_all();
+        // Leaving the drawing range keeps the target, as in EQ; despawning clears it.
+        app.world_mut()
+            .resource_mut::<NearbyEntities>()
+            .rendered
+            .remove(&2);
+        app.update();
+        assert_eq!(app.world().resource::<TargetState>().selected, Some(2));
+        app.world_mut()
+            .resource_mut::<OnlineState>()
+            .spawns
+            .remove(&2);
+        app.update();
+        assert_eq!(app.world().resource::<TargetState>().selected, None);
         app.world_mut().resource_mut::<OnlineState>().session_id = Some(2);
         app.update();
         assert_eq!(app.world().resource::<TargetState>().selected, None);
