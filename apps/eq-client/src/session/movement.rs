@@ -273,6 +273,7 @@ mod tests {
         let correction = WorldEvent::Position {
             spawn_id: 7,
             position: WorldPosition::default(),
+            velocity: [0.0; 3],
         };
         assert!(matches!(
             policy.observe(&correction, now),
@@ -281,6 +282,7 @@ mod tests {
         let other = WorldEvent::Position {
             spawn_id: 8,
             position: WorldPosition::default(),
+            velocity: [0.0; 3],
         };
         assert!(policy.observe(&other, now).is_none());
     }
@@ -296,6 +298,7 @@ mod tests {
             WorldEvent::Position {
                 spawn_id: 7,
                 position: WorldPosition::default(),
+                velocity: [0.0; 3],
             },
             WorldEvent::Death(Death {
                 spawn_id: 7,

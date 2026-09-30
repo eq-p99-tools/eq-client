@@ -18,6 +18,8 @@ pub(super) struct NearbyEntities {
 #[derive(Component)]
 pub(super) struct RemoteEntity {
     pub(super) id: u16,
+    /// The server report this entity moves on from, and when it was first seen.
+    report: Option<(eq_client_core::WorldPosition, [f32; 3], std::time::Instant)>,
 }
 
 /// Maintains a bounded nearby set. At most one new model is instantiated per frame.
@@ -116,7 +118,7 @@ pub(super) fn reconcile(
     let position = Vec3::from_array(render_position(spawn.position));
     let entity = commands
         .spawn((
-            RemoteEntity { id },
+            RemoteEntity { id, report: None },
             Name::new(spawn.name.clone()),
             Transform::from_translation(position).with_rotation(Quat::from_rotation_y(
                 eq_client_core::render_heading(spawn.position.heading),
@@ -174,14 +176,29 @@ pub(super) fn reconcile(
 pub(super) fn interpolate(
     state: Res<OnlineState>,
     time: Res<Time>,
-    mut entities: Query<(&RemoteEntity, &mut Transform)>,
+    mut entities: Query<(&mut RemoteEntity, &mut Transform)>,
 ) {
     let weight = 1.0 - (-time.delta_secs().min(0.1) / 0.1).exp();
-    for (entity, mut transform) in &mut entities {
+    let now = std::time::Instant::now();
+    for (mut entity, mut transform) in &mut entities {
         let Some(spawn) = state.spawns.get(&entity.id) else {
             continue;
         };
-        let target = Vec3::from_array(render_position(spawn.position));
+        // A spawn moves on from its latest report at its reported velocity.
+        let since = match entity.report {
+            Some((position, velocity, seen))
+                if position == spawn.position
+                    && velocity.map(f32::to_bits) == spawn.velocity.map(f32::to_bits) =>
+            {
+                seen
+            }
+            _ => {
+                entity.report = Some((spawn.position, spawn.velocity, now));
+                now
+            }
+        };
+        let position = eq_client_core::entities::extrapolate(spawn, now.duration_since(since));
+        let target = Vec3::from_array(render_position(position));
         if transform.translation.distance_squared(target) > 100.0 * 100.0 {
             transform.translation = target;
         } else {
@@ -298,6 +315,7 @@ pub(super) fn demo(
                 race,
                 gender: 0,
                 position: p,
+                velocity: [0.0; 3],
                 size,
                 invisible: false,
             },

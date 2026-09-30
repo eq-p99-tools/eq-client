@@ -102,6 +102,7 @@ mod tests {
                 race: 1,
                 gender: 0,
                 position: default(),
+                velocity: [0.0; 3],
                 size: 6.0,
                 invisible: false,
             },
