@@ -115,15 +115,17 @@ impl CollisionWorld {
 
     /// Finds nearby ground, never a roof above the permitted step height.
     pub fn ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
-        let origin = Vector::from_array((position + Vec3::Y * step_up).to_array());
+        // Both window edges are inclusive: the ray starts a hair above the top one,
+        // since a ray starting on a surface can miss it, and runs a hair past the
+        // bottom one, since mesh traversal can discard an endpoint contact.
+        const EDGE: f32 = 0.000_1;
+        let origin = Vector::from_array((position + Vec3::Y * (step_up + EDGE)).to_array());
         let hit = self
             .meshes()
             .filter_map(|mesh| {
                 mesh.cast_local_ray_and_get_normal(
                     &Ray::new(origin, -Vector::Y),
-                    // Include a floor exactly on the lower query boundary; the
-                    // mesh traversal can otherwise discard an endpoint contact.
-                    step_up + drop + 0.001,
+                    step_up + drop + 2.0 * EDGE,
                     false,
                 )
             })
@@ -132,7 +134,8 @@ impl CollisionWorld {
             return None;
         }
         let floor = origin.y - hit.time_of_impact;
-        (floor >= position.y - drop && floor <= position.y + step_up).then_some(floor)
+        (floor >= position.y - drop - EDGE && floor <= position.y + step_up + EDGE)
+            .then(|| floor.clamp(position.y - drop, position.y + step_up))
     }
 
     /// Signed distance from the character's collision capsule to the nearest solid
@@ -182,10 +185,40 @@ impl CollisionWorld {
             .max_by(f32::total_cmp)
     }
 
+    /// Walks a displacement in strides shorter than a stair tread, so a sample that
+    /// crosses several steps climbs or descends them one at a time. The whole walk
+    /// stays within one sample's grounded height budget, which the network guard
+    /// enforces; a flight too steep for it continues on the next sample.
     fn walk(&self, feet: Vec3, displacement: Vec3, height: f32, support: Support) -> Vec3 {
+        const STRIDE: f32 = 0.5;
         if !feet.is_finite() || !displacement.is_finite() || !height.is_finite() || height < 1.0 {
             return feet;
         }
+        if matches!(support, Support::Airborne) {
+            return self.stride(feet, displacement, height, support);
+        }
+        let horizontal = Vec3::new(displacement.x, 0.0, displacement.z);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped.
+        let count = (horizontal.length() / STRIDE).ceil().clamp(1.0, 64.0) as u8;
+        let part = horizontal / f32::from(count);
+        let mut position = feet;
+        for _ in 0..count {
+            let next = self.stride(position, part, height, support);
+            if (next.y - feet.y).abs() > MAX_GROUNDED_STEP + 0.001 {
+                break;
+            }
+            let moved = next.distance_squared(position) > 1e-10;
+            position = next;
+            if !moved {
+                break;
+            }
+        }
+        position
+    }
+
+    /// One stride: to the ground under its end, sliding along walls, stepping up
+    /// a riser the capsule can clear, and stepping down across then down.
+    fn stride(&self, feet: Vec3, displacement: Vec3, height: f32, support: Support) -> Vec3 {
         let mut position = feet;
         let mut remaining = Vec3::new(displacement.x, 0.0, displacement.z);
         for _ in 0..3 {
@@ -234,13 +267,28 @@ impl CollisionWorld {
                 Support::Airborne => position.y,
             };
             let target = Vec3::new(position.x + remaining.x, ground, position.z + remaining.z);
-            let delta = target - position;
+            // Going down, move across at the current height and then down, so the
+            // capsule never cuts the edge it steps off and the feet never stop at
+            // a height between the two floors.
+            let descending = !matches!(support, Support::Airborne) && target.y < position.y;
+            let delta = if descending {
+                Vec3::new(remaining.x, 0.0, remaining.z)
+            } else {
+                target - position
+            };
             if delta.length_squared() < 0.000_001 {
+                if descending {
+                    position = self.settle(position, target.y, height);
+                }
                 break;
             }
             match self.sweep(position, delta, height) {
                 Ok(None) => {
-                    position = target;
+                    position = if descending {
+                        self.settle(position + delta, target.y, height)
+                    } else {
+                        target
+                    };
                     break;
                 }
                 Ok(Some(hit)) => {
@@ -253,6 +301,12 @@ impl CollisionWorld {
                     }
                     let fraction = (hit.time_of_impact - 0.005 / delta.length()).clamp(0.0, 1.0);
                     position += delta * fraction;
+                    // A mostly vertical contact is a floor or ceiling edge, not a
+                    // wall to slide along; normalizing its small horizontal part
+                    // would cancel all forward motion.
+                    if hit.normal1.y.abs() > 0.7 {
+                        break;
+                    }
                     let normal = Vec3::new(hit.normal1.x, 0.0, hit.normal1.z).normalize_or_zero();
                     if !normal.is_finite() || normal.length_squared() < 0.5 {
                         break;
@@ -267,6 +321,30 @@ impl CollisionWorld {
             }
         }
         position
+    }
+
+    /// Lowers the feet onto `floor`, or onto whatever the capsule meets first. A
+    /// wall beside the drop (such as the riser just stepped off, within the sweep's
+    /// contact margin) does not hold the character up.
+    fn settle(&self, feet: Vec3, floor: f32, height: f32) -> Vec3 {
+        let drop = Vec3::Y * (floor - feet.y);
+        let landed = Vec3::new(feet.x, floor, feet.z);
+        match self.sweep(feet, drop, height) {
+            Ok(None) => landed,
+            Ok(Some(hit)) => {
+                let beside_a_wall = hit.normal1.y.abs() < 0.7
+                    && self
+                        .clearance(landed, height, 0.0)
+                        .is_none_or(|distance| distance >= 0.0);
+                if beside_a_wall || drop.length() == 0.0 {
+                    landed
+                } else {
+                    let fraction = (hit.time_of_impact - 0.005 / drop.length()).clamp(0.0, 1.0);
+                    feet + drop * fraction
+                }
+            }
+            Err(_) => feet,
+        }
     }
 
     /// Clears a stair riser by checking both the upward and elevated horizontal sweeps.
@@ -524,6 +602,102 @@ mod tests {
             CollisionWorld::new(floor(0.0).into_iter().chain(stair).chain(floor(7.0))).unwrap();
         let blocked = covered.step(start, Vec3::X * 1.6, 6.0);
         assert!(blocked.x < 0.0, "{blocked:?}");
+    }
+
+    fn quad(a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]) -> [[[f32; 3]; 3]; 2] {
+        [[a, b, c], [a, c, d]]
+    }
+
+    /// Open stairs rising along +x from a floor at y 0: `steps` risers of `rise`
+    /// on `tread`-deep treads, the last tread running on to x 60.
+    fn stairs(rise: f32, tread: f32, steps: u8) -> CollisionWorld {
+        let mut triangles = quad(
+            [-30.0, 0.0, -30.0],
+            [0.0, 0.0, -30.0],
+            [0.0, 0.0, 30.0],
+            [-30.0, 0.0, 30.0],
+        )
+        .to_vec();
+        for step in 0..steps {
+            let x = f32::from(step) * tread;
+            let (low, high) = (rise * f32::from(step), rise * f32::from(step + 1));
+            let end = if step + 1 == steps { 60.0 } else { x + tread };
+            triangles.extend(quad(
+                [x, low, -30.0],
+                [x, low, 30.0],
+                [x, high, 30.0],
+                [x, high, -30.0],
+            ));
+            triangles.extend(quad(
+                [x, high, -30.0],
+                [end, high, -30.0],
+                [end, high, 30.0],
+                [x, high, 30.0],
+            ));
+        }
+        CollisionWorld::new(triangles).unwrap()
+    }
+
+    #[test]
+    fn samples_of_any_length_climb_stairs_within_the_height_budget() {
+        for (rise, tread) in [(1.0, 0.6), (1.5, 1.0), (1.3, 1.9), (2.0, 1.5)] {
+            let world = stairs(rise, tread, 4);
+            let top = 4.0 * rise;
+            for sample in [0.3, 1.5, 3.0, 7.5] {
+                for start in 0..10_u8 {
+                    let mut feet = Vec3::new(-3.0 + f32::from(start) * 0.13, 0.0, 0.0);
+                    for _ in 0..100 {
+                        let next = world.step(feet, Vec3::X * sample, 6.0);
+                        assert!(
+                            (next.y - feet.y).abs() <= MAX_GROUNDED_STEP + 0.001,
+                            "rise {rise} tread {tread} sample {sample}: {feet:?} -> {next:?}"
+                        );
+                        feet = next;
+                    }
+                    assert!(
+                        feet.x > 15.0 && (feet.y - top).abs() < 0.01,
+                        "rise {rise} tread {tread} sample {sample} start {start}: {feet:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stepping_off_a_riser_lands_on_the_floor_below() {
+        for riser in [0.5, 1.0, 1.5, 2.0] {
+            let mut triangles = floor(0.0);
+            triangles.extend(quad(
+                [-20.0, riser, -10.0],
+                [0.0, riser, -10.0],
+                [0.0, riser, 10.0],
+                [-20.0, riser, 10.0],
+            ));
+            triangles.extend(quad(
+                [0.0, 0.0, -10.0],
+                [0.0, riser, -10.0],
+                [0.0, riser, 10.0],
+                [0.0, 0.0, 10.0],
+            ));
+            let world = CollisionWorld::new(triangles).unwrap();
+            for sample in [0.5, 1.5, 3.0, 4.5] {
+                for start in 0..10_u8 {
+                    let mut feet = Vec3::new(-3.0 + f32::from(start) * 0.137, riser, 0.0);
+                    for _ in 0..30 {
+                        feet = world.step(feet, Vec3::X * sample, 6.0);
+                        // Never left between the two floors.
+                        assert!(
+                            feet.y.abs() < 0.001 || (feet.y - riser).abs() < 0.001,
+                            "riser {riser} sample {sample}: {feet:?}"
+                        );
+                    }
+                    assert!(
+                        feet.x > 5.0 && feet.y.abs() < 0.001,
+                        "riser {riser}: {feet:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
