@@ -12,8 +12,9 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 10] = [
+const GM_COMMANDS: [&str; 11] = [
     "summon",
+    "damage",
     "givemoney",
     "zone",
     "goto",
@@ -373,7 +374,7 @@ mod tests {
         let base = Path::new("private");
         let steps = parse(
             "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
-             gm summon\ngm givemoney 0 0 5 0\npress F1 # self\n\
+             gm summon\ngm damage 10000\ngm givemoney 0 0 5 0\npress F1 # self\n\
              press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\nreport after cast\nscreenshot a.png\nquit\n",
             base,
@@ -398,6 +399,7 @@ mod tests {
                 Step::Slash("/camp".into()),
                 Step::Slash("/target a cave rat".into()),
                 Step::Gm("summon".into()),
+                Step::Gm("damage 10000".into()),
                 Step::Gm("givemoney 0 0 5 0".into()),
                 Step::Press(vec![KeyCode::F1]),
                 Step::Press(vec![KeyCode::AltLeft, KeyCode::Digit1]),
