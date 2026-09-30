@@ -1,20 +1,31 @@
 //! Compact slots and bag-content grids.
 use super::{InventoryState, SlotButton, Tab, icons::Icons, label, visible_slots};
 use bevy::prelude::*;
+use eq_client_assets::ui::SlotPlacement;
 use eq_client_core::inventory::InventorySlot;
 
 const CELL: f32 = 34.0;
 
-/// Keeps equipment and the cursor beside the carried bag grids.
+/// Names shown in empty equipment slots, short enough for one; hovering gives
+/// the full name, and the paperdoll's arrangement shows left from right.
+const EQUIPMENT_CAPTIONS: [&str; 22] = [
+    "Charm", "Ear", "Head", "Face", "Ear", "Neck", "Shoulder", "Arms", "Back", "Wrist", "Wrist",
+    "Range", "Hands", "Primary", "Second", "Finger", "Finger", "Chest", "Legs", "Feet", "Waist",
+    "Ammo",
+];
+
+/// Keeps equipment and the cursor beside the carried bag grids. `paperdoll` is
+/// the installed skin's equipment layout, when it could be read.
 pub(super) fn contents(
     parent: &mut ChildSpawnerCommands,
     state: &InventoryState,
+    paperdoll: Option<&[SlotPlacement]>,
     icons: &mut Icons,
     directory: Option<&std::path::Path>,
     images: &mut Assets<Image>,
 ) {
     quantity_picker(parent, state);
-    storage_columns(parent, state, icons, directory, images);
+    storage_columns(parent, state, paperdoll, icons, directory, images);
 }
 
 /// Keeps the quantity picker available for carried and bank stacks alike.
@@ -68,6 +79,7 @@ fn quantity_picker(parent: &mut ChildSpawnerCommands, state: &InventoryState) {
 fn storage_columns(
     parent: &mut ChildSpawnerCommands,
     state: &InventoryState,
+    paperdoll: Option<&[SlotPlacement]>,
     icons: &mut Icons,
     directory: Option<&std::path::Path>,
     images: &mut Assets<Image>,
@@ -88,29 +100,12 @@ fn storage_columns(
                 })
                 .with_children(|equipment| {
                     label(equipment, "EQUIPMENT", 10.0);
-                    let slots: Vec<_> = (0..=21).map(InventorySlot).collect();
-                    grid(equipment, &slots, state, icons, directory, images);
-                    label(equipment, "CURSOR", 10.0);
-                    equipment
-                        .spawn(Node {
-                            column_gap: px(8),
-                            align_items: AlignItems::Center,
-                            ..default()
-                        })
-                        .with_children(|cursor| {
-                            square(cursor, InventorySlot(30), state, icons, directory, images);
-                            cursor
-                                .spawn((
-                                    Button,
-                                    super::StoreCursor,
-                                    Node {
-                                        padding: UiRect::axes(px(10), px(6)),
-                                        ..default()
-                                    },
-                                    BackgroundColor(Color::srgb(0.08, 0.10, 0.13)),
-                                ))
-                                .with_children(|button| label(button, "Auto inventory", 11.0));
-                        });
+                    if let Some(paperdoll) = paperdoll {
+                        placed(equipment, paperdoll, state, icons, directory, images);
+                    } else {
+                        let slots: Vec<_> = (0..=21).map(InventorySlot).collect();
+                        grid(equipment, &slots, state, icons, directory, images);
+                    }
                 });
             columns
                 .spawn(Node {
@@ -120,6 +115,27 @@ fn storage_columns(
                     ..default()
                 })
                 .with_children(|bags| {
+                    // The cursor heads the storage column, beside the paperdoll.
+                    label(bags, "CURSOR", 10.0);
+                    bags.spawn(Node {
+                        column_gap: px(8),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    })
+                    .with_children(|cursor| {
+                        square(cursor, InventorySlot(30), state, icons, directory, images);
+                        cursor
+                            .spawn((
+                                Button,
+                                super::StoreCursor,
+                                Node {
+                                    padding: UiRect::axes(px(10), px(6)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.08, 0.10, 0.13)),
+                            ))
+                            .with_children(|button| label(button, "Auto inventory", 11.0));
+                    });
                     if state.tab == Tab::Bank {
                         carried(bags, state, Tab::Bank, icons, directory, images);
                     }
@@ -206,6 +222,55 @@ fn carried(
     } else if slots.is_empty() {
         label(parent, "No bank items received", 12.0);
     }
+}
+
+/// Equipment slots where the skin's inventory window puts them around the
+/// paperdoll, scaled so each slot is one of this window's cells.
+fn placed(
+    parent: &mut ChildSpawnerCommands,
+    layout: &[SlotPlacement],
+    state: &InventoryState,
+    icons: &mut Icons,
+    directory: Option<&std::path::Path>,
+    images: &mut Assets<Image>,
+) {
+    let size = layout
+        .iter()
+        .map(|p| p.width.max(p.height))
+        .fold(1.0, f32::max);
+    let scale = CELL / size;
+    let (width, height) = layout
+        .iter()
+        .fold((0.0_f32, 0.0_f32), |(width, height), p| {
+            (width.max(p.x + size), height.max(p.y + size))
+        });
+    parent
+        .spawn(Node {
+            width: px(width * scale),
+            height: px(height * scale),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|doll| {
+            for placement in layout {
+                doll.spawn(Node {
+                    position_type: PositionType::Absolute,
+                    left: px(placement.x * scale),
+                    top: px(placement.y * scale),
+                    ..default()
+                })
+                .with_children(|cell| {
+                    square(
+                        cell,
+                        InventorySlot(i32::from(placement.slot)),
+                        state,
+                        icons,
+                        directory,
+                        images,
+                    );
+                });
+            }
+        });
 }
 
 fn grid(
@@ -305,6 +370,19 @@ fn square(
                 }
             } else if !state.data.received() || state.data.stale() {
                 label(cell, "?", 12.0);
+            } else if let Some(caption) = usize::try_from(slot.0)
+                .ok()
+                .and_then(|index| EQUIPMENT_CAPTIONS.get(index))
+            {
+                cell.spawn((
+                    Text::new(*caption),
+                    TextFont {
+                        font_size: FontSize::Px(7.5),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.45, 0.49, 0.53)),
+                    TextLayout::justify(Justify::Center),
+                ));
             }
         });
 }
@@ -409,7 +487,14 @@ mod tests {
                  state: Res<InventoryState>,
                  mut images: ResMut<Assets<Image>>| {
                     commands.spawn(Node::default()).with_children(|parent| {
-                        contents(parent, &state, &mut Icons::default(), None, &mut images);
+                        contents(
+                            parent,
+                            &state,
+                            None,
+                            &mut Icons::default(),
+                            None,
+                            &mut images,
+                        );
                     });
                 },
             );
@@ -456,5 +541,73 @@ mod tests {
         assert!(counts.contains(&InventorySlot(2000)));
         assert!(counts.contains(&InventorySlot(251)));
         assert!(!counts.contains(&InventorySlot(30)));
+    }
+
+    #[test]
+    fn a_skin_layout_places_every_equipment_slot_and_labels_the_empty_ones() {
+        // A synthetic skin: two columns of 42-pixel slots, 11 rows each.
+        let layout: Vec<SlotPlacement> = (0..22_u16)
+            .map(|slot| SlotPlacement {
+                slot,
+                x: f32::from(slot % 2) * 130.0,
+                y: f32::from(slot / 2) * 43.0,
+                width: 42.0,
+                height: 42.0,
+            })
+            .collect();
+        let mut state = InventoryState::default();
+        state.apply(InventoryUpdate::Snapshot(Vec::new()));
+        state.apply(InventoryUpdate::Snapshot(
+            super::super::demo_items()
+                .into_iter()
+                .filter(|item| item.slot == InventorySlot(13))
+                .collect(),
+        ));
+        let mut app = App::new();
+        app.insert_resource(state)
+            .init_resource::<Assets<Image>>()
+            .add_systems(
+                Startup,
+                move |mut commands: Commands,
+                      state: Res<InventoryState>,
+                      mut images: ResMut<Assets<Image>>| {
+                    let layout = layout.clone();
+                    commands.spawn(Node::default()).with_children(|parent| {
+                        contents(
+                            parent,
+                            &state,
+                            Some(&layout),
+                            &mut Icons::default(),
+                            None,
+                            &mut images,
+                        );
+                    });
+                },
+            );
+        app.update();
+        let world = app.world_mut();
+        let placed: Vec<(i32, Val, Val)> = world
+            .query::<(&SlotButton, &ChildOf)>()
+            .iter(world)
+            .filter(|(button, _)| button.0.0 <= 21)
+            .map(|(button, parent)| {
+                let node = world.get::<Node>(parent.parent()).unwrap();
+                (button.0.0, node.left, node.top)
+            })
+            .collect();
+        assert_eq!(placed.len(), 22);
+        // Slot 21 is in the second column of the last row, scaled to 34-pixel cells.
+        let scale = CELL / 42.0;
+        let (_, left, top) = placed.iter().find(|(slot, ..)| *slot == 21).unwrap();
+        assert_eq!((*left, *top), (px(130.0 * scale), px(430.0 * scale)));
+        let captions: Vec<String> = world
+            .query::<&Text>()
+            .iter(world)
+            .map(|text| text.0.clone())
+            .collect();
+        // Every empty equipment slot is named; the occupied primary slot is not.
+        assert_eq!(captions.iter().filter(|text| *text == "Ear").count(), 2);
+        assert!(captions.iter().any(|text| text == "Shoulder"));
+        assert!(!captions.iter().any(|text| text == "Primary"));
     }
 }

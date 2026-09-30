@@ -43,6 +43,7 @@ glam = "0.32.1"
 parry3d = "0.30.2"
 image = { version = "0.25", default-features = false, features = ["bmp", "dds", "tga"] }
 libeq = { git = "https://github.com/cjab/libeq", rev = "e06ae17dd38b624983663505e25b99a259ea0b15" }
+roxmltree = "0.21.1"
 thiserror = "2"
 
 [workspace.lints.rust]

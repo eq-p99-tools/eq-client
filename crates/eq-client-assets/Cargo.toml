@@ -11,6 +11,7 @@ rust-version.workspace = true
 glam.workspace = true
 image.workspace = true
 libeq.workspace = true
+roxmltree.workspace = true
 thiserror.workspace = true
 
 [lints]
