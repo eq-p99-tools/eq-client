@@ -15,6 +15,14 @@ pub(super) struct AnimatedCharacter {
     pub(super) parts: Vec<Part>,
     /// The gear last drawn, if dressed yet.
     pub(super) dressed: Option<eq_client_core::outfit::Appearance>,
+    /// The entity the parts hang from; held items hang from it too.
+    pub(super) model: Entity,
+    /// The render layers the model draws on.
+    pub(super) layers: bevy::camera::visibility::RenderLayers,
+    /// Items in the primary and secondary hands.
+    pub(super) held: [Option<Held>; 2],
+    /// Where held items attach in the latest pose, in `Attachment` order.
+    pub(super) attachments: [Option<Mat4>; 3],
     elapsed: f32,
     since_pose: f32,
     moving_for: f32,
@@ -31,6 +39,20 @@ pub(super) struct Part {
     /// Its material in the base look.
     pub(super) base: Handle<StandardMaterial>,
 }
+
+/// An item drawn in a hand.
+pub(super) struct Held {
+    /// The item's model number, such as 10 for `IT10`.
+    pub(super) number: u32,
+    /// The entity drawing it.
+    pub(super) entity: Entity,
+    /// Where it attaches.
+    pub(super) point: eq_client_assets::characters::Attachment,
+}
+
+/// Marks a held item's entity, which follows its attachment point.
+#[derive(Component)]
+pub(super) struct HeldItem;
 
 /// The model a movement root wears, for views that draw it again elsewhere.
 #[derive(Component)]
@@ -188,6 +210,10 @@ pub(super) fn spawn_on_layers(
             meshes: handles,
             parts,
             dressed: None,
+            model: child,
+            layers: layers.clone(),
+            held: [None, None],
+            attachments: [None; 3],
             elapsed: 0.0,
             since_pose: 0.0,
             moving_for: 0.0,
@@ -207,6 +233,7 @@ pub(super) fn animate(
         Option<&super::entities::RemoteEntity>,
         Has<super::Player>,
     )>,
+    mut held_items: Query<&mut Transform, (With<HeldItem>, Without<AnimatedCharacter>)>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for (transform, mut character, remote, own) in &mut characters {
@@ -241,11 +268,20 @@ pub(super) fn animate(
             character.elapsed = 0.0;
         }
         let (clip, held) = selected;
-        let poses = if held {
-            character.asset.pose_held(clip, character.elapsed)
-        } else {
-            character.asset.pose(clip, character.elapsed)
-        };
+        let (poses, attachments) =
+            character
+                .asset
+                .pose_with_attachments(clip, character.elapsed, !held);
+        // Held items follow their hand or shield point.
+        character.attachments = attachments;
+        for item in character.held.iter().flatten() {
+            if let (Ok(mut placed), Some(point)) = (
+                held_items.get_mut(item.entity),
+                attachments[item.point.index()],
+            ) {
+                *placed = Transform::from_matrix(point);
+            }
+        }
         let mut poses: Vec<_> = poses.into_iter().map(Some).collect();
         for (index, handle) in &character.meshes {
             let Some(pose) = poses.get_mut(*index).and_then(Option::take) else {

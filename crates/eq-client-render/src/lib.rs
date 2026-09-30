@@ -14,6 +14,7 @@ mod ground;
 mod hud;
 mod interact;
 mod inventory;
+mod item_models;
 mod items;
 mod motion;
 mod navigation;
@@ -276,7 +277,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<inventory::InventoryState>()
         .init_resource::<motion::Controls>()
         .init_resource::<entities::NearbyEntities>()
-        .init_resource::<ground::ItemLibrary>()
+        .init_resource::<item_models::ItemLibrary>()
         .init_resource::<outfit::Wardrobe>()
         .init_resource::<windows::DragState>()
         .init_resource::<windows::Layouts>();

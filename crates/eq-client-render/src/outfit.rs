@@ -74,20 +74,21 @@ impl Wardrobe {
     }
 }
 
-/// Redraws a character's parts whenever its gear changes: other spawns from
-/// their spawn record and wear changes, the player and the paperdoll figure
-/// from the player's.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+/// Redraws a character's parts and held items whenever its gear changes:
+/// other spawns from their spawn record and wear changes, the player and the
+/// paperdoll figure from the player's.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Bevy system parameters.
 pub(super) fn dress(
+    mut commands: Commands,
     online: Res<super::online::OnlineState>,
-    mut wardrobe: ResMut<Wardrobe>,
+    settings: Res<super::ViewerSettings>,
+    (mut wardrobe, mut library): (ResMut<Wardrobe>, ResMut<super::item_models::ItemLibrary>),
     mut characters: Query<(
         &mut super::character::AnimatedCharacter,
         Option<&super::entities::RemoteEntity>,
     )>,
     mut parts: Query<&mut MeshMaterial3d<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    (mut images, mut meshes, mut materials): super::item_models::GpuAssets,
 ) {
     for (mut character, remote) in &mut characters {
         let look = match remote {
@@ -100,6 +101,10 @@ pub(super) fn dress(
             continue;
         }
         character.dressed = Some(look);
+        let directory = settings.0.eq_directory.as_deref();
+        hold(&mut commands, &mut character, &look, |name| {
+            library.shape(name, directory, (&mut images, &mut meshes, &mut materials))
+        });
         let character = &*character;
         for part in &character.parts {
             let handle = match character
@@ -121,5 +126,66 @@ pub(super) fn dress(
                 material.0 = handle;
             }
         }
+    }
+}
+
+/// Puts the items this appearance holds in the character's hands, replacing
+/// what it held before: the primary in the right hand, the secondary in the
+/// left hand or, for a shield, on the shield point.
+fn hold(
+    commands: &mut Commands,
+    character: &mut super::character::AnimatedCharacter,
+    look: &Appearance,
+    mut shape: impl FnMut(&str) -> Option<std::sync::Arc<super::item_models::Shape>>,
+) {
+    use eq_client_assets::characters::Attachment;
+    use eq_client_core::outfit::TextureSlot;
+    for (hand, slot) in [TextureSlot::Primary, TextureSlot::Secondary]
+        .into_iter()
+        .enumerate()
+    {
+        let number = look.material(slot);
+        if character.held[hand].as_ref().map_or(0, |held| held.number) == number {
+            continue;
+        }
+        if let Some(held) = character.held[hand].take() {
+            commands.entity(held.entity).despawn();
+        }
+        let Some(model) = outfit::held_model(look, slot).and_then(|name| shape(&name)) else {
+            continue;
+        };
+        let point = if slot == TextureSlot::Primary {
+            Attachment::RightHand
+        } else if outfit::on_shield_point(number, model.flat) {
+            Attachment::Shield
+        } else {
+            Attachment::LeftHand
+        };
+        let placed = character.attachments[point.index()]
+            .map_or(Transform::IDENTITY, Transform::from_matrix);
+        let layers = character.layers.clone();
+        let entity = commands
+            .spawn((
+                super::character::HeldItem,
+                placed,
+                Visibility::Inherited,
+                layers.clone(),
+            ))
+            .with_children(|parent| {
+                for (mesh, material) in &model.primitives {
+                    parent.spawn((
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(material.clone()),
+                        layers.clone(),
+                    ));
+                }
+            })
+            .id();
+        commands.entity(character.model).add_child(entity);
+        character.held[hand] = Some(super::character::Held {
+            number,
+            entity,
+            point,
+        });
     }
 }

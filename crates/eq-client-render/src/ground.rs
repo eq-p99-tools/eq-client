@@ -1,91 +1,16 @@
 //! Items on the ground and world containers, drawn with the installed models.
 //! Which object a click or key press means is decided in
 //! `eq_client_core::ground`; whether a pickup may be sent, in the network session.
+use super::item_models::{ItemLibrary, bounds};
 use bevy::prelude::*;
 use eq_client_core::ground::{GroundObject, ObjectKind};
-use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::BTreeMap;
 
 /// Objects are drawn this close to the player, as doors are.
 const DRAW_RADIUS: f32 = 240.0;
 /// What an item without an installed model shows: the small bag servers use
 /// by default.
 const DEFAULT_ITEM_MODEL: &str = "IT63";
-
-/// A drawable model with its bounds in model space.
-pub(super) struct Shape {
-    primitives: super::doors::Primitives,
-    bounds: Option<(Vec3, Vec3)>,
-}
-
-/// The installed item models, opened when the first object needs one, and the
-/// item shapes already built, which outlive zones.
-#[derive(Resource, Default)]
-pub(super) struct ItemLibrary {
-    models: Option<eq_client_assets::items::ItemModels>,
-    opened: bool,
-    shapes: HashMap<String, Option<Arc<Shape>>>,
-}
-
-impl ItemLibrary {
-    /// An item model's shape, built on first use; None when not installed.
-    fn shape(&mut self, key: &str, directory: Option<&Path>, gpu: &mut Gpu) -> Option<Arc<Shape>> {
-        if let Some(shape) = self.shapes.get(key) {
-            return shape.clone();
-        }
-        if !self.opened {
-            self.opened = true;
-            self.models = directory.and_then(|directory| {
-                eq_client_assets::items::ItemModels::open(directory)
-                    .inspect_err(|error| warn!("Item models unavailable: {error}"))
-                    .ok()
-            });
-        }
-        let model = self.models.as_mut().and_then(|models| {
-            models
-                .model(key)
-                .inspect_err(|error| warn!("Item model {key} unavailable: {error}"))
-                .ok()
-                .flatten()
-        });
-        let shape = model.map(|model| Arc::new(build(model, gpu)));
-        self.shapes.insert(key.to_owned(), shape.clone());
-        shape
-    }
-}
-
-type Gpu<'a> = (
-    ResMut<'a, Assets<Image>>,
-    ResMut<'a, Assets<Mesh>>,
-    ResMut<'a, Assets<StandardMaterial>>,
-);
-
-fn build(model: eq_client_assets::items::ItemModel, gpu: &mut Gpu) -> Shape {
-    let bounds = bounds(model.primitives.iter().flat_map(|part| &part.positions));
-    let (images, meshes, materials) = gpu;
-    let textures = super::create_texture_images(model.textures, images);
-    Shape {
-        primitives: super::create_render_primitives(
-            model.primitives,
-            &textures,
-            meshes,
-            materials,
-            true,
-        ),
-        bounds,
-    }
-}
-
-fn bounds<'a>(points: impl Iterator<Item = &'a [f32; 3]>) -> Option<(Vec3, Vec3)> {
-    points
-        .map(|point| Vec3::from_array(*point))
-        .fold(None, |bounds, point| {
-            Some(bounds.map_or((point, point), |(min, max): (Vec3, Vec3)| {
-                (min.min(point), max.max(point))
-            }))
-        })
-}
 
 /// An object on the ground as drawn.
 #[derive(Component)]
@@ -114,7 +39,7 @@ pub(super) fn reconcile(
     state: Res<super::online::OnlineState>,
     zone_models: Option<Res<super::doors::Models>>,
     mut library: ResMut<ItemLibrary>,
-    mut gpu: Gpu,
+    (mut images, mut meshes, mut materials): super::item_models::GpuAssets,
     rendered: Query<(Entity, &GroundEntity)>,
 ) {
     let mut wanted = BTreeMap::new();
@@ -143,12 +68,13 @@ pub(super) fn reconcile(
         let key = eq_client_assets::model_key(&object.model);
         let item = object.kind() == ObjectKind::Item;
         let zone = zone_models.as_ref().and_then(|models| models.0.get(&key));
+        let mut shape =
+            |key: &str| library.shape(key, directory, (&mut images, &mut meshes, &mut materials));
         let (primitives, bounds) = if let Some(model) = zone {
             let points = model.collision.iter().flatten();
             (model.primitives.clone(), bounds(points))
-        } else if let Some(shape) = library
-            .shape(&key, directory, &mut gpu)
-            .or_else(|| item.then(|| library.shape(DEFAULT_ITEM_MODEL, directory, &mut gpu))?)
+        } else if let Some(shape) =
+            shape(&key).or_else(|| item.then(|| shape(DEFAULT_ITEM_MODEL))?)
         {
             (shape.primitives.clone(), shape.bounds)
         } else {
@@ -269,16 +195,14 @@ mod tests {
     }
 
     fn app(state: super::super::online::OnlineState) -> App {
-        let mut library = ItemLibrary {
-            opened: true,
-            ..default()
-        };
-        library.shapes.insert(
-            "IT63".into(),
-            Some(Arc::new(Shape {
+        let mut library = ItemLibrary::default();
+        library.insert(
+            "IT63",
+            super::super::item_models::Shape {
                 primitives: vec![(Handle::default(), Handle::default())],
                 bounds: Some((Vec3::new(-0.3, 0.0, -0.3), Vec3::new(0.3, 0.8, 0.3))),
-            })),
+                flat: false,
+            },
         );
         let mut app = App::new();
         app.insert_resource(super::super::ViewerSettings(default()))
