@@ -28,6 +28,8 @@ pub(super) struct Controls {
     pub airborne: Option<eq_client_core::movement::AirborneController>,
     /// Why the movement guard refused the latest sample, until one is sent.
     pub refused: Option<String>,
+    /// When a jump was pressed since the last sample; only where falls are simulated.
+    pub jump: Option<Instant>,
 }
 impl Default for Controls {
     fn default() -> Self {
@@ -47,6 +49,7 @@ impl Default for Controls {
             visual: None,
             airborne: None,
             refused: None,
+            jump: None,
         }
     }
 }
@@ -258,6 +261,10 @@ pub(super) fn input(
     if focused && keyboard.just_pressed(KeyCode::Insert) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
+    // Held until the next sample; jumps rise and fall like falls, so only then.
+    if focused && keyboard.just_pressed(KeyCode::Space) && controls.airborne.is_some() {
+        controls.jump = Some(Instant::now());
+    }
     let now = Instant::now();
     let keyboard = navigation.sample(&keyboard);
     controls.taps.observe(&keyboard, focused, now);
@@ -313,12 +320,17 @@ pub(super) fn input(
         turn,
         preserve_facing,
     } = intent;
-    // A fall keeps going after the keys are released.
-    let falling = controls
+    // A jump or fall keeps going after the keys are released.
+    let airborne = controls
         .airborne
         .as_ref()
-        .is_some_and(|airborne| airborne.velocity() < 0.0);
-    if direction == Vec3::ZERO && turn == 0.0 && !controls.moving && !falling {
+        .is_some_and(|airborne| airborne.velocity() != 0.0);
+    if direction == Vec3::ZERO
+        && turn == 0.0
+        && !controls.moving
+        && !airborne
+        && controls.jump.is_none()
+    {
         return;
     }
     let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
@@ -326,15 +338,34 @@ pub(super) fn input(
     // Clock starts at receipt of the last locally accepted sample, not render delta.
     let span = controls.span(elapsed);
     let delta = direction * speed * span;
-    let (landing, mode) = match controls.airborne.as_mut() {
+    let jump = controls.jump.take().is_some();
+    let (landing, mode, jumped) = match controls.airborne.as_mut() {
         Some(airborne) => {
-            let landing = fall_step(airborne, world, feet, delta, span, body.height);
+            let rising = airborne.velocity() > 0.0;
+            let landing = fall_step(airborne, world, feet, delta, span, body.height, jump);
             let falling = airborne.velocity() < 0.0
                 || feet.y - landing.y > eq_client_core::movement::MAX_GROUNDED_STEP;
-            (landing, if falling { MovementMode::Fall } else { mode })
+            let jumped = !rising && airborne.velocity() > 0.0;
+            (
+                landing,
+                if falling { MovementMode::Fall } else { mode },
+                jumped,
+            )
         }
-        None => (world.step(feet, delta, body.height), mode),
+        None => (world.step(feet, delta, body.height), mode, false),
     };
+    // The server charges the jump's endurance; the arc travels in position updates.
+    if jumped
+        && sender
+            .try_send(ClientCommand::Jump {
+                session_id,
+                created: now,
+            })
+            .is_err()
+    {
+        controls.reset(None);
+        return;
+    }
     let position = landing + Vec3::Y * body.feet_offset;
     let position = stop_at_zone_line(&online.regions, origin, position);
     trace_proposal(mode, delta, position - origin);
@@ -362,10 +393,11 @@ pub(super) fn input(
 }
 
 /// Walks like a grounded step but keeps going past ledges and falls under gravity,
-/// in the 50 ms slices the airborne controller integrates. Each slice may climb,
-/// so the sample stops before its total rise passes the one riser the server's
-/// movement guard accepts; a larger climb takes several accepted samples instead
-/// of one that would be refused and retried forever.
+/// in the 50 ms slices the airborne controller integrates; `jump` starts a jump
+/// in the first slice when the character stands on the ground. Each slice may
+/// climb, so the sample stops before its total rise passes the one riser the
+/// server's movement guard accepts; a larger climb takes several accepted samples
+/// instead of one that would be refused and retried forever.
 pub(super) fn fall_step(
     airborne: &mut eq_client_core::movement::AirborneController,
     world: &eq_client_core::movement::CollisionWorld,
@@ -373,12 +405,13 @@ pub(super) fn fall_step(
     delta: Vec3,
     span: f32,
     height: f32,
+    jump: bool,
 ) -> Vec3 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // At most five slices.
     let slices = (span / 0.05).ceil().clamp(1.0, 5.0) as u8;
     let slice = f32::from(slices);
     let mut position = feet;
-    for _ in 0..slices {
+    for index in 0..slices {
         let mut trial = airborne.clone();
         let next = trial.step(
             world,
@@ -386,7 +419,7 @@ pub(super) fn fall_step(
             eq_client_core::movement::PROVISIONAL_PHYSICS,
             eq_client_core::movement::MotionStep {
                 horizontal: delta / slice,
-                jump: false,
+                jump: jump && index == 0,
                 seconds: span / slice,
                 height,
             },
@@ -597,13 +630,54 @@ mod tests {
         let world = CollisionWorld::new(triangles).unwrap();
         let mut airborne = AirborneController::default();
         let start = Vec3::new(-0.5, 0.0, 0.0);
-        let end = super::fall_step(&mut airborne, &world, start, Vec3::X * 3.0, 0.25, 6.0);
+        let end = super::fall_step(
+            &mut airborne,
+            &world,
+            start,
+            Vec3::X * 3.0,
+            0.25,
+            6.0,
+            false,
+        );
         assert!(end.x > start.x, "{end:?}");
         assert!(end.y - start.y <= MAX_GROUNDED_STEP, "{end:?}");
-        let next = super::fall_step(&mut airborne, &world, end, Vec3::X * 3.0, 0.25, 6.0);
+        let next = super::fall_step(&mut airborne, &world, end, Vec3::X * 3.0, 0.25, 6.0, false);
         assert!(
             next.y > end.y && next.y - end.y <= MAX_GROUNDED_STEP,
             "{next:?}"
+        );
+    }
+
+    #[test]
+    fn a_jump_starts_in_the_first_slice_and_keeps_its_arc_across_samples() {
+        use eq_client_core::movement::{AirborneController, CollisionWorld};
+        let world = CollisionWorld::new([
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ])
+        .unwrap();
+        let mut airborne = AirborneController::default();
+        let still = super::fall_step(
+            &mut airborne,
+            &world,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            0.15,
+            6.0,
+            false,
+        );
+        assert!(still.y.abs() < 0.001 && airborne.velocity() == 0.0);
+        let rising = super::fall_step(&mut airborne, &world, still, Vec3::X, 0.15, 6.0, true);
+        assert!(rising.y > 0.5 && rising.x > 0.9, "{rising:?}");
+        assert!(airborne.velocity() > 0.0);
+        // Released keys: the arc continues and lands back on the ground.
+        let mut feet = rising;
+        for _ in 0..10 {
+            feet = super::fall_step(&mut airborne, &world, feet, Vec3::ZERO, 0.15, 6.0, false);
+        }
+        assert!(
+            feet.y.abs() < 0.001 && airborne.velocity() == 0.0,
+            "{feet:?}"
         );
     }
 

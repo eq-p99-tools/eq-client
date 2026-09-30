@@ -395,7 +395,8 @@ fn inspect_walk() {
             RouteStep::Searching => (),
             RouteStep::Toward(next) => {
                 let to = Vec3::new(next.x - feet.x, 0.0, next.z - feet.z).normalize_or_zero();
-                let moved = motion::fall_step(&mut airborne, &world, feet, to * 3.1, 0.15, height);
+                let moved =
+                    motion::fall_step(&mut airborne, &world, feet, to * 3.1, 0.15, height, false);
                 println!(
                     "sample={sample} toward={next:?} feet={moved:?} moved={}",
                     moved.distance(feet)
