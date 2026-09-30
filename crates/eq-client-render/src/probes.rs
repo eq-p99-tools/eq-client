@@ -411,3 +411,47 @@ fn inspect_walk() {
     }
     println!("end=timeout feet={feet:?}");
 }
+
+/// Maps the zone lines of `EQ_PROBE_ZONE`: samples the ground on a 10-unit grid
+/// and prints, per zone-line tag, how many samples fall inside it and the EQ
+/// `(x, y, z)` bounds they span, for walking into one on purpose.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
+fn inspect_zone_lines() {
+    use std::collections::BTreeMap;
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone =
+        eq_client_assets::load_zone(&install, &std::env::var("EQ_PROBE_ZONE").unwrap()).unwrap();
+    let world = build_collision(&zone).unwrap();
+    let (low, high) = zone.collision.iter().flatten().fold(
+        (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+        |(low, high), p| {
+            let p = Vec3::from_array(*p);
+            (low.min(p), high.max(p))
+        },
+    );
+    let mut found: BTreeMap<String, (usize, Vec3, Vec3)> = BTreeMap::new();
+    let mut x = low.x;
+    while x <= high.x {
+        let mut z = low.z;
+        while z <= high.z {
+            let top = Vec3::new(x, high.y + 1.0, z);
+            if let Some(depth) = world.ray_distance(top, -Vec3::Y, high.y - low.y + 2.0) {
+                let ground = top.y - depth;
+                // WLD order is (east, north, up): renderer (x, z, y).
+                if let Some(line) = zone.regions.zone_line_at([x, z, ground + 3.0]) {
+                    let eq = Vec3::new(z, x, ground + 3.0);
+                    let entry = found.entry(format!("{line:?}")).or_insert((0, eq, eq));
+                    entry.0 += 1;
+                    entry.1 = entry.1.min(eq);
+                    entry.2 = entry.2.max(eq);
+                }
+            }
+            z += 10.0;
+        }
+        x += 10.0;
+    }
+    for (line, (samples, low, high)) in found {
+        println!("zone_line={line} samples={samples} eq_xyz_bounds={low:?}..{high:?}");
+    }
+}
