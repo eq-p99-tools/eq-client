@@ -271,6 +271,7 @@ pub(super) fn demo(
         walk_speed: 0.0,
         run_speed: 0.0,
         hp_percent: None,
+        appearance: eq_client_core::outfit::Appearance::default(),
     });
     for (id, race, offset, size) in [(2u16, 1, 0.0, 0.0), (3, 42, 2.1, 2.5), (4, 54, 4.2, 6.0)] {
         let phase = time.elapsed_secs() % 18.0;
@@ -318,6 +319,7 @@ pub(super) fn demo(
                 velocity: [0.0; 3],
                 size,
                 invisible: false,
+                appearance: eq_client_core::outfit::Appearance::default(),
             },
         );
         state.revisions.insert(id, 1);

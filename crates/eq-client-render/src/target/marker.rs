@@ -105,6 +105,7 @@ mod tests {
                 velocity: [0.0; 3],
                 size: 6.0,
                 invisible: false,
+                appearance: eq_client_core::outfit::Appearance::default(),
             },
         );
         let entity = app

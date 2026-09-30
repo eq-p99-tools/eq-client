@@ -18,6 +18,7 @@ mod items;
 mod motion;
 mod navigation;
 mod online;
+mod outfit;
 mod paperdoll;
 #[cfg(test)]
 mod probes;
@@ -242,7 +243,7 @@ pub fn run(
                 spell_icons::update,
             )
                 .chain(),
-            (character::animate, target::marker::update).chain(),
+            (outfit::dress, character::animate, target::marker::update).chain(),
             schedule_screenshot,
             exit_after_screenshot,
         )
@@ -276,6 +277,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<motion::Controls>()
         .init_resource::<entities::NearbyEntities>()
         .init_resource::<ground::ItemLibrary>()
+        .init_resource::<outfit::Wardrobe>()
         .init_resource::<windows::DragState>()
         .init_resource::<windows::Layouts>();
 }

@@ -202,6 +202,7 @@ mod tests {
                 walk_speed: 0.4,
                 run_speed,
                 hp_percent: Some(100),
+                appearance: eq_client_core::outfit::Appearance::default(),
             }),
         }
     }

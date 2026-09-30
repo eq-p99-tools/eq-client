@@ -340,6 +340,7 @@ mod tests {
             walk_speed: 0.0,
             run_speed: 0.0,
             hp_percent: None,
+            appearance: eq_client_core::outfit::Appearance::default(),
         });
         let mut bytes = [0u8; 80];
         bytes[..4].copy_from_slice(b"TEST");

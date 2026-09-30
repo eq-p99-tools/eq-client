@@ -50,6 +50,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         walk_speed: 0.0,
         run_speed: 0.0,
         hp_percent: Some(100),
+        appearance: eq_client_core::outfit::Appearance::default(),
     });
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut app = App::new();

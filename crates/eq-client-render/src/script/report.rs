@@ -82,6 +82,9 @@ pub(super) fn state(
         inventory_predicted = inventory.data.predicted(),
         inventory_stale = inventory.data.stale(),
         cursor_queued = inventory.data.queued().count(),
+        gear = ?online.player.as_ref().map(|player| player.appearance.materials),
+        tints = ?online.player.as_ref().map(|player| player.appearance.tints),
+        face = ?online.player.as_ref().map(|player| player.appearance.face),
         "Script report"
     );
 }
@@ -167,11 +170,21 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
         .collect();
     ground.sort_by_key(|object| object.3);
     ground.truncate(5);
+    // Gear of the nearest spawns: id and materials per texture slot.
+    let gear: Vec<(u16, [u32; 9])> = nearby
+        .iter()
+        .take(6)
+        .filter_map(|entry| {
+            let spawn = online.spawns.get(&entry.0)?;
+            Some((entry.0, spawn.appearance.materials))
+        })
+        .collect();
     info!(
         ?nearby,
         ?creatures,
         ?doors,
         ?ground,
+        ?gear,
         door_status = online.door_status,
         coins = ?trade.coins,
         trade = trade.summary(),

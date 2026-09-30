@@ -805,6 +805,7 @@ mod tests {
             walk_speed: 0.0,
             run_speed: 0.0,
             hp_percent: Some(100),
+            appearance: eq_client_core::outfit::Appearance::default(),
         });
         let floor = eq_client_core::movement::CollisionWorld::new([
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],

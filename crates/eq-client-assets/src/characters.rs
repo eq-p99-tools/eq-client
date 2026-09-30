@@ -168,6 +168,26 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
+    fn installed_models_name_their_materials_and_find_other_looks() {
+        let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
+        let human =
+            super::load_installed_character(std::path::Path::new(&install), "qeynos2", "HUM")
+                .unwrap();
+        let materials: Vec<_> = human.materials.iter().flatten().collect();
+        println!("HUM materials: {materials:?}");
+        assert!(
+            materials
+                .iter()
+                .any(|name| name.as_str() == "HUMCH0001_MDF")
+        );
+        assert!(human.has_material("humch0201_mdf"));
+        let (chain, _) = human.material_texture("HUMCH0201_MDF").unwrap().unwrap();
+        assert!(chain.width > 0 && chain.name.contains("humch0201"));
+        assert!(human.material_texture("HUMCH9901_MDF").unwrap().is_none());
+    }
+
+    #[test]
     fn hierarchy_rejects_cycles_and_invalid_indices() {
         assert!(validate_parents(&[Some(1), Some(0)]).is_err());
         assert!(validate_parents(&[Some(0)]).is_err());
