@@ -103,6 +103,8 @@ pub struct ViewerConfig {
     pub local_gm_commands: bool,
     /// UI skin to use instead of the one the character chose in the official client.
     pub ui_skin: Option<String>,
+    /// Where this client keeps its own settings; None keeps nothing between runs.
+    pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
     pub window_position: Option<(i32, i32)>,
 }
