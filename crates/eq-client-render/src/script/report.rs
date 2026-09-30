@@ -84,6 +84,8 @@ pub(super) fn state(
 }
 
 /// Spawn id, shown name, kind, class, distance and rounded EQ x, y, z.
+/// Door id, open type, latest action, distance and EQ position.
+type NearbyDoor = (u8, u8, Option<u8>, i32, [i32; 3]);
 type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
 
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
@@ -127,9 +129,28 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
         .map(|(id, name, kind, _, distance, at)| (*id, name.clone(), kind.clone(), *distance, *at))
         .collect();
     nearby.truncate(12);
+    // Doors near the player: id, open type, latest action, distance and position.
+    let mut doors: Vec<NearbyDoor> = online
+        .doors
+        .entries()
+        .values()
+        .map(|door| {
+            let position = Vec3::from_array(eq_client_core::render_position(door.position));
+            #[allow(clippy::cast_possible_truncation)] // Rounded report values.
+            let (distance, at) = (
+                origin.map_or(-1, |origin| position.distance(origin).round() as i32),
+                [door.position.x, door.position.y, door.position.z].map(|v| v.round() as i32),
+            );
+            (door.id, door.open_type, door.action, distance, at)
+        })
+        .collect();
+    doors.sort_by_key(|door| door.3);
+    doors.truncate(3);
     info!(
         ?nearby,
         ?creatures,
+        ?doors,
+        door_status = online.door_status,
         coins = ?trade.coins,
         trade = trade.summary(),
         auto_attack = combat.auto_attack,
