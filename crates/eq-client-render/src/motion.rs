@@ -26,6 +26,8 @@ pub(super) struct Controls {
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
+    /// Why the movement guard refused the latest sample, until one is sent.
+    pub refused: Option<String>,
 }
 impl Default for Controls {
     fn default() -> Self {
@@ -44,6 +46,7 @@ impl Default for Controls {
             taps: TapBuffer::default(),
             visual: None,
             airborne: None,
+            refused: None,
         }
     }
 }

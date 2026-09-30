@@ -85,7 +85,7 @@ pub(super) fn state(
 type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
 
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
-pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, combat): &Observed) {
+pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, combat, _): &Observed) {
     let origin = online
         .player
         .as_ref()
