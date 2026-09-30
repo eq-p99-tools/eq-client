@@ -4,6 +4,7 @@ pub mod buffs;
 pub mod chat;
 pub mod doors;
 pub mod entities;
+pub mod ground;
 pub mod movement;
 pub mod resources;
 pub mod targeting;
@@ -91,6 +92,13 @@ pub const fn render_position(position: WorldPosition) -> [f32; 3] {
 pub fn render_heading(heading: f32) -> f32 {
     // EQ horizontal direction is (sin(h), cos(h)); rendering swaps X/Y.
     std::f32::consts::FRAC_PI_2 - heading / 512.0 * std::f32::consts::TAU
+}
+
+/// Converts an EQ heading to renderer yaw for static models (doors, objects on
+/// the ground), whose meshes are already in renderer axes and, unlike
+/// characters, need no facing offset.
+pub fn static_yaw(heading: f32) -> f32 {
+    -heading / 512.0 * std::f32::consts::TAU
 }
 
 /// Converts a rotation about renderer Y (+Z forward) to an EQ 0..512 heading.

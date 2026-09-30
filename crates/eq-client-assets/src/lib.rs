@@ -1,6 +1,7 @@
 #![doc = "Owned, renderer-independent zone assets loaded from a local EQ installation."]
 
 pub mod characters;
+pub mod items;
 pub mod regions;
 pub mod spells;
 pub mod ui;
@@ -423,18 +424,62 @@ fn load_mesh_primitives(
     textures: &mut Vec<ZoneTexture>,
     texture_indices: &mut HashMap<String, usize>,
 ) -> Result<Vec<ZonePrimitive>, LoadError> {
+    stage_mesh(mesh)
+        .into_iter()
+        .map(|primitive| primitive.realize(archive, textures, texture_indices))
+        .collect()
+}
+
+/// A drawable mesh primitive whose texture is named but not yet decoded, so
+/// geometry can be read up front and textures only when a model is used.
+#[derive(Clone, Debug)]
+struct StagedPrimitive {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    texture_coordinates: Vec<[f32; 2]>,
+    indices: Vec<u32>,
+    material_mode: MaterialMode,
+    texture: Option<String>,
+}
+
+impl StagedPrimitive {
+    /// Decodes the texture (once per archive and name) and returns the primitive.
+    fn realize(
+        self,
+        archive: &mut PfsReader<File>,
+        textures: &mut Vec<ZoneTexture>,
+        texture_indices: &mut HashMap<String, usize>,
+    ) -> Result<ZonePrimitive, LoadError> {
+        let texture = self
+            .texture
+            .map(|name| load_texture(archive, &name, textures, texture_indices))
+            .transpose()?
+            .flatten();
+        Ok(ZonePrimitive {
+            positions: self.positions,
+            normals: self.normals,
+            texture_coordinates: self.texture_coordinates,
+            indices: self.indices,
+            texture,
+            material_mode: self.material_mode,
+        })
+    }
+}
+
+/// Reads a mesh's drawable primitives, positioned at the mesh's center.
+fn stage_mesh(mesh: &libeq::wld::Mesh<'_>) -> Vec<StagedPrimitive> {
     let center = mesh.center();
     let mut primitives = Vec::new();
     for primitive in mesh.primitives() {
-        let (material_mode, texture_name) = {
+        let (material_mode, texture) = {
             let material = primitive.material();
             let Some(material_mode) = material_mode(*material.render_method()) else {
                 continue;
             };
-            let texture_name = material
+            let texture = material
                 .base_color_texture()
                 .and_then(|value| value.source());
-            (material_mode, texture_name)
+            (material_mode, texture)
         };
         let positions = primitive
             .positions()
@@ -447,20 +492,25 @@ fn load_mesh_primitives(
                 ]
             })
             .collect();
-        let texture = texture_name
-            .map(|name| load_texture(archive, &name, textures, texture_indices))
-            .transpose()?
-            .flatten();
-        primitives.push(ZonePrimitive {
+        primitives.push(StagedPrimitive {
             positions,
             normals: primitive.normals(),
             texture_coordinates: primitive.texture_coordinates(),
             indices: primitive.indices(),
-            texture,
             material_mode,
+            texture,
         });
     }
-    Ok(primitives)
+    primitives
+}
+
+/// The name EQ uses to match an actor model, such as `IT63` for `it63_ACTORDEF`:
+/// upper case, without the `_ACTORDEF` suffix. Server strings stay names; they
+/// never become paths.
+#[must_use]
+pub fn model_key(name: &str) -> String {
+    let name = name.trim().to_ascii_uppercase();
+    name.strip_suffix("_ACTORDEF").unwrap_or(&name).to_owned()
 }
 
 /// Reads the WLD solid-face flags independently of visible material batches.

@@ -149,10 +149,29 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
         .collect();
     doors.sort_by_key(|door| door.3);
     doors.truncate(3);
+    // Objects on the ground: id, model, kind, distance and position.
+    let mut ground: Vec<(u32, String, String, i32, [i32; 3])> = online
+        .objects
+        .entries()
+        .values()
+        .map(|object| {
+            let position = Vec3::from_array(eq_client_core::render_position(object.position));
+            #[allow(clippy::cast_possible_truncation)] // Rounded report values.
+            let (distance, at) = (
+                origin.map_or(-1, |origin| position.distance(origin).round() as i32),
+                [object.position.x, object.position.y, object.position.z].map(|v| v.round() as i32),
+            );
+            let kind = format!("{:?}", object.kind());
+            (object.drop_id, object.model.clone(), kind, distance, at)
+        })
+        .collect();
+    ground.sort_by_key(|object| object.3);
+    ground.truncate(5);
     info!(
         ?nearby,
         ?creatures,
         ?doors,
+        ?ground,
         door_status = online.door_status,
         coins = ?trade.coins,
         trade = trade.summary(),
