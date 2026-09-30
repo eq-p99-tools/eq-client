@@ -3,18 +3,22 @@ use super::{DragHandle, Frame, LayoutKey, MinimizeLabel, TitleBar, collapse};
 use bevy::prelude::*;
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy)]
-struct Saved {
-    entity: Entity,
-    edges: [Val; 4],
-    margin: UiRect,
-    position_type: PositionType,
-    minimized: bool,
+/// A window's placement, and the frame it was last seen on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Saved {
+    /// A different frame with the same key takes this placement.
+    pub entity: Entity,
+    pub edges: [Val; 4],
+    pub margin: UiRect,
+    pub position_type: PositionType,
+    pub minimized: bool,
+    /// Moved or minimized by the player; only these are kept between runs.
+    pub placed: bool,
 }
 
-/// Persists through scene despawns; no account or character data is stored.
+/// Window placements by title, kept through scene despawns.
 #[derive(Resource, Default)]
-pub(crate) struct Layouts(BTreeMap<String, Saved>);
+pub(crate) struct Layouts(pub(super) BTreeMap<String, Saved>);
 
 /// Keeps explicitly placed panels reachable after resizing or UI scale changes.
 #[allow(clippy::needless_pass_by_value)]
@@ -75,6 +79,7 @@ pub(crate) fn remember(
             [node.left, node.top, node.right, node.bottom] = saved.edges;
             node.margin = saved.margin;
             node.position_type = saved.position_type;
+            frame.placed |= saved.placed;
             if saved.minimized {
                 frame.minimized = true;
                 collapse(
@@ -99,6 +104,7 @@ pub(crate) fn remember(
                 margin: node.margin,
                 position_type: node.position_type,
                 minimized: frame.minimized,
+                placed: frame.placed,
             },
         );
     }

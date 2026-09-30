@@ -127,6 +127,11 @@ struct Arguments {
     #[arg(long)]
     ui_skin: Option<String>,
 
+    /// Directory for this client's own settings, such as window positions.
+    /// Defaults to `eq-client` in the per-user settings directory.
+    #[arg(long, env = "EQ_CLIENT_SETTINGS_DIR")]
+    settings_dir: Option<PathBuf>,
+
     /// Top-left window corner as `X,Y` in physical desktop pixels (either may be
     /// negative on multi-monitor desktops).
     #[arg(long, value_parser = parse_window_position, allow_hyphen_values = true)]
@@ -265,6 +270,7 @@ fn main() {
             script_follow,
             local_gm_commands: local_eqemu,
             ui_skin: arguments.ui_skin,
+            settings_directory: arguments.settings_dir.or_else(default_settings_directory),
             window_position: arguments.window_position,
         },
         updates,
@@ -340,6 +346,23 @@ fn default_eq_directory() -> Option<PathBuf> {
     {
         None
     }
+}
+
+/// `eq-client` in the platform's per-user settings directory.
+fn default_settings_directory() -> Option<PathBuf> {
+    let variable = |name| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let base = if cfg!(windows) {
+        variable("APPDATA")
+    } else if cfg!(target_os = "macos") {
+        variable("HOME").map(|home| home.join("Library").join("Application Support"))
+    } else {
+        variable("XDG_CONFIG_HOME").or_else(|| variable("HOME").map(|home| home.join(".config")))
+    };
+    base.map(|base| base.join("eq-client"))
 }
 
 fn print_summary(zone: &ZoneAsset) {

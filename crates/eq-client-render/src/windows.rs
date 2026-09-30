@@ -3,10 +3,13 @@
 use bevy::{prelude::*, window::PrimaryWindow};
 mod layout;
 pub(super) mod pointer;
+mod store;
 pub(super) use layout::Layouts;
 
-/// Restores saved positions before layout and constrains measured frames afterward.
+/// Restores saved positions before layout and constrains measured frames afterward;
+/// placements persist between runs per character.
 pub(super) fn register_layout(app: &mut App) {
+    app.add_systems(Update, store::persist.after(super::online::receive));
     app.add_systems(
         PostUpdate,
         layout::remember.before(bevy::ui::UiSystems::Layout),
@@ -53,6 +56,8 @@ pub(super) fn contains(cursor: Vec2, transform: &UiGlobalTransform, node: &Compu
 #[derive(Component, Default)]
 pub(super) struct Frame {
     minimized: bool,
+    /// Moved or minimized by the player, so its placement is worth keeping.
+    placed: bool,
     restored_display: Vec<(Entity, Display)>,
     restored_height: Option<(Val, Val)>,
 }
@@ -180,6 +185,7 @@ pub(super) fn input(
             continue;
         };
         state.minimized = !state.minimized;
+        state.placed = true;
         collapse(
             &mut node,
             &mut state,
@@ -220,7 +226,7 @@ pub(super) fn input(
     let Some(cursor) = cursor else {
         return;
     };
-    if let Ok((mut node, computed, _, _)) = frames.get_mut(active.frame) {
+    if let Ok((mut node, computed, _, mut frame)) = frames.get_mut(active.frame) {
         if computed.inverse_scale_factor().to_bits() != active.inverse_scale.to_bits() {
             drag.active = None;
             return;
@@ -235,6 +241,7 @@ pub(super) fn input(
         node.right = Val::Auto;
         node.bottom = Val::Auto;
         node.margin = UiRect::ZERO;
+        frame.placed = true;
     }
 }
 
