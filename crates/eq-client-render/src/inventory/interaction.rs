@@ -158,7 +158,9 @@ impl InventoryState {
             if to_cursor || self.data.items().contains_key(&InventorySlot(30)) {
                 "Item is on the cursor / choose a destination".into()
             } else {
-                "Item placed / contents include local prediction".into()
+                // Servers acknowledge only refused moves, so the placement
+                // settles without a later message; claim nothing more.
+                "Item placed".into()
             }
         });
         self.revision = self.revision.wrapping_add(1);
