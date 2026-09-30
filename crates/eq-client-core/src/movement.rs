@@ -23,11 +23,14 @@ use parry3d::{
 };
 use std::sync::Arc;
 
-/// The character's collision capsule at `feet`. Its base floats above the feet so
-/// floors, stairs and uneven ground never register as walls.
+/// How far the collision capsule's base floats above the feet, so floors, stairs
+/// and uneven ground never register as walls.
+const LIFT: f32 = 0.85;
+
+/// The character's collision capsule at `feet`, floating `LIFT` above them.
 fn body(feet: Vec3, height: f32) -> (Pose, Capsule) {
     let radius = 0.4;
-    let center = feet + Vec3::Y * (height * 0.5 + 0.85);
+    let center = feet + Vec3::Y * (height * 0.5 + LIFT);
     (
         Pose::translation(center.x, center.y, center.z),
         Capsule::new_y(height * 0.5 - radius, radius),
