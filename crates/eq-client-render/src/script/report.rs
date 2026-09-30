@@ -79,6 +79,8 @@ pub(super) fn state(
         ?slots,
         ?effects,
         ?items,
+        inventory_predicted = inventory.data.predicted(),
+        inventory_stale = inventory.data.stale(),
         "Script report"
     );
 }
