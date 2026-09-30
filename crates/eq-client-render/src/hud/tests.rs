@@ -382,6 +382,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         walk_speed: 0.0,
         run_speed: 0.0,
         hp_percent: Some(100),
+        appearance: eq_client_core::outfit::Appearance::default(),
     });
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     app.insert_resource(online)
@@ -675,6 +676,7 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
         walk_speed: 0.0,
         run_speed: 0.0,
         hp_percent: Some(100),
+        appearance: eq_client_core::outfit::Appearance::default(),
     };
     let (sender, receiver) = std::sync::mpsc::sync_channel(4);
     let messages = messages::Messages::parse(

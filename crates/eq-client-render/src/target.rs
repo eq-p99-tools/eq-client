@@ -447,6 +447,7 @@ mod tests {
                     velocity: [0.0; 3],
                     size: 0.0,
                     invisible: false,
+                    appearance: eq_client_core::outfit::Appearance::default(),
                 },
             );
         }
@@ -478,6 +479,7 @@ mod tests {
             walk_speed: 0.0,
             run_speed: 0.0,
             hp_percent: None,
+            appearance: eq_client_core::outfit::Appearance::default(),
         });
         for (id, x) in [(2, 90.0), (3, 110.0)] {
             online.spawns.insert(
@@ -496,6 +498,7 @@ mod tests {
                     velocity: [0.0; 3],
                     size: 0.0,
                     invisible: false,
+                    appearance: eq_client_core::outfit::Appearance::default(),
                 },
             );
         }
@@ -549,6 +552,7 @@ mod tests {
                         velocity: [0.0; 3],
                         size: 0.0,
                         invisible: false,
+                        appearance: eq_client_core::outfit::Appearance::default(),
                     },
                 );
                 online.revisions.insert(id, 1);
@@ -677,6 +681,7 @@ mod tests {
             walk_speed: 0.0,
             run_speed: 0.0,
             hp_percent: Some(55),
+            appearance: eq_client_core::outfit::Appearance::default(),
         });
         let (tx, rx) = std::sync::mpsc::sync_channel(2);
         app.insert_resource(online)

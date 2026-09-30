@@ -440,6 +440,8 @@ struct StagedPrimitive {
     indices: Vec<u32>,
     material_mode: MaterialMode,
     texture: Option<String>,
+    /// The material's name in upper case, such as `HUMCH0001_MDF`.
+    material: Option<String>,
 }
 
 impl StagedPrimitive {
@@ -471,7 +473,7 @@ fn stage_mesh(mesh: &libeq::wld::Mesh<'_>) -> Vec<StagedPrimitive> {
     let center = mesh.center();
     let mut primitives = Vec::new();
     for primitive in mesh.primitives() {
-        let (material_mode, texture) = {
+        let (material_mode, texture, name) = {
             let material = primitive.material();
             let Some(material_mode) = material_mode(*material.render_method()) else {
                 continue;
@@ -479,7 +481,11 @@ fn stage_mesh(mesh: &libeq::wld::Mesh<'_>) -> Vec<StagedPrimitive> {
             let texture = material
                 .base_color_texture()
                 .and_then(|value| value.source());
-            (material_mode, texture)
+            (
+                material_mode,
+                texture,
+                material.name().map(str::to_ascii_uppercase),
+            )
         };
         let positions = primitive
             .positions()
@@ -499,6 +505,7 @@ fn stage_mesh(mesh: &libeq::wld::Mesh<'_>) -> Vec<StagedPrimitive> {
             indices: primitive.indices(),
             material_mode,
             texture,
+            material: name,
         });
     }
     primitives

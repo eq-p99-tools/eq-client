@@ -734,6 +734,7 @@ mod tests {
                 velocity: [0.0; 3],
                 size: 6.0,
                 invisible: false,
+                appearance: eq_client_core::outfit::Appearance::default(),
             },
         );
         let mut state = InventoryState::default();
@@ -793,6 +794,7 @@ mod tests {
             walk_speed: 0.0,
             run_speed: 0.0,
             hp_percent: Some(100),
+            appearance: eq_client_core::outfit::Appearance::default(),
         }
     }
 }

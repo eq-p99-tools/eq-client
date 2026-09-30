@@ -681,6 +681,18 @@ pub(super) fn receive(
                 }
             }
             WorldUpdate::Game(WorldEvent::Objects(update)) => state.objects.apply(&update),
+            WorldUpdate::Game(WorldEvent::WearChange(change)) => {
+                if let Some(spawn) = state.spawns.get_mut(&change.spawn_id) {
+                    spawn.appearance.apply(&change);
+                }
+                if let Some(player) = state
+                    .player
+                    .as_mut()
+                    .filter(|player| player.spawn_id == change.spawn_id)
+                {
+                    player.appearance.apply(&change);
+                }
+            }
             WorldUpdate::Game(WorldEvent::ObjectAction {
                 session_id,
                 error: Some(error),
@@ -911,6 +923,7 @@ mod tests {
             walk_speed: 0.0,
             run_speed: 0.0,
             hp_percent: Some(100),
+            appearance: eq_client_core::outfit::Appearance::default(),
         };
         let spawn = eq_client_core::SpawnState {
             class: None,
@@ -923,6 +936,7 @@ mod tests {
             velocity: [0.0; 3],
             size: 0.0,
             invisible: false,
+            appearance: eq_client_core::outfit::Appearance::default(),
         };
         let door = Door {
             id: 3,
@@ -994,6 +1008,7 @@ mod tests {
             walk_speed: 0.0,
             run_speed: 0.0,
             hp_percent: Some(100),
+            appearance: eq_client_core::outfit::Appearance::default(),
         });
         app.insert_resource(state)
             .insert_resource(Updates(Mutex::new(Some(receiver))))

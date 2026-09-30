@@ -6,6 +6,7 @@ pub mod doors;
 pub mod entities;
 pub mod ground;
 pub mod movement;
+pub mod outfit;
 pub mod resources;
 pub mod targeting;
 pub use eq_network_game::characters::CharacterChoice;

@@ -8,13 +8,28 @@ use super::{create_render_primitives, create_texture_images};
 
 #[derive(Component)]
 pub(super) struct AnimatedCharacter {
-    asset: Arc<CharacterAsset>,
-    meshes: Vec<Handle<Mesh>>,
+    pub(super) asset: Arc<CharacterAsset>,
+    /// Per drawn primitive, its asset index and this instance's posed mesh.
+    meshes: Vec<(usize, Handle<Mesh>)>,
+    /// The entities drawing the primitives.
+    pub(super) parts: Vec<Part>,
+    /// The gear last drawn, if dressed yet.
+    pub(super) dressed: Option<eq_client_core::outfit::Appearance>,
     elapsed: f32,
     since_pose: f32,
     moving_for: f32,
     previous_position: Vec3,
     clip: (&'static str, bool),
+}
+
+/// One drawn primitive of a character instance.
+pub(super) struct Part {
+    /// Index into the asset's primitives and base material names.
+    pub(super) index: usize,
+    /// The entity drawing it.
+    pub(super) entity: Entity,
+    /// Its material in the base look.
+    pub(super) base: Handle<StandardMaterial>,
 }
 
 /// The model a movement root wears, for views that draw it again elsewhere.
@@ -40,7 +55,9 @@ pub(super) fn spawn(
 #[derive(Clone)]
 pub(super) struct PreparedCharacter {
     asset: Arc<CharacterAsset>,
-    primitives: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    /// Drawable primitives, each with the index of its asset primitive, which
+    /// also indexes its pose and base material name.
+    primitives: Vec<(usize, Handle<Mesh>, Handle<StandardMaterial>)>,
 }
 
 impl PreparedCharacter {
@@ -57,9 +74,24 @@ pub(super) fn prepare(
     materials: &mut Assets<StandardMaterial>,
 ) -> PreparedCharacter {
     let textures = create_texture_images(asset.textures.clone(), images);
-    let primitives =
-        create_render_primitives(asset.primitives.clone(), &textures, meshes, materials, true);
-    for (handle, _) in &primitives {
+    // Empty primitives draw nothing; the rest keep their asset index.
+    let drawn: Vec<usize> = (0..asset.primitives.len())
+        .filter(|index| {
+            let primitive = &asset.primitives[*index];
+            !primitive.indices.is_empty() && !primitive.positions.is_empty()
+        })
+        .collect();
+    let rendered = create_render_primitives(
+        drawn
+            .iter()
+            .map(|index| asset.primitives[*index].clone())
+            .collect(),
+        &textures,
+        meshes,
+        materials,
+        true,
+    );
+    for (handle, _) in &rendered {
         if let Some(mut mesh) = meshes.get_mut(handle) {
             mesh.asset_usage = bevy::asset::RenderAssetUsages::MAIN_WORLD
                 | bevy::asset::RenderAssetUsages::RENDER_WORLD;
@@ -67,7 +99,11 @@ pub(super) fn prepare(
     }
     PreparedCharacter {
         asset: Arc::new(asset),
-        primitives,
+        primitives: drawn
+            .into_iter()
+            .zip(rendered)
+            .map(|(index, (mesh, material))| (index, mesh, material))
+            .collect(),
     }
 }
 
@@ -102,18 +138,22 @@ pub(super) fn spawn_on_layers(
     let primitives: Vec<_> = prepared
         .primitives
         .iter()
-        .filter_map(|(handle, material)| {
+        .filter_map(|(index, handle, material)| {
             let mesh = meshes.get(handle)?.clone();
-            Some((meshes.add(mesh), material.clone()))
+            Some((*index, meshes.add(mesh), material.clone()))
         })
         .collect();
-    let handles = primitives.iter().map(|(mesh, _)| mesh.clone()).collect();
+    let handles = primitives
+        .iter()
+        .map(|(index, mesh, _)| (*index, mesh.clone()))
+        .collect();
     let bottom = asset
         .primitives
         .iter()
         .flat_map(|p| &p.positions)
         .map(|p| p[1])
         .fold(f32::INFINITY, f32::min);
+    let mut parts = Vec::with_capacity(primitives.len());
     let child = commands
         .spawn((
             // Classic character meshes face +X (installed HUM/ERM/ELM/DWM toes
@@ -124,8 +164,19 @@ pub(super) fn spawn_on_layers(
             Visibility::Inherited,
         ))
         .with_children(|parent| {
-            for (mesh, material) in primitives {
-                parent.spawn((Mesh3d(mesh), MeshMaterial3d(material), layers.clone()));
+            for (index, mesh, material) in primitives {
+                let part = parent
+                    .spawn((
+                        Mesh3d(mesh),
+                        MeshMaterial3d(material.clone()),
+                        layers.clone(),
+                    ))
+                    .id();
+                parts.push(Part {
+                    index,
+                    entity: part,
+                    base: material,
+                });
             }
         })
         .id();
@@ -135,6 +186,8 @@ pub(super) fn spawn_on_layers(
         .insert(AnimatedCharacter {
             asset,
             meshes: handles,
+            parts,
+            dressed: None,
             elapsed: 0.0,
             since_pose: 0.0,
             moving_for: 0.0,
@@ -193,7 +246,11 @@ pub(super) fn animate(
         } else {
             character.asset.pose(clip, character.elapsed)
         };
-        for (handle, pose) in character.meshes.iter().zip(poses) {
+        let mut poses: Vec<_> = poses.into_iter().map(Some).collect();
+        for (index, handle) in &character.meshes {
+            let Some(pose) = poses.get_mut(*index).and_then(Option::take) else {
+                continue;
+            };
             if let Some(mut mesh) = meshes.get_mut(handle) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pose.positions);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, pose.normals);

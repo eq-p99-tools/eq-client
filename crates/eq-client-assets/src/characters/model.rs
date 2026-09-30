@@ -1,6 +1,10 @@
 //! Pose and skinning for the classic rigid-per-vertex character format.
 
-use std::{collections::HashMap, fs::File, path::Path};
+use std::{
+    collections::HashMap,
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 use glam::{Mat4, Quat, Vec3};
 use libeq::{
@@ -9,7 +13,7 @@ use libeq::{
 };
 
 use super::{invalid, resolve, validate_parents};
-use crate::{LoadError, ZonePrimitive, ZoneTexture, load_mesh_primitives};
+use crate::{LoadError, MaterialMode, ZonePrimitive, ZoneTexture, load_texture, stage_mesh};
 
 /// A renderer-independent character with original bone-local mesh data.
 #[derive(Clone, Debug)]
@@ -20,6 +24,13 @@ pub struct CharacterAsset {
     pub primitives: Vec<ZonePrimitive>,
     /// Locally decoded diffuse textures.
     pub textures: Vec<ZoneTexture>,
+    /// Per primitive, the material it draws with in its base look, in upper
+    /// case, such as `HUMCH0001_MDF`.
+    pub materials: Vec<Option<String>>,
+    /// The archive the model came from, for the textures of other looks.
+    source: PathBuf,
+    /// Every material in that archive by name: its texture file and blending.
+    catalog: HashMap<String, (Option<String>, MaterialMode)>,
     parents: Vec<Option<usize>>,
     base_pose: Vec<LocalTransform>,
     clips: HashMap<String, Vec<Option<AnimationTrack>>>,
@@ -102,6 +113,43 @@ impl CharacterAsset {
                 (min.min(p[1]), max.max(p[1]))
             });
         (max - min).max(1.0)
+    }
+
+    /// The archive the model came from.
+    #[must_use]
+    pub fn source(&self) -> &Path {
+        &self.source
+    }
+
+    /// Whether the model's archive has this material, such as `HUMCH0201_MDF`.
+    #[must_use]
+    pub fn has_material(&self, material: &str) -> bool {
+        self.catalog.contains_key(&material.to_ascii_uppercase())
+    }
+
+    /// The texture and blending of another material in the model's archive,
+    /// such as `HUMCH0201_MDF` for a chain tunic; None when the archive has no
+    /// such material or it draws without a texture.
+    ///
+    /// # Errors
+    /// Returns [`LoadError`] when the archive or the texture cannot be read.
+    pub fn material_texture(
+        &self,
+        material: &str,
+    ) -> Result<Option<(ZoneTexture, MaterialMode)>, LoadError> {
+        let Some((Some(texture), mode)) = self.catalog.get(&material.to_ascii_uppercase()) else {
+            return Ok(None);
+        };
+        let file = File::open(&self.source).map_err(|source| LoadError::OpenArchive {
+            path: self.source.clone(),
+            source,
+        })?;
+        let mut archive = PfsReader::open(file)?;
+        let mut textures = Vec::new();
+        let loaded = load_texture(&mut archive, texture, &mut textures, &mut HashMap::new())?;
+        Ok(loaded
+            .and_then(|_| textures.pop())
+            .map(|texture| (texture, *mode)))
     }
 
     /// Available animation codes as stored in this archive, in deterministic order.
@@ -310,9 +358,21 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         });
     }
     let world = libeq::wld::load(&bytes).map_err(|error| invalid(&error.to_string()))?;
+    let catalog = world
+        .materials()
+        .filter_map(|material| {
+            let name = material.name()?.to_ascii_uppercase();
+            let mode = crate::material_mode(*material.render_method())?;
+            let texture = material
+                .base_color_texture()
+                .and_then(|texture| texture.source());
+            Some((name, (texture, mode)))
+        })
+        .collect();
     let mut textures = Vec::new();
     let mut texture_indices = HashMap::new();
     let mut primitives = Vec::new();
+    let mut materials = Vec::new();
     let mut skins = Vec::new();
     for reference in skeleton.dm_sprites.as_deref().unwrap_or_default() {
         let sprite: &DmSprite = resolve(&doc, *reference)?;
@@ -334,15 +394,16 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         if bones.len() != raw.positions.len() || bones.iter().any(|bone| *bone >= parents.len()) {
             return Err(invalid("skin bone assignments"));
         }
-        for primitive in
-            load_mesh_primitives(&mesh, &mut archive, &mut textures, &mut texture_indices)?
-        {
+        for staged in stage_mesh(&mesh) {
+            let material = staged.material.clone();
+            let primitive = staged.realize(&mut archive, &mut textures, &mut texture_indices)?;
             skins.push(Skin {
                 positions: primitive.positions.clone(),
                 normals: primitive.normals.clone(),
                 bones: bones.clone(),
             });
             primitives.push(primitive);
+            materials.push(material);
         }
     }
     if primitives.is_empty() {
@@ -352,6 +413,9 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         name,
         primitives,
         textures,
+        materials,
+        source: path.to_owned(),
+        catalog,
         parents,
         base_pose,
         clips,
@@ -396,6 +460,9 @@ mod tests {
             name: "synthetic".into(),
             primitives: Vec::new(),
             textures: Vec::new(),
+            materials: Vec::new(),
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
             parents: vec![None],
             base_pose: vec![base],
             clips: HashMap::from([(

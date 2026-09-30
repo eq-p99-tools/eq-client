@@ -90,7 +90,12 @@ cargo run -p eq-client -- --eq-dir "/path/to/EverQuest" --online
 ```
 
 The server chooses the zone, saved position, heading, race, and gender. The viewer
-loads the corresponding local terrain and character model. HP, mana, endurance,
+loads the corresponding local terrain and character model. Characters on the
+classic player models, your own and the paperdoll's included, wear their armor:
+each body part draws with the leather, chain or plate texture the server
+reports for its slot, tinted, and faces follow the face chosen at creation.
+Robes, helmets, weapons in hand and later race-specific armor still draw as
+the base look. HP, mana, endurance,
 experience updates, memorized spell IDs, and communication text feed the HUD.
 Unknown values remain blank. Chat has All and channel tabs, unread counts, and
 independent scroll positions. It retains 200 messages per channel group, preserving
