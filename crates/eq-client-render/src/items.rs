@@ -275,13 +275,14 @@ fn mask(bits: u32, labels: &[&str]) -> String {
     }
 }
 
-/// Renders links as purple text spans within the same wrapping text paragraph.
+/// Renders links as purple text spans within the same wrapping text paragraph,
+/// returning the paragraph.
 pub(super) fn spawn_message(
     parent: &mut ChildSpawnerCommands,
     prefix: String,
     message: &eq_client_core::chat::Message,
     color: Color,
-) {
+) -> Entity {
     parent
         .spawn((
             Text::new(prefix),
@@ -333,7 +334,8 @@ pub(super) fn spawn_message(
                 },
                 TextColor(color),
             ));
-        });
+        })
+        .id()
 }
 
 /// Hit-tests the actual shaped text runs, including each wrapped part of a link.

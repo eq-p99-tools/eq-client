@@ -9,7 +9,7 @@ use eq_client_core::{
     ClientCommand, OutboundChat,
     chat::{ChannelName, ChatHistory, ChatLine, ChatTab, Message, channel_rgb},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// A locally produced line in the System channel.
 pub(super) fn system_line(text: String) -> ChatLine {
@@ -58,8 +58,20 @@ pub(super) struct ChatState {
 pub(super) struct Panel;
 #[derive(Component)]
 pub(super) struct Viewport;
+/// The active tab's lines, kept between redraws.
+#[derive(Component, Default)]
+pub(super) struct Content {
+    /// The tab the lines belong to, once drawn.
+    tab: Option<ChatTab>,
+    /// The history revision the lines match.
+    revision: u64,
+}
+/// The history entry a chat line shows.
 #[derive(Component)]
-pub(super) struct Content;
+pub(super) struct LineId(u64);
+/// Stands in for the lines of a tab that has none yet.
+#[derive(Component)]
+pub(super) struct Placeholder;
 #[derive(Component)]
 pub(super) struct TabButton(ChatTab);
 #[derive(Component)]
@@ -154,7 +166,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         ))
         .with_children(|viewport| {
             viewport.spawn((
-                Content,
+                Content::default(),
                 Node {
                     width: percent(100),
                     flex_direction: FlexDirection::Column,
@@ -357,7 +369,7 @@ pub(super) fn input(
     }
 }
 
-/// Rebuilds message nodes only when the selected history changes.
+/// Keeps the shown lines in step with the active tab's history.
 #[allow(
     clippy::too_many_arguments,
     clippy::needless_pass_by_value,
@@ -367,7 +379,8 @@ pub(super) fn input(
 pub(super) fn refresh(
     mut commands: Commands,
     mut state: ResMut<ChatState>,
-    content: Query<Entity, With<Content>>,
+    mut contents: Query<(Entity, &mut Content, Option<&Children>)>,
+    rendered: Query<(Option<&LineId>, Has<Placeholder>)>,
     mut labels: Query<(&TabLabel, &mut Text), (Without<InputLabel>, Without<InputStatus>)>,
     mut buttons: Query<
         (
@@ -378,14 +391,10 @@ pub(super) fn refresh(
         ),
         Without<InputBox>,
     >,
-    mut previous: Local<Option<(Entity, ChatTab, u64)>>,
     mut input_labels: Query<&mut Text, (With<InputLabel>, Without<TabLabel>, Without<InputStatus>)>,
     mut input_boxes: Query<&mut BorderColor, (With<InputBox>, Without<TabButton>)>,
     mut input_status: Query<&mut Text, (With<InputStatus>, Without<InputLabel>, Without<TabLabel>)>,
 ) {
-    let Ok(content) = content.single() else {
-        return;
-    };
     let active = state.active;
     let revision = state.history.revision();
     let following = state.views.entry(active).or_default().follow;
@@ -460,16 +469,50 @@ pub(super) fn refresh(
             state.status.clone()
         };
     }
-    let key = (content, active, revision);
-    if *previous == Some(key) {
-        return;
-    }
-    *previous = Some(key);
-    commands.entity(content).despawn_children();
-    commands.entity(content).with_children(|parent| {
+    // Only the active tab's lines exist, as laying out every tab's lines each frame
+    // would cost more than redrawing one tab when it is chosen.
+    for (column, mut content, children) in &mut contents {
+        let children = if content.tab == Some(active) {
+            if content.revision == revision {
+                continue;
+            }
+            children
+        } else {
+            commands.entity(column).despawn_children();
+            content.tab = Some(active);
+            None
+        };
+        content.revision = revision;
         let lines = state.history.lines(active);
-        if lines.is_empty() {
-            parent.spawn((
+        sync_lines(&mut commands, column, children, &lines, &rendered);
+    }
+}
+
+/// Brings the shown lines up to the history: lines it let go are dropped and new
+/// ones appended, so a busy channel never lays its kept lines out again.
+fn sync_lines(
+    commands: &mut Commands,
+    column: Entity,
+    children: Option<&Children>,
+    lines: &[(u64, &ChatLine)],
+    rendered: &Query<(Option<&LineId>, Has<Placeholder>)>,
+) {
+    let kept: HashSet<u64> = lines.iter().map(|(id, _)| *id).collect();
+    let mut newest = 0;
+    let mut placeholder = None;
+    for &child in children.into_iter().flatten() {
+        match rendered.get(child) {
+            Ok((Some(LineId(id)), _)) if kept.contains(id) => newest = newest.max(*id),
+            Ok((Some(_), _)) => commands.entity(child).despawn(),
+            Ok((None, true)) => placeholder = Some(child),
+            _ => (),
+        }
+    }
+    match (placeholder, lines.is_empty()) {
+        (Some(placeholder), false) => commands.entity(placeholder).despawn(),
+        (None, true) => {
+            commands.entity(column).with_child((
+                Placeholder,
                 Text::new("No messages in this channel yet."),
                 TextFont {
                     font_size: FontSize::Px(12.0),
@@ -478,38 +521,45 @@ pub(super) fn refresh(
                 TextColor(INK),
             ));
         }
-        for (_, line) in lines {
-            let [r, g, b] = channel_rgb(line.channel);
-            let sender = line
-                .sender
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map_or(String::new(), |s| format!("{s}: "));
-            let label = ChatTab::for_channel(line.channel).label();
-            if line.message.item_links.is_empty() {
-                parent.spawn((
-                    Text::new(format!("[{label}] {sender}{}", line.message.text)),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb_u8(r, g, b)),
-                    Node {
-                        width: percent(100),
-                        flex_shrink: 0.0,
-                        ..default()
-                    },
-                ));
-            } else {
-                super::items::spawn_message(
-                    parent,
-                    format!("[{label}] {sender}"),
-                    &line.message,
-                    Color::srgb_u8(r, g, b),
-                );
-            }
+        _ => (),
+    }
+    // History ids only grow, so every line newer than the last one shown is new.
+    commands.entity(column).with_children(|parent| {
+        for (id, line) in lines.iter().filter(|(id, _)| *id > newest) {
+            spawn_line(parent, *id, line);
         }
     });
+}
+
+/// Appends one chat line: its channel, sender and text, with item links clickable.
+fn spawn_line(parent: &mut ChildSpawnerCommands, id: u64, line: &ChatLine) {
+    let [r, g, b] = channel_rgb(line.channel);
+    let color = Color::srgb_u8(r, g, b);
+    let sender = line
+        .sender
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map_or(String::new(), |s| format!("{s}: "));
+    let prefix = format!("[{}] {sender}", ChatTab::for_channel(line.channel).label());
+    if line.message.item_links.is_empty() {
+        parent.spawn((
+            LineId(id),
+            Text::new(format!("{prefix}{}", line.message.text)),
+            TextFont {
+                font_size: FontSize::Px(12.0),
+                ..default()
+            },
+            TextColor(color),
+            Node {
+                width: percent(100),
+                flex_shrink: 0.0,
+                ..default()
+            },
+        ));
+    } else {
+        let message = super::items::spawn_message(parent, prefix, &line.message, color);
+        parent.commands().entity(message).insert(LineId(id));
+    }
 }
 
 fn submit_draft(
@@ -737,6 +787,84 @@ pub(super) fn seed_demo(history: &mut ChatHistory) {
 mod tests {
     use super::*;
 
+    /// The entries shown in the chat window, in order.
+    fn column(app: &mut App) -> Vec<Entity> {
+        let mut query = app
+            .world_mut()
+            .query_filtered::<Option<&Children>, With<Content>>();
+        query
+            .single(app.world())
+            .unwrap()
+            .map(|children| children.to_vec())
+            .unwrap_or_default()
+    }
+
+    /// The text of each line shown, item links included.
+    fn shown(app: &mut App) -> Vec<String> {
+        let lines = column(app);
+        let world = app.world();
+        lines
+            .into_iter()
+            .map(|line| {
+                let mut text = world.get::<Text>(line).unwrap().0.clone();
+                for child in world.get::<Children>(line).into_iter().flatten() {
+                    if let Some(span) = world.get::<TextSpan>(*child) {
+                        text.push_str(&span.0);
+                    }
+                }
+                text
+            })
+            .collect()
+    }
+
+    #[test]
+    fn new_lines_join_the_ones_shown_and_evicted_lines_leave() {
+        let mut app = App::new();
+        app.init_resource::<ChatState>()
+            .add_systems(Update, refresh);
+        app.world_mut().spawn(Content::default());
+        app.update();
+        let empty = column(&mut app);
+        assert_eq!(empty.len(), 1);
+        assert!(app.world().get::<Placeholder>(empty[0]).is_some());
+
+        let push = |app: &mut App, count| {
+            let mut state = app.world_mut().resource_mut::<ChatState>();
+            for _ in 0..count {
+                state.history.push(system_line("Synthetic line".into()));
+            }
+            app.update();
+        };
+        push(&mut app, 1);
+        let first = column(&mut app);
+        assert_eq!(first.len(), 1);
+        assert!(app.world().get::<LineId>(first[0]).is_some());
+
+        // A channel keeps 200 lines, so the first one leaves.
+        push(&mut app, 200);
+        let lines = column(&mut app);
+        assert!(!lines.contains(&first[0]));
+        let ids: Vec<u64> = lines
+            .iter()
+            .map(|line| app.world().get::<LineId>(*line).unwrap().0)
+            .collect();
+        let history: Vec<u64> = app
+            .world()
+            .resource::<ChatState>()
+            .history
+            .lines(ChatTab::All)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(ids, history);
+
+        // A new line keeps every line already drawn.
+        push(&mut app, 1);
+        let after = column(&mut app);
+        assert_eq!(after.len(), 200);
+        assert_eq!(after[..199], lines[1..]);
+    }
+
     #[test]
     fn target_requests_are_names_not_chat() {
         assert_eq!(
@@ -834,7 +962,7 @@ mod tests {
             .insert_resource(super::super::online::OnlineState::new(false))
             .insert_resource(super::super::target::CommandsToServer(None))
             .add_systems(Update, (input, refresh).chain());
-        app.world_mut().spawn(Content);
+        app.world_mut().spawn(Content::default());
         let button = app
             .world_mut()
             .spawn((TabButton(ChatTab::Guild), Interaction::Pressed))
@@ -842,44 +970,14 @@ mod tests {
         seed_demo(&mut app.world_mut().resource_mut::<ChatState>().history);
         app.update();
         assert_eq!(app.world().resource::<ChatState>().active, ChatTab::Guild);
-        let messages: Vec<_> = app
-            .world_mut()
-            .query::<(&Text, Option<&Children>)>()
-            .iter(app.world())
-            .map(|(root, children)| {
-                let mut text = root.0.clone();
-                if let Some(children) = children {
-                    for child in children {
-                        if let Some(span) = app.world().get::<TextSpan>(*child) {
-                            text.push_str(&span.0);
-                        }
-                    }
-                }
-                text
-            })
-            .collect();
+        let messages = shown(&mut app);
         assert_eq!(messages.len(), 1);
         assert!(messages[0].contains("Meet by the tunnel"));
         app.world_mut()
             .entity_mut(button)
             .insert((TabButton(ChatTab::Auction), Interaction::Pressed));
         app.update();
-        let messages: Vec<_> = app
-            .world_mut()
-            .query::<(&Text, Option<&Children>)>()
-            .iter(app.world())
-            .map(|(root, children)| {
-                let mut text = root.0.clone();
-                if let Some(children) = children {
-                    for child in children {
-                        if let Some(span) = app.world().get::<TextSpan>(*child) {
-                            text.push_str(&span.0);
-                        }
-                    }
-                }
-                text
-            })
-            .collect();
+        let messages = shown(&mut app);
         assert_eq!(messages.len(), 1);
         assert!(messages[0].contains("Fine Steel"));
         assert_eq!(
@@ -896,7 +994,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ChatState>()
             .add_systems(Update, refresh);
-        app.world_mut().spawn(Content);
+        app.world_mut().spawn(Content::default());
         {
             let mut state = app.world_mut().resource_mut::<ChatState>();
             state.views.insert(
