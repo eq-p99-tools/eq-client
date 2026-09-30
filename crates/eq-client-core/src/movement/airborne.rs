@@ -44,8 +44,23 @@ pub struct Landing {
     pub impact_speed: f32,
 }
 
+/// Ground directly under feet that are below its surface, within the capsule's
+/// lift, when there is head room to stand on it. Feet end up there after a
+/// server-placed move made with a different feet offset; since the floating
+/// capsule never touches that floor, the character would otherwise fall until
+/// the capsule rested on the ground, leaving the feet buried in it.
+fn buried_floor(world: &CollisionWorld, feet: Vec3, height: f32) -> Option<f32> {
+    let floor = world.ground(feet, super::LIFT, 0.0)?;
+    (floor > feet.y + 0.001
+        && matches!(
+            world.sweep(feet, Vec3::Y * (floor - feet.y), height),
+            Ok(None)
+        ))
+    .then_some(floor)
+}
+
 /// Vertical velocity survives frames with no keyboard input.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct AirborneController {
     velocity: f32,
     peak: Option<f32>,
@@ -101,6 +116,10 @@ impl AirborneController {
             return feet;
         }
         let dt = input.seconds.min(0.05);
+        let feet = match buried_floor(world, feet, input.height) {
+            Some(floor) if self.velocity <= 0.0 => Vec3::new(feet.x, floor, feet.z),
+            _ => feet,
+        };
         let floor = world.support_height(feet, 0.01, 0.05);
         let grounded = self.velocity <= 0.0 && floor.is_some();
         if grounded {
@@ -241,6 +260,26 @@ mod tests {
         state.reset();
         assert!(state.take_landing().is_none());
     }
+    #[test]
+    fn feet_just_under_the_ground_stand_on_it_instead_of_sinking() {
+        let world = CollisionWorld::new(floor(0.0)).unwrap();
+        let mut state = AirborneController::default();
+        // As after a teleport whose height assumed a different feet offset.
+        let stood = tick(&mut state, &world, Vec3::new(0.0, -0.3, 0.0), false);
+        assert!(stood.y.abs() < 0.001, "{stood:?}");
+        assert!(state.velocity().abs() < 0.001);
+        assert!(state.take_landing().is_none());
+        // Deeper than the capsule's lift is inside the ground, not standing on it.
+        let mut state = AirborneController::default();
+        let deep = Vec3::new(0.0, -1.0, 0.0);
+        assert!(tick(&mut state, &world, deep, false).y <= deep.y);
+        // No head room: a ceiling right above the capsule keeps it where it is.
+        let covered = CollisionWorld::new(floor(0.0).into_iter().chain(floor(6.7))).unwrap();
+        let mut state = AirborneController::default();
+        let pinned = Vec3::new(0.0, -0.3, 0.0);
+        assert!(tick(&mut state, &covered, pinned, false).y <= pinned.y);
+    }
+
     #[test]
     fn low_ceiling_stops_ascent_then_gravity_returns_to_floor() {
         let world = CollisionWorld::new(floor(0.0).into_iter().chain(floor(7.5))).unwrap();

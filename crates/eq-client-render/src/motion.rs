@@ -359,7 +359,10 @@ pub(super) fn input(
 }
 
 /// Walks like a grounded step but keeps going past ledges and falls under gravity,
-/// in the 50 ms slices the airborne controller integrates.
+/// in the 50 ms slices the airborne controller integrates. Each slice may climb,
+/// so the sample stops before its total rise passes the one riser the server's
+/// movement guard accepts; a larger climb takes several accepted samples instead
+/// of one that would be refused and retried forever.
 fn fall_step(
     airborne: &mut eq_client_core::movement::AirborneController,
     world: &eq_client_core::movement::CollisionWorld,
@@ -373,7 +376,8 @@ fn fall_step(
     let slice = f32::from(slices);
     let mut position = feet;
     for _ in 0..slices {
-        position = airborne.step(
+        let mut trial = airborne.clone();
+        let next = trial.step(
             world,
             position,
             eq_client_core::movement::PROVISIONAL_PHYSICS,
@@ -384,6 +388,11 @@ fn fall_step(
                 height,
             },
         );
+        if next.y - feet.y > eq_client_core::movement::MAX_GROUNDED_STEP {
+            break;
+        }
+        *airborne = trial;
+        position = next;
     }
     position
 }
@@ -562,6 +571,37 @@ mod tests {
         );
         let visual = controls.visual.as_ref().unwrap();
         assert!((visual.duration - super::MAX_CYCLE).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn one_sample_never_climbs_more_than_the_movement_guard_accepts() {
+        use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
+        // Steep stairs: each slice of a fast sample can climb a whole step.
+        let mut triangles = vec![
+            [[-20.0, 0.0, -10.0], [0.0, 0.0, -10.0], [0.0, 0.0, 10.0]],
+            [[-20.0, 0.0, -10.0], [0.0, 0.0, 10.0], [-20.0, 0.0, 10.0]],
+        ];
+        for step in 0..10_u8 {
+            let (x0, x1) = (f32::from(step) * 0.6, f32::from(step + 1) * 0.6);
+            let (low, top) = (f32::from(step) * 1.5, f32::from(step + 1) * 1.5);
+            triangles.extend([
+                [[x0, top, -10.0], [x1, top, -10.0], [x1, top, 10.0]],
+                [[x0, top, -10.0], [x1, top, 10.0], [x0, top, 10.0]],
+                [[x0, low, -10.0], [x0, top, -10.0], [x0, top, 10.0]],
+                [[x0, low, -10.0], [x0, top, 10.0], [x0, low, 10.0]],
+            ]);
+        }
+        let world = CollisionWorld::new(triangles).unwrap();
+        let mut airborne = AirborneController::default();
+        let start = Vec3::new(-0.5, 0.0, 0.0);
+        let end = super::fall_step(&mut airborne, &world, start, Vec3::X * 3.0, 0.25, 6.0);
+        assert!(end.x > start.x, "{end:?}");
+        assert!(end.y - start.y <= MAX_GROUNDED_STEP, "{end:?}");
+        let next = super::fall_step(&mut airborne, &world, end, Vec3::X * 3.0, 0.25, 6.0);
+        assert!(
+            next.y > end.y && next.y - end.y <= MAX_GROUNDED_STEP,
+            "{next:?}"
+        );
     }
 
     #[test]
