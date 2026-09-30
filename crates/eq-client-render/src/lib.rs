@@ -99,8 +99,9 @@ pub struct ViewerConfig {
     pub script: Option<Vec<script::Step>>,
     /// Script file and byte offset to keep reading appended steps from.
     pub script_follow: Option<(PathBuf, usize)>,
-    /// Let script `gm` steps send `#` commands; set only for a local `EQEmu` session.
-    pub local_gm_commands: bool,
+    /// The network session refuses servers outside this machine's network (a local
+    /// `EQEmu` test server), so scripts may send `gm` steps and run unwatched.
+    pub local_session: bool,
     /// UI skin to use instead of the one the character chose in the official client.
     pub ui_skin: Option<String>,
     /// Where this client keeps its own settings; None keeps nothing between runs.
@@ -165,11 +166,11 @@ pub fn run(
     config: ViewerConfig,
     updates: Option<Receiver<WorldUpdate>>,
     commands: Option<std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>>,
-) {
+) -> i32 {
     let screenshot = config.screenshot.clone();
     let steps = config.script.clone();
     let follow = config.script_follow.clone();
-    let gm_commands = config.local_gm_commands;
+    let local_session = config.local_session;
     let online = updates.is_some();
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
     let window = primary_window(online, screenshot.is_none(), config.window_position);
@@ -257,7 +258,7 @@ pub fn run(
     navigation::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
-        install_script(&mut app, steps, follow, gm_commands);
+        install_script(&mut app, steps, follow, local_session);
     }
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
@@ -265,7 +266,15 @@ pub fn run(
             settle_timer: Timer::from_seconds(screenshot_after, TimerMode::Once),
         });
     }
-    app.run();
+    exit_status(&app.run())
+}
+
+/// The process exit status for how the viewer ended.
+fn exit_status(exit: &AppExit) -> i32 {
+    match exit {
+        AppExit::Success => 0,
+        AppExit::Error(code) => i32::from(code.get()),
+    }
 }
 
 /// Drives an attended script after UI focus, optionally following its file.
@@ -273,13 +282,13 @@ fn install_script(
     app: &mut App,
     steps: Vec<script::Step>,
     follow: Option<(PathBuf, usize)>,
-    gm_commands: bool,
+    local_session: bool,
 ) {
     let script = match follow {
         Some((path, offset)) => script::Script::following(steps, path, offset),
         None => script::Script::new(steps),
     };
-    app.insert_resource(script.with_gm_commands(gm_commands));
+    app.insert_resource(script.local_session(local_session));
     app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
 }
 

@@ -40,6 +40,14 @@ pub(super) struct OnlineState {
 }
 
 impl OnlineState {
+    /// Whether an admitted character can act now: connected, alive and not zoning.
+    pub fn in_world(&self) -> bool {
+        self.connected
+            && self.session_id.is_some()
+            && self.death.is_none()
+            && self.pending_transfer.is_none()
+    }
+
     pub fn new(enabled: bool) -> Self {
         Self {
             selection: None,
@@ -109,7 +117,25 @@ pub(super) fn receive(
     };
     // The player entity spawned by zone entry in this batch, not yet in the world.
     let mut entered_player = None;
-    for update in receiver.try_iter().take(256) {
+    let mut ended = false;
+    let batch: Vec<_> = std::iter::from_fn(|| match receiver.try_recv() {
+        Ok(update) => Some(update),
+        Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            ended = true;
+            None
+        }
+    })
+    .take(256)
+    .collect();
+    // A worker that stopped without saying so (for example after a panic) ends
+    // the session here, instead of leaving it looking connected.
+    let lost = (ended && !state.finished).then(|| WorldUpdate::Connection {
+        connected: false,
+        terminal: true,
+        label: "Disconnected".into(),
+    });
+    for update in batch.into_iter().chain(lost) {
         match update {
             WorldUpdate::Connection {
                 connected,
@@ -265,7 +291,7 @@ pub(super) fn receive(
                 spawn_static_zone(
                     &mut commands,
                     zone,
-                    false,
+                    settings.0.terrain_only,
                     &mut images,
                     &mut meshes,
                     &mut materials,
