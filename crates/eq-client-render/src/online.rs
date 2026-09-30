@@ -1083,6 +1083,7 @@ mod tests {
                     position: eq_client_core::WorldPosition::default(),
                     reason: 0,
                     to_bind: false,
+                    solicited: true,
                 },
             )))
             .unwrap();

@@ -222,6 +222,7 @@ mod tests {
             position: WorldPosition::default(),
             reason: 0,
             to_bind,
+            solicited: true,
         })
     }
     #[test]
