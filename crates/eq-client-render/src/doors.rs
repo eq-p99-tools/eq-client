@@ -138,6 +138,15 @@ pub(super) fn input(
     };
 }
 
+/// Closes opened doors on the client's own timer, since servers close ordinary
+/// doors without telling clients.
+pub(super) fn close(mut state: ResMut<super::online::OnlineState>) {
+    let now = std::time::Instant::now();
+    if state.doors.closes_due(now) {
+        state.doors.close_due(now);
+    }
+}
+
 /// Normalizes an asset identifier without interpreting server strings as paths.
 pub(super) fn model_key(name: &str) -> String {
     let name = name.trim().to_ascii_uppercase();
@@ -355,7 +364,7 @@ mod tests {
         let update = eq_client_core::doors::decode(0x4c24, &bytes)
             .unwrap()
             .unwrap();
-        state.doors.apply(&update);
+        state.doors.apply(&update, std::time::Instant::now());
         let mut models = Models::default();
         models.0.insert(
             "TEST".into(),
@@ -453,6 +462,7 @@ mod tests {
                 &eq_client_core::doors::decode(0x4c24, &bytes)
                     .unwrap()
                     .unwrap(),
+                std::time::Instant::now(),
             );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 0);
@@ -460,7 +470,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<super::super::online::OnlineState>()
             .doors
-            .apply(&update);
+            .apply(&update, std::time::Instant::now());
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 1);
         app.world_mut()
@@ -494,11 +504,39 @@ mod tests {
         app.world_mut()
             .resource_mut::<super::super::online::OnlineState>()
             .doors
-            .apply(&eq_client_core::doors::DoorUpdate::RemoveAll);
+            .apply(
+                &eq_client_core::doors::DoorUpdate::RemoveAll,
+                std::time::Instant::now(),
+            );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 0);
         assert!(nearest(app.world().resource::<super::super::online::OnlineState>()).is_none());
         assert!(ground(&app).abs() < 0.001);
+    }
+
+    #[test]
+    fn an_opened_door_swings_shut_on_the_clients_own_timer() {
+        use eq_client_core::doors::{CLOSE_DELAY, DoorUpdate};
+        let opened = std::time::Instant::now()
+            .checked_sub(CLOSE_DELAY)
+            .expect("the clock has run longer than the delay");
+        let mut state = super::super::online::OnlineState::new(true);
+        let spawn = eq_client_core::doors::decode(0x4c24, &[0u8; 80])
+            .unwrap()
+            .unwrap();
+        state.doors.apply(&spawn, opened);
+        state
+            .doors
+            .apply(&DoorUpdate::Move { id: 0, action: 2 }, opened);
+        let mut app = App::new();
+        app.insert_resource(state).add_systems(Update, close);
+        app.update();
+        let door = &app
+            .world()
+            .resource::<super::super::online::OnlineState>()
+            .doors
+            .entries()[&0];
+        assert_eq!(door.active_endpoint(), Some(false));
     }
 
     #[test]
