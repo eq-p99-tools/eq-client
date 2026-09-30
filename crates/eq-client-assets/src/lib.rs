@@ -197,10 +197,7 @@ pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, Loa
     let world_bytes = archive
         .get(&world_name)?
         .ok_or_else(|| LoadError::MissingWorld(world_name.clone()))?;
-    let world =
-        libeq::wld::load(&world_bytes).map_err(|error| LoadError::ParseWorld(error.to_string()))?;
-    let doc = libeq::wld::parser::WldDoc::parse(&world_bytes)
-        .map_err(|_| LoadError::ParseWorld("invalid world region data".into()))?;
+    let (doc, world) = parse_wld(&world_bytes, &world_name)?;
     let regions = regions::ZoneRegions::from_doc(&doc)?;
 
     let mut textures = Vec::new();
@@ -319,14 +316,27 @@ struct ObjectPlacement {
     scale: [f32; 3],
 }
 
+/// Parses a WLD file into libeq's document and its model view. Building the view
+/// (`libeq::wld::load`) panics on data it cannot parse, which would end the client
+/// while zoning, so it is built only from bytes that already parsed.
+fn parse_wld(
+    bytes: &[u8],
+    name: &str,
+) -> Result<(libeq::wld::parser::WldDoc, libeq::wld::Wld), LoadError> {
+    let doc = libeq::wld::parser::WldDoc::parse(bytes)
+        .map_err(|_| LoadError::ParseWorld(format!("{name} could not be parsed")))?;
+    let world =
+        libeq::wld::load(bytes).map_err(|error| LoadError::ParseWorld(error.to_string()))?;
+    Ok((doc, world))
+}
+
 fn load_object_placements(
     archive: &mut PfsReader<File>,
 ) -> Result<Vec<ObjectPlacement>, LoadError> {
     let Some(bytes) = archive.get("objects.wld")? else {
         return Ok(Vec::new());
     };
-    let world =
-        libeq::wld::load(&bytes).map_err(|error| LoadError::ParseWorld(error.to_string()))?;
+    let (_, world) = parse_wld(&bytes, "objects.wld")?;
 
     Ok(world
         .objects()
@@ -371,8 +381,7 @@ fn load_object_models(
     let world_bytes = archive
         .get(&world_name)?
         .ok_or_else(|| LoadError::MissingWorld(world_name.clone()))?;
-    let world =
-        libeq::wld::load(&world_bytes).map_err(|error| LoadError::ParseWorld(error.to_string()))?;
+    let (_, world) = parse_wld(&world_bytes, &world_name)?;
 
     let mut models = Vec::new();
     let mut model_indices = HashMap::new();
@@ -534,6 +543,14 @@ mod tests {
     };
 
     use super::{LoadError, MaterialMode, bmp_color_key, load_zone, material_mode};
+
+    #[test]
+    fn unparseable_world_files_are_errors_not_crashes() {
+        assert!(matches!(
+            super::parse_wld(b"not a world file", "broken.wld"),
+            Err(LoadError::ParseWorld(_))
+        ));
+    }
 
     #[test]
     fn rejects_names_that_could_escape_the_install_directory() {
