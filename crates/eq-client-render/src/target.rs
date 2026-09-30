@@ -120,6 +120,7 @@ pub(super) fn input(
     // The world camera; the paperdoll's camera films the inventory figure.
     cameras: Query<(&Camera, &GlobalTransform), With<super::OrbitCamera>>,
     picker: picking::Picker,
+    ground: Query<(&super::ground::GroundEntity, &Transform)>,
     collision: Option<Res<super::Collision>>,
     nearby: Res<NearbyEntities>,
     online: Res<OnlineState>,
@@ -205,20 +206,32 @@ pub(super) fn input(
             && let Some(cursor) = window.cursor_position()
             && let Ok(ray) = camera.viewport_to_world(camera_transform, cursor)
         {
-            let hit_id = ids
+            let blocked = |distance: f32| {
+                collision
+                    .as_ref()
+                    .and_then(|collision| collision.0.as_ref())
+                    .and_then(|world| world.ray_distance(ray.origin, *ray.direction, distance))
+                    .is_some_and(|obstruction| obstruction + 0.01 < distance)
+            };
+            let spawn = ids
                 .iter()
                 .filter_map(|id| {
                     let distance = picker.distance(nearby.rendered[id], ray)?;
-                    let blocked = collision
-                        .as_ref()
-                        .and_then(|collision| collision.0.as_ref())
-                        .and_then(|world| world.ray_distance(ray.origin, *ray.direction, distance))
-                        .is_some_and(|obstruction| obstruction + 0.01 < distance);
-                    (!blocked).then_some((*id, distance))
+                    (!blocked(distance)).then_some((*id, distance))
                 })
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(id, _)| id);
-            proposal = Some(hit_id);
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            let item = super::ground::hit(ray, ground.iter()).filter(|hit| !blocked(hit.1));
+            // Clicking an item on the ground picks it up and keeps the target.
+            match (spawn, item) {
+                (spawn, Some((drop_id, distance)))
+                    if spawn.is_none_or(|(_, nearer)| distance < nearer) =>
+                {
+                    if let Err(error) = super::ground::pick_up(drop_id, &online, &commands) {
+                        chat.history.push(super::chat::system_line(error));
+                    }
+                }
+                (spawn, _) => proposal = Some(spawn.map(|(id, _)| id)),
+            }
         }
     }
     let Some(selected) = proposal else {

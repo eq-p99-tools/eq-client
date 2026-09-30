@@ -556,6 +556,17 @@ hint; queued uses predating a definition reload are rejected even if IDs are reu
 The request path works live on a local `EQEmu` server and still requires
 official-client capture comparison and a P99 check; mouse selection, lockpicking
 and special cursor-item interactions remain unfinished.
+
+Items on the ground (dropped items, ground spawns) and world tradeskill
+containers draw within 240 units with the zone's own model or, for items, the
+installed item model from `gequip*.s3d`; an item without an installed model
+shows the default bag. **Left-click** an item, or press **F** when it is the
+nearest thing within reach, to pick it up onto an empty cursor. The session
+checks the cursor, unsettled moves and the same 20-unit reach as doors, and a
+refusal appears in chat. Containers are not supported yet: they draw but cannot
+be used, and one that opens for a click is closed again. Pickups work live on a
+local `EQEmu` server; every ground object in the P99 recordings decodes, but
+picking up on P99 has not been tried.
 Destination admission starts
 stationary until a fresh calibration grant; normal handoffs can carry the supplied
 calibration under the continuity checks described above.
@@ -614,7 +625,8 @@ IDs remain events without expanding the profile. Titanium level gains and losses
 update the character display, experience bar and worker equipment eligibility,
 including updates received during admission. Quarm skill and level-change decoding
 remain outstanding. Trade, shared-bank and bank-currency actions are unavailable.
-Dropping and destruction remain unimplemented.
+Items on the ground can be picked up (see above); dropping and destruction remain
+unimplemented.
 Inventory instances now retain typed server click-effect metadata separately from
 scroll spells: effect ID/category, both level fields, base cast time, reuse delay
 and group, and the raw instance recast timestamp. Unknown categories remain

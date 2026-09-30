@@ -10,7 +10,9 @@ mod chat;
 mod combat;
 mod doors;
 mod entities;
+mod ground;
 mod hud;
+mod interact;
 mod inventory;
 mod items;
 mod motion;
@@ -215,7 +217,8 @@ pub fn run(
                 entities::interpolate,
                 doors::close,
                 doors::reconcile,
-                doors::input,
+                ground::reconcile,
+                interact::input,
             )
                 .chain(),
             items::update,
@@ -272,6 +275,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<inventory::InventoryState>()
         .init_resource::<motion::Controls>()
         .init_resource::<entities::NearbyEntities>()
+        .init_resource::<ground::ItemLibrary>()
         .init_resource::<windows::DragState>()
         .init_resource::<windows::Layouts>();
 }
@@ -998,9 +1002,13 @@ fn update_hud(
         },
         nearby.rendered.len()
     );
-    if let Some(door) = doors::nearest(&online) {
-        use std::fmt::Write;
-        let _ = write!(label.0, "\nF: use {} (door {})", door.model, door.id);
+    match interact::nearest(&online) {
+        Some(interact::Use::Door(id, model)) => {
+            use std::fmt::Write;
+            let _ = write!(label.0, "\nF: use {model} (door {id})");
+        }
+        Some(interact::Use::Item(_)) => label.0.push_str("\nF: pick up the item here"),
+        None => (),
     }
     if !online.door_status.is_empty() {
         label.0.push('\n');

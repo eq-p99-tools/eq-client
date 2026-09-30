@@ -76,8 +76,11 @@ fn posed(door: &eq_client_core::doors::Door, angle: f32) -> Transform {
     transform
 }
 
-/// Nearest usable server definition in this admission; distance is measured in all three axes.
-pub(super) fn nearest(state: &super::online::OnlineState) -> Option<&eq_client_core::doors::Door> {
+/// Nearest usable server definition in this admission with its distance, which
+/// is measured in all three axes.
+pub(super) fn nearest(
+    state: &super::online::OnlineState,
+) -> Option<(f32, &eq_client_core::doors::Door)> {
     if !state.connected || state.death.is_some() {
         return None;
     }
@@ -94,36 +97,17 @@ pub(super) fn nearest(state: &super::online::OnlineState) -> Option<&eq_client_c
                 .then_some((distance, door))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, door)| door)
 }
 
-/// One explicit key press queues one ordinary-use request; no state is predicted.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn input(
-    keys: Res<ButtonInput<KeyCode>>,
-    chat: Res<super::chat::ChatState>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    sender: Res<super::target::CommandsToServer>,
-    mut state: ResMut<super::online::OnlineState>,
+/// Queues one ordinary-use request; no state is predicted.
+pub(super) fn open(
+    door_id: u8,
+    state: &mut super::online::OnlineState,
+    sender: &super::target::CommandsToServer,
 ) {
-    if !keys.just_pressed(KeyCode::KeyF)
-        || chat.composing
-        || !windows.single().is_ok_and(|window| window.focused)
-        || keys.any_pressed([
-            KeyCode::ControlLeft,
-            KeyCode::ControlRight,
-            KeyCode::AltLeft,
-            KeyCode::AltRight,
-        ])
-    {
-        return;
-    }
-    let (Some(session_id), Some(door), Some(sender)) =
-        (state.session_id, nearest(&state), sender.0.as_ref())
-    else {
+    let (Some(session_id), Some(sender)) = (state.session_id, sender.0.as_ref()) else {
         return;
     };
-    let door_id = door.id;
     state.door_status = if sender
         .try_send(eq_client_core::ClientCommand::ClickDoor {
             session_id,
@@ -149,15 +133,14 @@ pub(super) fn close(mut state: ResMut<super::online::OnlineState>) {
 
 /// Normalizes an asset identifier without interpreting server strings as paths.
 pub(super) fn model_key(name: &str) -> String {
-    let name = name.trim().to_ascii_uppercase();
-    name.strip_suffix("_ACTORDEF").unwrap_or(&name).to_owned()
+    eq_client_assets::model_key(name)
 }
 
 /// Door meshes are already in renderer axes; unlike characters they need no model-facing offset.
 fn placement(door: &eq_client_core::doors::Door) -> Transform {
     Transform {
         translation: Vec3::from_array(eq_client_core::render_position(door.position)),
-        rotation: Quat::from_rotation_y(-door.position.heading / 512.0 * std::f32::consts::TAU),
+        rotation: Quat::from_rotation_y(eq_client_core::static_yaw(door.position.heading)),
         scale: Vec3::splat(f32::from(door.size) / 100.0),
     }
 }
@@ -389,7 +372,7 @@ mod tests {
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::chat::ChatState>()
             .insert_resource(super::super::target::CommandsToServer(Some(sender)))
-            .add_systems(Update, input);
+            .add_systems(Update, super::super::interact::input);
         let window = app
             .world_mut()
             .spawn((

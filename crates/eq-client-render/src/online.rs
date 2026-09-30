@@ -33,6 +33,8 @@ pub(super) struct OnlineState {
     pub spawns: BTreeMap<u16, eq_client_core::SpawnState>,
     pub doors: eq_client_core::doors::DoorTable,
     pub door_status: String,
+    /// Items on the ground and world containers in this zone.
+    pub objects: eq_client_core::ground::Objects,
     pub revisions: BTreeMap<u16, u64>,
     pub health: BTreeMap<u16, u8>,
     pub postures: BTreeMap<u16, eq_client_core::PostureState>,
@@ -65,6 +67,7 @@ impl OnlineState {
             spawns: BTreeMap::new(),
             doors: eq_client_core::doors::DoorTable::default(),
             door_status: String::new(),
+            objects: eq_client_core::ground::Objects::default(),
             revisions: BTreeMap::new(),
             health: BTreeMap::new(),
             postures: BTreeMap::new(),
@@ -181,6 +184,7 @@ pub(super) fn receive(
                     state.spawns.clear();
                     state.doors = eq_client_core::doors::DoorTable::default();
                     state.door_status.clear();
+                    state.objects = eq_client_core::ground::Objects::default();
                     state.revisions.clear();
                     state.health.clear();
                     state.postures.clear();
@@ -238,6 +242,7 @@ pub(super) fn receive(
                 state.spawns.clear();
                 state.doors = eq_client_core::doors::DoorTable::default();
                 state.door_status.clear();
+                state.objects = eq_client_core::ground::Objects::default();
                 state.revisions.clear();
                 state.health.clear();
                 state.postures.clear();
@@ -673,6 +678,17 @@ pub(super) fn receive(
                         || format!("Door {door_id}: request sent"),
                         |error| format!("Door {door_id}: {error}"),
                     );
+                }
+            }
+            WorldUpdate::Game(WorldEvent::Objects(update)) => state.objects.apply(&update),
+            WorldUpdate::Game(WorldEvent::ObjectAction {
+                session_id,
+                error: Some(error),
+                ..
+            }) => {
+                if state.session_id == Some(session_id) && state.connected {
+                    let line = super::ground::refusal(&error);
+                    chat.history.push(super::chat::system_line(line));
                 }
             }
             WorldUpdate::Game(WorldEvent::Level {
