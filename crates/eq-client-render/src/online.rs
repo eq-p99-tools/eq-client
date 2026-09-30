@@ -298,10 +298,12 @@ pub(super) fn receive(
             WorldUpdate::Game(WorldEvent::MotionSent {
                 session_id,
                 position,
+                refused,
             }) => {
                 if state.session_id == Some(session_id) && state.connected && state.death.is_none()
                 {
                     motion.accepted();
+                    motion.refused = refused;
                     if let Some(player) = &mut state.player {
                         player.position = position;
                     }

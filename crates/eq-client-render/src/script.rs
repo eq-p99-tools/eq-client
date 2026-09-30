@@ -179,6 +179,7 @@ type Observed<'w> = (
     Res<'w, super::target::CommandsToServer>,
     Res<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,
+    Res<'w, super::motion::Controls>,
 );
 
 type Input<'w> = (
@@ -282,18 +283,36 @@ pub(super) fn drive(
                     return;
                 };
                 let searching = route.is_searching();
-                let step = route.next(world, feet, goal, SEARCH_BUDGET);
+                let step = route.next(world, feet, goal, SEARCH_BUDGET, now);
                 if searching && !route.is_searching() {
                     let (waypoints, partial) = (route.remaining(), route.partial());
                     info!(waypoints, partial, "Script route ready");
+                } else if !searching && route.is_searching() {
+                    let refused = observed.6.refused.as_deref();
+                    info!(?refused, "Script walk stalled; searching again from here");
                 }
                 match step {
                     RouteStep::Unreachable => {
                         script.stop(&mut keys, &mut mouse, "no walkable path from here");
                         return;
                     }
+                    RouteStep::Stalled => {
+                        let refused = observed.6.refused.as_deref();
+                        let reason = refused.map_or_else(
+                            || "walk made no progress, even after searching again".to_owned(),
+                            |refused| {
+                                format!("walk made no progress; last step refused: {refused}")
+                            },
+                        );
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
+                    }
                     RouteStep::Arrived => true,
-                    RouteStep::Searching => elapsed >= *duration,
+                    RouteStep::Searching => {
+                        // Stand still while a stalled route searches again.
+                        script.release(&mut keys, &mut mouse);
+                        elapsed >= *duration
+                    }
                     RouteStep::Toward(next) => {
                         let to = next - feet;
                         // W walks along the camera's forward direction, opposite its orbit offset.
