@@ -53,6 +53,8 @@ pub struct Route {
     /// it last shrank by a whole `PROGRESS`.
     best: Option<(f32, Duration)>,
     replanned: bool,
+    /// Whether the route may step off ledges; see [`PathSearch::with_drops`].
+    drops: bool,
 }
 
 impl Route {
@@ -62,6 +64,7 @@ impl Route {
     pub fn new(feet: Vec3, goal: Vec3, reach: f32, height: f32) -> Self {
         Self {
             search: Some(PathSearch::new(feet, goal, reach, height)),
+            drops: false,
             waypoints: VecDeque::new(),
             reach,
             height,
@@ -71,6 +74,14 @@ impl Route {
             best: None,
             replanned: false,
         }
+    }
+
+    /// Lets the route step off ledges, for sessions that simulate falls.
+    #[must_use]
+    pub fn with_drops(mut self, drops: bool) -> Self {
+        self.drops = drops;
+        self.search = self.search.map(|search| search.with_drops(drops));
+        self
     }
 
     /// Whether the search is still running.
@@ -122,7 +133,9 @@ impl Route {
                 } else if std::mem::replace(&mut self.replanned, true) {
                     RouteStep::Stalled
                 } else {
-                    self.search = Some(PathSearch::new(feet, goal, self.reach, self.height));
+                    self.search = Some(
+                        PathSearch::new(feet, goal, self.reach, self.height).with_drops(self.drops),
+                    );
                     self.waypoints.clear();
                     self.partial = false;
                     self.best = None;
@@ -158,7 +171,7 @@ impl Route {
         goal: Vec3,
         budget: usize,
     ) -> RouteStep {
-        if flat(goal - feet) <= self.reach {
+        if super::path::within_reach(feet, goal, self.reach) {
             return RouteStep::Arrived;
         }
         if let Some(search) = &mut self.search {
@@ -329,6 +342,15 @@ mod tests {
                 route.next(world, feet_at(tick), goal, 4096, now)
             })
             .collect()
+    }
+
+    #[test]
+    fn a_goal_on_another_floor_is_not_reached_from_below_it() {
+        let world = open_field();
+        let goal = Vec3::Y * 20.0;
+        let mut route = Route::new(Vec3::X, goal, 2.0, 6.0);
+        let step = route.next(&world, Vec3::X, goal, 4096, Duration::ZERO);
+        assert_ne!(step, RouteStep::Arrived);
     }
 
     #[test]

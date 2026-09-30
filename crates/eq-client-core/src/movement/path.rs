@@ -89,6 +89,8 @@ pub struct PathSearch {
     nodes: HashMap<Key, Node>,
     open: BinaryHeap<Open>,
     expanded: usize,
+    /// Whether routes may step off ledges and fall to the floor below.
+    drops: bool,
 }
 
 impl PathSearch {
@@ -120,7 +122,16 @@ impl PathSearch {
             nodes,
             open,
             expanded: 0,
+            drops: false,
         }
+    }
+
+    /// Lets routes step off ledges and fall, for sessions that simulate falls;
+    /// without falls, grounded movement stops at every ledge a drop would need.
+    #[must_use]
+    pub fn with_drops(mut self, drops: bool) -> Self {
+        self.drops = drops;
+        self
     }
 
     /// Expands up to `budget` positions.
@@ -148,9 +159,11 @@ impl PathSearch {
                     continue;
                 };
                 let target = self.origin + Vec2::new(f32::from(i), f32::from(j)) * CELL;
-                let Some(next_feet) = walk(world, feet, target, self.height)
-                    .or_else(|| drop(world, feet, target, self.height))
-                else {
+                let Some(next_feet) = walk(world, feet, target, self.height).or_else(|| {
+                    self.drops
+                        .then(|| drop(world, feet, target, self.height))
+                        .flatten()
+                }) else {
                     continue;
                 };
                 let next = (i, j, level(next_feet.y));
@@ -205,8 +218,7 @@ impl PathSearch {
     }
 
     fn arrived(&self, feet: Vec3) -> bool {
-        Vec2::new(feet.x - self.goal.x, feet.z - self.goal.z).length() <= self.reach
-            && (feet.y - self.goal.y).abs() <= self.reach.max(10.0)
+        within_reach(feet, self.goal, self.reach)
     }
 
     fn trace(&self, mut key: Key) -> Vec<Vec3> {
@@ -240,6 +252,13 @@ pub(super) fn walk(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) ->
         feet = world.step(feet, part, height);
     }
     (Vec2::new(feet.x - to.x, feet.z - to.y).length() < 0.25).then_some(feet)
+}
+
+/// Whether feet are close enough to a goal: within `reach` across, and on its
+/// floor rather than one far above or below.
+pub(super) fn within_reach(feet: Vec3, goal: Vec3, reach: f32) -> bool {
+    Vec2::new(feet.x - goal.x, feet.z - goal.z).length() <= reach
+        && (feet.y - goal.y).abs() <= reach.max(10.0)
 }
 
 /// Steps off a ledge toward a horizontal position and falls to the floor below;
@@ -289,7 +308,13 @@ mod tests {
     }
 
     fn run(world: &CollisionWorld, start: Vec3, goal: Vec3) -> PathProgress {
-        let mut search = PathSearch::new(start, goal, 2.0, 6.0);
+        search(
+            PathSearch::new(start, goal, 2.0, 6.0).with_drops(true),
+            world,
+        )
+    }
+
+    fn search(mut search: PathSearch, world: &CollisionWorld) -> PathProgress {
         loop {
             match search.advance(world, 64) {
                 PathProgress::Searching => (),
@@ -328,6 +353,9 @@ mod tests {
         assert!(path.last().unwrap().y.abs() < 0.01, "{path:?}");
         assert!(path.iter().any(|feet| feet.x > 0.0 && feet.y < 0.01));
         assert_eq!(run(&world, low, high), PathProgress::Failed);
+        // Without falls, grounded movement stops at the ledge, so no route drops.
+        let grounded = PathSearch::new(high, low, 2.0, 6.0);
+        assert_eq!(search(grounded, &world), PathProgress::Failed);
     }
 
     #[test]
