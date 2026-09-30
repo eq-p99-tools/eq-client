@@ -213,6 +213,7 @@ mod tests {
 
     fn player() -> PlayerState {
         PlayerState {
+            name: "Example".into(),
             base_attributes: Some(BaseAttributes {
                 strength: 75,
                 stamina: 75,

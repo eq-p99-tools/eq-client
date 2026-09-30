@@ -108,11 +108,36 @@ pub(super) struct TabButton(Tab);
 #[derive(Component)]
 pub(super) struct SlotButton(pub(super) InventorySlot);
 
-/// The installed skin's equipment layout, read the first time the window draws.
+/// The equipment layout of the skin in use, read again when the skin changes.
 #[derive(Default)]
 pub(super) struct SkinLayout {
-    read: bool,
-    layout: Option<Vec<eq_client_assets::ui::SlotPlacement>>,
+    skin: Option<String>,
+    layout: Option<eq_client_assets::ui::EquipmentLayout>,
+}
+
+impl SkinLayout {
+    /// Reads `skin`'s layout, or the default skin's when that fails, unless this
+    /// skin's is the one already read. True when the layout was read again.
+    fn follow(&mut self, directory: Option<&std::path::Path>, skin: &str) -> bool {
+        use eq_client_assets::ui::{DEFAULT_SKIN, equipment_layout};
+        if self.skin.as_deref() == Some(skin) {
+            return false;
+        }
+        self.skin = Some(skin.to_owned());
+        self.layout = directory.and_then(|directory| {
+            equipment_layout(directory, skin)
+                .or_else(|error| {
+                    if skin == DEFAULT_SKIN {
+                        return Err(error);
+                    }
+                    warn!("Inventory layout of skin {skin} unavailable: {error}");
+                    equipment_layout(directory, DEFAULT_SKIN)
+                })
+                .inspect_err(|error| warn!("Inventory skin layout unavailable: {error}"))
+                .ok()
+        });
+        true
+    }
 }
 #[derive(Component)]
 pub(super) struct StoreCursor;
@@ -373,7 +398,8 @@ pub(super) fn update(
     state: Res<InventoryState>,
     settings: Res<super::ViewerSettings>,
     mut icons: Local<icons::Icons>,
-    mut skin: Local<SkinLayout>,
+    skin: Res<super::skin::UiSkin>,
+    mut skin_layout: Local<SkinLayout>,
     figure: Option<Res<super::paperdoll::PaperdollImage>>,
     mut images: ResMut<Assets<Image>>,
     mut previous: Local<Option<RenderStamp>>,
@@ -392,6 +418,11 @@ pub(super) fn update(
     let Ok(root) = rows.single() else {
         return;
     };
+    let directory = settings.0.eq_directory.as_deref();
+    // Equipment follows the skin's inventory window; without one, a labeled grid.
+    if skin_layout.follow(directory, &skin.0) {
+        *previous = None;
+    }
     let stamp = RenderStamp {
         revision: state.revision,
         tab: state.tab,
@@ -438,24 +469,14 @@ pub(super) fn update(
             Color::srgb(0.08, 0.10, 0.13)
         };
     }
-    let directory = settings.0.eq_directory.as_deref();
-    // The installed client's default skin places equipment around the paperdoll;
-    // without it, equipment falls back to a labeled grid.
-    if !std::mem::replace(&mut skin.read, true) {
-        skin.layout = directory.and_then(|directory| {
-            eq_client_assets::ui::equipment_layout(directory, "default")
-                .inspect_err(|error| warn!("Inventory skin layout unavailable: {error}"))
-                .ok()
-        });
-    }
     commands.entity(root).despawn_children();
     commands.entity(root).with_children(|list| {
         layout::contents(
             list,
             &state,
-            skin.layout.as_deref().map(|layout| layout::Paperdoll {
+            skin_layout.layout.as_ref().map(|layout| layout::Paperdoll {
                 layout,
-                figure: figure.as_deref().map(|figure| &figure.0),
+                figure: figure.as_deref(),
             }),
             &mut icons,
             directory,
@@ -640,6 +661,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<InventoryState>()
             .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::skin::UiSkin>()
             .init_resource::<Assets<Image>>()
             .insert_resource(super::super::ViewerSettings(
                 super::super::ViewerConfig::default(),

@@ -32,6 +32,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
     online.connected = true;
     online.session_id = Some(9);
     online.player = Some(eq_client_core::PlayerState {
+        name: "Example".into(),
         base_attributes: None,
         deity: None,
         class: Some(1),

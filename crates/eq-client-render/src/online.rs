@@ -17,6 +17,8 @@ pub(super) struct Updates(pub Mutex<Option<Receiver<WorldUpdate>>>);
 #[derive(Resource)]
 pub(super) struct OnlineState {
     pub selection: Option<super::character_select::Selection>,
+    /// The world's short name, once the server has sent it.
+    pub world: Option<String>,
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
     pub zone: String,
@@ -39,6 +41,7 @@ impl OnlineState {
     pub fn new(enabled: bool) -> Self {
         Self {
             selection: None,
+            world: None,
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
             zone: String::new(),
@@ -153,6 +156,9 @@ pub(super) fn receive(
                     |messages| messages.format(string_id, &arguments),
                 );
                 chat.history.push(super::chat::system_line(text));
+            }
+            WorldUpdate::Game(WorldEvent::WorldName { short_name }) => {
+                state.world = Some(short_name);
             }
             WorldUpdate::Game(WorldEvent::CharacterSelection {
                 selection_id,
@@ -780,6 +786,7 @@ mod tests {
         state.connected = true;
         state.session_id = Some(1);
         state.player = Some(PlayerState {
+            name: "Example".into(),
             base_attributes: None,
             deity: None,
             class: Some(1),

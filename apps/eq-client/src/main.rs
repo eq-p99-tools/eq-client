@@ -122,6 +122,11 @@ struct Arguments {
     #[arg(long, requires = "script")]
     script_follow: bool,
 
+    /// UI skin under the installation's `uifiles` whose window layouts to use,
+    /// instead of the one the character last chose in the official client.
+    #[arg(long)]
+    ui_skin: Option<String>,
+
     /// Top-left window corner as `X,Y` in physical desktop pixels (either may be
     /// negative on multi-monitor desktops).
     #[arg(long, value_parser = parse_window_position, allow_hyphen_values = true)]
@@ -259,6 +264,7 @@ fn main() {
             script,
             script_follow,
             local_gm_commands: local_eqemu,
+            ui_skin: arguments.ui_skin,
             window_position: arguments.window_position,
         },
         updates,

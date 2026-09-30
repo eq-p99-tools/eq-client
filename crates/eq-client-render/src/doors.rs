@@ -330,6 +330,7 @@ mod tests {
         state.connected = true;
         state.session_id = Some(11);
         state.player = Some(eq_client_core::PlayerState {
+            name: "Example".into(),
             base_attributes: None,
             spawn_id: 1,
             race: 1,

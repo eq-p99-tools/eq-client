@@ -1,7 +1,7 @@
 //! Compact slots and bag-content grids.
 use super::{InventoryState, SlotButton, Tab, icons::Icons, label, visible_slots};
 use bevy::prelude::*;
-use eq_client_assets::ui::SlotPlacement;
+use eq_client_assets::ui::{Area, EquipmentLayout};
 use eq_client_core::inventory::InventorySlot;
 
 const CELL: f32 = 34.0;
@@ -14,11 +14,12 @@ const EQUIPMENT_CAPTIONS: [&str; 22] = [
     "Ammo",
 ];
 
-/// The installed skin's equipment layout, and the character image for its middle.
+/// The installed skin's equipment layout, and the character image for the area
+/// the skin draws its character in.
 #[derive(Clone, Copy)]
 pub(super) struct Paperdoll<'a> {
-    pub layout: &'a [SlotPlacement],
-    pub figure: Option<&'a Handle<Image>>,
+    pub layout: &'a EquipmentLayout,
+    pub figure: Option<&'a crate::paperdoll::PaperdollImage>,
 }
 
 /// Keeps equipment and the cursor beside the carried bag grids. Equipment sits
@@ -231,9 +232,8 @@ fn carried(
     }
 }
 
-/// Equipment slots where the skin's inventory window puts them around the
-/// paperdoll, scaled so each slot is one of this window's cells, with the
-/// character drawn in the middle.
+/// Equipment slots where the skin's inventory window puts them, scaled so each
+/// slot is one of this window's cells, with the character where the skin draws it.
 fn placed(
     parent: &mut ChildSpawnerCommands,
     Paperdoll { layout, figure }: Paperdoll<'_>,
@@ -243,14 +243,18 @@ fn placed(
     images: &mut Assets<Image>,
 ) {
     let size = layout
+        .slots
         .iter()
         .map(|p| p.width.max(p.height))
         .fold(1.0, f32::max);
     let scale = CELL / size;
     let (width, height) = layout
+        .slots
         .iter()
-        .fold((0.0_f32, 0.0_f32), |(width, height), p| {
-            (width.max(p.x + size), height.max(p.y + size))
+        .map(|p| (p.x + size, p.y + size))
+        .chain(layout.character.map(|a| (a.x + a.width, a.y + a.height)))
+        .fold((0.0_f32, 0.0_f32), |(width, height), (right, bottom)| {
+            (width.max(right), height.max(bottom))
         });
     parent
         .spawn(Node {
@@ -260,20 +264,21 @@ fn placed(
             ..default()
         })
         .with_children(|doll| {
-            if let (Some(figure), Some(middle)) = (figure, middle(layout, size)) {
+            if let (Some(figure), Some(area)) = (figure, layout.character) {
+                let fitted = fit(area, figure.size);
                 doll.spawn((
-                    ImageNode::new(figure.clone()),
+                    ImageNode::new(figure.handle.clone()),
                     Node {
                         position_type: PositionType::Absolute,
-                        left: px(middle.min.x * scale),
-                        top: px(middle.min.y * scale),
-                        width: px(middle.width() * scale),
-                        height: px(middle.height() * scale),
+                        left: px(fitted.x * scale),
+                        top: px(fitted.y * scale),
+                        width: px(fitted.width * scale),
+                        height: px(fitted.height * scale),
                         ..default()
                     },
                 ));
             }
-            for placement in layout {
+            for placement in &layout.slots {
                 doll.spawn(Node {
                     position_type: PositionType::Absolute,
                     left: px(placement.x * scale),
@@ -294,21 +299,16 @@ fn placed(
         });
 }
 
-/// The empty middle of a paperdoll layout, where the character goes: between
-/// the outermost columns, from under the top row down to the first slot that
-/// sits between those columns again.
-fn middle(layout: &[SlotPlacement], size: f32) -> Option<Rect> {
-    let xs = || layout.iter().map(|placement| placement.x);
-    let left = xs().fold(f32::INFINITY, f32::min) + size;
-    let right = xs().fold(f32::NEG_INFINITY, f32::max);
-    let top = layout.iter().map(|p| p.y).fold(f32::INFINITY, f32::min) + size;
-    let bottom = layout
-        .iter()
-        .filter(|p| p.x >= left && p.x < right && p.y >= top)
-        .map(|p| p.y)
-        .fold(f32::INFINITY, f32::min);
-    (right > left && bottom.is_finite() && bottom > top)
-        .then(|| Rect::new(left, top, right, bottom))
+/// The largest centered rectangle inside `area` with the proportions of `size`.
+fn fit(area: Area, size: Vec2) -> Area {
+    let scale = (area.width / size.x).min(area.height / size.y);
+    let (width, height) = (size.x * scale, size.y * scale);
+    Area {
+        x: area.x + (area.width - width) / 2.0,
+        y: area.y + (area.height - height) / 2.0,
+        width,
+        height,
+    }
 }
 
 fn grid(
@@ -584,15 +584,18 @@ mod tests {
     #[test]
     fn a_skin_layout_places_every_equipment_slot_and_labels_the_empty_ones() {
         // A synthetic skin: two columns of 42-pixel slots, 11 rows each.
-        let layout: Vec<SlotPlacement> = (0..22_u16)
-            .map(|slot| SlotPlacement {
-                slot,
-                x: f32::from(slot % 2) * 130.0,
-                y: f32::from(slot / 2) * 43.0,
-                width: 42.0,
-                height: 42.0,
-            })
-            .collect();
+        let layout = EquipmentLayout {
+            slots: (0..22_u16)
+                .map(|slot| eq_client_assets::ui::SlotPlacement {
+                    slot,
+                    x: f32::from(slot % 2) * 130.0,
+                    y: f32::from(slot / 2) * 43.0,
+                    width: 42.0,
+                    height: 42.0,
+                })
+                .collect(),
+            character: None,
+        };
         let mut state = InventoryState::default();
         state.apply(InventoryUpdate::Snapshot(Vec::new()));
         state.apply(InventoryUpdate::Snapshot(
@@ -653,30 +656,24 @@ mod tests {
     }
 
     #[test]
-    fn the_figure_fills_the_middle_between_the_outer_columns() {
-        let at = |slot, x, y| SlotPlacement {
-            slot,
-            x,
-            y,
-            width: 42.0,
-            height: 42.0,
+    fn the_figure_keeps_its_proportions_inside_the_skins_character_area() {
+        let area = Area {
+            x: 46.0,
+            y: 56.0,
+            width: 80.0,
+            height: 128.0,
         };
-        // A top row, one side slot per column, and a lower row in the middle.
-        let layout = [
-            at(1, 0.0, 0.0),
-            at(2, 43.0, 0.0),
-            at(3, 87.0, 0.0),
-            at(4, 130.0, 0.0),
-            at(17, 0.0, 43.0),
-            at(5, 130.0, 43.0),
-            at(12, 43.0, 216.0),
-            at(0, 87.0, 216.0),
-        ];
+        // A narrow figure fills the height and centers across.
+        let tall = fit(area, Vec2::new(32.0, 128.0));
         assert_eq!(
-            middle(&layout, 42.0),
-            Some(Rect::new(42.0, 42.0, 130.0, 216.0))
+            (tall.x, tall.y, tall.width, tall.height),
+            (70.0, 56.0, 32.0, 128.0)
         );
-        // A single column leaves no middle to draw in.
-        assert_eq!(middle(&layout[..1], 42.0), None);
+        // A wide one fills the width and centers down.
+        let wide = fit(area, Vec2::new(128.0, 32.0));
+        assert_eq!(
+            (wide.x, wide.y, wide.width, wide.height),
+            (46.0, 110.0, 80.0, 20.0)
+        );
     }
 }

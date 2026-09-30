@@ -364,6 +364,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     let mut gems = [None; 8];
     gems[0] = Some(73);
     online.player = Some(PlayerState {
+        name: "Example".into(),
         base_attributes: None,
         deity: None,
         class: Some(2),
@@ -656,6 +657,7 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
     let mut gems = [None; 8];
     gems[0] = Some(73);
     let player = PlayerState {
+        name: "Example".into(),
         base_attributes: None,
         deity: None,
         class: Some(2),
