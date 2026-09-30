@@ -58,10 +58,12 @@ impl SessionWorker {
     }
 
     /// Starts one selected server session. Secrets come from the process environment.
+    /// A local-only session refuses servers outside this machine's network.
     pub fn start(
         install: &Path,
         seconds: Option<u64>,
         calibration: Option<MotionCalibration>,
+        local_only: bool,
     ) -> Result<(Self, Receiver<WorldUpdate>)> {
         if calibration.is_some() {
             let protocol: ServerProtocol = env::var("EQ_PROTOCOL")
@@ -72,9 +74,17 @@ impl SessionWorker {
                 "calibrated movement requires the Titanium protocol"
             );
         }
-        let client = client_from_environment(install)?;
+        let client = client_from_environment(install, local_only)?;
         let cancel = CancellationToken::default();
         let worker_cancel = cancel.clone();
+        // The limit covers the whole session: login, character select and every zone.
+        if let Some(seconds) = seconds {
+            let deadline = cancel.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_secs(seconds));
+                deadline.cancel();
+            });
+        }
         let (sender, receiver) = mpsc::sync_channel(1024);
         let (commands, command_queue) = mpsc::sync_channel(32);
         let configuration = commands.clone();
@@ -82,17 +92,16 @@ impl SessionWorker {
             let mut movement = movement::Continuity::new(calibration);
             let mut options = RunOptions::default();
             options.reconnect = false;
-            options.zone_duration = seconds.map(Duration::from_secs);
             let result =
                 client.run_with_commands(&worker_cancel, options, &command_queue, |event| {
                     let update = match event {
                         ClientEvent::World(event) => {
                             if let Some(command) =
                                 movement.observe(&event, std::time::Instant::now())
+                                && let Err(error) = configuration.try_send(command)
                             {
-                                configuration
-                                    .try_send(command)
-                                    .context("cannot queue movement calibration")?;
+                                // Movement stays disabled; the session itself is fine.
+                                eprintln!("Movement calibration was not carried over: {error}");
                             }
                             Some(WorldUpdate::Game(event))
                         }
@@ -127,7 +136,8 @@ impl SessionWorker {
                     Ok(())
                 });
             if let Err(error) = result {
-                let _ = sender.try_send(WorldUpdate::Connection {
+                // Waits for room if the queue is full; fails only once the viewer is gone.
+                let _ = sender.send(WorldUpdate::Connection {
                     connected: false,
                     terminal: true,
                     label: "Disconnected".into(),
@@ -156,7 +166,7 @@ fn progress_update(stage: eq_network::client::ConnectionStage) -> WorldUpdate {
 }
 
 /// Builds a protocol-specific client without loading P99 checksums for Quarm.
-fn client_from_environment(install: &Path) -> Result<Client> {
+fn client_from_environment(install: &Path, local_only: bool) -> Result<Client> {
     let value = |name| env::var(name).with_context(|| format!("missing {name}"));
     let protocol: ServerProtocol = env::var("EQ_PROTOCOL")
         .unwrap_or_else(|_| "p99".into())
@@ -175,17 +185,14 @@ fn client_from_environment(install: &Path) -> Result<Client> {
     if let Ok(port) = env::var("EQ_LOGIN_PORT") {
         config.port = port.parse().context("EQ_LOGIN_PORT is not a port number")?;
     }
-    let hostname = env::var("COMPUTERNAME")
-        .or_else(|_| env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "EQCLIENT".into());
-    let username = env::var("USERNAME")
-        .or_else(|_| env::var("USER"))
-        .unwrap_or_else(|_| "PLAYER".into());
+    config.local_only = local_only;
+    let hostname = env::var("COMPUTERNAME").or_else(|_| env::var("HOSTNAME"));
+    let username = env::var("USERNAME").or_else(|_| env::var("USER"));
     let client = Client::new(
         config,
         ClientIdentity::new(
-            hostname.chars().take(15).collect::<String>(),
-            username.chars().take(15).collect::<String>(),
+            identity_field(hostname.ok(), "EQCLIENT"),
+            identity_field(username.ok(), "PLAYER"),
         ),
     )?;
     let client = if protocol.is_titanium() {
@@ -194,6 +201,22 @@ fn client_from_environment(install: &Path) -> Result<Client> {
         client
     };
     Ok(client)
+}
+
+/// Up to 15 printable ASCII bytes of an identity field (the login identity is
+/// ASCII), or the fallback when none are left.
+fn identity_field(value: Option<String>, fallback: &str) -> String {
+    let field: String = value
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii() && !c.is_ascii_control())
+        .take(15)
+        .collect();
+    if field.trim().is_empty() {
+        fallback.into()
+    } else {
+        field
+    }
 }
 
 impl Drop for SessionWorker {
@@ -227,5 +250,18 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn identity_fields_are_short_ascii() {
+        assert_eq!(
+            super::identity_field(Some("Пользователь".into()), "PLAYER"),
+            "PLAYER"
+        );
+        assert_eq!(
+            super::identity_field(Some("DESKTOP-ABCDEFGHIJK".into()), "EQCLIENT"),
+            "DESKTOP-ABCDEFG"
+        );
+        assert_eq!(super::identity_field(None, "EQCLIENT"), "EQCLIENT");
     }
 }

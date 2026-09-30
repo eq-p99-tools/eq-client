@@ -41,8 +41,12 @@ pub struct Script {
     /// Script file still being appended to, with the bytes already read.
     follow: Option<Follow>,
     accepted: usize,
-    /// Whether `gm` steps may send `#` commands (a local `EQEmu` session).
-    gm: bool,
+    /// The session only reaches servers on this machine's network (a local
+    /// `EQEmu` test server): `gm` steps may send `#` commands there, and steps run
+    /// without anyone watching the window.
+    local: bool,
+    /// The window focus winit last reported; None until it reports any.
+    focus: Option<bool>,
     /// The route a `walk` step is searching for or following.
     route: Option<eq_client_core::movement::Route>,
 }
@@ -68,7 +72,8 @@ impl Script {
             paused: false,
             chat_seen: 0,
             follow: None,
-            gm: false,
+            local: false,
+            focus: None,
             route: None,
         }
     }
@@ -88,10 +93,11 @@ impl Script {
         }
     }
 
-    /// Lets `gm` steps send `#` commands; only for a local `EQEmu` session.
+    /// Marks the session local-only (see [`Script::local`]); set only when the
+    /// network session refuses servers outside this machine's network.
     #[must_use]
-    pub fn with_gm_commands(mut self, allowed: bool) -> Self {
-        self.gm = allowed;
+    pub fn local_session(mut self, local: bool) -> Self {
+        self.local = local;
         self
     }
 
@@ -207,11 +213,15 @@ pub(super) fn drive(
     mut cameras: Query<&mut super::OrbitCamera>,
     mut buttons: Buttons,
     windows: Query<&Window, With<PrimaryWindow>>,
+    mut focus: MessageReader<bevy::window::WindowFocused>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let Some(mut script) = script else {
         return;
     };
+    if let Some(event) = focus.read().last() {
+        script.focus = Some(event.focused);
+    }
     let (mut keys, mut mouse) = input;
     let now = time.elapsed();
     let started = *script.started.get_or_insert(now);
@@ -232,7 +242,11 @@ pub(super) fn drive(
         }
     }
     let window = windows.single().ok();
-    if !window.is_some_and(|window| window.focused) {
+    if !may_run(
+        script.local,
+        script.focus,
+        window.is_some_and(|window| window.focused),
+    ) {
         if !script.held.is_empty() {
             script.stop(
                 &mut keys,
@@ -401,6 +415,15 @@ pub(super) fn drive(
             }
             return;
         }
+        Step::Slash(_) | Step::Gm(_) if !online.in_world() => {
+            // The worker discards commands while zoning, dead or disconnected.
+            script.stop(
+                &mut keys,
+                &mut mouse,
+                "slash and gm steps need a character in the world; wait_online or wait_zone first",
+            );
+            return;
+        }
         Step::Slash(command) => {
             let queued = match super::chat::target_request(command) {
                 Some(request) => request.map(|name| chat.requested_target = Some(name)),
@@ -412,7 +435,7 @@ pub(super) fn drive(
             return;
         }
         Step::Gm(command) => {
-            let sent = gm_chat(command, script.gm).and_then(|chat| {
+            let sent = gm_chat(command, script.local).and_then(|chat| {
                 observed
                     .3
                     .0
@@ -524,6 +547,13 @@ pub(super) fn drive(
     script.current = Some((step, now));
 }
 
+/// Steps run only while someone watches the window, unless the session is
+/// local-only. A window counts as focused before winit reports anything (and a
+/// hidden one never gets a report), so only a reported focus counts.
+fn may_run(local: bool, reported_focus: Option<bool>, window_focused: bool) -> bool {
+    local || (reported_focus == Some(true) && window_focused)
+}
+
 /// The say line carrying a `gm` step's `#` command, refused unless the session is
 /// on a local `EQEmu` server.
 fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat, String> {
@@ -608,8 +638,16 @@ mod tests {
             gm_chat("givemoney 0 0 5 0", true).unwrap(),
             eq_client_core::OutboundChat::Say("#givemoney 0 0 5 0".into())
         );
-        assert!(!Script::new(vec![Step::Gm("summon".into())]).gm);
-        assert!(Script::new(Vec::new()).with_gm_commands(true).gm);
+        assert!(!Script::new(vec![Step::Gm("summon".into())]).local);
+        assert!(Script::new(Vec::new()).local_session(true).local);
+    }
+
+    #[test]
+    fn attended_scripts_wait_for_a_reported_focus() {
+        assert!(!may_run(false, None, true));
+        assert!(!may_run(false, Some(false), false));
+        assert!(may_run(false, Some(true), true));
+        assert!(may_run(true, None, true) && may_run(true, Some(false), false));
     }
 
     #[test]
