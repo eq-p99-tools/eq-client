@@ -156,6 +156,8 @@ pub(super) fn spawn(commands: &mut Commands) {
         });
         root.spawn((
             Viewport,
+            // Hovered only when no window drawn over the chat takes the pointer.
+            Interaction::default(),
             ScrollPosition::default(),
             Node {
                 overflow: Overflow::scroll_y(),
@@ -324,7 +326,12 @@ pub(super) fn input(
         }
     }
     if submit {
-        submit_draft(&mut state, &online, &sender);
+        if state.draft.trim().is_empty() {
+            // Enter on an empty line closes the input, as in the official client.
+            state.composing = false;
+        } else {
+            submit_draft(&mut state, &online, &sender);
+        }
     }
     state.hovered = windows
         .single()
@@ -596,6 +603,8 @@ fn submit_draft(
     match result {
         Ok(()) => {
             state.draft.clear();
+            // Sent lines return the keyboard to the game.
+            state.composing = false;
             state.status = "Chat queued".into();
         }
         Err(error) => state.status = error,
@@ -928,6 +937,44 @@ mod tests {
             }]
         ));
     }
+    #[test]
+    fn sending_a_line_or_an_empty_enter_returns_the_keyboard_to_the_game() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = super::super::online::OnlineState::new(true);
+        online.connected = true;
+        online.session_id = Some(1);
+        let mut app = App::new();
+        app.init_resource::<ChatState>()
+            .add_message::<MouseWheel>()
+            .add_message::<KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(super::super::target::CommandsToServer(Some(sender)))
+            .add_systems(Update, input);
+        let enter = KeyboardInput {
+            key_code: KeyCode::Enter,
+            logical_key: Key::Enter,
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        };
+        {
+            let mut chat = app.world_mut().resource_mut::<ChatState>();
+            chat.composing = true;
+            chat.draft = "hello".into();
+        }
+        app.world_mut().write_message(enter.clone());
+        app.update();
+        assert!(receiver.try_recv().is_ok());
+        let chat = app.world().resource::<ChatState>();
+        assert!(!chat.composing && chat.draft.is_empty());
+        app.world_mut().resource_mut::<ChatState>().composing = true;
+        app.world_mut().write_message(enter);
+        app.update();
+        assert!(!app.world().resource::<ChatState>().composing);
+        assert!(receiver.try_recv().is_err());
+    }
+
     #[test]
     fn character_selection_enter_does_not_open_chat_or_leak_after_admission() {
         let mut app = App::new();

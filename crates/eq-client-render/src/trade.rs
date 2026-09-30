@@ -314,7 +314,8 @@ pub(super) fn input(
         .filter(|(interaction, _)| **interaction == Interaction::Pressed)
         .map(|(_, action)| *action)
         .collect();
-    if focused && keys.just_pressed(KeyCode::Escape) {
+    // An Escape that cancelled typing belongs to the chat.
+    if focused && !chat.escape_consumed && keys.just_pressed(KeyCode::Escape) {
         clicked.extend([Action::EndLoot, Action::EndShop]);
     }
     if focused && keys.just_pressed(KeyCode::KeyL) {
@@ -554,7 +555,11 @@ pub(super) fn present(
                 .data
                 .items()
                 .values()
-                .filter(|item| sellable_slot(item.slot.0) && !no_drop(item))
+                .filter(|item| {
+                    sellable_slot(item.slot.0)
+                        && !no_drop(item)
+                        && !holds_items(item, inventory.data.items())
+                })
                 .map(|item| {
                     (
                         Action::Sell(item.slot.0),
@@ -594,7 +599,7 @@ pub(super) fn scroll(
     };
     for (transform, node, mut position) in &mut lists {
         if windows::contains(cursor, transform, node) {
-            position.y = (position.y - delta).max(0.0);
+            windows::scroll_by(&mut position, node, delta);
         }
     }
 }
@@ -602,6 +607,18 @@ pub(super) fn scroll(
 /// Carried slots and their bag contents; equipment and the cursor are excluded.
 fn sellable_slot(slot: i32) -> bool {
     (22..=29).contains(&slot) || (251..=330).contains(&slot)
+}
+
+/// A container with anything inside: selling it would sell its contents too, and
+/// the official client asks for it to be emptied first.
+fn holds_items(
+    item: &InventoryItem,
+    items: &std::collections::BTreeMap<eq_client_core::inventory::InventorySlot, InventoryItem>,
+) -> bool {
+    item.bag_slots > 0
+        && (0..10)
+            .filter_map(|index| item.slot.child(index))
+            .any(|child| items.contains_key(&child))
 }
 
 /// Merchants silently ignore offers of NO DROP items, so they are never offered.
@@ -712,6 +729,21 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn containers_with_contents_are_not_offered_for_sale() {
+        let items: BTreeMap<_, _> = super::super::inventory::demo_items()
+            .into_iter()
+            .map(|item| (item.slot, item))
+            .collect();
+        let by_slot = |slot| &items[&eq_client_core::inventory::InventorySlot(slot)];
+        // The backpack (22) holds rations; the satchel (23) holds arrows.
+        assert!(holds_items(by_slot(22), &items));
+        assert!(!holds_items(by_slot(13), &items));
+        let mut emptied = items.clone();
+        emptied.retain(|slot, _| slot.0 != 261);
+        assert!(!holds_items(by_slot(23), &emptied));
+    }
 
     #[test]
     fn long_lists_scroll_inside_the_window_while_its_buttons_stay_outside() {

@@ -352,11 +352,19 @@ pub(super) fn link_input(
         Option<&bevy::ui::CalculatedClip>,
     )>,
     mut links: Query<&mut Interaction, With<ItemButton>>,
+    viewports: Query<&Interaction, (With<super::chat::Viewport>, Without<ItemButton>)>,
 ) {
     for mut interaction in &mut links {
         if *interaction != Interaction::None {
             *interaction = Interaction::None;
         }
+    }
+    // Links live in chat lines; a window drawn over the chat keeps the pointer.
+    if !viewports
+        .iter()
+        .any(|viewport| *viewport != Interaction::None)
+    {
+        return;
     }
     let Some(cursor) = windows
         .single()
@@ -418,7 +426,7 @@ pub(super) fn scroll(
     for (transform, node, mut position) in &mut panels {
         if super::windows::contains(cursor, transform, node) {
             state.hovered = true;
-            position.y = (position.y - delta).max(0.0);
+            super::windows::scroll_by(&mut position, node, delta);
         }
     }
 }

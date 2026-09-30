@@ -89,6 +89,8 @@ impl InventoryState {
         self.cancel_actions();
         self.demo = false;
         self.bank_open = false;
+        // The bank tab closes with the bank; a stale choice would show no slots.
+        self.tab = Tab::Inventory;
         self.revision = self.revision.wrapping_add(1);
         self.hovered = false;
     }
@@ -289,7 +291,8 @@ pub(super) fn input(
         state.actions.auto_store = false;
         return;
     }
-    if keys.just_pressed(KeyCode::Escape) {
+    // An Escape that cancelled typing belongs to the chat.
+    if !chat.composing && !chat.escape_consumed && keys.just_pressed(KeyCode::Escape) {
         state.actions.auto_store = false;
         state.actions.split = None;
         if state.actions.pending.is_none() {
@@ -569,7 +572,7 @@ pub(super) fn scroll(
     for (transform, node, mut position) in &mut panels {
         if super::windows::contains(cursor, transform, node) {
             state.hovered = true;
-            position.y = (position.y - delta).max(0.0);
+            super::windows::scroll_by(&mut position, node, delta);
         }
     }
 }
