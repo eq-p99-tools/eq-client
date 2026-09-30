@@ -1,6 +1,6 @@
 //! Shared dragging and minimization behavior for HUD windows.
 
-use bevy::{prelude::*, window::PrimaryWindow};
+use bevy::{prelude::*, ui::FocusPolicy, window::PrimaryWindow};
 mod layout;
 pub(super) mod pointer;
 mod store;
@@ -10,6 +10,7 @@ pub(super) use layout::Layouts;
 /// placements persist between runs per character.
 pub(super) fn register_layout(app: &mut App) {
     app.add_systems(Update, store::persist.after(super::online::receive));
+    app.add_systems(PostUpdate, block_clicks);
     app.add_systems(
         PostUpdate,
         layout::remember.before(bevy::ui::UiSystems::Layout),
@@ -245,6 +246,19 @@ pub(super) fn input(
     }
 }
 
+type NewSurface = Or<(Added<Frame>, Added<Button>)>;
+
+/// Window frames and controls keep the clicks that land on them, so nothing drawn
+/// beneath (such as another window's buttons) is pressed through them. A node
+/// passes clicks on by default, and a button added to an existing node keeps that.
+fn block_clicks(mut policies: Query<&mut FocusPolicy, NewSurface>) {
+    for mut policy in &mut policies {
+        if *policy != FocusPolicy::Block {
+            *policy = FocusPolicy::Block;
+        }
+    }
+}
+
 /// Inserts the shared state on an interactive frame.
 pub(super) fn interactive(commands: &mut Commands, entity: Entity) {
     commands.entity(entity).insert(Frame::default());
@@ -443,5 +457,23 @@ mod tests {
                 .restored_height
                 .is_none()
         );
+    }
+
+    #[test]
+    fn frames_and_late_buttons_block_clicks_to_what_lies_beneath() {
+        let mut app = App::new();
+        app.add_systems(Update, block_clicks);
+        let frame = app
+            .world_mut()
+            .spawn((Node::default(), Frame::default()))
+            .id();
+        let button = app.world_mut().spawn(Node::default()).id();
+        app.world_mut().entity_mut(button).insert(Button);
+        let text = app.world_mut().spawn(Node::default()).id();
+        app.update();
+        let policy = |entity| *app.world().get::<FocusPolicy>(entity).unwrap();
+        assert_eq!(policy(frame), FocusPolicy::Block);
+        assert_eq!(policy(button), FocusPolicy::Block);
+        assert_eq!(policy(text), FocusPolicy::Pass);
     }
 }

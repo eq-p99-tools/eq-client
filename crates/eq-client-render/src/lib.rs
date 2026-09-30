@@ -574,20 +574,16 @@ fn spawn_camera(
         yaw: 0.75,
         pitch: -60.0_f32.to_radians(),
     };
-    let projection = match projection_style {
+    let mut projection = match projection_style {
         ProjectionStyle::Perspective => Projection::Perspective(PerspectiveProjection {
             near: 1.0,
-            far: radius * 10.0,
             ..default()
         }),
         ProjectionStyle::Orthographic => {
-            let mut projection = OrthographicProjection::default_3d();
-            projection.scale = radius / 400.0;
-            projection.near = -radius * 10.0;
-            projection.far = radius * 10.0;
-            Projection::Orthographic(projection)
+            Projection::Orthographic(OrthographicProjection::default_3d())
         }
     };
+    fit_projection(&mut projection, radius);
     commands.spawn((
         Camera3d::default(),
         projection,
@@ -1005,7 +1001,7 @@ fn orbit_camera(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut motion: MessageReader<MouseMotion>,
     mut wheel: MessageReader<MouseWheel>,
-    mut cameras: Query<(&mut OrbitCamera, &mut Transform)>,
+    mut cameras: Query<(&mut OrbitCamera, &mut Transform, Option<&mut Projection>)>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
 ) {
@@ -1033,14 +1029,35 @@ fn orbit_camera(
         scroll
     };
 
-    for (mut camera, mut transform) in &mut cameras {
+    for (mut camera, mut transform, projection) in &mut cameras {
         camera.yaw -= drag.x * 0.005;
         camera.pitch = (camera.pitch - drag.y * 0.005).clamp(-1.45, -0.15);
-        camera.radius = (camera.radius * (-scroll * 0.12).exp()).clamp(20.0, 20_000.0);
+        let radius = (camera.radius * (-scroll * 0.12).exp()).clamp(20.0, 20_000.0);
+        if radius.to_bits() != camera.radius.to_bits() {
+            camera.radius = radius;
+            if let Some(mut projection) = projection {
+                fit_projection(&mut projection, radius);
+            }
+        }
         *transform = unobstructed_orbit(
             &camera,
             collision.as_ref().and_then(|world| world.0.as_ref()),
         );
+    }
+}
+
+/// Keeps the view's depth, and an orthographic view's scale, in step with the
+/// orbit distance, so zooming out never pushes the scene past the far plane.
+fn fit_projection(projection: &mut Projection, radius: f32) {
+    let far = radius * 10.0;
+    match projection {
+        Projection::Perspective(perspective) => perspective.far = far,
+        Projection::Orthographic(orthographic) => {
+            orthographic.scale = radius / 400.0;
+            orthographic.near = -far;
+            orthographic.far = far;
+        }
+        Projection::Custom(_) => (),
     }
 }
 
