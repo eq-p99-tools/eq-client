@@ -17,6 +17,10 @@ pub(super) struct AnimatedCharacter {
     clip: (&'static str, bool),
 }
 
+/// The model a movement root wears, for views that draw it again elsewhere.
+#[derive(Component)]
+pub(super) struct Model(pub PreparedCharacter);
+
 /// Attaches the model to the movement root while keeping feet at terrain height.
 pub(super) fn spawn(
     commands: &mut Commands,
@@ -29,6 +33,7 @@ pub(super) fn spawn(
 ) {
     let prepared = prepare(asset, images, meshes, materials);
     spawn_prepared(commands, parent, &prepared, feet_offset, meshes);
+    commands.entity(parent).insert(Model(prepared));
 }
 
 /// Shared immutable model, texture, and material data for nearby instances.
@@ -74,6 +79,25 @@ pub(super) fn spawn_prepared(
     feet_offset: f32,
     meshes: &mut Assets<Mesh>,
 ) {
+    spawn_on_layers(
+        commands,
+        parent,
+        prepared,
+        feet_offset,
+        meshes,
+        &bevy::camera::visibility::RenderLayers::default(),
+    );
+}
+
+/// As [`spawn_prepared`], drawn only by cameras that see one of `layers`.
+pub(super) fn spawn_on_layers(
+    commands: &mut Commands,
+    parent: Entity,
+    prepared: &PreparedCharacter,
+    feet_offset: f32,
+    meshes: &mut Assets<Mesh>,
+    layers: &bevy::camera::visibility::RenderLayers,
+) {
     let asset = prepared.asset.clone();
     let primitives: Vec<_> = prepared
         .primitives
@@ -101,7 +125,7 @@ pub(super) fn spawn_prepared(
         ))
         .with_children(|parent| {
             for (mesh, material) in primitives {
-                parent.spawn((Mesh3d(mesh), MeshMaterial3d(material)));
+                parent.spawn((Mesh3d(mesh), MeshMaterial3d(material), layers.clone()));
             }
         })
         .id();

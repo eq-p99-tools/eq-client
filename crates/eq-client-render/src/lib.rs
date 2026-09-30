@@ -16,6 +16,7 @@ mod items;
 mod motion;
 mod navigation;
 mod online;
+mod paperdoll;
 #[cfg(test)]
 mod probes;
 mod resources;
@@ -312,6 +313,7 @@ fn install_overlays(app: &mut App) {
     app.add_systems(Update, character_select::update.after(online::receive));
     app.add_systems(Startup, character_select::demo);
     windows::register_layout(app);
+    paperdoll::register(app);
     app.add_systems(PostUpdate, chat::scroll.after(bevy::ui::UiSystems::Layout));
 }
 
