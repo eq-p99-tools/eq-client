@@ -117,7 +117,8 @@ pub(super) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    // The world camera; the paperdoll's camera films the inventory figure.
+    cameras: Query<(&Camera, &GlobalTransform), With<super::OrbitCamera>>,
     picker: picking::Picker,
     collision: Option<Res<super::Collision>>,
     nearby: Res<NearbyEntities>,

@@ -51,6 +51,8 @@ pub(crate) fn spawn(commands: &mut Commands) {
                 ..default()
             },
             GlobalZIndex(12),
+            // Rebuilt with the rest of the HUD at each zone entry.
+            super::HudRoot,
         ))
         .with_children(|root| {
             root.spawn((
@@ -67,6 +69,8 @@ pub(crate) fn spawn(commands: &mut Commands) {
                 BackgroundColor(PANEL),
                 BorderColor::all(EDGE),
                 ActionBar,
+                // Clicks on the bar stay off the world beneath it.
+                crate::windows::Frame::default(),
             ))
             .with_children(|panel| {
                 panel.spawn((

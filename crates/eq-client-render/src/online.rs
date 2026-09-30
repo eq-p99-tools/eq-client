@@ -107,6 +107,8 @@ pub(super) fn receive(
     let Some(receiver) = receiver.as_ref() else {
         return;
     };
+    // The player entity spawned by zone entry in this batch, not yet in the world.
+    let mut entered_player = None;
     for update in receiver.try_iter().take(256) {
         match update {
             WorldUpdate::Connection {
@@ -195,13 +197,28 @@ pub(super) fn receive(
                 state.health.clear();
                 state.postures.clear();
                 state.zone.clone_from(&zone);
+                // The session is this zone's even if its assets fail to load, so
+                // commands and later events never follow the previous zone's.
+                hud.hp = None;
+                hud.experience = None;
+                hud.mana = Some(player.mana);
+                hud.endurance = player.endurance;
+                hud.hp_percent = player.hp_percent;
+                hud.spells = player.memorized_spells;
+                state.player = Some((*player).clone());
+                state.session_id = Some(session_id);
                 let Some(directory) = &settings.0.eq_directory else {
                     continue;
                 };
                 let zone = match eq_client_assets::load_zone(directory, &zone) {
                     Ok(zone) => zone,
                     Err(error) => {
-                        hud.status = format!("Zone load failed: {error}");
+                        for entity in &entities {
+                            commands.entity(entity).despawn();
+                        }
+                        let text = format!("Zone {} could not be loaded: {error}", state.zone);
+                        error!("{text}");
+                        chat.history.push(super::chat::system_line(text));
                         continue;
                     }
                 };
@@ -280,14 +297,7 @@ pub(super) fn receive(
                 for mut camera in &mut cameras {
                     camera.focus = position;
                 }
-                hud.hp = None;
-                hud.experience = None;
-                hud.mana = Some(player.mana);
-                hud.endurance = player.endurance;
-                hud.hp_percent = player.hp_percent;
-                hud.spells = player.memorized_spells;
-                state.player = Some(*player);
-                state.session_id = Some(session_id);
+                entered_player = Some(entity);
             }
             WorldUpdate::Game(WorldEvent::MotionState {
                 session_id,
@@ -442,6 +452,7 @@ pub(super) fn receive(
             }
             WorldUpdate::Game(WorldEvent::Spawns(spawns)) => {
                 for spawn in spawns {
+                    combat.considered.remove(&spawn.spawn_id);
                     state.postures.remove(&spawn.spawn_id);
                     state.revision = state.revision.wrapping_add(1);
                     let revision = state.revision;
@@ -458,13 +469,14 @@ pub(super) fn receive(
                     spawn.invisible = invisible;
                 }
             }
+            // Zone entry resets postures and doors, and admission sends both before
+            // the session reports it is connected, so neither waits for that.
             WorldUpdate::Game(WorldEvent::Posture { spawn_id, posture }) => {
-                if state.connected
-                    && (state.spawns.contains_key(&spawn_id)
-                        || state
-                            .player
-                            .as_ref()
-                            .is_some_and(|player| player.spawn_id == spawn_id))
+                if state.spawns.contains_key(&spawn_id)
+                    || state
+                        .player
+                        .as_ref()
+                        .is_some_and(|player| player.spawn_id == spawn_id)
                 {
                     if state
                         .player
@@ -529,6 +541,7 @@ pub(super) fn receive(
                 }
             }
             WorldUpdate::Game(WorldEvent::Despawn(id)) => {
+                combat.considered.remove(&id);
                 state.spawns.remove(&id);
                 state.revisions.remove(&id);
                 state.health.remove(&id);
@@ -543,13 +556,20 @@ pub(super) fn receive(
                 {
                     motion.reset(None);
                     player.position = position;
-                    if let Ok(mut transform) = players.single_mut() {
-                        transform.translation = Vec3::from_array(render_position(position));
-                        transform.rotation =
-                            Quat::from_rotation_y(eq_client_core::render_heading(position.heading));
-                        for mut camera in &mut cameras {
-                            camera.focus = transform.translation;
-                        }
+                    let placed =
+                        Transform::from_translation(Vec3::from_array(render_position(position)))
+                            .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
+                                position.heading,
+                            )));
+                    // A correction right after zone entry belongs to the new player,
+                    // which only exists once this batch's commands apply.
+                    if let Some(entity) = entered_player {
+                        commands.entity(entity).insert(placed);
+                    } else if let Ok(mut transform) = players.single_mut() {
+                        *transform = placed;
+                    }
+                    for mut camera in &mut cameras {
+                        camera.focus = placed.translation;
                     }
                 }
             }
@@ -582,12 +602,10 @@ pub(super) fn receive(
             }
             WorldUpdate::Game(WorldEvent::Experience(value)) => hud.experience = Some(value),
             WorldUpdate::Game(WorldEvent::Doors(update)) => {
-                if state.connected {
-                    if matches!(update, eq_client_core::doors::DoorUpdate::RemoveAll) {
-                        state.door_status.clear();
-                    }
-                    state.doors.apply(&update);
+                if matches!(update, eq_client_core::doors::DoorUpdate::RemoveAll) {
+                    state.door_status.clear();
                 }
+                state.doors.apply(&update);
             }
             WorldUpdate::Game(WorldEvent::DoorAction {
                 session_id,
@@ -778,6 +796,100 @@ pub(super) fn receive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zone_entry_batch_keeps_doors_postures_and_the_new_session() {
+        use eq_client_core::doors::{Door, DoorUpdate};
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut app = App::new();
+        let mut state = OnlineState::new(true);
+        // Admission arrives while the session still reports it is zoning.
+        state.session_id = Some(1);
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig::default()))
+            .init_resource::<hud::HudState>()
+            .init_resource::<super::super::motion::Controls>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::target::TargetState>()
+            .init_resource::<super::super::combat::CombatState>()
+            .init_resource::<super::super::trade::TradeState>()
+            .init_resource::<super::super::items::ItemState>()
+            .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        let player = PlayerState {
+            name: "Example".into(),
+            base_attributes: None,
+            deity: None,
+            class: Some(1),
+            spawn_id: 9,
+            race: 1,
+            gender: 0,
+            level: 1,
+            position: eq_client_core::WorldPosition::default(),
+            mana: 0,
+            endurance: Some(0),
+            skills: None,
+            spell_refresh_ms: None,
+            memorized_spells: [None; 8],
+            size: 0.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            hp_percent: Some(100),
+        };
+        let spawn = eq_client_core::SpawnState {
+            class: None,
+            spawn_id: 5,
+            name: "a_rat".into(),
+            kind: eq_client_core::SpawnKind::Npc,
+            race: 1,
+            gender: 0,
+            position: eq_client_core::WorldPosition::default(),
+            size: 0.0,
+            invisible: false,
+        };
+        let door = Door {
+            id: 3,
+            model: "DOOR1".into(),
+            position: eq_client_core::WorldPosition::default(),
+            incline: 0,
+            size: 100,
+            open_type: 5,
+            state_at_spawn: 0,
+            invert_state: 0,
+            parameter: 0,
+            action: None,
+        };
+        // No installation is configured, so the zone's assets cannot load.
+        for update in [
+            WorldEvent::Entered {
+                session_id: 2,
+                zone: "example".into(),
+                player: Box::new(player),
+                far_clip: None,
+            },
+            WorldEvent::Spawns(vec![spawn]),
+            WorldEvent::Posture {
+                spawn_id: 5,
+                posture: eq_client_core::PostureState::Sitting,
+            },
+            WorldEvent::Doors(DoorUpdate::Spawn(vec![door])),
+        ] {
+            sender.send(WorldUpdate::Game(update)).unwrap();
+        }
+        app.update();
+        let state = app.world().resource::<OnlineState>();
+        assert_eq!(state.session_id, Some(2));
+        assert_eq!(state.player.as_ref().map(|player| player.spawn_id), Some(9));
+        assert_eq!(
+            state.postures.get(&5),
+            Some(&eq_client_core::PostureState::Sitting)
+        );
+        assert!(state.doors.entries().contains_key(&3));
+    }
 
     #[test]
     #[allow(
