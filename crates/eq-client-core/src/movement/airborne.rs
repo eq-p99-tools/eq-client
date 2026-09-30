@@ -59,6 +59,12 @@ fn buried_floor(world: &CollisionWorld, feet: Vec3, height: f32) -> Option<f32> 
     .then_some(floor)
 }
 
+/// Whether feet stand on ground the next step finds: under the footprint, or a
+/// floor they are buried in.
+fn supported(world: &CollisionWorld, feet: Vec3, height: f32) -> bool {
+    world.support_height(feet, 0.01, 0.05).is_some() || buried_floor(world, feet, height).is_some()
+}
+
 /// Vertical velocity survives frames with no keyboard input.
 #[derive(Clone, Default)]
 pub struct AirborneController {
@@ -176,16 +182,45 @@ impl AirborneController {
                 }
                 target
             }
-            Ok(Some(hit)) => {
-                self.velocity = 0.0;
-                let contact = position
-                    + Vec3::Y
-                        * distance
-                        * (hit.time_of_impact - 0.005 / distance.abs()).clamp(0.0, 1.0);
-                self.peak = self.peak.map(|peak| peak.max(contact.y));
-                contact
-            }
+            Ok(Some(hit)) => self.blocked(world, position, distance, &hit, end, input.height),
             Err(_) => position,
+        }
+    }
+
+    /// Ends a vertical move that met something: rests on it, or keeps falling
+    /// along it when the feet do not stand on it (a slope too steep to stand on,
+    /// or the edge of a step the feet came down beside) instead of hanging there.
+    fn blocked(
+        &mut self,
+        world: &CollisionWorld,
+        position: Vec3,
+        distance: f32,
+        hit: &parry3d::query::ShapeCastHit,
+        end: f32,
+        height: f32,
+    ) -> Vec3 {
+        let fraction = (hit.time_of_impact - 0.005 / distance.abs()).clamp(0.0, 1.0);
+        let contact = position + Vec3::Y * distance * fraction;
+        self.peak = self.peak.map(|peak| peak.max(contact.y));
+        // The obstacle's surface normal (the hit's is the capsule's own).
+        let surface = -Vec3::new(hit.normal1.x, hit.normal1.y, hit.normal1.z);
+        let rest = Vec3::Y * distance * (1.0 - fraction);
+        let slide = rest - surface * rest.dot(surface);
+        if distance >= 0.0
+            || surface.y <= 0.0
+            || slide.length_squared() <= 1e-8
+            || supported(world, contact, height)
+        {
+            self.velocity = 0.0;
+            return contact;
+        }
+        self.velocity = end;
+        match world.sweep(contact, slide, height) {
+            Ok(None) => contact + slide,
+            Ok(Some(block)) => {
+                contact + slide * (block.time_of_impact - 0.005 / slide.length()).clamp(0.0, 1.0)
+            }
+            Err(_) => contact,
         }
     }
 }
@@ -221,6 +256,54 @@ mod tests {
             },
         )
     }
+    #[test]
+    fn a_fall_onto_a_slope_too_steep_to_stand_on_slides_down_it() {
+        // Floor at y 0 for x < 0, then a 60-degree slope rising along +x.
+        let rise = 60.0_f32.to_radians().tan() * 10.0;
+        let world = CollisionWorld::new([
+            [[-20.0, 0.0, -20.0], [0.0, 0.0, -20.0], [0.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[0.0, 0.0, -20.0], [10.0, rise, -20.0], [10.0, rise, 20.0]],
+            [[0.0, 0.0, -20.0], [10.0, rise, 20.0], [0.0, 0.0, 20.0]],
+        ])
+        .unwrap();
+        let mut state = AirborneController::default();
+        let mut position = Vec3::new(5.0, 20.0, 0.0);
+        for _ in 0..400 {
+            position = tick(&mut state, &world, position, false);
+        }
+        assert!(position.y.abs() < 0.01 && position.x < 0.5, "{position:?}");
+        assert!(state.velocity().abs() < 0.001);
+    }
+
+    #[test]
+    fn a_fall_beside_a_step_slides_off_its_edge_onto_the_floor() {
+        // Floor at y 0, and a step 1.5 high for x >= 0. The feet start below its
+        // top, beside it, where the floating capsule meets its edge on the way down.
+        let world = CollisionWorld::new([
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[0.0, 1.5, -20.0], [20.0, 1.5, -20.0], [20.0, 1.5, 20.0]],
+            [[0.0, 1.5, -20.0], [20.0, 1.5, 20.0], [0.0, 1.5, 20.0]],
+            [[0.0, 0.0, -20.0], [0.0, 1.5, -20.0], [0.0, 1.5, 20.0]],
+            [[0.0, 0.0, -20.0], [0.0, 1.5, 20.0], [0.0, 0.0, 20.0]],
+        ])
+        .unwrap();
+        for x in [-0.1, -0.24, -0.35] {
+            let mut state = AirborneController::default();
+            let mut position = Vec3::new(x, 1.0, 0.0);
+            for _ in 0..100 {
+                position = tick(&mut state, &world, position, false);
+            }
+            // Never left hanging on the edge with no ground under the feet.
+            assert!(
+                position.y.abs() < 0.001 && position.x < x,
+                "{x}: {position:?}"
+            );
+            assert!(state.velocity().abs() < 0.001, "{x}: {}", state.velocity());
+        }
+    }
+
     #[test]
     #[allow(
         clippy::float_cmp,
