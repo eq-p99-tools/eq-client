@@ -227,7 +227,7 @@ pub fn run(
             orbit_camera,
             update_hud,
             (
-                (resources::update, hud::update).chain(),
+                (resources::hit_points, resources::update, hud::update).chain(),
                 hud::spell_details,
                 hud::actions,
                 hud::hotbar::update,

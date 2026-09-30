@@ -2281,7 +2281,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=codex%2Fgameplay-client-state#c831f706d97a922ba4afdf802666f21555d7c820"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=codex%2Fgameplay-client-state#db715b3655eeb1d1d210cb7d2d9a254ee6e4b2ef"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2300,7 +2300,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=codex%2Fgameplay-client-state#c831f706d97a922ba4afdf802666f21555d7c820"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=codex%2Fgameplay-client-state#db715b3655eeb1d1d210cb7d2d9a254ee6e4b2ef"
 dependencies = [
  "anyhow",
  "hex",
@@ -2315,7 +2315,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=codex%2Fgameplay-client-state#c831f706d97a922ba4afdf802666f21555d7c820"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=codex%2Fgameplay-client-state#db715b3655eeb1d1d210cb7d2d9a254ee6e4b2ef"
 dependencies = [
  "cbc",
  "cipher",
@@ -2328,7 +2328,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=codex%2Fgameplay-client-state#c831f706d97a922ba4afdf802666f21555d7c820"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=codex%2Fgameplay-client-state#db715b3655eeb1d1d210cb7d2d9a254ee6e4b2ef"
 dependencies = [
  "anyhow",
  "crc32fast",

@@ -5,8 +5,47 @@ use super::{
 };
 use bevy::prelude::*;
 use eq_client_core::resources::{
-    EffectiveAttributes, eqemu_equipped_modifiers, eqemu_titanium_base,
+    EffectiveAttributes, eqemu_equipped_modifiers, eqemu_item_hit_points, eqemu_titanium_base,
 };
+
+/// HP the player's equipped items add, when the inventory allows telling.
+pub(super) fn item_hit_points(
+    player: &eq_client_core::PlayerState,
+    inventory: &eq_client_core::inventory::Inventory,
+) -> Option<i64> {
+    let equipment = eqemu_equipped_modifiers(
+        inventory,
+        player.class?,
+        player.race,
+        u16::from(player.level),
+    )
+    .ok()?;
+    Some(eqemu_item_hit_points(&equipment))
+}
+
+/// Keeps the shown HP in step with the equipped items when the server's report
+/// leaves them out, as a gear change alone brings no new report.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn hit_points(
+    mut online: ResMut<OnlineState>,
+    inventory: Res<InventoryState>,
+    mut hud: ResMut<HudState>,
+) {
+    if !hud.reported_hp.is_some_and(|report| report.without_items) {
+        return;
+    }
+    let Some(items) = online
+        .player
+        .as_ref()
+        .and_then(|player| item_hit_points(player, &inventory.data))
+    else {
+        return;
+    };
+    if hud.item_hp != Some(items) {
+        hud.item_hp = Some(items);
+        super::online::show_own_hp(&mut online, &mut hud);
+    }
+}
 
 /// Recomputes from current admission data; never carries a maximum across a disconnect.
 #[allow(clippy::needless_pass_by_value)]
@@ -281,6 +320,57 @@ mod tests {
         inventory.apply(InventoryUpdate::Snapshot(vec![equipment]));
         inventory.apply(InventoryUpdate::Prediction(vec![]));
         assert_eq!(estimate(&player(), &inventory, &hud, &names), None);
+    }
+
+    #[test]
+    fn shown_hp_adds_back_what_equipped_items_give() {
+        use eq_client_core::ItemBonuses;
+        use eq_client_core::inventory::InventorySlot;
+        let mut chest = super::super::inventory::demo_items().remove(0);
+        chest.slot = InventorySlot(17);
+        chest.stack_count = None;
+        chest.rules.item_type = 10;
+        chest.details.slots = 1 << 17;
+        chest.details.classes = u32::MAX;
+        chest.details.races = u32::MAX;
+        chest.details.bonuses = Some(ItemBonuses {
+            hit_points: 100,
+            ..ItemBonuses::default()
+        });
+        chest.details.equipment = Some(eq_client_core::EquipmentRules::default());
+        let mut inventory = InventoryState::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![chest]));
+        assert_eq!(item_hit_points(&player(), &inventory.data), Some(100));
+        let mut online = OnlineState::new(true);
+        online.player = Some(player());
+        // Alive at 80 of 250 with a +100 HP chest, the server reports -20 of 150.
+        let hud = HudState {
+            reported_hp: Some(super::super::hud::ReportedHp {
+                current: -20,
+                maximum: 150,
+                without_items: true,
+            }),
+            ..default()
+        };
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(inventory)
+            .insert_resource(hud)
+            .add_systems(Update, hit_points);
+        app.update();
+        let hud = app.world().resource::<HudState>();
+        assert_eq!((hud.hp, hud.hp_percent), (Some((80, 250)), Some(32)));
+        let online = app.world().resource::<OnlineState>();
+        assert_eq!(online.health.get(&7), Some(&32));
+        assert_eq!(online.player.as_ref().unwrap().hp_percent, Some(32));
+        // Taking the chest off leaves the last report short of its bonus until
+        // the server reports again, as in the official client.
+        app.world_mut()
+            .resource_mut::<InventoryState>()
+            .apply(InventoryUpdate::Snapshot(vec![]));
+        app.update();
+        let hud = app.world().resource::<HudState>();
+        assert_eq!((hud.hp, hud.hp_percent), (Some((0, 150)), Some(0)));
     }
 
     #[test]

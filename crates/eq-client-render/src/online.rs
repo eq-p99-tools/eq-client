@@ -75,6 +75,19 @@ impl OnlineState {
 
 type SceneRoots = Or<(With<SceneEntity>, With<HudText>, With<hud::HudRoot>)>;
 
+/// Shows the player's HP from its last report and shares the percentage with
+/// the target window.
+pub(super) fn show_own_hp(state: &mut OnlineState, hud: &mut hud::HudState) {
+    let Some(percent) = hud.show_hp() else {
+        return;
+    };
+    if let Some(player) = state.player.as_mut() {
+        player.hp_percent = Some(percent);
+        let id = player.spawn_id;
+        state.health.insert(id, percent);
+    }
+}
+
 /// Applies bounded event batches; zone assets stay local and all movement stays disabled.
 #[allow(
     clippy::needless_pass_by_value,
@@ -232,6 +245,8 @@ pub(super) fn receive(
                 // The session is this zone's even if its assets fail to load, so
                 // commands and later events never follow the previous zone's.
                 hud.hp = None;
+                hud.reported_hp = None;
+                hud.item_hp = None;
                 hud.experience = None;
                 hud.mana = Some(player.mana);
                 hud.endurance = player.endurance;
@@ -613,23 +628,23 @@ pub(super) fn receive(
                 spawn_id,
                 current,
                 maximum,
+                without_items,
             }) => {
-                if state
+                if let Some(player) = state
                     .player
                     .as_ref()
-                    .is_some_and(|player| player.spawn_id == spawn_id)
+                    .filter(|player| player.spawn_id == spawn_id)
                 {
-                    hud.hp = Some((current, maximum));
-                    if maximum != 0 {
-                        let percent =
-                            u8::try_from((u64::from(current) * 100 / u64::from(maximum)).min(100))
-                                .expect("percentage is bounded to 100");
-                        hud.hp_percent = Some(percent);
-                        state.health.insert(spawn_id, percent);
-                        if let Some(player) = state.player.as_mut() {
-                            player.hp_percent = Some(percent);
-                        }
+                    if without_items {
+                        hud.item_hp = super::resources::item_hit_points(player, &inventory.data)
+                            .or(hud.item_hp);
                     }
+                    hud.reported_hp = Some(hud::ReportedHp {
+                        current,
+                        maximum,
+                        without_items,
+                    });
+                    show_own_hp(&mut state, &mut hud);
                 }
             }
             WorldUpdate::Game(WorldEvent::Resources { mana, endurance }) => {
@@ -1126,6 +1141,7 @@ mod tests {
                     spawn_id: 7,
                     current,
                     maximum,
+                    without_items: false,
                 }))
                 .unwrap();
             app.update();
@@ -1135,7 +1151,7 @@ mod tests {
             );
             assert_eq!(
                 app.world().resource::<hud::HudState>().hp,
-                Some((current, maximum))
+                Some((current.unsigned_abs(), maximum.unsigned_abs()))
             );
         }
         for (success, expected) in [(false, Some(42)), (true, None)] {
