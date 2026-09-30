@@ -19,6 +19,8 @@ pub(super) struct OnlineState {
     pub selection: Option<super::character_select::Selection>,
     /// The world's short name, once the server has sent it.
     pub world: Option<String>,
+    /// The current zone's far clip distance, when the server reported it.
+    pub far_clip: Option<f32>,
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
     pub zone: String,
@@ -42,6 +44,7 @@ impl OnlineState {
         Self {
             selection: None,
             world: None,
+            far_clip: None,
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
             zone: String::new(),
@@ -173,7 +176,9 @@ pub(super) fn receive(
                 session_id,
                 zone,
                 player,
+                far_clip,
             }) => {
+                state.far_clip = far_clip;
                 motion.reset(None);
                 state.selection = None;
                 state.pending_transfer = None;
@@ -1262,6 +1267,7 @@ mod tests {
                 session_id: 2,
                 zone: "freportw".into(),
                 player: Box::new(player),
+                far_clip: Some(450.0),
             }))
             .unwrap();
         app.update();

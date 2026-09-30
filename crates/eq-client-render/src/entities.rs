@@ -76,7 +76,12 @@ pub(super) fn reconcile(
         player.spawn_id,
         player.position,
         &present,
-        settings.0.entity_distance.unwrap_or(200.0),
+        // As the official client's clip plane, drawing stops at the zone's far clip.
+        settings
+            .0
+            .entity_distance
+            .unwrap_or(200.0)
+            .min(state.far_clip.unwrap_or(f32::INFINITY)),
         200,
     );
     let desired: BTreeSet<_> = selected.iter().copied().collect();

@@ -139,12 +139,7 @@ pub(super) fn input(
         target.sent = false;
         return;
     }
-    let ids: Vec<_> = nearby
-        .rendered
-        .keys()
-        .copied()
-        .filter(|id| online.spawns.get(id).is_some_and(|s| !s.invisible))
-        .collect();
+    let ids = targetable(nearby.rendered.keys().copied(), &online);
     let own_id = online.player.as_ref().map(|player| player.spawn_id);
     // A target lasts until its spawn despawns, is replaced or turns invisible, however
     // far away it goes; drawing range only limits what can be clicked or cycled.
@@ -258,6 +253,28 @@ pub(super) fn input(
     } else {
         "Offline selection".into()
     };
+}
+
+/// Drawn spawns the player may target: visible ones within the zone's far clip.
+/// The official client targets nothing past its clip plane, and servers log a
+/// target beyond it as a possible cheat; drawn spawns may linger a little past it.
+fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<u16> {
+    let reachable = |spawn: &eq_client_core::SpawnState| {
+        online
+            .far_clip
+            .zip(online.player.as_ref())
+            .is_none_or(|(clip, player)| {
+                eq_client_core::entities::within(player.position, spawn.position, clip)
+            })
+    };
+    rendered
+        .filter(|id| {
+            online
+                .spawns
+                .get(id)
+                .is_some_and(|spawn| !spawn.invisible && reachable(spawn))
+        })
+        .collect()
 }
 
 /// The nearest visible spawn whose shown name, or full server name such as
@@ -422,6 +439,53 @@ mod tests {
         // `/target a_whiskered_bat005` arrives with its underscores read as spaces.
         assert_eq!(named(&[2, 3], &online, "a whiskered bat005"), Some(3));
         assert_eq!(named(&[2, 3], &online, "a whiskered bat009"), None);
+    }
+
+    #[test]
+    fn spawns_past_the_zones_far_clip_cannot_be_targeted() {
+        let mut online = OnlineState::new(true);
+        online.player = Some(eq_client_core::PlayerState {
+            name: "Example".into(),
+            base_attributes: None,
+            deity: None,
+            class: Some(1),
+            spawn_id: 1,
+            race: 1,
+            gender: 0,
+            level: 1,
+            position: WorldPosition::default(),
+            mana: 0,
+            endurance: None,
+            skills: None,
+            spell_refresh_ms: None,
+            memorized_spells: [None; 8],
+            size: 0.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            hp_percent: None,
+        });
+        for (id, x) in [(2, 90.0), (3, 110.0)] {
+            online.spawns.insert(
+                id,
+                SpawnState {
+                    class: None,
+                    spawn_id: id,
+                    name: "a_bat".into(),
+                    kind: SpawnKind::Npc,
+                    race: 1,
+                    gender: 0,
+                    position: WorldPosition {
+                        x,
+                        ..WorldPosition::default()
+                    },
+                    size: 0.0,
+                    invisible: false,
+                },
+            );
+        }
+        assert_eq!(targetable([2, 3].into_iter(), &online), [2, 3]);
+        online.far_clip = Some(100.0);
+        assert_eq!(targetable([2, 3].into_iter(), &online), [2]);
     }
 
     #[test]
