@@ -259,6 +259,17 @@ fn block_clicks(mut policies: Query<&mut FocusPolicy, NewSurface>) {
     }
 }
 
+/// Scrolls a node's content by `delta` logical pixels (positive scrolls up),
+/// within its content: Bevy clamps only the drawn offset, so an unclamped position
+/// would leave dead travel to scroll back through.
+pub(super) fn scroll_by(position: &mut ScrollPosition, node: &ComputedNode, delta: f32) {
+    let maximum = ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.0);
+    let y = (position.y - delta).clamp(0.0, maximum);
+    if y.to_bits() != position.y.to_bits() {
+        position.y = y;
+    }
+}
+
 /// Inserts the shared state on an interactive frame.
 pub(super) fn interactive(commands: &mut Commands, entity: Entity) {
     commands.entity(entity).insert(Frame::default());
@@ -457,6 +468,23 @@ mod tests {
                 .restored_height
                 .is_none()
         );
+    }
+
+    #[test]
+    fn scrolling_stops_at_the_end_of_the_content() {
+        let node = ComputedNode {
+            size: Vec2::new(100.0, 200.0),
+            content_size: Vec2::new(100.0, 500.0),
+            inverse_scale_factor: 1.0,
+            ..default()
+        };
+        let mut position = ScrollPosition::default();
+        scroll_by(&mut position, &node, -1000.0);
+        assert!((position.y - 300.0).abs() < 0.001);
+        scroll_by(&mut position, &node, 30.0);
+        assert!((position.y - 270.0).abs() < 0.001);
+        scroll_by(&mut position, &node, 1000.0);
+        assert!(position.y.abs() < 0.001);
     }
 
     #[test]

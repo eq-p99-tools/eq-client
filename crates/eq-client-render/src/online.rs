@@ -156,6 +156,9 @@ pub(super) fn receive(
                     }
                     inventory.cancel_actions();
                     motion.reset(None);
+                    if let Some(actions) = actions.as_mut() {
+                        actions.camp = None;
+                    }
                 }
                 state.finished = terminal;
                 if terminal {
@@ -207,6 +210,9 @@ pub(super) fn receive(
                 far_clip,
             }) => {
                 state.far_clip = far_clip;
+                if let Some(actions) = actions.as_mut() {
+                    actions.camp = None;
+                }
                 motion.reset(None);
                 state.selection = None;
                 state.pending_transfer = None;
@@ -423,6 +429,10 @@ pub(super) fn receive(
                 }
             }
             WorldUpdate::Game(WorldEvent::ZoneTransfer(offer)) => {
+                // The session keeps camp state per zone admission.
+                if let Some(actions) = actions.as_mut() {
+                    actions.camp = None;
+                }
                 state.pending_transfer = Some(offer.clone());
                 hud.casting = None;
                 hud.interrupted = None;
