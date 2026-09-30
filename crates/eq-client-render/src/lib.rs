@@ -298,6 +298,7 @@ fn install_overlays(app: &mut App) {
                     .chain()
                     .after(online::receive)
                     .after(target::input),
+                trade::scroll,
             ),
         );
     app.add_systems(Update, windows::input);
