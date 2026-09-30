@@ -385,16 +385,16 @@ cooldown deadlines. A rejected transfer restores access to that data; a new zone
 admission replaces it, and a terminal disconnect clears it.
 
 Remaining presentation/gameplay work includes equipment and appearance variants,
-additional model races and appearance updates, animated world textures, water,
-doors and online jumping/falling. The offline viewer supports Space to jump,
-ledge departure, gravity, terminal speed, floor landing, and ceiling collision.
-Each offline landing exposes local fall distance and impact speed for diagnostics;
-it does not calculate damage or send a damage report.
-Its explicit preview tuning (gravity 32, terminal speed 40, jump speed 10 in
-world units and seconds) is not calibrated EQ physics. Falls continue after
+additional model races and appearance updates, animated world textures and water.
+Space jumps, and walking off a ledge falls, with gravity, terminal speed, floor
+landing and ceiling collision: offline, and online on stock `EQEmu` sessions.
+P99 and Quarm sessions keep grounded movement until official-client jumps and
+falls are measured. Each landing exposes local fall distance and impact speed for
+diagnostics; it does not calculate damage or send a damage report, so online falls
+do not hurt yet. The explicit tuning (gravity 32, terminal speed 40, jump speed 10
+in world units and seconds) is not calibrated EQ physics. Falls continue after
 movement keys are released or the window loses focus; chat/focus guards suppress
-new movement input. Online locomotion still uses the grounded path until vertical
-wire scaling and landing/fall-damage behavior are established. Spell slots
+new movement input. Spell slots
 show hover names, shortcuts, local base mana cost, cast time, range, reuse timing
 and remaining cooldowns, with distinct
 empty/available/waiting colors. Spell gems and book rows load icons from the user's
@@ -540,9 +540,11 @@ and pivots still need visual comparison with real doors. Unknown actions preserv
 the last known pose. Sliding doors, lifts, continuous rotation and incline remain
 unimplemented. Nearby door collision now follows the same rendered transform,
 including scale, and is removed with the door or session. Only a changed door's
-collision mesh is rebuilt; the static zone mesh is retained. This does not yet
-handle a closing door pushing an intersecting character, moving-platform carrying,
-or official-client automatic close timing.
+collision mesh is rebuilt; the static zone mesh is retained. Servers close ordinary
+doors on their own timers without telling clients, so an opened door closes
+locally after five seconds, `EQEmu`'s default timer; the official client's delay
+is not measured yet. This does not yet handle a closing door pushing an
+intersecting character or moving-platform carrying.
 Press **F** to request ordinary use of the nearest door within a local 20-unit
 three-dimensional reach limit. The HUD identifies that door and distinguishes
 queued/submitted requests from local rejections. The worker rechecks admission,
@@ -551,9 +553,9 @@ Use does not predict an open state, supply a lockpick skill or invent a cursor k
 Chat and unfocused windows suppress the shortcut. This source-based request path
 handles server removal of all doors by clearing definitions, models and the use
 hint; queued uses predating a definition reload are rejected even if IDs are reused.
-The request path
-still requires official-client capture comparison and live validation; mouse
-selection, lockpicking and special cursor-item interactions remain unfinished.
+The request path works live on a local `EQEmu` server and still requires
+official-client capture comparison and a P99 check; mouse selection, lockpicking
+and special cursor-item interactions remain unfinished.
 Destination admission starts
 stationary until a fresh calibration grant; normal handoffs can carry the supplied
 calibration under the continuity checks described above.
