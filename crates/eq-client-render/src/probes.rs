@@ -212,7 +212,7 @@ fn inspect_enclosure() {
 }
 
 #[test]
-#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_POSITION and EQ_PROBE_MODEL"]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_POSITION, EQ_PROBE_MODEL and EQ_PROBE_RACE"]
 fn inspect_admission_support() {
     let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
     let zone =
@@ -244,7 +244,9 @@ fn inspect_admission_support() {
     );
     let surface = TerrainSurface::from_primitives(&zone.primitives);
     let rendered = surface.height_below(position.x, position.z, position.y + 0.5);
-    let offset = online::feet_offset(&surface, Some(&world), position, height);
+    // Players arrive with size 0: the race's default size.
+    let race: u32 = std::env::var("EQ_PROBE_RACE").unwrap().parse().unwrap();
+    let offset = eq_client_core::z_offset(race, 0.0);
     let feet = position - Vec3::Y * offset;
     println!("model_height={height} rendered_ground={rendered:?} feet_offset={offset}");
     println!(
@@ -312,12 +314,13 @@ fn inspect_admission_support() {
     );
 }
 
-/// Replays a spot where a live character stopped moving: the feet offset admission
-/// derived at `EQ_PROBE_ADMISSION`, then, from `EQ_PROBE_POSITION` (renderer points
-/// of the logged EQ positions), the capsule's clearance, the parts it touches, and
-/// a short step in 16 directions, grounded and through the online fall controller.
+/// Replays a spot where a live character stopped moving: with the feet offset the
+/// log's admission line reports (`EQ_PROBE_OFFSET`) and the logged position as a
+/// renderer point (`EQ_PROBE_POSITION`), the capsule's clearance, the parts it
+/// touches, and a short step in 16 directions, grounded and through the online
+/// fall controller.
 #[test]
-#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_MODEL, EQ_PROBE_ADMISSION and EQ_PROBE_POSITION"]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_MODEL, EQ_PROBE_OFFSET and EQ_PROBE_POSITION"]
 fn inspect_stuck() {
     use eq_client_core::movement::{AirborneController, MotionStep, PROVISIONAL_PHYSICS};
     let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
@@ -330,9 +333,7 @@ fn inspect_stuck() {
     .unwrap()
     .height();
     let world = build_collision(&zone).unwrap();
-    let surface = TerrainSurface::from_primitives(&zone.primitives);
-    let admission = probe_point("EQ_PROBE_ADMISSION");
-    let offset = online::feet_offset(&surface, Some(&world), admission, height);
+    let offset: f32 = std::env::var("EQ_PROBE_OFFSET").unwrap().parse().unwrap();
     let feet = probe_point("EQ_PROBE_POSITION") - Vec3::Y * offset;
     println!(
         "height={height} feet_offset={offset} feet={feet:?} clearance={:?}",

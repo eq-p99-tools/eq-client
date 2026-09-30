@@ -98,6 +98,93 @@ pub fn world_heading(yaw: f32) -> f32 {
     ((std::f32::consts::FRAC_PI_2 - yaw) / std::f32::consts::TAU * 512.0).rem_euclid(512.0)
 }
 
+/// `EQEmu`'s per-model exceptions to its 3.125 z offset factor, in its order, with
+/// the IDs of the `Race::` constants it names in the comments (common/races.h).
+const Z_FACTORS: [(u32, f32); 46] = [
+    (436, 0.577), // Basilisk
+    (430, 0.5),   // Drake2
+    (432, 1.9),   // Drake3
+    (435, 0.93),  // Dragon
+    (450, 0.938), // LavaSpider
+    (479, 0.8),   // Alligator2
+    (451, 0.816), // LavaSpiderQueen
+    (437, 0.527), // Dragon2
+    (439, 1.536), // Puma2
+    (415, 1.0),   // Rat
+    (438, 0.776), // Dragon3
+    (452, 0.776), // Dragon4
+    (441, 0.816), // SpiderQueen
+    (440, 0.938), // Spider
+    (46, 1.0),    // Imp
+    (468, 1.0),   // Snake
+    (459, 1.0),   // Corathus
+    (462, 1.5),   // DrachnidCocoon
+    (530, 1.2),   // Dragon5
+    (549, 0.5),   // Goo4
+    (548, 0.5),   // Goo3
+    (547, 0.5),   // Goo2
+    (604, 1.2),   // Dracolich
+    (653, 5.9),   // Telmira
+    (658, 4.0),   // MorellThule
+    (323, 5.0),   // AnimatedArmor
+    (663, 5.0),   // Amygdalan
+    (147, 4.0),   // IksarSpirit
+    (664, 4.0),   // Sandman
+    (49, 9.0),    // LavaDragon
+    (703, 9.0),   // AlaranSentryStone
+    (668, 5.0),   // Rabbit
+    (158, 7.0),   // Wurm
+    (669, 7.0),   // BlindDreamer
+    (187, 0.5),   // Siren
+    (90, 0.5),    // HalasCitizen
+    (190, 0.5),   // Othmir
+    (183, 0.6),   // Coldain
+    (14, 1.2),    // Werewolf
+    (8, 0.7),     // Dwarf
+    (216, 1.4),   // Horse
+    (175, 1.75),  // EnchantedArmor
+    (63, 1.75),   // Tiger
+    (66, 1.0),    // StatueOfRallosZek
+    (687, 2.0),   // Goral
+    (686, 2.0),   // Selyrah
+];
+
+/// The size `EQEmu` uses for a spawn sent with size 0, as players are (common/
+/// races.cpp `GetRaceGenderDefaultHeight`, the same for both genders of these
+/// races). Only playable races are listed; other models use 6, as `EQEmu` does
+/// past the end of its table.
+fn default_size(race: u32) -> f32 {
+    match race {
+        2 | 130 => 7.0,     // Barbarian, Vah Shir
+        4 | 6 | 330 => 5.0, // Wood Elf, Dark Elf, Froglok
+        7 => 5.5,           // Half Elf
+        8 => 4.0,           // Dwarf
+        9 => 8.0,           // Troll
+        10 => 9.0,          // Ogre
+        11 => 3.5,          // Halfling
+        12 => 3.0,          // Gnome
+        _ => 6.0,           // Human, Erudite, High Elf, Iksar and other models
+    }
+}
+
+/// How far above its feet a spawn's reported position sits: 0.2 × size × a
+/// per-model factor, exactly as `EQEmu` places mobs (zone/waypoints.cpp
+/// `Mob::GetZOffset`), with the race's default size when none was sent.
+/// Unverified against a P99 capture.
+#[must_use]
+pub fn z_offset(race: u32, size: f32) -> f32 {
+    let factor = Z_FACTORS
+        .iter()
+        .find(|(model, _)| *model == race)
+        .map_or(3.125, |(_, factor)| *factor);
+    let size = if size.is_finite() && size > 0.0 {
+        size
+    } else {
+        default_size(race)
+    };
+    0.2 * size * factor
+}
+
 /// Converts a renderer position back to EQ world coordinates.
 pub const fn world_position(position: [f32; 3], heading: f32) -> WorldPosition {
     WorldPosition {
@@ -118,6 +205,19 @@ pub use eq_network_game::{
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reported_positions_sit_a_size_and_model_scaled_offset_above_the_feet() {
+        let offset = super::z_offset;
+        assert!((offset(1, 6.0) - 3.75).abs() < 0.0001); // human
+        assert!((offset(10, 9.0) - 5.625).abs() < 0.0001); // ogre
+        assert!((offset(8, 4.0) - 0.56).abs() < 0.0001); // dwarf, race 8 in races.h
+        assert!((offset(437, 10.0) - 1.054).abs() < 0.0001); // Dragon2
+        // Players arrive with size 0, which means the race's default.
+        assert!((offset(1, 0.0) - 3.75).abs() < 0.0001);
+        assert!((offset(10, 0.0) - 5.625).abs() < 0.0001);
+        assert!((offset(12, f32::NAN) - 1.875).abs() < 0.0001); // gnome
+    }
+
     #[test]
     fn cardinal_headings_match_eq_axes_after_render_conversion() {
         for (heading, direction) in [
