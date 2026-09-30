@@ -10,6 +10,15 @@ mod tests;
 
 use bevy::prelude::*;
 
+/// The player's own HP as the server last reported it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ReportedHp {
+    pub current: i32,
+    pub maximum: i32,
+    /// Both leave out what equipped items add, which the client adds back.
+    pub without_items: bool,
+}
+
 #[derive(Resource, Default)]
 pub(super) struct HudState {
     /// Shared gameplay buff state; presentation never assigns server slots.
@@ -18,6 +27,10 @@ pub(super) struct HudState {
     pub status: String,
     pub hp: Option<(u32, u32)>,
     pub hp_percent: Option<u8>,
+    /// The player's last HP report, which `hp` shows.
+    pub reported_hp: Option<ReportedHp>,
+    /// HP the equipped items add, as last calculated.
+    pub item_hp: Option<i64>,
     pub mana: Option<u32>,
     pub endurance: Option<u32>,
     /// Calculated, unverified maxima (mana, endurance), never server-reported values.
@@ -35,6 +48,28 @@ pub(super) struct HudState {
 }
 
 impl HudState {
+    /// Shows the last HP report, adding back what equipped items give when the
+    /// report leaves it out (unknown item HP counts as none), and returns the
+    /// percentage shown. A dying character shows zero.
+    pub(super) fn show_hp(&mut self) -> Option<u8> {
+        let report = self.reported_hp?;
+        let items = if report.without_items {
+            self.item_hp.unwrap_or(0)
+        } else {
+            0
+        };
+        let current = i64::from(report.current) + items;
+        let maximum = i64::from(report.maximum) + items;
+        let shown = |value: i64| u32::try_from(value.max(0)).unwrap_or(u32::MAX);
+        self.hp = Some((shown(current), shown(maximum)));
+        let percent = (maximum > 0).then(|| {
+            u8::try_from(current.clamp(0, maximum) * 100 / maximum)
+                .expect("percentage is bounded to 100")
+        })?;
+        self.hp_percent = Some(percent);
+        Some(percent)
+    }
+
     /// Keeps potentially lasting effects; explicit server buff slots remain authoritative.
     pub(super) fn spell_effect(
         &mut self,

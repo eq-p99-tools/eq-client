@@ -131,6 +131,19 @@ pub fn eqemu_equipped_modifiers(
     Ok(result)
 }
 
+/// Hit points equipped items add, as `EQEmu` totals them in `itembonuses.HP`
+/// (zone/bonuses.cpp `Mob::AddItemBonuses`): each eligible item's own HP, scaled
+/// below its recommended level. Worn +HP effects count toward a different bonus
+/// (`FlatMaxHPChange`), and augments are not modelled.
+pub fn eqemu_item_hit_points(
+    equipment: &[(crate::inventory::InventorySlot, ScaledEquipment)],
+) -> i64 {
+    equipment
+        .iter()
+        .map(|(_, item)| i64::from(item.bonuses.hit_points))
+        .sum()
+}
+
 /// Applies the `EQEmu` required/recommended-level rules to one eligible equipped item.
 /// Callers must first check slot, class, race and item category; carried items do not qualify.
 /// Missing metadata or level zero returns None. Below-required items yield zero modifiers.
