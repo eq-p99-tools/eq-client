@@ -525,12 +525,11 @@ pub(super) fn drive(
         Step::Walk(range, _) => {
             let route = bodies.single().ok().and_then(|body| {
                 let (feet, goal) = walk_ends((&*online, &observed), *body)?;
-                Some(eq_client_core::movement::Route::new(
-                    feet,
-                    goal,
-                    *range,
-                    body.height,
-                ))
+                // Ledges are routes only where the session simulates falls.
+                Some(
+                    eq_client_core::movement::Route::new(feet, goal, *range, body.height)
+                        .with_drops(observed.6.airborne.is_some()),
+                )
             });
             let Some(route) = route else {
                 script.stop(&mut keys, &mut mouse, "walk needs a visible target");
