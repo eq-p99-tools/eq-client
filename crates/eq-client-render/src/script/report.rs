@@ -61,6 +61,7 @@ pub(super) fn state(
         label,
         zone = online.zone,
         world = ?online.world,
+        far_clip = ?online.far_clip,
         connected = online.connected,
         ?position,
         ?posture,

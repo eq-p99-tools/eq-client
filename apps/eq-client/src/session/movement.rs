@@ -182,6 +182,7 @@ mod tests {
         WorldEvent::Entered {
             session_id,
             zone: "example".into(),
+            far_clip: None,
             player: Box::new(PlayerState {
                 name: "Example".into(),
                 base_attributes: None,

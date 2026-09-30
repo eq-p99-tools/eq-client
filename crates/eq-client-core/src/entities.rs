@@ -45,9 +45,29 @@ pub fn nearby(
         .collect()
 }
 
+/// Whether `to` lies within `range` of `from`, in three-dimensional EQ world units.
+#[must_use]
+pub fn within(from: WorldPosition, to: WorldPosition, range: f32) -> bool {
+    let distance = (to.x - from.x).hypot(to.y - from.y).hypot(to.z - from.z);
+    distance.is_finite() && distance <= range
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn within_measures_three_dimensional_distance() {
+        let at = |x, y, z| WorldPosition {
+            x,
+            y,
+            z,
+            heading: 0.0,
+        };
+        assert!(within(at(0.0, 0.0, 0.0), at(3.0, 4.0, 12.0), 13.0));
+        assert!(!within(at(0.0, 0.0, 0.0), at(3.0, 4.0, 12.0), 12.9));
+        assert!(!within(at(0.0, 0.0, 0.0), at(f32::NAN, 0.0, 0.0), 100.0));
+    }
     fn spawn(id: u16, x: f32) -> SpawnState {
         SpawnState {
             class: None,
