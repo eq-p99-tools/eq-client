@@ -126,7 +126,10 @@ pub(super) fn reconcile(
         } else {
             1.0
         };
-        character::spawn_prepared(&mut commands, entity, &asset, height * 0.5, &mut meshes);
+        // The server reports the position EQ's size rule puts above the feet; the
+        // offset is in model units because the model is scaled below its root.
+        let feet = eq_client_core::z_offset(spawn.race, spawn.size) / scale;
+        character::spawn_prepared(&mut commands, entity, &asset, feet, &mut meshes);
         commands.entity(entity).insert(
             Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
