@@ -102,6 +102,13 @@ pub(super) struct HoverLabel;
 pub(super) struct TabButton(Tab);
 #[derive(Component)]
 pub(super) struct SlotButton(pub(super) InventorySlot);
+
+/// The installed skin's equipment layout, read the first time the window draws.
+#[derive(Default)]
+pub(super) struct Paperdoll {
+    read: bool,
+    layout: Option<Vec<eq_client_assets::ui::SlotPlacement>>,
+}
 #[derive(Component)]
 pub(super) struct StoreCursor;
 #[derive(Component)]
@@ -149,7 +156,7 @@ pub(super) fn spawn(commands: &mut Commands) {
                 top: px(110),
                 width: px(600),
                 max_width: percent(95),
-                max_height: percent(53),
+                max_height: percent(62),
                 overflow: Overflow::scroll_y(),
                 padding: UiRect::all(px(8)),
                 flex_direction: FlexDirection::Column,
@@ -361,6 +368,7 @@ pub(super) fn update(
     state: Res<InventoryState>,
     settings: Res<super::ViewerSettings>,
     mut icons: Local<icons::Icons>,
+    mut paperdoll: Local<Paperdoll>,
     mut images: ResMut<Assets<Image>>,
     mut previous: Local<Option<RenderStamp>>,
     mut panels: Query<&mut Node, (With<Panel>, Without<TabButton>)>,
@@ -424,13 +432,24 @@ pub(super) fn update(
             Color::srgb(0.08, 0.10, 0.13)
         };
     }
+    let directory = settings.0.eq_directory.as_deref();
+    // The installed client's default skin places equipment around the paperdoll;
+    // without it, equipment falls back to a labeled grid.
+    if !std::mem::replace(&mut paperdoll.read, true) {
+        paperdoll.layout = directory.and_then(|directory| {
+            eq_client_assets::ui::equipment_layout(directory, "default")
+                .inspect_err(|error| warn!("Inventory skin layout unavailable: {error}"))
+                .ok()
+        });
+    }
     commands.entity(root).despawn_children();
     commands.entity(root).with_children(|list| {
         layout::contents(
             list,
             &state,
+            paperdoll.layout.as_deref(),
             &mut icons,
-            settings.0.eq_directory.as_deref(),
+            directory,
             &mut images,
         );
     });

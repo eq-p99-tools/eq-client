@@ -3,6 +3,7 @@
 pub mod characters;
 pub mod regions;
 pub mod spells;
+pub mod ui;
 
 use std::collections::HashMap;
 use std::fs::File;
