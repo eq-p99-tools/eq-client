@@ -81,6 +81,7 @@ pub(super) fn state(
         ?items,
         inventory_predicted = inventory.data.predicted(),
         inventory_stale = inventory.data.stale(),
+        cursor_queued = inventory.data.queued().count(),
         "Script report"
     );
 }
