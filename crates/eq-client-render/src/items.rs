@@ -402,13 +402,7 @@ pub(super) fn scroll(
     mut state: ResMut<ItemState>,
 ) {
     state.hovered = false;
-    let delta: f32 = wheel
-        .read()
-        .map(|e| match e.unit {
-            bevy::input::mouse::MouseScrollUnit::Line => e.y * 24.0,
-            bevy::input::mouse::MouseScrollUnit::Pixel => e.y,
-        })
-        .sum();
+    let delta = super::windows::wheel_pixels(&mut wheel);
     let Some(cursor) = windows
         .single()
         .ok()
@@ -420,13 +414,7 @@ pub(super) fn scroll(
         return;
     }
     for (transform, node, mut position) in &mut panels {
-        if transform.try_inverse().is_some_and(|inverse| {
-            inverse
-                .transform_point2(cursor)
-                .abs()
-                .cmple(node.size() * 0.5)
-                .all()
-        }) {
+        if super::windows::contains(cursor, transform, node) {
             state.hovered = true;
             position.y = (position.y - delta).max(0.0);
         }

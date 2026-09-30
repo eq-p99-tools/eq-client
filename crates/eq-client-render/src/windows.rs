@@ -28,6 +28,28 @@ pub(super) fn identify(commands: &mut Commands, frame: Entity, key: &str) {
 /// Visible windows and standalone controls consume pointer input before the world.
 pub(super) type PointerSurface = Or<(With<Frame>, With<Button>)>;
 
+/// Wheel travel since the last read, in logical pixels; positive scrolls up.
+pub(super) fn wheel_pixels(wheel: &mut MessageReader<bevy::input::mouse::MouseWheel>) -> f32 {
+    wheel
+        .read()
+        .map(|event| match event.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => event.y * 24.0,
+            bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
+        })
+        .sum()
+}
+
+/// Whether a physical cursor position lies inside a laid-out UI node.
+pub(super) fn contains(cursor: Vec2, transform: &UiGlobalTransform, node: &ComputedNode) -> bool {
+    transform.try_inverse().is_some_and(|inverse| {
+        inverse
+            .transform_point2(cursor)
+            .abs()
+            .cmple(node.size() * 0.5)
+            .all()
+    })
+}
+
 #[derive(Component, Default)]
 pub(super) struct Frame {
     minimized: bool,

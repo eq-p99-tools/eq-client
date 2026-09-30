@@ -176,7 +176,8 @@ impl TradeState {
             }
             MerchantUpdate::Closed => self.merchant = None,
             MerchantUpdate::Bought { price, .. } => self.adjust_coins(-i64::from(price)),
-            // Sales are followed by a server money update.
+            // The session removes the sold units from the inventory, and a server
+            // money update follows.
             MerchantUpdate::Sold { .. } => (),
         }
         None
@@ -257,6 +258,14 @@ pub(super) fn coin_text(copper: u64) -> String {
 
 #[derive(Component)]
 pub(super) struct Panel;
+
+/// The scrolling item list inside the loot or merchant window.
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Rows {
+    Loot,
+    Merchant,
+}
+
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Action {
     Take(u16),
@@ -476,13 +485,15 @@ pub(super) fn input(
     }
 }
 
-/// Rebuilds the loot and merchant windows whenever their contents change.
+/// Rebuilds the loot and merchant windows whenever their contents change, keeping
+/// each list's scroll offset so a sale does not jump back to the top.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn present(
     mut commands: Commands,
     trade: Res<TradeState>,
     inventory: Res<super::inventory::InventoryState>,
     panels: Query<Entity, With<Panel>>,
+    lists: Query<(&Rows, &ScrollPosition)>,
     mut shown: Local<Option<(u64, u64)>>,
 ) {
     let signature = (trade.revision, inventory.data.revision());
@@ -490,6 +501,13 @@ pub(super) fn present(
         return;
     }
     *shown = Some(signature);
+    let offset = |kind: Rows| {
+        lists
+            .iter()
+            .find(|(list, _)| **list == kind)
+            .map_or(0.0, |(_, position)| position.y)
+    };
+    let (loot_offset, merchant_offset) = (offset(Rows::Loot), offset(Rows::Merchant));
     for panel in &panels {
         commands.entity(panel).despawn();
     }
@@ -512,7 +530,7 @@ pub(super) fn present(
             "LOOT",
             (px(24), Val::Auto, px(110)),
             &format!("{}: {status}", window.name),
-            &rows,
+            (Rows::Loot, &rows, loot_offset),
             &[(Action::TakeAll, "Loot all"), (Action::EndLoot, "Done")],
         );
     }
@@ -552,9 +570,32 @@ pub(super) fn present(
             "MERCHANT",
             (Val::Auto, px(24), px(96)),
             &format!("{}   Your coin: {coins}", window.name),
-            &rows,
+            (Rows::Merchant, &rows, merchant_offset),
             &[(Action::EndShop, "Done")],
         );
+    }
+}
+
+/// Scrolls the loot or merchant list under the pointer; the camera ignores wheel
+/// input over windows.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn scroll(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut lists: Query<(&UiGlobalTransform, &ComputedNode, &mut ScrollPosition), With<Rows>>,
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+) {
+    let delta = windows::wheel_pixels(&mut wheel);
+    let Some(cursor) = windows
+        .single()
+        .ok()
+        .and_then(Window::physical_cursor_position)
+    else {
+        return;
+    };
+    for (transform, node, mut position) in &mut lists {
+        if windows::contains(cursor, transform, node) {
+            position.y = (position.y - delta).max(0.0);
+        }
     }
 }
 
@@ -575,12 +616,14 @@ fn item_label(item: &InventoryItem) -> String {
     }
 }
 
+/// A window whose item list scrolls between a fixed status line and footer, so
+/// the closing buttons stay reachable however long the list is.
 fn spawn_panel(
     commands: &mut Commands,
     title: &str,
     (left, right, top): (Val, Val, Val),
     status: &str,
-    rows: &[(Action, String)],
+    (list, rows, offset): (Rows, &[(Action, String)], f32),
     footer: &[(Action, &str)],
 ) {
     let frame = commands
@@ -593,11 +636,9 @@ fn spawn_panel(
                 right,
                 top,
                 width: px(300),
-                max_height: px(400),
                 padding: UiRect::all(px(6)),
                 row_gap: px(4),
                 flex_direction: FlexDirection::Column,
-                overflow: Overflow::clip_y(),
                 ..default()
             },
             // Above inventory and spellbook, below item inspection.
@@ -615,9 +656,23 @@ fn spawn_panel(
             },
             TextColor(Color::srgb(0.73, 0.77, 0.81)),
         ));
-        for (action, label) in rows {
-            button(parent, *action, label);
-        }
+        parent
+            .spawn((
+                list,
+                ScrollPosition(Vec2::new(0.0, offset)),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(4),
+                    max_height: px(320),
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+            ))
+            .with_children(|list| {
+                for (action, label) in rows {
+                    button(list, *action, label);
+                }
+            });
         parent
             .spawn(Node {
                 column_gap: px(6),
@@ -657,6 +712,82 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_lists_scroll_inside_the_window_while_its_buttons_stay_outside() {
+        let stock: BTreeMap<u32, MerchantItem> = super::super::inventory::demo_items()
+            .into_iter()
+            .cycle()
+            .take(30)
+            .zip(1u32..)
+            .map(|(item, slot)| {
+                (
+                    slot,
+                    MerchantItem {
+                        slot,
+                        price: 10,
+                        quantity: 0,
+                        item,
+                    },
+                )
+            })
+            .collect();
+        let mut app = App::new();
+        app.insert_resource(TradeState {
+            merchant: Some(MerchantWindow {
+                merchant_id: 8,
+                name: "Merchant".into(),
+                stock,
+            }),
+            ..TradeState::default()
+        })
+        .init_resource::<super::super::inventory::InventoryState>()
+        .add_systems(Update, present);
+        app.update();
+        let world = app.world_mut();
+        let in_list = |world: &World, entity: Entity| {
+            std::iter::successors(Some(entity), |entity| {
+                world.get::<ChildOf>(*entity).map(ChildOf::parent)
+            })
+            .any(|entity| world.get::<Rows>(entity) == Some(&Rows::Merchant))
+        };
+        let buttons: Vec<(Entity, Action)> = world
+            .query::<(Entity, &Action)>()
+            .iter(world)
+            .map(|(entity, action)| (entity, *action))
+            .collect();
+        assert_eq!(
+            buttons
+                .iter()
+                .filter(
+                    |(entity, action)| matches!(action, Action::Buy(_)) && in_list(world, *entity)
+                )
+                .count(),
+            30
+        );
+        let done = buttons
+            .iter()
+            .find(|(_, action)| *action == Action::EndShop)
+            .unwrap()
+            .0;
+        assert!(!in_list(world, done));
+        // A rebuild, as after a sale, keeps the list where the player scrolled it.
+        let mut lists = world.query_filtered::<&mut ScrollPosition, With<Rows>>();
+        lists.single_mut(world).unwrap().y = 120.0;
+        world.resource_mut::<TradeState>().changed();
+        app.update();
+        let world = app.world_mut();
+        assert!(
+            (world
+                .query_filtered::<&ScrollPosition, With<Rows>>()
+                .single(world)
+                .unwrap()
+                .y
+                - 120.0)
+                .abs()
+                < 0.001
+        );
+    }
 
     #[test]
     fn coins_format_by_denomination() {

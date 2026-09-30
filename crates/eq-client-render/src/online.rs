@@ -705,6 +705,11 @@ pub(super) fn receive(
                     chat.history.push(super::chat::system_line(text));
                 }
             }
+            WorldUpdate::Game(WorldEvent::MerchantRefused { session_id, reason }) => {
+                if state.session_id == Some(session_id) {
+                    chat.history.push(super::chat::system_line(reason));
+                }
+            }
             WorldUpdate::Game(WorldEvent::Consideration(consideration)) => {
                 let name = state
                     .spawns
