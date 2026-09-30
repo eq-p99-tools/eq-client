@@ -367,3 +367,46 @@ fn inspect_stuck() {
     }
     println!("refused_directions={refused}/16");
 }
+
+/// Walks a route offline exactly as a script's walk step does online: the route
+/// searched from `EQ_PROBE_FEET` to `EQ_PROBE_GOAL` (renderer feet points),
+/// followed with the online stepper in 150 ms samples of 3.1 units, printing
+/// each sample and how the walk ends. Door colliders are not loaded.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_MODEL, EQ_PROBE_FEET and EQ_PROBE_GOAL"]
+fn inspect_walk() {
+    use eq_client_core::movement::{AirborneController, Route, RouteStep};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone =
+        eq_client_assets::load_zone(&install, &std::env::var("EQ_PROBE_ZONE").unwrap()).unwrap();
+    let height = eq_client_assets::characters::load_character(
+        &install.join("global_chr.s3d"),
+        &std::env::var("EQ_PROBE_MODEL").unwrap(),
+    )
+    .unwrap()
+    .height();
+    let world = build_collision(&zone).unwrap();
+    let (mut feet, goal) = (probe_point("EQ_PROBE_FEET"), probe_point("EQ_PROBE_GOAL"));
+    let mut route = Route::new(feet, goal, 10.0, height);
+    let mut airborne = AirborneController::default();
+    for sample in 0..400_u64 {
+        let now = std::time::Duration::from_millis(sample * 150);
+        match route.next(&world, feet, goal, 5000, now) {
+            RouteStep::Searching => (),
+            RouteStep::Toward(next) => {
+                let to = Vec3::new(next.x - feet.x, 0.0, next.z - feet.z).normalize_or_zero();
+                let moved = motion::fall_step(&mut airborne, &world, feet, to * 3.1, 0.15, height);
+                println!(
+                    "sample={sample} toward={next:?} feet={moved:?} moved={}",
+                    moved.distance(feet)
+                );
+                feet = moved;
+            }
+            end => {
+                println!("end={end:?} feet={feet:?} remaining={}", route.remaining());
+                return;
+            }
+        }
+    }
+    println!("end=timeout feet={feet:?}");
+}

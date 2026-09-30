@@ -230,7 +230,7 @@ fn level(y: f32) -> i16 {
 
 /// Walks toward a horizontal position in short collision steps; None when a wall,
 /// ledge or steep slope stops the character short of it.
-fn walk(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) -> Option<Vec3> {
+pub(super) fn walk(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) -> Option<Vec3> {
     let delta = Vec3::new(to.x - from.x, 0.0, to.y - from.z);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A few grid steps.
     let steps = (delta.length() / SUBSTEP).ceil().max(1.0) as u8;
