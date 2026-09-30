@@ -14,12 +14,19 @@ const EQUIPMENT_CAPTIONS: [&str; 22] = [
     "Ammo",
 ];
 
-/// Keeps equipment and the cursor beside the carried bag grids. `paperdoll` is
-/// the installed skin's equipment layout, when it could be read.
+/// The installed skin's equipment layout, and the character image for its middle.
+#[derive(Clone, Copy)]
+pub(super) struct Paperdoll<'a> {
+    pub layout: &'a [SlotPlacement],
+    pub figure: Option<&'a Handle<Image>>,
+}
+
+/// Keeps equipment and the cursor beside the carried bag grids. Equipment sits
+/// around the paperdoll when the installed skin's layout could be read.
 pub(super) fn contents(
     parent: &mut ChildSpawnerCommands,
     state: &InventoryState,
-    paperdoll: Option<&[SlotPlacement]>,
+    paperdoll: Option<Paperdoll<'_>>,
     icons: &mut Icons,
     directory: Option<&std::path::Path>,
     images: &mut Assets<Image>,
@@ -79,7 +86,7 @@ fn quantity_picker(parent: &mut ChildSpawnerCommands, state: &InventoryState) {
 fn storage_columns(
     parent: &mut ChildSpawnerCommands,
     state: &InventoryState,
-    paperdoll: Option<&[SlotPlacement]>,
+    paperdoll: Option<Paperdoll<'_>>,
     icons: &mut Icons,
     directory: Option<&std::path::Path>,
     images: &mut Assets<Image>,
@@ -225,10 +232,11 @@ fn carried(
 }
 
 /// Equipment slots where the skin's inventory window puts them around the
-/// paperdoll, scaled so each slot is one of this window's cells.
+/// paperdoll, scaled so each slot is one of this window's cells, with the
+/// character drawn in the middle.
 fn placed(
     parent: &mut ChildSpawnerCommands,
-    layout: &[SlotPlacement],
+    Paperdoll { layout, figure }: Paperdoll<'_>,
     state: &InventoryState,
     icons: &mut Icons,
     directory: Option<&std::path::Path>,
@@ -252,6 +260,19 @@ fn placed(
             ..default()
         })
         .with_children(|doll| {
+            if let (Some(figure), Some(middle)) = (figure, middle(layout, size)) {
+                doll.spawn((
+                    ImageNode::new(figure.clone()),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(middle.min.x * scale),
+                        top: px(middle.min.y * scale),
+                        width: px(middle.width() * scale),
+                        height: px(middle.height() * scale),
+                        ..default()
+                    },
+                ));
+            }
             for placement in layout {
                 doll.spawn(Node {
                     position_type: PositionType::Absolute,
@@ -271,6 +292,23 @@ fn placed(
                 });
             }
         });
+}
+
+/// The empty middle of a paperdoll layout, where the character goes: between
+/// the outermost columns, from under the top row down to the first slot that
+/// sits between those columns again.
+fn middle(layout: &[SlotPlacement], size: f32) -> Option<Rect> {
+    let xs = || layout.iter().map(|placement| placement.x);
+    let left = xs().fold(f32::INFINITY, f32::min) + size;
+    let right = xs().fold(f32::NEG_INFINITY, f32::max);
+    let top = layout.iter().map(|p| p.y).fold(f32::INFINITY, f32::min) + size;
+    let bottom = layout
+        .iter()
+        .filter(|p| p.x >= left && p.x < right && p.y >= top)
+        .map(|p| p.y)
+        .fold(f32::INFINITY, f32::min);
+    (right > left && bottom.is_finite() && bottom > top)
+        .then(|| Rect::new(left, top, right, bottom))
 }
 
 fn grid(
@@ -576,7 +614,10 @@ mod tests {
                         contents(
                             parent,
                             &state,
-                            Some(&layout),
+                            Some(Paperdoll {
+                                layout: &layout,
+                                figure: None,
+                            }),
                             &mut Icons::default(),
                             None,
                             &mut images,
@@ -609,5 +650,33 @@ mod tests {
         assert_eq!(captions.iter().filter(|text| *text == "Ear").count(), 2);
         assert!(captions.iter().any(|text| text == "Shoulder"));
         assert!(!captions.iter().any(|text| text == "Primary"));
+    }
+
+    #[test]
+    fn the_figure_fills_the_middle_between_the_outer_columns() {
+        let at = |slot, x, y| SlotPlacement {
+            slot,
+            x,
+            y,
+            width: 42.0,
+            height: 42.0,
+        };
+        // A top row, one side slot per column, and a lower row in the middle.
+        let layout = [
+            at(1, 0.0, 0.0),
+            at(2, 43.0, 0.0),
+            at(3, 87.0, 0.0),
+            at(4, 130.0, 0.0),
+            at(17, 0.0, 43.0),
+            at(5, 130.0, 43.0),
+            at(12, 43.0, 216.0),
+            at(0, 87.0, 216.0),
+        ];
+        assert_eq!(
+            middle(&layout, 42.0),
+            Some(Rect::new(42.0, 42.0, 130.0, 216.0))
+        );
+        // A single column leaves no middle to draw in.
+        assert_eq!(middle(&layout[..1], 42.0), None);
     }
 }

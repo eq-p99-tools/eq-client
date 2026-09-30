@@ -30,6 +30,11 @@ pub(super) struct InventoryState {
     actions: interaction::Actions,
 }
 impl InventoryState {
+    /// Whether the inventory window is showing.
+    pub(super) const fn is_open(&self) -> bool {
+        self.open
+    }
+
     /// Current request feedback, also shown when inventory is closed for hotbar use.
     pub(crate) fn action_message(&self) -> &str {
         &self.actions.message
@@ -105,7 +110,7 @@ pub(super) struct SlotButton(pub(super) InventorySlot);
 
 /// The installed skin's equipment layout, read the first time the window draws.
 #[derive(Default)]
-pub(super) struct Paperdoll {
+pub(super) struct SkinLayout {
     read: bool,
     layout: Option<Vec<eq_client_assets::ui::SlotPlacement>>,
 }
@@ -368,7 +373,8 @@ pub(super) fn update(
     state: Res<InventoryState>,
     settings: Res<super::ViewerSettings>,
     mut icons: Local<icons::Icons>,
-    mut paperdoll: Local<Paperdoll>,
+    mut skin: Local<SkinLayout>,
+    figure: Option<Res<super::paperdoll::PaperdollImage>>,
     mut images: ResMut<Assets<Image>>,
     mut previous: Local<Option<RenderStamp>>,
     mut panels: Query<&mut Node, (With<Panel>, Without<TabButton>)>,
@@ -435,8 +441,8 @@ pub(super) fn update(
     let directory = settings.0.eq_directory.as_deref();
     // The installed client's default skin places equipment around the paperdoll;
     // without it, equipment falls back to a labeled grid.
-    if !std::mem::replace(&mut paperdoll.read, true) {
-        paperdoll.layout = directory.and_then(|directory| {
+    if !std::mem::replace(&mut skin.read, true) {
+        skin.layout = directory.and_then(|directory| {
             eq_client_assets::ui::equipment_layout(directory, "default")
                 .inspect_err(|error| warn!("Inventory skin layout unavailable: {error}"))
                 .ok()
@@ -447,7 +453,10 @@ pub(super) fn update(
         layout::contents(
             list,
             &state,
-            paperdoll.layout.as_deref(),
+            skin.layout.as_deref().map(|layout| layout::Paperdoll {
+                layout,
+                figure: figure.as_deref().map(|figure| &figure.0),
+            }),
             &mut icons,
             directory,
             &mut images,
