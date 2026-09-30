@@ -25,6 +25,30 @@ pub struct ItemModel {
     pub primitives: Vec<ZonePrimitive>,
     /// The textures this model uses.
     pub textures: Vec<ZoneTexture>,
+    /// Whether the model is flat like a shield: two sides of similar length
+    /// and a much thinner third.
+    pub flat: bool,
+}
+
+/// Whether geometry is flat like a shield: the middle extent is over 60% of
+/// the longest and the shortest under 20% of the middle. The installed IT200
+/// series of shields all are; a sword or staff, long in one direction only,
+/// is not.
+fn flat(primitives: &[ZonePrimitive]) -> bool {
+    let mut low = [f32::INFINITY; 3];
+    let mut high = [f32::NEG_INFINITY; 3];
+    for point in primitives.iter().flat_map(|part| &part.positions) {
+        for axis in 0..3 {
+            low[axis] = low[axis].min(point[axis]);
+            high[axis] = high[axis].max(point[axis]);
+        }
+    }
+    let mut extents: [f32; 3] = std::array::from_fn(|axis| high[axis] - low[axis]);
+    if !extents.iter().all(|extent| extent.is_finite()) {
+        return false;
+    }
+    extents.sort_by(f32::total_cmp);
+    extents[1] > 0.6 * extents[2] && extents[0] < 0.2 * extents[1]
 }
 
 struct Entry {
@@ -85,6 +109,11 @@ impl ItemModels {
         self.models.len()
     }
 
+    /// Names of the available models, such as `IT63`, in no particular order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.models.keys().map(String::as_str)
+    }
+
     /// Whether no item archive was installed or none held a static model.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -109,7 +138,7 @@ impl ItemModels {
         let archive = &mut self.archives[entry.archive];
         let mut textures = Vec::new();
         let mut indices = HashMap::new();
-        let primitives = entry
+        let primitives: Vec<ZonePrimitive> = entry
             .primitives
             .iter()
             .cloned()
@@ -117,6 +146,7 @@ impl ItemModels {
             .collect::<Result<_, _>>()?;
         Ok(Some(ItemModel {
             name: key,
+            flat: flat(&primitives),
             primitives,
             textures,
         }))
@@ -160,5 +190,41 @@ mod tests {
             bag.textures.len()
         );
         assert!(models.len() > 100);
+        // The classic shields are flat; the models seen held in live tests are not.
+        let mut names: Vec<String> = models.names().map(str::to_owned).collect();
+        names.sort_by_key(|name| name[2..].parse::<u32>().unwrap_or(u32::MAX));
+        let flat: Vec<_> = names
+            .iter()
+            .filter(|name| models.model(name).unwrap().unwrap().flat)
+            .cloned()
+            .collect();
+        println!("flat models ({} of {}): {flat:?}", flat.len(), names.len());
+        for shield in ["IT200", "IT201", "IT203", "IT210", "IT220"] {
+            assert!(flat.iter().any(|name| name == shield), "{shield}");
+        }
+        for held in ["IT1", "IT10", "IT48", "IT112", "IT10653"] {
+            assert!(!flat.iter().any(|name| name == held), "{held}");
+        }
+    }
+
+    fn cuboid(size: [f32; 3]) -> ZonePrimitive {
+        ZonePrimitive {
+            positions: vec![[0.0; 3], size],
+            normals: Vec::new(),
+            texture_coordinates: Vec::new(),
+            indices: Vec::new(),
+            texture: None,
+            material_mode: crate::MaterialMode::Opaque,
+        }
+    }
+
+    #[test]
+    fn only_wide_thin_shapes_count_as_flat() {
+        // A kite shield, a sword, a staff, a bag and a broad flat blade.
+        assert!(flat(&[cuboid([2.7, 1.9, 0.15])]));
+        assert!(!flat(&[cuboid([2.7, 0.6, 0.15])]));
+        assert!(!flat(&[cuboid([0.1, 3.6, 0.4])]));
+        assert!(!flat(&[cuboid([0.7, 0.8, 0.6])]));
+        assert!(!flat(&[]));
     }
 }

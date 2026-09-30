@@ -1,7 +1,7 @@
 //! Classic character archive discovery, independent of the renderer and session.
 
 mod model;
-pub use model::{CharacterAsset, CharacterPose, load_character};
+pub use model::{Attachment, CharacterAsset, CharacterPose, load_character};
 
 use std::{fs::File, path::Path};
 
@@ -185,6 +185,10 @@ mod tests {
         let (chain, _) = human.material_texture("HUMCH0201_MDF").unwrap().unwrap();
         assert!(chain.width > 0 && chain.name.contains("humch0201"));
         assert!(human.material_texture("HUMCH9901_MDF").unwrap().is_none());
+        // Both hands and the shield point are on the skeleton.
+        let (_, attachments) = human.pose_with_attachments("P01", 0.0, true);
+        println!("HUM attachments: {attachments:?}");
+        assert!(attachments.iter().all(Option::is_some));
     }
 
     #[test]

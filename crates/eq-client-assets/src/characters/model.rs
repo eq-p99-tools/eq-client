@@ -35,6 +35,55 @@ pub struct CharacterAsset {
     base_pose: Vec<LocalTransform>,
     clips: HashMap<String, Vec<Option<AnimationTrack>>>,
     skins: Vec<Skin>,
+    /// Bones held items attach to, in [`Attachment`] order.
+    attachments: [Option<usize>; 3],
+}
+
+/// Where a classic skeleton holds items.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Attachment {
+    /// The right hand (`R_POINT`), for the primary item.
+    RightHand,
+    /// The left hand (`L_POINT`), for an off-hand item that is not a shield.
+    LeftHand,
+    /// The forearm's shield point (`SHIELD_POINT`).
+    Shield,
+}
+
+impl Attachment {
+    /// Index into [`CharacterAsset::pose_with_attachments`]'s attachments.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The bone name this point uses, after the model prefix.
+    const fn bone(self) -> &'static str {
+        match self {
+            Self::RightHand => "R_POINT",
+            Self::LeftHand => "L_POINT",
+            Self::Shield => "SHIELD_POINT",
+        }
+    }
+}
+
+/// Swaps WLD's Z-up axes for the Y-up space poses use, around a bone transform.
+fn y_up(matrix: Mat4) -> Mat4 {
+    let swap = Mat4::from_cols(glam::Vec4::X, glam::Vec4::Z, glam::Vec4::Y, glam::Vec4::W);
+    swap * matrix * swap
+}
+
+/// The bone for an attachment point: a track or DAG name such as
+/// `HUMR_POINT_TRACK` for the model `HUM`.
+fn attachment_bone(bones: &[&str], model: &str, point: Attachment) -> Option<usize> {
+    bones.iter().position(|bone| {
+        let bone = bone.to_ascii_uppercase();
+        let stem = bone
+            .strip_suffix("_TRACK")
+            .or_else(|| bone.strip_suffix("_DAG"))
+            .unwrap_or(&bone);
+        stem.strip_prefix(model) == Some(point.bone())
+    })
 }
 
 /// Interpolated vertex data for a single draw primitive.
@@ -162,20 +211,38 @@ impl CharacterAsset {
     /// Samples a clip, or the base pose when the clip is unavailable.
     /// No root motion is applied to the entity; movement remains owned by simulation.
     pub fn pose(&self, animation: &str, seconds: f32) -> Vec<CharacterPose> {
-        self.sample_pose(animation, seconds, true)
+        self.skin(&self.bones(animation, seconds, true))
     }
 
     /// Plays a transition once and holds its final frame instead of looping it.
     pub fn pose_held(&self, animation: &str, seconds: f32) -> Vec<CharacterPose> {
-        self.sample_pose(animation, seconds, false)
+        self.skin(&self.bones(animation, seconds, false))
     }
 
+    /// Samples a clip, looping or held as [`Self::pose`] and [`Self::pose_held`]
+    /// do, and also returns where each held item attaches, in the pose's Y-up
+    /// space, for the attachment points this skeleton has.
+    pub fn pose_with_attachments(
+        &self,
+        animation: &str,
+        seconds: f32,
+        looping: bool,
+    ) -> (Vec<CharacterPose>, [Option<Mat4>; 3]) {
+        let bones = self.bones(animation, seconds, looping);
+        let attachments = self.attachments.map(|bone| {
+            bone.and_then(|bone| bones.get(bone))
+                .map(|matrix| y_up(*matrix))
+        });
+        (self.skin(&bones), attachments)
+    }
+
+    /// Each bone's transform in native Z-up WLD space for a clip.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_precision_loss
     )]
-    fn sample_pose(&self, animation: &str, seconds: f32, looping: bool) -> Vec<CharacterPose> {
+    fn bones(&self, animation: &str, seconds: f32, looping: bool) -> Vec<Mat4> {
         let clip = self.clips.get(animation);
         let local: Vec<_> = self
             .base_pose
@@ -215,7 +282,11 @@ impl CharacterAsset {
                 .matrix()
             })
             .collect();
-        let world = compose_hierarchy(&local, &self.parents);
+        compose_hierarchy(&local, &self.parents)
+    }
+
+    /// Skins every primitive with these bone transforms.
+    fn skin(&self, world: &[Mat4]) -> Vec<CharacterPose> {
         self.skins
             .iter()
             .map(|skin| {
@@ -409,6 +480,12 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
     if primitives.is_empty() {
         return Err(invalid("model has no renderable skins"));
     }
+    let attachments = [
+        Attachment::RightHand,
+        Attachment::LeftHand,
+        Attachment::Shield,
+    ]
+    .map(|point| attachment_bone(&bone_names, &name, point));
     let mut asset = CharacterAsset {
         name,
         primitives,
@@ -420,6 +497,7 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         base_pose,
         clips,
         skins,
+        attachments,
     };
     let pose = asset.pose("", 0.0);
     for (primitive, pose) in asset.primitives.iter_mut().zip(pose) {
@@ -477,6 +555,7 @@ mod tests {
                 normals: vec![[1.0, 0.0, 0.0]],
                 bones: vec![0],
             }],
+            attachments: [Some(0), None, None],
         };
         for time in [1.0, 1.5, 2.0, 10.0] {
             assert!((asset.pose_held("P02", time)[0].positions[0][0] + 1.0).abs() < 0.0001);
@@ -504,6 +583,60 @@ mod tests {
             .matrix()
             .transform_point3(Vec3::X);
         assert!((point - Vec3::new(2.0, 0.5, 0.0)).length() < 0.0001);
+    }
+
+    #[test]
+    fn attachment_points_are_found_by_bone_name_for_this_model() {
+        let bones = [
+            "HUMPE_TRACK",
+            "HUMR_POINT_TRACK",
+            "HUML_POINT_DAG",
+            "HUMSHIELD_POINT_TRACK",
+            "ELMR_POINT_TRACK",
+        ];
+        assert_eq!(
+            attachment_bone(&bones, "HUM", Attachment::RightHand),
+            Some(1)
+        );
+        assert_eq!(
+            attachment_bone(&bones, "HUM", Attachment::LeftHand),
+            Some(2)
+        );
+        assert_eq!(attachment_bone(&bones, "HUM", Attachment::Shield), Some(3));
+        assert_eq!(
+            attachment_bone(&bones, "ELM", Attachment::RightHand),
+            Some(4)
+        );
+        assert_eq!(attachment_bone(&bones, "ELM", Attachment::Shield), None);
+    }
+
+    #[test]
+    fn attachments_come_in_the_poses_y_up_space() {
+        // A WLD translation up (Z) is up (Y) in pose space.
+        let up = y_up(Mat4::from_translation(Vec3::new(1.0, 2.0, 3.0)));
+        assert!((up.transform_point3(Vec3::ZERO) - Vec3::new(1.0, 3.0, 2.0)).length() < 0.0001);
+        let base = LocalTransform {
+            translation: Vec3::new(0.0, 0.0, 5.0),
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+        };
+        let asset = CharacterAsset {
+            name: "synthetic".into(),
+            primitives: Vec::new(),
+            textures: Vec::new(),
+            materials: Vec::new(),
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None],
+            base_pose: vec![base],
+            clips: HashMap::new(),
+            skins: Vec::new(),
+            attachments: [Some(0), None, None],
+        };
+        let (_, attachments) = asset.pose_with_attachments("", 0.0, true);
+        let hand = attachments[Attachment::RightHand.index()].unwrap();
+        assert!((hand.transform_point3(Vec3::ZERO) - Vec3::new(0.0, 5.0, 0.0)).length() < 0.0001);
+        assert!(attachments[Attachment::Shield.index()].is_none());
     }
 
     #[test]

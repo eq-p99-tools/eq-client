@@ -90,6 +90,17 @@ pub fn held_model(appearance: &Appearance, slot: TextureSlot) -> Option<String> 
     (slot.held() && number > 0).then(|| format!("IT{number}"))
 }
 
+/// Whether an off-hand item goes on the shield point instead of in the left
+/// hand. Titanium servers say only which model a hand holds, not what kind of
+/// item it is, so this is decided from the model: the classic shields are
+/// IT200 through IT299, and later models (IT10000 and up) are shields when
+/// they are flat like one. Flat classic models outside that range, such as
+/// broad blades, stay in the hand.
+#[must_use]
+pub fn on_shield_point(number: u32, flat: bool) -> bool {
+    (200..300).contains(&number) || (number >= 10_000 && flat)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +167,17 @@ mod tests {
         assert_eq!(tint("HUMLG0001_MDF", &look), None);
         assert_eq!(tint("HUMHE0001_MDF", &look), None);
         assert_eq!(tint("CLK0401_MDF", &look), None);
+    }
+
+    #[test]
+    fn classic_shields_and_flat_later_models_go_on_the_shield_point() {
+        assert!(on_shield_point(200, true));
+        assert!(on_shield_point(228, false));
+        assert!(on_shield_point(10_530, true));
+        assert!(!on_shield_point(10_653, false));
+        // A flat classic blade stays in the hand.
+        assert!(!on_shield_point(40, true));
+        assert!(!on_shield_point(48, false));
     }
 
     #[test]
