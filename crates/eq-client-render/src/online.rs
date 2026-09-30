@@ -31,7 +31,7 @@ pub(super) struct OnlineState {
     pub session_id: Option<u64>,
     pub player: Option<PlayerState>,
     pub spawns: BTreeMap<u16, eq_client_core::SpawnState>,
-    pub doors: eq_client_core::doors::Doors,
+    pub doors: eq_client_core::doors::DoorTable,
     pub door_status: String,
     pub revisions: BTreeMap<u16, u64>,
     pub health: BTreeMap<u16, u8>,
@@ -63,7 +63,7 @@ impl OnlineState {
             session_id: None,
             player: None,
             spawns: BTreeMap::new(),
-            doors: eq_client_core::doors::Doors::default(),
+            doors: eq_client_core::doors::DoorTable::default(),
             door_status: String::new(),
             revisions: BTreeMap::new(),
             health: BTreeMap::new(),
@@ -166,7 +166,7 @@ pub(super) fn receive(
                     state.pending_transfer = None;
                     inventory.clear();
                     state.spawns.clear();
-                    state.doors = eq_client_core::doors::Doors::default();
+                    state.doors = eq_client_core::doors::DoorTable::default();
                     state.door_status.clear();
                     state.revisions.clear();
                     state.health.clear();
@@ -223,7 +223,7 @@ pub(super) fn receive(
                 inventory.clear();
                 state.death = None;
                 state.spawns.clear();
-                state.doors = eq_client_core::doors::Doors::default();
+                state.doors = eq_client_core::doors::DoorTable::default();
                 state.door_status.clear();
                 state.revisions.clear();
                 state.health.clear();
@@ -641,7 +641,7 @@ pub(super) fn receive(
                 if matches!(update, eq_client_core::doors::DoorUpdate::RemoveAll) {
                     state.door_status.clear();
                 }
-                state.doors.apply(&update);
+                state.doors.apply(&update, std::time::Instant::now());
             }
             WorldUpdate::Game(WorldEvent::DoorAction {
                 session_id,

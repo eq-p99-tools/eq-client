@@ -186,20 +186,9 @@ pub fn run(
     .insert_resource(ViewerSettings(config))
     .insert_resource(online::OnlineState::new(online))
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
-    .init_resource::<hud::HudState>()
-    .init_resource::<hud::hotbar::Bindings>()
-    .init_resource::<spellbook::BookView>()
-    .init_resource::<spell_icons::Icons>()
-    .init_resource::<chat::ChatState>()
-    .init_resource::<target::TargetState>()
-    .init_resource::<items::ItemState>()
-    .init_resource::<inventory::InventoryState>()
-    .insert_resource(target::CommandsToServer(commands))
-    .init_resource::<motion::Controls>()
-    .init_resource::<entities::NearbyEntities>()
-    .init_resource::<windows::DragState>()
-    .init_resource::<windows::Layouts>()
-    .add_plugins(DefaultPlugins.set(WindowPlugin {
+    .insert_resource(target::CommandsToServer(commands));
+    init_presentation(&mut app);
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(window),
         ..default()
     }))
@@ -224,6 +213,7 @@ pub fn run(
                 entities::demo,
                 entities::reconcile,
                 entities::interpolate,
+                doors::close,
                 doors::reconcile,
                 doors::input,
             )
@@ -267,6 +257,23 @@ pub fn run(
         });
     }
     exit_status(&app.run())
+}
+
+/// Starts the presentation state (HUD, windows, chat, targeting, inventory and
+/// motion) empty.
+fn init_presentation(app: &mut App) {
+    app.init_resource::<hud::HudState>()
+        .init_resource::<hud::hotbar::Bindings>()
+        .init_resource::<spellbook::BookView>()
+        .init_resource::<spell_icons::Icons>()
+        .init_resource::<chat::ChatState>()
+        .init_resource::<target::TargetState>()
+        .init_resource::<items::ItemState>()
+        .init_resource::<inventory::InventoryState>()
+        .init_resource::<motion::Controls>()
+        .init_resource::<entities::NearbyEntities>()
+        .init_resource::<windows::DragState>()
+        .init_resource::<windows::Layouts>();
 }
 
 /// The process exit status for how the viewer ended.
