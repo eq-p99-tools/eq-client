@@ -366,7 +366,7 @@ pub(super) fn input(
 /// so the sample stops before its total rise passes the one riser the server's
 /// movement guard accepts; a larger climb takes several accepted samples instead
 /// of one that would be refused and retried forever.
-fn fall_step(
+pub(super) fn fall_step(
     airborne: &mut eq_client_core::movement::AirborneController,
     world: &eq_client_core::movement::CollisionWorld,
     feet: Vec3,
