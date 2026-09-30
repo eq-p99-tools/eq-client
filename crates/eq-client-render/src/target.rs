@@ -431,6 +431,7 @@ mod tests {
                     race: 1,
                     gender: 0,
                     position: WorldPosition::default(),
+                    velocity: [0.0; 3],
                     size: 0.0,
                     invisible: false,
                 },
@@ -479,6 +480,7 @@ mod tests {
                         x,
                         ..WorldPosition::default()
                     },
+                    velocity: [0.0; 3],
                     size: 0.0,
                     invisible: false,
                 },
@@ -531,6 +533,7 @@ mod tests {
                             z: 0.0,
                             heading: 0.0,
                         },
+                        velocity: [0.0; 3],
                         size: 0.0,
                         invisible: false,
                     },

@@ -2,6 +2,36 @@
 
 use crate::{SpawnKind, SpawnState, WorldPosition};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
+
+/// Longest a spawn's reported motion is carried forward. Servers repeat a moving
+/// spawn's position every few seconds (P99 about every 2.3 s, `EQEmu` at least
+/// every 5 s), so a spawn with no newer report stops where it got to.
+pub const MOTION_HORIZON: Duration = Duration::from_secs(6);
+
+/// Where a spawn is `elapsed` after its last report: its reported velocity is
+/// carried forward, up to [`MOTION_HORIZON`], as the official client moves
+/// spawns between updates instead of leaving them at the last report.
+#[must_use]
+pub fn extrapolate(spawn: &SpawnState, elapsed: Duration) -> WorldPosition {
+    let seconds = elapsed.min(MOTION_HORIZON).as_secs_f32();
+    let [x, y, z] = spawn.velocity;
+    let position = spawn.position;
+    let moved = WorldPosition {
+        x: position.x + x * seconds,
+        y: position.y + y * seconds,
+        z: position.z + z * seconds,
+        heading: position.heading,
+    };
+    if [moved.x, moved.y, moved.z]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        moved
+    } else {
+        position
+    }
+}
 
 /// Selects nearby visible entities, nearest first, with an exit margin and hard cap.
 /// Radius is three-dimensional EQ world distance, measured from the player.
@@ -57,6 +87,40 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::float_cmp)] // Exactly representable fixture values.
+    fn moving_spawns_carry_their_reported_velocity_up_to_the_horizon() {
+        let spawn = SpawnState {
+            class: None,
+            spawn_id: 9,
+            name: "Synthetic walker".into(),
+            kind: SpawnKind::Npc,
+            race: 1,
+            gender: 0,
+            position: WorldPosition {
+                x: 10.0,
+                y: -4.0,
+                z: 2.0,
+                heading: 128.0,
+            },
+            velocity: [4.0, -2.0, 0.5],
+            size: 0.0,
+            invisible: false,
+        };
+        let at = extrapolate(&spawn, Duration::from_secs(2));
+        assert_eq!((at.x, at.y, at.z, at.heading), (18.0, -8.0, 3.0, 128.0));
+        let far = extrapolate(&spawn, Duration::from_mins(1));
+        assert_eq!((far.x, far.y), (34.0, -16.0));
+        let standing = SpawnState {
+            velocity: [0.0; 3],
+            ..spawn
+        };
+        assert_eq!(
+            extrapolate(&standing, Duration::from_secs(3)),
+            standing.position
+        );
+    }
+
+    #[test]
     fn within_measures_three_dimensional_distance() {
         let at = |x, y, z| WorldPosition {
             x,
@@ -80,6 +144,7 @@ mod tests {
                 x,
                 ..Default::default()
             },
+            velocity: [0.0; 3],
             size: 0.0,
             invisible: false,
         }

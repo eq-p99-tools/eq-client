@@ -598,9 +598,14 @@ pub(super) fn receive(
                 state.health.remove(&id);
                 state.postures.remove(&id);
             }
-            WorldUpdate::Game(WorldEvent::Position { spawn_id, position }) => {
+            WorldUpdate::Game(WorldEvent::Position {
+                spawn_id,
+                position,
+                velocity,
+            }) => {
                 if let Some(spawn) = state.spawns.get_mut(&spawn_id) {
                     spawn.position = position;
+                    spawn.velocity = velocity;
                 }
                 if let Some(player) = &mut state.player
                     && player.spawn_id == spawn_id
@@ -899,6 +904,7 @@ mod tests {
             race: 1,
             gender: 0,
             position: eq_client_core::WorldPosition::default(),
+            velocity: [0.0; 3],
             size: 0.0,
             invisible: false,
         };
