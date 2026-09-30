@@ -183,6 +183,7 @@ mod tests {
             session_id,
             zone: "example".into(),
             player: Box::new(PlayerState {
+                name: "Example".into(),
                 base_attributes: None,
                 spawn_id: 7,
                 race: 1,

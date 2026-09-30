@@ -12,13 +12,16 @@ use super::{Player, character};
 
 /// The render layer only the paperdoll camera draws.
 const LAYER: usize = 1;
-/// Rendered size in pixels: twice the default skin's figure area, so the image
-/// stays sharp when the window scales it down.
+/// Rendered size in pixels: about twice the default skin's character area, so
+/// the image stays sharp when the window scales it down.
 const SIZE: UVec2 = UVec2::new(176, 348);
 
-/// The image the paperdoll camera renders into.
+/// The image the paperdoll camera renders into, and its size in pixels.
 #[derive(Resource)]
-pub(super) struct PaperdollImage(pub Handle<Image>);
+pub(super) struct PaperdollImage {
+    pub handle: Handle<Image>,
+    pub size: Vec2,
+}
 
 /// Adds the paperdoll's camera, and keeps its figure and activity current.
 pub(super) fn register(app: &mut App) {
@@ -58,7 +61,10 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         RenderLayers::layer(LAYER),
         Transform::from_xyz(3.0, 8.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    commands.insert_resource(PaperdollImage(handle));
+    commands.insert_resource(PaperdollImage {
+        handle,
+        size: SIZE.as_vec2(),
+    });
 }
 
 /// Looks at a figure of this height, standing on the origin and facing +Z, so it

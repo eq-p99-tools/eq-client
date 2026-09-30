@@ -21,6 +21,7 @@ mod paperdoll;
 mod probes;
 mod resources;
 pub mod script;
+mod skin;
 mod spell_icons;
 mod spellbook;
 mod target;
@@ -100,6 +101,8 @@ pub struct ViewerConfig {
     pub script_follow: Option<(PathBuf, usize)>,
     /// Let script `gm` steps send `#` commands; set only for a local `EQEmu` session.
     pub local_gm_commands: bool,
+    /// UI skin to use instead of the one the character chose in the official client.
+    pub ui_skin: Option<String>,
     /// Optional top-left window corner in physical desktop pixels.
     pub window_position: Option<(i32, i32)>,
 }
@@ -314,6 +317,7 @@ fn install_overlays(app: &mut App) {
     app.add_systems(Startup, character_select::demo);
     windows::register_layout(app);
     paperdoll::register(app);
+    skin::register(app);
     app.add_systems(PostUpdate, chat::scroll.after(bevy::ui::UiSystems::Layout));
 }
 

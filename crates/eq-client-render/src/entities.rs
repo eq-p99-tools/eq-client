@@ -231,6 +231,7 @@ pub(super) fn demo(
         super::chat::seed_demo(&mut chat.history);
     }
     state.player = Some(eq_client_core::PlayerState {
+        name: "Preview".into(),
         base_attributes: None,
         deity: None,
         class: Some(1),

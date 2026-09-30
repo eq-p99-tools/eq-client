@@ -578,6 +578,7 @@ mod tests {
         online.connected = true;
         online.session_id = Some(1);
         online.player = Some(eq_client_core::PlayerState {
+            name: "Example".into(),
             base_attributes: None,
             spawn_id: 7,
             race: 1,

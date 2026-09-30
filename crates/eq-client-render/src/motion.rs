@@ -787,6 +787,7 @@ mod tests {
         state.connected = true;
         state.session_id = Some(11);
         state.player = Some(eq_client_core::PlayerState {
+            name: "Example".into(),
             base_attributes: None,
             deity: None,
             class: Some(1),

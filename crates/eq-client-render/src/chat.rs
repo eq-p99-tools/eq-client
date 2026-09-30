@@ -885,6 +885,7 @@ mod tests {
         assert!(game_commands("/camp", &online).unwrap().is_err());
         online.session_id = Some(4);
         online.player = Some(eq_client_core::PlayerState {
+            name: "Example".into(),
             base_attributes: None,
             deity: None,
             class: Some(2),

@@ -60,6 +60,7 @@ pub(super) fn state(
     info!(
         label,
         zone = online.zone,
+        world = ?online.world,
         connected = online.connected,
         ?position,
         ?posture,
