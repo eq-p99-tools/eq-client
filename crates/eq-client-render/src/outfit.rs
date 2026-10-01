@@ -210,16 +210,15 @@ fn hold(
         } else {
             Attachment::LeftHand
         };
-        let placed = character.attachments[point.index()]
-            .map_or(Transform::IDENTITY, Transform::from_matrix);
+        // Held items show only at a point the skeleton has; animation keeps
+        // them there.
+        let (placed, shown) = character.attachments[point.index()]
+            .map_or((Transform::IDENTITY, Visibility::Hidden), |point| {
+                (Transform::from_matrix(point), Visibility::Inherited)
+            });
         let layers = character.layers.clone();
         let entity = commands
-            .spawn((
-                super::character::HeldItem,
-                placed,
-                Visibility::Inherited,
-                layers.clone(),
-            ))
+            .spawn((super::character::HeldItem, placed, shown, layers.clone()))
             .with_children(|parent| {
                 for (mesh, material) in &model.primitives {
                     parent.spawn((
