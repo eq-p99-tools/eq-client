@@ -209,6 +209,26 @@ impl WindowId {
         Self::CharacterSelect,
     ];
 
+    /// The official client's name for the window: its screen in the skin's
+    /// files, and its section in a character's UI file.
+    pub(crate) const fn official(self) -> Option<&'static str> {
+        match self {
+            Self::Target => Some("TargetWindow"),
+            Self::Player => Some("PlayerWindow"),
+            Self::Spells => Some("CastSpellWnd"),
+            Self::Actions => Some("HotButtonWnd"),
+            Self::CastBar => Some("CastingWindow"),
+            Self::Effects => Some("BuffWindow"),
+            Self::Chat => Some("ChatWindow"),
+            Self::Inventory => Some("InventoryWindow"),
+            Self::Spellbook => Some("SpellBookWnd"),
+            Self::Item => Some("ItemDisplayWindow"),
+            Self::Loot => Some("LootWnd"),
+            Self::Merchant => Some("MerchantWnd"),
+            _ => None,
+        }
+    }
+
     /// The name its placement is saved under.
     pub(crate) const fn key(self) -> &'static str {
         match self {

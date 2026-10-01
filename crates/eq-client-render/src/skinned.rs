@@ -13,13 +13,15 @@ use eq_client_assets::{
 };
 use std::collections::HashMap;
 
-/// Where the skin defines a window the client draws from it.
-const fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
-    match id {
-        WindowId::Player => Some(("EQUI_PlayerWindow.xml", "PlayerWindow")),
-        WindowId::Target => Some(("EQUI_TargetWindow.xml", "TargetWindow")),
-        _ => None,
-    }
+/// The skin's file for a window the client draws from the skin, and the
+/// window's name in it.
+fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
+    let file = match id {
+        WindowId::Player => "EQUI_PlayerWindow.xml",
+        WindowId::Target => "EQUI_TargetWindow.xml",
+        _ => return None,
+    };
+    Some((file, id.official()?))
 }
 
 /// What a piece of a skinned window shows, in the official client's

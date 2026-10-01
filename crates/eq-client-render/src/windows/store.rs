@@ -34,7 +34,10 @@ pub(super) struct Store {
 /// Loads the placements of whoever is playing and saves changes to their file.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn persist(
-    time: Res<Time<Real>>,
+    (time, windows): (
+        Res<Time<Real>>,
+        Query<&Window, With<bevy::window::PrimaryWindow>>,
+    ),
     settings: Res<crate::ViewerSettings>,
     online: Res<crate::online::OnlineState>,
     drag: Res<super::DragState>,
@@ -61,11 +64,28 @@ pub(super) fn persist(
             store.loaded = true;
         }
         store.profile = current.map(|(world, character)| (world.to_owned(), character.to_owned()));
+        let own = store.directory.as_ref().and_then(|directory| {
+            std::fs::read_to_string(directory.join(file_name(store.profile.as_ref()))).ok()
+        });
+        let seeded = own.is_none();
         if let Some(directory) = &store.directory {
-            let text = std::fs::read_to_string(directory.join(file_name(store.profile.as_ref())))
-                .or_else(|_| std::fs::read_to_string(directory.join(SHARED)))
+            let text = own
+                .or_else(|| std::fs::read_to_string(directory.join(SHARED)).ok())
                 .unwrap_or_default();
             layouts.0 = decode(&text);
+        }
+        // A character this client has not placed windows for yet starts where
+        // the official client last put them.
+        if seeded
+            && let Some((world, character)) = &store.profile
+            && let Some(install) = settings.0.eq_directory.as_deref()
+            && let Ok(window) = windows.single()
+        {
+            seed(
+                &mut layouts.0,
+                &eq_client_assets::ui::window_positions(install, character, world),
+                Vec2::new(window.width(), window.height()),
+            );
         }
         store.written = encode(&layouts.0);
         store.since_check = Duration::ZERO;
@@ -75,6 +95,60 @@ pub(super) fn persist(
     if (store.since_check >= SAVE_INTERVAL || exiting) && drag.active.is_none() {
         store.since_check = Duration::ZERO;
         save(&mut store, &layouts);
+    }
+}
+
+/// Places the windows the official client placed for a character, where
+/// this client has no placement of its own: at the position it saved for
+/// this screen size, or else scaled from the largest screen it saved one for.
+fn seed(
+    layouts: &mut BTreeMap<super::WindowId, Saved>,
+    positions: &[eq_client_assets::ui::WindowPosition],
+    viewport: Vec2,
+) {
+    if viewport.min_element() <= 0.0 {
+        return;
+    }
+    for id in super::WindowId::ALL {
+        let Some(name) = id.official() else {
+            continue;
+        };
+        if layouts.contains_key(&id) || !id.describe().persists {
+            continue;
+        }
+        let saved: Vec<_> = positions
+            .iter()
+            .filter(|position| position.window.eq_ignore_ascii_case(name))
+            .filter(|position| position.screen.0 > 0 && position.screen.1 > 0)
+            .collect();
+        let size = |position: &&eq_client_assets::ui::WindowPosition| {
+            UVec2::new(position.screen.0, position.screen.1)
+        };
+        let Some(position) = saved
+            .iter()
+            .find(|position| size(position).as_vec2() == viewport)
+            .or_else(|| {
+                saved.iter().max_by_key(|position| {
+                    u64::from(position.screen.0) * u64::from(position.screen.1)
+                })
+            })
+        else {
+            continue;
+        };
+        #[allow(clippy::cast_precision_loss, reason = "screen positions are small")]
+        let at =
+            Vec2::new(position.x as f32, position.y as f32) * viewport / size(position).as_vec2();
+        layouts.insert(
+            id,
+            Saved {
+                entity: Entity::PLACEHOLDER,
+                edges: [px(at.x), px(at.y), Val::Auto, Val::Auto],
+                margin: UiRect::ZERO,
+                position_type: PositionType::Absolute,
+                minimized: false,
+                placed: true,
+            },
+        );
     }
 }
 
@@ -235,6 +309,49 @@ fn parse_length(text: &str) -> Option<Val> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_character_starts_where_the_official_client_put_its_windows() {
+        use super::super::WindowId;
+        use eq_client_assets::ui::WindowPosition;
+        let at = |window: &str, screen, x, y| WindowPosition {
+            window: window.into(),
+            screen,
+            x,
+            y,
+        };
+        let mut layouts = BTreeMap::new();
+        let mut chat = Saved {
+            entity: Entity::PLACEHOLDER,
+            edges: [px(1), px(2), Val::Auto, Val::Auto],
+            margin: UiRect::ZERO,
+            position_type: PositionType::Absolute,
+            minimized: false,
+            placed: true,
+        };
+        layouts.insert(WindowId::Chat, chat);
+        seed(
+            &mut layouts,
+            &[
+                at("PlayerWindow", (2560, 1600), 2000, 400),
+                at("TargetWindow", (2560, 1600), 1200, 20),
+                at("TargetWindow", (1280, 800), 500, 16),
+                at("ChatWindow", (1280, 800), 9, 9),
+                at("CastingWindow", (1280, 800), 9, 9),
+            ],
+            Vec2::new(1280.0, 800.0),
+        );
+        let edges = |id| layouts[&id].edges[..2].to_vec();
+        // Scaled from the only screen size saved for it.
+        assert_eq!(edges(WindowId::Player), [px(1000), px(200)]);
+        // This screen's own size wins over a larger one.
+        assert_eq!(edges(WindowId::Target), [px(500), px(16)]);
+        // This client's own placement stays.
+        chat.entity = Entity::PLACEHOLDER;
+        assert_eq!(layouts[&WindowId::Chat], chat);
+        // Windows whose placement is never kept are left where they open.
+        assert!(!layouts.contains_key(&WindowId::CastBar));
+    }
 
     fn saved(left: Val, minimized: bool) -> Saved {
         Saved {
