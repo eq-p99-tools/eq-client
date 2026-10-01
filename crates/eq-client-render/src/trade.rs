@@ -11,6 +11,8 @@ use super::windows;
 
 /// The NPC class that answers ordinary shop requests; servers ignore other classes.
 const MERCHANT_CLASS: u8 = 41;
+/// The NPC class that keeps the player's bank.
+const BANKER_CLASS: u8 = 40;
 
 /// The open loot and merchant windows: what they show besides the world's
 /// lists, which say what is on the corpse and for sale.
@@ -154,7 +156,7 @@ pub(super) fn input(
     mut online: ResMut<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut trade: ResMut<TradeState>,
-    mut chat: ResMut<super::chat::ChatState>,
+    (mut chat, mut shown): (ResMut<super::chat::ChatState>, ResMut<windows::Shown>),
     buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
     escape: Res<super::escape::Escape>,
 ) {
@@ -224,6 +226,9 @@ pub(super) fn input(
         }
     }
     if keys.pressed(super::keys::Act::Trade) {
+        let banker = targeted.as_ref().is_some_and(|(_, kind, class, ..)| {
+            *kind == SpawnKind::Npc && *class == Some(BANKER_CLASS)
+        });
         if trade.merchant.is_some() {
             clicked.push(Action::EndShop);
         } else if let Some((merchant_id, _, _, _, name)) =
@@ -247,6 +252,9 @@ pub(super) fn input(
                 trade.merchant = Some(MerchantWindow { name });
                 trade.changed();
             }
+        } else if banker {
+            // A banker opens the bank, drawn from the skin, while in reach.
+            shown.open(windows::WindowId::Bank);
         } else {
             chat.history.push(super::chat::system_line(
                 "Target a merchant to trade with it.".into(),
@@ -952,6 +960,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         drop(receiver);
         let mut app = App::new();
+        app.init_resource::<windows::Shown>();
         crate::keys::testing::install(&mut app);
         online.open_loot(9);
         app.insert_resource(online)

@@ -1,9 +1,13 @@
-//! Windows drawn from the installed skin's definitions: for now the player
-//! and target windows. Each keeps its place in the window registry and its
-//! behaviour; the skin decides its size, frame and pieces, and what each
-//! gauge and label shows follows the official client's numbering. A skin
-//! without the window, or a viewer without an installation, keeps the
-//! client's own chrome.
+//! Windows drawn from the installed skin's definitions: the player, target
+//! and spell windows, and the windows that hold items. Each keeps its place
+//! in the window registry and its behaviour; the skin decides its size,
+//! frame and pieces, and what each gauge and label shows follows the
+//! official client's numbering. A skin without the window, or a viewer
+//! without an installation, keeps the client's own chrome.
+mod items;
+
+pub(crate) use items::{close, contents, frames, picker, toggle_bag};
+
 use super::windows::WindowId;
 use crate::theme::{self, Size};
 use bevy::prelude::*;
@@ -20,6 +24,9 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Player => "EQUI_PlayerWindow.xml",
         WindowId::Target => "EQUI_TargetWindow.xml",
         WindowId::Spells => "EQUI_CastSpellWnd.xml",
+        WindowId::Inventory => "EQUI_Inventory.xml",
+        WindowId::Bank => "EQUI_BankWnd.xml",
+        WindowId::Bag(_) => "EQUI_Container.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -40,6 +47,17 @@ pub(crate) enum Shows {
     /// The target window's line, under it: what became of the player's
     /// choice of target. The official client says it in the chat.
     TargetLine,
+    /// The purse: platinum, gold, silver or copper, from 0.
+    Coins(u8),
+    /// The banker the bank is open at.
+    Banker,
+}
+
+/// What a skinned window is drawn for: the window, and the paperdoll's
+/// picture for the inventory's figure.
+struct Context<'a> {
+    id: WindowId,
+    paperdoll: Option<&'a super::paperdoll::PaperdollImage>,
 }
 
 /// The skin's windows as read, by skin: read once, whatever rebuilds the
@@ -79,6 +97,17 @@ impl Screens {
 #[derive(Component)]
 pub(crate) struct Drawn(String);
 
+/// The windows drawn from the skin.
+#[derive(Resource, Default)]
+pub(crate) struct Skinned(std::collections::BTreeSet<WindowId>);
+
+impl Skinned {
+    /// Whether this window is drawn from the skin.
+    pub(crate) fn has(&self, id: WindowId) -> bool {
+        self.0.contains(&id)
+    }
+}
+
 /// A button drawn from the skin, with its piece for each state.
 #[derive(Component, Clone)]
 pub(crate) struct SkinButton(ButtonLook);
@@ -109,6 +138,10 @@ pub(crate) fn apply(
     mut screens: ResMut<Screens>,
     mut frames: Frames,
     mut art: crate::sheets::Art,
+    (paperdoll, mut skinned): (
+        Option<Res<super::paperdoll::PaperdollImage>>,
+        ResMut<Skinned>,
+    ),
 ) {
     let Some(directory) = settings.0.eq_directory.as_deref() else {
         return;
@@ -121,13 +154,18 @@ pub(crate) fn apply(
             continue;
         };
         commands.entity(frame).insert(Drawn(skin.0.clone()));
-        reshape(&mut node, screen, state.placed());
+        skinned.0.insert(*id);
+        reshape(&mut node, screen, state.placed(), *id);
         super::windows::drag_anywhere(&mut commands, frame);
         background.0 = Color::NONE;
         *border = BorderColor::all(Color::NONE);
         commands.entity(frame).despawn_children();
         commands.entity(frame).with_children(|window| {
-            draw(window, screen, &mut art);
+            let context = Context {
+                id: *id,
+                paperdoll: paperdoll.as_deref(),
+            };
+            draw(window, screen, &mut art, &context);
             if *id == WindowId::Target {
                 window.spawn((
                     Shows::TargetLine,
@@ -146,15 +184,23 @@ pub(crate) fn apply(
     }
 }
 
-/// Sizes the frame as the skin does. A window the player has not placed
-/// opens where the skin puts it, as the official client opens it.
-fn reshape(node: &mut Node, screen: &Screen, placed: bool) {
+/// Sizes the frame as the skin does. A HUD window the player has not placed
+/// opens where the skin puts it, as the official client opens it; the
+/// windows the player opens keep the client's places, laid out to stay
+/// clear of each other.
+fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
     node.width = px(screen.area.width);
     node.height = px(screen.area.height);
+    // The skin's size is the window's: no caps or scrolling of the client's own.
+    node.min_width = Val::Auto;
+    node.min_height = Val::Auto;
+    node.max_width = Val::Auto;
+    node.max_height = Val::Auto;
+    node.overflow = Overflow::visible();
     node.padding = UiRect::ZERO;
     node.border = UiRect::ZERO;
     node.row_gap = Val::ZERO;
-    if !placed {
+    if !placed && id.describe().layer == super::windows::Layer::Hud {
         node.position_type = PositionType::Absolute;
         node.left = px(screen.area.x);
         node.top = px(screen.area.y);
@@ -165,7 +211,12 @@ fn reshape(node: &mut Node, screen: &Screen, placed: bool) {
 }
 
 /// The frame's background, border and title bar, then the pieces inside it.
-fn draw(window: &mut ChildSpawnerCommands, screen: &Screen, art: &mut crate::sheets::Art) {
+fn draw(
+    window: &mut ChildSpawnerCommands,
+    screen: &Screen,
+    art: &mut crate::sheets::Art,
+    context: &Context,
+) {
     let (width, height) = (screen.area.width, screen.area.height);
     let mut inside = Area {
         x: 0.0,
@@ -199,10 +250,36 @@ fn draw(window: &mut ChildSpawnerCommands, screen: &Screen, art: &mut crate::she
             title(window, art, &template.title, &mut inside);
         }
     }
-    for (_, element) in &screen.pieces {
+    // As in the official client, nothing shows outside the client area: the
+    // skin parks pieces there that only some windows use, such as a
+    // container's augment labels.
+    let client = Area {
+        x: 0.0,
+        y: 0.0,
+        width: inside.width,
+        height: inside.height,
+    };
+    window
+        .spawn(Node {
+            overflow: Overflow::clip(),
+            ..at(inside.x, inside.y, inside.width, inside.height)
+        })
+        .with_children(|area| pieces(area, art, &screen.pieces, &client, context));
+}
+
+/// Pieces of a window or page, inside this area, in drawing order.
+fn pieces(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    pieces: &[(String, Element)],
+    inside: &Area,
+    context: &Context,
+) {
+    let inside = *inside;
+    for (name, element) in pieces {
         match element {
             Element::Gauge(gauge) => self::gauge(window, art, gauge, &inside),
-            Element::Label(label) => self::label(window, label, &inside),
+            Element::Label(label) => self::label(window, name, label, &inside, context.id),
             Element::Image { id, area, piece } => {
                 let node = at(
                     inside.x + area.x,
@@ -218,9 +295,30 @@ fn draw(window: &mut ChildSpawnerCommands, screen: &Screen, art: &mut crate::she
                 }
             }
             Element::SpellGem(gem) => spell_gem(window, art, gem, &inside),
-            Element::Button(button) => self::button(window, art, button, &inside),
-            // The inventory's pieces are drawn with the inventory.
-            Element::InvSlot(_) | Element::Tabs(_) | Element::View(_) | Element::Other(_) => (),
+            Element::Button(button) => self::button(window, art, button, &inside, context.id),
+            Element::InvSlot(slot) => items::slot(window, art, slot, &inside, context.id),
+            // The first page shows; the client has nothing for the others yet.
+            Element::Tabs(pages) => {
+                if let Some(page) = pages.first() {
+                    let at = page.area.unwrap_or(Area {
+                        x: 0.0,
+                        y: 0.0,
+                        width: inside.width,
+                        height: inside.height,
+                    });
+                    let page_inside = Area {
+                        x: inside.x + at.x,
+                        y: inside.y + at.y,
+                        width: at.width,
+                        height: at.height,
+                    };
+                    self::pieces(window, art, &page.pieces, &page_inside, context);
+                }
+            }
+            Element::View(view) if view.name == "IW_CharacterView" => {
+                items::figure(window, view, &inside, context.paperdoll);
+            }
+            Element::View(_) | Element::Other(_) => (),
         }
     }
 }
@@ -275,38 +373,125 @@ fn spell_gem(
         });
 }
 
-/// A button the client knows what to do with: for now the spellbook's
-/// toggle.
+/// What a skin's button does in the client.
+enum Does {
+    /// Opens and closes a window.
+    Toggles(WindowId),
+    /// Closes its own window.
+    Closes,
+    /// Shows the purse's coins of one kind.
+    Coins(u8),
+    /// Shows a bag's picture.
+    BagIcon,
+    /// Nothing yet: drawn greyed out, as the client's own windows show what
+    /// it or the server lacks.
+    Nothing,
+}
+
+/// A skin's button: what the client does with it, or greyed out where it
+/// does nothing yet.
 fn button(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
     button: &eq_client_assets::sidl::Button,
     inside: &Area,
+    owner: WindowId,
 ) {
-    // Only buttons the client knows what to do with are drawn.
-    let toggles = match button.id.as_deref() {
-        Some("CSPW_SpellBook") => WindowId::Spellbook,
-        _ => return,
-    };
-    let Some(image) = button.look.normal.as_ref().and_then(|piece| art.cut(piece)) else {
-        return;
+    let does = match button.id.as_deref() {
+        Some("CSPW_SpellBook") => Does::Toggles(WindowId::Spellbook),
+        Some("DoneButton") => Does::Closes,
+        Some(id) if id.starts_with("IW_Money") => match id.trim_start_matches("IW_Money").parse() {
+            Ok(kind @ 0..=3) => Does::Coins(kind),
+            _ => return,
+        },
+        Some("Container_Icon") if matches!(owner, WindowId::Bag(_)) => Does::BagIcon,
+        // The official client shows Combine only on a tradeskill container,
+        // and this client combines nothing.
+        Some("Container_Combine") => return,
+        _ => Does::Nothing,
     };
     let area = button.area;
-    let mut drawn = window.spawn((
-        Button,
-        super::windows::SelectorButton(toggles),
-        SkinButton(button.look.clone()),
-        image,
-        at(
-            inside.x + area.x,
-            inside.y + area.y,
-            area.width,
-            area.height,
-        ),
-    ));
-    if let Some(tooltip) = &button.tooltip {
+    let node = at(
+        inside.x + area.x,
+        inside.y + area.y,
+        area.width,
+        area.height,
+    );
+    let look = match does {
+        Does::Nothing => button
+            .look
+            .disabled
+            .as_ref()
+            .or(button.look.normal.as_ref()),
+        _ => button.look.normal.as_ref(),
+    };
+    let mut drawn = match look.and_then(|piece| art.cut(piece)) {
+        Some(image) => window.spawn((image, node)),
+        None => window.spawn(node),
+    };
+    match does {
+        Does::Toggles(toggles) => {
+            drawn.insert((
+                Button,
+                super::windows::SelectorButton(toggles),
+                SkinButton(button.look.clone()),
+            ));
+        }
+        Does::Closes => {
+            drawn.insert((Button, items::Closes(owner)));
+        }
+        Does::Coins(_) | Does::BagIcon | Does::Nothing => (),
+    }
+    if let Some(tooltip) = &button.tooltip
+        && !matches!(does, Does::Nothing)
+    {
         drawn.insert(crate::tooltip::Tooltip(tooltip.clone()));
     }
+    let ink = match does {
+        Does::Nothing => theme::INK_DIM,
+        _ => button.text_color.map_or(theme::INK_BRIGHT, rgb),
+    };
+    drawn.with_children(|inner| {
+        if let (Some(decal), Some(place)) = (&button.decal, button.decal_area) {
+            picture(
+                inner,
+                art,
+                decal,
+                at(place.x, place.y, place.width, place.height),
+            );
+        }
+        match does {
+            Does::Coins(kind) => aligned(
+                inner,
+                at(0.0, 5.0, area.width - 6.0, area.height - 5.0),
+                Align::Right,
+                (Shows::Coins(kind), theme::text("", Size::Body, ink)),
+            ),
+            Does::BagIcon => {
+                if let WindowId::Bag(bag) = owner {
+                    inner.spawn((
+                        items::BagPart::Icon(eq_client_core::inventory::InventorySlot(bag)),
+                        ImageNode::default(),
+                        at(0.0, 0.0, area.width, area.height),
+                    ));
+                }
+            }
+            // A box with a picture shows a value, such as the bank's coins;
+            // the skin's text there is only a sample, so it stays blank
+            // until the client has the value.
+            Does::Nothing if button.decal.is_some() => (),
+            Does::Toggles(_) | Does::Closes | Does::Nothing => {
+                if let Some(text) = &button.text {
+                    aligned(
+                        inner,
+                        at(0.0, (area.height - 12.0) / 2.0, area.width, 12.0),
+                        Align::Center,
+                        theme::text(text.as_str(), Size::Small, ink),
+                    );
+                }
+            }
+        }
+    });
 }
 
 /// Draws each skin button in its state: on while its window is open,
@@ -497,37 +682,59 @@ fn gauge(
     });
 }
 
-/// A label: fixed text, or what its number says it shows.
-fn label(window: &mut ChildSpawnerCommands, label: &Label, inside: &Area) {
+/// A label: fixed text, or what its number says it shows; a bag's window
+/// names its bag.
+fn label(
+    window: &mut ChildSpawnerCommands,
+    name: &str,
+    label: &Label,
+    inside: &Area,
+    owner: WindowId,
+) {
     let area = label.area;
-    let mut text = window.spawn((
-        theme::text(
-            if label.eq_type.is_some() {
-                ""
-            } else {
-                label.text.as_str()
-            },
-            font(label.font),
-            label.color.map_or(theme::INK_BRIGHT, rgb),
-        ),
-        TextLayout::new(
-            match label.align {
-                Align::Left => Justify::Left,
-                Align::Center => Justify::Center,
-                Align::Right => Justify::Right,
-            },
-            LineBreak::NoWrap,
-        ),
-        at(
-            inside.x + area.x,
-            inside.y + area.y,
-            area.width,
-            area.height,
-        ),
-    ));
-    if let Some(kind) = label.eq_type {
-        text.insert(Shows::Label(kind));
+    let bag = match owner {
+        WindowId::Bag(bag) if name == "Container_Label" => {
+            Some(eq_client_core::inventory::InventorySlot(bag))
+        }
+        _ => None,
+    };
+    let banker = owner == WindowId::Bank && name == "BW_BankerName";
+    let words = if label.eq_type.is_some() || bag.is_some() || banker {
+        ""
+    } else {
+        label.text.as_str()
+    };
+    let text = theme::text(
+        words,
+        font(label.font),
+        label.color.map_or(theme::INK_BRIGHT, rgb),
+    );
+    let node = at(
+        inside.x + area.x,
+        inside.y + area.y,
+        area.width,
+        area.height,
+    );
+    match (label.eq_type, bag) {
+        (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
+        (None, Some(bag)) => aligned(window, node, label.align, (text, items::BagPart::Name(bag))),
+        (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
+        (None, None) => aligned(window, node, label.align, text),
     }
+}
+
+/// Text in a box the skin sizes, aligned in it as the skin aligns it, on
+/// one line.
+fn aligned(window: &mut ChildSpawnerCommands, mut node: Node, align: Align, text: impl Bundle) {
+    node.justify_content = match align {
+        Align::Left => JustifyContent::FlexStart,
+        Align::Center => JustifyContent::Center,
+        Align::Right => JustifyContent::FlexEnd,
+    };
+    node.overflow = Overflow::clip();
+    window
+        .spawn(node)
+        .with_child((text, TextLayout::new(Justify::Left, LineBreak::NoWrap)));
 }
 
 /// A piece of the skin, stretched over this node.
@@ -577,7 +784,10 @@ const fn to_f32(value: u32) -> f32 {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
     online: Res<super::online::OnlineState>,
-    hud: Res<super::hud::HudState>,
+    (hud, inventory): (
+        Res<super::hud::HudState>,
+        Res<super::inventory::InventoryState>,
+    ),
     combat: Res<super::combat::CombatState>,
     lines: Res<super::notices::Lines>,
     mut fills: Query<(&Shows, &mut Node), Without<Text>>,
@@ -613,6 +823,8 @@ pub(crate) fn show(
                 lines.target.text(std::time::Instant::now()).to_owned(),
                 None,
             ),
+            Shows::Coins(kind) => (coins(world, kind), None),
+            Shows::Banker => (inventory.banker().to_owned(), None),
             Shows::Fill(_) | Shows::Attacking => continue,
         };
         if text.0 != wanted {
@@ -686,13 +898,61 @@ fn label_text(
             format!("{:.0}", (fraction * 100.0).clamp(0.0, 100.0))
         })
     };
+    let player = world.player();
+    let number = |value: Option<u32>| value.map_or_else(String::new, |value| value.to_string());
+    let attribute = |pick: fn(&eq_client_core::BaseAttributes) -> i32| {
+        player
+            .and_then(|player| player.base_attributes.as_ref())
+            .map_or_else(String::new, |attributes| pick(attributes).to_string())
+    };
+    let vitals = world.vitals();
     match kind {
+        1 => player.map_or_else(String::new, |player| player.name.clone()),
+        2 => player.map_or_else(String::new, |player| player.level.to_string()),
+        3 => player
+            .and_then(|player| player.class)
+            .and_then(eq_client_core::classes::class_name)
+            .unwrap_or_default()
+            .to_owned(),
+        4 => player
+            .and_then(|player| player.deity)
+            .and_then(eq_client_core::classes::deity_name)
+            .unwrap_or_default()
+            .to_owned(),
+        // The profile's base attributes; what items and spells add is not
+        // reported to the client.
+        5 => attribute(|attributes| attributes.strength),
+        6 => attribute(|attributes| attributes.stamina),
+        7 => attribute(|attributes| attributes.dexterity),
+        8 => attribute(|attributes| attributes.agility),
+        9 => attribute(|attributes| attributes.wisdom),
+        10 => attribute(|attributes| attributes.intelligence),
+        11 => attribute(|attributes| attributes.charisma),
+        17 => number(world.hit_points().map(|(current, _)| current)),
+        18 => number(world.hit_points().map(|(_, maximum)| maximum)),
         19 => percent(fraction(world, estimate, 1)),
         20 => percent(fraction(world, estimate, 2)),
         21 => percent(fraction(world, estimate, 3)),
         29 => target_health(world).map_or_else(String::new, |health| health.to_string()),
+        124 => number(vitals.mana),
+        125 => number(estimate.map(|(mana, _)| mana)),
+        126 => number(vitals.endurance),
+        127 => number(estimate.map(|(_, endurance)| endurance)),
         _ => String::new(),
     }
+}
+
+/// The purse's coins of one kind: platinum, gold, silver or copper.
+fn coins(world: &eq_client_core::world::ClientWorld, kind: u8) -> String {
+    world.coins().map_or_else(String::new, |coins| {
+        match kind {
+            0 => coins.platinum,
+            1 => coins.gold,
+            2 => coins.silver,
+            _ => coins.copper,
+        }
+        .to_string()
+    })
 }
 
 /// The target's health in percent, the player's own when they target

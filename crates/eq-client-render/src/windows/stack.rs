@@ -69,6 +69,11 @@ impl Shown {
         self.0.remove(&id);
     }
 
+    /// The open windows.
+    pub(crate) fn ids(&self) -> impl Iterator<Item = WindowId> + '_ {
+        self.0.iter().copied()
+    }
+
     fn toggle(&mut self, id: WindowId) {
         if !self.0.remove(&id) {
             self.0.insert(id);

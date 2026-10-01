@@ -2,6 +2,8 @@
 //! opens, which layer it draws in, how the player opens it, whether Escape
 //! closes it and whether its placement is kept. A new window is a new
 //! [`WindowId`], and each rule below must say what it does for it.
+use std::borrow::Cow;
+
 use bevy::prelude::*;
 
 /// A window the client draws. The id keys its saved placement, its place in
@@ -24,8 +26,13 @@ pub(crate) enum WindowId {
     Effects,
     /// Chat.
     Chat,
-    /// The inventory and the bank.
+    /// The inventory and, drawn by the client's own chrome, the bank.
     Inventory,
+    /// The bank, drawn from the skin, while a banker is near.
+    Bank,
+    /// A bag's contents, drawn from the skin: the bag in this inventory
+    /// slot (Titanium's numbering).
+    Bag(i32),
     /// The spellbook.
     Spellbook,
     /// An inspected item.
@@ -155,6 +162,24 @@ pub(crate) struct Description {
     pub saved_as: &'static [&'static str],
 }
 
+/// Where a bag opens until it is moved: carried bags side by side right of
+/// the inventory, below the target window; bank bags side by side right of
+/// the bank, five to a row, each row a little lower.
+const fn bag_placement(slot: i32) -> Placement {
+    // A skin's bag window is about 100 pixels wide.
+    const STEP: f32 = 98.0;
+    #[allow(clippy::cast_precision_loss)] // Slot offsets are small.
+    if slot >= 2000 {
+        let index = (slot - 2000).rem_euclid(16);
+        Placement::TopLeft(
+            778.0 + (index % 5) as f32 * STEP,
+            100.0 + (index / 5) as f32 * 24.0,
+        )
+    } else {
+        Placement::TopLeft(484.0 + (slot - 22).rem_euclid(8) as f32 * STEP, 300.0)
+    }
+}
+
 /// A window of the always-there HUD.
 const fn hud(
     title: &'static str,
@@ -191,7 +216,9 @@ const fn floating(
 
 impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
-    pub(crate) const ALL: [Self; 15] = [
+    /// Bags are left out: there is one for each slot that can hold a bag
+    /// (see [`WindowId::bags`]), and none of them is toggled.
+    pub(crate) const ALL: [Self; 16] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -201,6 +228,7 @@ impl WindowId {
         Self::Effects,
         Self::Chat,
         Self::Inventory,
+        Self::Bank,
         Self::Spellbook,
         Self::Item,
         Self::Loot,
@@ -209,8 +237,15 @@ impl WindowId {
         Self::CharacterSelect,
     ];
 
-    /// The official client's name for the window: its screen in the skin's
-    /// files, and its section in a character's UI file.
+    /// The windows of the bags in the slots that hold one: carried, then
+    /// in the bank.
+    pub(crate) fn bags() -> impl Iterator<Item = Self> {
+        (22..=29).chain(2000..=2015).map(Self::Bag)
+    }
+
+    /// The official client's name for the window's screen in the skin's
+    /// files; also its section in a character's UI file, except a bag's
+    /// (see [`WindowId::section`]).
     pub(crate) const fn official(self) -> Option<&'static str> {
         match self {
             Self::Target => Some("TargetWindow"),
@@ -221,6 +256,8 @@ impl WindowId {
             Self::Effects => Some("BuffWindow"),
             Self::Chat => Some("ChatWindow"),
             Self::Inventory => Some("InventoryWindow"),
+            Self::Bank => Some("BankWnd"),
+            Self::Bag(_) => Some("ContainerWindow"),
             Self::Spellbook => Some("SpellBookWnd"),
             Self::Item => Some("ItemDisplayWindow"),
             Self::Loot => Some("LootWnd"),
@@ -229,9 +266,20 @@ impl WindowId {
         }
     }
 
-    /// The name its placement is saved under.
-    pub(crate) const fn key(self) -> &'static str {
+    /// Its section in a character's UI file: each bag keeps its own place,
+    /// `BagInv1` to `BagInv8` carried and `BagBank1` on in the bank.
+    pub(crate) fn section(self) -> Option<Cow<'static, str>> {
         match self {
+            Self::Bag(slot @ 22..=29) => Some(Cow::Owned(format!("BagInv{}", slot - 21))),
+            Self::Bag(slot @ 2000..=2015) => Some(Cow::Owned(format!("BagBank{}", slot - 1999))),
+            Self::Bag(_) => None,
+            _ => self.official().map(Cow::Borrowed),
+        }
+    }
+
+    /// The name its placement is saved under; each bag's names its slot.
+    pub(crate) fn key(self) -> Cow<'static, str> {
+        Cow::Borrowed(match self {
             Self::Status => "status",
             Self::Target => "target",
             Self::Player => "player",
@@ -241,18 +289,23 @@ impl WindowId {
             Self::Effects => "effects",
             Self::Chat => "chat",
             Self::Inventory => "inventory",
+            Self::Bank => "bank",
+            Self::Bag(slot) => return Cow::Owned(format!("bag-{slot}")),
             Self::Spellbook => "spellbook",
             Self::Item => "item",
             Self::Loot => "loot",
             Self::Merchant => "merchant",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
-        }
+        })
     }
 
     /// The window whose placement is saved under this name, now or before
     /// windows had ids.
     pub(crate) fn saved_under(name: &str) -> Option<Self> {
+        if name.starts_with("bag-") {
+            return Self::bags().find(|bag| bag.key() == name);
+        }
         Self::ALL
             .into_iter()
             .find(|id| id.key() == name || id.describe().saved_as.contains(&name))
@@ -309,6 +362,12 @@ impl WindowId {
                     &["INVENTORY"],
                 )
             },
+            // Right of where the skin puts the player and target windows, so
+            // the banker stays in view; a banker's window opens and closes
+            // with the banker's reach.
+            Self::Bank => floating("BANK", Placement::TopLeft(666.0, 100.0), false, &[]),
+            // Each bag keeps its own place, as in the official client.
+            Self::Bag(slot) => floating("", bag_placement(slot), false, &[]),
             Self::Spellbook => Description {
                 ..floating(
                     "SPELLBOOK",
@@ -317,11 +376,9 @@ impl WindowId {
                     &["SPELLBOOK [B]"],
                 )
             },
-            // Between the inventory and the spellbook, below the effects; a
-            // merchant open at the same time sits a little lower, so both
-            // titles show.
             // Loot and merchant open right of where the skin puts the player
-            // and target windows.
+            // and target windows; a merchant open at the same time sits a
+            // little lower, so both titles show.
             Self::Loot => floating("LOOT", Placement::TopLeft(676.0, 206.0), false, &["LOOT"]),
             Self::Merchant => floating(
                 "MERCHANT",
@@ -357,12 +414,13 @@ mod tests {
 
     #[test]
     fn every_window_has_one_key_and_old_names_find_it() {
-        let mut keys: Vec<_> = WindowId::ALL.iter().map(|id| id.key()).collect();
+        let windows: Vec<_> = WindowId::ALL.into_iter().chain(WindowId::bags()).collect();
+        let mut keys: Vec<_> = windows.iter().map(|id| id.key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), WindowId::ALL.len());
-        for id in WindowId::ALL {
-            assert_eq!(WindowId::saved_under(id.key()), Some(id));
+        assert_eq!(keys.len(), windows.len());
+        for id in windows {
+            assert_eq!(WindowId::saved_under(&id.key()), Some(id));
             for old in id.describe().saved_as {
                 assert_eq!(WindowId::saved_under(old), Some(id), "{old}");
             }
@@ -372,5 +430,20 @@ mod tests {
             Some(WindowId::Spellbook)
         );
         assert_eq!(WindowId::saved_under("unknown"), None);
+        assert_eq!(WindowId::saved_under("bag-"), None);
+        assert_eq!(WindowId::saved_under("bag-31"), None);
+    }
+
+    #[test]
+    fn each_bag_has_the_official_clients_section() {
+        let section = |slot| WindowId::Bag(slot).section().map(Cow::into_owned);
+        assert_eq!(section(22).as_deref(), Some("BagInv1"));
+        assert_eq!(section(29).as_deref(), Some("BagInv8"));
+        assert_eq!(section(2000).as_deref(), Some("BagBank1"));
+        assert_eq!(section(2500), None);
+        assert_eq!(
+            WindowId::Inventory.section().as_deref(),
+            Some("InventoryWindow")
+        );
     }
 }

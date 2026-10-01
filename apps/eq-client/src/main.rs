@@ -135,7 +135,8 @@ struct Arguments {
     terrain_only: bool,
 
     /// Attended key script (press/hold/wait/report/screenshot/quit), run only
-    /// while the client window is focused, except on a local `EQEmu` server.
+    /// while the client window is focused, except offline or on a local
+    /// `EQEmu` server.
     /// Screenshots are saved beside it.
     #[arg(long, conflicts_with = "screenshot")]
     script: Option<PathBuf>,

@@ -190,7 +190,7 @@ fn characters(news: Res<News>) {
     });
 }
 
-/// Fills the inventory, and the bank if asked, and opens the window.
+/// Fills the inventory, and the bank if asked, and opens their windows.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn inventory(
     news: Res<News>,
@@ -201,6 +201,9 @@ fn inventory(
     news.game(WorldEvent::Inventory(InventoryUpdate::Snapshot(items())));
     state.preview(switches.0.bank);
     shown.open(super::windows::WindowId::Inventory);
+    if switches.0.bank {
+        shown.open(super::windows::WindowId::Bank);
+    }
 }
 
 /// Scribes fourteen spells, memorizes eight and starts two effects, then

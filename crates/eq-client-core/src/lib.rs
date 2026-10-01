@@ -2,6 +2,7 @@
 
 pub mod buffs;
 pub mod chat;
+pub mod classes;
 pub mod doors;
 pub mod entities;
 pub mod ground;

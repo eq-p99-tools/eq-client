@@ -109,8 +109,11 @@ fn seed(
     if viewport.min_element() <= 0.0 {
         return;
     }
-    for id in super::WindowId::ALL {
-        let Some(name) = id.official() else {
+    for id in super::WindowId::ALL
+        .into_iter()
+        .chain(super::WindowId::bags())
+    {
+        let Some(name) = id.section() else {
             continue;
         };
         if layouts.contains_key(&id) || !id.describe().persists {
@@ -118,7 +121,7 @@ fn seed(
         }
         let saved: Vec<_> = positions
             .iter()
-            .filter(|position| position.window.eq_ignore_ascii_case(name))
+            .filter(|position| position.window.eq_ignore_ascii_case(&name))
             .filter(|position| position.screen.0 > 0 && position.screen.1 > 0)
             .collect();
         let size = |position: &&eq_client_assets::ui::WindowPosition| {

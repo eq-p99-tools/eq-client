@@ -829,6 +829,8 @@ mod tests {
         let sender = crate::outbox::Outbox::new(Some(tx));
         state.refresh_bank_access(online);
         assert!(state.bank_open);
+        // The bank's window names the banker in reach.
+        assert_eq!(state.banker(), "Synthetic banker");
         state.click_slot(InventorySlot(2000), false, online, &sender);
         assert!(
             matches!(rx.try_recv().unwrap(), ClientCommand::MoveInventory(request)
@@ -839,6 +841,7 @@ mod tests {
         testing::place_axis(online, |position| position.x = 21.0);
         state.refresh_bank_access(online);
         assert!(!state.bank_open);
+        assert_eq!(state.banker(), "");
         assert_eq!(state.tab, super::super::Tab::Inventory);
         // Closing the bank never discards a move already submitted to the worker.
         assert!(state.actions.pending.is_some());

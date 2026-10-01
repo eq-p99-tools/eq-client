@@ -37,7 +37,7 @@ pub(super) fn contents(
 }
 
 /// Keeps the quantity picker available for carried and bank stacks alike.
-fn quantity_picker(parent: &mut ChildSpawnerCommands, view: View<'_>) {
+pub(crate) fn quantity_picker(parent: &mut ChildSpawnerCommands, view: View<'_>) {
     if let Some(selection) = &view.state.actions.split {
         use super::interaction::SplitAction;
         parent

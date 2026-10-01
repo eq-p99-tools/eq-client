@@ -4,6 +4,8 @@ pub(super) mod cursor;
 mod interaction;
 mod layout;
 
+pub(crate) use layout::quantity_picker;
+
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::inventory::{Inventory, InventorySlot, InventoryUpdate};
@@ -28,6 +30,8 @@ pub(super) struct InventoryState {
     revision: u64,
     next_use_id: u64,
     bank_open: bool,
+    /// The banker in reach, by name, while the bank is open.
+    banker: String,
     actions: interaction::Actions,
     /// Moves the offline preview settled itself, on their way to the world.
     demo_news: Vec<InventoryUpdate>,
@@ -46,7 +50,32 @@ impl InventoryState {
     pub(crate) fn preview(&mut self, bank: bool) {
         self.demo = true;
         self.bank_open = bank;
+        self.banker = if bank {
+            "Preview banker".into()
+        } else {
+            String::new()
+        };
         self.tab = if bank { Tab::Bank } else { Tab::Inventory };
+    }
+
+    /// Changes whenever the window must be drawn again.
+    pub(crate) const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Whether a stack is being split, so the quantity picker shows.
+    pub(crate) const fn splitting(&self) -> bool {
+        self.actions.split.is_some()
+    }
+
+    /// Whether a banker is in reach, so the bank can be opened.
+    pub(crate) const fn bank_open(&self) -> bool {
+        self.bank_open
+    }
+
+    /// The banker in reach, by name; empty while none is.
+    pub(crate) fn banker(&self) -> &str {
+        &self.banker
     }
 
     /// Whether an action is under way that Escape cancels: a split, or
@@ -76,18 +105,16 @@ impl InventoryState {
         if self.demo && !online.enabled {
             return;
         }
-        let available = !self.demo
-            && online.world().connected()
-            && online.world().death().is_none()
-            && online.world().session_id().is_some()
-            && online.world().player().is_some_and(|player| {
-                online
-                    .world()
-                    .spawns()
-                    .values()
-                    .map(|spawn| &spawn.state)
-                    .any(|spawn| eq_client_core::inventory::banker_in_range(player.position, spawn))
-            });
+        let world = online.world();
+        let banker = (!self.demo
+            && world.connected()
+            && world.death().is_none()
+            && world.session_id().is_some())
+        .then(|| world.player())
+        .flatten()
+        .and_then(|player| nearest_banker(world, player.position));
+        let available = banker.is_some();
+        self.banker = banker.unwrap_or_default();
         if self.bank_open != available {
             self.bank_open = available;
             self.actions.split = None;
@@ -114,6 +141,7 @@ impl InventoryState {
         self.demo_news.clear();
         self.demo = false;
         self.bank_open = false;
+        self.banker.clear();
         // The bank tab closes with the bank; a stale choice would show no slots.
         self.tab = Tab::Inventory;
         self.revision = self.revision.wrapping_add(1);
@@ -254,7 +282,7 @@ pub(super) fn input(
     mouse: Res<ButtonInput<MouseButton>>,
     online: Res<super::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
-    shown: Res<super::windows::Shown>,
+    (mut shown, skinned): (ResMut<super::windows::Shown>, Res<crate::skinned::Skinned>),
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
     slots: Query<(&Interaction, &SlotButton)>,
     store: Query<&Interaction, (With<StoreCursor>, Changed<Interaction>)>,
@@ -277,10 +305,11 @@ pub(super) fn input(
         }
         state.revision = state.revision.wrapping_add(1);
     }
+    // A closed inventory ends its own actions; slots in an open bag or bank
+    // still take clicks.
     if !shown.is_open(super::windows::WindowId::Inventory) {
         state.actions.auto_store = false;
         state.actions.split = None;
-        return;
     }
     // A nested quantity button consumes the click before its enclosing item slot.
     if let Some((_, stack)) = stack_counts
@@ -338,7 +367,13 @@ pub(super) fn input(
                     );
                 }
             } else if let Some(item) = online.world().inventory().items().get(&slot.0) {
-                items.open_received(item.details.clone());
+                // With the skin's bag windows, a bag opens as in the official
+                // client; anything else shows what it is.
+                if item.bag_slots > 0 && skinned.has(super::windows::WindowId::Inventory) {
+                    crate::skinned::toggle_bag(&mut shown, slot.0);
+                } else {
+                    items.open_received(item.details.clone());
+                }
             }
         } else if mouse.just_pressed(MouseButton::Left) && *interaction == Interaction::Pressed {
             if keys
@@ -351,6 +386,25 @@ pub(super) fn input(
             }
         }
     }
+}
+
+/// The nearest banker in reach, by the name players see.
+fn nearest_banker(
+    world: &eq_client_core::world::ClientWorld,
+    position: eq_client_core::WorldPosition,
+) -> Option<String> {
+    let distance = |at: eq_client_core::WorldPosition| {
+        (position.x - at.x)
+            .hypot(position.y - at.y)
+            .hypot(position.z - at.z)
+    };
+    world
+        .spawns()
+        .values()
+        .map(|spawn| &spawn.state)
+        .filter(|spawn| eq_client_core::inventory::banker_in_range(position, spawn))
+        .min_by(|a, b| distance(a.position).total_cmp(&distance(b.position)))
+        .map(|spawn| eq_client_core::entities::display_name(&spawn.name))
 }
 
 fn visible_slots(inventory: &Inventory, tab: Tab) -> Vec<InventorySlot> {

@@ -233,7 +233,7 @@ pub fn run(
     frame_limit::install(&mut app, frame_rate_cap);
     install_overlays(&mut app);
     if let Some(steps) = steps {
-        install_script(&mut app, steps, follow, local_session);
+        install_script(&mut app, steps, follow, (local_session, online));
     }
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
@@ -260,6 +260,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<spellbook::BookSelection>()
         .init_resource::<sheets::Sheets>()
         .init_resource::<skinned::Screens>()
+        .init_resource::<skinned::Skinned>()
         .init_resource::<chat::ChatState>()
         .init_resource::<notices::Lines>()
         .init_resource::<items::ItemState>()
@@ -315,18 +316,19 @@ fn exit_status(exit: &AppExit) -> i32 {
     }
 }
 
-/// Drives an attended script after UI focus, optionally following its file.
+/// Drives a script after UI focus, optionally following its file; it is
+/// attended unless the session is local-only or the preview is offline.
 fn install_script(
     app: &mut App,
     steps: Vec<script::Step>,
     follow: Option<(PathBuf, usize)>,
-    local_session: bool,
+    (local_session, online): (bool, bool),
 ) {
     let script = match follow {
         Some((path, offset)) => script::Script::following(steps, path, offset),
         None => script::Script::new(steps),
     };
-    app.insert_resource(script.local_session(local_session));
+    app.insert_resource(script.local_session(local_session).offline_preview(!online));
     app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
 }
 
@@ -426,9 +428,13 @@ fn schedule(app: &mut App) {
                 spell_icons::update,
                 outbox::show,
                 hud::action_bar::update,
+                skinned::frames,
                 skinned::apply,
                 skinned::show,
                 skinned::buttons,
+                skinned::contents,
+                skinned::close,
+                skinned::picker,
             )
                 .chain(),
             (

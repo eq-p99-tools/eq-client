@@ -62,10 +62,13 @@ impl Art<'_> {
             .clone()
     }
 
+    /// A rectangle of a texture, stretched over its node as the skin's
+    /// pieces are: a border's edge or a gauge spans its whole length.
     fn piece(&mut self, file: &str, rect: Rect) -> Option<ImageNode> {
         Some(ImageNode {
             image: self.texture(file)?,
             rect: Some(rect),
+            image_mode: NodeImageMode::Stretch,
             ..default()
         })
     }

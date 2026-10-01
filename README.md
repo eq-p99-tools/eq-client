@@ -508,9 +508,10 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done ...`,
+`right_click` with the same targets (a bag's slot opens its window),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
-window is focused, stop if focus is lost while a key is held, cap each hold, wait
+window is focused (except offline, or on a local `EQEmu` server), stop if focus is lost while a key is held, cap each hold, wait
 and the whole run, inject clicks only while the real pointer is outside the
 window, never send chat, and save screenshots beside the script file.
 

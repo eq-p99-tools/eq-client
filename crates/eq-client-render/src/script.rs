@@ -33,7 +33,8 @@ pub struct Script {
     steps: VecDeque<Step>,
     current: Option<(Step, Duration)>,
     held: Vec<KeyCode>,
-    clicked: bool,
+    /// The mouse button a scripted click holds down until the next frame.
+    clicked: Option<MouseButton>,
     started: Option<Duration>,
     paused: bool,
     /// Newest chat line already included in a report.
@@ -45,6 +46,9 @@ pub struct Script {
     /// `EQEmu` test server): `gm` steps may send `#` commands there, and steps run
     /// without anyone watching the window.
     local: bool,
+    /// The preview runs offline: no step can reach a server, so steps run
+    /// without anyone watching the window, but `gm` steps stay refused.
+    offline: bool,
     /// The window focus winit last reported; None until it reports any.
     focus: Option<bool>,
     /// The route a `walk` step is searching for or following.
@@ -67,12 +71,13 @@ impl Script {
             steps: steps.into(),
             current: None,
             held: Vec::new(),
-            clicked: false,
+            clicked: None,
             started: None,
             paused: false,
             chat_seen: 0,
             follow: None,
             local: false,
+            offline: false,
             focus: None,
             route: None,
         }
@@ -98,6 +103,13 @@ impl Script {
     #[must_use]
     pub fn local_session(mut self, local: bool) -> Self {
         self.local = local;
+        self
+    }
+
+    /// Marks the run offline (see [`Script::offline`]).
+    #[must_use]
+    pub fn offline_preview(mut self, offline: bool) -> Self {
+        self.offline = offline;
         self
     }
 
@@ -143,8 +155,8 @@ impl Script {
         for key in self.held.drain(..) {
             keys.release(key);
         }
-        if std::mem::take(&mut self.clicked) {
-            mouse.release(MouseButton::Left);
+        if let Some(button) = self.clicked.take() {
+            mouse.release(button);
         }
     }
 
@@ -245,7 +257,7 @@ pub(super) fn drive(
     }
     let window = windows.single().ok();
     if !may_run(
-        script.local,
+        script.local || script.offline,
         script.focus,
         window.is_some_and(|window| window.focused),
     ) {
@@ -267,8 +279,11 @@ pub(super) fn drive(
     // One-frame presses and clicks are released on the frame after they were pressed.
     if matches!(
         script.current,
-        Some((Step::Press(_) | Step::Select(_) | Step::Click(_), _))
-    ) && (!script.held.is_empty() || script.clicked)
+        Some((
+            Step::Press(_) | Step::Select(_) | Step::Click(_) | Step::RightClick(_),
+            _
+        ))
+    ) && (!script.held.is_empty() || script.clicked.is_some())
     {
         script.release(&mut keys, &mut mouse);
         script.current = None;
@@ -369,7 +384,7 @@ pub(super) fn drive(
                     _ => online.world().connected() && online.world().player().is_some(),
                 }
             }
-            Step::Click(target) => {
+            Step::Click(target) | Step::RightClick(target) => {
                 if elapsed > MAX_WAIT {
                     script.stop(&mut keys, &mut mouse, "the pointer stayed over the window");
                     return;
@@ -381,8 +396,13 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "click target is not visible");
                     return;
                 }
-                mouse.press(MouseButton::Left);
-                script.clicked = true;
+                let button = if matches!(step, Step::RightClick(_)) {
+                    MouseButton::Right
+                } else {
+                    MouseButton::Left
+                };
+                mouse.press(button);
+                script.clicked = Some(button);
                 return;
             }
             _ => true,
@@ -492,7 +512,7 @@ pub(super) fn drive(
             }
             return;
         }
-        Step::Click(_) => {
+        Step::Click(_) | Step::RightClick(_) => {
             if window.is_some_and(|window| window.cursor_position().is_some()) {
                 info!("Scripted click waits until the pointer leaves the client window");
             }
@@ -553,10 +573,11 @@ pub(super) fn drive(
 }
 
 /// Steps run only while someone watches the window, unless the session is
-/// local-only. A window counts as focused before winit reports anything (and a
-/// hidden one never gets a report), so only a reported focus counts.
-fn may_run(local: bool, reported_focus: Option<bool>, window_focused: bool) -> bool {
-    local || (reported_focus == Some(true) && window_focused)
+/// local-only or there is none. A window counts as focused before winit
+/// reports anything (and a hidden one never gets a report), so only a
+/// reported focus counts.
+fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool) -> bool {
+    unattended || (reported_focus == Some(true) && window_focused)
 }
 
 /// The say line carrying a `gm` step's `#` command, refused unless the session is
@@ -660,6 +681,9 @@ mod tests {
         );
         assert!(!Script::new(vec![Step::Gm("summon".into())]).local);
         assert!(Script::new(Vec::new()).local_session(true).local);
+        // Offline, steps run unattended but a gm step is still refused.
+        let offline = Script::new(Vec::new()).offline_preview(true);
+        assert!(offline.offline && !offline.local);
     }
 
     #[test]
