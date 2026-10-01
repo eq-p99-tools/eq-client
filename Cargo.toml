@@ -39,8 +39,8 @@ eq-client-axes = { path = "crates/eq-client-axes" }
 eq-client-core = { path = "crates/eq-client-core" }
 eq-client-render = { path = "crates/eq-client-render" }
 anyhow = "1"
-eq-network = { git = "https://github.com/eq-p99-tools/eq-network", branch = "main" }
-eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", branch = "main" }
+eq-network = { git = "https://github.com/eq-p99-tools/eq-network", branch = "claude/food-and-drink" }
+eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", branch = "claude/food-and-drink" }
 glam = "0.32.1"
 parry3d = "0.30.2"
 image = { version = "0.25", default-features = false, features = ["bmp", "dds", "tga"] }
