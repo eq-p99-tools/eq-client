@@ -23,6 +23,9 @@ pub(super) struct AnimatedCharacter {
     pub(super) held: [Option<Held>; 2],
     /// Where held items attach in the latest pose, in `Attachment` order.
     pub(super) attachments: [Option<Mat4>; 3],
+    /// Per asset primitive, whether its piece is drawn; hidden ones are not
+    /// posed.
+    pub(super) shown: Vec<bool>,
     elapsed: f32,
     since_pose: f32,
     moving_for: f32,
@@ -172,9 +175,13 @@ pub(super) fn spawn_on_layers(
     let bottom = asset
         .primitives
         .iter()
-        .flat_map(|p| &p.positions)
+        .zip(&asset.pieces)
+        .filter(|(_, piece)| piece.base())
+        .flat_map(|(p, _)| &p.positions)
         .map(|p| p[1])
         .fold(f32::INFINITY, f32::min);
+    // Until gear says otherwise, only the base body and bare head show.
+    let shown: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
     let mut parts = Vec::with_capacity(primitives.len());
     let child = commands
         .spawn((
@@ -188,10 +195,16 @@ pub(super) fn spawn_on_layers(
         ))
         .with_children(|parent| {
             for (index, mesh, material) in primitives {
+                let visibility = if shown.get(index).copied().unwrap_or(true) {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
                 let part = parent
                     .spawn((
                         Mesh3d(mesh),
                         MeshMaterial3d(material.clone()),
+                        visibility,
                         layers.clone(),
                     ))
                     .id();
@@ -215,6 +228,7 @@ pub(super) fn spawn_on_layers(
             layers: layers.clone(),
             held: [None, None],
             attachments: [None; 3],
+            shown,
             elapsed: 0.0,
             since_pose: 0.0,
             moving_for: 0.0,
@@ -269,10 +283,10 @@ pub(super) fn animate(
             character.elapsed = 0.0;
         }
         let (clip, held) = selected;
-        let (poses, attachments) =
+        let (mut poses, attachments) =
             character
                 .asset
-                .pose_with_attachments(clip, character.elapsed, !held);
+                .pose_with_attachments(clip, character.elapsed, !held, &character.shown);
         // Held items follow their hand or shield point.
         character.attachments = attachments;
         for item in character.held.iter().flatten() {
@@ -283,7 +297,6 @@ pub(super) fn animate(
                 *placed = Transform::from_matrix(point);
             }
         }
-        let mut poses: Vec<_> = poses.into_iter().map(Some).collect();
         for (index, handle) in &character.meshes {
             let Some(pose) = poses.get_mut(*index).and_then(Option::take) else {
                 continue;

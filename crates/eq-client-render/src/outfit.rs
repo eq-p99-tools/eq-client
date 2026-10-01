@@ -1,9 +1,10 @@
 //! Dresses characters in their worn gear: each body part draws with the
 //! material `eq_client_core::outfit` names for the gear, tinted, loaded from the
-//! model's archive once and kept in the base look where the model lacks it.
+//! model's archive once and kept in the base look where the model lacks it,
+//! and only the body and head the gear calls for are drawn.
 use bevy::prelude::*;
-use eq_client_assets::characters::CharacterAsset;
-use eq_client_core::outfit::{self, Appearance};
+use eq_client_assets::characters::{CharacterAsset, Piece};
+use eq_client_core::outfit::{self, Appearance, Shape};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -18,17 +19,18 @@ pub(super) struct Wardrobe(HashMap<Look, Option<Handle<StandardMaterial>>>);
 type Gpu<'a, 'b> = (&'a mut Assets<Image>, &'b mut Assets<StandardMaterial>);
 
 impl Wardrobe {
-    /// The material for a primitive whose base-look material is `base_name`.
+    /// The material for a primitive whose base-look material is `base_name`;
+    /// `helm` says it is on a helmed head.
     fn material(
         &mut self,
         asset: &CharacterAsset,
-        base_name: &str,
+        (base_name, helm): (&str, bool),
         base: &Handle<StandardMaterial>,
         look: &Appearance,
         (images, materials): Gpu,
     ) -> Handle<StandardMaterial> {
         let base_name = base_name.to_ascii_uppercase();
-        let tint = outfit::tint(&base_name, look);
+        let tint = outfit::tint(&base_name, helm, look);
         // A look the model does not ship keeps the base material, still tinted.
         let name = Some(outfit::dressed(&base_name, look))
             .filter(|name| asset.has_material(name))
@@ -74,6 +76,25 @@ impl Wardrobe {
     }
 }
 
+/// Whether a piece of a model is drawn in this shape.
+pub(super) fn shows(piece: Piece, shape: Shape) -> bool {
+    match piece {
+        Piece::Body(body) => body == shape.body,
+        Piece::Head(head) => head == shape.head,
+        Piece::Fixed => true,
+    }
+}
+
+/// The body and head a model draws with for an appearance.
+fn shape_of(asset: &CharacterAsset, race: u32, look: &Appearance) -> Shape {
+    outfit::shape(
+        race,
+        look,
+        |body| asset.pieces.contains(&Piece::Body(body)),
+        |head| asset.pieces.contains(&Piece::Head(head)),
+    )
+}
+
 /// Redraws a character's parts and held items whenever its gear changes:
 /// other spawns from their spawn record and wear changes, the player and the
 /// paperdoll figure from the player's.
@@ -87,14 +108,20 @@ pub(super) fn dress(
         &mut super::character::AnimatedCharacter,
         Option<&super::entities::RemoteEntity>,
     )>,
-    mut parts: Query<&mut MeshMaterial3d<StandardMaterial>>,
+    mut parts: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
     (mut images, mut meshes, mut materials): super::item_models::GpuAssets,
 ) {
     for (mut character, remote) in &mut characters {
-        let look = match remote {
-            Some(remote) => online.spawns.get(&remote.id).map(|spawn| spawn.appearance),
+        let (race, look) = match remote {
+            Some(remote) => online
+                .spawns
+                .get(&remote.id)
+                .map(|spawn| (spawn.race, spawn.appearance)),
             // The player's model and its paperdoll copy.
-            None => online.player.as_ref().map(|player| player.appearance),
+            None => online
+                .player
+                .as_ref()
+                .map(|player| (player.race, player.appearance)),
         }
         .unwrap_or_default();
         if character.dressed == Some(look) {
@@ -105,8 +132,20 @@ pub(super) fn dress(
         hold(&mut commands, &mut character, &look, |name| {
             library.shape(name, directory, (&mut images, &mut meshes, &mut materials))
         });
-        let character = &*character;
+        let shape = shape_of(&character.asset, race, &look);
+        let character = &mut *character;
         for part in &character.parts {
+            let piece = character
+                .asset
+                .pieces
+                .get(part.index)
+                .copied()
+                .unwrap_or(Piece::Fixed);
+            let shown = shows(piece, shape);
+            if let Some(slot) = character.shown.get_mut(part.index) {
+                *slot = shown;
+            }
+            let helm = matches!(piece, Piece::Head(head) if head > 0);
             let handle = match character
                 .asset
                 .materials
@@ -115,15 +154,20 @@ pub(super) fn dress(
             {
                 Some(base_name) => wardrobe.material(
                     &character.asset,
-                    base_name,
+                    (base_name, helm),
                     &part.base,
                     &look,
                     (&mut images, &mut materials),
                 ),
                 None => part.base.clone(),
             };
-            if let Ok(mut material) = parts.get_mut(part.entity) {
+            if let Ok((mut material, mut visibility)) = parts.get_mut(part.entity) {
                 material.0 = handle;
+                *visibility = if shown {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
             }
         }
     }

@@ -85,9 +85,14 @@ pub(super) fn state(
         gear = ?online.player.as_ref().map(|player| player.appearance.materials),
         tints = ?online.player.as_ref().map(|player| player.appearance.tints),
         face = ?online.player.as_ref().map(|player| player.appearance.face),
+        show_helm = ?online.player.as_ref().map(|player| player.appearance.show_helm),
         "Script report"
     );
 }
+
+/// A nearby spawn's gear: its id, materials per texture slot, the chest's
+/// tint and whether its helm shows.
+type Gear = (u16, [u32; 9], Option<[u8; 3]>, bool);
 
 /// Spawn id, shown name, kind, class, distance and rounded EQ x, y, z.
 /// Door id, open type, latest action, distance and EQ position.
@@ -170,13 +175,13 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
         .collect();
     ground.sort_by_key(|object| object.3);
     ground.truncate(5);
-    // Gear of the nearest spawns: id and materials per texture slot.
-    let gear: Vec<(u16, [u32; 9])> = nearby
+    // Gear of the nearest spawns.
+    let gear: Vec<Gear> = nearby
         .iter()
         .take(6)
         .filter_map(|entry| {
-            let spawn = online.spawns.get(&entry.0)?;
-            Some((entry.0, spawn.appearance.materials))
+            let look = online.spawns.get(&entry.0)?.appearance;
+            Some((entry.0, look.materials, look.tints[1], look.show_helm))
         })
         .collect();
     info!(

@@ -1,7 +1,7 @@
 //! Classic character archive discovery, independent of the renderer and session.
 
 mod model;
-pub use model::{Attachment, CharacterAsset, CharacterPose, load_character};
+pub use model::{Attachment, CharacterAsset, CharacterPose, Piece, load_character};
 
 use std::{fs::File, path::Path};
 
@@ -186,7 +186,7 @@ mod tests {
         assert!(chain.width > 0 && chain.name.contains("humch0201"));
         assert!(human.material_texture("HUMCH9901_MDF").unwrap().is_none());
         // Both hands and the shield point are on the skeleton.
-        let (_, attachments) = human.pose_with_attachments("P01", 0.0, true);
+        let (_, attachments) = human.pose_with_attachments("P01", 0.0, true, &[]);
         println!("HUM attachments: {attachments:?}");
         assert!(attachments.iter().all(Option::is_some));
         // The right hand is on the right. A model faces heading 0 as stored,
@@ -202,6 +202,17 @@ mod tests {
         };
         assert!(side(super::Attachment::RightHand) > 0.0);
         assert!(side(super::Attachment::LeftHand) < 0.0);
+        // The robe body and the three helmed heads come with the model, and
+        // the archive has every robe's materials.
+        for piece in [
+            super::Piece::Body(1),
+            super::Piece::Head(1),
+            super::Piece::Head(2),
+            super::Piece::Head(3),
+        ] {
+            assert!(human.pieces.contains(&piece), "{piece:?}");
+        }
+        assert!(human.has_material("CLK0701_MDF") && human.has_material("CLK1006_MDF"));
     }
 
     #[test]

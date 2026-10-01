@@ -27,6 +27,8 @@ pub struct CharacterAsset {
     /// Per primitive, the material it draws with in its base look, in upper
     /// case, such as `HUMCH0001_MDF`.
     pub materials: Vec<Option<String>>,
+    /// Per primitive, the piece of the model it belongs to.
+    pub pieces: Vec<Piece>,
     /// The archive the model came from, for the textures of other looks.
     source: PathBuf,
     /// Every material in that archive by name: its texture file and blending.
@@ -37,6 +39,50 @@ pub struct CharacterAsset {
     skins: Vec<Skin>,
     /// Bones held items attach to, in [`Attachment`] order.
     attachments: [Option<usize>; 3],
+}
+
+/// Which interchangeable piece of a classic model a mesh is. Models swap
+/// whole bodies (`HUM01`, the robe body, beside `HUM`) and heads (`HUMHE01` to
+/// `HUMHE03`, the helmed heads, beside the bare `HUMHE00`); the number in the
+/// mesh's name says which.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Piece {
+    /// A body; 0 is the base body.
+    Body(u8),
+    /// A head; 0 is the bare head.
+    Head(u8),
+    /// Any other mesh, always drawn.
+    Fixed,
+}
+
+impl Piece {
+    /// Reads a mesh name such as `HUMHE02_DMSPRITEDEF` for the model `HUM`.
+    fn of(model: &str, mesh: &str) -> Self {
+        let number = |digits: &str| {
+            (digits.len() == 2 && digits.bytes().all(|byte| byte.is_ascii_digit()))
+                .then(|| digits.parse().ok())
+                .flatten()
+        };
+        let Some(rest) = mesh
+            .strip_suffix("_DMSPRITEDEF")
+            .and_then(|stem| stem.strip_prefix(model))
+        else {
+            return Self::Fixed;
+        };
+        if rest.is_empty() {
+            Self::Body(0)
+        } else if let Some(head) = rest.strip_prefix("HE").and_then(number) {
+            Self::Head(head)
+        } else {
+            number(rest).map_or(Self::Fixed, Self::Body)
+        }
+    }
+
+    /// Whether the piece is drawn in the model's base look.
+    #[must_use]
+    pub const fn base(self) -> bool {
+        matches!(self, Self::Body(0) | Self::Head(0) | Self::Fixed)
+    }
 }
 
 /// Where a classic skeleton holds items.
@@ -96,6 +142,25 @@ struct Skin {
     bones: Vec<usize>,
 }
 
+impl Skin {
+    /// Poses this primitive with these bone transforms.
+    fn pose(&self, world: &[Mat4]) -> CharacterPose {
+        let mut positions = Vec::with_capacity(self.positions.len());
+        let mut normals = Vec::with_capacity(self.normals.len());
+        for ((position, normal), bone) in self.positions.iter().zip(&self.normals).zip(&self.bones)
+        {
+            // Skinning occurs in native Z-up WLD coordinates.
+            let point = world[*bone].transform_point3(crate::wld(*position));
+            let normal = world[*bone]
+                .transform_vector3(crate::wld(*normal))
+                .normalize_or_zero();
+            positions.push(eq_client_axes::from_wld(point).to_array());
+            normals.push(eq_client_axes::from_wld(normal).to_array());
+        }
+        CharacterPose { positions, normals }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct AnimationTrack {
     frames: Vec<LocalTransform>,
@@ -151,7 +216,9 @@ impl CharacterAsset {
         let (min, max) = self
             .primitives
             .iter()
-            .flat_map(|p| &p.positions)
+            .zip(&self.pieces)
+            .filter(|(_, piece)| piece.base())
+            .flat_map(|(p, _)| &p.positions)
             .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), p| {
                 (min.min(p[1]), max.max(p[1]))
             });
@@ -214,20 +281,34 @@ impl CharacterAsset {
     }
 
     /// Samples a clip, looping or held as [`Self::pose`] and [`Self::pose_held`]
-    /// do, and also returns where each held item attaches, in the renderer's
-    /// frame like the pose, for the attachment points this skeleton has.
+    /// do, for the primitives `shown` marks (the others get None), and also
+    /// returns where each held item attaches, in the renderer's frame like
+    /// the pose, for the attachment points this skeleton has.
     pub fn pose_with_attachments(
         &self,
         animation: &str,
         seconds: f32,
         looping: bool,
-    ) -> (Vec<CharacterPose>, [Option<Mat4>; 3]) {
+        shown: &[bool],
+    ) -> (Vec<Option<CharacterPose>>, [Option<Mat4>; 3]) {
         let bones = self.bones(animation, seconds, looping);
         let attachments = self.attachments.map(|bone| {
             bone.and_then(|bone| bones.get(bone))
                 .map(|matrix| eq_client_axes::wld_transform(*matrix))
         });
-        (self.skin(&bones), attachments)
+        let poses = self
+            .skins
+            .iter()
+            .enumerate()
+            .map(|(index, skin)| {
+                shown
+                    .get(index)
+                    .copied()
+                    .unwrap_or(false)
+                    .then(|| skin.pose(&bones))
+            })
+            .collect();
+        (poses, attachments)
     }
 
     /// Each bone's transform in native Z-up WLD space for a clip.
@@ -281,25 +362,7 @@ impl CharacterAsset {
 
     /// Skins every primitive with these bone transforms.
     fn skin(&self, world: &[Mat4]) -> Vec<CharacterPose> {
-        self.skins
-            .iter()
-            .map(|skin| {
-                let mut positions = Vec::with_capacity(skin.positions.len());
-                let mut normals = Vec::with_capacity(skin.normals.len());
-                for ((position, normal), bone) in
-                    skin.positions.iter().zip(&skin.normals).zip(&skin.bones)
-                {
-                    // Skinning occurs in native Z-up WLD coordinates.
-                    let point = world[*bone].transform_point3(crate::wld(*position));
-                    let normal = world[*bone]
-                        .transform_vector3(crate::wld(*normal))
-                        .normalize_or_zero();
-                    positions.push(eq_client_axes::from_wld(point).to_array());
-                    normals.push(eq_client_axes::from_wld(normal).to_array());
-                }
-                CharacterPose { positions, normals }
-            })
-            .collect()
+        self.skins.iter().map(|skin| skin.pose(world)).collect()
     }
 }
 
@@ -436,12 +499,31 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
     let mut texture_indices = HashMap::new();
     let mut primitives = Vec::new();
     let mut materials = Vec::new();
+    let mut pieces = Vec::new();
     let mut skins = Vec::new();
+    // The skeleton's own meshes, then the bodies and heads that can replace
+    // them, which share its bones.
+    let mut sprites = Vec::new();
     for reference in skeleton.dm_sprites.as_deref().unwrap_or_default() {
         let sprite: &DmSprite = resolve(&doc, *reference)?;
         let raw: &DmSpriteDef2 = doc
             .get(&sprite.reference)
             .ok_or_else(|| invalid("legacy skin is not yet renderable"))?;
+        sprites.push(raw);
+    }
+    let attached: Vec<_> = sprites
+        .iter()
+        .filter_map(|raw| doc.get_string(raw.name_reference))
+        .collect();
+    let others: Vec<&DmSpriteDef2> = doc
+        .fragment_iter::<DmSpriteDef2>()
+        .filter(|raw| {
+            doc.get_string(raw.name_reference)
+                .is_some_and(|mesh| !attached.contains(&mesh) && !Piece::of(&name, mesh).base())
+        })
+        .collect();
+    sprites.extend(others);
+    for raw in sprites {
         let mesh_name = doc
             .get_string(raw.name_reference)
             .ok_or_else(|| invalid("mesh name"))?;
@@ -457,6 +539,7 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         if bones.len() != raw.positions.len() || bones.iter().any(|bone| *bone >= parents.len()) {
             return Err(invalid("skin bone assignments"));
         }
+        let piece = Piece::of(&name, mesh_name);
         for staged in stage_mesh(&mesh) {
             let material = staged.material.clone();
             // Skinning starts from libeq's axes; poses convert to the renderer's.
@@ -467,6 +550,7 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
             });
             primitives.push(staged.realize(&mut archive, &mut textures, &mut texture_indices)?);
             materials.push(material);
+            pieces.push(piece);
         }
     }
     if primitives.is_empty() {
@@ -483,6 +567,7 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         primitives,
         textures,
         materials,
+        pieces,
         source: path.to_owned(),
         catalog,
         parents,
@@ -531,6 +616,7 @@ mod tests {
             primitives: Vec::new(),
             textures: Vec::new(),
             materials: Vec::new(),
+            pieces: Vec::new(),
             source: PathBuf::new(),
             catalog: HashMap::new(),
             parents: vec![None],
@@ -615,6 +701,7 @@ mod tests {
             primitives: Vec::new(),
             textures: Vec::new(),
             materials: Vec::new(),
+            pieces: Vec::new(),
             source: PathBuf::new(),
             catalog: HashMap::new(),
             parents: vec![None],
@@ -623,10 +710,28 @@ mod tests {
             skins: Vec::new(),
             attachments: [Some(0), None, None],
         };
-        let (_, attachments) = asset.pose_with_attachments("", 0.0, true);
+        let (_, attachments) = asset.pose_with_attachments("", 0.0, true, &[]);
         let hand = attachments[Attachment::RightHand.index()].unwrap();
         assert!((hand.transform_point3(Vec3::ZERO) - Vec3::new(0.0, 5.0, 0.0)).length() < 0.0001);
         assert!(attachments[Attachment::Shield.index()].is_none());
+    }
+
+    #[test]
+    fn mesh_names_say_which_body_or_head_they_are() {
+        assert_eq!(Piece::of("HUM", "HUM_DMSPRITEDEF"), Piece::Body(0));
+        assert_eq!(Piece::of("HUM", "HUM01_DMSPRITEDEF"), Piece::Body(1));
+        assert_eq!(Piece::of("HUM", "HUMHE00_DMSPRITEDEF"), Piece::Head(0));
+        assert_eq!(Piece::of("HUM", "HUMHE03_DMSPRITEDEF"), Piece::Head(3));
+        for other in [
+            "ELF_DMSPRITEDEF",
+            "HUMHE3_DMSPRITEDEF",
+            "HUMXX_DMSPRITEDEF",
+            "HUM1A_DMSPRITEDEF",
+            "HUM01",
+        ] {
+            assert_eq!(Piece::of("HUM", other), Piece::Fixed, "{other}");
+        }
+        assert!(Piece::Fixed.base() && Piece::Head(0).base() && !Piece::Body(1).base());
     }
 
     #[test]
