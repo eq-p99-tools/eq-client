@@ -21,7 +21,6 @@ pub(super) enum Tab {
 pub(super) struct InventoryState {
     colors: colors::Colors,
     pub hovered: bool,
-    open: bool,
     demo: bool,
     tab: Tab,
     revision: u64,
@@ -45,11 +44,6 @@ impl InventoryState {
     /// storing the cursor's item.
     pub(super) const fn action_under_way(&self) -> bool {
         self.actions.auto_store || self.actions.split.is_some()
-    }
-
-    /// Whether the inventory window is showing.
-    pub(super) const fn is_open(&self) -> bool {
-        self.open
     }
 
     /// Current request feedback, also shown when inventory is closed for hotbar use.
@@ -118,8 +112,6 @@ impl InventoryState {
     }
 }
 #[derive(Component)]
-pub(super) struct Toggle;
-#[derive(Component)]
 pub(super) struct Panel;
 #[derive(Component)]
 pub(super) struct Rows;
@@ -179,58 +171,33 @@ pub(super) struct RenderStamp {
     inventory: u64,
 }
 
-/// Creates the inventory toggle and an initially closed drawer.
+/// Creates the inventory window, closed; the selector and its key open it.
 pub(super) fn spawn(commands: &mut Commands) {
     cursor::spawn(commands);
-    commands
-        .spawn((
-            super::hud::HudRoot,
-            Button,
-            Toggle,
-            GlobalZIndex(25),
-            // Beside the target window, clear of the status box, which grows
-            // with the status line and the interaction prompt, and of the
-            // spellbook at the top right.
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(16),
-                left: percent(50),
-                margin: UiRect::left(px(156)),
-                padding: UiRect::axes(px(12), px(7)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.95)),
-        ))
-        .with_children(|button| {
-            label(button, "Inventory [I]", 12.0);
-        });
-    let frame = commands
-        .spawn((
-            super::hud::HudRoot,
-            Panel,
-            super::windows::pointer::TakesWheel,
-            GlobalZIndex(25),
-            ScrollPosition::default(),
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(20),
-                top: px(110),
-                width: px(600),
-                max_width: percent(95),
-                max_height: percent(62),
-                overflow: Overflow::scroll_y(),
-                padding: UiRect::all(px(8)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(6),
-                display: Display::None,
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
-        ))
-        .id();
-    super::windows::interactive(commands, frame);
+    let frame = super::windows::frame(
+        commands,
+        super::windows::WindowId::Inventory,
+        Node {
+            width: px(600),
+            max_width: percent(95),
+            // Clear of the chat window below it on a 720-line screen.
+            max_height: percent(55),
+            overflow: Overflow::scroll_y(),
+            padding: UiRect::all(px(8)),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(6),
+            display: Display::None,
+            ..default()
+        },
+        Color::srgb(0.025, 0.032, 0.04),
+    );
+    commands.entity(frame).insert((
+        super::hud::HudRoot,
+        Panel,
+        super::windows::pointer::TakesWheel,
+        ScrollPosition::default(),
+    ));
     commands.entity(frame).with_children(|panel| {
-        super::windows::title_bar(panel, frame, "INVENTORY");
         panel
             .spawn(Node {
                 column_gap: px(6),
@@ -302,7 +269,7 @@ pub(super) fn input(
     mouse: Res<ButtonInput<MouseButton>>,
     online: Res<super::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
-    toggles: Query<&Interaction, (With<Toggle>, Changed<Interaction>)>,
+    shown: Res<super::windows::Shown>,
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
     slots: Query<(&Interaction, &SlotButton)>,
     store: Query<&Interaction, (With<StoreCursor>, Changed<Interaction>)>,
@@ -326,12 +293,7 @@ pub(super) fn input(
         }
         state.revision = state.revision.wrapping_add(1);
     }
-    if (!chat.composing && keys.just_pressed(KeyCode::KeyI))
-        || toggles.iter().any(|i| *i == Interaction::Pressed)
-    {
-        state.open = !state.open;
-    }
-    if !state.open {
+    if !shown.is_open(super::windows::WindowId::Inventory) {
         state.actions.auto_store = false;
         state.actions.split = None;
         return;
@@ -428,7 +390,7 @@ fn visible_slots(inventory: &Inventory, tab: Tab) -> Vec<InventorySlot> {
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
     mut commands: Commands,
-    state: Res<InventoryState>,
+    (state, shown): (Res<InventoryState>, Res<super::windows::Shown>),
     online: Res<super::online::OnlineState>,
     settings: Res<super::ViewerSettings>,
     mut art: super::sheets::Art,
@@ -442,7 +404,7 @@ pub(super) fn update(
     mut tabs: Query<(&TabButton, &mut BackgroundColor, &mut Node), Without<Panel>>,
 ) {
     for mut panel in &mut panels {
-        panel.display = if state.open {
+        panel.display = if shown.is_open(super::windows::WindowId::Inventory) {
             Display::Flex
         } else {
             Display::None
@@ -460,7 +422,7 @@ pub(super) fn update(
     let stamp = RenderStamp {
         revision: state.revision,
         tab: state.tab,
-        open: state.open,
+        open: shown.is_open(super::windows::WindowId::Inventory),
         bank_open: state.bank_open,
         root,
         inventory: inventory.revision(),
@@ -597,10 +559,11 @@ pub(super) fn scroll(
         With<Panel>,
     >,
     wheel: Res<super::windows::pointer::Wheel>,
+    shown: Res<super::windows::Shown>,
     mut state: ResMut<InventoryState>,
 ) {
     state.hovered = false;
-    if !state.open {
+    if !shown.is_open(super::windows::WindowId::Inventory) {
         return;
     }
     let Some(cursor) = windows
@@ -626,6 +589,7 @@ pub(super) fn demo(
     settings: Res<super::ViewerSettings>,
     mut online: ResMut<super::online::OnlineState>,
     mut state: ResMut<InventoryState>,
+    mut shown: ResMut<super::windows::Shown>,
 ) {
     if !settings.0.demo_inventory || online.enabled {
         return;
@@ -634,7 +598,7 @@ pub(super) fn demo(
         .demo_news
         .push(InventoryUpdate::Snapshot(demo_items()));
     tell(&mut state, &mut online);
-    state.open = true;
+    shown.open(super::windows::WindowId::Inventory);
     state.bank_open = settings.0.demo_bank;
     state.tab = if state.bank_open {
         Tab::Bank
@@ -739,7 +703,15 @@ mod tests {
         })
         .add_systems(
             Update,
-            (input, settle, update, feedback, super::super::items::update).chain(),
+            (
+                crate::windows::toggle,
+                input,
+                settle,
+                update,
+                feedback,
+                super::super::items::update,
+            )
+                .chain(),
         );
         app
     }
@@ -753,7 +725,11 @@ mod tests {
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyI);
         app.update();
-        assert!(!app.world().resource::<InventoryState>().open);
+        assert!(
+            !app.world()
+                .resource::<crate::windows::Shown>()
+                .is_open(crate::windows::WindowId::Inventory)
+        );
         app.world_mut()
             .resource_mut::<super::super::chat::ChatState>()
             .composing = false;
@@ -761,7 +737,11 @@ mod tests {
         let mut windows = world.query::<&mut Window>();
         windows.single_mut(world).unwrap().focused = false;
         app.update();
-        assert!(!app.world().resource::<InventoryState>().open);
+        assert!(
+            !app.world()
+                .resource::<crate::windows::Shown>()
+                .is_open(crate::windows::WindowId::Inventory)
+        );
     }
 
     #[test]
@@ -775,7 +755,11 @@ mod tests {
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyI);
         app.update();
-        assert!(app.world().resource::<InventoryState>().open);
+        assert!(
+            app.world()
+                .resource::<crate::windows::Shown>()
+                .is_open(crate::windows::WindowId::Inventory)
+        );
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .clear();
@@ -838,9 +822,11 @@ mod tests {
             ),
         );
         {
+            app.world_mut()
+                .resource_mut::<crate::windows::Shown>()
+                .open(crate::windows::WindowId::Inventory);
             let mut state = app.world_mut().resource_mut::<InventoryState>();
             state.demo = true;
-            state.open = true;
         }
         app.update();
         app.world_mut()
@@ -896,9 +882,11 @@ mod tests {
             ),
         );
         {
+            app.world_mut()
+                .resource_mut::<crate::windows::Shown>()
+                .open(crate::windows::WindowId::Inventory);
             let mut state = app.world_mut().resource_mut::<InventoryState>();
             state.demo = true;
-            state.open = true;
             state.tab = Tab::Inventory;
         }
         app.update();

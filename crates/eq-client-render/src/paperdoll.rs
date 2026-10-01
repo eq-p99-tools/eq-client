@@ -110,12 +110,13 @@ fn sync(
 /// Renders the figure only while someone can see it.
 #[allow(clippy::needless_pass_by_value)]
 fn toggle(
-    inventory: Res<super::inventory::InventoryState>,
+    shown: Res<super::windows::Shown>,
     mut cameras: Query<&mut Camera, With<PaperdollCamera>>,
 ) {
+    let open = shown.is_open(super::windows::WindowId::Inventory);
     for mut camera in &mut cameras {
-        if camera.is_active != inventory.is_open() {
-            camera.is_active = inventory.is_open();
+        if camera.is_active != open {
+            camera.is_active = open;
         }
     }
 }

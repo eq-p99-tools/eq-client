@@ -316,7 +316,9 @@ fn init_presentation(app: &mut App) {
         .init_resource::<item_models::ItemLibrary>()
         .init_resource::<outfit::Wardrobe>()
         .init_resource::<windows::DragState>()
-        .init_resource::<windows::Layouts>();
+        .init_resource::<windows::Layouts>()
+        .init_resource::<windows::Shown>()
+        .init_resource::<windows::Stack>();
 }
 
 /// What the tests of the windows start from.
@@ -634,18 +636,18 @@ fn spawn_player_and_hud(
                 ..default()
             },
             TextColor(Color::srgb(0.73, 0.77, 0.79)),
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(16),
-                left: px(16),
-                padding: UiRect::all(px(10)),
-                ..default()
-            },
+            windows::placed(
+                windows::WindowId::Status,
+                Node {
+                    padding: UiRect::all(px(10)),
+                    ..default()
+                },
+            ),
             BackgroundColor(Color::srgba(0.02, 0.03, 0.04, 0.82)),
         ))
         .id();
     windows::passive(commands, status_panel);
-    windows::identify(commands, status_panel, "POSITION");
+    windows::identify(commands, status_panel, windows::WindowId::Status);
     hud::spawn(commands);
     player
 }

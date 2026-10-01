@@ -97,10 +97,13 @@ pub(super) fn controls(parent: &mut ChildSpawnerCommands, colors: &Colors, slot:
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn input(
     mut state: ResMut<InventoryState>,
+    shown: Res<crate::windows::Shown>,
     actions: Query<(Ref<Interaction>, &Action)>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    if !state.open || !windows.single().is_ok_and(|window| window.focused) {
+    if !shown.is_open(crate::windows::WindowId::Inventory)
+        || !windows.single().is_ok_and(|window| window.focused)
+    {
         return;
     }
     // Resolve a swatch before its parent toggle if both report a press.
@@ -138,8 +141,11 @@ mod tests {
     fn palette_press_changes_only_its_group_and_closes_popup() {
         let mut app = App::new();
         app.init_resource::<InventoryState>()
+            .init_resource::<crate::windows::Shown>()
             .add_systems(Update, input);
-        app.world_mut().resource_mut::<InventoryState>().open = true;
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Inventory);
         app.world_mut().spawn((
             Window {
                 focused: true,

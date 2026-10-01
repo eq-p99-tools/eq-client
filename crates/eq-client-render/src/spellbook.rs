@@ -23,7 +23,6 @@ pub(super) struct ScribeCursor;
 
 #[derive(Resource, Default)]
 pub(super) struct BookView {
-    open: bool,
     pub(super) page: usize,
 }
 
@@ -32,7 +31,7 @@ pub(super) struct BookView {
 pub(super) fn demo(
     settings: Res<super::ViewerSettings>,
     mut online: ResMut<super::online::OnlineState>,
-    mut view: ResMut<BookView>,
+    mut shown: ResMut<super::windows::Shown>,
 ) {
     if !settings.0.demo_spellbook || online.enabled {
         return;
@@ -80,7 +79,7 @@ pub(super) fn demo(
             &eq_client_core::world::NoSpells,
         );
     }
-    view.open = true;
+    shown.open(super::windows::WindowId::Spellbook);
 }
 
 type BookRows<'w, 's> = Query<
@@ -275,28 +274,23 @@ impl SpellNames {
 
 /// Builds a compact movable book; empty and unavailable books remain distinct.
 pub(super) fn spawn(commands: &mut Commands) {
-    let frame = commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                right: px(20),
-                top: px(16),
-                width: px(310),
-                display: Display::None,
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::all(px(8)),
-                row_gap: px(4),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.96)),
-            GlobalZIndex(25),
-            BookFrame,
-            super::hud::HudRoot,
-        ))
-        .id();
-    super::windows::interactive(commands, frame);
+    let frame = super::windows::frame(
+        commands,
+        super::windows::WindowId::Spellbook,
+        Node {
+            width: px(310),
+            display: Display::None,
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::all(px(8)),
+            row_gap: px(4),
+            ..default()
+        },
+        Color::srgba(0.025, 0.032, 0.04, 0.96),
+    );
+    commands
+        .entity(frame)
+        .insert((BookFrame, super::hud::HudRoot));
     commands.entity(frame).with_children(|parent| {
-        super::windows::title_bar(parent, frame, "SPELLBOOK [B]");
         parent
             .spawn(Node {
                 flex_direction: FlexDirection::Column,
@@ -395,7 +389,7 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
 /// Browses known spells and requests gem assignments without predicting server state.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
-    keys: Res<ButtonInput<KeyCode>>,
+    shown: Res<super::windows::Shown>,
     chat: Res<super::chat::ChatState>,
     names: Res<SpellNames>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -414,17 +408,11 @@ pub(super) fn update(
     let world = super::online::world(online.as_deref());
     selection.receive_reply(world.book_action_revision());
     let accepts_input = !chat.composing && windows.single().is_ok_and(|window| window.focused);
-    if keys.just_pressed(KeyCode::KeyB) && accepts_input {
-        state.open = !state.open;
-    }
+    let open = shown.is_open(super::windows::WindowId::Spellbook);
     for mut node in &mut frames {
-        node.display = if state.open {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        node.display = if open { Display::Flex } else { Display::None };
     }
-    if !state.open {
+    if !open {
         selection.deletion.cancel();
         return;
     }
@@ -1157,9 +1145,11 @@ mod tests {
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .init_resource::<crate::hud::HudState>()
             .init_resource::<BookSelection>()
-            .insert_resource(BookView {
-                open: true,
-                page: 0,
+            .insert_resource(BookView { page: 0 })
+            .insert_resource({
+                let mut shown = crate::windows::Shown::default();
+                shown.open(crate::windows::WindowId::Spellbook);
+                shown
             })
             .add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
             .add_systems(Update, update);
@@ -1253,9 +1243,13 @@ mod tests {
                 ..
             }
         ));
-        app.world_mut().resource_mut::<BookView>().open = false;
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .close(crate::windows::WindowId::Spellbook);
         app.update();
-        app.world_mut().resource_mut::<BookView>().open = true;
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Spellbook);
         click(&mut app, button(Action::Select));
         click(&mut app, button(Action::Confirm));
         assert!(receiver.try_recv().is_err());
@@ -1279,9 +1273,11 @@ mod tests {
             .insert_resource(crate::online::OnlineState::new(false))
             .init_resource::<SpellNames>()
             .init_resource::<BookSelection>()
-            .insert_resource(BookView {
-                open: true,
-                page: 0,
+            .insert_resource(BookView { page: 0 })
+            .insert_resource({
+                let mut shown = crate::windows::Shown::default();
+                shown.open(crate::windows::WindowId::Spellbook);
+                shown
             })
             .add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
             .add_systems(Update, (super::super::windows::input, update).chain());
@@ -1357,7 +1353,10 @@ mod tests {
                 online
             })
             .insert_resource(SpellNames::parse("42^Example spell"))
-            .add_systems(Update, update);
+            .init_resource::<crate::windows::Shown>()
+            .init_resource::<crate::windows::Stack>()
+            .init_resource::<crate::escape::Escape>()
+            .add_systems(Update, (crate::windows::toggle, update).chain());
         app.world_mut().spawn((
             Window {
                 focused: true,

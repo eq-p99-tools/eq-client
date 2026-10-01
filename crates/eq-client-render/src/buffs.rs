@@ -19,13 +19,25 @@ pub(super) struct Hint;
 pub(super) fn update(
     mut commands: Commands,
     online: Res<OnlineState>,
-    panels: Query<Entity, With<Panel>>,
+    shown: Res<windows::Shown>,
+    mut panels: Query<(Entity, &mut Node), With<Panel>>,
     bodies: Query<Entity, With<Body>>,
     mut previous: Local<Option<BTreeMap<u32, eq_client_core::Buff>>>,
     mut previous_effects: Local<BTreeMap<u16, eq_client_core::SpellEffect>>,
 ) {
+    // The player closes and opens the window from the selector.
+    let display = if shown.is_open(windows::WindowId::Effects) {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for (_, mut node) in &mut panels {
+        if node.display != display {
+            node.display = display;
+        }
+    }
     let Some(buffs) = online.world.buffs().slots() else {
-        for entity in &panels {
+        for (entity, _) in &panels {
             commands.entity(entity).despawn();
         }
         *previous = None;
@@ -44,27 +56,20 @@ pub(super) fn update(
         commands.entity(body).despawn_children();
         body
     } else {
-        let frame = commands
-            .spawn((
-                Panel,
-                windows::Frame::default(),
-                Node {
-                    position_type: PositionType::Absolute,
-                    right: px(340),
-                    top: px(150),
-                    width: px(242),
-                    padding: UiRect::all(px(6)),
-                    row_gap: px(4),
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                GlobalZIndex(12),
-                BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.92)),
-            ))
-            .id();
-        commands
-            .entity(frame)
-            .with_children(|parent| windows::title_bar(parent, frame, "BUFFS"));
+        let frame = windows::frame(
+            &mut commands,
+            windows::WindowId::Effects,
+            Node {
+                width: px(242),
+                padding: UiRect::all(px(6)),
+                row_gap: px(4),
+                flex_direction: FlexDirection::Column,
+                display,
+                ..default()
+            },
+            Color::srgba(0.025, 0.032, 0.04, 0.92),
+        );
+        commands.entity(frame).insert(Panel);
         let body = commands
             .spawn((
                 Body,
@@ -334,13 +339,12 @@ mod tests {
 
     #[test]
     fn updates_keep_the_frame_and_remove_faded_icons_and_stale_admissions() {
-        let mut app = App::new();
+        let mut app = crate::testing::app();
         app.insert_resource({
             let mut online = OnlineState::new(true);
             crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
             online
         })
-        .init_resource::<SpellNames>()
         .add_systems(Update, (update, hover).chain());
         let buff = eq_client_core::Buff {
             spell_id: 42,

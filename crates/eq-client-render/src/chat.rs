@@ -93,34 +93,30 @@ const INK: Color = Color::srgb(0.72, 0.75, 0.77);
 /// Creates a clipped scrollback window; changing tabs never destroys stored messages.
 #[allow(clippy::too_many_lines)] // Declarative UI tree.
 pub(super) fn spawn(commands: &mut Commands) {
-    let frame = commands
-        .spawn((
-            super::hud::HudRoot,
-            Panel,
-            super::windows::pointer::TakesWheel,
-            GlobalZIndex(15),
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(20),
-                bottom: px(16),
-                width: px(420),
-                max_width: percent(95),
-                height: px(202),
-                max_height: percent(45),
-                padding: UiRect::all(px(8)),
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(px(4)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(6),
-                ..default()
-            },
-            BackgroundColor(PANEL),
-            BorderColor::all(EDGE),
-        ))
-        .id();
-    super::windows::interactive(commands, frame);
+    let frame = super::windows::frame(
+        commands,
+        super::windows::WindowId::Chat,
+        Node {
+            width: px(420),
+            max_width: percent(95),
+            height: px(202),
+            max_height: percent(45),
+            padding: UiRect::all(px(8)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(4)),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(6),
+            ..default()
+        },
+        PANEL,
+    );
+    commands.entity(frame).insert((
+        super::hud::HudRoot,
+        Panel,
+        super::windows::pointer::TakesWheel,
+        BorderColor::all(EDGE),
+    ));
     commands.entity(frame).with_children(|root| {
-        super::windows::title_bar(root, frame, "CHAT");
         root.spawn(Node {
             flex_wrap: FlexWrap::Wrap,
             column_gap: px(3),
