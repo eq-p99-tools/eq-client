@@ -3,9 +3,54 @@ use super::{online::OnlineState, target::CommandsToServer};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, ItemDetails, ItemLink};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
 };
+
+/// Item definitions the server sent this session. Once full, the one kept
+/// longest is forgotten first, never the one on screen.
+#[derive(Default)]
+pub(super) struct ItemCache {
+    items: BTreeMap<u32, ItemDetails>,
+    /// Item IDs, the one kept longest first.
+    order: VecDeque<u32>,
+}
+
+impl ItemCache {
+    /// How many definitions are kept.
+    const CAPACITY: usize = 128;
+
+    /// The definition of an item, if the server sent it.
+    pub(super) fn get(&self, id: u32) -> Option<&ItemDetails> {
+        self.items.get(&id)
+    }
+
+    /// Whether the server sent the definition of an item.
+    pub(super) fn contains(&self, id: u32) -> bool {
+        self.items.contains_key(&id)
+    }
+
+    /// Keeps a definition; when full, forgets the one kept longest other than
+    /// this one and `shown`, the item on screen.
+    pub(super) fn insert(&mut self, item: ItemDetails, shown: Option<u32>) {
+        let id = item.id;
+        self.order.retain(|kept| *kept != id);
+        self.order.push_back(id);
+        self.items.insert(id, item);
+        while self.items.len() > Self::CAPACITY {
+            let Some(index) = self
+                .order
+                .iter()
+                .position(|kept| *kept != id && Some(*kept) != shown)
+            else {
+                break;
+            };
+            if let Some(oldest) = self.order.remove(index) {
+                self.items.remove(&oldest);
+            }
+        }
+    }
+}
 
 #[derive(Component)]
 pub(super) struct ItemButton(pub ItemLink);
@@ -17,7 +62,7 @@ pub(super) struct ItemText;
 pub(super) struct CloseItem;
 #[derive(Resource, Default)]
 pub(super) struct ItemState {
-    pub cache: BTreeMap<u32, ItemDetails>,
+    pub cache: ItemCache,
     pub hovered: bool,
     session: Option<u64>,
     selected: Option<(u32, String)>,
@@ -31,10 +76,13 @@ impl ItemState {
         self.selected = Some((item.id, item.name.clone()));
         self.pending = None;
         self.status.clear();
-        if self.cache.len() >= 128 {
-            self.cache.pop_first();
-        }
-        self.cache.insert(item.id, item);
+        self.cache.insert(item, None);
+    }
+
+    /// Keeps a definition the server sent, holding on to the one on screen.
+    pub(super) fn received(&mut self, item: ItemDetails) {
+        let shown = self.selected.as_ref().map(|(id, _)| *id);
+        self.cache.insert(item, shown);
     }
 }
 
@@ -119,7 +167,7 @@ pub(super) fn input(
     if state
         .selected
         .as_ref()
-        .is_some_and(|(id, _)| state.cache.contains_key(id))
+        .is_some_and(|(id, _)| state.cache.contains(*id))
     {
         state.pending = None;
     }
@@ -149,7 +197,7 @@ pub(super) fn input(
             continue;
         }
         state.selected = Some((link.item_id, link.text.clone()));
-        if state.cache.contains_key(&link.item_id) {
+        if state.cache.contains(link.item_id) {
             continue;
         }
         if !online.connected || online.death.is_some() {
@@ -194,7 +242,7 @@ pub(super) fn update(
     let Some((id, name)) = &state.selected else {
         return;
     };
-    let text = state.cache.get(id).map_or_else(
+    let text = state.cache.get(*id).map_or_else(
         || format!("{name}\n\n{}", state.status),
         |item| {
             let properties = item
@@ -444,6 +492,26 @@ pub(super) fn scroll(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(id: u32) -> ItemDetails {
+        let mut item = super::super::inventory::demo_items()[0].details.clone();
+        item.id = id;
+        item
+    }
+
+    #[test]
+    fn the_item_on_screen_is_never_forgotten_and_the_oldest_goes_first() {
+        let mut state = ItemState::default();
+        // The item on screen has the lowest ID, which a map's first entry was.
+        state.open_received(item(1));
+        for id in 1000..1000 + 200 {
+            state.received(item(id));
+        }
+        assert!(state.cache.contains(1));
+        assert!(!state.cache.contains(1000));
+        assert!(state.cache.contains(1199));
+        assert_eq!(state.cache.items.len(), ItemCache::CAPACITY);
+    }
     #[test]
     fn wrapped_link_uses_each_line_without_linking_the_gap() {
         let runs = [

@@ -412,10 +412,7 @@ pub(super) fn receive(
             }
             WorldUpdate::Game(WorldEvent::ItemDetails(item)) => {
                 eprintln!("Item definition received: ID {}", item.id);
-                if items.cache.len() >= 128 {
-                    items.cache.pop_first();
-                }
-                items.cache.insert(item.id, item);
+                items.received(item);
             }
             WorldUpdate::Game(WorldEvent::Death(death)) => {
                 if let Ok(id) = u16::try_from(death.spawn_id) {
