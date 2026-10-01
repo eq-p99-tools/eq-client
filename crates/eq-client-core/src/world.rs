@@ -8,15 +8,17 @@
 //! its rules are tested without one.
 
 mod casting;
+mod target;
 mod vitals;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
+pub use target::Target;
 pub use vitals::{ReportedHp, Vitals};
 
 use crate::{
     BookActionStatus, CampStatus, CharacterChoice, Coins, Death, PlayerState, PostureState,
     SpawnState, SpellBook, SpellUpdate, WorldEvent, WorldPosition, WorldUpdate, ZoneOffer,
-    buffs::BuffTracker, doors::DoorTable, ground::Objects, inventory::Inventory,
+    buffs::BuffTracker, combat::ConColor, doors::DoorTable, ground::Objects, inventory::Inventory,
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -106,6 +108,9 @@ pub struct ClientWorld {
     /// The player's own posture, which the zone's spawns do not carry.
     player_posture: Option<PostureState>,
     spawns: BTreeMap<u16, Spawn>,
+    /// Level colors the server reported for spawns the player considered.
+    considered: BTreeMap<u16, ConColor>,
+    target: Target,
     doors: DoorTable,
     objects: Objects,
     /// The last revision given to a spawn.
@@ -149,6 +154,18 @@ impl ClientWorld {
             self.doors.close_due(now);
         }
         self.casting.cooldowns.resolve(spells, now);
+    }
+
+    /// The player's own choice of target, which the client tells the session
+    /// separately; what the session makes of it arrives as news.
+    pub fn select_target(&mut self, spawn: Option<u16>) {
+        self.target = Target {
+            selected: spawn,
+            sent: false,
+            revision: spawn
+                .and_then(|id| self.spawns.get(&id))
+                .map(|spawn| spawn.revision),
+        };
     }
 
     /// Notes the player's health.
@@ -263,6 +280,8 @@ impl ClientWorld {
             }
             WorldEvent::Spawns(spawns) => {
                 for spawn in spawns {
+                    // A new spawn has not been considered, whatever had its ID.
+                    self.considered.remove(&spawn.spawn_id);
                     self.revision = self.revision.wrapping_add(1);
                     self.spawns.insert(
                         spawn.spawn_id,
@@ -277,6 +296,29 @@ impl ClientWorld {
             }
             WorldEvent::Despawn(id) => {
                 self.spawns.remove(id);
+                self.considered.remove(id);
+            }
+            WorldEvent::Consideration(consideration) => {
+                self.considered
+                    .insert(consideration.target_id, consideration.color);
+            }
+            WorldEvent::TargetSent(id) => {
+                if self.target.selected == *id {
+                    self.target.sent = true;
+                } else {
+                    changes.ignored = true;
+                }
+            }
+            WorldEvent::TargetRejected {
+                session_id,
+                spawn_id,
+                ..
+            } => {
+                if self.accepts_reply(*session_id) && self.target.selected == *spawn_id {
+                    self.target = Target::default();
+                } else {
+                    changes.ignored = true;
+                }
             }
             WorldEvent::Visibility {
                 spawn_id,
@@ -486,6 +528,8 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        // Whatever the reason, the player can no longer act on their target.
+        self.target = Target::default();
         match reason {
             Reset::Entered => {
                 self.forget_admission();
@@ -557,6 +601,7 @@ impl ClientWorld {
     /// Forgets the zone's spawns, doors and objects.
     fn forget_zone(&mut self) {
         self.spawns.clear();
+        self.considered.clear();
         self.player_posture = None;
         self.doors = DoorTable::default();
         self.objects = Objects::default();
@@ -632,6 +677,31 @@ impl ClientWorld {
     #[must_use]
     pub fn spawn(&self, id: u16) -> Option<&Spawn> {
         self.spawns.get(&id)
+    }
+
+    /// The player's target.
+    #[must_use]
+    pub const fn target(&self) -> &Target {
+        &self.target
+    }
+
+    /// Whether the target is gone: its spawn despawned, was replaced or
+    /// turned invisible. The player choosing themselves never goes stale.
+    #[must_use]
+    pub fn target_stale(&self) -> bool {
+        self.target.selected.is_some_and(|id| {
+            !self.is_player(id)
+                && self.spawns.get(&id).is_none_or(|spawn| {
+                    spawn.state.invisible || Some(spawn.revision) != self.target.revision
+                })
+        })
+    }
+
+    /// The level color the server gave when the player last considered a
+    /// spawn.
+    #[must_use]
+    pub fn considered(&self, id: u16) -> Option<ConColor> {
+        self.considered.get(&id).copied()
     }
 
     /// Whether a spawn ID is the player's.

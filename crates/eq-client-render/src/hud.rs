@@ -318,7 +318,6 @@ pub(super) fn actions(
     mut hud: ResMut<HudState>,
     online: Res<super::online::OnlineState>,
     chat: Res<super::chat::ChatState>,
-    target: Res<super::target::TargetState>,
     sender: Res<super::target::CommandsToServer>,
     clicks: Query<(&Interaction, &SpellGem), Changed<Interaction>>,
     bar_clicks: Query<(&Interaction, &hotbar::Slot), Changed<Interaction>>,
@@ -385,7 +384,7 @@ pub(super) fn actions(
             &requests::Request {
                 session_id,
                 gem,
-                target_id: target.selected.unwrap_or(player.spawn_id),
+                target_id: online.world.target().selected.unwrap_or(player.spawn_id),
                 forgetting,
                 mana_cost,
             },

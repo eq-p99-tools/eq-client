@@ -297,7 +297,6 @@ pub(crate) fn item_actions(
     chat: Res<crate::chat::ChatState>,
     online: Res<crate::online::OnlineState>,
     sender: Res<crate::target::CommandsToServer>,
-    target: Res<crate::target::TargetState>,
     mut hud: ResMut<super::HudState>,
     mut inventory: ResMut<crate::inventory::InventoryState>,
 ) {
@@ -314,7 +313,7 @@ pub(crate) fn item_actions(
             slot,
             &online,
             &sender,
-            target.selected,
+            online.world.target().selected,
             online.world.casting().cast.is_some() || online.world.casting().pending.is_some(),
         )
     };

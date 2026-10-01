@@ -181,7 +181,6 @@ type Buttons<'w, 's> = Query<
 
 type Observed<'w> = (
     Res<'w, super::hud::HudState>,
-    Res<'w, super::target::TargetState>,
     Res<'w, super::target::CommandsToServer>,
     Res<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,
@@ -276,7 +275,7 @@ pub(super) fn drive(
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
             Step::Approach(range, duration) => {
-                let distance = face(&online, &observed, &players, &mut cameras);
+                let distance = face(&online, &players, &mut cameras);
                 distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
             }
             Step::Walk(_, duration) => {
@@ -284,7 +283,7 @@ pub(super) fn drive(
                 let ends = bodies
                     .single()
                     .ok()
-                    .and_then(|body| walk_ends((&*online, &observed), *body));
+                    .and_then(|body| walk_ends(&online, *body));
                 let world = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
@@ -302,7 +301,7 @@ pub(super) fn drive(
                     let (waypoints, partial) = (route.remaining(), route.partial());
                     info!(waypoints, partial, "Script route ready");
                 } else if !searching && route.is_searching() {
-                    let refused = observed.5.refused.as_deref();
+                    let refused = observed.4.refused.as_deref();
                     info!(?refused, "Script walk stalled; searching again from here");
                 }
                 match step {
@@ -311,7 +310,7 @@ pub(super) fn drive(
                         return;
                     }
                     RouteStep::Stalled => {
-                        let refused = observed.5.refused.as_deref();
+                        let refused = observed.4.refused.as_deref();
                         let reason = refused.map_or_else(
                             || "walk made no progress, even after searching again".to_owned(),
                             |refused| {
@@ -399,7 +398,7 @@ pub(super) fn drive(
     match &step {
         Step::Create(character) => {
             let sent = online.selection.as_ref().is_some_and(|selection| {
-                observed.2.0.as_ref().is_some_and(|sender| {
+                observed.1.0.as_ref().is_some_and(|sender| {
                     sender
                         .try_send(eq_client_core::ClientCommand::CreateCharacter {
                             selection_id: selection.id(),
@@ -429,7 +428,7 @@ pub(super) fn drive(
         Step::Slash(command) => {
             let queued = match super::chat::target_request(command) {
                 Some(request) => request.map(|name| chat.requested_target = Some(name)),
-                None => super::chat::submit_game_command(command, &online, &observed.2),
+                None => super::chat::submit_game_command(command, &online, &observed.1),
             };
             if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);
@@ -439,7 +438,7 @@ pub(super) fn drive(
         Step::Gm(command) => {
             let sent = gm_chat(command, script.local).and_then(|chat| {
                 observed
-                    .2
+                    .1
                     .0
                     .as_ref()
                     .ok_or_else(|| String::from("Network worker is unavailable"))?
@@ -511,13 +510,13 @@ pub(super) fn drive(
             return;
         }
         Step::Face => {
-            if face(&online, &observed, &players, &mut cameras).is_none() {
+            if face(&online, &players, &mut cameras).is_none() {
                 script.stop(&mut keys, &mut mouse, "face needs a visible target");
             }
             return;
         }
         Step::Approach(..) => {
-            if face(&online, &observed, &players, &mut cameras).is_none() {
+            if face(&online, &players, &mut cameras).is_none() {
                 script.stop(&mut keys, &mut mouse, "approach needs a visible target");
                 return;
             }
@@ -526,11 +525,11 @@ pub(super) fn drive(
         }
         Step::Walk(range, _) => {
             let route = bodies.single().ok().and_then(|body| {
-                let (feet, goal) = walk_ends((&*online, &observed), *body)?;
+                let (feet, goal) = walk_ends(&online, *body)?;
                 // Ledges are routes only where the session simulates falls.
                 Some(
                     eq_client_core::movement::Route::new(feet, goal, *range, body.height)
-                        .with_drops(observed.5.airborne.is_some()),
+                        .with_drops(observed.4.airborne.is_some()),
                 )
             });
             let Some(route) = route else {
@@ -604,14 +603,13 @@ fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
     false
 }
 
-type Seen<'a, 'w> = (&'a super::online::OnlineState, &'a Observed<'w>);
-
 /// The player's feet at its accepted position and the target's position, in
 /// render coordinates.
-fn walk_ends((online, observed): Seen, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
+fn walk_ends(online: &super::online::OnlineState, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
     let player = online.world.player()?;
-    let spawn = observed
-        .1
+    let spawn = online
+        .world
+        .target()
         .selected
         .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state))?;
     let origin = Vec3::from_array(eq_client_core::render_position(player.position));
@@ -623,12 +621,12 @@ fn walk_ends((online, observed): Seen, body: super::PlayerBody) -> Option<(Vec3,
 /// distance between them, or None without a player and a known target.
 fn face(
     online: &super::online::OnlineState,
-    observed: &Observed,
     players: &Query<&Transform, With<super::Player>>,
     cameras: &mut Query<&mut super::OrbitCamera>,
 ) -> Option<f32> {
-    let spawn = observed
-        .1
+    let spawn = online
+        .world
+        .target()
         .selected
         .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state))?;
     let transform = players.single().ok()?;

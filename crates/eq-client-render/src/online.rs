@@ -103,14 +103,17 @@ struct Panels<'a> {
     motion: &'a mut super::motion::Controls,
     inventory: &'a mut super::inventory::InventoryState,
     target: &'a mut super::target::TargetState,
+    combat: &'a mut super::combat::CombatState,
     actions: Option<&'a mut hud::action_bar::ActionRequests>,
 }
 
 impl Panels<'_> {
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
-        // Whatever was in flight, its feedback is stale.
+        // Whatever was in flight, its feedback is stale, and the world forgot
+        // the target.
         self.hud.action_feedback = None;
+        self.target.status.clear();
         if !matches!(reason, Reset::Died)
             && let Some(actions) = self.actions.as_mut()
         {
@@ -127,6 +130,8 @@ impl Panels<'_> {
                 }
             }
             Reset::Entered => {
+                // Requests made in the old admission are void.
+                *self.combat = super::combat::CombatState::default();
                 self.motion.reset(None);
                 state.selection = None;
                 state.door_status.clear();
@@ -135,7 +140,6 @@ impl Panels<'_> {
             Reset::Zoning { to_bind } => {
                 self.inventory.cancel_actions();
                 self.motion.reset(None);
-                *self.target = super::target::TargetState::default();
                 self.hud.status = if to_bind {
                     "Respawning at bind".into()
                 } else {
@@ -145,11 +149,11 @@ impl Panels<'_> {
             Reset::Died => {
                 self.motion.reset(None);
                 self.inventory.cancel_actions();
-                *self.target = super::target::TargetState::default();
                 self.hud.status = "Dead - awaiting server bind destination".into();
             }
             Reset::Camped => {
                 // Leave the zone; the world server sends a fresh character list.
+                *self.combat = super::combat::CombatState::default();
                 state.door_status.clear();
                 self.inventory.forget();
                 self.motion.reset(None);
@@ -239,6 +243,7 @@ pub(super) fn receive(
                 motion: &mut motion,
                 inventory: &mut inventory,
                 target: &mut target,
+                combat: &mut combat,
                 actions: actions.as_deref_mut(),
             }
             .forget(reason, &mut state);
@@ -449,32 +454,19 @@ pub(super) fn receive(
                 }
             }
             WorldUpdate::Game(WorldEvent::TargetSent(id)) => {
-                if target.selected == id {
-                    target.sent = true;
+                if !changes.ignored {
                     debug!("Target packet sent: {id:?}");
                 }
             }
-            WorldUpdate::Game(WorldEvent::TargetRejected {
-                session_id,
-                spawn_id,
-                reason,
-            }) => {
-                if state.world.accepts_reply(session_id) {
-                    target.reject(spawn_id, &reason);
+            WorldUpdate::Game(WorldEvent::TargetRejected { reason, .. }) => {
+                if !changes.ignored {
+                    target.status = format!("Target rejected: {reason}");
                 }
             }
             WorldUpdate::Game(WorldEvent::HealthPercent { spawn_id, percent }) => {
-                if target.selected == Some(spawn_id) {
+                if state.world.target().selected == Some(spawn_id) {
                     debug!("Target health received: spawn {spawn_id}, {percent}%");
                 }
-            }
-            WorldUpdate::Game(WorldEvent::Spawns(spawns)) => {
-                for spawn in spawns {
-                    combat.considered.remove(&spawn.spawn_id);
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Despawn(id)) => {
-                combat.considered.remove(&id);
             }
             WorldUpdate::Game(WorldEvent::Posture { spawn_id, posture }) => {
                 if state.world.is_player(spawn_id) {
@@ -606,9 +598,6 @@ pub(super) fn receive(
                             &consideration,
                         )));
                 }
-                combat
-                    .considered
-                    .insert(consideration.target_id, consideration.color);
             }
             WorldUpdate::Game(WorldEvent::Damage(damage)) => {
                 if let (Some(player), Some(messages)) = (state.world.player(), messages.as_deref())
@@ -1304,20 +1293,16 @@ mod tests {
         app.update();
         assert!(world(&app).death().is_none());
         app.world_mut()
-            .resource_mut::<super::super::target::TargetState>()
-            .selected = Some(8);
+            .resource_mut::<OnlineState>()
+            .world
+            .select_target(Some(8));
         death.spawn_id = 7;
         sender
             .send(WorldUpdate::Game(WorldEvent::Death(death)))
             .unwrap();
         app.update();
         assert!(world(&app).death().is_some());
-        assert_eq!(
-            app.world()
-                .resource::<super::super::target::TargetState>()
-                .selected,
-            None
-        );
+        assert_eq!(world(&app).target().selected, None);
         assert_eq!(world(&app).health(7), Some(0));
         assert_eq!(world(&app).casting().pending, None);
         sender

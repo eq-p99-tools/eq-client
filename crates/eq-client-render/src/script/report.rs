@@ -18,7 +18,7 @@ pub(super) fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
 pub(super) fn state(
     label: &str,
     online: &crate::online::OnlineState,
-    (hud, target, ..): &Observed,
+    (hud, ..): &Observed,
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
@@ -91,7 +91,7 @@ pub(super) fn state(
         pending = ?online.world.casting().pending,
         interrupted = ?online.world.casting().interrupted.map(|(_, id)| id),
         feedback = ?hud.action_feedback.as_ref().map(|(_, text)| text),
-        target = ?target.selected,
+        target = ?online.world.target().selected,
         ?gems,
         ?cooldowns,
         ?book,
