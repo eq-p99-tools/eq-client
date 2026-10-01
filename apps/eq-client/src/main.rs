@@ -60,6 +60,11 @@ struct Arguments {
     #[arg(long, default_value = "200")]
     entity_distance: f32,
 
+    /// Hide your own character's helm, as the official client's show-helm
+    /// option does; other characters always show theirs.
+    #[arg(long)]
+    hide_own_helm: bool,
+
     /// Show synthetic moving entities offline, without connecting to a server.
     #[arg(long, conflicts_with = "online")]
     demo_entities: bool,
@@ -321,6 +326,7 @@ fn viewer_config(
         eq_directory: Some(eq_directory),
         entity_distance: Some(arguments.entity_distance),
         demo_entities: arguments.demo_entities,
+        hide_own_helm: arguments.hide_own_helm,
         demo_inventory: arguments.demo_inventory,
         demo_bank: arguments.demo_bank,
         demo_spellbook: arguments.demo_spellbook,

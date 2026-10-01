@@ -108,6 +108,9 @@ pub struct ViewerConfig {
     pub local_session: bool,
     /// UI skin to use instead of the one the character chose in the official client.
     pub ui_skin: Option<String>,
+    /// Hide the player's own helm, as the official client's show-helm option
+    /// does; other characters always show theirs.
+    pub hide_own_helm: bool,
     /// Where this client keeps its own settings; None keeps nothing between runs.
     pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
