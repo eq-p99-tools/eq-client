@@ -1,5 +1,5 @@
 //! Pre-zone character selection uses occupied server slots, never typed names.
-use super::{hud::HudState, online::OnlineState, outbox::Outbox};
+use super::{online::OnlineState, outbox::Outbox};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{CharacterChoice, ClientCommand};
@@ -80,7 +80,7 @@ pub(super) enum Action {
 pub(super) fn update(
     mut commands: Commands,
     mut online: ResMut<OnlineState>,
-    hud: Res<HudState>,
+    lines: Res<crate::notices::Lines>,
     outbox: Res<Outbox>,
     keys: crate::keys::Keys,
     navigation: Res<super::navigation::NavigationKeys>,
@@ -129,9 +129,9 @@ pub(super) fn update(
             selection.enter(&outbox, world);
         }
     }
+    let status = lines.status.text(std::time::Instant::now());
     let signature = format!(
-        "{visible}:{}:{:?}",
-        hud.status,
+        "{visible}:{status}:{:?}",
         online
             .selection
             .as_ref()
@@ -145,7 +145,7 @@ pub(super) fn update(
         commands.entity(root).despawn();
     }
     if visible {
-        spawn(&mut commands, online.selection.as_ref(), &hud.status);
+        spawn(&mut commands, online.selection.as_ref(), status);
     }
 }
 
@@ -251,7 +251,7 @@ mod tests {
         crate::keys::testing::install(&mut app);
         app.insert_resource(state)
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
-            .init_resource::<HudState>()
+            .init_resource::<crate::notices::Lines>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::navigation::NavigationKeys>()
             .add_systems(Update, update);

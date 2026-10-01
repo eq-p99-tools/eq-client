@@ -293,7 +293,7 @@ pub(crate) fn item_actions(
     clicks: Query<(&Interaction, &Slot), Changed<Interaction>>,
     online: Res<crate::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
-    mut hud: ResMut<super::HudState>,
+    mut lines: ResMut<crate::notices::Lines>,
     mut inventory: ResMut<crate::inventory::InventoryState>,
 ) {
     if !keys.focused() {
@@ -313,7 +313,7 @@ pub(crate) fn item_actions(
             online.world().casting().cast.is_some() || online.world().casting().pending.is_some(),
         )
     };
-    hud.action_feedback = Some((std::time::Instant::now(), message));
+    lines.feedback.flash(message, std::time::Instant::now());
 }
 
 #[cfg(test)]

@@ -10,14 +10,11 @@ mod tests;
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 
-/// What the HUD shows besides the world: the status line, estimated maxima
-/// and timed feedback.
+/// What the HUD shows besides the world and the lines: estimated maxima.
 #[derive(Resource, Default)]
 pub(super) struct HudState {
-    pub status: String,
     /// Calculated, unverified maxima (mana, endurance), never server-reported values.
     pub resource_estimate: Option<(u32, u32)>,
-    pub action_feedback: Option<(std::time::Instant, String)>,
 }
 
 #[derive(Component)]
@@ -342,7 +339,7 @@ pub(super) fn empty_gem(gem: u8, map: &super::keys::KeyMap) -> String {
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn spell_details(
     map: Res<super::keys::KeyMap>,
-    state: Res<HudState>,
+    lines: Res<super::notices::Lines>,
     online: Res<super::online::OnlineState>,
     names: Res<super::spellbook::SpellNames>,
     mut gems: Query<(&Interaction, &SpellGem, &mut BackgroundColor)>,
@@ -389,10 +386,9 @@ pub(super) fn spell_details(
             text
         }
     };
-    if let Some((created, message)) = &state.action_feedback
-        && now.saturating_duration_since(*created) < std::time::Duration::from_secs(3)
-    {
-        text.clone_from(message);
+    let feedback = lines.feedback.text(now);
+    if !feedback.is_empty() {
+        feedback.clone_into(&mut text);
     }
     for mut label in &mut labels {
         if label.0 != text {
@@ -405,7 +401,7 @@ pub(super) fn spell_details(
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn actions(
     keys: super::keys::Keys,
-    mut hud: ResMut<HudState>,
+    mut lines: ResMut<super::notices::Lines>,
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     clicks: Query<(&Interaction, &SpellGem), Changed<Interaction>>,
@@ -442,7 +438,7 @@ pub(super) fn actions(
             .gem(usize::from(gem))
             .and_then(|spell| names.mana(spell));
         requests::spell(
-            &mut hud,
+            &mut lines.feedback,
             online.world(),
             player,
             &outbox,

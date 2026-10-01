@@ -59,7 +59,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
     app.init_resource::<Bindings>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<crate::chat::ChatState>()
-        .init_resource::<crate::target::TargetState>()
+        .init_resource::<crate::notices::Lines>()
         .init_resource::<crate::hud::HudState>()
         .init_resource::<crate::inventory::InventoryState>()
         .insert_resource(online)
@@ -137,11 +137,9 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
     assert!(rx.try_recv().is_err());
     assert!(
         app.world()
-            .resource::<crate::hud::HudState>()
-            .action_feedback
-            .as_ref()
-            .unwrap()
-            .1
+            .resource::<crate::notices::Lines>()
+            .feedback
+            .text(std::time::Instant::now())
             .contains("unavailable")
     );
 }

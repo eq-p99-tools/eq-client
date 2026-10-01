@@ -3,7 +3,6 @@
 //! Casting, spellbook changes and camping each report elsewhere too; this bar
 //! only mirrors their state so timing is visible in the same spot every time.
 
-use super::HudState;
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::BookActionStatus;
@@ -102,7 +101,7 @@ pub(crate) fn spawn(commands: &mut Commands) {
 
 /// Chooses the most specific action in progress, then recent feedback.
 pub(super) fn current(
-    hud: &HudState,
+    feedback: &crate::notices::Line,
     world: &eq_client_core::world::ClientWorld,
     requests: &ActionRequests,
     names: &crate::spellbook::SpellNames,
@@ -162,11 +161,10 @@ pub(super) fn current(
             progress: Some(0.0),
         });
     }
-    hud.action_feedback
-        .as_ref()
-        .filter(|(at, _)| recent(*at))
-        .map(|(_, message)| Shown {
-            label: message.clone(),
+    Some(feedback.text(now))
+        .filter(|text| !text.is_empty())
+        .map(|text| Shown {
+            label: text.to_owned(),
             progress: Some(0.0),
         })
 }
@@ -175,7 +173,7 @@ pub(super) fn current(
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update(
     state: (
-        Res<HudState>,
+        Res<crate::notices::Lines>,
         Res<crate::online::OnlineState>,
         Res<ActionRequests>,
     ),
@@ -188,10 +186,10 @@ pub(crate) fn update(
     mut labels: Query<&mut Text, With<ActionLabel>>,
     mut fills: Query<(&mut Node, &mut BackgroundColor), With<ActionFill>>,
 ) {
-    let (hud, online, requests) = state;
+    let (lines, online, requests) = state;
     let (names, messages) = definitions;
     let shown = current(
-        &hud,
+        &lines.feedback,
         online.world(),
         &requests,
         &names,
@@ -240,12 +238,12 @@ mod tests {
         let names = crate::spellbook::SpellNames::default();
         let messages = super::super::messages::Messages::load(None);
         let now = Instant::now();
-        let mut hud = HudState::default();
+        let mut feedback = crate::notices::Line::default();
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 1, testing::player(7));
         let mut requests = ActionRequests::default();
         assert_eq!(
-            current(&hud, online.world(), &requests, &names, &messages, now),
+            current(&feedback, online.world(), &requests, &names, &messages, now),
             None
         );
 
@@ -256,7 +254,8 @@ mod tests {
             )],
             now.checked_sub(Duration::from_secs(15)).unwrap(),
         );
-        let camping = current(&hud, online.world(), &requests, &names, &messages, now).unwrap();
+        let camping =
+            current(&feedback, online.world(), &requests, &names, &messages, now).unwrap();
         assert_eq!(camping.label, "Camping (15s)");
         assert!((camping.progress.unwrap() - 0.5).abs() < 0.01);
 
@@ -265,12 +264,12 @@ mod tests {
             now.checked_sub(Duration::from_secs(1)).unwrap(),
             "Memorizing Courage into gem 2".into(),
         ));
-        let book = current(&hud, online.world(), &requests, &names, &messages, now).unwrap();
+        let book = current(&feedback, online.world(), &requests, &names, &messages, now).unwrap();
         assert_eq!(book.label, "Memorizing Courage into gem 2");
         assert!((book.progress.unwrap() - 0.2).abs() < 0.01);
         testing::book_action(&mut online, BookActionStatus::AwaitingReply);
         assert_eq!(
-            current(&hud, online.world(), &requests, &names, &messages, now)
+            current(&feedback, online.world(), &requests, &names, &messages, now)
                 .unwrap()
                 .progress,
             None
@@ -286,7 +285,8 @@ mod tests {
             })],
             now.checked_sub(Duration::from_secs(1)).unwrap(),
         );
-        let casting = current(&hud, online.world(), &requests, &names, &messages, now).unwrap();
+        let casting =
+            current(&feedback, online.world(), &requests, &names, &messages, now).unwrap();
         assert!(casting.label.starts_with("Casting "));
         assert!((casting.progress.unwrap() - 0.25).abs() < 0.01);
 
@@ -304,16 +304,23 @@ mod tests {
                 eq_client_core::CampStatus::Abandoned,
             )],
         );
-        hud.action_feedback = Some((now, "Spell available in 2.0s".into()));
+        feedback.flash("Spell available in 2.0s", now);
         assert_eq!(
-            current(&hud, online.world(), &requests, &names, &messages, now)
+            current(&feedback, online.world(), &requests, &names, &messages, now)
                 .unwrap()
                 .label,
             "Spell available in 2.0s"
         );
         let later = now + FEEDBACK;
         assert_eq!(
-            current(&hud, online.world(), &requests, &names, &messages, later),
+            current(
+                &feedback,
+                online.world(),
+                &requests,
+                &names,
+                &messages,
+                later
+            ),
             None
         );
     }

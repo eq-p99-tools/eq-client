@@ -1,6 +1,5 @@
 //! Local spell-request feedback; server notifications remain authoritative.
 
-use super::HudState;
 use eq_client_core::{ClientCommand, PlayerState};
 use std::time::Instant;
 
@@ -69,7 +68,7 @@ pub(super) fn check(
 /// is worth a line; a request sent says nothing, as the cast bar shows the
 /// cast once the server takes it, and the outbox shows its own refusals.
 pub(super) fn spell(
-    hud: &mut HudState,
+    feedback: &mut crate::notices::Line,
     world: &eq_client_core::world::ClientWorld,
     player: &PlayerState,
     outbox: &crate::outbox::Outbox,
@@ -84,9 +83,9 @@ pub(super) fn spell(
         ..
     } = *request;
     match check(world, player, request, wording, now) {
-        Err(refusal) => hud.action_feedback = Some((now, refusal)),
+        Err(refusal) => feedback.flash(refusal, now),
         Ok(spell_id) => {
-            hud.action_feedback = None;
+            feedback.clear();
             let _ = outbox.post(world, |stamp| {
                 if forgetting {
                     ClientCommand::ForgetSpell {

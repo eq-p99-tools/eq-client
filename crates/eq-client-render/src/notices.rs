@@ -12,6 +12,67 @@ use eq_client_core::{
     world::{Link, Notice},
 };
 
+/// How long feedback on the player's own action stays on screen.
+pub(crate) const FLASH: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// One line on screen besides the chat, which notices and the player's own
+/// actions set: what it says, and until when if it says it for a moment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Line {
+    text: String,
+    until: Option<std::time::Instant>,
+}
+
+impl Line {
+    /// Says this until something else is said.
+    pub(crate) fn set(&mut self, text: impl Into<String>) {
+        self.text = text.into();
+        self.until = None;
+    }
+
+    /// Says this for a moment ([`FLASH`]).
+    pub(crate) fn flash(&mut self, text: impl Into<String>, now: std::time::Instant) {
+        self.text = text.into();
+        self.until = Some(now + FLASH);
+    }
+
+    /// Says nothing.
+    pub(crate) fn clear(&mut self) {
+        self.text.clear();
+        self.until = None;
+    }
+
+    /// Moves a moment's words this much closer to passing.
+    #[cfg(test)]
+    pub(crate) fn age(&mut self, by: std::time::Duration) {
+        self.until = self.until.and_then(|until| until.checked_sub(by));
+    }
+
+    /// What the line says now: nothing once a moment's words have passed.
+    pub(crate) fn text(&self, now: std::time::Instant) -> &str {
+        if self.until.is_some_and(|until| now >= until) {
+            ""
+        } else {
+            &self.text
+        }
+    }
+}
+
+/// The client's lines besides the chat, one for each place a notice shows.
+/// Each has one writer API, so every line is set, cleared or expires the
+/// same way.
+#[derive(bevy::prelude::Resource, Default)]
+pub(crate) struct Lines {
+    /// The status line: the connection, death and camping.
+    pub status: Line,
+    /// The target window's line.
+    pub target: Line,
+    /// Feedback on the player's last action, for a moment.
+    pub feedback: Line,
+    /// What became of the last door the player used.
+    pub door: Line,
+}
+
 /// Where a notice shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Place {
@@ -134,6 +195,20 @@ const fn link_text(link: Link) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_says_its_words_until_cleared_and_a_flash_passes() {
+        let now = std::time::Instant::now();
+        let mut line = Line::default();
+        line.set("Zoning");
+        assert_eq!(line.text(now + FLASH * 10), "Zoning");
+        line.flash("Request queue is full", now);
+        assert_eq!(line.text(now), "Request queue is full");
+        assert_eq!(line.text(now + FLASH), "");
+        line.set("Camped - choose a character");
+        line.clear();
+        assert_eq!(line.text(now), "");
+    }
     use eq_client_core::Coins;
 
     #[test]

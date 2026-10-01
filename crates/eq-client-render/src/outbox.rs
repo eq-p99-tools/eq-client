@@ -197,9 +197,9 @@ impl Outbox {
 /// Shows this frame's last refusal in the HUD's feedback line, the one place
 /// refusals show.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn show(outbox: Res<Outbox>, mut hud: ResMut<super::hud::HudState>) {
+pub(crate) fn show(outbox: Res<Outbox>, mut lines: ResMut<super::notices::Lines>) {
     if let Some(refusal) = outbox.take_refused().pop() {
-        hud.action_feedback = Some((Instant::now(), refusal.text().into()));
+        lines.feedback.flash(refusal.text(), Instant::now());
     }
 }
 
