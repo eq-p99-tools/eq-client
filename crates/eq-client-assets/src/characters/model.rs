@@ -67,12 +67,6 @@ impl Attachment {
     }
 }
 
-/// Swaps WLD's Z-up axes for the Y-up space poses use, around a bone transform.
-fn y_up(matrix: Mat4) -> Mat4 {
-    let swap = Mat4::from_cols(glam::Vec4::X, glam::Vec4::Z, glam::Vec4::Y, glam::Vec4::W);
-    swap * matrix * swap
-}
-
 /// The bone for an attachment point: a track or DAG name such as
 /// `HUMR_POINT_TRACK` for the model `HUM`.
 fn attachment_bone(bones: &[&str], model: &str, point: Attachment) -> Option<usize> {
@@ -220,8 +214,8 @@ impl CharacterAsset {
     }
 
     /// Samples a clip, looping or held as [`Self::pose`] and [`Self::pose_held`]
-    /// do, and also returns where each held item attaches, in the pose's Y-up
-    /// space, for the attachment points this skeleton has.
+    /// do, and also returns where each held item attaches, in the renderer's
+    /// frame like the pose, for the attachment points this skeleton has.
     pub fn pose_with_attachments(
         &self,
         animation: &str,
@@ -231,7 +225,7 @@ impl CharacterAsset {
         let bones = self.bones(animation, seconds, looping);
         let attachments = self.attachments.map(|bone| {
             bone.and_then(|bone| bones.get(bone))
-                .map(|matrix| y_up(*matrix))
+                .map(|matrix| eq_client_axes::wld_transform(*matrix))
         });
         (self.skin(&bones), attachments)
     }
@@ -295,15 +289,13 @@ impl CharacterAsset {
                 for ((position, normal), bone) in
                     skin.positions.iter().zip(&skin.normals).zip(&skin.bones)
                 {
-                    // Skinning occurs in native Z-up WLD coordinates before swapping axes.
-                    let [x, y, z] = *position;
-                    let point = world[*bone].transform_point3(Vec3::new(x, z, y));
-                    let [x, y, z] = *normal;
+                    // Skinning occurs in native Z-up WLD coordinates.
+                    let point = world[*bone].transform_point3(crate::wld(*position));
                     let normal = world[*bone]
-                        .transform_vector3(Vec3::new(x, z, y))
+                        .transform_vector3(crate::wld(*normal))
                         .normalize_or_zero();
-                    positions.push([point.x, point.z, point.y]);
-                    normals.push([normal.x, normal.z, normal.y]);
+                    positions.push(eq_client_axes::from_wld(point).to_array());
+                    normals.push(eq_client_axes::from_wld(normal).to_array());
                 }
                 CharacterPose { positions, normals }
             })
@@ -467,13 +459,13 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         }
         for staged in stage_mesh(&mesh) {
             let material = staged.material.clone();
-            let primitive = staged.realize(&mut archive, &mut textures, &mut texture_indices)?;
+            // Skinning starts from libeq's axes; poses convert to the renderer's.
             skins.push(Skin {
-                positions: primitive.positions.clone(),
-                normals: primitive.normals.clone(),
+                positions: staged.positions.clone(),
+                normals: staged.normals.clone(),
                 bones: bones.clone(),
             });
-            primitives.push(primitive);
+            primitives.push(staged.realize(&mut archive, &mut textures, &mut texture_indices)?);
             materials.push(material);
         }
     }
@@ -611,10 +603,8 @@ mod tests {
     }
 
     #[test]
-    fn attachments_come_in_the_poses_y_up_space() {
-        // A WLD translation up (Z) is up (Y) in pose space.
-        let up = y_up(Mat4::from_translation(Vec3::new(1.0, 2.0, 3.0)));
-        assert!((up.transform_point3(Vec3::ZERO) - Vec3::new(1.0, 3.0, 2.0)).length() < 0.0001);
+    fn attachments_come_in_the_poses_frame() {
+        // A bone raised along WLD up (Z) holds its item up the renderer's Y.
         let base = LocalTransform {
             translation: Vec3::new(0.0, 0.0, 5.0),
             rotation: Quat::IDENTITY,

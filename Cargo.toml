@@ -2,6 +2,7 @@
 members = [
   "apps/eq-client",
   "crates/eq-client-assets",
+  "crates/eq-client-axes",
   "crates/eq-client-core",
   "crates/eq-client-render",
 ]
@@ -34,6 +35,7 @@ bevy = { version = "0.19.1", default-features = false, features = [
 ] }
 clap = { version = "4.5", features = ["derive", "env"] }
 eq-client-assets = { path = "crates/eq-client-assets" }
+eq-client-axes = { path = "crates/eq-client-axes" }
 eq-client-core = { path = "crates/eq-client-core" }
 eq-client-render = { path = "crates/eq-client-render" }
 anyhow = "1"

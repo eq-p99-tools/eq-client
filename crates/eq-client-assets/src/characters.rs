@@ -189,6 +189,19 @@ mod tests {
         let (_, attachments) = human.pose_with_attachments("P01", 0.0, true);
         println!("HUM attachments: {attachments:?}");
         assert!(attachments.iter().all(Option::is_some));
+        // The right hand is on the right. A model faces heading 0 as stored,
+        // with up along Y, so its right is facing × up; a mirrored frame would
+        // put the right hand on the left.
+        let right = eq_client_axes::from_wld(glam::Vec3::X).cross(glam::Vec3::Y);
+        let side = |point: super::Attachment| {
+            attachments[point.index()]
+                .unwrap()
+                .w_axis
+                .truncate()
+                .dot(right)
+        };
+        assert!(side(super::Attachment::RightHand) > 0.0);
+        assert!(side(super::Attachment::LeftHand) < 0.0);
     }
 
     #[test]

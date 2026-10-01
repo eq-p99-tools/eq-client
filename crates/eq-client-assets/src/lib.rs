@@ -11,6 +11,7 @@ use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use glam::{EulerRot, Mat3, Quat, Vec3};
 use image::ImageError;
 use libeq::pfs::PfsReader;
 use libeq::wld::parser::{DrawStyle, MaterialType, RenderMethod, TextureStyle};
@@ -34,13 +35,13 @@ pub struct ZoneTexture {
 /// One draw call from a classic WLD zone.
 #[derive(Clone, Debug)]
 pub struct ZonePrimitive {
-    /// Vertex positions in right-handed, Y-up render coordinates.
+    /// Vertex positions in the renderer's frame (see `eq_client_axes`).
     pub positions: Vec<[f32; 3]>,
     /// Vertex normals in the same coordinate system as `positions`.
     pub normals: Vec<[f32; 3]>,
     /// Texture coordinates.
     pub texture_coordinates: Vec<[f32; 2]>,
-    /// Triangle-list indices.
+    /// Triangle-list indices, wound counter-clockwise around the normals.
     pub indices: Vec<u32>,
     /// Optional decoded diffuse texture.
     pub texture: Option<usize>,
@@ -88,10 +89,10 @@ pub struct ZoneModel {
 pub struct ZoneObject {
     /// Index into [`ZoneAsset::models`].
     pub model: usize,
-    /// World translation in right-handed, Y-up coordinates.
+    /// Translation in the renderer's frame.
     pub translation: [f32; 3],
-    /// Euler rotation in degrees around the X, Y, and Z axes.
-    pub rotation_degrees: [f32; 3],
+    /// Rotation in the renderer's frame, as an `(x, y, z, w)` quaternion.
+    pub rotation: [f32; 4],
     /// Scale along the X, Y, and Z axes.
     pub scale: [f32; 3],
 }
@@ -206,40 +207,8 @@ pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, Loa
     let mut primitives = Vec::new();
 
     for mesh in world.meshes() {
-        let center = mesh.center();
-        for primitive in mesh.primitives() {
-            let material = primitive.material();
-            let Some(material_mode) = material_mode(*material.render_method()) else {
-                continue;
-            };
-            let positions = primitive
-                .positions()
-                .into_iter()
-                .map(|position| {
-                    [
-                        position[0] + center.0,
-                        position[1] + center.1,
-                        position[2] + center.2,
-                    ]
-                })
-                .collect();
-            let texture = material
-                .base_color_texture()
-                .and_then(|value| value.source())
-                .and_then(|name| {
-                    load_texture(&mut archive, &name, &mut textures, &mut texture_indices)
-                        .transpose()
-                })
-                .transpose()?;
-
-            primitives.push(ZonePrimitive {
-                positions,
-                normals: primitive.normals(),
-                texture_coordinates: primitive.texture_coordinates(),
-                indices: primitive.indices(),
-                texture,
-                material_mode,
-            });
+        for staged in stage_mesh(&mesh) {
+            primitives.push(staged.realize(&mut archive, &mut textures, &mut texture_indices)?);
         }
     }
 
@@ -313,7 +282,7 @@ fn material_mode(method: RenderMethod) -> Option<MaterialMode> {
 struct ObjectPlacement {
     model_name: String,
     translation: [f32; 3],
-    rotation_degrees: [f32; 3],
+    rotation: [f32; 4],
     scale: [f32; 3],
 }
 
@@ -349,8 +318,8 @@ fn load_object_placements(
             let uniform_scale = nonzero_scale(uniform_scale);
             Some(ObjectPlacement {
                 model_name,
-                translation: [x, y, z],
-                rotation_degrees: [rotation_x, rotation_y, rotation_z],
+                translation: render([x, y, z]),
+                rotation: placement_rotation([rotation_x, rotation_y, rotation_z]),
                 scale: [uniform_scale; 3],
             })
         })
@@ -409,7 +378,7 @@ fn load_object_models(
             Some(ZoneObject {
                 model,
                 translation: placement.translation,
-                rotation_degrees: placement.rotation_degrees,
+                rotation: placement.rotation,
                 scale: placement.scale,
             })
         })
@@ -445,7 +414,8 @@ struct StagedPrimitive {
 }
 
 impl StagedPrimitive {
-    /// Decodes the texture (once per archive and name) and returns the primitive.
+    /// Decodes the texture (once per archive and name) and returns the
+    /// primitive in the renderer's frame.
     fn realize(
         self,
         archive: &mut PfsReader<File>,
@@ -458,14 +428,43 @@ impl StagedPrimitive {
             .transpose()?
             .flatten();
         Ok(ZonePrimitive {
-            positions: self.positions,
-            normals: self.normals,
+            positions: self.positions.into_iter().map(render).collect(),
+            normals: self.normals.into_iter().map(render).collect(),
             texture_coordinates: self.texture_coordinates,
-            indices: self.indices,
+            indices: self
+                .indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|&triangle| eq_client_axes::wld_triangle(triangle))
+                .collect(),
             texture,
             material_mode: self.material_mode,
         })
     }
+}
+
+/// libeq hands out WLD vectors with Y and Z swapped, for Y-up viewers; this
+/// matrix swaps them back, and is its own inverse.
+const LIBEQ_AXES: Mat3 = Mat3::from_cols(Vec3::X, Vec3::Z, Vec3::Y);
+
+/// Converts a libeq vector to WLD coordinates.
+fn wld(vector: [f32; 3]) -> Vec3 {
+    LIBEQ_AXES * Vec3::from_array(vector)
+}
+
+/// Converts a libeq position or normal to the renderer's frame.
+fn render(vector: [f32; 3]) -> [f32; 3] {
+    eq_client_axes::from_wld(wld(vector)).to_array()
+}
+
+/// Converts libeq's placement rotation, Euler angles in degrees about its
+/// swapped axes, to an `(x, y, z, w)` quaternion in the renderer's frame.
+fn placement_rotation(degrees: [f32; 3]) -> [f32; 4] {
+    let [x, y, z] = degrees.map(f32::to_radians);
+    let swapped = Mat3::from_quat(Quat::from_euler(EulerRot::XYZ, x, y, z));
+    let rotation = Quat::from_mat3(&(LIBEQ_AXES * swapped * LIBEQ_AXES));
+    eq_client_axes::wld_rotation(rotation).to_array()
 }
 
 /// Reads a mesh's drawable primitives, positioned at the mesh's center.
@@ -520,7 +519,8 @@ pub fn model_key(name: &str) -> String {
     name.strip_suffix("_ACTORDEF").unwrap_or(&name).to_owned()
 }
 
-/// Reads the WLD solid-face flags independently of visible material batches.
+/// Reads the WLD solid-face flags independently of visible material batches,
+/// in the renderer's frame with the same winding as the drawn triangles.
 fn mesh_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
     let positions = mesh.positions();
     let center = mesh.center();
@@ -528,13 +528,16 @@ fn mesh_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
         .as_chunks::<3>()
         .0
         .iter()
-        .filter_map(|indices| {
-            let mut triangle = [[0.0; 3]; 3];
-            for (out, index) in triangle.iter_mut().zip(indices) {
-                let p = positions.get(*index as usize)?;
-                *out = [p[0] + center.0, p[1] + center.1, p[2] + center.2];
+        .filter_map(|&triangle| {
+            let mut corners = [[0.0; 3]; 3];
+            for (out, index) in corners
+                .iter_mut()
+                .zip(eq_client_axes::wld_triangle(triangle))
+            {
+                let p = positions.get(index as usize)?;
+                *out = render([p[0] + center.0, p[1] + center.1, p[2] + center.2]);
             }
-            Some(triangle)
+            Some(corners)
         })
         .collect()
 }
@@ -634,6 +637,45 @@ mod tests {
         assert_eq!(material_mode(transparent), None);
         assert_eq!(material_mode(boundary), None);
         assert_eq!(material_mode(diffuse), Some(MaterialMode::Opaque));
+    }
+
+    /// The share of triangles wound counter-clockwise around their vertex
+    /// normals, as the renderer expects.
+    fn counter_clockwise_share(primitives: &[super::ZonePrimitive]) -> f64 {
+        use glam::Vec3;
+        let (mut agree, mut total) = (0_u32, 0_u32);
+        for primitive in primitives {
+            for triangle in primitive.indices.as_chunks::<3>().0 {
+                let point = |index: u32| Vec3::from_array(primitive.positions[index as usize]);
+                let normal: Vec3 = triangle
+                    .iter()
+                    .map(|&index| Vec3::from_array(primitive.normals[index as usize]))
+                    .sum();
+                let [a, b, c] = triangle.map(point);
+                let winding = (b - a).cross(c - a);
+                if winding.length_squared() > 1e-8 && normal.length_squared() > 1e-8 {
+                    total += 1;
+                    agree += u32::from(winding.dot(normal) > 0.0);
+                }
+            }
+        }
+        f64::from(agree) / f64::from(total)
+    }
+
+    #[test]
+    #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
+    fn installed_triangles_wind_counter_clockwise_around_their_normals() {
+        let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
+        let zone = load_zone(Path::new(&install), "qeytoqrg").unwrap();
+        let human =
+            crate::characters::load_installed_character(Path::new(&install), "qeynos2", "HUM")
+                .unwrap();
+        let (terrain, character) = (
+            counter_clockwise_share(&zone.primitives),
+            counter_clockwise_share(&human.primitives),
+        );
+        println!("counter-clockwise share: terrain {terrain:.3}, human {character:.3}");
+        assert!(terrain > 0.9 && character > 0.9);
     }
 
     #[test]

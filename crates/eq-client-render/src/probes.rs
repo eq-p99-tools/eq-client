@@ -99,12 +99,7 @@ fn collision_parts(
         if Vec3::from_array(object.translation).distance(near) > 120.0 {
             continue;
         }
-        let rotation = object.rotation_degrees.map(f32::to_radians);
-        let transform = Mat4::from_scale_rotation_translation(
-            Vec3::from_array(object.scale),
-            Quat::from_euler(EulerRot::XYZ, rotation[0], rotation[1], rotation[2]),
-            Vec3::from_array(object.translation),
-        );
+        let transform = object_transform(object).to_matrix();
         let triangles: Vec<[[f32; 3]; 3]> = model
             .collision
             .iter()
@@ -125,7 +120,7 @@ fn collision_parts(
             "object={} at={:?} rotation={:?} scale={:?} solid_triangles={} bounds={low:?}..{high:?}",
             model.name,
             object.translation,
-            object.rotation_degrees,
+            object.rotation,
             object.scale,
             triangles.len()
         );
@@ -438,9 +433,10 @@ fn inspect_zone_lines() {
             let top = Vec3::new(x, high.y + 1.0, z);
             if let Some(depth) = world.ray_distance(top, -Vec3::Y, high.y - low.y + 2.0) {
                 let ground = top.y - depth;
-                // WLD order is (east, north, up): renderer (x, z, y).
-                if let Some(line) = zone.regions.zone_line_at([x, z, ground + 3.0]) {
-                    let eq = Vec3::new(z, x, ground + 3.0);
+                let probe = [x, ground + 3.0, z];
+                if let Some(line) = zone.regions.zone_line_at(probe) {
+                    let at = world_position(probe, 0.0);
+                    let eq = Vec3::new(at.x, at.y, at.z);
                     let entry = found.entry(format!("{line:?}")).or_insert((0, eq, eq));
                     entry.0 += 1;
                     entry.1 = entry.1.min(eq);

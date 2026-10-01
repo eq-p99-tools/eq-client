@@ -39,40 +39,50 @@ fn collider(model: &Model, transform: &Transform) -> Option<Arc<CollisionMesh>> 
 pub(super) struct DoorEntity {
     id: u8,
     model: String,
-    hinge_angle: f32,
+    /// How far the door has swung from its placed heading, in EQ heading units.
+    swing: f32,
     definition: eq_client_core::doors::Door,
     collider: Option<Arc<CollisionMesh>>,
 }
 
-/// Hinged types have opposite quarter-turn endpoints; other mechanisms need their own motion.
+/// A hinged door's swing: a quarter turn, in EQ heading units.
+const QUARTER_TURN: f32 = eq_client_core::FULL_TURN / 4.0;
+
+/// Hinged types turn a quarter of the way around, to opposite sides, from their
+/// placed heading. The turn is in EQ's own heading units, so it shows the right
+/// way round in the renderer like every other heading. Other mechanisms need
+/// their own motion.
 fn hinge_target(door: &eq_client_core::doors::Door) -> Option<f32> {
     if door.incline != 0 {
         return None;
     }
     let direction = match door.open_type {
-        0..=4 | 8 => -1.0,
-        5..=7 => 1.0,
+        0..=4 | 8 => 1.0,
+        5..=7 => -1.0,
         _ => return None,
     };
     Some(if door.active_endpoint()? {
-        direction * std::f32::consts::FRAC_PI_2
+        direction * QUARTER_TURN
     } else {
         0.0
     })
 }
 
-/// Cosmetic interpolation only; this rate does not drive packets or claim original-client timing.
+/// Cosmetic interpolation only, half a turn a second; this rate does not drive
+/// packets or claim original-client timing.
 fn advance_hinge(current: f32, target: f32, seconds: f32) -> f32 {
     if !seconds.is_finite() || seconds <= 0.0 {
         return current;
     }
-    let step = std::f32::consts::PI * seconds.min(0.1);
+    let step = 2.0 * QUARTER_TURN * seconds.min(0.1);
     current + (target - current).clamp(-step, step)
 }
 
-fn posed(door: &eq_client_core::doors::Door, angle: f32) -> Transform {
+/// The door's transform once it has swung this far from its placed heading.
+fn posed(door: &eq_client_core::doors::Door, swing: f32) -> Transform {
     let mut transform = placement(door);
-    transform.rotation *= Quat::from_rotation_y(angle);
+    transform.rotation =
+        Quat::from_rotation_y(eq_client_core::static_yaw(door.position.heading + swing));
     transform
 }
 
@@ -180,12 +190,12 @@ pub(super) fn reconcile(
             let mut previous = door.definition.clone();
             previous.action = definition.action;
             if previous != *definition {
-                door.hinge_angle = hinge_target(definition).unwrap_or(0.0);
+                door.swing = hinge_target(definition).unwrap_or(0.0);
             } else if let Some(target) = hinge_target(definition) {
-                door.hinge_angle = advance_hinge(door.hinge_angle, target, time.delta_secs());
+                door.swing = advance_hinge(door.swing, target, time.delta_secs());
             }
             door.definition = definition.clone();
-            let next = posed(definition, door.hinge_angle);
+            let next = posed(definition, door.swing);
             if *transform != next {
                 door.collider = models
                     .as_ref()
@@ -219,7 +229,7 @@ pub(super) fn reconcile(
                 DoorEntity {
                     id,
                     model: model_key(&door.model),
-                    hinge_angle: hinge_target(door).unwrap_or(0.0),
+                    swing: hinge_target(door).unwrap_or(0.0),
                     definition: door.clone(),
                     collider,
                 },
@@ -289,19 +299,19 @@ mod tests {
         let door = &mut doors[0];
         assert_eq!(hinge_target(door), Some(0.0));
         door.action = Some(2);
-        let backward = hinge_target(door).unwrap();
+        let swing = hinge_target(door).unwrap();
+        assert_eq!(swing, QUARTER_TURN);
         door.open_type = 5;
-        let forward = hinge_target(door).unwrap();
-        assert!((backward + forward).abs() < 0.0001);
-        let halfway = advance_hinge(0.0, forward, 0.1);
-        assert!(halfway > 0.0 && halfway < forward);
-        assert_eq!(advance_hinge(halfway, 0.0, 0.1), 0.0);
-        assert_eq!(advance_hinge(0.0, forward, 5.0), halfway);
-        let mut angle = 0.0;
+        assert_eq!(hinge_target(door), Some(-swing));
+        let partway = advance_hinge(0.0, swing, 0.1);
+        assert!(partway > 0.0 && partway < swing);
+        assert_eq!(advance_hinge(partway, 0.0, 0.1), 0.0);
+        assert_eq!(advance_hinge(0.0, swing, 5.0), partway);
+        let mut turned = 0.0;
         for _ in 0..10 {
-            angle = advance_hinge(angle, forward, 0.1);
+            turned = advance_hinge(turned, swing, 0.1);
         }
-        assert_eq!(angle, forward);
+        assert_eq!(turned, swing);
         door.action = Some(255);
         assert_eq!(hinge_target(door), None);
         door.action = Some(2);
@@ -540,8 +550,13 @@ mod tests {
             panic!("door table")
         };
         let transform = placement(&doors[0]);
-        assert_eq!(transform.translation, Vec3::new(12.0, 3.0, -7.0));
+        // EQ's X runs along the renderer's -Z.
+        assert_eq!(transform.translation, Vec3::new(12.0, 3.0, 7.0));
         assert_eq!(transform.scale, Vec3::splat(1.5));
-        assert!((transform.rotation * Vec3::X - Vec3::Z).length() < 0.0001);
+        // A model's +X faces its heading: 128 is west, the world's +X.
+        assert!((transform.rotation * Vec3::X - Vec3::NEG_Z).length() < 0.0001);
+        // An open door turns a quarter further round.
+        let open = posed(&doors[0], QUARTER_TURN);
+        assert!((open.rotation * Vec3::X - Vec3::NEG_X).length() < 0.0001);
     }
 }

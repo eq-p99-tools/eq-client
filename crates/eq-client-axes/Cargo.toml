@@ -1,6 +1,6 @@
 [package]
-name = "eq-client-core"
-description = "Engine-independent world state for native EverQuest clients"
+name = "eq-client-axes"
+description = "Where EverQuest's world and file axes meet a right-handed, Y-up renderer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,10 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-parry3d.workspace = true
-eq-client-axes.workspace = true
 glam.workspace = true
-eq-network-game.workspace = true
 
 [lints]
 workspace = true

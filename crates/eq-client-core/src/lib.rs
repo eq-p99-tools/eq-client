@@ -81,31 +81,15 @@ pub fn classic_model(race: u32, gender: u32) -> Option<&'static str> {
     pair.get(usize::try_from(gender).ok()?).copied()
 }
 
-/// Converts an EQ position to a right-handed, Y-up renderer position.
-///
-/// `EverQuest` reports `(north, east, up)` while common 3D engines use
-/// `(right, up, forward)`.
-pub const fn render_position(position: WorldPosition) -> [f32; 3] {
-    [position.y, position.z, position.x]
+/// Converts an EQ position to the renderer's frame. `eq_client_axes` owns the
+/// conversion, the reflection between EQ's frame and the renderer's included;
+/// this and [`world_position`] adapt it to protocol positions.
+pub fn render_position(position: WorldPosition) -> [f32; 3] {
+    eq_client_axes::from_world(glam::Vec3::new(position.x, position.y, position.z)).to_array()
 }
 
-/// Converts EQ heading to renderer yaw about Y, where the root faces +Z.
-pub fn render_heading(heading: f32) -> f32 {
-    // EQ horizontal direction is (sin(h), cos(h)); rendering swaps X/Y.
-    std::f32::consts::FRAC_PI_2 - heading / 512.0 * std::f32::consts::TAU
-}
-
-/// Converts an EQ heading to renderer yaw for static models (doors, objects on
-/// the ground), whose meshes are already in renderer axes and, unlike
-/// characters, need no facing offset.
-pub fn static_yaw(heading: f32) -> f32 {
-    -heading / 512.0 * std::f32::consts::TAU
-}
-
-/// Converts a rotation about renderer Y (+Z forward) to an EQ 0..512 heading.
-pub fn world_heading(yaw: f32) -> f32 {
-    ((std::f32::consts::FRAC_PI_2 - yaw) / std::f32::consts::TAU * 512.0).rem_euclid(512.0)
-}
+/// Heading conversions, derived from the same axes as [`render_position`].
+pub use eq_client_axes::{FULL_TURN, model_yaw, render_heading, static_yaw, world_heading};
 
 /// `EQEmu`'s per-model exceptions to its 3.125 z offset factor, in its order, with
 /// the IDs of the `Race::` constants it names in the comments (common/races.h).
@@ -194,12 +178,14 @@ pub fn z_offset(race: u32, size: f32) -> f32 {
     0.2 * size * factor
 }
 
-/// Converts a renderer position back to EQ world coordinates.
-pub const fn world_position(position: [f32; 3], heading: f32) -> WorldPosition {
+/// Converts a renderer position back to EQ world coordinates, undoing
+/// [`render_position`].
+pub fn world_position(position: [f32; 3], heading: f32) -> WorldPosition {
+    let world = eq_client_axes::to_world(glam::Vec3::from_array(position));
     WorldPosition {
-        x: position[2],
-        y: position[0],
-        z: position[1],
+        x: world.x,
+        y: world.y,
+        z: world.z,
         heading,
     }
 }
@@ -227,22 +213,6 @@ mod tests {
         assert!((offset(12, f32::NAN) - 1.875).abs() < 0.0001); // gnome
     }
 
-    #[test]
-    fn cardinal_headings_match_eq_axes_after_render_conversion() {
-        for (heading, direction) in [
-            (0.0, [1.0, 0.0, 0.0]),
-            (128.0, [0.0, 0.0, 1.0]),
-            (256.0, [-1.0, 0.0, 0.0]),
-            (384.0, [0.0, 0.0, -1.0]),
-        ] {
-            let yaw = super::render_heading(heading);
-            assert!((yaw.sin() - direction[0]).abs() < 0.00001);
-            assert!((yaw.cos() - direction[2]).abs() < 0.00001);
-            assert!((super::world_heading(yaw) - heading).abs() < 0.0001);
-        }
-        assert!(super::world_heading(super::render_heading(512.0)).abs() < 0.0001);
-    }
-
     use super::{WorldPosition, render_position, world_position};
 
     #[test]
@@ -258,7 +228,7 @@ mod tests {
         assert!(
             actual
                 .iter()
-                .zip([20.0, 30.0, 10.0])
+                .zip([20.0, 30.0, -10.0])
                 .all(|(a, b)| (a - b).abs() < f32::EPSILON)
         );
         assert_eq!(world_position(actual, position.heading), position);
