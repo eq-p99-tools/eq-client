@@ -9,10 +9,12 @@
 
 mod casting;
 mod target;
+mod trade;
 mod vitals;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
 pub use target::Target;
+pub use trade::{Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
 
 use crate::{
@@ -118,6 +120,7 @@ pub struct ClientWorld {
     vitals: Vitals,
     inventory: Inventory,
     coins: Option<Coins>,
+    trade: trade::Trade,
     casting: Casting,
     buffs: BuffTracker,
     spell_book: Option<SpellBook>,
@@ -166,6 +169,34 @@ impl ClientWorld {
                 .and_then(|id| self.spawns.get(&id))
                 .map(|spawn| spawn.revision),
         };
+    }
+
+    /// The player opened a corpse; the server's word on it arrives as news.
+    pub fn open_loot(&mut self, corpse_id: u16) {
+        self.trade.loot = Some(Loot {
+            corpse_id,
+            items: BTreeMap::new(),
+            listed: false,
+        });
+    }
+
+    /// The player is done looting.
+    pub fn close_loot(&mut self) {
+        self.trade.loot = None;
+    }
+
+    /// The player asked a merchant to trade; the server's word on it arrives
+    /// as news.
+    pub fn open_shop(&mut self, merchant_id: u16) {
+        self.trade.merchant = Some(Merchant {
+            merchant_id,
+            stock: BTreeMap::new(),
+        });
+    }
+
+    /// The player is done trading.
+    pub fn close_shop(&mut self) {
+        self.trade.merchant = None;
     }
 
     /// Notes the player's health.
@@ -424,6 +455,10 @@ impl ClientWorld {
                 self.refresh_item_hp();
             }
             WorldEvent::Coins(coins) => self.coins = Some(*coins),
+            WorldEvent::Loot(update) => changes.ignored = !self.trade.loot(update, &mut self.coins),
+            WorldEvent::Merchant(update) => {
+                changes.ignored = !self.trade.merchant(update, &mut self.coins);
+            }
             WorldEvent::CastPending {
                 session_id,
                 spell_id,
@@ -602,6 +637,8 @@ impl ClientWorld {
     fn forget_zone(&mut self) {
         self.spawns.clear();
         self.considered.clear();
+        // The corpse and the merchant were the zone's.
+        self.trade = trade::Trade::default();
         self.player_posture = None;
         self.doors = DoorTable::default();
         self.objects = Objects::default();
@@ -760,6 +797,18 @@ impl ClientWorld {
     #[must_use]
     pub const fn inventory(&self) -> &Inventory {
         &self.inventory
+    }
+
+    /// The corpse the player is looting.
+    #[must_use]
+    pub const fn loot(&self) -> Option<&Loot> {
+        self.trade.loot.as_ref()
+    }
+
+    /// The merchant the player is trading with.
+    #[must_use]
+    pub const fn merchant(&self) -> Option<&Merchant> {
+        self.trade.merchant.as_ref()
     }
 
     /// The coins the player carries, as last reported.

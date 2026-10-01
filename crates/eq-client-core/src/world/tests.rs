@@ -762,3 +762,115 @@ fn consider_colors_last_while_the_spawn_does() {
     game(&mut world, entered(2));
     assert_eq!(world.considered(5), None);
 }
+
+fn coins(platinum: u32, gold: u32, silver: u32, copper: u32) -> Coins {
+    Coins {
+        platinum,
+        gold,
+        silver,
+        copper,
+    }
+}
+
+#[test]
+fn a_corpse_fills_while_open_and_closes_when_the_server_says() {
+    use crate::loot::{LootResponse, LootUpdate};
+    let mut world = admitted();
+    let loot = |update| WorldEvent::Loot(update);
+    // News about a corpse the player did not open is no one's.
+    assert!(game(&mut world, loot(LootUpdate::Closed)).ignored);
+    world.open_loot(9);
+    let mut item = chest();
+    item.slot = crate::inventory::InventorySlot(22);
+    game(&mut world, loot(LootUpdate::Item(Box::new(item))));
+    game(&mut world, loot(LootUpdate::Listed { corpse_id: 8 }));
+    assert!(!world.loot().unwrap().listed, "another corpse's listing");
+    game(&mut world, loot(LootUpdate::Listed { corpse_id: 9 }));
+    assert!(world.loot().unwrap().listed);
+    let taken = |accepted| loot(LootUpdate::Taken { slot: 22, accepted });
+    game(&mut world, taken(false));
+    assert!(world.loot().unwrap().items.contains_key(&22));
+    game(&mut world, taken(true));
+    assert!(world.loot().unwrap().items.is_empty());
+    game(&mut world, loot(LootUpdate::Closed));
+    assert!(world.loot().is_none());
+    // A refusal closes it too.
+    world.open_loot(9);
+    game(
+        &mut world,
+        loot(LootUpdate::Opened {
+            response: LootResponse::TooFar,
+            coins: Coins::default(),
+        }),
+    );
+    assert!(world.loot().is_none());
+    // And the zone's end.
+    world.open_loot(9);
+    game(&mut world, entered(2));
+    assert!(world.loot().is_none());
+}
+
+#[test]
+fn loot_coins_and_purchases_adjust_the_carried_total() {
+    use crate::{
+        loot::{LootResponse, LootUpdate},
+        merchant::MerchantUpdate,
+    };
+    let mut world = admitted();
+    game(&mut world, WorldEvent::Coins(coins(1, 0, 0, 0)));
+    world.open_loot(9);
+    world.open_shop(8);
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Opened {
+            response: LootResponse::Normal,
+            coins: coins(0, 0, 1, 5),
+        }),
+    );
+    assert_eq!(world.coins().unwrap().total_copper(), 1015);
+    game(
+        &mut world,
+        WorldEvent::Merchant(MerchantUpdate::Bought {
+            slot: 2,
+            quantity: 1,
+            price: 20,
+        }),
+    );
+    assert_eq!(world.coins(), Some(&coins(0, 9, 9, 5)));
+    // The next money update restores the server's denominations.
+    game(&mut world, WorldEvent::Coins(coins(0, 0, 99, 5)));
+    assert_eq!(world.coins(), Some(&coins(0, 0, 99, 5)));
+}
+
+#[test]
+fn a_merchant_lists_stock_until_closed_or_refusing() {
+    use crate::merchant::{MerchantItem, MerchantUpdate};
+    let mut world = admitted();
+    let merchant = |update| WorldEvent::Merchant(update);
+    assert!(game(&mut world, merchant(MerchantUpdate::Closed)).ignored);
+    world.open_shop(8);
+    game(
+        &mut world,
+        merchant(MerchantUpdate::Item(Box::new(MerchantItem {
+            slot: 3,
+            price: 10,
+            quantity: 0,
+            item: chest(),
+        }))),
+    );
+    assert!(world.merchant().unwrap().stock.contains_key(&3));
+    game(&mut world, merchant(MerchantUpdate::Removed { slot: 3 }));
+    assert!(world.merchant().unwrap().stock.is_empty());
+    game(
+        &mut world,
+        merchant(MerchantUpdate::Opened {
+            merchant_id: 8,
+            accepted: false,
+            rate: 1.0,
+        }),
+    );
+    assert!(world.merchant().is_none());
+    world.open_shop(8);
+    world.close_shop();
+    assert!(world.merchant().is_none());
+}

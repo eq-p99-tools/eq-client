@@ -122,7 +122,7 @@ type NearbyDoor = (u8, u8, Option<u8>, i32, [i32; 3]);
 type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
 
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
-pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, combat, _): &Observed) {
+pub(super) fn surroundings(online: &crate::online::OnlineState, (.., combat, _): &Observed) {
     let origin = online
         .world
         .player()
@@ -210,8 +210,8 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
         ?gear,
         ?models,
         door_status = online.door_status,
-        coins = ?trade.coins,
-        trade = trade.summary(),
+        coins = ?online.world.coins(),
+        trade = crate::trade::summary(&online.world),
         auto_attack = combat.auto_attack,
         "Script surroundings"
     );
