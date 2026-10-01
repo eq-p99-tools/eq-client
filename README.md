@@ -487,9 +487,10 @@ The target panel lists the keys that apply to the current target:
   **Loot all** takes one item at a time, waiting for each acknowledgement. Killed
   creatures become corpses in place, keeping their spawn ID.
 - **U** opens the targeted merchant: stock with the server's prices, one-click
-  purchases, and a sell button for each carried item. The window shows the coins
-  last reported by the server, adjusted for loot and purchases as the Titanium
-  client does. **Escape** closes both windows.
+  purchases, and a sell button for each carried item. The window shows the purse
+  as the networking session keeps it: the server's last money update, with loot
+  coins and purchases applied kind by kind as servers do. **Escape** closes the
+  window opened last first.
 - Clicking an NPC with an item on the cursor asks it to take the item, as the
   official client does. Its answer opens the skin's give window (`GiveWnd`)
   with the item in the first of its four slots; more items go in from the
@@ -502,8 +503,9 @@ The target panel lists the keys that apply to the current target:
   them down there, the give window's boxes included. Coins dropped on another
   kind's box change kind as servers do (11 gold into the bank's platinum
   leaves 1 gold on the cursor). Clicking an NPC with coins on the cursor
-  opens the give window with them. The bank's boxes show what the profile
-  and the player's moves put there.
+  opens the give window with them. Every coin box shows what the networking
+  session says is there; it refuses a move a place cannot cover before it is
+  sent, and the reason shows in chat.
 - **/camp** sits, waits the 30-second preparation, logs out and returns to
   character selection. Standing, moving, zoning or dying abandons it. **/sit** and
   **/stand** change posture from chat.

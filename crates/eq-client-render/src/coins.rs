@@ -2,8 +2,8 @@
 //! a coin box in the purse or the bank picks coins up onto the cursor (the
 //! quantity picker asks how many, a shifted click takes them all), and a
 //! click with coins on the cursor puts them down in the box clicked, the
-//! give window's among them, changing kind as servers do. Servers answer no
-//! coin move, so the world keeps the coins where the player put them.
+//! give window's among them, changing kind as servers do. The session keeps
+//! the coins and says where they went; a window shows what it is told.
 use crate::{inventory::InventoryState, online::OnlineState, outbox::Outbox};
 use bevy::prelude::*;
 use eq_client_core::{
@@ -30,19 +30,14 @@ pub(crate) fn on_cursor(world: &ClientWorld) -> Option<(Coin, u32)> {
         .find(|(_, count)| *count > 0)
 }
 
-/// Sends a coin move and keeps the coins where they went; a refusal shows in
-/// the feedback line.
-pub(crate) fn send(transfer: CoinTransfer, online: &mut OnlineState, outbox: &Outbox) {
-    let sent = outbox
-        .post(online.world(), |stamp| ClientCommand::MoveCoins {
-            session_id: stamp.session_id,
-            transfer,
-            created: stamp.created,
-        })
-        .is_ok();
-    if sent {
-        online.move_coins(transfer);
-    }
+/// Sends a coin move; the session says where the coins went, or why they
+/// did not go. An outbox refusal shows in the feedback line.
+pub(crate) fn send(transfer: CoinTransfer, online: &OnlineState, outbox: &Outbox) {
+    let _ = outbox.post(online.world(), |stamp| ClientCommand::MoveCoins {
+        session_id: stamp.session_id,
+        transfer,
+        created: stamp.created,
+    });
 }
 
 /// What a click on a coin box does: put down the cursor's coins, or pick
@@ -107,13 +102,13 @@ pub(crate) enum Click {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn input(
     keys: crate::keys::Keys,
-    mut online: ResMut<OnlineState>,
+    online: Res<OnlineState>,
     outbox: Res<Outbox>,
     mut inventory: ResMut<InventoryState>,
     boxes: Query<(&Interaction, &CoinBox), Changed<Interaction>>,
 ) {
     if let Some(transfer) = inventory.take_coins() {
-        send(transfer, &mut online, &outbox);
+        send(transfer, &online, &outbox);
     }
     let Some((_, target)) = boxes
         .iter()
@@ -125,7 +120,7 @@ pub(crate) fn input(
         .input
         .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     match click(*target, online.world(), inventory.bank_open(), all) {
-        Some(Click::Move(transfer)) => send(transfer, &mut online, &outbox),
+        Some(Click::Move(transfer)) => send(transfer, &online, &outbox),
         Some(Click::Pick(available)) => {
             inventory.select_coins(target.place, target.coin, available);
         }
@@ -158,13 +153,27 @@ mod tests {
                     silver: 0,
                     copper: 0,
                 }),
-                WorldEvent::CoinsElsewhere {
-                    cursor: Coins::default(),
-                    bank: Coins::default(),
-                },
+                elsewhere(Coins::default(), Coins::default()),
             ],
         );
         online
+    }
+
+    /// The session's word on the coins outside the purse.
+    fn elsewhere(cursor: Coins, given: Coins) -> WorldEvent {
+        WorldEvent::CoinsElsewhere {
+            cursor,
+            bank: Coins::default(),
+            given,
+            offered: Coins::default(),
+        }
+    }
+
+    fn gold(gold: u32) -> Coins {
+        Coins {
+            gold,
+            ..Coins::default()
+        }
     }
 
     #[test]
@@ -186,7 +195,8 @@ mod tests {
             (take.from, take.to, take.amount),
             (CoinPlace::Purse, CoinPlace::Cursor, 5)
         );
-        assert!(online.move_coins(take));
+        // The session moves them and says so.
+        testing::news(&mut online, [elsewhere(gold(5), Coins::default())]);
         // With coins on the cursor, a click on any box puts them down there.
         let bank_platinum = CoinBox {
             place: CoinPlace::Bank,
@@ -218,7 +228,11 @@ mod tests {
         let Some(Click::Move(give)) = click(given, online.world(), false, false) else {
             panic!("the cursor's coins go in");
         };
-        assert!(online.move_coins(give));
+        assert_eq!(
+            (give.from, give.to, give.amount),
+            (CoinPlace::Cursor, CoinPlace::Trade, 5)
+        );
+        testing::news(&mut online, [elsewhere(Coins::default(), gold(5))]);
         assert_eq!(shown(online.world(), CoinPlace::Trade, Coin::Gold), "5");
         assert_eq!(click(given, online.world(), false, true), None);
     }

@@ -179,6 +179,7 @@ type Buttons<'w, 's> = Query<
     'w,
     's,
     (
+        Entity,
         &'static mut Interaction,
         &'static InheritedVisibility,
         Option<&'static super::inventory::SlotButton>,
@@ -195,6 +196,10 @@ type Buttons<'w, 's> = Query<
         ),
     ),
 >;
+
+/// Every UI node's display and parent: a closed window is only left out of
+/// the layout, so its buttons keep their visibility.
+type Layout<'w, 's> = Query<'w, 's, (&'static Node, Option<&'static ChildOf>)>;
 
 type Observed<'w> = (
     (
@@ -230,7 +235,7 @@ pub(super) fn drive(
     bodies: Query<&super::PlayerBody, With<super::Player>>,
     collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
-    mut buttons: Buttons,
+    (mut buttons, layout): (Buttons, Layout),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut exit: MessageWriter<AppExit>,
@@ -397,7 +402,7 @@ pub(super) fn drive(
                 if window.is_some_and(|window| window.cursor_position().is_some()) {
                     return;
                 }
-                if !click(*target, &mut buttons) {
+                if !click(*target, &mut buttons, &layout) {
                     script.stop(&mut keys, &mut mouse, "click target is not visible");
                     return;
                 }
@@ -602,9 +607,11 @@ fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat,
     Ok(eq_client_core::OutboundChat::Say(format!("#{command}")))
 }
 
-/// Marks the first visible matching control pressed; the focus system clears it next frame.
-fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
+/// Marks the first visible matching control in an open window pressed; the
+/// focus system clears it next frame.
+fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
     for (
+        entity,
         mut interaction,
         visibility,
         slot,
@@ -661,12 +668,25 @@ fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
                     }
             }),
         };
-        if matches && visibility.get() {
+        if matches && visibility.get() && displayed(entity, layout) {
             *interaction = Interaction::Pressed;
             return true;
         }
     }
     false
+}
+
+/// Whether a node and every node above it are laid out, as a pointer needs
+/// to reach it.
+fn displayed(entity: Entity, layout: &Layout) -> bool {
+    let mut next = Some(entity);
+    while let Some((node, parent)) = next.and_then(|entity| layout.get(entity).ok()) {
+        if node.display == Display::None {
+            return false;
+        }
+        next = parent.map(ChildOf::parent);
+    }
+    true
 }
 
 /// The player's feet at its accepted position and the target's position, in
@@ -724,6 +744,38 @@ mod tests {
         // Offline, steps run unattended but a gm step is still refused.
         let offline = Script::new(Vec::new()).offline_preview(true);
         assert!(offline.offline && !offline.local);
+    }
+
+    #[test]
+    fn scripted_clicks_reach_only_buttons_in_open_windows() {
+        use bevy::ecs::system::SystemState;
+        let mut world = World::new();
+        let button = |world: &mut World, display| {
+            let frame = world
+                .spawn(Node {
+                    display,
+                    ..default()
+                })
+                .id();
+            world
+                .spawn((
+                    Node::default(),
+                    Interaction::None,
+                    InheritedVisibility::VISIBLE,
+                    super::super::give::GiveButton,
+                    ChildOf(frame),
+                ))
+                .id()
+        };
+        let closed = button(&mut world, Display::None);
+        let mut state = SystemState::<(Buttons, Layout)>::new(&mut world);
+        let (mut buttons, layout) = state.get_mut(&mut world).unwrap();
+        assert!(!click(ClickTarget::Give, &mut buttons, &layout));
+        let open = button(&mut world, Display::Flex);
+        let (mut buttons, layout) = state.get_mut(&mut world).unwrap();
+        assert!(click(ClickTarget::Give, &mut buttons, &layout));
+        assert_eq!(world.get::<Interaction>(open), Some(&Interaction::Pressed));
+        assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
     }
 
     #[test]

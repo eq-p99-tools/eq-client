@@ -2,7 +2,6 @@
 //! character: what the player opened, and what the server listed in it.
 use super::Notice;
 use crate::{
-    Coins,
     exchange::ExchangeUpdate,
     inventory::InventoryItem,
     loot::{LootResponse, LootUpdate},
@@ -41,8 +40,6 @@ pub struct Exchange {
     pub open: bool,
     /// Whether the player clicked Give.
     pub given: bool,
-    /// The coins the player put in the window.
-    pub coins: Coins,
 }
 
 impl Exchange {
@@ -64,20 +61,16 @@ pub(super) struct Trade {
 }
 
 impl Trade {
-    /// Follows the server's word on the corpse being looted, returning the
-    /// coins it handed over. False when no corpse is open.
-    pub(super) fn loot(&mut self, update: &LootUpdate, coins: &mut Option<Coins>) -> bool {
+    /// Follows the server's word on the corpse being looted; the session
+    /// adds the coins it handed over to the purse. False when no corpse is
+    /// open.
+    pub(super) fn loot(&mut self, update: &LootUpdate) -> bool {
         let Some(loot) = self.loot.as_mut() else {
             return false;
         };
         match update {
-            LootUpdate::Opened {
-                response,
-                coins: taken,
-            } => {
-                if matches!(response, LootResponse::Normal) {
-                    adjust(coins, i64::try_from(taken.total_copper()).unwrap_or(0));
-                } else {
+            LootUpdate::Opened { response, .. } => {
+                if !matches!(response, LootResponse::Normal) {
                     self.loot = None;
                 }
             }
@@ -101,8 +94,9 @@ impl Trade {
         true
     }
 
-    /// Follows the server's word on the merchant open. False when none is.
-    pub(super) fn merchant(&mut self, update: &MerchantUpdate, coins: &mut Option<Coins>) -> bool {
+    /// Follows the server's word on the merchant open; the session takes a
+    /// purchase's price from the purse. False when none is.
+    pub(super) fn merchant(&mut self, update: &MerchantUpdate) -> bool {
         let Some(merchant) = self.merchant.as_mut() else {
             return false;
         };
@@ -119,10 +113,8 @@ impl Trade {
                 merchant.stock.remove(slot);
             }
             MerchantUpdate::Closed => self.merchant = None,
-            MerchantUpdate::Bought { price, .. } => adjust(coins, -i64::from(*price)),
-            // The session removes the sold units from the inventory, and a
-            // server money update follows.
-            MerchantUpdate::Sold { .. } => (),
+            // The session moves the purse and the inventory.
+            MerchantUpdate::Bought { .. } | MerchantUpdate::Sold { .. } => (),
         }
         true
     }
@@ -172,21 +164,4 @@ pub(super) fn merchant_notice(update: &MerchantUpdate) -> Option<Notice> {
         }
     )
     .then_some(Notice::ShopRefused)
-}
-
-/// Like the Titanium client, applies coin changes the server reports without
-/// a money update (loot coins, purchase prices). Only the total is exact; the
-/// next money update restores the true denominations.
-fn adjust(coins: &mut Option<Coins>, copper: i64) {
-    if let Some(coins) = coins {
-        let total = i64::try_from(coins.total_copper()).unwrap_or(i64::MAX);
-        let total = u64::try_from(total.saturating_add(copper).max(0)).unwrap_or(0);
-        let denomination = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
-        *coins = Coins {
-            platinum: denomination(total / 1000),
-            gold: denomination(total / 100 % 10),
-            silver: denomination(total / 10 % 10),
-            copper: denomination(total % 10),
-        };
-    }
 }

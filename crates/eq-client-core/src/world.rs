@@ -32,8 +32,8 @@ pub use trade::{Exchange, Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
 
 use crate::{
-    BookActionStatus, CharacterChoice, Coins, Death, PlayerState, PostureState, SpawnState,
-    SpellBook, WorldEvent, WorldUpdate, ZoneOffer, buffs::BuffTracker, inventory::Inventory,
+    BookActionStatus, CharacterChoice, Death, PlayerState, PostureState, SpawnState, SpellBook,
+    WorldEvent, WorldUpdate, ZoneOffer, buffs::BuffTracker, inventory::Inventory,
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -118,12 +118,8 @@ pub struct ClientWorld {
     player: Option<PlayerState>,
     vitals: Vitals,
     inventory: Inventory,
-    coins: Option<Coins>,
-    /// The coins on the cursor, which the client keeps where the player put
-    /// them, as servers answer no coin move.
-    cursor_coins: Coins,
-    /// The coins in the bank, from the profile and the player's moves.
-    bank_coins: Option<Coins>,
+    /// Where the player's coins are, as the session keeps and tells them.
+    wallet: crate::money::Wallet,
     casting: Casting,
     buffs: BuffTracker,
     spell_book: Option<SpellBook>,
@@ -228,46 +224,7 @@ impl ClientWorld {
             slots: partner.slots(),
             open: false,
             given: false,
-            coins: Coins::default(),
         });
-    }
-
-    /// The player moved coins. Servers answer no coin move, so the client
-    /// keeps them where they went, as the Titanium client does; only whole
-    /// coins change kind. False, and nothing moves, when the place they come
-    /// from does not hold them or the place they go is unknown.
-    pub fn move_coins(&mut self, transfer: crate::money::CoinTransfer) -> bool {
-        let (taken, added) = transfer.amounts();
-        let held = self
-            .coins_in(transfer.from)
-            .is_some_and(|coins| coins.of(transfer.coin) >= taken);
-        if taken == 0 || !held || self.coins_in(transfer.to).is_none() {
-            return false;
-        }
-        if let Some(from) = self.coin_place(transfer.from) {
-            *from.of_mut(transfer.coin) -= taken;
-        }
-        if let Some(to) = self.coin_place(transfer.to) {
-            *to.of_mut(transfer.into) = to.of(transfer.into).saturating_add(added);
-        }
-        true
-    }
-
-    /// The coins in a place, to change.
-    fn coin_place(&mut self, place: crate::money::CoinPlace) -> Option<&mut Coins> {
-        use crate::money::CoinPlace;
-        match place {
-            CoinPlace::Purse => self.coins.as_mut(),
-            CoinPlace::Cursor => Some(&mut self.cursor_coins),
-            CoinPlace::Bank => self.bank_coins.as_mut(),
-            CoinPlace::Trade => self
-                .zone
-                .trade
-                .exchange
-                .as_mut()
-                .filter(|exchange| exchange.open)
-                .map(|exchange| &mut exchange.coins),
-        }
     }
 
     /// The player clicked Give; the server's word ends the window.
@@ -442,20 +399,26 @@ impl ClientWorld {
                 error,
             } => self.item_used((*session_id, *request_id), error.as_ref(), news),
             WorldEvent::ItemDetails(item) => self.items.insert(item.clone()),
+            // The session keeps the coins and says where they are.
             WorldEvent::Coins(coins) => {
-                self.coins = Some(*coins);
+                self.wallet.purse = Some(*coins);
                 news.trade = true;
             }
-            WorldEvent::CoinsElsewhere { cursor, bank } => {
-                self.cursor_coins = *cursor;
-                self.bank_coins = Some(*bank);
+            WorldEvent::CoinsElsewhere {
+                cursor,
+                bank,
+                given,
+                offered,
+            } => {
+                self.wallet.cursor = *cursor;
+                self.wallet.bank = Some(*bank);
+                self.wallet.given = *given;
+                self.wallet.offered = *offered;
                 news.trade = true;
             }
-            WorldEvent::CoinsRefused {
-                session_id,
-                transfer,
-                reason,
-            } => self.coins_refused(*session_id, *transfer, reason, news),
+            WorldEvent::CoinsRefused { session_id, reason } => {
+                self.coins_refused(*session_id, reason, news);
+            }
             WorldEvent::Loot(update) => self.loot_news(update, news),
             WorldEvent::Merchant(update) => self.merchant_news(update, news),
             WorldEvent::MerchantRefused { session_id, reason } => {
@@ -532,9 +495,7 @@ impl ClientWorld {
                 self.casting = Casting::default();
                 self.vitals = Vitals::default();
                 self.inventory = Inventory::default();
-                self.coins = None;
-                self.cursor_coins = Coins::default();
-                self.bank_coins = None;
+                self.wallet = crate::money::Wallet::default();
                 self.spell_book = None;
                 self.buffs.clear();
                 self.session_id = None;

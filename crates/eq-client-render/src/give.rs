@@ -91,7 +91,7 @@ pub(crate) fn window(
                     into: coin,
                     amount,
                 };
-                crate::coins::send(transfer, &mut online, &outbox);
+                crate::coins::send(transfer, &online, &outbox);
             } else {
                 inventory.hand_over_cursor(&online, &outbox);
             }

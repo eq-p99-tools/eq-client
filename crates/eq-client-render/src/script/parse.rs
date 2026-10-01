@@ -12,9 +12,12 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 14] = [
+const GM_COMMANDS: [&str; 16] = [
     "summon",
     "summonitem",
+    // A temporary NPC at the GM's feet, and coins or items on the target.
+    "spawn",
+    "npcloot",
     "castspell",
     "damage",
     "givemoney",

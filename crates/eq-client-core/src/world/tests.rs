@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    CampStatus, SpawnKind, SpellUpdate, WorldPosition, ZoneRejection,
+    CampStatus, Coins, SpawnKind, SpellUpdate, WorldPosition, ZoneRejection,
     combat::ConColor,
     doors::{Door, DoorUpdate},
     ground::ObjectUpdate,
@@ -816,7 +816,7 @@ fn a_corpse_fills_while_open_and_closes_when_the_server_says() {
 }
 
 #[test]
-fn loot_coins_and_purchases_adjust_the_carried_total() {
+fn the_purse_is_what_the_session_says_whatever_loot_and_purchases_suggest() {
     use crate::{
         loot::{LootResponse, LootUpdate},
         merchant::MerchantUpdate,
@@ -825,6 +825,8 @@ fn loot_coins_and_purchases_adjust_the_carried_total() {
     game(&mut world, WorldEvent::Coins(coins(1, 0, 0, 0)));
     world.open_loot(9);
     world.open_shop(8);
+    // The session adds loot coins and takes a price, and says so; the
+    // client does no sums of its own.
     game(
         &mut world,
         WorldEvent::Loot(LootUpdate::Opened {
@@ -832,7 +834,6 @@ fn loot_coins_and_purchases_adjust_the_carried_total() {
             coins: coins(0, 0, 1, 5),
         }),
     );
-    assert_eq!(world.coins().unwrap().total_copper(), 1015);
     game(
         &mut world,
         WorldEvent::Merchant(MerchantUpdate::Bought {
@@ -841,10 +842,10 @@ fn loot_coins_and_purchases_adjust_the_carried_total() {
             price: 20,
         }),
     );
+    assert_eq!(world.coins(), Some(&coins(1, 0, 0, 0)));
+    let changes = game(&mut world, WorldEvent::Coins(coins(0, 9, 9, 5)));
+    assert!(changes.trade);
     assert_eq!(world.coins(), Some(&coins(0, 9, 9, 5)));
-    // The next money update restores the server's denominations.
-    game(&mut world, WorldEvent::Coins(coins(0, 0, 99, 5)));
-    assert_eq!(world.coins(), Some(&coins(0, 0, 99, 5)));
 }
 
 #[test]
@@ -937,9 +938,9 @@ fn the_give_window_opens_on_the_npcs_answer_and_closes_on_the_servers_word() {
 }
 
 #[test]
-fn coins_stay_where_the_player_puts_them_and_a_refused_move_puts_them_back() {
+fn coins_outside_the_purse_are_where_the_session_says() {
     use crate::exchange::ExchangeUpdate;
-    use crate::money::{Coin, CoinPlace, CoinTransfer};
+    use crate::money::CoinPlace;
     let mut world = admitted();
     let coins = |platinum, gold, silver, copper| Coins {
         platinum,
@@ -947,78 +948,40 @@ fn coins_stay_where_the_player_puts_them_and_a_refused_move_puts_them_back() {
         silver,
         copper,
     };
-    game(&mut world, WorldEvent::Coins(coins(1, 12, 0, 3)));
-    game(
-        &mut world,
-        WorldEvent::CoinsElsewhere {
-            cursor: Coins::default(),
-            bank: coins(0, 0, 5, 0),
-        },
-    );
-    let transfer = |from, to, coin, into, amount| CoinTransfer {
-        from,
-        to,
-        coin,
-        into,
-        amount,
+    let elsewhere = |cursor, given| WorldEvent::CoinsElsewhere {
+        cursor,
+        bank: coins(0, 0, 5, 0),
+        given,
+        offered: Coins::default(),
     };
-    // Picked up onto the cursor.
-    assert!(world.move_coins(transfer(
-        CoinPlace::Purse,
-        CoinPlace::Cursor,
-        Coin::Gold,
-        Coin::Gold,
-        11
-    )));
-    assert_eq!(world.coins_in(CoinPlace::Purse), Some(coins(1, 1, 0, 3)));
+    game(&mut world, elsewhere(coins(0, 11, 0, 0), Coins::default()));
     assert_eq!(world.coins_in(CoinPlace::Cursor), Some(coins(0, 11, 0, 0)));
-    // Not more than a place holds.
-    assert!(!world.move_coins(transfer(
-        CoinPlace::Purse,
-        CoinPlace::Cursor,
-        Coin::Gold,
-        Coin::Gold,
-        2
-    )));
-    // Into the bank's platinum: only whole platinum arrives.
-    assert!(world.move_coins(transfer(
-        CoinPlace::Cursor,
-        CoinPlace::Bank,
-        Coin::Gold,
-        Coin::Platinum,
-        11
-    )));
-    assert_eq!(world.coins_in(CoinPlace::Cursor), Some(coins(0, 1, 0, 0)));
-    assert_eq!(world.coins_in(CoinPlace::Bank), Some(coins(1, 0, 5, 0)));
-    // No trade window, no coins in it.
-    let into_trade = transfer(
-        CoinPlace::Cursor,
-        CoinPlace::Trade,
-        Coin::Gold,
-        Coin::Gold,
-        1,
-    );
-    assert!(!world.move_coins(into_trade));
+    assert_eq!(world.coins_in(CoinPlace::Bank), Some(coins(0, 0, 5, 0)));
+    // A window's coins show only while it is open.
+    game(&mut world, elsewhere(Coins::default(), coins(0, 1, 0, 0)));
+    assert_eq!(world.coins_in(CoinPlace::Trade), None);
     world.offer_trade(8);
     game(
         &mut world,
         WorldEvent::Exchange(ExchangeUpdate::Opened { with: 8 }),
     );
-    assert!(world.move_coins(into_trade));
     assert_eq!(world.coins_in(CoinPlace::Trade), Some(coins(0, 1, 0, 0)));
-    // The session did not send it: the coin comes back to the cursor.
+    // A refused move says why, and moves nothing.
     let changes = game(
         &mut world,
         WorldEvent::CoinsRefused {
             session_id: 1,
-            transfer: into_trade,
-            reason: "No trade window is open".into(),
+            reason: "You do not have that many coins there".into(),
         },
     );
-    assert!(changes.trade);
-    assert_eq!(world.coins_in(CoinPlace::Cursor), Some(coins(0, 1, 0, 0)));
-    assert_eq!(world.coins_in(CoinPlace::Trade), Some(Coins::default()));
-    // Camping forgets the coins outside the purse.
+    assert_eq!(
+        changes.notices,
+        [Notice::TradeRefused(
+            "You do not have that many coins there".into()
+        )]
+    );
+    assert_eq!(world.coins_in(CoinPlace::Trade), Some(coins(0, 1, 0, 0)));
+    // Camping forgets the coins.
     world.apply(
         &WorldUpdate::Game(WorldEvent::Camp(CampStatus::Camped)),
         Instant::now(),
