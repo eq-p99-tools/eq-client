@@ -1,4 +1,5 @@
 //! Paged view of the server's indexed spellbook.
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 mod scribe;
 pub(super) use scribe::presentation as scribe_presentation;
@@ -285,7 +286,6 @@ pub(super) fn spawn(commands: &mut Commands) {
             row_gap: px(4),
             ..default()
         },
-        Color::srgba(0.025, 0.032, 0.04, 0.96),
     );
     commands
         .entity(frame)
@@ -306,11 +306,8 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
     super::book_delete::spawn(parent);
     parent.spawn((
         Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(13.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.78, 0.80, 0.84)),
+        theme::font(Size::Heading),
+        TextColor(theme::INK_BRIGHT),
         BookText,
     ));
     parent
@@ -322,16 +319,13 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
                 padding: UiRect::all(px(6)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.10, 0.12, 0.16)),
+            BackgroundColor(theme::BUTTON),
         ))
         .with_child((
             scribe::Label,
             Text::new("Scribe cursor scroll"),
-            TextColor(Color::WHITE),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
+            TextColor(theme::INK_BRIGHT),
+            theme::font(Size::Label),
         ));
     for index in 0..ROWS_PER_PAGE {
         parent
@@ -339,10 +333,7 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
                 Button,
                 BookEntry(index),
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
+                theme::font(Size::Heading),
                 Node {
                     min_height: px(26),
                     padding: UiRect {
@@ -351,7 +342,7 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
                     },
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.07, 0.09, 0.12)),
+                BackgroundColor(theme::INSET),
             ))
             .with_child(super::spell_icons::artwork(
                 super::spell_icons::Source::Book(index),
@@ -366,22 +357,7 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             for (next, label) in [(false, "Previous"), (true, "Next")] {
-                row.spawn((
-                    Button,
-                    PageButton(next),
-                    Node {
-                        padding: UiRect::axes(px(12), px(6)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.10, 0.12, 0.16)),
-                ))
-                .with_child((
-                    Text::new(label),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
-                ));
+                theme::button_with(row, PageButton(next), label, Size::Label);
             }
         });
 }
@@ -662,13 +638,7 @@ fn refresh_gems(
                 .copied()
                 .flatten()
                 != selected;
-        background.0 = if !available {
-            Color::srgb(0.055, 0.065, 0.08)
-        } else if *interaction != Interaction::None {
-            Color::srgb(0.20, 0.29, 0.40)
-        } else {
-            Color::srgb(0.12, 0.16, 0.22)
-        };
+        background.0 = theme::button(available, false, *interaction);
         if *interaction != Interaction::None {
             gem_hint = Some(gem_description(
                 *gem,
@@ -710,11 +680,11 @@ fn refresh_rows(
             node.display = Display::Flex;
             value.0 = format!("{} | {}", slot + 1, names.label(*id));
             background.0 = if selection.selected == Some(*id) {
-                Color::srgb(0.16, 0.23, 0.32)
+                theme::BUTTON_ON
             } else if *interaction == Interaction::Hovered {
-                Color::srgb(0.10, 0.13, 0.18)
+                theme::BUTTON_HOVER
             } else {
-                Color::srgb(0.07, 0.09, 0.12)
+                theme::INSET
             };
         } else {
             value.0.clear();
@@ -789,11 +759,8 @@ fn gem_hint() -> impl Bundle {
     (
         GemHint,
         Text::new("Hover a gem to inspect its current spell"),
-        TextFont {
-            font_size: FontSize::Px(11.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.70, 0.76, 0.84)),
+        theme::font(Size::Body),
+        TextColor(theme::INK),
         Node {
             height: px(44),
             flex_shrink: 0.0,
@@ -816,10 +783,7 @@ fn gem_choices(parent: &mut ChildSpawnerCommands) {
                     GemChoice(gem),
                     crate::outbox::Needs(eq_client_core::Capability::Spellbook),
                     Text::new(format!("{}", gem + 1)),
-                    TextFont {
-                        font_size: FontSize::Px(13.0),
-                        ..default()
-                    },
+                    theme::font(Size::Heading),
                     Node {
                         width: px(32),
                         height: px(42),
@@ -827,7 +791,7 @@ fn gem_choices(parent: &mut ChildSpawnerCommands) {
                         justify_content: JustifyContent::Center,
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.12, 0.16, 0.22)),
+                    BackgroundColor(theme::BUTTON),
                 ))
                 .with_child(super::spell_icons::artwork(
                     super::spell_icons::Source::Gem(usize::from(gem)),
@@ -1453,7 +1417,7 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().get::<BackgroundColor>(text).unwrap().0,
-            Color::srgb(0.16, 0.23, 0.32)
+            crate::theme::BUTTON_ON
         );
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()

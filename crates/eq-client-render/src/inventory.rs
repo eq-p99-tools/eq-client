@@ -4,6 +4,7 @@ pub(super) mod cursor;
 mod interaction;
 mod layout;
 
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::inventory::{Inventory, InventorySlot, InventoryUpdate};
 
@@ -189,7 +190,6 @@ pub(super) fn spawn(commands: &mut Commands) {
             display: Display::None,
             ..default()
         },
-        Color::srgb(0.025, 0.032, 0.04),
     );
     commands.entity(frame).insert((
         super::hud::HudRoot,
@@ -205,37 +205,20 @@ pub(super) fn spawn(commands: &mut Commands) {
             })
             .with_children(|tabs| {
                 for (tab, name) in [(Tab::Inventory, "Inventory"), (Tab::Bank, "Bank")] {
-                    tabs.spawn((
-                        Button,
-                        TabButton(tab),
-                        Node {
-                            padding: UiRect::axes(px(12), px(6)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.08, 0.10, 0.13)),
-                    ))
-                    .with_children(|button| {
-                        label(button, name, 12.0);
-                    });
+                    theme::button_with(tabs, TabButton(tab), name, Size::Label);
                 }
             });
         panel.spawn((
             Status,
             Text::new("Inventory not received"),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.75, 0.72, 0.60)),
+            theme::font(Size::Body),
+            TextColor(theme::INK),
         ));
         panel.spawn((
             HoverLabel,
             Text::new(SLOT_HELP),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.88, 0.87, 0.80)),
+            theme::font(Size::Body),
+            TextColor(theme::INK_WARM),
             Node {
                 min_height: px(14),
                 ..default()
@@ -250,16 +233,6 @@ pub(super) fn spawn(commands: &mut Commands) {
             },
         ));
     });
-}
-fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32) {
-    parent.spawn((
-        Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(size),
-            ..default()
-        },
-        TextColor(Color::srgb(0.88, 0.89, 0.91)),
-    ));
 }
 
 /// What the inventory's mouse does, shown until a slot is hovered.
@@ -469,11 +442,7 @@ pub(super) fn update(
         } else {
             Display::Flex
         };
-        color.0 = if tab.0 == state.tab {
-            Color::srgb(0.20, 0.22, 0.28)
-        } else {
-            Color::srgb(0.08, 0.10, 0.13)
-        };
+        color.0 = theme::button(true, tab.0 == state.tab, Interaction::None);
     }
     commands.entity(root).despawn_children();
     commands.entity(root).with_children(|list| {
@@ -505,13 +474,13 @@ pub(super) fn feedback(
         let item = inventory.items().get(&slot.0);
         let hovered = *interaction != Interaction::None;
         let tint = if slot.0 == InventorySlot::CURSOR && item.is_some() {
-            Color::srgb(0.45, 0.82, 1.0)
+            theme::FOCUS
         } else if hovered {
-            Color::srgb(0.88, 0.77, 0.45)
+            theme::EDGE_HOVER
         } else if item.is_some() {
-            Color::srgb(0.48, 0.43, 0.31)
+            theme::EDGE_HELD
         } else {
-            Color::srgb(0.22, 0.25, 0.28)
+            theme::EDGE
         };
         *border = BorderColor::all(tint);
         if hovered {

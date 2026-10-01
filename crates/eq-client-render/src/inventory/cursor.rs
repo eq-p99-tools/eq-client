@@ -1,5 +1,6 @@
 //! Non-interactive display of the actual inventory cursor slot.
 use super::{InventorySlot, InventoryState};
+use crate::theme::{self, Size};
 use bevy::{prelude::*, ui::FocusPolicy, window::PrimaryWindow};
 
 #[derive(Component)]
@@ -20,7 +21,7 @@ pub(super) fn spawn(commands: &mut Commands) {
             padding: UiRect::all(px(4)),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.02, 0.03, 0.04, 0.88)),
+        BackgroundColor(theme::SCRIM),
     ));
 }
 
@@ -92,11 +93,8 @@ pub(crate) fn update(
         }
         parent.spawn((
             Text::new(text),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.88, 0.85, 0.73)),
+            theme::font(Size::Body),
+            TextColor(theme::INK_WARM),
             FocusPolicy::Pass,
         ));
     });

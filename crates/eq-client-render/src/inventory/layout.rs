@@ -1,6 +1,7 @@
 //! Compact slots and bag-content grids.
-use super::{SlotButton, Tab, View, label, visible_slots};
+use super::{SlotButton, Tab, View, visible_slots};
 use crate::sheets::Art;
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_assets::ui::{Area, EquipmentLayout};
 use eq_client_core::inventory::InventorySlot;
@@ -47,10 +48,10 @@ fn quantity_picker(parent: &mut ChildSpawnerCommands, view: View<'_>) {
                 ..default()
             })
             .with_children(|picker| {
-                label(
+                theme::label(
                     picker,
                     &format!("PICK UP {} / {}", selection.amount, selection.available),
-                    12.0,
+                    Size::Label,
                 );
                 picker
                     .spawn(Node {
@@ -66,16 +67,7 @@ fn quantity_picker(parent: &mut ChildSpawnerCommands, view: View<'_>) {
                             (SplitAction::Confirm, "Pick up"),
                             (SplitAction::Cancel, "Cancel"),
                         ] {
-                            row.spawn((
-                                Button,
-                                action,
-                                Node {
-                                    padding: UiRect::axes(px(10), px(6)),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgb(0.08, 0.10, 0.13)),
-                            ))
-                            .with_children(|button| label(button, title, 11.0));
+                            theme::button_with(row, action, title, Size::Body);
                         }
                     });
             });
@@ -104,7 +96,7 @@ fn storage_columns(
                     ..default()
                 })
                 .with_children(|equipment| {
-                    label(equipment, "EQUIPMENT", 10.0);
+                    theme::label(equipment, "EQUIPMENT", Size::Small);
                     if let Some(paperdoll) = paperdoll {
                         placed(equipment, paperdoll, view, art);
                     } else {
@@ -121,7 +113,7 @@ fn storage_columns(
                 })
                 .with_children(|bags| {
                     // The cursor heads the storage column, beside the paperdoll.
-                    label(bags, "CURSOR", 10.0);
+                    theme::label(bags, "CURSOR", Size::Small);
                     bags.spawn(Node {
                         column_gap: px(8),
                         align_items: AlignItems::Center,
@@ -129,17 +121,12 @@ fn storage_columns(
                     })
                     .with_children(|cursor| {
                         square(cursor, InventorySlot::CURSOR, view, art);
-                        cursor
-                            .spawn((
-                                Button,
-                                super::StoreCursor,
-                                Node {
-                                    padding: UiRect::axes(px(10), px(6)),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgb(0.08, 0.10, 0.13)),
-                            ))
-                            .with_children(|button| label(button, "Auto inventory", 11.0));
+                        theme::button_with(
+                            cursor,
+                            super::StoreCursor,
+                            "Auto inventory",
+                            Size::Body,
+                        );
                     });
                     if view.state.tab == Tab::Bank {
                         carried(bags, view, Tab::Bank, art);
@@ -203,23 +190,23 @@ fn carried(parent: &mut ChildSpawnerCommands, view: View<'_>, tab: Tab, art: &mu
                         square(heading, *slot, view, art);
                         super::colors::controls(heading, &view.state.colors, *slot);
                     });
-                    label(bag, &item.details.name, 10.0);
+                    theme::label(bag, &item.details.name, Size::Small);
                 });
                 grid(row, &children, view, art);
             });
     }
     if !remaining.is_empty() {
-        label(
+        theme::label(
             parent,
             match tab {
                 Tab::Inventory => "CARRIED",
                 Tab::Bank => "BANK",
             },
-            10.0,
+            Size::Small,
         );
         grid(parent, &remaining, view, art);
     } else if slots.is_empty() {
-        label(parent, "No bank items received", 12.0);
+        theme::label(parent, "No bank items received", Size::Label);
     }
 }
 
@@ -336,11 +323,11 @@ fn square(
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.045, 0.055, 0.065)),
+            BackgroundColor(theme::WELL),
             BorderColor::all(if item.is_some() {
-                Color::srgb(0.48, 0.43, 0.31)
+                theme::EDGE_HELD
             } else {
-                Color::srgb(0.22, 0.25, 0.28)
+                theme::EDGE
             }),
         ))
         .with_children(|cell| {
@@ -362,17 +349,14 @@ fn square(
                         .filter_map(|w| w.chars().next())
                         .take(2)
                         .collect();
-                    label(cell, &initials, 12.0);
+                    theme::label(cell, &initials, Size::Label);
                 }
                 if let Some(count) = item.stack_count {
                     let mut quantity = cell.spawn((
                         Text::new(count.to_string()),
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+                        theme::font(Size::Body),
+                        TextColor(theme::INK_BRIGHT),
+                        BackgroundColor(theme::SCRIM),
                         Node {
                             position_type: PositionType::Absolute,
                             right: px(1),
@@ -386,18 +370,15 @@ fn square(
                     }
                 }
             } else if !view.inventory.received() || view.inventory.stale() {
-                label(cell, "?", 12.0);
+                theme::label(cell, "?", Size::Label);
             } else if let Some(caption) = usize::try_from(slot.0)
                 .ok()
                 .and_then(|index| EQUIPMENT_CAPTIONS.get(index))
             {
                 cell.spawn((
                     Text::new(*caption),
-                    TextFont {
-                        font_size: FontSize::Px(7.5),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.45, 0.49, 0.53)),
+                    theme::font(Size::Caption),
+                    TextColor(theme::INK_DIM),
                     TextLayout::justify(Justify::Center),
                 ));
             }

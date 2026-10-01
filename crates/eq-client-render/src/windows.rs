@@ -2,6 +2,7 @@
 //! title bar, dragging and minimizing, the stack that orders the floating
 //! windows, and the placements kept between runs.
 
+use crate::theme::{self, Size};
 use bevy::{prelude::*, ui::FocusPolicy, window::PrimaryWindow};
 mod layout;
 pub(super) mod pointer;
@@ -61,18 +62,14 @@ pub(crate) fn placed(id: WindowId, mut node: Node) -> Node {
 /// Spawns a window's frame where the registry says it opens, in its layer,
 /// with its id and background and, for a titled window, its title bar; the
 /// caller adds its own markers and body after the title bar.
-pub(crate) fn frame(
-    commands: &mut Commands,
-    id: WindowId,
-    mut node: Node,
-    background: Color,
-) -> Entity {
+pub(crate) fn frame(commands: &mut Commands, id: WindowId, mut node: Node) -> Entity {
     let description = id.describe();
     description.placement.apply(&mut node);
+    node.border = UiRect::all(px(1));
     let frame = commands
         .spawn((
             node,
-            BackgroundColor(background),
+            theme::surface(),
             GlobalZIndex(description.layer.base()),
             Frame::default(),
             id,
@@ -168,17 +165,10 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: Wi
                 flex_shrink: 0.0,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.055, 0.067, 0.078)),
+            BackgroundColor(theme::TITLE_BAR),
         ))
         .with_children(|bar| {
-            bar.spawn((
-                Text::new(title),
-                TextFont {
-                    font_size: FontSize::Px(10.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.68, 0.71, 0.74)),
-            ));
+            bar.spawn(theme::text(title, Size::Small, theme::INK));
             bar.spawn((
                 Button,
                 Minimize(frame),
@@ -189,17 +179,12 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: Wi
                     align_items: AlignItems::Center,
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.10, 0.12, 0.14)),
+                BackgroundColor(theme::BUTTON),
             ))
             .with_children(|button| {
                 button.spawn((
                     MinimizeLabel(frame),
-                    Text::new("_"),
-                    TextFont {
-                        font_size: FontSize::Px(11.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.82, 0.82, 0.78)),
+                    theme::text("_", Size::Body, theme::INK_BRIGHT),
                 ));
             });
         });

@@ -2,6 +2,7 @@
 pub(super) mod marker;
 mod picking;
 use super::{entities::NearbyEntities, online::OnlineState};
+use crate::theme::{self, Size};
 use crate::{keys::Act, outbox::Outbox};
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::{ClientCommand, SpawnKind, targeting::cycle};
@@ -33,14 +34,12 @@ pub(super) fn spawn(commands: &mut Commands) {
                     width: px(280),
                     padding: UiRect::all(px(10)),
                     border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(px(4)),
                     flex_direction: FlexDirection::Column,
                     row_gap: px(5),
                     ..default()
                 },
             ),
-            BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.93)),
-            BorderColor::all(Color::srgb(0.4, 0.37, 0.26)),
+            theme::surface(),
         ))
         .id();
     super::windows::passive(commands, frame);
@@ -49,11 +48,8 @@ pub(super) fn spawn(commands: &mut Commands) {
         panel.spawn((
             TargetName,
             Text::new("No target"),
-            TextFont {
-                font_size: FontSize::Px(13.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.9, 0.85, 0.65)),
+            theme::font(Size::Heading),
+            TextColor(theme::INK_WARM),
         ));
         panel
             .spawn((
@@ -62,7 +58,7 @@ pub(super) fn spawn(commands: &mut Commands) {
                     width: percent(100),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.13, 0.10, 0.10)),
+                BackgroundColor(theme::WELL),
             ))
             .with_children(|bar| {
                 bar.spawn((
@@ -72,17 +68,14 @@ pub(super) fn spawn(commands: &mut Commands) {
                         width: percent(0),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.65, 0.22, 0.22)),
+                    BackgroundColor(theme::HP),
                 ));
             });
         panel.spawn((
             TargetDetails,
             Text::new("Click or Tab to select"),
-            TextFont {
-                font_size: FontSize::Px(10.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.7, 0.73, 0.77)),
+            theme::font(Size::Small),
+            TextColor(theme::INK),
         ));
     });
 }

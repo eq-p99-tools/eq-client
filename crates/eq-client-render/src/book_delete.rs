@@ -1,4 +1,5 @@
 //! Confirmed deletion and server-authoritative reordering of spellbook entries.
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, SpellBook};
 
@@ -45,18 +46,12 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                         ..default()
                     },
                     BackgroundColor(if matches!(action, Action::Select | Action::Confirm) {
-                        Color::srgb(0.16, 0.09, 0.09)
+                        theme::BUTTON_DANGER
                     } else {
-                        Color::srgb(0.10, 0.12, 0.16)
+                        theme::BUTTON
                     }),
                 ))
-                .with_child((
-                    Text::new(label),
-                    TextFont {
-                        font_size: FontSize::Px(11.0),
-                        ..default()
-                    },
-                ));
+                .with_child((Text::new(label), theme::font(Size::Body)));
             }
         });
 }

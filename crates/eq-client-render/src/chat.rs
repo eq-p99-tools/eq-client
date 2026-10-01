@@ -1,4 +1,5 @@
 //! Tabbed receive-only chat, with mobile palette colors and independent scroll positions.
+use crate::theme::{self, Size};
 use bevy::{
     input::keyboard::{Key, KeyboardInput},
     prelude::*,
@@ -84,10 +85,6 @@ pub(super) struct Send;
 #[derive(Component)]
 pub(super) struct InputStatus;
 
-const PANEL: Color = Color::srgba(0.025, 0.032, 0.04, 0.94);
-const EDGE: Color = Color::srgb(0.23, 0.25, 0.26);
-const INK: Color = Color::srgb(0.72, 0.75, 0.77);
-
 /// Creates a clipped scrollback window; changing tabs never destroys stored messages.
 #[allow(clippy::too_many_lines)] // Declarative UI tree.
 pub(super) fn spawn(commands: &mut Commands) {
@@ -100,19 +97,15 @@ pub(super) fn spawn(commands: &mut Commands) {
             height: px(202),
             max_height: percent(45),
             padding: UiRect::all(px(8)),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(4)),
             flex_direction: FlexDirection::Column,
             row_gap: px(6),
             ..default()
         },
-        PANEL,
     );
     commands.entity(frame).insert((
         super::hud::HudRoot,
         Panel,
         super::windows::pointer::TakesWheel,
-        BorderColor::all(EDGE),
     ));
     commands.entity(frame).with_children(|root| {
         root.spawn(Node {
@@ -132,18 +125,15 @@ pub(super) fn spawn(commands: &mut Commands) {
                         border: UiRect::bottom(px(2)),
                         ..default()
                     },
-                    BackgroundColor(PANEL),
-                    BorderColor::all(EDGE),
+                    BackgroundColor(theme::BUTTON),
+                    BorderColor::all(theme::EDGE),
                 ))
                 .with_children(|button| {
                     button.spawn((
                         TabLabel(tab),
                         Text::new(tab.label()),
-                        TextFont {
-                            font_size: FontSize::Px(10.0),
-                            ..default()
-                        },
-                        TextColor(INK),
+                        theme::font(Size::Small),
+                        TextColor(theme::INK),
                     ));
                 });
             }
@@ -189,39 +179,18 @@ pub(super) fn spawn(commands: &mut Commands) {
                     border: UiRect::all(px(1)),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.04, 0.05, 0.06)),
-                BorderColor::all(EDGE),
+                BackgroundColor(theme::WELL),
+                BorderColor::all(theme::EDGE),
             ))
             .with_children(|input| {
                 input.spawn((
                     InputLabel,
                     Text::new("Press Enter to chat"),
-                    TextFont {
-                        font_size: FontSize::Px(11.0),
-                        ..default()
-                    },
-                    TextColor(INK),
+                    theme::font(Size::Body),
+                    TextColor(theme::INK),
                 ));
             });
-            row.spawn((
-                Button,
-                Send,
-                Node {
-                    padding: UiRect::axes(px(9), px(5)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgb(0.10, 0.13, 0.16)),
-            ))
-            .with_children(|button| {
-                button.spawn((
-                    Text::new("Send"),
-                    TextFont {
-                        font_size: FontSize::Px(11.0),
-                        ..default()
-                    },
-                    TextColor(INK),
-                ));
-            });
+            theme::button_with(row, Send, "Send", Size::Body);
         });
         root.spawn(Node {
             justify_content: JustifyContent::SpaceBetween,
@@ -233,32 +202,10 @@ pub(super) fn spawn(commands: &mut Commands) {
             footer.spawn((
                 InputStatus,
                 Text::new("Wheel: history | Enter: chat"),
-                TextFont {
-                    font_size: FontSize::Px(10.0),
-                    ..default()
-                },
-                TextColor(INK),
+                theme::font(Size::Small),
+                TextColor(theme::INK),
             ));
-            footer
-                .spawn((
-                    Button,
-                    Latest,
-                    Node {
-                        padding: UiRect::axes(px(8), px(3)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.10, 0.13, 0.16)),
-                ))
-                .with_children(|button| {
-                    button.spawn((
-                        Text::new("Latest"),
-                        TextFont {
-                            font_size: FontSize::Px(10.0),
-                            ..default()
-                        },
-                        TextColor(INK),
-                    ));
-                });
+            theme::button_with(footer, Latest, "Latest", Size::Small);
         });
     });
 }
@@ -425,17 +372,11 @@ pub(super) fn refresh(
         }
     }
     for (TabButton(tab), interaction, mut background, mut border) in &mut buttons {
-        background.0 = if *tab == active {
-            Color::srgb(0.16, 0.19, 0.22)
-        } else if *interaction == Interaction::Hovered {
-            Color::srgb(0.10, 0.13, 0.16)
-        } else {
-            PANEL
-        };
+        background.0 = theme::button(true, *tab == active, *interaction);
         *border = BorderColor::all(if *tab == active {
-            Color::srgb(0.72, 0.62, 0.38)
+            theme::EDGE_HOVER
         } else {
-            EDGE
+            theme::EDGE
         });
     }
     for mut text in &mut input_labels {
@@ -454,9 +395,9 @@ pub(super) fn refresh(
     }
     for mut border in &mut input_boxes {
         *border = BorderColor::all(if typing.composing {
-            Color::srgb(0.45, 0.72, 0.95)
+            theme::FOCUS
         } else {
-            EDGE
+            theme::EDGE
         });
     }
     for mut text in &mut input_status {
@@ -511,11 +452,8 @@ fn sync_lines(
             commands.entity(column).with_child((
                 Placeholder,
                 Text::new("No messages in this channel yet."),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(INK),
+                theme::font(Size::Label),
+                TextColor(theme::INK),
             ));
         }
         _ => (),
@@ -542,10 +480,7 @@ fn spawn_line(parent: &mut ChildSpawnerCommands, id: u64, line: &ChatLine) {
         parent.spawn((
             LineId(id),
             Text::new(format!("{prefix}{}", line.message.text)),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
+            theme::font(Size::Label),
             TextColor(color),
             Node {
                 width: percent(100),

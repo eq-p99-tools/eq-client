@@ -1,6 +1,7 @@
 #![doc = "Bevy scene and camera support for renderer-independent EQ zone assets."]
 
 use std::{path::PathBuf, sync::mpsc::Receiver};
+use theme::Size;
 
 mod book_delete;
 mod buffs;
@@ -35,6 +36,7 @@ mod skin;
 mod spell_icons;
 mod spellbook;
 mod target;
+mod theme;
 mod tooltip;
 mod trade;
 mod windows;
@@ -661,11 +663,8 @@ fn spawn_player_and_hud(
         .spawn((
             HudText,
             Text::new(""),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.73, 0.77, 0.79)),
+            theme::font(Size::Label),
+            TextColor(theme::INK),
             windows::placed(
                 windows::WindowId::Status,
                 Node {
@@ -673,7 +672,7 @@ fn spawn_player_and_hud(
                     ..default()
                 },
             ),
-            BackgroundColor(Color::srgba(0.02, 0.03, 0.04, 0.82)),
+            BackgroundColor(theme::SCRIM),
         ))
         .id();
     windows::passive(commands, status_panel);

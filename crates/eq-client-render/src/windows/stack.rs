@@ -3,6 +3,7 @@
 //! the windows the player opens and closes do so from the selector or their
 //! key, the same way for each.
 use super::registry::{Layer, WindowId};
+use crate::theme::{self, Size};
 use bevy::{prelude::*, window::PrimaryWindow};
 use std::collections::BTreeSet;
 
@@ -195,16 +196,11 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
                         padding: UiRect::axes(px(10), px(5)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.92)),
+                    BackgroundColor(theme::BUTTON),
                 ))
                 .with_child((
                     SelectorLabel(window),
-                    Text::new(name(window)),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.84, 0.84, 0.80)),
+                    theme::text(name(window), Size::Label, theme::INK_BRIGHT),
                 ));
             }
         });
@@ -235,13 +231,7 @@ pub(crate) fn light_selector(
         }
     }
     for (button, interaction, mut color) in &mut buttons {
-        let wanted = match (shown.is_open(button.0), interaction) {
-            (true, _) => Color::srgba(0.16, 0.20, 0.27, 0.95),
-            (false, Interaction::Hovered | Interaction::Pressed) => {
-                Color::srgba(0.08, 0.10, 0.13, 0.95)
-            }
-            (false, Interaction::None) => Color::srgba(0.025, 0.032, 0.04, 0.92),
-        };
+        let wanted = theme::button(true, shown.is_open(button.0), *interaction);
         if color.0 != wanted {
             color.0 = wanted;
         }

@@ -1,5 +1,6 @@
 //! The one floating tooltip: the text of the control under the pointer,
 //! beside the pointer. A greyed-out control says why it is greyed out.
+use crate::theme::{self, Size};
 use bevy::{prelude::*, window::PrimaryWindow};
 
 /// What a control says when the pointer rests on it.
@@ -15,11 +16,8 @@ pub(crate) fn spawn(mut commands: Commands) {
     commands.spawn((
         TooltipBox,
         Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(11.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.92, 0.90, 0.82)),
+        theme::font(Size::Body),
+        TextColor(theme::INK_WARM),
         Node {
             position_type: PositionType::Absolute,
             padding: UiRect::axes(px(6), px(3)),
@@ -27,7 +25,7 @@ pub(crate) fn spawn(mut commands: Commands) {
             display: Display::None,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.02, 0.025, 0.03, 0.95)),
+        BackgroundColor(theme::SCRIM),
         GlobalZIndex(1000),
         bevy::ui::FocusPolicy::Pass,
     ));

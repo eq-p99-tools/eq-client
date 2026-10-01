@@ -1,5 +1,6 @@
 //! Clickable chat item links and a read-only server-backed details panel.
 use super::{online::OnlineState, outbox::Outbox};
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, ItemDetails, ItemLink};
 use std::time::{Duration, Instant};
@@ -60,7 +61,6 @@ pub(super) fn spawn(commands: &mut Commands) {
             display: Display::None,
             ..default()
         },
-        Color::srgb(0.025, 0.032, 0.04),
     );
     commands.entity(frame).insert((
         super::hud::HudRoot,
@@ -73,20 +73,14 @@ pub(super) fn spawn(commands: &mut Commands) {
             Button,
             CloseItem,
             Text::new("Close item"),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.85, 0.8, 0.6)),
+            theme::font(Size::Label),
+            TextColor(theme::INK_WARM),
         ));
         panel.spawn((
             ItemText,
             Text::new(""),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+            theme::font(Size::Label),
+            TextColor(theme::INK_BRIGHT),
         ));
     });
 }
@@ -277,10 +271,7 @@ pub(super) fn spawn_message(
     parent
         .spawn((
             Text::new(prefix),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
+            theme::font(Size::Label),
             TextColor(color),
             Node {
                 width: percent(100),
@@ -299,19 +290,13 @@ pub(super) fn spawn_message(
                 }
                 text.spawn((
                     TextSpan::new(&message.text[end..link.text_start]),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    theme::font(Size::Label),
                     TextColor(color),
                 ));
                 text.spawn((
                     TextSpan::new(&message.text[link.text_start..link.text_end]),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb_u8(190, 80, 255)),
+                    theme::font(Size::Label),
+                    TextColor(theme::LINK),
                     ItemButton(link.clone()),
                     Interaction::None,
                 ));
@@ -319,10 +304,7 @@ pub(super) fn spawn_message(
             }
             text.spawn((
                 TextSpan::new(&message.text[end..]),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
+                theme::font(Size::Label),
                 TextColor(color),
             ));
         })
@@ -521,7 +503,7 @@ mod tests {
         let mut links = world.query::<(&ItemButton, &TextColor)>();
         let (link, color) = links.single(world).unwrap();
         assert_eq!(link.0.item_id, 42);
-        assert_eq!(color.0, Color::srgb_u8(190, 80, 255));
+        assert_eq!(color.0, crate::theme::LINK);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! L loots the targeted corpse, U trades with the targeted NPC, and Escape
 //! closes the window (see `escape`). A window closes only once the server has
 //! been told, so the server never keeps a session the player can no longer end.
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{
     ClientCommand, SpawnKind,
@@ -649,7 +650,6 @@ fn show_panel(
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
-            Color::srgba(0.025, 0.032, 0.04, 0.94),
         );
         commands.entity(frame).insert(Panel(list));
         frame
@@ -657,11 +657,8 @@ fn show_panel(
     commands.entity(frame).with_children(|parent| {
         parent.spawn((
             Text::new(status),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.73, 0.77, 0.81)),
+            theme::font(Size::Body),
+            TextColor(theme::INK),
         ));
         parent
             .spawn((
@@ -700,27 +697,12 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
         Action::Take(_) | Action::TakeAll | Action::EndLoot => Capability::Looting,
         Action::Buy(_) | Action::Sell(_) | Action::EndShop => Capability::Trading,
     };
-    parent
-        .spawn((
-            Button,
-            action,
-            crate::outbox::Needs(needs),
-            Node {
-                padding: UiRect::axes(px(6), px(3)),
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.10, 0.14, 0.18)),
-        ))
-        .with_children(|button| {
-            button.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.9, 0.92, 0.94)),
-            ));
-        });
+    theme::button_with(
+        parent,
+        (action, crate::outbox::Needs(needs)),
+        label,
+        Size::Label,
+    );
 }
 
 #[cfg(test)]
