@@ -9,53 +9,14 @@ mod tests;
 
 use bevy::prelude::*;
 
-/// The player's own HP as the server last reported it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct ReportedHp {
-    pub current: i32,
-    pub maximum: i32,
-    /// Both leave out what equipped items add, which the client adds back.
-    pub without_items: bool,
-}
-
-/// What the HUD shows besides the world: the status line, the player's HP as
-/// worked out from the last report, estimated maxima and timed feedback.
+/// What the HUD shows besides the world: the status line, estimated maxima
+/// and timed feedback.
 #[derive(Resource, Default)]
 pub(super) struct HudState {
     pub status: String,
-    pub hp: Option<(u32, u32)>,
-    pub hp_percent: Option<u8>,
-    /// The player's last HP report, which `hp` shows.
-    pub reported_hp: Option<ReportedHp>,
-    /// HP the equipped items add, as last calculated.
-    pub item_hp: Option<i64>,
     /// Calculated, unverified maxima (mana, endurance), never server-reported values.
     pub resource_estimate: Option<(u32, u32)>,
     pub action_feedback: Option<(std::time::Instant, String)>,
-}
-
-impl HudState {
-    /// Shows the last HP report, adding back what equipped items give when the
-    /// report leaves it out (unknown item HP counts as none), and returns the
-    /// percentage shown. A dying character shows zero.
-    pub(super) fn show_hp(&mut self) -> Option<u8> {
-        let report = self.reported_hp?;
-        let items = if report.without_items {
-            self.item_hp.unwrap_or(0)
-        } else {
-            0
-        };
-        let current = i64::from(report.current) + items;
-        let maximum = i64::from(report.maximum) + items;
-        let shown = |value: i64| u32::try_from(value.max(0)).unwrap_or(u32::MAX);
-        self.hp = Some((shown(current), shown(maximum)));
-        let percent = (maximum > 0).then(|| {
-            u8::try_from(current.clamp(0, maximum) * 100 / maximum)
-                .expect("percentage is bounded to 100")
-        })?;
-        self.hp_percent = Some(percent);
-        Some(percent)
-    }
 }
 
 #[derive(Component)]
@@ -88,6 +49,8 @@ pub(super) fn update(
     let now = std::time::Instant::now();
     let world = &online.world;
     let (casting, vitals) = (world.casting(), world.vitals());
+    // Without a report, the health the server gave in percent.
+    let health = world.player().and_then(|player| player.hp_percent);
     for (mut text, label) in &mut texts {
         let value = match label {
             HudLabel::Casting => casting.cast.map_or_else(
@@ -124,10 +87,10 @@ pub(super) fn update(
                 }
             }
             HudLabel::Stat(stat) => match *stat {
-                "HP" => state
-                    .hp
+                "HP" => world
+                    .hit_points()
                     .map(|(a, b)| format!("{a}/{b}"))
-                    .or_else(|| state.hp_percent.map(|p| format!("{p}%"))),
+                    .or_else(|| health.map(|p| format!("{p}%"))),
                 "MANA" => vitals
                     .mana
                     .map(|v| resource_label(v, state.resource_estimate.map(|v| v.0))),
@@ -160,11 +123,11 @@ pub(super) fn update(
         let ratio = match *stat {
             "MANA" => resource_ratio(vitals.mana, state.resource_estimate.map(|v| v.0)),
             "STAMINA" => resource_ratio(vitals.endurance, state.resource_estimate.map(|v| v.1)),
-            "HP" => state
-                .hp
+            "HP" => world
+                .hit_points()
                 .filter(|(_, max)| *max > 0)
                 .map(|(value, max)| f64::from(value) / f64::from(max))
-                .or_else(|| state.hp_percent.map(|v| f64::from(v) / 100.0)),
+                .or_else(|| health.map(|v| f64::from(v) / 100.0)),
             "EXP" => vitals.experience.map(|v| f64::from(v) / 330.0),
             _ => None,
         }

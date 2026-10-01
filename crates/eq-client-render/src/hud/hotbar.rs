@@ -140,7 +140,7 @@ pub(crate) fn update(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     gems: Query<(&Interaction, &super::SpellGem)>,
     items: Query<(&Interaction, &crate::inventory::SlotButton)>,
-    inventory: Option<Res<crate::inventory::InventoryState>>,
+    online: Option<Res<crate::online::OnlineState>>,
     mut bindings: ResMut<Bindings>,
 ) {
     if !chat.composing
@@ -155,11 +155,11 @@ pub(crate) fn update(
             .find(|(interaction, _)| **interaction != Interaction::None)
         {
             bindings.0[index] = Some(Action::Gem(gem.0));
-        } else if let Some(inventory) = inventory
+        } else if let Some(online) = online
             && let Some((_, slot)) = items
                 .iter()
                 .find(|(interaction, _)| **interaction != Interaction::None)
-            && let Some(item) = inventory.data.items().get(&slot.0)
+            && let Some(item) = online.world.inventory().items().get(&slot.0)
             && item.activation.effect.is_some()
         {
             bindings.0[index] = Some(Action::Item {
@@ -176,11 +176,11 @@ pub(crate) fn presentation(
     bindings: Res<Bindings>,
     online: Res<crate::online::OnlineState>,
     names: Res<crate::spellbook::SpellNames>,
-    inventory: Option<Res<crate::inventory::InventoryState>>,
     mut slots: Query<(&Interaction, &Slot, &mut BackgroundColor)>,
     mut labels: Query<(&mut Text, Option<&Caption>, Option<&Hint>)>,
 ) {
     let now = std::time::Instant::now();
+    let inventory = online.world.inventory();
     let hovered = slots
         .iter()
         .find(|(interaction, _, _)| **interaction != Interaction::None)
@@ -196,9 +196,7 @@ pub(crate) fn presentation(
                 .flatten()
         });
         let missing_item = match bindings.0[slot.0] {
-            Some(Action::Item { slot, id }) => inventory
-                .as_ref()
-                .is_none_or(|inventory| bound_item(inventory, slot, id).is_none()),
+            Some(Action::Item { slot, id }) => bound_item(inventory, slot, id).is_none(),
             _ => false,
         };
         let empty = missing_item
@@ -267,8 +265,7 @@ pub(crate) fn presentation(
                 },
                 Some(Action::Sit) => "Sit down".into(),
                 Some(Action::Stand) => "Stand up".into(),
-                Some(Action::Item { slot, id }) => inventory.as_ref()
-                    .and_then(|inventory| bound_item(inventory, slot, id))
+                Some(Action::Item { slot, id }) => bound_item(inventory, slot, id)
                     .map_or_else(|| format!("Bound item unavailable\n{} / rebind after moving it", slot.label()),
                         |item| format!("{}\n{} / uses current target or self", item.details.name, slot.label())),
                 None if hovered.is_some() => "Unassigned\nHover gem or item + Ctrl+number: bind".into(),
@@ -280,12 +277,11 @@ pub(crate) fn presentation(
 
 /// A slot binding never silently activates a different item placed into that slot.
 fn bound_item(
-    inventory: &crate::inventory::InventoryState,
+    inventory: &eq_client_core::inventory::Inventory,
     slot: eq_client_core::inventory::InventorySlot,
     id: u32,
 ) -> Option<&eq_client_core::inventory::InventoryItem> {
     inventory
-        .data
         .items()
         .get(&slot)
         .filter(|item| item.details.id == id && item.activation.effect.is_some())
@@ -311,7 +307,7 @@ pub(crate) fn item_actions(
     let Some(Action::Item { slot, id }) = requested(&keys, &bindings, &clicks) else {
         return;
     };
-    let message = if bound_item(&inventory, slot, id).is_none() {
+    let message = if bound_item(online.world.inventory(), slot, id).is_none() {
         "Bound item unavailable; rebind after moving it".to_owned()
     } else {
         inventory.activate_shortcut(

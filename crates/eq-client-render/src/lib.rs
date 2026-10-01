@@ -214,6 +214,7 @@ pub fn run(
             (items::link_input, items::input).chain(),
             (
                 inventory::input,
+                inventory::settle,
                 inventory::colors::input,
                 inventory::update,
                 inventory::feedback,
@@ -241,7 +242,7 @@ pub fn run(
             orbit_camera,
             update_hud,
             (
-                (resources::hit_points, resources::update, hud::update).chain(),
+                (resources::update, hud::update).chain(),
                 hud::spell_details,
                 hud::actions,
                 hud::hotbar::update,

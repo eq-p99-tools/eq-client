@@ -167,6 +167,5 @@ mod tests {
         assert_eq!(state.colors.picker, None);
         assert_eq!(state.colors.tint(slot), Color::srgb(0.075, 0.16, 0.12));
         assert_eq!(state.colors.tint(InventorySlot(23)), original_other);
-        assert!(state.data.items().is_empty());
     }
 }

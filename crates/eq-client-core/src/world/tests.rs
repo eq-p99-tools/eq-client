@@ -557,3 +557,119 @@ fn a_book_change_holds_until_confirmed_and_every_reply_counts() {
     );
     assert!(world.book_action().is_none());
 }
+
+/// A worn chest that gives 100 HP.
+fn chest() -> crate::inventory::InventoryItem {
+    use crate::inventory::{InventoryItem, InventorySlot, ItemActivation, ItemPlacement};
+    InventoryItem {
+        activation: ItemActivation::default(),
+        scroll_spell: None,
+        rules: ItemPlacement {
+            item_type: 10,
+            ..ItemPlacement::default()
+        },
+        slot: InventorySlot(17),
+        details: crate::ItemDetails {
+            equipment: Some(crate::EquipmentRules::default()),
+            bonuses: Some(crate::ItemBonuses {
+                hit_points: 100,
+                ..crate::ItemBonuses::default()
+            }),
+            id: 1,
+            name: "Chest".into(),
+            lore: String::new(),
+            weight_tenths: 10,
+            slots: 1 << 17,
+            classes: u32::MAX,
+            races: u32::MAX,
+            flags: Vec::new(),
+            stats: Vec::new(),
+        },
+        icon: 0,
+        stack_count: None,
+        charges: 0,
+        bag_slots: 0,
+    }
+}
+
+fn hit_points(spawn_id: u16, current: i32, maximum: i32) -> WorldEvent {
+    WorldEvent::HitPoints {
+        spawn_id,
+        current,
+        maximum,
+        without_items: true,
+    }
+}
+
+fn inventory(items: Vec<crate::inventory::InventoryItem>) -> WorldEvent {
+    WorldEvent::Inventory(crate::inventory::InventoryUpdate::Snapshot(items))
+}
+
+#[test]
+fn shown_hp_adds_back_what_equipped_items_give() {
+    let mut world = admitted();
+    assert!(game(&mut world, inventory(vec![chest()])).inventory);
+    // Alive at 80 of 250 with a +100 HP chest, the server reports -20 of 150.
+    game(&mut world, hit_points(9, -20, 150));
+    assert_eq!(world.hit_points(), Some((80, 250)));
+    assert_eq!(world.health(9), Some(32));
+    // Taking the chest off leaves the last report short of its bonus until the
+    // server reports again, as in the official client.
+    game(&mut world, inventory(Vec::new()));
+    assert_eq!(world.hit_points(), Some((0, 150)));
+    assert_eq!(world.health(9), Some(0));
+    // Another spawn's report is not the player's.
+    assert!(game(&mut world, hit_points(5, 1, 2)).ignored);
+    assert_eq!(world.hit_points(), Some((0, 150)));
+}
+
+#[test]
+fn the_dead_show_no_hp_and_a_new_admission_forgets_the_report() {
+    let mut world = admitted();
+    game(&mut world, hit_points(9, 75, 150));
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 9,
+            killer_id: 0,
+            corpse_id: 10,
+            bind_zone_id: 2,
+        }),
+    );
+    assert_eq!(world.hit_points(), Some((0, 150)));
+    assert_eq!(world.health(9), Some(0));
+    game(&mut world, entered(2));
+    assert_eq!(world.hit_points(), None);
+    assert_eq!(world.vitals().reported_hp, None);
+}
+
+#[test]
+fn the_inventory_lasts_until_the_admission_or_session_ends() {
+    let held = |world: &ClientWorld| !world.inventory().items().is_empty();
+    let mut world = admitted();
+    game(&mut world, inventory(vec![chest()]));
+    // Zoning, dying and a dropped connection that will come back keep it.
+    game(
+        &mut world,
+        WorldEvent::ZoneTransfer(ZoneOffer {
+            zone_id: 2,
+            instance_id: 0,
+            position: WorldPosition::default(),
+            reason: 0,
+            to_bind: false,
+            solicited: true,
+        }),
+    );
+    connection(&mut world, false, false);
+    assert!(held(&world));
+    // A new admission waits for the server to send it again.
+    game(&mut world, entered(2));
+    assert!(!held(&world));
+    game(&mut world, inventory(vec![chest()]));
+    connection(&mut world, false, true);
+    assert!(!held(&world));
+    let mut world = admitted();
+    game(&mut world, inventory(vec![chest()]));
+    game(&mut world, WorldEvent::Camp(CampStatus::Camped));
+    assert!(!held(&world));
+}

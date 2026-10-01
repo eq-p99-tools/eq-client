@@ -423,7 +423,6 @@ pub(super) fn update(
     online: Option<Res<super::online::OnlineState>>,
     sender: Option<Res<super::target::CommandsToServer>>,
     mut selection: Local<BookSelection>,
-    inventory: Option<Res<super::inventory::InventoryState>>,
     actions: BookActions,
 ) {
     let (scribe, mut deletion, mut requests) = actions;
@@ -455,18 +454,14 @@ pub(super) fn update(
             .iter()
             .any(|interaction| *interaction == Interaction::Pressed)
     {
-        selection.message = match request_scribe(
-            online.as_deref(),
-            inventory.as_deref(),
-            world.spell_book(),
-            sender.as_deref(),
-        ) {
-            Ok(spell) => {
-                let _ = note(&mut requests, format!("Scribing {}", names.label(spell)));
-                "Scribe request queued; waiting for server updates".into()
-            }
-            Err(error) => error.to_string(),
-        };
+        selection.message =
+            match request_scribe(online.as_deref(), world.spell_book(), sender.as_deref()) {
+                Ok(spell) => {
+                    let _ = note(&mut requests, format!("Scribing {}", names.label(spell)));
+                    "Scribe request queued; waiting for server updates".into()
+                }
+                Err(error) => error.to_string(),
+            };
     }
     let entries = known_entries(world.spell_book());
     if selection
@@ -941,12 +936,11 @@ fn request_memorize(
 /// Queues the current cursor scroll without consuming or inserting it locally.
 fn request_scribe(
     online: Option<&super::online::OnlineState>,
-    inventory: Option<&super::inventory::InventoryState>,
     book: Option<&eq_client_core::SpellBook>,
     sender: Option<&super::target::CommandsToServer>,
 ) -> anyhow::Result<u32> {
     use anyhow::Context;
-    let command = prepare_scribe(online, inventory, book, sender)?;
+    let command = prepare_scribe(online, book, sender)?;
     let eq_client_core::ClientCommand::ScribeSpell { spell_id, .. } = command else {
         anyhow::bail!("Scribe request was not a scribe");
     };
@@ -961,7 +955,6 @@ fn request_scribe(
 /// Shares admission, cursor and book validation between presentation and submission.
 fn prepare_scribe(
     online: Option<&super::online::OnlineState>,
-    inventory: Option<&super::inventory::InventoryState>,
     book: Option<&eq_client_core::SpellBook>,
     sender: Option<&super::target::CommandsToServer>,
 ) -> anyhow::Result<eq_client_core::ClientCommand> {
@@ -971,7 +964,7 @@ fn prepare_scribe(
         online.world.connected() && online.world.death().is_none(),
         "Connect to scribe a scroll"
     );
-    let inventory = &inventory.context("Inventory unavailable")?.data;
+    let inventory = online.world.inventory();
     ensure!(
         inventory.received() && !inventory.stale(),
         "Inventory awaiting refresh"
@@ -1108,7 +1101,6 @@ mod tests {
         use eq_client_core::inventory::{
             InventoryItem, InventorySlot, InventoryUpdate, ItemPlacement,
         };
-        let mut inventory = super::super::inventory::InventoryState::default();
         let details = eq_client_core::ItemDetails {
             equipment: None,
             bonuses: None,
@@ -1122,32 +1114,33 @@ mod tests {
             flags: Vec::new(),
             stats: Vec::new(),
         };
-        inventory.apply(InventoryUpdate::Snapshot(vec![InventoryItem {
-            activation: eq_client_core::inventory::ItemActivation::default(),
-            scroll_spell: Some(73),
-            rules: ItemPlacement::default(),
-            slot: InventorySlot(30),
-            details,
-            icon: 0,
-            stack_count: None,
-            charges: 1,
-            bag_slots: 0,
-        }]));
-        let before = inventory.data.clone();
         let book = eq_client_core::SpellBook::titanium_profile(&vec![0; 19592]).unwrap();
         let mut online = super::super::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 7, crate::online::testing::player(1));
+        crate::online::testing::inventory(
+            &mut online,
+            InventoryUpdate::Snapshot(vec![InventoryItem {
+                activation: eq_client_core::inventory::ItemActivation::default(),
+                scroll_spell: Some(73),
+                rules: ItemPlacement::default(),
+                slot: InventorySlot(30),
+                details,
+                icon: 0,
+                stack_count: None,
+                charges: 1,
+                bag_slots: 0,
+            }]),
+        );
+        let before = online.world.inventory().clone();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let sender = super::super::target::CommandsToServer(Some(tx));
-        request_scribe(Some(&online), Some(&inventory), Some(&book), Some(&sender)).unwrap();
+        request_scribe(Some(&online), Some(&book), Some(&sender)).unwrap();
         assert!(
             matches!(rx.try_recv().unwrap(), eq_client_core::ClientCommand::ScribeSpell { session_id: 7, slot: 0, spell_id: 73, revision, .. } if revision == before.revision())
         );
-        assert_eq!(inventory.data, before);
+        assert_eq!(online.world.inventory(), &before);
         crate::online::testing::connect(&mut online, false);
-        assert!(
-            request_scribe(Some(&online), Some(&inventory), Some(&book), Some(&sender)).is_err()
-        );
+        assert!(request_scribe(Some(&online), Some(&book), Some(&sender)).is_err());
         assert!(rx.try_recv().is_err());
     }
 

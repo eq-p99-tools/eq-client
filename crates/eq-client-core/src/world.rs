@@ -1,5 +1,6 @@
 //! The client's picture of the game: what the server has said about the
-//! connection, the admission, the player and the zone around them.
+//! connection, the admission, the player, their belongings and the zone
+//! around them.
 //!
 //! Updates from the session are its only writer, applied by
 //! [`ClientWorld::apply`], and each reset has one reason, which decides what
@@ -7,13 +8,15 @@
 //! its rules are tested without one.
 
 mod casting;
+mod vitals;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
+pub use vitals::{ReportedHp, Vitals};
 
 use crate::{
     BookActionStatus, CampStatus, CharacterChoice, Coins, Death, PlayerState, PostureState,
     SpawnState, SpellBook, SpellUpdate, WorldEvent, WorldPosition, WorldUpdate, ZoneOffer,
-    buffs::BuffTracker, doors::DoorTable, ground::Objects,
+    buffs::BuffTracker, doors::DoorTable, ground::Objects, inventory::Inventory,
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -63,19 +66,12 @@ pub enum Reset {
     },
 }
 
-/// The player's mana, endurance and experience as last reported.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Vitals {
-    /// Current mana.
-    pub mana: Option<u32>,
-    /// Current endurance.
-    pub endurance: Option<u32>,
-    /// Experience on the Titanium 0..330 scale.
-    pub experience: Option<u32>,
-}
-
 /// What an update changed that a front end must redo.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag names one independent thing to redo"
+)]
 pub struct Changes {
     /// The world was reset, and why.
     pub reset: Option<Reset>,
@@ -87,6 +83,8 @@ pub struct Changes {
     pub characters: bool,
     /// What a spell notice did to the player's casting.
     pub cast: Option<CastNews>,
+    /// The inventory changed.
+    pub inventory: bool,
     /// The update was for an earlier admission, or came when the world takes
     /// no such news, so nothing changed.
     pub ignored: bool,
@@ -113,6 +111,7 @@ pub struct ClientWorld {
     /// The last revision given to a spawn.
     revision: u64,
     vitals: Vitals,
+    inventory: Inventory,
     coins: Option<Coins>,
     casting: Casting,
     buffs: BuffTracker,
@@ -152,11 +151,28 @@ impl ClientWorld {
         self.casting.cooldowns.resolve(spells, now);
     }
 
-    /// Notes the player's health as the HUD computes it from the last report.
-    // Until the player's vitals move into the world, the HUD works it out.
-    pub fn note_own_health(&mut self, percent: u8) {
+    /// Notes the player's health.
+    fn own_health(&mut self, percent: u8) {
         if let Some(player) = self.player.as_mut() {
             player.hp_percent = Some(percent);
+        }
+    }
+
+    /// The player's health follows the HP their last report and equipped
+    /// items make.
+    fn show_hp(&mut self) {
+        if let Some(percent) = self.hit_points().and_then(vitals::percent) {
+            self.own_health(percent);
+        }
+    }
+
+    /// Works out the HP equipped items add again, after the inventory, the
+    /// player or the report changed.
+    fn refresh_item_hp(&mut self) {
+        if let Some(player) = self.player.as_ref()
+            && self.vitals.refresh_item_hp(player, &self.inventory)
+        {
+            self.show_hp();
         }
     }
 
@@ -205,7 +221,7 @@ impl ClientWorld {
                 self.vitals = Vitals {
                     mana: Some(player.mana),
                     endurance: player.endurance,
-                    experience: None,
+                    ..Vitals::default()
                 };
                 self.casting.pending = None;
                 self.casting.cooldowns.restore(
@@ -280,7 +296,7 @@ impl ClientWorld {
             }
             WorldEvent::HealthPercent { spawn_id, percent } => {
                 if self.is_player(*spawn_id) {
-                    self.note_own_health(*percent);
+                    self.own_health(*percent);
                 }
                 if let Some(spawn) = self.spawns.get_mut(spawn_id) {
                     spawn.health = Some(*percent);
@@ -326,6 +342,8 @@ impl ClientWorld {
                 Some(player) if self.connected => {
                     player.level = *current;
                     self.vitals.experience = Some(*experience);
+                    // What items give can depend on the level.
+                    self.refresh_item_hp();
                 }
                 _ => changes.ignored = true,
             },
@@ -340,6 +358,29 @@ impl ClientWorld {
                 self.vitals.endurance = Some(*endurance);
             }
             WorldEvent::Experience(value) => self.vitals.experience = Some(*value),
+            WorldEvent::HitPoints {
+                spawn_id,
+                current,
+                maximum,
+                without_items,
+            } => {
+                if self.is_player(*spawn_id) {
+                    self.vitals.reported_hp = Some(ReportedHp {
+                        current: *current,
+                        maximum: *maximum,
+                        without_items: *without_items,
+                    });
+                    self.refresh_item_hp();
+                    self.show_hp();
+                } else {
+                    changes.ignored = true;
+                }
+            }
+            WorldEvent::Inventory(update) => {
+                self.inventory.apply(update.clone());
+                changes.inventory = true;
+                self.refresh_item_hp();
+            }
             WorldEvent::Coins(coins) => self.coins = Some(*coins),
             WorldEvent::CastPending {
                 session_id,
@@ -438,7 +479,7 @@ impl ClientWorld {
         {
             return Changes::default();
         }
-        self.note_own_health(0);
+        self.own_health(0);
         self.death = Some(death.clone());
         self.reset(Reset::Died)
     }
@@ -448,6 +489,8 @@ impl ClientWorld {
         match reason {
             Reset::Entered => {
                 self.forget_admission();
+                // The server sends the inventory again after each admission.
+                self.inventory = Inventory::default();
                 self.spell_book = None;
                 self.buffs.clear();
                 self.casting.interrupted = None;
@@ -458,6 +501,7 @@ impl ClientWorld {
                 self.book_action = None;
                 self.casting = Casting::default();
                 self.vitals = Vitals::default();
+                self.inventory = Inventory::default();
                 self.spell_book = None;
                 self.buffs.clear();
                 self.session_id = None;
@@ -477,6 +521,7 @@ impl ClientWorld {
                 if ended {
                     self.characters = None;
                     self.pending_transfer = None;
+                    self.inventory = Inventory::default();
                     self.forget_zone();
                 }
             }
@@ -631,6 +676,20 @@ impl ClientWorld {
     #[must_use]
     pub const fn vitals(&self) -> &Vitals {
         &self.vitals
+    }
+
+    /// The player's HP to show, current and maximum, once reported: what the
+    /// server reported, with what equipped items add when it leaves that out.
+    #[must_use]
+    pub fn hit_points(&self) -> Option<(u32, u32)> {
+        self.vitals.hit_points(self.death.is_some())
+    }
+
+    /// The player's inventory, bank and cursor as the server reported them,
+    /// with any local predictions the session marked.
+    #[must_use]
+    pub const fn inventory(&self) -> &Inventory {
+        &self.inventory
     }
 
     /// The coins the player carries, as last reported.

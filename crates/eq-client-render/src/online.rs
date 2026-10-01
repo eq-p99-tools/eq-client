@@ -55,14 +55,6 @@ pub(super) fn world(online: Option<&OnlineState>) -> &ClientWorld {
 
 type SceneRoots = Or<(With<SceneEntity>, With<HudText>, With<hud::HudRoot>)>;
 
-/// Shows the player's HP from its last report and shares the percentage with
-/// the target window.
-pub(super) fn show_own_hp(state: &mut OnlineState, hud: &mut hud::HudState) {
-    if let Some(percent) = hud.show_hp() {
-        state.world.note_own_health(percent);
-    }
-}
-
 /// The offline demos' player, standing here with these spells memorized.
 pub(super) fn preview_player(
     position: eq_client_core::WorldPosition,
@@ -131,14 +123,14 @@ impl Panels<'_> {
                 if ended {
                     state.selection = None;
                     state.door_status.clear();
-                    self.inventory.clear();
+                    self.inventory.forget();
                 }
             }
             Reset::Entered => {
                 self.motion.reset(None);
                 state.selection = None;
                 state.door_status.clear();
-                self.inventory.clear();
+                self.inventory.forget();
             }
             Reset::Zoning { to_bind } => {
                 self.inventory.cancel_actions();
@@ -154,16 +146,12 @@ impl Panels<'_> {
                 self.motion.reset(None);
                 self.inventory.cancel_actions();
                 *self.target = super::target::TargetState::default();
-                self.hud.hp_percent = Some(0);
-                if let Some((_, maximum)) = self.hud.hp {
-                    self.hud.hp = Some((0, maximum));
-                }
                 self.hud.status = "Dead - awaiting server bind destination".into();
             }
             Reset::Camped => {
                 // Leave the zone; the world server sends a fresh character list.
                 state.door_status.clear();
-                self.inventory.clear();
+                self.inventory.forget();
                 self.motion.reset(None);
                 self.hud.status = "Camped - choose a character".into();
             }
@@ -255,6 +243,9 @@ pub(super) fn receive(
             }
             .forget(reason, &mut state);
         }
+        if changes.inventory {
+            inventory.refresh(state.world.inventory().stale());
+        }
         if changes.characters {
             state.selection = state.world.characters().map(|list| {
                 super::character_select::Selection::new(list.selection_id, list.characters.clone())
@@ -301,10 +292,6 @@ pub(super) fn receive(
             WorldUpdate::Game(WorldEvent::Entered { player, .. }) => {
                 // The session is this zone's even if its assets fail to load, so
                 // commands and later events never follow the previous zone's.
-                hud.hp = None;
-                hud.reported_hp = None;
-                hud.item_hp = None;
-                hud.hp_percent = player.hp_percent;
                 let Some(directory) = &settings.0.eq_directory else {
                     continue;
                 };
@@ -426,9 +413,6 @@ pub(super) fn receive(
                     }
                 }
             }
-            WorldUpdate::Game(WorldEvent::Inventory(update)) => {
-                inventory.apply(update);
-            }
             WorldUpdate::Game(WorldEvent::ItemUseAction {
                 session_id,
                 request_id,
@@ -445,7 +429,7 @@ pub(super) fn receive(
                 revision,
                 error,
             }) => {
-                inventory.action_result(session_id, revision, error);
+                inventory.action_result(session_id, revision, error, state.world.inventory());
             }
             WorldUpdate::Game(WorldEvent::ItemDetails(item)) => {
                 debug!("Item definition received: ID {}", item.id);
@@ -515,29 +499,6 @@ pub(super) fn receive(
                     .is_some_and(|player| u32::from(player.spawn_id) == caster_id)
                 {
                     debug!(message_id, "Own cast interrupted");
-                }
-            }
-            WorldUpdate::Game(WorldEvent::HitPoints {
-                spawn_id,
-                current,
-                maximum,
-                without_items,
-            }) => {
-                if let Some(player) = state
-                    .world
-                    .player()
-                    .filter(|player| player.spawn_id == spawn_id)
-                {
-                    if without_items {
-                        hud.item_hp = super::resources::item_hit_points(player, &inventory.data)
-                            .or(hud.item_hp);
-                    }
-                    hud.reported_hp = Some(hud::ReportedHp {
-                        current,
-                        maximum,
-                        without_items,
-                    });
-                    show_own_hp(&mut state, &mut hud);
                 }
             }
             WorldUpdate::Game(WorldEvent::Doors(update)) => {
@@ -819,6 +780,14 @@ pub(crate) mod testing {
             table[slot as usize] = Some(buff);
         }
         news(state, [WorldEvent::BuffSnapshot(table)]);
+    }
+
+    /// Reports a change to the player's inventory.
+    pub(crate) fn inventory(
+        state: &mut OnlineState,
+        update: eq_client_core::inventory::InventoryUpdate,
+    ) {
+        news(state, [WorldEvent::Inventory(update)]);
     }
 
     /// Gives the player this spellbook.
@@ -1153,7 +1122,7 @@ mod tests {
             app.update();
             assert_eq!(world(&app).health(7), Some(percent));
             assert_eq!(
-                app.world().resource::<hud::HudState>().hp,
+                world(&app).hit_points(),
                 Some((current.unsigned_abs(), maximum.unsigned_abs()))
             );
         }
@@ -1349,7 +1318,7 @@ mod tests {
                 .selected,
             None
         );
-        assert_eq!(app.world().resource::<hud::HudState>().hp_percent, Some(0));
+        assert_eq!(world(&app).health(7), Some(0));
         assert_eq!(world(&app).casting().pending, None);
         sender
             .send(WorldUpdate::Game(WorldEvent::Spell(

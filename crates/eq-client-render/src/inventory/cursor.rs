@@ -29,18 +29,20 @@ pub(super) fn spawn(commands: &mut Commands) {
 pub(crate) fn update(
     mut commands: Commands,
     state: Res<InventoryState>,
+    online: Res<crate::online::OnlineState>,
     settings: Option<Res<crate::ViewerSettings>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     scale: Option<Res<UiScale>>,
     mut root: Query<(Entity, &mut Node), With<Overlay>>,
-    mut stamp: Local<Option<(Entity, u64)>>,
+    mut stamp: Local<Option<(Entity, u64, u64)>>,
     mut icons: Local<icons::Icons>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let Ok((entity, mut node)) = root.single_mut() else {
         return;
     };
-    let item = state.data.items().get(&InventorySlot(30));
+    let inventory = online.world.inventory();
+    let item = inventory.items().get(&InventorySlot(30));
     let pointer = windows
         .single()
         .ok()
@@ -59,10 +61,11 @@ pub(crate) fn update(
         let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
         place(&mut node, pointer / factor, viewport / factor);
     }
-    if *stamp == Some((entity, state.revision)) {
+    let current = (entity, state.revision, inventory.revision());
+    if *stamp == Some(current) {
         return;
     }
-    *stamp = Some((entity, state.revision));
+    *stamp = Some(current);
     commands.entity(entity).despawn_children();
     let Some(item) = item else {
         return;
@@ -76,7 +79,7 @@ pub(crate) fn update(
         use std::fmt::Write;
         let _ = write!(text, " x{count}");
     }
-    if state.data.stale() {
+    if inventory.stale() {
         text.push_str("\nAwaiting inventory update");
     }
     commands.entity(entity).with_children(|parent| {
@@ -135,6 +138,7 @@ mod tests {
     fn cursor_tracks_real_slot_when_inventory_is_closed_and_hides_after_clear() {
         let mut app = App::new();
         app.init_resource::<InventoryState>()
+            .insert_resource(crate::online::OnlineState::new(false))
             .init_resource::<Assets<Image>>()
             .insert_resource(UiScale(2.0))
             .add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
@@ -145,7 +149,8 @@ mod tests {
         };
         window.set_cursor_position(Some(Vec2::new(100.0, 80.0)));
         let window_id = app.world_mut().spawn((window, PrimaryWindow)).id();
-        app.world_mut().resource_mut::<InventoryState>().apply(
+        crate::online::testing::inventory(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
             eq_client_core::inventory::InventoryUpdate::Snapshot(super::super::demo_items()),
         );
         app.update();
@@ -177,7 +182,10 @@ mod tests {
         let node = overlays.single(world).unwrap().0;
         assert_eq!((node.left, node.top), (px(66), px(56)));
         assert_eq!((node.right, node.bottom), (Val::Auto, Val::Auto));
-        world.resource_mut::<InventoryState>().clear();
+        // The world forgets the inventory, as when the player camps.
+        *world.resource_mut::<crate::online::OnlineState>() =
+            crate::online::OnlineState::new(false);
+        world.resource_mut::<InventoryState>().forget();
         app.update();
         let world = app.world_mut();
         assert_eq!(overlays.single(world).unwrap().0.display, Display::None);
