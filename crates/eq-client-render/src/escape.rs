@@ -4,7 +4,7 @@
 //! does Escape drop the target. Each of those reads this decision instead of
 //! the key, so one press never does two things.
 use super::windows::{Stack, WindowId};
-use bevy::{prelude::*, window::PrimaryWindow};
+use bevy::prelude::*;
 
 /// What this frame's Escape press does, if anything.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
@@ -28,18 +28,13 @@ type Frames<'w, 's> =
 /// typing belongs to the chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn route(
-    keys: Res<ButtonInput<KeyCode>>,
-    chat: Res<super::chat::ChatState>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    keys: super::keys::Keys,
     inventory: Res<super::inventory::InventoryState>,
     (stack, frames): (Res<Stack>, Frames),
     online: Res<super::online::OnlineState>,
     mut escape: ResMut<Escape>,
 ) {
-    let pressed = keys.just_pressed(KeyCode::Escape)
-        && !chat.composing
-        && !chat.escape_consumed
-        && windows.single().is_ok_and(|window| window.focused);
+    let pressed = keys.input.just_pressed(KeyCode::Escape) && keys.escape_free();
     *escape = if !pressed {
         Escape::Unused
     } else if inventory.action_under_way() {
@@ -126,7 +121,7 @@ mod tests {
         app.insert_resource(online);
         assert_eq!(press(&mut app), Escape::Target);
         app.world_mut()
-            .resource_mut::<crate::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         assert_eq!(press(&mut app), Escape::Unused);
     }

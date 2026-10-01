@@ -22,7 +22,7 @@ pub(super) fn check(
     world: &eq_client_core::world::ClientWorld,
     player: &PlayerState,
     request: &Request,
-    messages: &super::messages::Messages,
+    (messages, map): (&super::messages::Messages, &crate::keys::KeyMap),
     now: Instant,
 ) -> Result<u32, String> {
     let Request {
@@ -36,9 +36,12 @@ pub(super) fn check(
         .get(usize::from(gem))
         .copied()
         .flatten()
-        .ok_or("Empty spell gem — open the spellbook [B] to memorize")?;
+        .ok_or_else(|| super::empty_gem(gem, map))?;
     if world.casting().cast.is_some() {
-        return Err("Already casting — duck [C] to interrupt".into());
+        return Err(format!(
+            "Already casting: {} to interrupt",
+            map.named(crate::keys::Act::Duck, "duck")
+        ));
     }
     if world.casting().pending.is_some() {
         return Err("Waiting for the server to acknowledge the cast".into());
@@ -71,7 +74,7 @@ pub(super) fn spell(
     player: &PlayerState,
     outbox: &crate::outbox::Outbox,
     request: &Request,
-    messages: &super::messages::Messages,
+    wording: (&super::messages::Messages, &crate::keys::KeyMap),
 ) {
     let now = Instant::now();
     let Request {
@@ -80,7 +83,7 @@ pub(super) fn spell(
         forgetting,
         ..
     } = *request;
-    match check(world, player, request, messages, now) {
+    match check(world, player, request, wording, now) {
         Err(refusal) => hud.action_feedback = Some((now, refusal)),
         Ok(spell_id) => {
             hud.action_feedback = None;

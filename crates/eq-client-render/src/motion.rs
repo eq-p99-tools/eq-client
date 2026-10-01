@@ -1,6 +1,10 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
-use super::{Collision, OrbitCamera, Player, PlayerBody, axis, camera_relative_direction, online};
-use bevy::{prelude::*, window::PrimaryWindow};
+use super::{
+    Collision, OrbitCamera, Player, PlayerBody, camera_relative_direction,
+    keys::{Act, KeyMap},
+    online,
+};
+use bevy::prelude::*;
 use eq_client_assets::regions::ZoneLine;
 use eq_client_core::{ClientCommand, MovementMode, MovementRequest, world_position};
 use std::time::{Duration, Instant};
@@ -98,16 +102,18 @@ impl Controls {
     fn intent(
         &self,
         keys: &ButtonInput<KeyCode>,
+        map: &KeyMap,
         focused: bool,
         yaw: f32,
         heading: f32,
     ) -> MotionInput {
         // A complete tap can arrive between render frames. Preserve its press edge
         // for this one sample without mutating Bevy's shared held-key state.
-        let keys = sample_keys(keys);
+        let keys = sample_keys(keys, map);
         let keys = &keys;
         let mut intent = movement_input(
             keys,
+            map,
             focused,
             yaw,
             heading,
@@ -120,8 +126,9 @@ impl Controls {
         }
         // Pure sidesteps have priority over camera-relative keys, but do not
         // combine with forward/back arrows until diagonal wire behavior is measured.
-        let sideways = axis(keys, KeyCode::ArrowLeft, KeyCode::ArrowRight);
-        if focused && sideways != 0.0 && !keys.any_pressed([KeyCode::ArrowUp, KeyCode::ArrowDown]) {
+        let sideways = map.axis(keys, Act::StrafeLeft, Act::StrafeRight);
+        if focused && sideways != 0.0 && !map.held(keys, Act::Forward) && !map.held(keys, Act::Back)
+        {
             let radians = eq_client_core::render_heading(heading);
             intent.preserve_facing = true;
             if let Some(speed) = self.strafe_speed {
@@ -179,33 +186,25 @@ impl Controls {
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
 const MAX_CYCLE: f32 = 0.25;
 
-/// Movement bindings whose press edges may arrive between network updates.
-const MOTION_KEYS: [KeyCode; 10] = [
-    KeyCode::KeyW,
-    KeyCode::KeyA,
-    KeyCode::KeyS,
-    KeyCode::KeyD,
-    KeyCode::KeyQ,
-    KeyCode::KeyE,
-    KeyCode::ArrowUp,
-    KeyCode::ArrowDown,
-    KeyCode::ArrowLeft,
-    KeyCode::ArrowRight,
-];
-
 /// Holds short press edges across the send throttle, never across focus loss or expiry.
 #[derive(Default)]
 struct TapBuffer(Vec<(KeyCode, Instant)>);
 
 impl TapBuffer {
-    fn observe(&mut self, keys: &ButtonInput<KeyCode>, focused: bool, now: Instant) {
+    fn observe(
+        &mut self,
+        keys: &ButtonInput<KeyCode>,
+        movement: &[KeyCode],
+        focused: bool,
+        now: Instant,
+    ) {
         if !focused {
             self.0.clear();
             return;
         }
         self.0
             .retain(|(_, time)| now.saturating_duration_since(*time) < Duration::from_millis(250));
-        for key in MOTION_KEYS {
+        for &key in movement {
             if keys.just_pressed(key) {
                 self.0.retain(|(pending, _)| *pending != key);
                 self.0.push((key, now));
@@ -223,9 +222,9 @@ impl TapBuffer {
 }
 
 /// Includes fresh tap edges without modifying the shared keyboard state.
-fn sample_keys(keys: &ButtonInput<KeyCode>) -> ButtonInput<KeyCode> {
+fn sample_keys(keys: &ButtonInput<KeyCode>, map: &KeyMap) -> ButtonInput<KeyCode> {
     let mut sampled = keys.clone();
-    for key in MOTION_KEYS {
+    for key in map.movement_keys() {
         if keys.just_pressed(key) {
             sampled.press(key);
         }
@@ -240,16 +239,14 @@ fn sample_keys(keys: &ButtonInput<KeyCode>) -> ButtonInput<KeyCode> {
     clippy::too_many_lines
 )]
 pub(super) fn input(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    keys: crate::keys::Keys,
     navigation: Res<super::navigation::NavigationKeys>,
     online: Res<online::OnlineState>,
-    chat: Res<super::chat::ChatState>,
     collision: Res<Collision>,
     outbox: Res<crate::outbox::Outbox>,
     mut controls: ResMut<Controls>,
     players: Query<&PlayerBody, With<Player>>,
     cameras: Query<&OrbitCamera>,
-    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     if !online.enabled || !online.world.connected() || online.world.death().is_some() {
         controls.reset(None);
@@ -258,17 +255,20 @@ pub(super) fn input(
     let Some(_) = controls.speed else {
         return;
     };
-    let focused = windows.single().is_ok_and(|window| window.focused) && !chat.composing;
-    if focused && keyboard.just_pressed(KeyCode::Insert) && controls.walk_speed.is_some() {
+    let focused = keys.focused();
+    if keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
     // Held until the next sample; jumps rise and fall like falls, so only then.
-    if focused && keyboard.just_pressed(KeyCode::Space) && controls.airborne.is_some() {
+    if keys.pressed(Act::Jump) && controls.airborne.is_some() {
         controls.jump = Some(Instant::now());
     }
     let now = Instant::now();
-    let keyboard = navigation.sample(&keyboard);
-    controls.taps.observe(&keyboard, focused, now);
+    let map = &*keys.map;
+    let keyboard = navigation.sample(&keys.input);
+    controls
+        .taps
+        .observe(&keyboard, &map.movement_keys(), focused, now);
     if controls.waiting {
         if now.duration_since(controls.queued_at) > Duration::from_millis(250) {
             controls.reset(None);
@@ -317,7 +317,7 @@ pub(super) fn input(
     }
     let current_heading = accepted.position.heading;
     let sampled = controls.taps.take(&keyboard);
-    let intent = controls.intent(&sampled, focused, camera.yaw, current_heading);
+    let intent = controls.intent(&sampled, map, focused, camera.yaw, current_heading);
     let MotionInput {
         mode,
         speed,
@@ -512,16 +512,19 @@ struct MotionInput {
 /// Resolves character-relative arrows and camera-relative WASD without mixing modes.
 fn movement_input(
     keyboard: &ButtonInput<KeyCode>,
+    map: &KeyMap,
     focused: bool,
     camera_yaw: f32,
     current_heading: f32,
     speed: f32,
     backward_speed: Option<f32>,
 ) -> MotionInput {
-    let backing =
-        focused && keyboard.pressed(KeyCode::ArrowDown) && !keyboard.pressed(KeyCode::ArrowUp);
-    let forward =
-        focused && keyboard.pressed(KeyCode::ArrowUp) && !keyboard.pressed(KeyCode::ArrowDown);
+    let (ahead, behind) = (
+        map.held(keyboard, Act::Forward),
+        map.held(keyboard, Act::Back),
+    );
+    let backing = focused && behind && !ahead;
+    let forward = focused && ahead && !behind;
     let heading_radians = eq_client_core::render_heading(current_heading);
     let facing = Vec3::new(heading_radians.sin(), 0.0, heading_radians.cos());
     let (mode, speed, direction) = if backing {
@@ -537,8 +540,8 @@ fn movement_input(
             MovementMode::Forward,
             speed,
             camera_relative_direction(
-                axis(keyboard, KeyCode::KeyA, KeyCode::KeyD),
-                axis(keyboard, KeyCode::KeyS, KeyCode::KeyW),
+                map.axis(keyboard, Act::CameraLeft, Act::CameraRight),
+                map.axis(keyboard, Act::CameraBack, Act::CameraForward),
                 camera_yaw,
             ),
         )
@@ -553,7 +556,7 @@ fn movement_input(
         (mode, direction)
     };
     let turn = if focused {
-        axis(keyboard, KeyCode::KeyE, KeyCode::KeyQ)
+        map.axis(keyboard, Act::TurnRight, Act::TurnLeft)
     } else {
         0.0
     };
@@ -705,24 +708,39 @@ mod tests {
         let mut taps = TapBuffer::default();
         keys.press(KeyCode::ArrowDown);
         keys.release(KeyCode::ArrowDown);
-        taps.observe(&keys, true, start);
+        taps.observe(&keys, &KeyMap::default().movement_keys(), true, start);
         keys.clear();
-        taps.observe(&keys, true, start + Duration::from_millis(100));
+        taps.observe(
+            &keys,
+            &KeyMap::default().movement_keys(),
+            true,
+            start + Duration::from_millis(100),
+        );
         assert!(taps.take(&keys).pressed(KeyCode::ArrowDown));
         assert!(!taps.take(&keys).pressed(KeyCode::ArrowDown));
 
         keys.press(KeyCode::ArrowDown);
         keys.release(KeyCode::ArrowDown);
-        taps.observe(&keys, true, start);
+        taps.observe(&keys, &KeyMap::default().movement_keys(), true, start);
         keys.clear();
-        taps.observe(&keys, false, start + Duration::from_millis(1));
+        taps.observe(
+            &keys,
+            &KeyMap::default().movement_keys(),
+            false,
+            start + Duration::from_millis(1),
+        );
         assert!(!taps.take(&keys).pressed(KeyCode::ArrowDown));
 
         keys.press(KeyCode::ArrowDown);
         keys.release(KeyCode::ArrowDown);
-        taps.observe(&keys, true, start);
+        taps.observe(&keys, &KeyMap::default().movement_keys(), true, start);
         keys.clear();
-        taps.observe(&keys, true, start + Duration::from_millis(250));
+        taps.observe(
+            &keys,
+            &KeyMap::default().movement_keys(),
+            true,
+            start + Duration::from_millis(250),
+        );
         assert!(!taps.take(&keys).pressed(KeyCode::ArrowDown));
     }
 
@@ -740,17 +758,31 @@ mod tests {
         keys.press(KeyCode::ArrowUp);
         keys.release(KeyCode::ArrowUp);
         assert!(!keys.pressed(KeyCode::ArrowUp));
-        assert_ne!(controls.intent(&keys, true, 0.0, 0.0).direction, Vec3::ZERO);
+        assert_ne!(
+            controls
+                .intent(&keys, &KeyMap::default(), true, 0.0, 0.0)
+                .direction,
+            Vec3::ZERO
+        );
         assert_eq!(
-            controls.intent(&keys, false, 0.0, 0.0).direction,
+            controls
+                .intent(&keys, &KeyMap::default(), false, 0.0, 0.0)
+                .direction,
             Vec3::ZERO
         );
         keys.clear();
-        assert_eq!(controls.intent(&keys, true, 0.0, 0.0).direction, Vec3::ZERO);
+        assert_eq!(
+            controls
+                .intent(&keys, &KeyMap::default(), true, 0.0, 0.0)
+                .direction,
+            Vec3::ZERO
+        );
         keys.press(KeyCode::ArrowDown);
         keys.release(KeyCode::ArrowDown);
         assert_eq!(
-            controls.intent(&keys, true, 0.0, 0.0).mode,
+            controls
+                .intent(&keys, &KeyMap::default(), true, 0.0, 0.0)
+                .mode,
             MovementMode::Backward
         );
         assert!(!keys.pressed(KeyCode::ArrowDown));
@@ -789,6 +821,7 @@ mod tests {
     fn app() -> (App, mpsc::Receiver<ClientCommand>) {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         let mut state = online::OnlineState::new(true);
         crate::online::testing::admit(
             &mut state,
@@ -854,7 +887,7 @@ mod tests {
                 focused: true,
                 ..Window::default()
             },
-            PrimaryWindow,
+            bevy::window::PrimaryWindow,
         ));
         (app, receiver)
     }
@@ -875,11 +908,13 @@ mod tests {
             let mut keys = ButtonInput::default();
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
-                controls.intent(&keys, true, 0.0, heading).direction,
+                controls
+                    .intent(&keys, &KeyMap::default(), true, 0.0, heading)
+                    .direction,
                 Vec3::ZERO
             );
             controls.strafe_speed = Some(3.0);
-            let right = controls.intent(&keys, true, 0.0, heading);
+            let right = controls.intent(&keys, &KeyMap::default(), true, 0.0, heading);
             assert_eq!(right.mode, MovementMode::Strafe);
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
@@ -887,15 +922,19 @@ mod tests {
             assert!(right.direction.dot(facing.cross(Vec3::Y)) > 0.999);
             keys.reset_all();
             keys.press(KeyCode::ArrowLeft);
-            let left = controls.intent(&keys, true, 0.0, heading);
+            let left = controls.intent(&keys, &KeyMap::default(), true, 0.0, heading);
             assert!((left.direction + right.direction).length() < 0.0001);
             assert_eq!(
-                controls.intent(&keys, false, 0.0, heading).direction,
+                controls
+                    .intent(&keys, &KeyMap::default(), false, 0.0, heading)
+                    .direction,
                 Vec3::ZERO
             );
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
-                controls.intent(&keys, true, 0.0, heading).direction,
+                controls
+                    .intent(&keys, &KeyMap::default(), true, 0.0, heading)
+                    .direction,
                 Vec3::ZERO
             );
         }
@@ -920,7 +959,7 @@ mod tests {
         let (mut app, _) = self::app();
         app.world_mut().resource_mut::<Controls>().walk_speed = Some(2.0);
         app.world_mut()
-            .resource_mut::<crate::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()

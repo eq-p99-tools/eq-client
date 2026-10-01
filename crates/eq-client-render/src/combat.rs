@@ -2,7 +2,7 @@
 //!
 //! The server decides every outcome; this module only sends explicit requests for
 //! the current target and prints what the server reports.
-use bevy::{prelude::*, window::PrimaryWindow};
+use bevy::prelude::*;
 use eq_client_core::{
     ClientCommand, OutboundChat, SpawnKind,
     combat::{ConColor, Consideration, Damage, DamageOutcome, SPELL_DAMAGE_KIND},
@@ -30,14 +30,14 @@ fn capitalized(text: &str) -> String {
 /// Handles K (consider), H (hail) and G (toggle auto-attack) for the current target.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: super::keys::Keys,
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     messages: Res<Messages>,
     mut combat: ResMut<CombatState>,
     mut chat: ResMut<super::chat::ChatState>,
-    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    use super::keys::Act;
     let Some(player) = online.world.player() else {
         return;
     };
@@ -69,17 +69,12 @@ pub(super) fn input(
                 .push(super::chat::system_line(messages.format(1466, &[])));
         }
     }
-    if !online.world.connected()
-        || online.world.death().is_some()
-        || chat.composing
-        || keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
-        || !windows.single().is_ok_and(|window| window.focused)
-    {
+    if !online.world.connected() || online.world.death().is_some() || !keys.focused() {
         return;
     }
     let mut feedback = |text: String| chat.history.push(super::chat::system_line(text));
     // The outbox shows why a request did not leave.
-    if keys.just_pressed(KeyCode::KeyK) {
+    if keys.pressed(Act::Consider) {
         match spawn {
             Some((target_id, _)) => {
                 let _ = outbox.post(world, |stamp| ClientCommand::Consider {
@@ -92,14 +87,14 @@ pub(super) fn input(
             None => feedback(messages.format(12240, &[])),
         }
     }
-    if keys.just_pressed(KeyCode::KeyH) {
+    if keys.pressed(Act::Hail) {
         let text = spawn.map_or_else(
             || "Hail".to_owned(),
             |(_, spawn)| format!("Hail, {}", display_name(&spawn.name)),
         );
         let _ = outbox.send(world, ClientCommand::SendChat(OutboundChat::Say(text)));
     }
-    if keys.just_pressed(KeyCode::KeyG) {
+    if keys.pressed(Act::Attack) {
         let enable = !combat.auto_attack;
         if enable && attackable.is_none() {
             feedback("Target a creature to attack it".into());

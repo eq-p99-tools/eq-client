@@ -34,22 +34,12 @@ pub(super) fn nearest(state: &super::online::OnlineState) -> Option<Use> {
 /// One explicit key press queues one request; no state is predicted.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn input(
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: super::keys::Keys,
     mut chat: ResMut<super::chat::ChatState>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     outbox: Res<crate::outbox::Outbox>,
     mut state: ResMut<super::online::OnlineState>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyF)
-        || chat.composing
-        || !windows.single().is_ok_and(|window| window.focused)
-        || keys.any_pressed([
-            KeyCode::ControlLeft,
-            KeyCode::ControlRight,
-            KeyCode::AltLeft,
-            KeyCode::AltRight,
-        ])
-    {
+    if !keys.pressed(super::keys::Act::Use) {
         return;
     }
     match nearest(&state) {
@@ -142,6 +132,7 @@ mod tests {
         crate::online::testing::objects(&mut state, &item_at(3.0));
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::chat::ChatState>()
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))

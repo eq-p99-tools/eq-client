@@ -26,7 +26,7 @@ pub(super) struct PaperdollImage {
 /// Adds the paperdoll's camera, and keeps its figure and activity current.
 pub(super) fn register(app: &mut App) {
     app.add_systems(Startup, setup)
-        .add_systems(Update, (sync, toggle));
+        .add_systems(Update, (sync, toggle).in_set(super::Stage::Present));
 }
 
 #[derive(Component)]

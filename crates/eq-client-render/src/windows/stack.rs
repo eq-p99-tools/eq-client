@@ -79,6 +79,10 @@ impl Shown {
 #[derive(Component, Clone, Copy)]
 pub(crate) struct SelectorButton(pub WindowId);
 
+/// A selector button's label: the window's name and its key.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct SelectorLabel(WindowId);
+
 /// Brings the window under a fresh click to the front: the frontmost of the
 /// open floating windows the pointer is over.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -133,10 +137,8 @@ pub(crate) fn restack(stack: Res<Stack>, mut frames: Query<(&WindowId, &mut Glob
 /// the front.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn toggle(
-    keys: Res<ButtonInput<KeyCode>>,
-    chat: Res<crate::chat::ChatState>,
+    keys: crate::keys::Keys,
     escape: Res<crate::escape::Escape>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     buttons: Query<(&Interaction, &SelectorButton), Changed<Interaction>>,
     mut shown: ResMut<Shown>,
     mut stack: ResMut<Stack>,
@@ -146,13 +148,9 @@ pub(crate) fn toggle(
     {
         shown.close(id);
     }
-    let focused = windows.single().is_ok_and(|window| window.focused) && !chat.composing;
     let pressed = WindowId::ALL.into_iter().filter(|id| {
-        let description = id.describe();
-        description.toggled
-            && (description
-                .key
-                .is_some_and(|key| focused && keys.just_pressed(key))
+        id.describe().toggled
+            && (keys.pressed(crate::keys::Act::Toggle(*id))
                 || buttons.iter().any(|(interaction, button)| {
                     *interaction == Interaction::Pressed && button.0 == *id
                 }))
@@ -186,19 +184,13 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
                 .into_iter()
                 .filter(|window| window.describe().toggled)
             {
-                let description = window.describe();
-                let name = description.title.to_lowercase();
-                let mut name = name.chars();
-                let label = name.next().map_or_else(String::new, |first| {
-                    first.to_uppercase().chain(name).collect()
-                });
-                let hint = description
-                    .key
-                    .map_or_else(String::new, |key| format!(" [{}]", key_label(key)));
                 row.spawn((
                     Button,
                     SelectorButton(window),
-                    crate::tooltip::Tooltip(format!("Open or close the {}", label.to_lowercase())),
+                    crate::tooltip::Tooltip(format!(
+                        "Open or close the {}",
+                        name(window).to_lowercase()
+                    )),
                     Node {
                         padding: UiRect::axes(px(10), px(5)),
                         ..default()
@@ -206,7 +198,8 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
                     BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.92)),
                 ))
                 .with_child((
-                    Text::new(format!("{label}{hint}")),
+                    SelectorLabel(window),
+                    Text::new(name(window)),
                     TextFont {
                         font_size: FontSize::Px(12.0),
                         ..default()
@@ -217,21 +210,30 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
         });
 }
 
-/// A key as a hint shows it: `KeyB` as "B", `Digit1` as "1".
-pub(crate) fn key_label(key: KeyCode) -> String {
-    let name = format!("{key:?}");
-    name.strip_prefix("Key")
-        .or_else(|| name.strip_prefix("Digit"))
-        .unwrap_or(&name)
-        .to_owned()
+/// A window's name as the selector shows it: "Inventory" for "INVENTORY".
+fn name(window: WindowId) -> String {
+    let title = window.describe().title.to_lowercase();
+    let mut letters = title.chars();
+    letters.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(letters).collect()
+    })
 }
 
-/// Lights the selector's buttons whose windows are open.
+/// Lights the selector's buttons whose windows are open, and names each
+/// window's key from the key map.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn light_selector(
     shown: Res<Shown>,
+    map: Res<crate::keys::KeyMap>,
     mut buttons: Query<(&SelectorButton, &Interaction, &mut BackgroundColor)>,
+    mut labels: Query<(&SelectorLabel, &mut Text)>,
 ) {
+    for (SelectorLabel(window), mut text) in &mut labels {
+        let wanted = map.named(crate::keys::Act::Toggle(*window), &name(*window));
+        if text.0 != wanted {
+            text.0 = wanted;
+        }
+    }
     for (button, interaction, mut color) in &mut buttons {
         let wanted = match (shown.is_open(button.0), interaction) {
             (true, _) => Color::srgba(0.16, 0.20, 0.27, 0.95),
@@ -264,13 +266,6 @@ mod tests {
     }
 
     #[test]
-    fn keys_read_as_their_letters() {
-        assert_eq!(key_label(KeyCode::KeyB), "B");
-        assert_eq!(key_label(KeyCode::Digit1), "1");
-        assert_eq!(key_label(KeyCode::F1), "F1");
-    }
-
-    #[test]
     fn keys_and_the_selector_open_and_close_the_toggled_windows() {
         let mut app = crate::testing::app();
         app.add_systems(Update, toggle);
@@ -295,7 +290,7 @@ mod tests {
         // Typing in chat never toggles a window.
         app.world_mut().entity_mut(button).despawn();
         app.world_mut()
-            .resource_mut::<crate::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
