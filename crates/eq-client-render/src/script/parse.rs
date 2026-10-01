@@ -108,6 +108,30 @@ pub enum ClickTarget {
     Tint(i32, Option<usize>),
     /// The give window's Give button.
     Give,
+    /// A coin box: the purse's, the bank's or the give window's.
+    Coins(
+        eq_client_core::money::CoinPlace,
+        eq_client_core::money::Coin,
+    ),
+    /// A button of the quantity picker.
+    Pick(PickButton),
+}
+
+/// The quantity picker's buttons.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PickButton {
+    /// One fewer.
+    Less,
+    /// One more.
+    More,
+    /// The least.
+    Min,
+    /// All of them.
+    Max,
+    /// Take the amount shown.
+    Confirm,
+    /// Take nothing.
+    Cancel,
 }
 
 /// Loot and merchant window buttons.
@@ -242,6 +266,16 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["sell", slot] => ClickTarget::Trade(TradeClick::Sell(value(slot, "an inventory slot")?)),
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
         ["give"] => ClickTarget::Give,
+        ["coins", place, coin] => ClickTarget::Coins(coin_place(place)?, coin_kind(coin)?),
+        ["pick", button] => ClickTarget::Pick(match *button {
+            "less" => PickButton::Less,
+            "more" => PickButton::More,
+            "min" => PickButton::Min,
+            "max" => PickButton::Max,
+            "confirm" => PickButton::Confirm,
+            "cancel" => PickButton::Cancel,
+            _ => return Err("expected less, more, min, max, confirm or cancel".into()),
+        }),
         ["tint", slot] => ClickTarget::Tint(value(slot, "a bag slot")?, None),
         ["tint", slot, color] => ClickTarget::Tint(
             value(slot, "a bag slot")?,
@@ -255,6 +289,29 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                 .ok_or_else(|| String::from("expected a gem from 1 to 8"))?,
         ),
         _ => return Err("unknown or malformed step".into()),
+    })
+}
+
+/// A coin box's place: `purse`, `bank` or `give`.
+fn coin_place(word: &str) -> Result<eq_client_core::money::CoinPlace, String> {
+    use eq_client_core::money::CoinPlace;
+    Ok(match word {
+        "purse" => CoinPlace::Purse,
+        "bank" => CoinPlace::Bank,
+        "give" => CoinPlace::Trade,
+        _ => return Err("expected purse, bank or give".into()),
+    })
+}
+
+/// A coin box's kind: `platinum`, `gold`, `silver` or `copper`.
+fn coin_kind(word: &str) -> Result<eq_client_core::money::Coin, String> {
+    use eq_client_core::money::Coin;
+    Ok(match word {
+        "platinum" => Coin::Platinum,
+        "gold" => Coin::Gold,
+        "silver" => Coin::Silver,
+        "copper" => Coin::Copper,
+        _ => return Err("expected platinum, gold, silver or copper".into()),
     })
 }
 

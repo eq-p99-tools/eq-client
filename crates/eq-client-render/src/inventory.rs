@@ -4,6 +4,7 @@ pub(super) mod cursor;
 mod interaction;
 mod layout;
 
+pub(crate) use interaction::SplitAction;
 pub(crate) use layout::quantity_picker;
 
 use crate::theme::{self, Size};
@@ -66,6 +67,29 @@ impl InventoryState {
     /// Whether a stack is being split, so the quantity picker shows.
     pub(crate) const fn splitting(&self) -> bool {
         self.actions.split.is_some()
+    }
+
+    /// Opens the quantity picker for coins of one kind in a place, with the
+    /// cursor empty; a shifted click takes them all instead.
+    pub(crate) fn select_coins(
+        &mut self,
+        place: eq_client_core::money::CoinPlace,
+        coin: eq_client_core::money::Coin,
+        available: u32,
+    ) {
+        self.actions.auto_store = false;
+        self.actions.split = (available > 0).then_some(interaction::SplitSelection {
+            picked: interaction::Picked::Coins(place, coin),
+            revision: 0,
+            amount: available,
+            available,
+        });
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// The coins the quantity picker took, once, for the coins system to move.
+    pub(crate) fn take_coins(&mut self) -> Option<eq_client_core::money::CoinTransfer> {
+        self.actions.coins.take()
     }
 
     /// Whether a banker is in reach, so the bank can be opened.

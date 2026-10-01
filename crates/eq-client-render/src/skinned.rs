@@ -15,6 +15,7 @@ use eq_client_assets::{
     sidl::{Align, ButtonLook, Element, Gauge, Label, Library, Piece, Screen},
     ui::Area,
 };
+use eq_client_core::money::{Coin, CoinPlace};
 use std::collections::HashMap;
 
 /// The skin's file for a window the client draws from the skin, and the
@@ -48,8 +49,9 @@ pub(crate) enum Shows {
     /// The target window's line, under it: what became of the player's
     /// choice of target. The official client says it in the chat.
     TargetLine,
-    /// The purse: platinum, gold, silver or copper, from 0.
-    Coins(u8),
+    /// The coins of one kind in a place: the purse, the bank or the give
+    /// window.
+    Coins(CoinPlace, Coin),
     /// The banker the bank is open at.
     Banker,
     /// The character the give window hands items to.
@@ -384,8 +386,9 @@ enum Does {
     Closes,
     /// Hands what the give window holds over.
     Gives,
-    /// Shows the purse's coins of one kind.
-    Coins(u8),
+    /// Holds coins of one kind in a place, which a click picks up or puts
+    /// down.
+    Coins(CoinPlace, Coin),
     /// Shows a bag's picture.
     BagIcon,
     /// Nothing yet: drawn greyed out, as the client's own windows show what
@@ -402,13 +405,13 @@ fn button(
     inside: &Area,
     owner: WindowId,
 ) {
+    let coins = button.id.as_deref().and_then(coin_box);
     let does = match button.id.as_deref() {
         Some("CSPW_SpellBook") => Does::Toggles(WindowId::Spellbook),
         Some("DoneButton") => Does::Closes,
-        Some(id) if id.starts_with("IW_Money") => match id.trim_start_matches("IW_Money").parse() {
-            Ok(kind @ 0..=3) => Does::Coins(kind),
-            _ => return,
-        },
+        Some(_) if coins.is_some() => {
+            coins.map_or(Does::Nothing, |(place, coin)| Does::Coins(place, coin))
+        }
         Some("GVW_Give_Button") => Does::Gives,
         Some("GVW_Cancel_Button") => Does::Closes,
         Some("Container_Icon") if matches!(owner, WindowId::Bag(_)) => Does::BagIcon,
@@ -450,7 +453,10 @@ fn button(
         Does::Gives => {
             drawn.insert((Button, super::give::GiveButton));
         }
-        Does::Coins(_) | Does::BagIcon | Does::Nothing => (),
+        Does::Coins(place, coin) => {
+            drawn.insert((Button, super::coins::CoinBox { place, coin }));
+        }
+        Does::BagIcon | Does::Nothing => (),
     }
     if let Some(tooltip) = &button.tooltip
         && !matches!(does, Does::Nothing)
@@ -471,11 +477,11 @@ fn button(
             );
         }
         match does {
-            Does::Coins(kind) => aligned(
+            Does::Coins(place, coin) => aligned(
                 inner,
                 at(0.0, 5.0, area.width - 6.0, area.height - 5.0),
                 Align::Right,
-                (Shows::Coins(kind), theme::text("", Size::Body, ink)),
+                (Shows::Coins(place, coin), theme::text("", Size::Body, ink)),
             ),
             Does::BagIcon => {
                 if let WindowId::Bag(bag) = owner {
@@ -835,7 +841,7 @@ pub(crate) fn show(
                 lines.target.text(std::time::Instant::now()).to_owned(),
                 None,
             ),
-            Shows::Coins(kind) => (coins(world, kind), None),
+            Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Banker => (inventory.banker().to_owned(), None),
             Shows::Partner => (super::give::partner(world), None),
             Shows::Fill(_) | Shows::Attacking => continue,
@@ -955,17 +961,19 @@ fn label_text(
     }
 }
 
-/// The purse's coins of one kind: platinum, gold, silver or copper.
-fn coins(world: &eq_client_core::world::ClientWorld, kind: u8) -> String {
-    world.coins().map_or_else(String::new, |coins| {
-        match kind {
-            0 => coins.platinum,
-            1 => coins.gold,
-            2 => coins.silver,
-            _ => coins.copper,
-        }
-        .to_string()
-    })
+/// The place and kind a skin's coin box holds, by its name: the purse's
+/// (`IW_Money0` platinum to `IW_Money3` copper), the bank's and the give
+/// window's.
+fn coin_box(id: &str) -> Option<(CoinPlace, Coin)> {
+    let (place, index) = [
+        ("IW_Money", CoinPlace::Purse),
+        ("BW_Money", CoinPlace::Bank),
+        ("GVW_MyMoney", CoinPlace::Trade),
+    ]
+    .into_iter()
+    .find_map(|(prefix, place)| Some((place, id.strip_prefix(prefix)?)))?;
+    let coin = *Coin::ALL.get(index.parse::<usize>().ok()?)?;
+    Some((place, coin))
 }
 
 /// The target's health in percent, the player's own when they target

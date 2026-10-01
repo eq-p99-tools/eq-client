@@ -10,23 +10,22 @@ use crate::{
     windows::{Shown, WindowId},
 };
 use bevy::prelude::*;
-use eq_client_core::{
-    ClientCommand, SpawnKind, exchange::Partner, inventory::InventorySlot, world::ClientWorld,
-};
+use eq_client_core::{ClientCommand, SpawnKind, inventory::InventorySlot, world::ClientWorld};
 
 /// The give window's Give button.
 #[derive(Component)]
 pub(crate) struct GiveButton;
 
-/// Asks a clicked NPC to take what the player holds on the cursor; nothing
-/// happens without an item there, as in the official client. A refusal shows
-/// in the feedback line.
+/// Asks a clicked NPC to take what the player holds on the cursor, an item
+/// or coins; nothing happens with an empty cursor, as in the official
+/// client. A refusal shows in the feedback line.
 pub(crate) fn offer(spawn_id: u16, online: &mut OnlineState, outbox: &Outbox) {
     let world = online.world();
     let holding = world
         .inventory()
         .items()
-        .contains_key(&InventorySlot::CURSOR);
+        .contains_key(&InventorySlot::CURSOR)
+        || crate::coins::on_cursor(world).is_some();
     let npc = world
         .spawn(spawn_id)
         .is_some_and(|spawn| spawn.state.kind == SpawnKind::Npc);
@@ -41,7 +40,7 @@ pub(crate) fn offer(spawn_id: u16, online: &mut OnlineState, outbox: &Outbox) {
         })
         .is_ok();
     if sent {
-        online.offer_trade(spawn_id, Partner::Npc.slots());
+        online.offer_trade(spawn_id);
     }
 }
 
@@ -64,8 +63,9 @@ fn cancel(online: &mut OnlineState, outbox: &Outbox) {
 }
 
 /// Keeps the give window with the exchange: it opens when the NPC answers,
-/// taking the item on the cursor into its first slot, and closes when the
-/// server ends the exchange. A window the player closes cancels it.
+/// taking what is on the cursor (an item into its first slot, or coins), and
+/// closes when the server ends the exchange. A window the player closes
+/// cancels it.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn window(
     mut online: ResMut<OnlineState>,
@@ -83,7 +83,18 @@ pub(crate) fn window(
         (Some(with), mine) if mine != Some(with) => {
             shown.open(WindowId::Give);
             *opened = Some(with);
-            inventory.hand_over_cursor(&online, &outbox);
+            if let Some((coin, amount)) = crate::coins::on_cursor(online.world()) {
+                let transfer = eq_client_core::money::CoinTransfer {
+                    from: eq_client_core::money::CoinPlace::Cursor,
+                    to: eq_client_core::money::CoinPlace::Trade,
+                    coin,
+                    into: coin,
+                    amount,
+                };
+                crate::coins::send(transfer, &mut online, &outbox);
+            } else {
+                inventory.hand_over_cursor(&online, &outbox);
+            }
         }
         (Some(_), Some(_)) if !shown.is_open(WindowId::Give) => {
             cancel(&mut online, &outbox);
@@ -226,7 +237,7 @@ mod tests {
     #[test]
     fn closing_the_window_cancels_the_exchange() {
         let (mut app, rx) = app();
-        online(&mut app).offer_trade(NPC, 4);
+        online(&mut app).offer_trade(NPC);
         testing::news(
             &mut online(&mut app),
             [WorldEvent::Exchange(ExchangeUpdate::Opened {
@@ -249,7 +260,7 @@ mod tests {
     #[test]
     fn the_window_names_the_npc() {
         let (mut app, _rx) = app();
-        online(&mut app).offer_trade(NPC, 4);
+        online(&mut app).offer_trade(NPC);
         assert_eq!(partner(online(&mut app).world()), "Guard Example");
     }
 }

@@ -119,6 +119,11 @@ pub struct ClientWorld {
     vitals: Vitals,
     inventory: Inventory,
     coins: Option<Coins>,
+    /// The coins on the cursor, which the client keeps where the player put
+    /// them, as servers answer no coin move.
+    cursor_coins: Coins,
+    /// The coins in the bank, from the profile and the player's moves.
+    bank_coins: Option<Coins>,
     casting: Casting,
     buffs: BuffTracker,
     spell_book: Option<SpellBook>,
@@ -212,14 +217,57 @@ impl ClientWorld {
     }
 
     /// The player asked a character to trade, holding something to hand
-    /// over; their answer opens a window with this many trade slots.
-    pub fn offer_trade(&mut self, with: u16, slots: u8) {
+    /// over; their answer opens the window, the give window for an NPC.
+    pub fn offer_trade(&mut self, with: u16) {
+        let partner = match self.zone.spawns.get(&with).map(|spawn| spawn.state.kind) {
+            Some(crate::SpawnKind::Player) => crate::exchange::Partner::Player,
+            _ => crate::exchange::Partner::Npc,
+        };
         self.zone.trade.exchange = Some(Exchange {
             with,
-            slots,
+            slots: partner.slots(),
             open: false,
             given: false,
+            coins: Coins::default(),
         });
+    }
+
+    /// The player moved coins. Servers answer no coin move, so the client
+    /// keeps them where they went, as the Titanium client does; only whole
+    /// coins change kind. False, and nothing moves, when the place they come
+    /// from does not hold them or the place they go is unknown.
+    pub fn move_coins(&mut self, transfer: crate::money::CoinTransfer) -> bool {
+        let (taken, added) = transfer.amounts();
+        let held = self
+            .coins_in(transfer.from)
+            .is_some_and(|coins| coins.of(transfer.coin) >= taken);
+        if taken == 0 || !held || self.coins_in(transfer.to).is_none() {
+            return false;
+        }
+        if let Some(from) = self.coin_place(transfer.from) {
+            *from.of_mut(transfer.coin) -= taken;
+        }
+        if let Some(to) = self.coin_place(transfer.to) {
+            *to.of_mut(transfer.into) = to.of(transfer.into).saturating_add(added);
+        }
+        true
+    }
+
+    /// The coins in a place, to change.
+    fn coin_place(&mut self, place: crate::money::CoinPlace) -> Option<&mut Coins> {
+        use crate::money::CoinPlace;
+        match place {
+            CoinPlace::Purse => self.coins.as_mut(),
+            CoinPlace::Cursor => Some(&mut self.cursor_coins),
+            CoinPlace::Bank => self.bank_coins.as_mut(),
+            CoinPlace::Trade => self
+                .zone
+                .trade
+                .exchange
+                .as_mut()
+                .filter(|exchange| exchange.open)
+                .map(|exchange| &mut exchange.coins),
+        }
     }
 
     /// The player clicked Give; the server's word ends the window.
@@ -398,6 +446,16 @@ impl ClientWorld {
                 self.coins = Some(*coins);
                 news.trade = true;
             }
+            WorldEvent::CoinsElsewhere { cursor, bank } => {
+                self.cursor_coins = *cursor;
+                self.bank_coins = Some(*bank);
+                news.trade = true;
+            }
+            WorldEvent::CoinsRefused {
+                session_id,
+                transfer,
+                reason,
+            } => self.coins_refused(*session_id, *transfer, reason, news),
             WorldEvent::Loot(update) => self.loot_news(update, news),
             WorldEvent::Merchant(update) => self.merchant_news(update, news),
             WorldEvent::MerchantRefused { session_id, reason } => {
@@ -475,6 +533,8 @@ impl ClientWorld {
                 self.vitals = Vitals::default();
                 self.inventory = Inventory::default();
                 self.coins = None;
+                self.cursor_coins = Coins::default();
+                self.bank_coins = None;
                 self.spell_book = None;
                 self.buffs.clear();
                 self.session_id = None;

@@ -9,7 +9,7 @@
 mod parse;
 mod report;
 
-pub use parse::{ClickTarget, Step, TradeClick, parse};
+pub use parse::{ClickTarget, PickButton, Step, TradeClick, parse};
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -189,6 +189,10 @@ type Buttons<'w, 's> = Query<
         Option<&'static super::trade::Action>,
         Option<&'static super::inventory::colors::Action>,
         Has<super::give::GiveButton>,
+        (
+            Option<&'static super::coins::CoinBox>,
+            Option<&'static super::inventory::SplitAction>,
+        ),
     ),
 >;
 
@@ -600,8 +604,19 @@ fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat,
 
 /// Marks the first visible matching control pressed; the focus system clears it next frame.
 fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
-    for (mut interaction, visibility, slot, scribe, store, row, gem, trade, tint, give) in
-        buttons.iter_mut()
+    for (
+        mut interaction,
+        visibility,
+        slot,
+        scribe,
+        store,
+        row,
+        gem,
+        trade,
+        tint,
+        give,
+        (coins, pick),
+    ) in buttons.iter_mut()
     {
         let matches = match target {
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
@@ -630,6 +645,21 @@ fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
                 }
             }),
             ClickTarget::Give => give,
+            ClickTarget::Coins(place, coin) => {
+                coins.is_some_and(|coins| coins.place == place && coins.coin == coin)
+            }
+            ClickTarget::Pick(button) => pick.is_some_and(|action| {
+                use super::inventory::SplitAction;
+                *action
+                    == match button {
+                        PickButton::Less => SplitAction::Less,
+                        PickButton::More => SplitAction::More,
+                        PickButton::Min => SplitAction::Minimum,
+                        PickButton::Max => SplitAction::Maximum,
+                        PickButton::Confirm => SplitAction::Confirm,
+                        PickButton::Cancel => SplitAction::Cancel,
+                    }
+            }),
         };
         if matches && visibility.get() {
             *interaction = Interaction::Pressed;
