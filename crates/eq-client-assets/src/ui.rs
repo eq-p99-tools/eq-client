@@ -91,6 +91,9 @@ pub enum UiLayoutError {
         /// Decoder error.
         source: image::ImageError,
     },
+    /// The window file defines no window of that name.
+    #[error("the skin defines no window {0}")]
+    MissingWindow(String),
     /// A texture sheet is not the size its cells assume.
     #[error("{path} is {width}x{height}, not {SHEET_SIZE}x{SHEET_SIZE}")]
     SheetSize {
@@ -126,6 +129,22 @@ pub fn skin_file(eq_directory: &Path, skin: &str, file: &str) -> Result<PathBuf,
     } else {
         skins.join(DEFAULT_SKIN).join(file)
     })
+}
+
+/// Reads one of a skin's textures, such as `window_pieces01.tga`, as RGBA
+/// pixels, whatever its size.
+///
+/// # Errors
+/// Rejects unsafe names and unreadable or undecodable files.
+pub fn texture(
+    eq_directory: &Path,
+    skin: &str,
+    file: &str,
+) -> Result<image::RgbaImage, UiLayoutError> {
+    let path = skin_file(eq_directory, skin, file)?;
+    Ok(image::open(&path)
+        .map_err(|source| UiLayoutError::Image { path, source })?
+        .into_rgba8())
 }
 
 /// Reads one of a skin's icon sheets, such as `dragitem1.tga`, as RGBA pixels.
