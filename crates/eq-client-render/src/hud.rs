@@ -465,6 +465,9 @@ pub(super) fn actions(
             (&messages, &keys.map),
         );
     }
+    if let Some(hotbar::Action::Ability(ability)) = bar_action {
+        super::abilities::use_ability(ability, &online, &outbox);
+    }
     let posture = if keys.pressed(Act::Duck) {
         Some(eq_client_core::Posture::Ducking)
     } else if keys.pressed(Act::Sit) {

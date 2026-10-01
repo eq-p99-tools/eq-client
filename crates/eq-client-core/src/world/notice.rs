@@ -71,6 +71,11 @@ pub enum Notice {
     ZoneLineRefused(String),
     /// A target request was refused, and why.
     TargetRefused(String),
+    /// An ability was not used, and why.
+    AbilityRefused(String),
+    /// Sense Heading: the compass point the player faces, clockwise from
+    /// north (0) to north-west (7).
+    Heading(u8),
     /// A cast request was refused, and why.
     CastRefused {
         /// The spell asked for.

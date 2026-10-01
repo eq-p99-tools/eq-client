@@ -160,7 +160,10 @@ pub(crate) fn frames(
     }
     let mut drawn = BTreeSet::new();
     for (frame, id) in &frames {
-        if matches!(id, WindowId::Bank | WindowId::Bag(_) | WindowId::Give) {
+        if matches!(
+            id,
+            WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::ActionsWindow
+        ) {
             if shown.is_open(*id) {
                 drawn.insert(*id);
             } else {
@@ -171,7 +174,10 @@ pub(crate) fn frames(
     let wanted: Vec<WindowId> = shown
         .ids()
         .filter(|id| {
-            matches!(id, WindowId::Bank | WindowId::Bag(_) | WindowId::Give) && !drawn.contains(id)
+            matches!(
+                id,
+                WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::ActionsWindow
+            ) && !drawn.contains(id)
         })
         .collect();
     // A window just opened comes to the front.
@@ -300,8 +306,9 @@ pub(crate) fn close(
         }
     }
     // Closing the give window cancels the exchange; see `give::window`.
-    if let crate::escape::Escape::Close(id @ (WindowId::Bank | WindowId::Bag(_) | WindowId::Give)) =
-        *escape
+    if let crate::escape::Escape::Close(
+        id @ (WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::ActionsWindow),
+    ) = *escape
     {
         shown.close(id);
     }

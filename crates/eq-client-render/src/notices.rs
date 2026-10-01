@@ -134,6 +134,13 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 )
             })
             .map_or_else(Vec::new, chat),
+        // The official client's own words, with the point's name.
+        Notice::Heading(point) => messages
+            .map(|messages| {
+                let point = messages.format(12427 + u32::from(*point), &[]);
+                messages.format(12435, &[point])
+            })
+            .map_or_else(Vec::new, chat),
         Notice::Camp(status) => match status {
             CampStatus::Preparing => messages.map(|messages| messages.format(12293, &[])),
             CampStatus::Abandoned => messages.map(|messages| messages.format(12290, &[])),
@@ -158,7 +165,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         ),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
-        Notice::TradeRefused(reason) => chat(reason.clone()),
+        Notice::TradeRefused(reason) | Notice::AbilityRefused(reason) => chat(reason.clone()),
         // "You are too far away to trade."
         Notice::GiveRefused(reason) | Notice::GroundRefused(reason) => {
             chat(super::ground::refusal(reason))

@@ -7,6 +7,7 @@
 //! is forgotten. Nothing here draws, so any front end can host the world and
 //! its rules are tested without one.
 
+mod abilities;
 mod admission;
 mod belongings;
 mod casting;
@@ -125,6 +126,9 @@ pub struct ClientWorld {
     spell_book: Option<SpellBook>,
     /// The spellbook change in flight, until confirmed.
     book_action: Option<BookActionStatus>,
+    /// When each ability timer the session started runs out; servers keep
+    /// them across zones.
+    ability_timers: std::collections::BTreeMap<crate::abilities::Recovery, Instant>,
 
     // The zone's contents, the corpse and merchant among them.
     zone: zone::Zone,
@@ -429,6 +433,16 @@ impl ClientWorld {
                 self.exchange_refused(*session_id, reason, news);
             }
 
+            // The player's abilities.
+            WorldEvent::AbilityUsed {
+                session_id,
+                ability,
+                ready_in,
+            } => self.ability_used((*session_id, *ability, *ready_in), now, news),
+            WorldEvent::AbilityRefused { session_id, reason } => {
+                self.ability_refused(*session_id, reason, news);
+            }
+
             // The player's spells.
             WorldEvent::Spell(update) => news.cast = self.spell(update, now),
             WorldEvent::CastPending {
@@ -496,6 +510,7 @@ impl ClientWorld {
                 self.vitals = Vitals::default();
                 self.inventory = Inventory::default();
                 self.wallet = crate::money::Wallet::default();
+                self.ability_timers.clear();
                 self.spell_book = None;
                 self.buffs.clear();
                 self.session_id = None;
