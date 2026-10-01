@@ -320,10 +320,12 @@ impl WindowId {
             // Between the inventory and the spellbook, below the effects; a
             // merchant open at the same time sits a little lower, so both
             // titles show.
-            Self::Loot => floating("LOOT", Placement::TopLeft(632.0, 206.0), false, &["LOOT"]),
+            // Loot and merchant open right of where the skin puts the player
+            // and target windows.
+            Self::Loot => floating("LOOT", Placement::TopLeft(676.0, 206.0), false, &["LOOT"]),
             Self::Merchant => floating(
                 "MERCHANT",
-                Placement::TopLeft(644.0, 236.0),
+                Placement::TopLeft(688.0, 236.0),
                 false,
                 &["MERCHANT"],
             ),
