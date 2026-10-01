@@ -386,6 +386,7 @@ fn schedule(app: &mut App) {
             combat::input,
             trade::input,
             give::buttons,
+            give::inspect_theirs,
             hud::actions,
             hud::hotbar::update,
             hud::hotbar::item_actions,
@@ -438,7 +439,7 @@ fn schedule(app: &mut App) {
                 skinned::apply,
                 skinned::show,
                 skinned::buttons,
-                skinned::contents,
+                (skinned::contents, skinned::theirs),
                 skinned::close,
                 skinned::picker,
             )

@@ -28,7 +28,7 @@ pub use items::ItemCache;
 pub use link::Link;
 pub use notice::Notice;
 pub use target::Target;
-pub use trade::{Exchange, Loot, Merchant};
+pub use trade::{Asker, Exchange, Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
 
 use crate::{
@@ -219,12 +219,7 @@ impl ClientWorld {
             Some(crate::SpawnKind::Player) => crate::exchange::Partner::Player,
             _ => crate::exchange::Partner::Npc,
         };
-        self.zone.trade.exchange = Some(Exchange {
-            with,
-            slots: partner.slots(),
-            open: false,
-            given: false,
-        });
+        self.zone.trade.exchange = Some(Exchange::asked(with, partner));
     }
 
     /// The player clicked Give; the server's word ends the window.
@@ -383,7 +378,11 @@ impl ClientWorld {
             ),
 
             // What the player owns and trades.
-            WorldEvent::Inventory(update) => self.inventory_news(update, news),
+            WorldEvent::Inventory(update) => {
+                let before = self.offering();
+                self.inventory_news(update, news);
+                self.reconsider(&before);
+            }
             WorldEvent::InventoryAction {
                 session_id,
                 revision,
@@ -410,10 +409,12 @@ impl ClientWorld {
                 given,
                 offered,
             } => {
+                let before = self.offering();
                 self.wallet.cursor = *cursor;
                 self.wallet.bank = Some(*bank);
                 self.wallet.given = *given;
                 self.wallet.offered = *offered;
+                self.reconsider(&before);
                 news.trade = true;
             }
             WorldEvent::CoinsRefused { session_id, reason } => {
@@ -424,7 +425,7 @@ impl ClientWorld {
             WorldEvent::MerchantRefused { session_id, reason } => {
                 self.merchant_refused(*session_id, reason, news);
             }
-            WorldEvent::Exchange(update) => self.exchange_news(*update, news),
+            WorldEvent::Exchange(update) => self.exchange_news(update, news),
             WorldEvent::ExchangeRefused { session_id, reason } => {
                 self.exchange_refused(*session_id, reason, news);
             }

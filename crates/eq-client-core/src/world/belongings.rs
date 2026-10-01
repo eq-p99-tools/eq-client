@@ -7,6 +7,13 @@ use crate::{
     merchant::MerchantUpdate,
 };
 
+/// What the player has put in an open give or trade window.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Offering {
+    items: Vec<(crate::inventory::InventorySlot, u32, Option<u32>)>,
+    coins: crate::Coins,
+}
+
 impl ClientWorld {
     /// The inventory changed; what equipped items give may change with it.
     pub(super) fn inventory_news(&mut self, update: &InventoryUpdate, changes: &mut Changes) {
@@ -60,7 +67,7 @@ impl ClientWorld {
     }
 
     /// News of the give window the player asked for.
-    pub(super) fn exchange_news(&mut self, update: ExchangeUpdate, changes: &mut Changes) {
+    pub(super) fn exchange_news(&mut self, update: &ExchangeUpdate, changes: &mut Changes) {
         if self.zone.trade.exchange(update) {
             changes.trade = true;
             if let ExchangeUpdate::Busy { .. } = update {
@@ -70,6 +77,34 @@ impl ClientWorld {
             }
         } else {
             changes.ignored = true;
+        }
+    }
+
+    /// What the player has put in the open window: the items in its slots
+    /// and the coins given.
+    pub(super) fn offering(&self) -> Offering {
+        if self.zone.trade.exchange.is_none() {
+            return Offering::default();
+        }
+        Offering {
+            items: self
+                .inventory
+                .items()
+                .iter()
+                .filter(|(slot, _)| slot.is_in_trade())
+                .map(|(slot, item)| (*slot, item.details.id, item.stack_count))
+                .collect(),
+            coins: self.wallet.given,
+        }
+    }
+
+    /// Anything the player put in undoes both sides' Give or Trade clicks,
+    /// as servers undo them (`EQEmu`'s `Trade::AddEntity` and coin moves).
+    pub(super) fn reconsider(&mut self, before: &Offering) {
+        if *before != self.offering()
+            && let Some(exchange) = self.zone.trade.exchange.as_mut()
+        {
+            exchange.undo_clicks();
         }
     }
 

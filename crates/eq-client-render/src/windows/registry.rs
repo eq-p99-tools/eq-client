@@ -43,6 +43,8 @@ pub(crate) enum WindowId {
     Merchant,
     /// The give window: what the player hands an NPC, drawn from the skin.
     Give,
+    /// The trade window between two players, drawn from the skin.
+    Trade,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -220,7 +222,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 17] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -236,6 +238,7 @@ impl WindowId {
         Self::Loot,
         Self::Merchant,
         Self::Give,
+        Self::Trade,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -266,6 +269,7 @@ impl WindowId {
             Self::Loot => Some("LootWnd"),
             Self::Merchant => Some("MerchantWnd"),
             Self::Give => Some("GiveWnd"),
+            Self::Trade => Some("TradeWnd"),
             _ => None,
         }
     }
@@ -300,6 +304,7 @@ impl WindowId {
             Self::Loot => "loot",
             Self::Merchant => "merchant",
             Self::Give => "give",
+            Self::Trade => "trade",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -394,6 +399,8 @@ impl WindowId {
             // Right of the effects window, clear of the inventory and its
             // bags, where the items to give come from.
             Self::Give => floating("GIVE", Placement::TopRight(220.0, 100.0), false, &[]),
+            // Where the give window opens: the two never show at once.
+            Self::Trade => floating("TRADE", Placement::TopRight(220.0, 100.0), false, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(

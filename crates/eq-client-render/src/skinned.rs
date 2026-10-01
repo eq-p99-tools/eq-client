@@ -6,7 +6,7 @@
 //! without an installation, keeps the client's own chrome.
 mod items;
 
-pub(crate) use items::{close, contents, frames, picker, toggle_bag};
+pub(crate) use items::{TheirSlot, close, contents, frames, picker, theirs, toggle_bag};
 
 use super::windows::WindowId;
 use crate::theme::{self, Size};
@@ -29,6 +29,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Bank => "EQUI_BankWnd.xml",
         WindowId::Bag(_) => "EQUI_Container.xml",
         WindowId::Give => "EQUI_GiveWnd.xml",
+        WindowId::Trade => "EQUI_TradeWnd.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -50,12 +51,17 @@ pub(crate) enum Shows {
     /// choice of target. The official client says it in the chat.
     TargetLine,
     /// The coins of one kind in a place: the purse, the bank or the give
-    /// window.
+    /// or trade window.
     Coins(CoinPlace, Coin),
+    /// The coins of one kind the other player put in the trade.
+    Offered(Coin),
     /// The banker the bank is open at.
     Banker,
-    /// The character the give window hands items to.
+    /// The character the give or trade window is with, lit once they click
+    /// Trade.
     Partner,
+    /// The player in the trade window, lit once they click Trade.
+    Trader,
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -389,11 +395,43 @@ enum Does {
     /// Holds coins of one kind in a place, which a click picks up or puts
     /// down.
     Coins(CoinPlace, Coin),
+    /// Shows the coins of one kind the other player put in the trade.
+    Offered(Coin),
     /// Shows a bag's picture.
     BagIcon,
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
+}
+
+/// What the client does with a skin's button; None for one it leaves out.
+fn does(id: &str, owner: WindowId) -> Option<Does> {
+    if let Some((place, coin)) = coin_box(id) {
+        return Some(Does::Coins(place, coin));
+    }
+    if let Some(coin) = their_coin_box(id) {
+        return Some(Does::Offered(coin));
+    }
+    Some(match id {
+        "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
+        "DoneButton" | "GVW_Cancel_Button" | "TRDW_Cancel_Button" => Does::Closes,
+        "GVW_Give_Button" | "TRDW_Trade_Button" => Does::Gives,
+        "Container_Icon" if matches!(owner, WindowId::Bag(_)) => Does::BagIcon,
+        // The official client shows Combine only on a tradeskill container,
+        // and this client combines nothing.
+        "Container_Combine" => return None,
+        _ => Does::Nothing,
+    })
+}
+
+/// A coin box's count, right of its coin's picture.
+fn coin_count(inner: &mut ChildSpawnerCommands, area: Area, shows: Shows, ink: Color) {
+    aligned(
+        inner,
+        at(0.0, 5.0, area.width - 6.0, area.height - 5.0),
+        Align::Right,
+        (shows, theme::text("", Size::Body, ink)),
+    );
 }
 
 /// A skin's button: what the client does with it, or greyed out where it
@@ -405,22 +443,12 @@ fn button(
     inside: &Area,
     owner: WindowId,
 ) {
-    let coins = button.id.as_deref().and_then(coin_box);
-    let does = match button.id.as_deref() {
-        Some("CSPW_SpellBook") => Does::Toggles(WindowId::Spellbook),
-        Some("DoneButton") => Does::Closes,
-        Some(_) if coins.is_some() => {
-            coins.map_or(Does::Nothing, |(place, coin)| Does::Coins(place, coin))
-        }
-        Some("GVW_Give_Button") => Does::Gives,
-        Some("GVW_Cancel_Button") => Does::Closes,
-        Some("Container_Icon") if matches!(owner, WindowId::Bag(_)) => Does::BagIcon,
-        // The official client shows Combine only on a tradeskill container,
-        // and this client combines nothing.
-        Some("Container_Combine") => return,
-        _ => Does::Nothing,
+    let Some(does) = does(button.id.as_deref().unwrap_or_default(), owner) else {
+        return;
     };
-    let area = button.area;
+    let area = button.stretch.map_or(button.area, |stretch| {
+        stretch.within(inside.width, inside.height)
+    });
     let node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -456,7 +484,7 @@ fn button(
         Does::Coins(place, coin) => {
             drawn.insert((Button, super::coins::CoinBox { place, coin }));
         }
-        Does::BagIcon | Does::Nothing => (),
+        Does::Offered(_) | Does::BagIcon | Does::Nothing => (),
     }
     if let Some(tooltip) = &button.tooltip
         && !matches!(does, Does::Nothing)
@@ -477,12 +505,8 @@ fn button(
             );
         }
         match does {
-            Does::Coins(place, coin) => aligned(
-                inner,
-                at(0.0, 5.0, area.width - 6.0, area.height - 5.0),
-                Align::Right,
-                (Shows::Coins(place, coin), theme::text("", Size::Body, ink)),
-            ),
+            Does::Coins(place, coin) => coin_count(inner, area, Shows::Coins(place, coin), ink),
+            Does::Offered(coin) => coin_count(inner, area, Shows::Offered(coin), ink),
             Does::BagIcon => {
                 if let WindowId::Bag(bag) = owner {
                     inner.spawn((
@@ -715,8 +739,12 @@ fn label(
         _ => None,
     };
     let banker = owner == WindowId::Bank && name == "BW_BankerName";
-    let partner = owner == WindowId::Give && name == "GVW_NPCName";
-    let words = if label.eq_type.is_some() || bag.is_some() || banker || partner {
+    let partner = matches!(
+        (owner, name),
+        (WindowId::Give, "GVW_NPCName") | (WindowId::Trade, "TRDW_HisName")
+    );
+    let trader = owner == WindowId::Trade && name == "TRDW_MyName";
+    let words = if label.eq_type.is_some() || bag.is_some() || banker || partner || trader {
         ""
     } else {
         label.text.as_str()
@@ -737,6 +765,7 @@ fn label(
         (None, Some(bag)) => aligned(window, node, label.align, (text, items::BagPart::Name(bag))),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
         (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
+        (None, None) if trader => aligned(window, node, label.align, (text, Shows::Trader)),
         (None, None) => aligned(window, node, label.align, text),
     }
 }
@@ -842,8 +871,23 @@ pub(crate) fn show(
                 None,
             ),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
+            Shows::Offered(coin) => (
+                world
+                    .offered_coins()
+                    .map_or_else(String::new, |coins| coins.of(coin).to_string()),
+                None,
+            ),
             Shows::Banker => (inventory.banker().to_owned(), None),
-            Shows::Partner => (super::give::partner(world), None),
+            Shows::Partner => (
+                super::give::partner(world),
+                Some(super::give::ink(world, super::give::Side::Theirs)),
+            ),
+            Shows::Trader => (
+                world
+                    .player()
+                    .map_or_else(String::new, |player| player.name.clone()),
+                Some(super::give::ink(world, super::give::Side::Mine)),
+            ),
             Shows::Fill(_) | Shows::Attacking => continue,
         };
         if text.0 != wanted {
@@ -969,11 +1013,19 @@ fn coin_box(id: &str) -> Option<(CoinPlace, Coin)> {
         ("IW_Money", CoinPlace::Purse),
         ("BW_Money", CoinPlace::Bank),
         ("GVW_MyMoney", CoinPlace::Trade),
+        ("TRDW_MyMoney", CoinPlace::Trade),
     ]
     .into_iter()
     .find_map(|(prefix, place)| Some((place, id.strip_prefix(prefix)?)))?;
     let coin = *Coin::ALL.get(index.parse::<usize>().ok()?)?;
     Some((place, coin))
+}
+
+/// The coin a trade window's box for the other player's coins shows,
+/// numbered platinum to copper as the player's own.
+fn their_coin_box(id: &str) -> Option<Coin> {
+    let index = id.strip_prefix("TRDW_HisMoney")?.parse::<usize>().ok()?;
+    Coin::ALL.get(index).copied()
 }
 
 /// The target's health in percent, the player's own when they target

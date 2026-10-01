@@ -24,6 +24,11 @@ pub(crate) struct SkinSlot {
     in_bag: Option<(InventorySlot, u8)>,
 }
 
+/// One of the other player's trade slots (0 to 7), which shows what they
+/// put in; a right click inspects it.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct TheirSlot(pub(crate) u8);
+
 /// What a skinned slot shows of its item, drawn again when the inventory
 /// changes.
 #[derive(Component)]
@@ -66,23 +71,28 @@ pub(super) fn slot(
         return;
     };
     let area = slot.area;
-    window
-        .spawn((
-            Button,
-            SlotButton(number),
-            SkinSlot { in_bag },
-            at(
-                inside.x + area.x,
-                inside.y + area.y,
-                area.width,
-                area.height,
-            ),
-        ))
-        .with_children(|cell| {
-            if let Some(piece) = &slot.background {
-                picture(cell, art, piece, at(0.0, 0.0, area.width, area.height));
-            }
-        });
+    let node = at(
+        inside.x + area.x,
+        inside.y + area.y,
+        area.width,
+        area.height,
+    );
+    let theirs = number
+        .0
+        .checked_sub(eq_client_core::exchange::THEIR_FIRST_SLOT)
+        .and_then(|index| u8::try_from(index).ok());
+    let mut cell = match theirs {
+        // The other player's slots are not the player's to fill.
+        Some(index) if owner == WindowId::Trade && index < 8 => {
+            window.spawn((Button, TheirSlot(index), node))
+        }
+        _ => window.spawn((Button, SlotButton(number), SkinSlot { in_bag }, node)),
+    };
+    cell.with_children(|cell| {
+        if let Some(piece) = &slot.background {
+            picture(cell, art, piece, at(0.0, 0.0, area.width, area.height));
+        }
+    });
 }
 
 /// The inventory's figure: the paperdoll in the skin's frame. An item
@@ -160,7 +170,10 @@ pub(crate) fn frames(
     }
     let mut drawn = BTreeSet::new();
     for (frame, id) in &frames {
-        if matches!(id, WindowId::Bank | WindowId::Bag(_) | WindowId::Give) {
+        if matches!(
+            id,
+            WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::Trade
+        ) {
             if shown.is_open(*id) {
                 drawn.insert(*id);
             } else {
@@ -171,7 +184,10 @@ pub(crate) fn frames(
     let wanted: Vec<WindowId> = shown
         .ids()
         .filter(|id| {
-            matches!(id, WindowId::Bank | WindowId::Bag(_) | WindowId::Give) && !drawn.contains(id)
+            matches!(
+                id,
+                WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::Trade
+            ) && !drawn.contains(id)
         })
         .collect();
     // A window just opened comes to the front.
@@ -228,44 +244,7 @@ pub(crate) fn contents(
         if node.display != display {
             node.display = display;
         }
-        let Some(item) = items.get(&button.0) else {
-            commands.entity(cell).remove::<crate::tooltip::Tooltip>();
-            continue;
-        };
-        // The official client names an item under the pointer.
-        commands
-            .entity(cell)
-            .insert(crate::tooltip::Tooltip(item.details.name.clone()));
-        let (width, height) = match (node.width, node.height) {
-            (Val::Px(width), Val::Px(height)) => (width, height),
-            _ => (40.0, 40.0),
-        };
-        commands.entity(cell).with_children(|cell| {
-            if let Some(icon) = art.item(item.icon) {
-                cell.spawn((Content, icon, at(1.0, 1.0, width - 2.0, height - 2.0)));
-            } else {
-                let initials: String = item
-                    .details
-                    .name
-                    .split_whitespace()
-                    .filter_map(|word| word.chars().next())
-                    .take(2)
-                    .collect();
-                cell.spawn((
-                    Content,
-                    theme::text(initials, Size::Label, theme::INK_BRIGHT),
-                    at(4.0, 4.0, width - 8.0, height - 8.0),
-                ));
-            }
-            if let Some(count) = item.stack_count.filter(|count| *count > 1) {
-                cell.spawn((
-                    Content,
-                    theme::text(count.to_string(), Size::Body, theme::INK_BRIGHT),
-                    TextLayout::new(Justify::Right, LineBreak::NoWrap),
-                    at(0.0, height - 14.0, width - 3.0, 13.0),
-                ));
-            }
-        });
+        draw(&mut commands, &mut art, cell, &node, items.get(&button.0));
     }
     for (part, mut text) in &mut names {
         if let BagPart::Name(bag) = part {
@@ -286,6 +265,95 @@ pub(crate) fn contents(
     }
 }
 
+/// Draws an item in a slot: its icon (or its initials without one) and its
+/// stack's count, named under the pointer as in the official client; an
+/// empty slot loses its name.
+fn draw(
+    commands: &mut Commands,
+    art: &mut Art,
+    cell: Entity,
+    node: &Node,
+    item: Option<&eq_client_core::inventory::InventoryItem>,
+) {
+    let Some(item) = item else {
+        commands.entity(cell).remove::<crate::tooltip::Tooltip>();
+        return;
+    };
+    commands
+        .entity(cell)
+        .insert(crate::tooltip::Tooltip(item.details.name.clone()));
+    let (width, height) = match (node.width, node.height) {
+        (Val::Px(width), Val::Px(height)) => (width, height),
+        _ => (40.0, 40.0),
+    };
+    commands.entity(cell).with_children(|cell| {
+        if let Some(icon) = art.item(item.icon) {
+            cell.spawn((Content, icon, at(1.0, 1.0, width - 2.0, height - 2.0)));
+        } else {
+            let initials: String = item
+                .details
+                .name
+                .split_whitespace()
+                .filter_map(|word| word.chars().next())
+                .take(2)
+                .collect();
+            cell.spawn((
+                Content,
+                theme::text(initials, Size::Label, theme::INK_BRIGHT),
+                at(4.0, 4.0, width - 8.0, height - 8.0),
+            ));
+        }
+        if let Some(count) = item.stack_count.filter(|count| *count > 1) {
+            cell.spawn((
+                Content,
+                theme::text(count.to_string(), Size::Body, theme::INK_BRIGHT),
+                TextLayout::new(Justify::Right, LineBreak::NoWrap),
+                at(0.0, height - 14.0, width - 3.0, 13.0),
+            ));
+        }
+    });
+}
+
+/// Draws what the other player put in each of their trade slots, when it
+/// changes or a slot is drawn.
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)] // Bevy system parameters.
+pub(crate) fn theirs(
+    mut commands: Commands,
+    online: Res<crate::online::OnlineState>,
+    mut art: Art,
+    (mut last, added): (
+        Local<Option<Vec<(u8, u32, Option<u32>)>>>,
+        Query<(), Added<TheirSlot>>,
+    ),
+    slots: Query<(Entity, &TheirSlot, &Node, Option<&Children>)>,
+    old: Query<(), With<Content>>,
+) {
+    let theirs = online.world().exchange().map(|exchange| &exchange.theirs);
+    let shown: Vec<_> = theirs
+        .into_iter()
+        .flatten()
+        .map(|(index, item)| (*index, item.details.id, item.stack_count))
+        .collect();
+    if last.as_ref() == Some(&shown) && added.is_empty() {
+        return;
+    }
+    *last = Some(shown);
+    for (cell, slot, node, children) in &slots {
+        for child in children.into_iter().flatten() {
+            if old.contains(*child) {
+                commands.entity(*child).despawn();
+            }
+        }
+        draw(
+            &mut commands,
+            &mut art,
+            cell,
+            node,
+            theirs.and_then(|theirs| theirs.get(&slot.0)),
+        );
+    }
+}
+
 /// Closes a window when its Done button is pressed, and a bag or the bank
 /// when Escape finds it in front.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -299,9 +367,11 @@ pub(crate) fn close(
             shown.close(*window);
         }
     }
-    // Closing the give window cancels the exchange; see `give::window`.
-    if let crate::escape::Escape::Close(id @ (WindowId::Bank | WindowId::Bag(_) | WindowId::Give)) =
-        *escape
+    // Closing the give or trade window cancels the exchange; see
+    // `give::window`.
+    if let crate::escape::Escape::Close(
+        id @ (WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::Trade),
+    ) = *escape
     {
         shown.close(id);
     }

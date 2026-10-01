@@ -110,6 +110,57 @@ pub struct ButtonLook {
     pub pressed_flyby: Option<Piece>,
 }
 
+/// One edge of an element that stretches with its window: how far it sits
+/// from the window's near edge (top or left) or its far one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Anchor {
+    /// Whether the offset counts from the near edge.
+    pub near: bool,
+    /// The offset.
+    pub offset: f32,
+}
+
+impl Anchor {
+    /// Where the edge falls in a window this wide or tall.
+    #[must_use]
+    pub fn at(self, size: f32) -> f32 {
+        if self.near {
+            self.offset
+        } else {
+            size - self.offset
+        }
+    }
+}
+
+/// Where an element that stretches with its window (`AutoStretch`) sits:
+/// each edge anchored to one of the window's. The skin's own windows anchor
+/// an edge to the top or left unless they say otherwise.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stretch {
+    /// The left edge.
+    pub left: Anchor,
+    /// The top edge.
+    pub top: Anchor,
+    /// The right edge.
+    pub right: Anchor,
+    /// The bottom edge.
+    pub bottom: Anchor,
+}
+
+impl Stretch {
+    /// Where it sits in a window's client area of this size.
+    #[must_use]
+    pub fn within(self, width: f32, height: f32) -> Area {
+        let (left, top) = (self.left.at(width), self.top.at(height));
+        Area {
+            x: left,
+            y: top,
+            width: (self.right.at(width) - left).max(0.0),
+            height: (self.bottom.at(height) - top).max(0.0),
+        }
+    }
+}
+
 /// A button.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Button {
@@ -117,6 +168,9 @@ pub struct Button {
     pub id: Option<String>,
     /// Where it sits in its window.
     pub area: Area,
+    /// Where it sits instead when it stretches with its window, as the trade
+    /// window's buttons hug its bottom edge.
+    pub stretch: Option<Stretch>,
     /// How it is drawn.
     pub look: ButtonLook,
     /// Whether it stays on once pressed, as a window's toggle does.
@@ -440,6 +494,7 @@ impl Library {
         Element::Button(Button {
             id: text_of(node, "ScreenID").map(str::to_owned),
             area: at(),
+            stretch: stretch(node),
             look: ButtonLook {
                 normal: state("Normal"),
                 pressed: state("Pressed"),
@@ -640,6 +695,23 @@ fn area(node: roxmltree::Node<'_, '_>) -> Option<Area> {
     })
 }
 
+/// Where an element sits when it stretches with its window, if it does.
+fn stretch(node: roxmltree::Node<'_, '_>) -> Option<Stretch> {
+    if !flag(node, "AutoStretch") {
+        return None;
+    }
+    let anchor = |to: &str, offset: &str| Anchor {
+        near: text_of(node, to).is_none_or(|text| text.eq_ignore_ascii_case("true")),
+        offset: number(node, offset).unwrap_or(0.0),
+    };
+    Some(Stretch {
+        left: anchor("LeftAnchorToLeft", "LeftAnchorOffset"),
+        top: anchor("TopAnchorToTop", "TopAnchorOffset"),
+        right: anchor("RightAnchorToLeft", "RightAnchorOffset"),
+        bottom: anchor("BottomAnchorToTop", "BottomAnchorOffset"),
+    })
+}
+
 /// A `Frames` element: a texture and the rectangle cut from it.
 fn frame(node: roxmltree::Node<'_, '_>) -> Option<Piece> {
     let location = child(node, "Location");
@@ -730,8 +802,14 @@ mod tests {
             <ButtonDrawTemplate><Normal>A_Back</Normal><NormalDecal>A_Corner</NormalDecal></ButtonDrawTemplate>
             <DecalOffset><X>1</X><Y>3</Y></DecalOffset><DecalSize><CX>18</CX><CY>18</CY></DecalSize>
         </Button>
+        <Button item="Trade"><ScreenID>TRDW_Trade_Button</ScreenID>
+            <AutoStretch>true</AutoStretch>
+            <LeftAnchorOffset>5</LeftAnchorOffset><TopAnchorOffset>37</TopAnchorOffset>
+            <RightAnchorOffset>90</RightAnchorOffset><BottomAnchorOffset>5</BottomAnchorOffset>
+            <TopAnchorToTop>false</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+        </Button>
         <Screen item="Bags"><Size><CX>428</CX><CY>460</CY></Size>
-            <Pieces>Tabs</Pieces><Pieces>Platinum</Pieces>
+            <Pieces>Tabs</Pieces><Pieces>Platinum</Pieces><Pieces>Trade</Pieces>
         </Screen>
         <Screen item="SampleWindow">
             <Location><X>516</X><Y>242</Y></Location><Size><CX>147</CX><CY>50</CY></Size>
@@ -814,6 +892,29 @@ mod tests {
             button.tooltip.as_deref(),
             Some("Opens and closes Your Spellbook")
         );
+    }
+
+    #[test]
+    fn a_stretched_button_hugs_the_edges_it_is_anchored_to() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let screen = library.screen(WINDOW, "Bags").unwrap();
+        let Element::Button(button) = &screen.pieces[2].1 else {
+            panic!("a button")
+        };
+        // Left and right count from the left; top and bottom from the bottom.
+        assert_eq!(
+            button.stretch.unwrap().within(226.0, 330.0),
+            Area {
+                x: 5.0,
+                y: 293.0,
+                width: 85.0,
+                height: 32.0
+            }
+        );
+        let Element::Button(platinum) = &screen.pieces[1].1 else {
+            panic!("a button")
+        };
+        assert_eq!(platinum.stretch, None);
     }
 
     #[test]
