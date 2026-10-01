@@ -2,7 +2,7 @@
 mod movement;
 
 use anyhow::{Context, Result};
-use eq_client_core::{ClientCommand, MotionCalibration, WorldUpdate, world::Link};
+use eq_client_core::{ClientCommand, MotionCalibration, WorldUpdate, food::AutoEat, world::Link};
 use eq_network::{
     assets::Assets,
     client::{
@@ -65,12 +65,13 @@ impl SessionWorker {
         seconds: Option<u64>,
         calibration: Option<MotionCalibration>,
         local_only: bool,
+        auto_eat: AutoEat,
     ) -> Result<(Self, Receiver<WorldUpdate>)> {
         anyhow::ensure!(
             calibration.is_none() || protocol.is_titanium(),
             "calibrated movement requires the Titanium protocol"
         );
-        let client = client_from_environment(install, protocol, local_only)?;
+        let client = client_from_environment(install, protocol, local_only, auto_eat)?;
         let cancel = CancellationToken::default();
         let worker_cancel = cancel.clone();
         // The limit covers the whole session: login, character select and every zone.
@@ -182,6 +183,7 @@ fn client_from_environment(
     install: &Path,
     protocol: ServerProtocol,
     local_only: bool,
+    auto_eat: AutoEat,
 ) -> Result<Client> {
     let value = |name| env::var(name).with_context(|| format!("missing {name}"));
     let mut config = ClientConfig::for_protocol(
@@ -199,6 +201,7 @@ fn client_from_environment(
         config.port = port.parse().context("EQ_LOGIN_PORT is not a port number")?;
     }
     config.local_only = local_only;
+    config.auto_eat = auto_eat;
     let hostname = env::var("COMPUTERNAME").or_else(|_| env::var("HOSTNAME"));
     let username = env::var("USERNAME").or_else(|_| env::var("USER"));
     let client = Client::new(

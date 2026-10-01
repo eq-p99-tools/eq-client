@@ -509,7 +509,12 @@ The target panel lists the keys that apply to the current target:
 - Food and drink: when the server counts the player hungry or thirsty (3000
   of 6000 or less), the client eats or drinks from the inventory on its
   own, as the official client does, and says so when there is nothing left.
-  A right click on food or drink eats or drinks it by hand.
+  By default it leaves food and drink with modifiers for the player to eat
+  or drink by hand: attributes, resists, HP, mana, endurance, AC, HP or mana
+  regeneration, haste, or a click, proc, worn or focus effect. When only
+  such food or drink is left, it says so. `--auto-eat-anything` eats and
+  drinks whatever comes first instead, as the official client does. A
+  right click on food or drink eats or drinks it by hand, whatever it is.
 - **/camp** sits, waits the 30-second preparation, logs out and returns to
   character selection. Standing, moving, zoning or dying abandons it. **/sit** and
   **/stand** change posture from chat.

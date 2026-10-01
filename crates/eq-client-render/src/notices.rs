@@ -8,6 +8,7 @@ use super::{
 use eq_client_core::{
     CampStatus,
     entities::display_name,
+    food::Shortage,
     loot::LootResponse,
     world::{Link, Notice},
 };
@@ -94,16 +95,48 @@ fn heading(point: u8, messages: &Messages) -> String {
     messages.format(12435, &[point])
 }
 
-/// The official client's words for food or drink it could not find.
-fn nothing_to_eat((food, water): (bool, bool), messages: &Messages) -> String {
-    messages.format(
-        match (food, water) {
-            (true, true) => 12491,
-            (true, false) => 12488,
-            _ => 12490,
-        },
-        &[],
-    )
+/// What a hungry or thirsty player hears: the official client's words for
+/// food or drink it could not find, and what was left for them to eat or
+/// drink by hand because it has modifiers.
+fn nothing_to_eat(
+    food: Option<Shortage>,
+    water: Option<Shortage>,
+    messages: Option<&Messages>,
+) -> Vec<String> {
+    let lacks = |meal: Option<Shortage>, shortage| meal == Some(shortage);
+    let official = match (
+        lacks(food, Shortage::Nothing),
+        lacks(water, Shortage::Nothing),
+    ) {
+        (true, true) => Some(12491),
+        (true, false) => Some(12488),
+        (false, true) => Some(12490),
+        (false, false) => None,
+    };
+    let kept = match (
+        lacks(food, Shortage::OnlyModified),
+        lacks(water, Shortage::OnlyModified),
+    ) {
+        (true, true) => Some(
+            "You are hungry and thirsty. Your food and drink have modifiers, so \
+             they are only eaten and drunk when you right-click them.",
+        ),
+        (true, false) => Some(
+            "You are hungry. Your food has modifiers, so it is only eaten when \
+             you right-click it.",
+        ),
+        (false, true) => Some(
+            "You are thirsty. Your drink has modifiers, so it is only drunk \
+             when you right-click it.",
+        ),
+        (false, false) => None,
+    };
+    official
+        .zip(messages)
+        .map(|(id, messages)| messages.format(id, &[]))
+        .into_iter()
+        .chain(kept.map(String::from))
+        .collect()
 }
 
 /// How a notice reads, and where each part shows.
@@ -182,10 +215,10 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::TradeRefused(reason)
         | Notice::AbilityRefused(reason)
         | Notice::ConsumeRefused(reason) => chat(reason.clone()),
-        // The official client's words for what it could not find.
-        Notice::NothingToEat { food, water } => messages
-            .map(|messages| nothing_to_eat((*food, *water), messages))
-            .map_or_else(Vec::new, chat),
+        Notice::NothingToEat { food, water } => nothing_to_eat(*food, *water, messages)
+            .into_iter()
+            .map(|line| (Place::Chat, line))
+            .collect(),
         // "You are too far away to trade."
         Notice::GiveRefused(reason) | Notice::GroundRefused(reason) => {
             chat(super::ground::refusal(reason))
@@ -267,6 +300,59 @@ mod tests {
         assert_eq!(
             line(Notice::ShopRefused),
             [(Place::Chat, "That merchant will not trade with you.".into())]
+        );
+    }
+
+    #[test]
+    fn hunger_says_what_was_missing_and_what_was_kept_back() {
+        let messages = Messages::parse(
+            "EQST0002
+0 3
+12488 Out of food.
+12490 Out of drink.
+12491 Out of both.
+",
+        );
+        let lines = |food, water| -> Vec<String> {
+            wording(&Notice::NothingToEat { food, water }, Some(&messages))
+                .into_iter()
+                .map(|(place, line)| {
+                    assert_eq!(place, Place::Chat);
+                    line
+                })
+                .collect()
+        };
+        assert_eq!(
+            lines(Some(Shortage::Nothing), Some(Shortage::Nothing)),
+            ["Out of both."]
+        );
+        assert_eq!(
+            lines(Some(Shortage::OnlyModified), Some(Shortage::Nothing)),
+            [
+                "Out of drink.",
+                concat!(
+                    "You are hungry. Your food has modifiers, so it is only eaten when ",
+                    "you right-click it."
+                )
+            ]
+        );
+        assert_eq!(
+            lines(None, Some(Shortage::OnlyModified)),
+            [concat!(
+                "You are thirsty. Your drink has modifiers, so it is only drunk when ",
+                "you right-click it."
+            )]
+        );
+        // Without the installed strings, only what was kept back is said.
+        assert_eq!(
+            wording(
+                &Notice::NothingToEat {
+                    food: Some(Shortage::Nothing),
+                    water: None
+                },
+                None
+            ),
+            []
         );
     }
 

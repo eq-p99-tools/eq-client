@@ -2291,7 +2291,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ffood-and-drink#dbb0896488dbc5433e0bcd7505eee488ce0097e0"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#bee50d68421e6a59474a5474321d091498fbed4a"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2310,7 +2310,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ffood-and-drink#dbb0896488dbc5433e0bcd7505eee488ce0097e0"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#bee50d68421e6a59474a5474321d091498fbed4a"
 dependencies = [
  "anyhow",
  "hex",
@@ -2325,7 +2325,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ffood-and-drink#dbb0896488dbc5433e0bcd7505eee488ce0097e0"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#bee50d68421e6a59474a5474321d091498fbed4a"
 dependencies = [
  "cbc",
  "cipher",
@@ -2338,7 +2338,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ffood-and-drink#dbb0896488dbc5433e0bcd7505eee488ce0097e0"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#bee50d68421e6a59474a5474321d091498fbed4a"
 dependencies = [
  "anyhow",
  "crc32fast",

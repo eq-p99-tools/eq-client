@@ -76,12 +76,13 @@ pub enum Notice {
     /// Sense Heading: the compass point the player faces, clockwise from
     /// north (0) to north-west (7).
     Heading(u8),
-    /// The player turned hungry or thirsty with nothing to eat or drink.
+    /// The player turned hungry or thirsty with nothing the session eats or
+    /// drinks on its own.
     NothingToEat {
-        /// No food.
-        food: bool,
-        /// No drink.
-        water: bool,
+        /// Why a hungry player went without food.
+        food: Option<crate::food::Shortage>,
+        /// Why a thirsty player went without drink.
+        water: Option<crate::food::Shortage>,
     },
     /// An item was not eaten or drunk, and why.
     ConsumeRefused(String),

@@ -964,7 +964,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
 
 #[test]
 fn the_player_hears_what_they_could_not_eat_or_drink() {
-    use crate::food::Nourishment;
+    use crate::food::{Nourishment, Shortage};
     let mut world = admitted();
     let fed = Nourishment {
         food: 2500,
@@ -976,14 +976,14 @@ fn the_player_hears_what_they_could_not_eat_or_drink() {
         game(
             &mut world,
             WorldEvent::NothingToEat {
-                food: true,
-                water: false
+                food: Some(Shortage::OnlyModified),
+                water: None
             }
         )
         .notices,
         [Notice::NothingToEat {
-            food: true,
-            water: false
+            food: Some(Shortage::OnlyModified),
+            water: None
         }]
     );
     let refused = |session_id| WorldEvent::ConsumeRefused {
