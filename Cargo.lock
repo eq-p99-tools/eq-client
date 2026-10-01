@@ -2245,6 +2245,7 @@ dependencies = [
  "eq-client-render",
  "eq-network",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

@@ -150,111 +150,66 @@ impl eq_client_core::world::SpellCatalog for SpellNames {
     }
 }
 
+/// The installed client's spells, with the client's words for them.
 #[derive(Resource, Default)]
-pub(super) struct SpellNames {
-    spells: std::collections::BTreeMap<u32, SpellDefinition>,
-}
-
-#[derive(Default)]
-struct SpellDefinition {
-    mechanics: Option<eq_client_assets::spells::Mechanics>,
-    name: Option<String>,
-    timing: Option<SpellTiming>,
-    icon: Option<u32>,
-    mana: Option<u32>,
-    cast_ms: Option<u32>,
-    range: Option<f32>,
-}
+pub(super) struct SpellNames(eq_client_assets::spells::Definitions);
 
 impl SpellNames {
     /// Loads labels and timing from the user's installation; assets are never bundled.
     pub fn load(directory: Option<&std::path::Path>) -> Self {
-        directory
-            .and_then(|path| std::fs::read(path.join("spells_us.txt")).ok())
-            .map_or_else(Self::default, |bytes| {
-                Self::parse(&String::from_utf8_lossy(&bytes))
-            })
+        Self(
+            directory
+                .and_then(|path| eq_client_assets::spells::Definitions::read(path).ok())
+                .unwrap_or_default(),
+        )
     }
 
-    /// Keeps valid names even when a line has unavailable or malformed timing fields.
+    /// Spells from the text of a spell file.
+    #[cfg(test)]
     pub(super) fn parse(text: &str) -> Self {
-        let mut result = Self::default();
-        for line in text.lines() {
-            let fields: Vec<_> = line.split('^').take(183).collect();
-            // EQEmu SPDat field 144 indexes the default UI's spell artwork grid.
-            let Some(id) = fields.first().and_then(|field| field.parse::<u32>().ok()) else {
-                continue;
-            };
-            let mut definition = SpellDefinition {
-                mechanics: eq_client_assets::spells::Mechanics::from_fields(&fields),
-                icon: fields.get(144).and_then(|field| field.parse().ok()),
-                mana: fields.get(19).and_then(|field| field.parse().ok()),
-                cast_ms: fields.get(13).and_then(|field| field.parse().ok()),
-                range: fields
-                    .get(9)
-                    .and_then(|field| field.parse::<f32>().ok())
-                    .filter(|range| range.is_finite() && *range >= 0.0),
-                ..Default::default()
-            };
-            definition.name = fields
-                .get(1)
-                .map(|name| name.trim())
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned);
-            // EQ spells_us.txt fields 14/15 are recovery and same-spell reuse milliseconds.
-            if let (Some(recovery_ms), Some(recast_ms)) = (
-                fields.get(14).and_then(|s| s.parse().ok()),
-                fields.get(15).and_then(|s| s.parse().ok()),
-            ) {
-                definition.timing = Some(SpellTiming {
-                    recovery_ms,
-                    recast_ms,
-                });
-            }
-            result.spells.insert(id, definition);
-        }
-        result
+        Self(eq_client_assets::spells::Definitions::parse(text))
+    }
+
+    fn spell(&self, id: u32) -> Option<&eq_client_assets::spells::Definition> {
+        self.0.get(id)
     }
 
     pub(super) fn timing(&self, id: u32) -> Option<SpellTiming> {
-        self.spells.get(&id).and_then(|spell| spell.timing)
+        self.spell(id)?.timing.map(|timing| SpellTiming {
+            recovery_ms: timing.recovery_ms,
+            recast_ms: timing.recast_ms,
+        })
     }
 
     /// Looks up local mechanics by the server's exact spell ID, never by display name.
     pub(super) fn mechanics(&self, id: u32) -> Option<&eq_client_assets::spells::Mechanics> {
-        self.spells.get(&id)?.mechanics.as_ref()
+        self.spell(id)?.mechanics.as_ref()
     }
 
     /// Only an explicit zero duration is an instant effect; unknown rules stay unresolved.
     pub(super) fn instant_effect(&self, id: u32) -> bool {
-        self.mechanics(id).is_some_and(|mechanics| {
-            mechanics.duration_formula == 0
-                && mechanics.duration_cap == 0
-                && mechanics
-                    .alternate_duration
-                    .is_some_and(|alternate| alternate.formula == 0 && alternate.duration == 0)
-        })
+        self.mechanics(id)
+            .is_some_and(eq_client_assets::spells::Mechanics::instant)
     }
 
     /// Unmodified installation mana cost.
     pub(super) fn mana(&self, id: u32) -> Option<u32> {
-        self.spells.get(&id).and_then(|spell| spell.mana)
+        self.spell(id)?.mana
     }
 
     pub(super) fn icon(&self, id: u32) -> Option<u32> {
-        self.spells.get(&id).and_then(|spell| spell.icon)
+        self.spell(id)?.icon
     }
 
     pub fn label(&self, id: u32) -> String {
-        self.spells
-            .get(&id)
+        self.spell(id)
             .and_then(|spell| spell.name.clone())
             .unwrap_or_else(|| format!("Spell {id}"))
     }
 
     /// Unmodified installation values, not server-adjusted costs or cast times.
     pub(super) fn details(&self, id: u32) -> String {
-        let Some(spell) = self.spells.get(&id) else {
+        let Some(spell) = self.spell(id) else {
             return "Local spell details unavailable".into();
         };
         format!(

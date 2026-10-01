@@ -61,20 +61,16 @@ impl SessionWorker {
     /// A local-only session refuses servers outside this machine's network.
     pub fn start(
         install: &Path,
+        protocol: ServerProtocol,
         seconds: Option<u64>,
         calibration: Option<MotionCalibration>,
         local_only: bool,
     ) -> Result<(Self, Receiver<WorldUpdate>)> {
-        if calibration.is_some() {
-            let protocol: ServerProtocol = env::var("EQ_PROTOCOL")
-                .unwrap_or_else(|_| "p99".into())
-                .parse()?;
-            anyhow::ensure!(
-                protocol.is_titanium(),
-                "calibrated movement requires the Titanium protocol"
-            );
-        }
-        let client = client_from_environment(install, local_only)?;
+        anyhow::ensure!(
+            calibration.is_none() || protocol.is_titanium(),
+            "calibrated movement requires the Titanium protocol"
+        );
+        let client = client_from_environment(install, protocol, local_only)?;
         let cancel = CancellationToken::default();
         let worker_cancel = cancel.clone();
         // The limit covers the whole session: login, character select and every zone.
@@ -101,7 +97,9 @@ impl SessionWorker {
                                 && let Err(error) = configuration.try_send(command)
                             {
                                 // Movement stays disabled; the session itself is fine.
-                                eprintln!("Movement calibration was not carried over: {error}");
+                                tracing::warn!(
+                                    "Movement calibration was not carried over: {error}"
+                                );
                             }
                             Some(WorldUpdate::Game(event))
                         }
@@ -114,7 +112,7 @@ impl SessionWorker {
                             _ => None,
                         },
                         ClientEvent::Diagnostic(message) => {
-                            eprintln!("{message}");
+                            tracing::info!("{message}");
                             None
                         }
                         // A reconnect is a fresh login; this viewer asks for
@@ -123,7 +121,7 @@ impl SessionWorker {
                             error,
                             delay_seconds,
                         } => {
-                            eprintln!("Reconnecting in {delay_seconds} s: {error}");
+                            tracing::warn!("Reconnecting in {delay_seconds} s: {error}");
                             Some(WorldUpdate::Connection(Link::LoggingIn))
                         }
                     };
@@ -141,7 +139,7 @@ impl SessionWorker {
             if let Err(error) = result {
                 // Waits for room if the queue is full; fails only once the viewer is gone.
                 let _ = sender.send(WorldUpdate::Connection(Link::Ended));
-                eprintln!("Session ended: {error:#}");
+                tracing::error!("Session ended: {error:#}");
             }
         });
         Ok((
@@ -180,11 +178,12 @@ fn link(state: ConnectionState) -> Link {
 }
 
 /// Builds a protocol-specific client without loading P99 checksums for Quarm.
-fn client_from_environment(install: &Path, local_only: bool) -> Result<Client> {
+fn client_from_environment(
+    install: &Path,
+    protocol: ServerProtocol,
+    local_only: bool,
+) -> Result<Client> {
     let value = |name| env::var(name).with_context(|| format!("missing {name}"));
-    let protocol: ServerProtocol = env::var("EQ_PROTOCOL")
-        .unwrap_or_else(|_| "p99".into())
-        .parse()?;
     let mut config = ClientConfig::for_protocol(
         protocol,
         value("EQ_ACCOUNT")?,

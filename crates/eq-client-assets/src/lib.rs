@@ -4,6 +4,7 @@ pub mod characters;
 pub mod items;
 pub mod regions;
 pub mod spells;
+pub mod strings;
 pub mod ui;
 
 use std::collections::HashMap;
