@@ -86,6 +86,8 @@ pub struct ClientWorld {
     world_name: Option<String>,
     characters: Option<CharacterList>,
     session_id: Option<u64>,
+    /// What the admission lets the player do.
+    capabilities: Vec<crate::Capability>,
     zone: String,
     far_clip: Option<f32>,
     death: Option<Death>,
@@ -261,6 +263,7 @@ impl ClientWorld {
                 changes.characters = true;
             }
             WorldEvent::Entered {
+                capabilities,
                 session_id,
                 zone,
                 player,
@@ -268,6 +271,7 @@ impl ClientWorld {
             } => {
                 changes = self.reset(Reset::Entered);
                 changes.entered = true;
+                self.capabilities.clone_from(capabilities);
                 self.session_id = Some(*session_id);
                 self.zone.clone_from(zone);
                 self.far_clip = *far_clip;
@@ -752,6 +756,7 @@ impl ClientWorld {
                 self.spell_book = None;
                 self.buffs.clear();
                 self.session_id = None;
+                self.capabilities.clear();
                 self.player = None;
                 self.connected = false;
             }

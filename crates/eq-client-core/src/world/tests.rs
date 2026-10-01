@@ -79,6 +79,7 @@ fn connection(world: &mut ClientWorld, connected: bool, terminal: bool) -> Chang
 
 fn entered(session_id: u64) -> WorldEvent {
     WorldEvent::Entered {
+        capabilities: Vec::new(),
         session_id,
         zone: "qeytoqrg".into(),
         player: Box::new(player(9)),
@@ -504,6 +505,7 @@ fn the_profile_restores_gem_timers_and_vitals_at_admission() {
     let now = Instant::now();
     world.apply(
         &WorldUpdate::Game(WorldEvent::Entered {
+            capabilities: Vec::new(),
             session_id: 1,
             zone: "qeytoqrg".into(),
             player: Box::new(caster),
@@ -1110,4 +1112,19 @@ fn moves_and_replies_reach_the_front_end_for_the_current_admission() {
             dead: false
         }]
     );
+}
+
+#[test]
+fn the_admission_says_what_the_player_can_do_until_they_camp() {
+    use crate::Capability;
+    let mut world = ClientWorld::default();
+    let mut entry = entered(1);
+    if let WorldEvent::Entered { capabilities, .. } = &mut entry {
+        *capabilities = vec![Capability::Moving, Capability::Talking];
+    }
+    game(&mut world, entry);
+    assert!(world.can(Capability::Talking));
+    assert!(!world.can(Capability::Falling));
+    game(&mut world, WorldEvent::Camp(CampStatus::Camped));
+    assert!(world.capabilities().is_empty());
 }

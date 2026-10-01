@@ -192,6 +192,7 @@ mod tests {
     }
     fn entered(session_id: u64, run_speed: f32) -> WorldEvent {
         WorldEvent::Entered {
+            capabilities: Vec::new(),
             session_id,
             zone: "example".into(),
             far_clip: None,
