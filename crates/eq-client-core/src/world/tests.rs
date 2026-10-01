@@ -882,6 +882,87 @@ fn a_merchant_lists_stock_until_closed_or_refusing() {
 }
 
 #[test]
+fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
+    use crate::abilities::Ability;
+    use std::time::Duration;
+    let mut world = admitted();
+    assert!(world.abilities().is_empty(), "no skills, no abilities");
+    let mut skills = vec![0; 100];
+    skills[30] = 12;
+    skills[29] = 3;
+    let mut warrior = player(9);
+    warrior.skills = Some(skills);
+    warrior.race = 10;
+    world.apply(
+        &WorldUpdate::Game(WorldEvent::Entered {
+            capabilities: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(warrior),
+            far_clip: None,
+        }),
+        Instant::now(),
+        &NoSpells,
+    );
+    // An Ogre slams without the bash skill.
+    assert_eq!(
+        world.abilities(),
+        [Ability::Kick, Ability::Bash, Ability::Hide]
+    );
+    let now = Instant::now();
+    let used = |session_id| WorldEvent::AbilityUsed {
+        session_id,
+        ability: Ability::Kick,
+        ready_in: Duration::from_secs(4),
+    };
+    assert!(game(&mut world, used(2)).ignored, "another admission's");
+    world.apply(&WorldUpdate::Game(used(1)), now, &NoSpells);
+    // Strikes share the timer; other abilities keep their own.
+    assert_eq!(
+        world.ability_wait(Ability::Bash, now + Duration::from_secs(1)),
+        Some(Duration::from_secs(3))
+    );
+    assert_eq!(world.ability_wait(Ability::Hide, now), None);
+    assert_eq!(
+        world.ability_wait(Ability::Kick, now + Duration::from_secs(4)),
+        None
+    );
+    // Sense Heading says where the player faces: 128 is west.
+    let mut facing = world.player().unwrap().position;
+    facing.heading = 128.0;
+    game(
+        &mut world,
+        WorldEvent::Position {
+            spawn_id: 9,
+            position: facing,
+            velocity: [0.0; 3],
+        },
+    );
+    let changes = game(
+        &mut world,
+        WorldEvent::AbilityUsed {
+            session_id: 1,
+            ability: Ability::SenseHeading,
+            ready_in: Duration::ZERO,
+        },
+    );
+    assert_eq!(changes.notices, [Notice::Heading(6)]);
+    let changes = game(
+        &mut world,
+        WorldEvent::AbilityRefused {
+            session_id: 1,
+            reason: "Your target is too far away, get closer!".into(),
+        },
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::AbilityRefused(
+            "Your target is too far away, get closer!".into()
+        )]
+    );
+}
+
+#[test]
 fn the_player_hears_what_they_could_not_eat_or_drink() {
     use crate::food::Nourishment;
     let mut world = admitted();

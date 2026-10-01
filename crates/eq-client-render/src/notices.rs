@@ -88,6 +88,24 @@ pub(super) enum Place {
     Door,
 }
 
+/// Sense Heading in the official client's own words, with the point's name.
+fn heading(point: u8, messages: &Messages) -> String {
+    let point = messages.format(12427 + u32::from(point), &[]);
+    messages.format(12435, &[point])
+}
+
+/// The official client's words for food or drink it could not find.
+fn nothing_to_eat((food, water): (bool, bool), messages: &Messages) -> String {
+    messages.format(
+        match (food, water) {
+            (true, true) => 12491,
+            (true, false) => 12488,
+            _ => 12490,
+        },
+        &[],
+    )
+}
+
 /// How a notice reads, and where each part shows.
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
     let chat = |text: String| vec![(Place::Chat, text)];
@@ -134,6 +152,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 )
             })
             .map_or_else(Vec::new, chat),
+        Notice::Heading(point) => messages
+            .map(|messages| heading(*point, messages))
+            .map_or_else(Vec::new, chat),
         Notice::Camp(status) => match status {
             CampStatus::Preparing => messages.map(|messages| messages.format(12293, &[])),
             CampStatus::Abandoned => messages.map(|messages| messages.format(12290, &[])),
@@ -158,19 +179,12 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         ),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
-        Notice::TradeRefused(reason) | Notice::ConsumeRefused(reason) => chat(reason.clone()),
+        Notice::TradeRefused(reason)
+        | Notice::AbilityRefused(reason)
+        | Notice::ConsumeRefused(reason) => chat(reason.clone()),
         // The official client's words for what it could not find.
         Notice::NothingToEat { food, water } => messages
-            .map(|messages| {
-                messages.format(
-                    match (food, water) {
-                        (true, true) => 12491,
-                        (true, false) => 12488,
-                        _ => 12490,
-                    },
-                    &[],
-                )
-            })
+            .map(|messages| nothing_to_eat((*food, *water), messages))
             .map_or_else(Vec::new, chat),
         // "You are too far away to trade."
         Notice::GiveRefused(reason) | Notice::GroundRefused(reason) => {
