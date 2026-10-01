@@ -7,7 +7,6 @@ use eq_client_core::{
     ClientCommand, OutboundChat, SpawnKind,
     combat::{ConColor, Consideration, Damage, DamageOutcome, SPELL_DAMAGE_KIND},
 };
-use std::collections::BTreeMap;
 
 use super::hud::messages::Messages;
 
@@ -18,19 +17,6 @@ pub(super) struct CombatState {
     pub auto_attack: bool,
     /// Target that the current auto-attack request was made against.
     attack_target: Option<u16>,
-    session: Option<u64>,
-    /// Latest level colors reported for considered entities in this admission.
-    pub considered: BTreeMap<u16, ConColor>,
-}
-
-impl CombatState {
-    /// Forgets requests from an old admission.
-    pub(super) fn reset(&mut self, session: Option<u64>) {
-        *self = Self {
-            session,
-            ..Self::default()
-        };
-    }
 }
 
 /// Removes the server's numeric suffix and underscores from a spawn name.
@@ -53,16 +39,12 @@ fn capitalized(text: &str) -> String {
 pub(super) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     online: Res<super::online::OnlineState>,
-    target: Res<super::target::TargetState>,
     sender: Res<super::target::CommandsToServer>,
     messages: Res<Messages>,
     mut combat: ResMut<CombatState>,
     mut chat: ResMut<super::chat::ChatState>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    if combat.session != online.world.session_id() {
-        combat.reset(online.world.session_id());
-    }
     let (Some(session_id), Some(player), Some(sender)) = (
         online.world.session_id(),
         online.world.player(),
@@ -71,7 +53,9 @@ pub(super) fn input(
         return;
     };
     let now = std::time::Instant::now();
-    let spawn = target
+    let spawn = online
+        .world
+        .target()
         .selected
         .filter(|id| *id != player.spawn_id)
         .and_then(|id| online.world.spawn(id).map(|spawn| (id, &spawn.state)));
@@ -166,14 +150,15 @@ pub(super) fn input(
 /// Colors the target name by the latest consider result.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn target_color(
-    combat: Res<CombatState>,
-    target: Res<super::target::TargetState>,
+    online: Res<super::online::OnlineState>,
     mut names: Query<&mut TextColor, With<super::target::TargetName>>,
 ) {
-    let color = target
+    let color = online
+        .world
+        .target()
         .selected
-        .and_then(|id| combat.considered.get(&id))
-        .map_or(Color::srgb(0.9, 0.85, 0.65), |color| con_rgb(*color));
+        .and_then(|id| online.world.considered(id))
+        .map_or(Color::srgb(0.9, 0.85, 0.65), con_rgb);
     for mut text in &mut names {
         if text.0 != color {
             text.0 = color;

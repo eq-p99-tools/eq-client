@@ -30,7 +30,7 @@ pub(super) fn route(
     windows: Query<&Window, With<PrimaryWindow>>,
     inventory: Res<super::inventory::InventoryState>,
     trade: Res<super::trade::TradeState>,
-    target: Res<super::target::TargetState>,
+    online: Res<super::online::OnlineState>,
     mut escape: ResMut<Escape>,
 ) {
     let pressed = keys.just_pressed(KeyCode::Escape)
@@ -45,7 +45,7 @@ pub(super) fn route(
         Escape::Loot
     } else if trade.shopping() {
         Escape::Shop
-    } else if target.selected.is_some() {
+    } else if online.world.target().selected.is_some() {
         Escape::Target
     } else {
         Escape::Unused

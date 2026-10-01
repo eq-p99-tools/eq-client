@@ -309,7 +309,6 @@ pub(super) fn input(
     mut items: ResMut<super::items::ItemState>,
     (chat, escape): (Res<super::chat::ChatState>, Res<super::escape::Escape>),
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    target: Option<Res<super::target::TargetState>>,
 ) {
     state.refresh_bank_access(&online);
     if !windows.single().is_ok_and(|window| window.focused) {
@@ -382,7 +381,7 @@ pub(super) fn input(
                         slot.0,
                         &online,
                         &sender,
-                        target.as_ref().and_then(|target| target.selected),
+                        online.world.target().selected,
                         casting,
                     );
                 }

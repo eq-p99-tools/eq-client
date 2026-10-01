@@ -298,7 +298,6 @@ pub(super) enum Action {
 pub(super) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     online: Res<super::online::OnlineState>,
-    target: Res<super::target::TargetState>,
     sender: Res<super::target::CommandsToServer>,
     mut trade: ResMut<TradeState>,
     mut chat: ResMut<super::chat::ChatState>,
@@ -321,7 +320,7 @@ pub(super) fn input(
     let own_id = player.spawn_id;
     let send = |command: ClientCommand| sender.try_send(command).is_ok();
     let focused = !chat.composing && windows.single().is_ok_and(|window| window.focused);
-    let targeted = target.selected.and_then(|id| {
+    let targeted = online.world.target().selected.and_then(|id| {
         online
             .world
             .spawn(id)

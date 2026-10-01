@@ -8,7 +8,6 @@ pub(crate) struct Marker;
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub(crate) fn update(
     mut commands: Commands,
-    target: Res<super::TargetState>,
     online: Res<crate::online::OnlineState>,
     nearby: Res<crate::entities::NearbyEntities>,
     poses: Query<&Transform, Without<Marker>>,
@@ -18,7 +17,9 @@ pub(crate) fn update(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let selected = target
+    let selected = online
+        .world
+        .target()
         .selected
         .filter(|_| online.world.connected() && online.world.death().is_none());
     let pose = selected.and_then(|id| {
@@ -116,12 +117,9 @@ mod tests {
             .id();
         let mut nearby = crate::entities::NearbyEntities::default();
         nearby.rendered.insert(2, entity);
+        online.world.select_target(Some(2));
         app.insert_resource(online)
             .insert_resource(nearby)
-            .insert_resource(super::super::TargetState {
-                selected: Some(2),
-                ..default()
-            })
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, update);

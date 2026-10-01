@@ -673,3 +673,92 @@ fn the_inventory_lasts_until_the_admission_or_session_ends() {
     game(&mut world, WorldEvent::Camp(CampStatus::Camped));
     assert!(!held(&world));
 }
+
+#[test]
+fn the_target_follows_the_choice_and_the_sessions_word_on_it() {
+    let mut world = admitted();
+    world.select_target(Some(5));
+    assert_eq!(world.target().selected, Some(5));
+    assert!(!world.target().sent);
+    // News of another choice is not this one's.
+    assert!(game(&mut world, WorldEvent::TargetSent(Some(4))).ignored);
+    assert!(!game(&mut world, WorldEvent::TargetSent(Some(5))).ignored);
+    assert!(world.target().sent);
+    let refusal = |session_id, spawn_id| WorldEvent::TargetRejected {
+        session_id,
+        spawn_id,
+        reason: "Too far away".into(),
+    };
+    assert!(game(&mut world, refusal(2, Some(5))).ignored);
+    assert!(game(&mut world, refusal(1, Some(4))).ignored);
+    assert!(!game(&mut world, refusal(1, Some(5))).ignored);
+    assert_eq!(world.target().selected, None);
+}
+
+#[test]
+fn a_target_goes_stale_when_its_spawn_leaves_changes_or_hides() {
+    let mut world = admitted();
+    world.select_target(Some(9));
+    assert!(!world.target_stale(), "the player choosing themselves");
+    world.select_target(Some(5));
+    assert!(!world.target_stale());
+    game(
+        &mut world,
+        WorldEvent::Visibility {
+            spawn_id: 5,
+            invisible: true,
+        },
+    );
+    assert!(world.target_stale());
+    world.select_target(Some(5));
+    game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
+    assert!(world.target_stale(), "replaced under the same ID");
+    world.select_target(Some(5));
+    assert!(!world.target_stale());
+    game(&mut world, WorldEvent::Despawn(5));
+    assert!(world.target_stale());
+}
+
+#[test]
+fn every_reset_forgets_the_target() {
+    let mut world = admitted();
+    world.select_target(Some(5));
+    connection(&mut world, false, false);
+    assert_eq!(world.target().selected, None);
+    let mut world = admitted();
+    world.select_target(Some(5));
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 9,
+            killer_id: 0,
+            corpse_id: 10,
+            bind_zone_id: 2,
+        }),
+    );
+    assert_eq!(world.target().selected, None);
+}
+
+#[test]
+fn consider_colors_last_while_the_spawn_does() {
+    let consider = |target_id| {
+        WorldEvent::Consideration(crate::combat::Consideration {
+            target_id,
+            faction: 5,
+            color: ConColor::Red,
+            hit_points: None,
+        })
+    };
+    let mut world = admitted();
+    game(&mut world, consider(5));
+    assert_eq!(world.considered(5), Some(ConColor::Red));
+    // A spawn replacing it has not been considered.
+    game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
+    assert_eq!(world.considered(5), None);
+    game(&mut world, consider(5));
+    game(&mut world, WorldEvent::Despawn(5));
+    assert_eq!(world.considered(5), None);
+    game(&mut world, consider(5));
+    game(&mut world, entered(2));
+    assert_eq!(world.considered(5), None);
+}
