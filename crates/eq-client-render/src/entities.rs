@@ -297,8 +297,9 @@ pub(super) fn demo(
         p.x += angle.cos() * radius;
         p.y += angle.sin() * radius;
         let height = if size > 0.0 { size } else { 6.0 };
+        let [x, _, z] = render_position(p);
         p.z = surface
-            .height_below(p.y, p.x, origin.z + 10.0)
+            .height_below(x, z, origin.z + 10.0)
             .unwrap_or(origin.z - height * 0.5)
             + height * 0.5;
         p.heading = (-angle).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * 512.0;

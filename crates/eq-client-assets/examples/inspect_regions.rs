@@ -25,8 +25,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !query.is_empty() {
         let position: [f32; 3] = query
             .try_into()
-            .map_err(|_| "supply exactly three WLD coordinates")?;
-        println!("Boundary query: {:?}", regions.zone_line_at(position));
+            .map_err(|_| "supply exactly three world coordinates: x, y, z")?;
+        let position = eq_client_axes::from_world(glam::Vec3::from_array(position));
+        println!(
+            "Boundary query: {:?}",
+            regions.zone_line_at(position.to_array())
+        );
     }
     for tree in doc.fragment_iter::<WorldTree>() {
         println!("BSP nodes: {}", tree.world_nodes.len());

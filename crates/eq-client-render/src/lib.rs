@@ -498,12 +498,7 @@ fn spawn_static_zone(
         let Some(model) = models.get(object.model) else {
             continue;
         };
-        let rotation = object.rotation_degrees.map(f32::to_radians);
-        let transform = Transform {
-            translation: Vec3::from_array(object.translation),
-            rotation: Quat::from_euler(EulerRot::XYZ, rotation[0], rotation[1], rotation[2]),
-            scale: Vec3::from_array(object.scale),
-        };
+        let transform = object_transform(&object);
         commands
             .spawn((SceneEntity, transform, Visibility::Inherited))
             .with_children(|parent| {
@@ -808,6 +803,16 @@ fn create_material(
     })
 }
 
+/// Where a zone object sits; the assets crate already placed it in the
+/// renderer's frame.
+fn object_transform(object: &eq_client_assets::ZoneObject) -> Transform {
+    Transform {
+        translation: Vec3::from_array(object.translation),
+        rotation: Quat::from_array(object.rotation),
+        scale: Vec3::from_array(object.scale),
+    }
+}
+
 /// Includes solid terrain and transformed object geometry, including hidden boundaries.
 fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
     let mut triangles = zone.collision.clone();
@@ -815,12 +820,7 @@ fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Collisi
         let Some(model) = zone.models.get(object.model) else {
             continue;
         };
-        let rotation = object.rotation_degrees.map(f32::to_radians);
-        let transform = Mat4::from_scale_rotation_translation(
-            Vec3::from_array(object.scale),
-            Quat::from_euler(EulerRot::XYZ, rotation[0], rotation[1], rotation[2]),
-            Vec3::from_array(object.translation),
-        );
+        let transform = object_transform(object).to_matrix();
         triangles.extend(model.collision.iter().map(|triangle| {
             triangle.map(|p| transform.transform_point3(Vec3::from_array(p)).to_array())
         }));

@@ -7,6 +7,10 @@ build artifacts do not contain or redistribute EverQuest assets.
 
 The code is intentionally split at stable boundaries:
 
+- `eq-client-axes` is the one place EQ's world and file axes meet the
+  renderer's. EQ's frame is the mirror image of a right-handed one, and every
+  position, rotation, heading and triangle conversion is derived from that one
+  definition.
 - `eq-client-core` owns engine-independent world coordinates and updates.
 - `eq-client-assets` turns local EQ archives into owned, renderer-independent
   meshes and textures.

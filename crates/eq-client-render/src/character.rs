@@ -178,11 +178,12 @@ pub(super) fn spawn_on_layers(
     let mut parts = Vec::with_capacity(primitives.len());
     let child = commands
         .spawn((
-            // Classic character meshes face +X (installed HUM/ERM/ELM/DWM toes
-            // extend along +X), not the movement root's +Z forward convention.
-            // Keep protocol heading on the root and correct the model once here.
+            // Classic character meshes face heading 0 as stored, like all WLD
+            // geometry (installed HUM/ERM/ELM/DWM toes extend along it), not
+            // the movement root's +Z. Keep protocol heading on the root and
+            // turn the model once here.
             Transform::from_xyz(0.0, -feet_offset - bottom, 0.0)
-                .with_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2)),
+                .with_rotation(Quat::from_rotation_y(eq_client_core::model_yaw())),
             Visibility::Inherited,
         ))
         .with_children(|parent| {

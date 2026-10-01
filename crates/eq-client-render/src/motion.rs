@@ -72,16 +72,11 @@ impl BoundaryTracker {
             ZoneLine::Reference(number) => eq_client_core::ZoneLineDestination::Reference(number),
             ZoneLine::Absolute {
                 zone_id,
-                position,
+                position: [x, y, z],
                 heading,
             } => eq_client_core::ZoneLineDestination::Absolute {
                 zone_id,
-                position: eq_client_core::WorldPosition {
-                    x: position[1],
-                    y: position[0],
-                    z: position[2],
-                    heading,
-                },
+                position: eq_client_core::WorldPosition { x, y, z, heading },
             },
         })
     }
@@ -291,7 +286,7 @@ pub(super) fn input(
         let position = player.position;
         let boundary = online
             .regions
-            .zone_line_at([position.y, position.x, position.z]);
+            .zone_line_at(eq_client_core::render_position(position));
         if let Some(destination) = controls.boundary.observe(boundary) {
             if sender
                 .try_send(ClientCommand::CrossZoneLine {
@@ -480,8 +475,8 @@ fn stop_at_zone_line(
     end: Vec3,
 ) -> Vec3 {
     regions
-        .zone_line_entry([start.x, start.z, start.y], [end.x, end.z, end.y])
-        .map_or(end, |point| Vec3::new(point[0], point[2], point[1]))
+        .zone_line_entry(start.to_array(), end.to_array())
+        .map_or(end, Vec3::from_array)
 }
 
 /// Logs displacement magnitudes without recording the character's world coordinates.
@@ -751,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn boundary_crossing_is_edge_triggered_and_absolute_axes_are_converted() {
+    fn boundary_crossing_is_edge_triggered_and_absolute_destinations_pass_through() {
         let mut tracker = BoundaryTracker::default();
         assert!(tracker.observe(Some(ZoneLine::Reference(7))).is_none());
         assert!(tracker.observe(Some(ZoneLine::Reference(7))).is_none());
@@ -771,8 +766,8 @@ mod tests {
             Some(eq_client_core::ZoneLineDestination::Absolute {
                 zone_id: 42,
                 position: eq_client_core::WorldPosition {
-                    x: 34.0,
-                    y: 12.0,
+                    x: 12.0,
+                    y: 34.0,
                     z: 56.0,
                     heading: 64.0
                 }
@@ -837,7 +832,8 @@ mod tests {
         app.world_mut().spawn(OrbitCamera {
             focus: Vec3::ZERO,
             radius: 30.0,
-            yaw: 0.0,
+            // Looking east, heading 384, so W walks along EQ's -X.
+            yaw: eq_client_core::render_heading(384.0) + std::f32::consts::PI,
             pitch: 1.0,
         });
         app.world_mut().spawn((

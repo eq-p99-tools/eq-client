@@ -1,6 +1,7 @@
 //! Classic WLD boundary regions, independent of server destinations.
 use std::collections::BTreeMap;
 
+use glam::Vec3;
 use libeq::wld::parser::{FragmentRef, Region, WldDoc, WorldTree, Zone};
 
 use crate::LoadError;
@@ -19,18 +20,19 @@ struct Node {
 pub enum ZoneLine {
     /// Lookup number in the current server-provided zone-point table.
     Reference(u32),
-    /// Older assets embed a destination directly, in WLD axis order.
+    /// Older assets embed a destination directly.
     Absolute {
         /// Destination zone ID.
         zone_id: u16,
-        /// Raw WLD `(east, north, up)` destination.
+        /// Destination in world coordinates, as servers place spawns.
         position: [f32; 3],
         /// Facing, including the protocol's preserve-facing sentinel.
         heading: f32,
     },
 }
 
-/// Spatial lookup for zone-line references in classic WLD assets.
+/// Spatial lookup for zone-line references in classic WLD assets, in the
+/// renderer's frame like the rest of a zone's geometry.
 ///
 /// Numbers refer to the server's zone-point table, not destination zone IDs.
 /// Unrecognized or malformed tags intentionally produce no route.
@@ -63,7 +65,8 @@ impl ZoneRegions {
                     return Err(invalid("non-finite BSP plane"));
                 }
                 Ok(Node {
-                    normal,
+                    // The conversion keeps lengths, so a plane's distance stays.
+                    normal: eq_client_axes::from_wld(Vec3::from_array(normal)).to_array(),
                     distance: node.split_distance,
                     region: index(&node.region, region_count)?,
                     front: index(&node.front_tree, tree.world_nodes.len())?,
@@ -95,9 +98,8 @@ impl ZoneRegions {
         Ok(Self { nodes, routes })
     }
 
-    /// Finds a boundary at raw WLD `(east, north, up)` coordinates.
+    /// Finds a boundary at a position in the renderer's frame.
     ///
-    /// Use `[server.y, server.x, server.z]`, before the renderer's Y-up transform.
     /// A point exactly on a split plane, a broken tree, or a cycle yields no route.
     pub fn zone_line_at(&self, position: [f32; 3]) -> Option<ZoneLine> {
         if !position.iter().all(|v| v.is_finite()) {
@@ -125,8 +127,9 @@ impl ZoneRegions {
         None
     }
 
-    /// Returns a point inside the first boundary crossed by a movement segment.
-    /// An already occupied boundary is ignored so admission does not trigger zoning.
+    /// Returns a point inside the first boundary crossed by a movement segment,
+    /// in the renderer's frame. An already occupied boundary is ignored so
+    /// admission does not trigger zoning.
     #[allow(clippy::cast_possible_truncation)] // Interpolation stays between finite f32 endpoints.
     pub fn zone_line_entry(&self, start: [f32; 3], end: [f32; 3]) -> Option<[f32; 3]> {
         if self.routes.is_empty()
@@ -225,9 +228,10 @@ fn zone_line_tag(tag: &str) -> Option<ZoneLine> {
         }
         value.parse().ok()
     };
+    let wld = Vec3::new(decimal(10, 16)?, decimal(16, 22)?, decimal(22, 28)?);
     Some(ZoneLine::Absolute {
         zone_id,
-        position: [decimal(10, 16)?, decimal(16, 22)?, decimal(22, 28)?],
+        position: eq_client_axes::wld_to_world(wld).to_array(),
         heading: decimal(28, 31)?,
     })
 }
@@ -259,7 +263,8 @@ mod tests {
             zone_line_tag("DRNTP00042-00012000034000056999_ZONE"),
             Some(ZoneLine::Absolute {
                 zone_id: 42,
-                position: [-12.0, 34.0, 56.0],
+                // Written in WLD order, the world's Y first.
+                position: [34.0, -12.0, 56.0],
                 heading: 999.0
             })
         );
