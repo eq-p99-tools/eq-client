@@ -7,6 +7,7 @@ use crate::{
 use eq_client_core::{
     ClientCommand,
     inventory::{Inventory, InventoryActor, InventoryMove, MoveQuantity},
+    money::{Coin, CoinPlace, CoinTransfer},
 };
 use std::{num::NonZeroU32, time::Instant};
 
@@ -18,16 +19,27 @@ pub(super) struct Actions {
     pub split: Option<SplitSelection>,
     pub pending: Option<(u64, u64, bool)>,
     pub message: String,
+    /// Coins the quantity picker took, for the coins system to move.
+    pub coins: Option<CoinTransfer>,
+}
+
+/// What a quantity picker takes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Picked {
+    /// A stack in this inventory slot.
+    Stack(InventorySlot),
+    /// Coins of one kind in a place.
+    Coins(CoinPlace, Coin),
 }
 
 pub(super) struct SplitSelection {
-    pub slot: InventorySlot,
+    pub picked: Picked,
     pub revision: u64,
     pub amount: u32,
     pub available: u32,
 }
 
-#[derive(bevy::prelude::Component, Clone, Copy)]
+#[derive(bevy::prelude::Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SplitAction {
     Less,
     More,
@@ -202,7 +214,7 @@ impl InventoryState {
             self.actions.message = "Finish the current cursor move first".into();
         } else if let Some(available) = count.filter(|count| *count > 1) {
             self.actions.split = Some(SplitSelection {
-                slot,
+                picked: Picked::Stack(slot),
                 revision: inventory.revision(),
                 amount: 1,
                 available,
@@ -224,7 +236,11 @@ impl InventoryState {
             return;
         };
         self.revision = self.revision.wrapping_add(1);
-        if selection.revision != online.world().inventory().revision() {
+        let stack = match selection.picked {
+            Picked::Stack(slot) => Some(slot),
+            Picked::Coins(..) => None,
+        };
+        if stack.is_some() && selection.revision != online.world().inventory().revision() {
             self.actions.message = "Inventory changed; choose the stack again".into();
             return;
         }
@@ -237,13 +253,23 @@ impl InventoryState {
             SplitAction::Maximum => selection.amount = selection.available,
             SplitAction::Cancel => return,
             SplitAction::Confirm => {
-                if let Err(error) = self.try_click(
-                    selection.slot,
-                    NonZeroU32::new(selection.amount),
-                    online,
-                    sender,
-                ) {
-                    self.actions.message = crate::outbox::window_line(&error);
+                match selection.picked {
+                    Picked::Stack(slot) => {
+                        if let Err(error) =
+                            self.try_click(slot, NonZeroU32::new(selection.amount), online, sender)
+                        {
+                            self.actions.message = crate::outbox::window_line(&error);
+                        }
+                    }
+                    Picked::Coins(place, coin) => {
+                        self.actions.coins = Some(CoinTransfer {
+                            from: place,
+                            to: CoinPlace::Cursor,
+                            coin,
+                            into: coin,
+                            amount: selection.amount,
+                        });
+                    }
                 }
                 return;
             }
@@ -340,6 +366,13 @@ impl InventoryState {
         ensure!(
             self.actions.pending.is_none(),
             "Waiting for the queued move; it will not be retried"
+        );
+        ensure!(
+            online
+                .world()
+                .coins_in(CoinPlace::Cursor)
+                .is_none_or(|coins| coins.is_empty()),
+            "Put the coins on the cursor down first"
         );
         // The offline demo settles its own moves; online, the outbox stamps
         // the move, or says why not.

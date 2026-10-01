@@ -84,9 +84,14 @@ impl OnlineState {
         self.world.close_shop();
     }
 
-    /// The player asked a character to trade; the window has this many slots.
-    pub(super) fn offer_trade(&mut self, with: u16, slots: u8) {
-        self.world.offer_trade(with, slots);
+    /// The player asked a character to trade.
+    pub(super) fn offer_trade(&mut self, with: u16) {
+        self.world.offer_trade(with);
+    }
+
+    /// The player moved coins; false when they could not go.
+    pub(super) fn move_coins(&mut self, transfer: eq_client_core::money::CoinTransfer) -> bool {
+        self.world.move_coins(transfer)
     }
 
     /// The player clicked Give.

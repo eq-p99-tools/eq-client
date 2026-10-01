@@ -199,6 +199,24 @@ impl ClientWorld {
         self.zone.trade.loot.as_ref()
     }
 
+    /// The coins in a place, where the client knows them: a trade window's
+    /// only while it is open.
+    #[must_use]
+    pub fn coins_in(&self, place: crate::money::CoinPlace) -> Option<Coins> {
+        use crate::money::CoinPlace;
+        match place {
+            CoinPlace::Purse => self.coins,
+            CoinPlace::Cursor => Some(self.cursor_coins),
+            CoinPlace::Bank => self.bank_coins,
+            CoinPlace::Trade => self
+                .zone
+                .trade
+                .exchange
+                .filter(|exchange| exchange.open)
+                .map(|exchange| exchange.coins),
+        }
+    }
+
     /// The give window the player asked for or has open.
     #[must_use]
     pub const fn exchange(&self) -> Option<&Exchange> {

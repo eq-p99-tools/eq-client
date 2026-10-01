@@ -8,6 +8,7 @@ mod buffs;
 mod character;
 mod character_select;
 mod chat;
+mod coins;
 mod combat;
 mod doors;
 mod entities;
@@ -378,6 +379,7 @@ fn schedule(app: &mut App) {
             items::link_input,
             items::input,
             inventory::input,
+            coins::input,
             inventory::colors::input,
             interact::input,
             target::input,

@@ -41,6 +41,8 @@ pub struct Exchange {
     pub open: bool,
     /// Whether the player clicked Give.
     pub given: bool,
+    /// The coins the player put in the window.
+    pub coins: Coins,
 }
 
 impl Exchange {

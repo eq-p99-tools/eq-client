@@ -4,7 +4,7 @@
 use super::{Changes, ClientWorld, Notice, Reply, trade};
 use crate::{
     exchange::ExchangeUpdate, inventory::InventoryUpdate, loot::LootUpdate,
-    merchant::MerchantUpdate,
+    merchant::MerchantUpdate, money::CoinTransfer,
 };
 
 impl ClientWorld {
@@ -87,6 +87,33 @@ impl ClientWorld {
         } else {
             changes.ignored = true;
         }
+    }
+
+    /// A coin move was not sent: the coins go back where they came from.
+    pub(super) fn coins_refused(
+        &mut self,
+        session_id: u64,
+        transfer: CoinTransfer,
+        reason: &str,
+        changes: &mut Changes,
+    ) {
+        if self.session_id != Some(session_id) {
+            changes.ignored = true;
+            return;
+        }
+        // What arrived goes back as what it was.
+        let (_, added) = transfer.amounts();
+        self.move_coins(CoinTransfer {
+            from: transfer.to,
+            to: transfer.from,
+            coin: transfer.into,
+            into: transfer.coin,
+            amount: added,
+        });
+        changes.trade = true;
+        changes
+            .notices
+            .push(Notice::TradeRefused(reason.to_owned()));
     }
 
     /// The merchant would not trade.

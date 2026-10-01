@@ -464,7 +464,13 @@ mod tests {
         assert_eq!(items, &before);
         let inventory = app.world().resource::<InventoryState>();
         let selection = inventory.actions.split.as_ref().unwrap();
-        assert_eq!((selection.slot, selection.amount), (InventorySlot(251), 1));
+        assert_eq!(
+            (selection.picked, selection.amount),
+            (
+                super::super::interaction::Picked::Stack(InventorySlot(251)),
+                1
+            )
+        );
         // With an item on the cursor, the count is a placement target like its icon.
         let mut contents: Vec<_> = before.items().values().cloned().collect();
         let stack = contents

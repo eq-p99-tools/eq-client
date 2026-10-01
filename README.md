@@ -496,6 +496,14 @@ The target panel lists the keys that apply to the current target:
   cursor, **Give** hands them over (a quest NPC answers in chat, and what it
   does not want comes back on the cursor), and **Cancel** or **Escape**
   takes them back. Only an NPC within 20 units is asked.
+- Coins move as in the official client: clicking a coin box in the purse or
+  the bank picks coins up onto the cursor (the quantity picker asks how many;
+  Shift takes them all), and clicking a box with coins on the cursor puts
+  them down there, the give window's boxes included. Coins dropped on another
+  kind's box change kind as servers do (11 gold into the bank's platinum
+  leaves 1 gold on the cursor). Clicking an NPC with coins on the cursor
+  opens the give window with them. The bank's boxes show what the profile
+  and the player's moves put there.
 - **/camp** sits, waits the 30-second preparation, logs out and returns to
   character selection. Standing, moving, zoning or dying abandons it. **/sit** and
   **/stand** change posture from chat.
@@ -515,6 +523,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...`,
 `give` (asks the target to take the cursor item, as clicking it does),
+`click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel`,
 `right_click` with the same targets (a bag's slot opens its window),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
@@ -643,8 +652,8 @@ worker and UI immediately, including changes during admission; unsupported skill
 IDs remain events without expanding the profile. Titanium level gains and losses
 update the character display, experience bar and worker equipment eligibility,
 including updates received during admission. Quarm skill and level-change decoding
-remain outstanding. Coins in the give window, trades with other players,
-shared-bank and bank-currency actions are unavailable.
+remain outstanding. Trades with other players, the shared bank and the
+bank's Change button are unavailable.
 Items on the ground can be picked up (see above); dropping and destruction remain
 unimplemented.
 Inventory instances now retain typed server click-effect metadata separately from

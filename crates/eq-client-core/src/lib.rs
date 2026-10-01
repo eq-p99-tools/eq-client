@@ -22,6 +22,7 @@ pub use eq_network_game::exchange;
 pub use eq_network_game::inventory;
 pub use eq_network_game::loot;
 pub use eq_network_game::merchant;
+pub use eq_network_game::money;
 pub use eq_network_game::movement::{
     BackwardCalibration, MotionCalibration, MovementMode, MovementRequest, StrafeCalibration,
     WalkCalibration,

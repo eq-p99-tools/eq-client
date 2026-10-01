@@ -102,6 +102,8 @@ pub(super) fn state(
         inventory_stale = online.world().inventory().stale(),
         cursor_queued = online.world().inventory().queued().count(),
         exchange = ?online.world().exchange(),
+        cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
+        bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
         gear = ?online.world().player().map(|player| player.appearance.materials),
         tints = ?online.world().player().map(|player| player.appearance.tints),
         face = ?online.world().player().map(|player| player.appearance.face),

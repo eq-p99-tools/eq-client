@@ -25,6 +25,10 @@ pub(super) fn spawn(commands: &mut Commands) {
     ));
 }
 
+/// What the overlay was last drawn for: its entity, the window's and the
+/// inventory's revisions, and the coins on the cursor.
+type Drawn = (Entity, u64, u64, Option<(eq_client_core::money::Coin, u32)>);
+
 /// Follows the pointer using confirmed/predicted inventory state, never a selected slot.
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub(crate) fn update(
@@ -34,7 +38,7 @@ pub(crate) fn update(
     windows: Query<&Window, With<PrimaryWindow>>,
     scale: Option<Res<UiScale>>,
     mut root: Query<(Entity, &mut Node), With<Overlay>>,
-    mut stamp: Local<Option<(Entity, u64, u64)>>,
+    mut stamp: Local<Option<Drawn>>,
     mut art: crate::sheets::Art,
 ) {
     let Ok((entity, mut node)) = root.single_mut() else {
@@ -42,6 +46,7 @@ pub(crate) fn update(
     };
     let inventory = online.world().inventory();
     let item = inventory.items().get(&InventorySlot::CURSOR);
+    let coins = crate::coins::on_cursor(online.world());
     let pointer = windows
         .single()
         .ok()
@@ -51,7 +56,7 @@ pub(crate) fn update(
                 .cursor_position()
                 .map(|pointer| (pointer, window.size()))
         });
-    node.display = if item.is_some() && pointer.is_some() {
+    node.display = if (item.is_some() || coins.is_some()) && pointer.is_some() {
         Display::Flex
     } else {
         Display::None
@@ -60,13 +65,22 @@ pub(crate) fn update(
         let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
         place(&mut node, pointer / factor, viewport / factor);
     }
-    let current = (entity, state.revision, inventory.revision());
+    let current = (entity, state.revision, inventory.revision(), coins);
     if *stamp == Some(current) {
         return;
     }
     *stamp = Some(current);
     commands.entity(entity).despawn_children();
     let Some(item) = item else {
+        // Coins ride the cursor on their own, as in the official client.
+        if let Some((coin, count)) = coins {
+            commands.entity(entity).with_child((
+                Text::new(format!("{count} {}", coin_name(coin))),
+                theme::font(Size::Body),
+                TextColor(theme::INK_WARM),
+                FocusPolicy::Pass,
+            ));
+        }
         return;
     };
     let icon = art.item(item.icon);
@@ -98,6 +112,17 @@ pub(crate) fn update(
             FocusPolicy::Pass,
         ));
     });
+}
+
+/// What a kind of coin is called.
+const fn coin_name(coin: eq_client_core::money::Coin) -> &'static str {
+    use eq_client_core::money::Coin;
+    match coin {
+        Coin::Platinum => "platinum",
+        Coin::Gold => "gold",
+        Coin::Silver => "silver",
+        Coin::Copper => "copper",
+    }
 }
 
 /// Anchors away from the nearest edges without waiting for text layout measurements.
