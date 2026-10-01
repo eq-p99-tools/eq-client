@@ -565,18 +565,26 @@ pub(super) fn receive(
                     chat.history.push(super::chat::system_line(text));
                 }
             }
-            // The shop window still keeps its own copy, adjusted between
-            // money updates, until loot and merchant state join the world.
-            WorldUpdate::Game(WorldEvent::Coins(coins)) => trade.coins = Some(coins),
+            // The merchant window shows the coins.
+            WorldUpdate::Game(WorldEvent::Coins(_)) => trade.changed(),
             WorldUpdate::Game(WorldEvent::Loot(update)) => {
-                if let Some(text) = trade.apply_loot(update) {
-                    chat.history.push(super::chat::system_line(text));
+                if !changes.ignored {
+                    if let eq_client_core::loot::LootUpdate::Taken { slot, accepted } = update {
+                        trade.taken(slot, accepted);
+                    }
+                    if let Some(text) = super::trade::loot_text(&update) {
+                        chat.history.push(super::chat::system_line(text));
+                    }
                 }
+                trade.changed();
             }
             WorldUpdate::Game(WorldEvent::Merchant(update)) => {
-                if let Some(text) = trade.apply_merchant(update) {
+                if !changes.ignored
+                    && let Some(text) = super::trade::merchant_text(&update)
+                {
                     chat.history.push(super::chat::system_line(text));
                 }
+                trade.changed();
             }
             WorldUpdate::Game(WorldEvent::MerchantRefused { session_id, reason }) => {
                 if state.world.session_id() == Some(session_id) {
