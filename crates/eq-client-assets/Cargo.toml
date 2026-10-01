@@ -8,8 +8,11 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+eq-client-axes.workspace = true
+glam.workspace = true
 image.workspace = true
 libeq.workspace = true
+roxmltree.workspace = true
 thiserror.workspace = true
 
 [lints]

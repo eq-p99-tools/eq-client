@@ -7,5 +7,11 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+parry3d.workspace = true
+eq-client-axes.workspace = true
+glam.workspace = true
+eq-network-game.workspace = true
+
 [lints]
 workspace = true

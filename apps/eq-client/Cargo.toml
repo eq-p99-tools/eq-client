@@ -8,8 +8,12 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+serde_json.workspace = true
+anyhow.workspace = true
+eq-network.workspace = true
 clap.workspace = true
 eq-client-assets.workspace = true
+eq-client-core.workspace = true
 eq-client-render.workspace = true
 
 [lints]

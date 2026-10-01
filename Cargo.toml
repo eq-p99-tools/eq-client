@@ -2,6 +2,7 @@
 members = [
   "apps/eq-client",
   "crates/eq-client-assets",
+  "crates/eq-client-axes",
   "crates/eq-client-core",
   "crates/eq-client-render",
 ]
@@ -15,13 +16,18 @@ repository = "https://github.com/eq-p99-tools/eq-client"
 rust-version = "1.95"
 
 [workspace.dependencies]
+serde_json = "1"
 bevy = { version = "0.19.1", default-features = false, features = [
   "3d_bevy_render",
   "async_executor",
   "bevy_asset",
   "bevy_log",
   "bevy_state",
+  "bevy_text",
+  "bevy_ui",
+  "bevy_ui_render",
   "bevy_winit",
+  "default_font",
   "multi_threaded",
   "reflect_auto_register",
   "std",
@@ -29,10 +35,17 @@ bevy = { version = "0.19.1", default-features = false, features = [
 ] }
 clap = { version = "4.5", features = ["derive", "env"] }
 eq-client-assets = { path = "crates/eq-client-assets" }
+eq-client-axes = { path = "crates/eq-client-axes" }
 eq-client-core = { path = "crates/eq-client-core" }
 eq-client-render = { path = "crates/eq-client-render" }
+anyhow = "1"
+eq-network = { git = "https://github.com/eq-p99-tools/eq-network", branch = "codex/gameplay-client-state" }
+eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", branch = "codex/gameplay-client-state" }
+glam = "0.32.1"
+parry3d = "0.30.2"
 image = { version = "0.25", default-features = false, features = ["bmp", "dds", "tga"] }
 libeq = { git = "https://github.com/cjab/libeq", rev = "e06ae17dd38b624983663505e25b99a259ea0b15" }
+roxmltree = "0.21.1"
 thiserror = "2"
 
 [workspace.lints.rust]
