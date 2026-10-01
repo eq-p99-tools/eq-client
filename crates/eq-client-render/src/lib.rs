@@ -10,6 +10,7 @@ mod chat;
 mod combat;
 mod doors;
 mod entities;
+mod escape;
 mod frame_limit;
 mod ground;
 mod hud;
@@ -319,6 +320,15 @@ fn install_script(
 fn install_overlays(app: &mut App) {
     app.init_resource::<combat::CombatState>()
         .init_resource::<trade::TradeState>()
+        .init_resource::<escape::Escape>()
+        .add_systems(
+            Update,
+            escape::route
+                .after(chat::input)
+                .before(inventory::input)
+                .before(target::input)
+                .before(trade::input),
+        )
         .init_resource::<hud::action_bar::ActionRequests>()
         .add_systems(
             Update,

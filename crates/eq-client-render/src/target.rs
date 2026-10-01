@@ -127,7 +127,10 @@ pub(super) fn input(
     mut chat: ResMut<super::chat::ChatState>,
     commands: Res<CommandsToServer>,
     mut target: ResMut<TargetState>,
-    ui: super::windows::pointer::PointerUi,
+    (ui, escape): (
+        super::windows::pointer::PointerUi,
+        Res<super::escape::Escape>,
+    ),
 ) {
     if target.session != online.session_id {
         *target = TargetState {
@@ -184,7 +187,7 @@ pub(super) fn input(
             Some(id) => proposal = Some(Some(id)),
             None => target.status = format!("No nearby target named {name}"),
         }
-    } else if accepts_input && keys.just_pressed(KeyCode::Escape) {
+    } else if *escape == super::escape::Escape::Target {
         proposal = Some(None);
     } else if accepts_input && keys.just_pressed(KeyCode::F1) {
         proposal = own_id.map(Some);
@@ -520,8 +523,11 @@ mod tests {
             .insert_resource(OnlineState::new(false))
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<TargetState>()
+            .init_resource::<super::super::escape::Escape>()
+            .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::trade::TradeState>()
             .insert_resource(CommandsToServer(None))
-            .add_systems(Update, input);
+            .add_systems(Update, (super::super::escape::route, input).chain());
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -690,6 +696,7 @@ mod tests {
             .init_resource::<NearbyEntities>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<TargetState>()
+            .init_resource::<super::super::escape::Escape>()
             .insert_resource(CommandsToServer(Some(tx)))
             .add_systems(Update, (input, update).chain());
         app.world_mut().spawn((
