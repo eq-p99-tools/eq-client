@@ -97,14 +97,20 @@ pub(super) fn tick(
     state.world.tick(std::time::Instant::now(), spells);
 }
 
-/// The panels a reset reaches besides the world itself.
-struct Panels<'a> {
-    hud: &'a mut hud::HudState,
-    motion: &'a mut super::motion::Controls,
-    inventory: &'a mut super::inventory::InventoryState,
-    target: &'a mut super::target::TargetState,
-    combat: &'a mut super::combat::CombatState,
-    actions: Option<&'a mut hud::action_bar::ActionRequests>,
+/// The panels the session's news reaches besides the world, and the one
+/// place a reset of the world reaches them: no panel watches the admission
+/// to reset itself.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct Panels<'w> {
+    hud: ResMut<'w, hud::HudState>,
+    motion: ResMut<'w, super::motion::Controls>,
+    inventory: ResMut<'w, super::inventory::InventoryState>,
+    target: ResMut<'w, super::target::TargetState>,
+    combat: ResMut<'w, super::combat::CombatState>,
+    trade: ResMut<'w, super::trade::TradeState>,
+    items: ResMut<'w, super::items::ItemState>,
+    book: Option<ResMut<'w, super::spellbook::BookSelection>>,
+    book_view: Option<ResMut<'w, super::spellbook::BookView>>,
 }
 
 impl Panels<'_> {
@@ -114,10 +120,16 @@ impl Panels<'_> {
         // the target.
         self.hud.action_feedback = None;
         self.target.status.clear();
-        if !matches!(reason, Reset::Died)
-            && let Some(actions) = self.actions.as_mut()
-        {
-            actions.camp = None;
+        if matches!(reason, Reset::Entered | Reset::Camped) {
+            // Requests and choices made in the old admission are void.
+            *self.combat = super::combat::CombatState::default();
+            *self.items = super::items::ItemState::default();
+            if let Some(book) = self.book.as_mut() {
+                **book = super::spellbook::BookSelection::default();
+            }
+            if let Some(view) = self.book_view.as_mut() {
+                view.page = 0;
+            }
         }
         match reason {
             Reset::Lost { ended, .. } => {
@@ -130,8 +142,6 @@ impl Panels<'_> {
                 }
             }
             Reset::Entered => {
-                // Requests made in the old admission are void.
-                *self.combat = super::combat::CombatState::default();
                 self.motion.reset(None);
                 state.selection = None;
                 state.door_status.clear();
@@ -153,7 +163,6 @@ impl Panels<'_> {
             }
             Reset::Camped => {
                 // Leave the zone; the world server sends a fresh character list.
-                *self.combat = super::combat::CombatState::default();
                 state.door_status.clear();
                 self.inventory.forget();
                 self.motion.reset(None);
@@ -178,17 +187,8 @@ pub(super) fn receive(
         Option<Res<hud::messages::Messages>>,
     ),
     mut state: ResMut<OnlineState>,
-    mut hud: ResMut<hud::HudState>,
-    mut motion: ResMut<super::motion::Controls>,
+    mut panels: Panels,
     mut chat: ResMut<super::chat::ChatState>,
-    (mut target, mut combat, mut trade, mut actions): (
-        ResMut<super::target::TargetState>,
-        ResMut<super::combat::CombatState>,
-        ResMut<super::trade::TradeState>,
-        Option<ResMut<hud::action_bar::ActionRequests>>,
-    ),
-    mut items: ResMut<super::items::ItemState>,
-    mut inventory: ResMut<super::inventory::InventoryState>,
     entities: Query<Entity, SceneRoots>,
     mut players: Query<&mut Transform, With<Player>>,
     mut cameras: Query<&mut OrbitCamera>,
@@ -235,21 +235,13 @@ pub(super) fn receive(
             changes.cast,
             Some(CastNews::Began | CastNews::Refreshed | CastNews::Interrupted)
         ) {
-            hud.action_feedback = None;
+            panels.hud.action_feedback = None;
         }
         if let Some(reason) = changes.reset {
-            Panels {
-                hud: &mut hud,
-                motion: &mut motion,
-                inventory: &mut inventory,
-                target: &mut target,
-                combat: &mut combat,
-                actions: actions.as_deref_mut(),
-            }
-            .forget(reason, &mut state);
+            panels.forget(reason, &mut state);
         }
         if changes.inventory {
-            inventory.refresh(state.world.inventory().stale());
+            panels.inventory.refresh(state.world.inventory().stale());
         }
         if changes.characters {
             state.selection = state.world.characters().map(|list| {
@@ -257,7 +249,7 @@ pub(super) fn receive(
             });
         }
         if let Some(position) = changes.placed {
-            motion.reset(None);
+            panels.motion.reset(None);
             let placed = Transform::from_translation(Vec3::from_array(render_position(position)))
                 .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
                     position.heading,
@@ -275,7 +267,7 @@ pub(super) fn receive(
         }
         match update {
             WorldUpdate::Connection { label, .. } => {
-                hud.status = if state.world.death().is_some() {
+                panels.hud.status = if state.world.death().is_some() {
                     "Dead - awaiting respawn".into()
                 } else {
                     label
@@ -399,11 +391,11 @@ pub(super) fn receive(
                 falls,
             }) => {
                 if state.world.session_id() == Some(session_id) {
-                    motion.reset(units_per_second);
-                    motion.backward_speed = backward_units_per_second;
-                    motion.walk_speed = walk_units_per_second;
-                    motion.strafe_speed = strafe_units_per_second;
-                    motion.airborne =
+                    panels.motion.reset(units_per_second);
+                    panels.motion.backward_speed = backward_units_per_second;
+                    panels.motion.walk_speed = walk_units_per_second;
+                    panels.motion.strafe_speed = strafe_units_per_second;
+                    panels.motion.airborne =
                         falls.then(eq_client_core::movement::AirborneController::default);
                 }
             }
@@ -411,10 +403,10 @@ pub(super) fn receive(
                 position, refused, ..
             }) => {
                 if !changes.ignored {
-                    motion.accepted();
-                    motion.refused = refused;
+                    panels.motion.accepted();
+                    panels.motion.refused = refused;
                     if let Ok(transform) = players.single_mut() {
-                        motion.display_sample(*transform, position);
+                        panels.motion.display_sample(*transform, position);
                     }
                 }
             }
@@ -424,9 +416,12 @@ pub(super) fn receive(
                 error,
             }) => {
                 if state.world.accepts_reply(session_id)
-                    && inventory.item_use_result(session_id, request_id, error)
+                    && panels
+                        .inventory
+                        .item_use_result(session_id, request_id, error)
                 {
-                    hud.action_feedback = Some((now, inventory.action_message().to_owned()));
+                    panels.hud.action_feedback =
+                        Some((now, panels.inventory.action_message().to_owned()));
                 }
             }
             WorldUpdate::Game(WorldEvent::InventoryAction {
@@ -434,23 +429,27 @@ pub(super) fn receive(
                 revision,
                 error,
             }) => {
-                inventory.action_result(session_id, revision, error, state.world.inventory());
+                panels.inventory.action_result(
+                    session_id,
+                    revision,
+                    error,
+                    state.world.inventory(),
+                );
             }
             WorldUpdate::Game(WorldEvent::ItemDetails(item)) => {
                 debug!("Item definition received: ID {}", item.id);
-                items.received(item);
             }
             WorldUpdate::Game(WorldEvent::ZoneTransferRejected { reason, .. }) => {
                 if !changes.ignored {
-                    hud.status = reason.to_string();
+                    panels.hud.status = reason.to_string();
                     chat.history
                         .push(super::chat::system_line(reason.to_string()));
                 }
             }
             WorldUpdate::Game(WorldEvent::ZoneLineRejected { session_id, reason }) => {
                 if state.world.session_id() == Some(session_id) {
-                    motion.accepted();
-                    hud.status = format!("Cannot cross zone line: {reason}");
+                    panels.motion.accepted();
+                    panels.hud.status = format!("Cannot cross zone line: {reason}");
                 }
             }
             WorldUpdate::Game(WorldEvent::TargetSent(id)) => {
@@ -460,7 +459,7 @@ pub(super) fn receive(
             }
             WorldUpdate::Game(WorldEvent::TargetRejected { reason, .. }) => {
                 if !changes.ignored {
-                    target.status = format!("Target rejected: {reason}");
+                    panels.target.status = format!("Target rejected: {reason}");
                 }
             }
             WorldUpdate::Game(WorldEvent::HealthPercent { spawn_id, percent }) => {
@@ -477,7 +476,7 @@ pub(super) fn receive(
                 spell_id, reason, ..
             }) => {
                 if !changes.ignored {
-                    hud.action_feedback =
+                    panels.hud.action_feedback =
                         Some((now, format!("Cast rejected (spell {spell_id}): {reason}")));
                 }
             }
@@ -541,15 +540,6 @@ pub(super) fn receive(
                 }
             }
             WorldUpdate::Game(WorldEvent::Camp(status)) => {
-                if let Some(actions) = actions.as_mut() {
-                    actions.camp = match &status {
-                        eq_client_core::CampStatus::Preparing => Some((now, false)),
-                        eq_client_core::CampStatus::LoggingOut => {
-                            Some(actions.camp.map_or((now, true), |(since, _)| (since, true)))
-                        }
-                        _ => None,
-                    };
-                }
                 let text = match &status {
                     eq_client_core::CampStatus::Preparing => messages
                         .as_deref()
@@ -566,17 +556,17 @@ pub(super) fn receive(
                 }
             }
             // The merchant window shows the coins.
-            WorldUpdate::Game(WorldEvent::Coins(_)) => trade.changed(),
+            WorldUpdate::Game(WorldEvent::Coins(_)) => panels.trade.changed(),
             WorldUpdate::Game(WorldEvent::Loot(update)) => {
                 if !changes.ignored {
                     if let eq_client_core::loot::LootUpdate::Taken { slot, accepted } = update {
-                        trade.taken(slot, accepted);
+                        panels.trade.taken(slot, accepted);
                     }
                     if let Some(text) = super::trade::loot_text(&update) {
                         chat.history.push(super::chat::system_line(text));
                     }
                 }
-                trade.changed();
+                panels.trade.changed();
             }
             WorldUpdate::Game(WorldEvent::Merchant(update)) => {
                 if !changes.ignored
@@ -584,7 +574,7 @@ pub(super) fn receive(
                 {
                     chat.history.push(super::chat::system_line(text));
                 }
-                trade.changed();
+                panels.trade.changed();
             }
             WorldUpdate::Game(WorldEvent::MerchantRefused { session_id, reason }) => {
                 if state.world.session_id() == Some(session_id) {
@@ -914,6 +904,88 @@ mod tests {
             Some(eq_client_core::PostureState::Sitting)
         );
         assert!(world.doors().entries().contains_key(&3));
+    }
+
+    #[test]
+    fn a_new_admission_starts_the_windows_over() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig::default()))
+            .init_resource::<hud::HudState>()
+            .init_resource::<super::super::motion::Controls>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::target::TargetState>()
+            .init_resource::<super::super::combat::CombatState>()
+            .init_resource::<super::super::trade::TradeState>()
+            .init_resource::<super::super::items::ItemState>()
+            .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::spellbook::BookSelection>()
+            .init_resource::<super::super::spellbook::BookView>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        let item = super::super::inventory::demo_items().remove(0).details;
+        app.world_mut()
+            .resource_mut::<super::super::items::ItemState>()
+            .open_received(item);
+        app.world_mut()
+            .resource_mut::<super::super::spellbook::BookView>()
+            .page = 2;
+        app.world_mut()
+            .resource_mut::<super::super::target::TargetState>()
+            .status = "Sending selection".into();
+        // Zoning keeps the item panel and the book's page.
+        sender
+            .send(WorldUpdate::Game(WorldEvent::ZoneTransfer(
+                eq_client_core::ZoneOffer {
+                    zone_id: 2,
+                    instance_id: 0,
+                    position: eq_client_core::WorldPosition::default(),
+                    reason: 0,
+                    to_bind: false,
+                    solicited: true,
+                },
+            )))
+            .unwrap();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<super::super::items::ItemState>()
+                .selected()
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .resource::<super::super::target::TargetState>()
+                .status
+                .is_empty()
+        );
+        sender
+            .send(WorldUpdate::Game(WorldEvent::Entered {
+                session_id: 2,
+                zone: "qeynos2".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+            }))
+            .unwrap();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<super::super::items::ItemState>()
+                .selected()
+                .is_none()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<super::super::spellbook::BookView>()
+                .page,
+            0
+        );
     }
 
     fn world(app: &App) -> &ClientWorld {

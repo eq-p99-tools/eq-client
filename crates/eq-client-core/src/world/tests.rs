@@ -164,6 +164,7 @@ fn a_new_zone_entry_forgets_the_old_zone_and_death() {
 fn camping_forgets_the_admission_and_its_zone() {
     let mut world = admitted();
     game(&mut world, WorldEvent::Mana(25));
+    game(&mut world, WorldEvent::Coins(Coins::default()));
     game(
         &mut world,
         WorldEvent::Spell(SpellUpdate::Began {
@@ -182,6 +183,7 @@ fn camping_forgets_the_admission_and_its_zone() {
     // Nothing about the departed character lingers.
     assert_eq!(world.vitals().mana, None);
     assert!(world.casting().cast.is_none());
+    assert!(world.coins().is_none());
 }
 
 #[test]
@@ -873,4 +875,58 @@ fn a_merchant_lists_stock_until_closed_or_refusing() {
     world.open_shop(8);
     world.close_shop();
     assert!(world.merchant().is_none());
+}
+
+#[test]
+fn camping_progress_follows_the_session_and_only_death_leaves_it() {
+    let mut world = admitted();
+    let start = Instant::now();
+    let camp = |world: &mut ClientWorld, status, at| {
+        world.apply(&WorldUpdate::Game(WorldEvent::Camp(status)), at, &NoSpells)
+    };
+    camp(&mut world, CampStatus::Preparing, start);
+    assert_eq!(
+        world.camp(),
+        Some(Camp {
+            since: start,
+            logging_out: false
+        })
+    );
+    // The logout keeps the time camping began.
+    camp(
+        &mut world,
+        CampStatus::LoggingOut,
+        start + std::time::Duration::from_secs(30),
+    );
+    assert_eq!(
+        world.camp(),
+        Some(Camp {
+            since: start,
+            logging_out: true
+        })
+    );
+    camp(&mut world, CampStatus::Abandoned, start);
+    assert_eq!(world.camp(), None);
+    camp(&mut world, CampStatus::Preparing, start);
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 9,
+            killer_id: 0,
+            corpse_id: 10,
+            bind_zone_id: 2,
+        }),
+    );
+    assert!(world.camp().is_some());
+    connection(&mut world, false, false);
+    assert_eq!(world.camp(), None);
+}
+
+#[test]
+fn item_definitions_last_for_the_admission() {
+    let mut world = admitted();
+    game(&mut world, WorldEvent::ItemDetails(chest().details));
+    assert_eq!(world.item(1).map(|item| item.name.as_str()), Some("Chest"));
+    game(&mut world, entered(2));
+    assert!(world.item(1).is_none());
 }
