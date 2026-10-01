@@ -24,6 +24,7 @@ pub(super) fn register_layout(app: &mut App) {
         (
             stack::raise,
             stack::toggle,
+            stack::raise_opened,
             stack::light_selector,
             stack::restack,
         )

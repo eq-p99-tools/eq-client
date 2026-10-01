@@ -1,7 +1,7 @@
 //! Which windows are open and which is in front: the floating windows stack
-//! in the order the player last clicked them, Escape closes the top one, and
-//! the windows the player opens and closes do so from the selector or their
-//! key, the same way for each.
+//! in the order the player last clicked or opened them, Escape closes the top
+//! one, and the windows the player opens and closes do so from the selector
+//! or their key, the same way for each.
 use super::registry::{Layer, WindowId};
 use crate::theme::{self, Size};
 use bevy::{prelude::*, window::PrimaryWindow};
@@ -121,6 +121,31 @@ pub(crate) fn raise(
     let front = stack.front_to_back().find(|id| under.contains(id));
     if let Some(front) = front {
         stack.raise(front);
+    }
+}
+
+/// The window frames whose layout changed this frame.
+type ChangedFrames<'w, 's> =
+    Query<'w, 's, (&'static WindowId, &'static Node), (With<super::Frame>, Changed<Node>)>;
+
+/// Brings a floating window to the front when it opens, whoever opened it:
+/// the player, or the server with a merchant, a corpse or a give window. The
+/// newest window is the one Escape closes first.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn raise_opened(
+    frames: ChangedFrames,
+    mut open: Local<BTreeSet<WindowId>>,
+    mut stack: ResMut<Stack>,
+) {
+    for (id, node) in &frames {
+        if id.describe().layer != Layer::Floating {
+            continue;
+        }
+        if node.display == Display::None {
+            open.remove(id);
+        } else if open.insert(*id) {
+            stack.raise(*id);
+        }
     }
 }
 
@@ -258,6 +283,53 @@ mod tests {
             stack.front_to_back().take(2).collect::<Vec<_>>(),
             [WindowId::Loot, WindowId::Inventory]
         );
+    }
+
+    #[test]
+    fn a_window_comes_to_the_front_when_it_opens() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, raise_opened);
+        let frame = |app: &mut App, id: WindowId| {
+            app.world_mut()
+                .spawn((
+                    super::super::Frame::default(),
+                    id,
+                    Node {
+                        display: Display::None,
+                        ..default()
+                    },
+                ))
+                .id()
+        };
+        let inventory = frame(&mut app, WindowId::Inventory);
+        let merchant = frame(&mut app, WindowId::Merchant);
+        app.update();
+        let set = |app: &mut App, entity, node: Node| {
+            *app.world_mut().get_mut::<Node>(entity).unwrap() = node;
+        };
+        let front = |app: &App| app.world().resource::<Stack>().front_to_back().next();
+        let shown = Node {
+            display: Display::Flex,
+            ..default()
+        };
+        set(&mut app, inventory, shown.clone());
+        app.update();
+        assert_eq!(front(&app), Some(WindowId::Inventory));
+        // The server opens a shop over the inventory.
+        set(&mut app, merchant, shown.clone());
+        app.update();
+        assert_eq!(front(&app), Some(WindowId::Merchant));
+        // Moving an open window leaves it where it is in the stack.
+        set(
+            &mut app,
+            inventory,
+            Node {
+                left: px(5),
+                ..shown
+            },
+        );
+        app.update();
+        assert_eq!(front(&app), Some(WindowId::Merchant));
     }
 
     #[test]
