@@ -71,6 +71,15 @@ pub enum Notice {
     ZoneLineRefused(String),
     /// A target request was refused, and why.
     TargetRefused(String),
+    /// The player turned hungry or thirsty with nothing to eat or drink.
+    NothingToEat {
+        /// No food.
+        food: bool,
+        /// No drink.
+        water: bool,
+    },
+    /// An item was not eaten or drunk, and why.
+    ConsumeRefused(String),
     /// A cast request was refused, and why.
     CastRefused {
         /// The spell asked for.

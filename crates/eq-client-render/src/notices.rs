@@ -158,7 +158,20 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         ),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
-        Notice::TradeRefused(reason) => chat(reason.clone()),
+        Notice::TradeRefused(reason) | Notice::ConsumeRefused(reason) => chat(reason.clone()),
+        // The official client's words for what it could not find.
+        Notice::NothingToEat { food, water } => messages
+            .map(|messages| {
+                messages.format(
+                    match (food, water) {
+                        (true, true) => 12491,
+                        (true, false) => 12488,
+                        _ => 12490,
+                    },
+                    &[],
+                )
+            })
+            .map_or_else(Vec::new, chat),
         // "You are too far away to trade."
         Notice::GiveRefused(reason) | Notice::GroundRefused(reason) => {
             chat(super::ground::refusal(reason))

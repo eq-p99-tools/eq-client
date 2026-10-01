@@ -882,6 +882,43 @@ fn a_merchant_lists_stock_until_closed_or_refusing() {
 }
 
 #[test]
+fn the_player_hears_what_they_could_not_eat_or_drink() {
+    use crate::food::Nourishment;
+    let mut world = admitted();
+    let fed = Nourishment {
+        food: 2500,
+        water: 6000,
+    };
+    game(&mut world, WorldEvent::Nourishment(fed));
+    assert_eq!(world.nourishment(), Some(fed));
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::NothingToEat {
+                food: true,
+                water: false
+            }
+        )
+        .notices,
+        [Notice::NothingToEat {
+            food: true,
+            water: false
+        }]
+    );
+    let refused = |session_id| WorldEvent::ConsumeRefused {
+        session_id,
+        reason: "You cannot eat or drink that".into(),
+    };
+    assert!(game(&mut world, refused(2)).ignored, "another admission's");
+    assert_eq!(
+        game(&mut world, refused(1)).notices,
+        [Notice::ConsumeRefused(
+            "You cannot eat or drink that".into()
+        )]
+    );
+}
+
+#[test]
 fn the_give_window_opens_on_the_npcs_answer_and_closes_on_the_servers_word() {
     use crate::exchange::ExchangeUpdate;
     let mut world = admitted();

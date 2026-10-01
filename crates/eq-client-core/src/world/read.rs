@@ -221,6 +221,12 @@ impl ClientWorld {
         self.zone.trade.exchange.as_ref()
     }
 
+    /// How fed and watered the player is, as the server last said.
+    #[must_use]
+    pub const fn nourishment(&self) -> Option<crate::food::Nourishment> {
+        self.nourishment
+    }
+
     /// The merchant the player is trading with.
     #[must_use]
     pub const fn merchant(&self) -> Option<&Merchant> {

@@ -392,9 +392,18 @@ pub(super) fn input(
                 }
             } else if let Some(item) = online.world().inventory().items().get(&slot.0) {
                 // With the skin's bag windows, a bag opens as in the official
-                // client; anything else shows what it is.
+                // client; food and drink are eaten or drunk, and anything else
+                // shows what it is.
                 if item.bag_slots > 0 && skinned.has(super::windows::WindowId::Inventory) {
                     crate::skinned::toggle_bag(&mut shown, slot.0);
+                } else if eq_client_core::food::Meal::of_item_type(item.rules.item_type).is_some() {
+                    let _ = sender.post(online.world(), |stamp| {
+                        eq_client_core::ClientCommand::Consume {
+                            session_id: stamp.session_id,
+                            slot: slot.0,
+                            created: stamp.created,
+                        }
+                    });
                 } else {
                     items.open_received(item.details.clone());
                 }

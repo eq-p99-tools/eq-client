@@ -19,6 +19,7 @@ pub use eq_network_game::command::GameCommand as ClientCommand;
 pub use eq_network_game::command::Posture;
 pub use eq_network_game::creation;
 pub use eq_network_game::exchange;
+pub use eq_network_game::food;
 pub use eq_network_game::inventory;
 pub use eq_network_game::loot;
 pub use eq_network_game::merchant;
