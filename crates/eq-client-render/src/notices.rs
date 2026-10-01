@@ -159,7 +159,10 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
         Notice::TradeRefused(reason) => chat(reason.clone()),
-        Notice::GroundRefused(reason) => chat(super::ground::refusal(reason)),
+        // "You are too far away to trade."
+        Notice::GiveRefused(reason) | Notice::GroundRefused(reason) => {
+            chat(super::ground::refusal(reason))
+        }
         // A click sent says nothing, as in the official client; a refused
         // one says why, and a later click clears it.
         Notice::Door { error, .. } => vec![(Place::Door, error.clone().unwrap_or_default())],

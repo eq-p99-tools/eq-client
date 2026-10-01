@@ -28,7 +28,7 @@ pub use items::ItemCache;
 pub use link::Link;
 pub use notice::Notice;
 pub use target::Target;
-pub use trade::{Loot, Merchant};
+pub use trade::{Exchange, Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
 
 use crate::{
@@ -211,6 +211,29 @@ impl ClientWorld {
         self.zone.trade.merchant = None;
     }
 
+    /// The player asked a character to trade, holding something to hand
+    /// over; their answer opens a window with this many trade slots.
+    pub fn offer_trade(&mut self, with: u16, slots: u8) {
+        self.zone.trade.exchange = Some(Exchange {
+            with,
+            slots,
+            open: false,
+            given: false,
+        });
+    }
+
+    /// The player clicked Give; the server's word ends the window.
+    pub fn give(&mut self) {
+        if let Some(exchange) = self.zone.trade.exchange.as_mut() {
+            exchange.given = true;
+        }
+    }
+
+    /// The player closed the give window; what it held comes back as news.
+    pub fn close_trade(&mut self) {
+        self.zone.trade.exchange = None;
+    }
+
     fn connection(&mut self, connected: bool, ended: bool) -> Changes {
         let transferring = self.pending_transfer.is_some();
         self.connected = connected;
@@ -380,6 +403,10 @@ impl ClientWorld {
             WorldEvent::MerchantRefused { session_id, reason } => {
                 self.merchant_refused(*session_id, reason, news);
             }
+            WorldEvent::Exchange(update) => self.exchange_news(*update, news),
+            WorldEvent::ExchangeRefused { session_id, reason } => {
+                self.exchange_refused(*session_id, reason, news);
+            }
 
             // The player's spells.
             WorldEvent::Spell(update) => news.cast = self.spell(update, now),
@@ -416,6 +443,8 @@ impl ClientWorld {
         }
         self.own_health(0);
         self.death = Some(death.clone());
+        // The server closes a window the player dies with.
+        self.zone.trade.exchange = None;
         self.reset(Reset::Died)
     }
 

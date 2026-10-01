@@ -27,6 +27,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Inventory => "EQUI_Inventory.xml",
         WindowId::Bank => "EQUI_BankWnd.xml",
         WindowId::Bag(_) => "EQUI_Container.xml",
+        WindowId::Give => "EQUI_GiveWnd.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -51,6 +52,8 @@ pub(crate) enum Shows {
     Coins(u8),
     /// The banker the bank is open at.
     Banker,
+    /// The character the give window hands items to.
+    Partner,
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -379,6 +382,8 @@ enum Does {
     Toggles(WindowId),
     /// Closes its own window.
     Closes,
+    /// Hands what the give window holds over.
+    Gives,
     /// Shows the purse's coins of one kind.
     Coins(u8),
     /// Shows a bag's picture.
@@ -404,6 +409,8 @@ fn button(
             Ok(kind @ 0..=3) => Does::Coins(kind),
             _ => return,
         },
+        Some("GVW_Give_Button") => Does::Gives,
+        Some("GVW_Cancel_Button") => Does::Closes,
         Some("Container_Icon") if matches!(owner, WindowId::Bag(_)) => Does::BagIcon,
         // The official client shows Combine only on a tradeskill container,
         // and this client combines nothing.
@@ -439,6 +446,9 @@ fn button(
         }
         Does::Closes => {
             drawn.insert((Button, items::Closes(owner)));
+        }
+        Does::Gives => {
+            drawn.insert((Button, super::give::GiveButton));
         }
         Does::Coins(_) | Does::BagIcon | Does::Nothing => (),
     }
@@ -480,7 +490,7 @@ fn button(
             // the skin's text there is only a sample, so it stays blank
             // until the client has the value.
             Does::Nothing if button.decal.is_some() => (),
-            Does::Toggles(_) | Does::Closes | Does::Nothing => {
+            Does::Toggles(_) | Does::Closes | Does::Gives | Does::Nothing => {
                 if let Some(text) = &button.text {
                     aligned(
                         inner,
@@ -699,7 +709,8 @@ fn label(
         _ => None,
     };
     let banker = owner == WindowId::Bank && name == "BW_BankerName";
-    let words = if label.eq_type.is_some() || bag.is_some() || banker {
+    let partner = owner == WindowId::Give && name == "GVW_NPCName";
+    let words = if label.eq_type.is_some() || bag.is_some() || banker || partner {
         ""
     } else {
         label.text.as_str()
@@ -719,6 +730,7 @@ fn label(
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
         (None, Some(bag)) => aligned(window, node, label.align, (text, items::BagPart::Name(bag))),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
+        (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
         (None, None) => aligned(window, node, label.align, text),
     }
 }
@@ -825,6 +837,7 @@ pub(crate) fn show(
             ),
             Shows::Coins(kind) => (coins(world, kind), None),
             Shows::Banker => (inventory.banker().to_owned(), None),
+            Shows::Partner => (super::give::partner(world), None),
             Shows::Fill(_) | Shows::Attacking => continue,
         };
         if text.0 != wanted {

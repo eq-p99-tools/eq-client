@@ -1,7 +1,8 @@
 //! What the world knows, for any front end to read; only the session's news
 //! and the player's own choices change it.
 use super::{
-    Camp, Casting, CharacterList, ClientWorld, Loot, Merchant, MotionGrant, Spawn, Target, Vitals,
+    Camp, Casting, CharacterList, ClientWorld, Exchange, Loot, Merchant, MotionGrant, Spawn,
+    Target, Vitals,
 };
 use crate::{
     BookActionStatus, Coins, Death, PlayerState, PostureState, SpellBook, ZoneOffer,
@@ -196,6 +197,12 @@ impl ClientWorld {
     #[must_use]
     pub const fn loot(&self) -> Option<&Loot> {
         self.zone.trade.loot.as_ref()
+    }
+
+    /// The give window the player asked for or has open.
+    #[must_use]
+    pub const fn exchange(&self) -> Option<&Exchange> {
+        self.zone.trade.exchange.as_ref()
     }
 
     /// The merchant the player is trading with.

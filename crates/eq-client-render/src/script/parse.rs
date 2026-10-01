@@ -73,6 +73,9 @@ pub enum Step {
     /// Walks a searched path around walls to within a distance of the current
     /// target, for a bounded duration.
     Walk(f32, Duration),
+    /// Asks the current target to take the item on the cursor, as clicking
+    /// it with the item does.
+    Give,
     /// Left-clicks one UI control through Bevy's ordinary interaction state.
     Click(ClickTarget),
     /// Right-clicks one UI control the same way, as a bag is opened or an
@@ -103,6 +106,8 @@ pub enum ClickTarget {
     Trade(TradeClick),
     /// A bag's tint swatch by storage slot, or one of its palette colors.
     Tint(i32, Option<usize>),
+    /// The give window's Give button.
+    Give,
 }
 
 /// Loot and merchant window buttons.
@@ -200,6 +205,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("walk", [range, duration]) => {
             Step::Walk(number(range, 1.0, 200.0)?, millis(duration, MAX_WALK)?)
         }
+        ("give", []) => Step::Give,
         ("click", target) => Step::Click(parse_click(target)?),
         ("right_click", target) => Step::RightClick(parse_click(target)?),
         ("report", label) => Step::Report(label.join(" ")),
@@ -235,6 +241,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["buy", slot] => ClickTarget::Trade(TradeClick::Buy(value(slot, "a merchant slot")?)),
         ["sell", slot] => ClickTarget::Trade(TradeClick::Sell(value(slot, "an inventory slot")?)),
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
+        ["give"] => ClickTarget::Give,
         ["tint", slot] => ClickTarget::Tint(value(slot, "a bag slot")?, None),
         ["tint", slot, color] => ClickTarget::Tint(
             value(slot, "a bag slot")?,
@@ -388,7 +395,7 @@ mod tests {
             "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
              gm summon\ngm damage 10000\ngm givemoney 0 0 5 0\npress F1 # self\n\
              press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\n\
-             click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\nreport after cast\nscreenshot a.png\nquit\n",
+             click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\ngive\nclick give\nreport after cast\nscreenshot a.png\nquit\n",
             base,
         )
         .unwrap();
@@ -442,6 +449,8 @@ mod tests {
                 Step::Click(ClickTarget::Trade(TradeClick::Buy(3))),
                 Step::Click(ClickTarget::Trade(TradeClick::Sell(23))),
                 Step::Click(ClickTarget::Trade(TradeClick::EndShop)),
+                Step::Give,
+                Step::Click(ClickTarget::Give),
                 Step::Report("after cast".into()),
                 Step::Screenshot(base.join("a.png")),
                 Step::Quit,

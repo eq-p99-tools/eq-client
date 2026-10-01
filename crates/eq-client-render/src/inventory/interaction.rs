@@ -272,8 +272,31 @@ impl InventoryState {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Hands the item on the cursor to the open give window: into its first
+    /// empty slot, as the official client does when the window opens.
+    pub(crate) fn hand_over_cursor(&mut self, online: &OnlineState, sender: &Outbox) {
+        let world = online.world();
+        let slots = world
+            .exchange()
+            .map_or(0, eq_client_core::world::Exchange::trade_slots);
+        let items = world.inventory().items();
+        if !items.contains_key(&InventorySlot::CURSOR) {
+            return;
+        }
+        let empty = (0..i32::from(slots))
+            .map(|index| InventorySlot(3000 + index))
+            .find(|slot| !items.contains_key(slot));
+        if let Some(slot) = empty {
+            self.click_slot(slot, false, online, sender);
+        }
+    }
+
     fn actor(&self, online: &OnlineState) -> anyhow::Result<InventoryActor> {
         use anyhow::Context;
+        let trade_slots = online
+            .world()
+            .exchange()
+            .map_or(0, eq_client_core::world::Exchange::trade_slots);
         if self.demo {
             return Ok(InventoryActor {
                 bank_access: self.bank_open,
@@ -282,6 +305,7 @@ impl InventoryState {
                 class: Some(1),
                 race: 1,
                 level: 60,
+                trade_slots,
             });
         }
         let player = online
@@ -299,6 +323,7 @@ impl InventoryState {
             class: player.class,
             race: player.race,
             level: player.level,
+            trade_slots,
         })
     }
 
@@ -330,11 +355,16 @@ impl InventoryState {
             inventory.received() && !inventory.stale(),
             "Wait for a current inventory snapshot"
         );
+        let trade_slots = online
+            .world()
+            .exchange()
+            .map_or(0, eq_client_core::world::Exchange::trade_slots);
         ensure!(
             slot.is_equipment()
                 || slot.is_carried()
                 || slot == InventorySlot::CURSOR
-                || (self.bank_open && slot.is_personal_bank()),
+                || (self.bank_open && slot.is_personal_bank())
+                || (slot.is_trade() && slot.0 - 3000 < i32::from(trade_slots)),
             "This slot is view only"
         );
         let cursor_item = inventory.items().get(&InventorySlot::CURSOR);

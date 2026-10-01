@@ -13,6 +13,7 @@ mod doors;
 mod entities;
 mod escape;
 mod frame_limit;
+mod give;
 mod ground;
 mod hud;
 mod interact;
@@ -382,6 +383,7 @@ fn schedule(app: &mut App) {
             target::input,
             combat::input,
             trade::input,
+            give::buttons,
             hud::actions,
             hud::hotbar::update,
             hud::hotbar::item_actions,
@@ -412,6 +414,8 @@ fn schedule(app: &mut App) {
                 motion::interpolate,
                 orbit_camera,
                 update_hud,
+                // Opens the give window before its frame is drawn.
+                give::window,
             )
                 .chain(),
             (
