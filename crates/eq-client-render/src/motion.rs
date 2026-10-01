@@ -151,6 +151,17 @@ impl Controls {
             .as_secs_f32()
             .min(if self.moving { MAX_CYCLE } else { 0.1 })
     }
+    /// Takes the session's word on how the player may move.
+    pub fn grant(&mut self, grant: eq_client_core::world::MotionGrant) {
+        self.reset(grant.units_per_second);
+        self.backward_speed = grant.backward_units_per_second;
+        self.walk_speed = grant.walk_units_per_second;
+        self.strafe_speed = grant.strafe_units_per_second;
+        self.airborne = grant
+            .falls
+            .then(eq_client_core::movement::AirborneController::default);
+    }
+
     pub fn accepted(&mut self) {
         let now = Instant::now();
         // Spread each sample over the whole proposal cycle so continuous motion

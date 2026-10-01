@@ -10,11 +10,22 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Resource, Default)]
 pub(super) struct NearbyEntities {
-    session: Option<u64>,
     pub(super) rendered: BTreeMap<u16, Entity>,
     revisions: BTreeMap<u16, u64>,
     models: BTreeMap<&'static str, Option<character::PreparedCharacter>>,
     elapsed: f32,
+}
+
+impl NearbyEntities {
+    /// Forgets the spawns drawn for an admission the world forgot, and the
+    /// models loaded for its zone.
+    pub(super) fn forget(&mut self, commands: &mut Commands) {
+        for (_, entity) in std::mem::take(&mut self.rendered) {
+            commands.entity(entity).despawn();
+        }
+        self.models.clear();
+        self.revisions.clear();
+    }
 }
 
 #[derive(Component)]
@@ -40,14 +51,6 @@ pub(super) fn reconcile(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if nearby_state.session != state.world.session_id() || state.world.ended() {
-        for (_, entity) in std::mem::take(&mut nearby_state.rendered) {
-            commands.entity(entity).despawn();
-        }
-        nearby_state.models.clear();
-        nearby_state.revisions.clear();
-        nearby_state.session = state.world.session_id();
-    }
     if !state.world.connected() {
         return;
     }
@@ -248,7 +251,7 @@ pub(super) fn demo(
         );
     };
     if state.world.session_id().is_none() {
-        admit_preview(&mut state, origin, &scene.zone_name, now);
+        super::online::admit_preview(&mut state, origin, &scene.zone_name);
     }
     hud.status = "Offline entity demo".into();
     if chat.history.revision() == 0 {
@@ -313,33 +316,6 @@ pub(super) fn demo(
                 },
             );
         }
-    }
-}
-
-/// Admits the demo's preview player in the zone on screen, as a session would.
-fn admit_preview(
-    state: &mut OnlineState,
-    origin: eq_client_core::WorldPosition,
-    zone: &str,
-    now: std::time::Instant,
-) {
-    let player = super::online::preview_player(origin, [None; 8]);
-    for update in [
-        WorldUpdate::Game(WorldEvent::Entered {
-            session_id: 1,
-            zone: zone.into(),
-            player: Box::new(player),
-            far_clip: None,
-        }),
-        WorldUpdate::Connection {
-            connected: true,
-            terminal: false,
-            label: String::new(),
-        },
-    ] {
-        state
-            .world
-            .apply(&update, now, &eq_client_core::world::NoSpells);
     }
 }
 

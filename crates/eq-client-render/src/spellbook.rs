@@ -50,7 +50,7 @@ pub(super) fn demo(
             mode: 0,
         });
     }
-    let gems = std::array::from_fn(|index| u32::try_from(index + 1).ok());
+    let gems: [Option<u32>; 8] = std::array::from_fn(|index| u32::try_from(index + 1).ok());
     let buff = |spell_id| eq_client_core::Buff {
         spell_id,
         caster_level: 1,
@@ -64,20 +64,16 @@ pub(super) fn demo(
         eq_client_core::WorldEvent::SpellBook(book),
         eq_client_core::WorldEvent::BuffSnapshot(vec![Some(buff(202)), None, Some(buff(200))]),
     ];
-    if online.world.session_id().is_none() {
-        news.insert(
-            0,
-            eq_client_core::WorldEvent::Entered {
-                session_id: 1,
-                zone: String::new(),
-                player: Box::new(super::online::preview_player(
-                    eq_client_core::WorldPosition::default(),
-                    gems,
-                )),
-                far_clip: None,
-            },
-        );
-    }
+    // The preview player, admitted at startup, memorizes the first spells.
+    news.extend(gems.iter().zip(0..).filter_map(|(spell, slot)| {
+        spell.map(|spell_id| {
+            eq_client_core::WorldEvent::Spell(eq_client_core::SpellUpdate::Slot {
+                slot,
+                spell_id,
+                mode: 1,
+            })
+        })
+    }));
     let now = std::time::Instant::now();
     for event in news {
         online.world.apply(

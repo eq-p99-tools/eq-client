@@ -26,6 +26,14 @@ pub(super) enum Place {
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
     let chat = |text: String| vec![(Place::Chat, text)];
     match notice {
+        Notice::Connection { label, dead } => vec![(
+            Place::Status,
+            if *dead {
+                "Dead - awaiting respawn".into()
+            } else {
+                label.clone()
+            },
+        )],
         Notice::ServerString { id, arguments } => chat(messages.map_or_else(
             || format!("Server message {id}"),
             |messages| messages.format(*id, arguments),

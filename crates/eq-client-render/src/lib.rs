@@ -34,6 +34,7 @@ mod spellbook;
 mod target;
 mod trade;
 mod windows;
+mod zone;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
@@ -206,7 +207,13 @@ pub fn run(
         primary_window: Some(window),
         ..default()
     }))
-    .add_systems(Startup, (setup_scene, inventory::demo, spellbook::demo))
+    .add_systems(
+        Startup,
+        (
+            setup_scene,
+            (inventory::demo, spellbook::demo).after(setup_scene),
+        ),
+    )
     .add_systems(
         Update,
         (
@@ -341,7 +348,7 @@ fn install_overlays(app: &mut App) {
                 .after(online::receive)
                 .after(hud::update),
         )
-        .add_systems(Startup, trade::demo)
+        .add_systems(Startup, trade::demo.after(setup_scene))
         .add_systems(
             Update,
             (
@@ -393,9 +400,8 @@ fn setup_scene(
     mut ambient_light: ResMut<GlobalAmbientLight>,
     mut pending: ResMut<PendingZone>,
     settings: Res<ViewerSettings>,
-    mut images: ResMut<Assets<Image>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut online: ResMut<online::OnlineState>,
+    mut scene: zone::Scene,
 ) {
     let zone = pending
         .zone
@@ -416,10 +422,8 @@ fn setup_scene(
     let start_y = terrain_surface
         .height_at(start_x, start_z)
         .unwrap_or(zone_center.y);
-    let height = pending
-        .character
-        .as_ref()
-        .map_or(6.0, CharacterAsset::height);
+    let character = pending.character.take();
+    let height = character.as_ref().map_or(6.0, CharacterAsset::height);
     let body = PlayerBody {
         feet_offset: height * 0.5,
         height,
@@ -431,38 +435,25 @@ fn setup_scene(
         .camera_distance
         .unwrap_or(default_radius)
         .clamp(20.0, 20_000.0);
-    commands.insert_resource(Collision(build_collision(&zone)));
-    commands.insert_resource(terrain_surface);
-    commands.insert_resource(SceneInfo {
-        zone_name: zone.short_name.clone(),
-    });
-
-    spawn_static_zone(
+    let zone_name = zone.short_name.clone();
+    scene.enter(
         &mut commands,
-        zone,
+        zone::Entry {
+            zone,
+            character,
+            placed: Transform::from_translation(player_position),
+            body,
+        },
         settings.0.terrain_only,
-        &mut images,
-        &mut meshes,
-        &mut materials,
+        &mut online.regions,
     );
-    let player = spawn_player_and_hud(
-        &mut commands,
-        player_position,
-        pending.character.is_none(),
-        body,
-        &mut meshes,
-        &mut materials,
-    );
-    if let Some(asset) = pending.character.take() {
-        character::spawn(
-            &mut commands,
-            player,
-            asset,
-            body.feet_offset,
-            &mut images,
-            &mut meshes,
-            &mut materials,
-        );
+    let demos = &settings.0;
+    if !online.enabled
+        && (demos.demo_entities || demos.demo_inventory || demos.demo_spellbook || demos.demo_trade)
+    {
+        // Every offline demo fills one admitted world, as a session would.
+        let origin = world_position(player_position.to_array(), 0.0);
+        online::admit_preview(&mut online, origin, &zone_name);
     }
     spawn_lighting(&mut commands, &mut ambient_light);
     spawn_camera(
