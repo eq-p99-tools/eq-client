@@ -759,7 +759,7 @@ mod tests {
             .world()
             .resource::<super::super::items::ItemState>()
             .cache;
-        assert_eq!(cache[&3].name, "Preview rations");
+        assert_eq!(cache.get(3).unwrap().name, "Preview rations");
         let world = app.world_mut();
         let mut text = world.query_filtered::<&Text, With<super::super::items::ItemText>>();
         assert!(text.single(world).unwrap().0.contains("Preview rations"));
