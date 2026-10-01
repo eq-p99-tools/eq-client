@@ -54,6 +54,8 @@ pub enum Notice {
     ShopRefused,
     /// Nothing was bought or sold, and why.
     TradeRefused(String),
+    /// No give window opened, or it closed, and why.
+    GiveRefused(String),
     /// An item on the ground could not be picked up, and why.
     GroundRefused(String),
     /// A door request went to the server, or was refused and why.

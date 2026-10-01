@@ -1,7 +1,11 @@
 //! News about what the player owns and trades: the inventory and its
-//! moves, item uses, coins, the corpse being looted and the merchant.
+//! moves, item uses, coins, the corpse being looted, the merchant and the
+//! give window.
 use super::{Changes, ClientWorld, Notice, Reply, trade};
-use crate::{inventory::InventoryUpdate, loot::LootUpdate, merchant::MerchantUpdate};
+use crate::{
+    exchange::ExchangeUpdate, inventory::InventoryUpdate, loot::LootUpdate,
+    merchant::MerchantUpdate,
+};
 
 impl ClientWorld {
     /// The inventory changed; what equipped items give may change with it.
@@ -50,6 +54,36 @@ impl ClientWorld {
         if self.zone.trade.merchant(update, &mut self.coins) {
             changes.trade = true;
             changes.notices.extend(trade::merchant_notice(update));
+        } else {
+            changes.ignored = true;
+        }
+    }
+
+    /// News of the give window the player asked for.
+    pub(super) fn exchange_news(&mut self, update: ExchangeUpdate, changes: &mut Changes) {
+        if self.zone.trade.exchange(update) {
+            changes.trade = true;
+            if let ExchangeUpdate::Busy { .. } = update {
+                changes
+                    .notices
+                    .push(Notice::GiveRefused("They are busy".into()));
+            }
+        } else {
+            changes.ignored = true;
+        }
+    }
+
+    /// The request to trade was not sent, or nobody answered it.
+    pub(super) fn exchange_refused(
+        &mut self,
+        session_id: u64,
+        reason: &str,
+        changes: &mut Changes,
+    ) {
+        if self.session_id == Some(session_id) {
+            self.zone.trade.exchange = None;
+            changes.trade = true;
+            changes.notices.push(Notice::GiveRefused(reason.to_owned()));
         } else {
             changes.ignored = true;
         }

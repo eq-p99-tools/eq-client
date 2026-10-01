@@ -187,7 +187,14 @@ pub(super) fn input(
                         chat.history.push(super::chat::system_line(line));
                     }
                 }
-                (spawn, _) => proposal = Some(spawn.map(|(id, _)| id)),
+                (spawn, _) => {
+                    // An NPC clicked with an item on the cursor is asked to
+                    // take it, as well as targeted.
+                    if let Some((id, _)) = spawn {
+                        super::give::offer(id, &mut online, &outbox);
+                    }
+                    proposal = Some(spawn.map(|(id, _)| id));
+                }
             }
         }
     }

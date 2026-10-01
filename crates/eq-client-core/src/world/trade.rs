@@ -1,8 +1,9 @@
-//! Looting a corpse and trading with a merchant: what the player opened, and
-//! what the server listed in it.
+//! Looting a corpse, trading with a merchant and handing items to another
+//! character: what the player opened, and what the server listed in it.
 use super::Notice;
 use crate::{
     Coins,
+    exchange::ExchangeUpdate,
     inventory::InventoryItem,
     loot::{LootResponse, LootUpdate},
     merchant::{MerchantItem, MerchantUpdate},
@@ -29,11 +30,35 @@ pub struct Merchant {
     pub stock: BTreeMap<u32, MerchantItem>,
 }
 
-/// The loot and merchant windows the player opened, as the server fills them.
+/// A give window the player asked for, or has open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Exchange {
+    /// The character on the other side.
+    pub with: u16,
+    /// How many trade slots the window has.
+    pub slots: u8,
+    /// Whether their answer has opened the window.
+    pub open: bool,
+    /// Whether the player clicked Give.
+    pub given: bool,
+}
+
+impl Exchange {
+    /// How many trade slots the player may fill now: none until the window
+    /// opens.
+    #[must_use]
+    pub const fn trade_slots(&self) -> u8 {
+        if self.open { self.slots } else { 0 }
+    }
+}
+
+/// The loot, merchant and give windows the player opened, as the server
+/// fills them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Trade {
     pub loot: Option<Loot>,
     pub merchant: Option<Merchant>,
+    pub exchange: Option<Exchange>,
 }
 
 impl Trade {
@@ -96,6 +121,25 @@ impl Trade {
             // The session removes the sold units from the inventory, and a
             // server money update follows.
             MerchantUpdate::Sold { .. } => (),
+        }
+        true
+    }
+}
+
+impl Trade {
+    /// Follows the server's word on a give window. False when the news is
+    /// not about the one the player asked for.
+    pub(super) fn exchange(&mut self, update: ExchangeUpdate) -> bool {
+        let Some(exchange) = self.exchange.as_mut() else {
+            return false;
+        };
+        match update {
+            ExchangeUpdate::Opened { with } if u32::from(exchange.with) == with => {
+                exchange.open = true;
+            }
+            ExchangeUpdate::Finished | ExchangeUpdate::Cancelled { .. } => self.exchange = None,
+            ExchangeUpdate::Busy { by } if u32::from(exchange.with) == by => self.exchange = None,
+            _ => return false,
         }
         true
     }

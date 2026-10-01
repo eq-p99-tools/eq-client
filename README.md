@@ -472,7 +472,7 @@ existing nearby-entity behavior. Texture transparency is not sampled by picking.
 
 For explicit stationary live checks, `--online --target-nearest-player-once` selects one nearby player, while `--online --inspect-first-chat-item-once` inspects one actual incoming item link. Both use the same typed command path as the UI and are disabled by default.
 
-## Combat, looting, merchants and camping
+## Combat, looting, merchants, giving and camping
 
 The target panel lists the keys that apply to the current target:
 
@@ -490,6 +490,12 @@ The target panel lists the keys that apply to the current target:
   purchases, and a sell button for each carried item. The window shows the coins
   last reported by the server, adjusted for loot and purchases as the Titanium
   client does. **Escape** closes both windows.
+- Clicking an NPC with an item on the cursor asks it to take the item, as the
+  official client does. Its answer opens the skin's give window (`GiveWnd`)
+  with the item in the first of its four slots; more items go in from the
+  cursor, **Give** hands them over (a quest NPC answers in chat, and what it
+  does not want comes back on the cursor), and **Cancel** or **Escape**
+  takes them back. Only an NPC within 20 units is asked.
 - **/camp** sits, waits the 30-second preparation, logs out and returns to
   character selection. Standing, moving, zoning or dying abandons it. **/sit** and
   **/stand** change posture from chat.
@@ -507,7 +513,8 @@ official client. These paths have synthetic tests; live verification is pending.
 repeatable live or offline checks. One step per line, `#` starts a comment:
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
-`camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done ...`,
+`camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...`,
+`give` (asks the target to take the cursor item, as clicking it does),
 `right_click` with the same targets (a bag's slot opens its window),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
@@ -636,7 +643,8 @@ worker and UI immediately, including changes during admission; unsupported skill
 IDs remain events without expanding the profile. Titanium level gains and losses
 update the character display, experience bar and worker equipment eligibility,
 including updates received during admission. Quarm skill and level-change decoding
-remain outstanding. Trade, shared-bank and bank-currency actions are unavailable.
+remain outstanding. Coins in the give window, trades with other players,
+shared-bank and bank-currency actions are unavailable.
 Items on the ground can be picked up (see above); dropping and destruction remain
 unimplemented.
 Inventory instances now retain typed server click-effect metadata separately from

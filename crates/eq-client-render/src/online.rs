@@ -84,6 +84,21 @@ impl OnlineState {
         self.world.close_shop();
     }
 
+    /// The player asked a character to trade; the window has this many slots.
+    pub(super) fn offer_trade(&mut self, with: u16, slots: u8) {
+        self.world.offer_trade(with, slots);
+    }
+
+    /// The player clicked Give.
+    pub(super) fn give(&mut self) {
+        self.world.give();
+    }
+
+    /// The player closed the give window.
+    pub(super) fn close_trade(&mut self) {
+        self.world.close_trade();
+    }
+
     /// Whether an admitted character can act now: connected, alive and not zoning.
     pub fn in_world(&self) -> bool {
         self.world.in_world()

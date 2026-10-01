@@ -881,6 +881,62 @@ fn a_merchant_lists_stock_until_closed_or_refusing() {
 }
 
 #[test]
+fn the_give_window_opens_on_the_npcs_answer_and_closes_on_the_servers_word() {
+    use crate::exchange::ExchangeUpdate;
+    let mut world = admitted();
+    let exchange = |update| WorldEvent::Exchange(update);
+    // News of a window nobody asked for is not the player's.
+    assert!(game(&mut world, exchange(ExchangeUpdate::Opened { with: 8 })).ignored);
+    world.offer_trade(8, 4);
+    assert_eq!(world.exchange().unwrap().trade_slots(), 0);
+    // Another character's answer opens nothing.
+    assert!(game(&mut world, exchange(ExchangeUpdate::Opened { with: 9 })).ignored);
+    let changes = game(&mut world, exchange(ExchangeUpdate::Opened { with: 8 }));
+    assert!(changes.trade);
+    assert_eq!(world.exchange().unwrap().trade_slots(), 4);
+    world.give();
+    assert!(world.exchange().unwrap().given);
+    game(&mut world, exchange(ExchangeUpdate::Finished));
+    assert!(world.exchange().is_none());
+    // A refusal for this admission closes the request and says why; one
+    // for an earlier admission is not this one's.
+    world.offer_trade(8, 4);
+    let refused = |session_id| WorldEvent::ExchangeRefused {
+        session_id,
+        reason: "You are too far away to trade".into(),
+    };
+    assert!(game(&mut world, refused(2)).ignored);
+    let changes = game(&mut world, refused(1));
+    assert_eq!(
+        changes.notices,
+        [Notice::GiveRefused("You are too far away to trade".into())]
+    );
+    assert!(world.exchange().is_none());
+    // A busy partner, the player's own closing and death all end it.
+    world.offer_trade(8, 4);
+    let changes = game(&mut world, exchange(ExchangeUpdate::Busy { by: 8 }));
+    assert_eq!(
+        changes.notices,
+        [Notice::GiveRefused("They are busy".into())]
+    );
+    assert!(world.exchange().is_none());
+    world.offer_trade(8, 4);
+    world.close_trade();
+    assert!(world.exchange().is_none());
+    world.offer_trade(8, 4);
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 9,
+            killer_id: 0,
+            corpse_id: 0,
+            bind_zone_id: 0,
+        }),
+    );
+    assert!(world.exchange().is_none());
+}
+
+#[test]
 fn camping_progress_follows_the_session_and_only_death_leaves_it() {
     let mut world = admitted();
     let start = Instant::now();

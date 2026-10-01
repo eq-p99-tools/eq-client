@@ -127,8 +127,9 @@ pub(super) fn figure(
 }
 
 /// Opens and closes the windows that hold items and have no frame of their
-/// own until then: a bag's, while it is open and still a bag, and the
-/// bank's, while it is open and a banker is in reach.
+/// own until then: a bag's, while it is open and still a bag, the bank's,
+/// while it is open and a banker is in reach, and the give window while it
+/// is open.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn frames(
     mut commands: Commands,
@@ -159,7 +160,7 @@ pub(crate) fn frames(
     }
     let mut drawn = BTreeSet::new();
     for (frame, id) in &frames {
-        if matches!(id, WindowId::Bank | WindowId::Bag(_)) {
+        if matches!(id, WindowId::Bank | WindowId::Bag(_) | WindowId::Give) {
             if shown.is_open(*id) {
                 drawn.insert(*id);
             } else {
@@ -169,7 +170,9 @@ pub(crate) fn frames(
     }
     let wanted: Vec<WindowId> = shown
         .ids()
-        .filter(|id| matches!(id, WindowId::Bank | WindowId::Bag(_)) && !drawn.contains(id))
+        .filter(|id| {
+            matches!(id, WindowId::Bank | WindowId::Bag(_) | WindowId::Give) && !drawn.contains(id)
+        })
         .collect();
     // A window just opened comes to the front.
     for id in wanted {
@@ -296,7 +299,10 @@ pub(crate) fn close(
             shown.close(*window);
         }
     }
-    if let crate::escape::Escape::Close(id @ (WindowId::Bank | WindowId::Bag(_))) = *escape {
+    // Closing the give window cancels the exchange; see `give::window`.
+    if let crate::escape::Escape::Close(id @ (WindowId::Bank | WindowId::Bag(_) | WindowId::Give)) =
+        *escape
+    {
         shown.close(id);
     }
 }

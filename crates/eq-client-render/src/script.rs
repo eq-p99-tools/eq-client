@@ -188,6 +188,7 @@ type Buttons<'w, 's> = Query<
         Option<&'static super::spellbook::GemChoice>,
         Option<&'static super::trade::Action>,
         Option<&'static super::inventory::colors::Action>,
+        Has<super::give::GiveButton>,
     ),
 >;
 
@@ -460,6 +461,14 @@ pub(super) fn drive(
             }
             return;
         }
+        Step::Give => {
+            let Some(target) = online.world().target().selected else {
+                script.stop(&mut keys, &mut mouse, "give needs a target");
+                return;
+            };
+            super::give::offer(target, &mut online, &observed.1);
+            return;
+        }
         Step::Gm(command) => {
             let sent = gm_chat(command, script.local).and_then(|chat| {
                 observed
@@ -591,7 +600,7 @@ fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat,
 
 /// Marks the first visible matching control pressed; the focus system clears it next frame.
 fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
-    for (mut interaction, visibility, slot, scribe, store, row, gem, trade, tint) in
+    for (mut interaction, visibility, slot, scribe, store, row, gem, trade, tint, give) in
         buttons.iter_mut()
     {
         let matches = match target {
@@ -620,6 +629,7 @@ fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
                     _ => false,
                 }
             }),
+            ClickTarget::Give => give,
         };
         if matches && visibility.get() {
             *interaction = Interaction::Pressed;
