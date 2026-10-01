@@ -266,8 +266,9 @@ pub(super) fn coin_text(copper: u64) -> String {
     }
 }
 
+/// A loot or merchant window, by the list it shows.
 #[derive(Component)]
-pub(super) struct Panel;
+pub(super) struct Panel(Rows);
 
 /// The scrolling item list inside the loot or merchant window.
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
@@ -498,14 +499,16 @@ pub(super) fn input(
     }
 }
 
-/// Rebuilds the loot and merchant windows whenever their contents change, keeping
-/// each list's scroll offset so a sale does not jump back to the top.
+/// Rebuilds the loot and merchant windows' contents whenever they change, keeping
+/// each list's scroll offset so a sale does not jump back to the top. A window
+/// stays the same window while it is open, so one being dragged keeps
+/// following the pointer as its rows change.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn present(
     mut commands: Commands,
     trade: Res<TradeState>,
     inventory: Res<super::inventory::InventoryState>,
-    panels: Query<Entity, With<Panel>>,
+    panels: Query<(Entity, &Panel)>,
     lists: Query<(&Rows, &ScrollPosition)>,
     mut shown: Local<Option<(u64, u64)>>,
 ) {
@@ -521,8 +524,22 @@ pub(super) fn present(
             .map_or(0.0, |(_, position)| position.y)
     };
     let (loot_offset, merchant_offset) = (offset(Rows::Loot), offset(Rows::Merchant));
-    for panel in &panels {
-        commands.entity(panel).despawn();
+    let mut open: Vec<(Rows, Entity)> = panels
+        .iter()
+        .map(|(entity, panel)| (panel.0, entity))
+        .collect();
+    let mut frame = |kind: Rows| {
+        open.iter()
+            .position(|(shown, _)| *shown == kind)
+            .map(|index| open.swap_remove(index).1)
+    };
+    let (loot_frame, merchant_frame) = (
+        trade.loot.as_ref().and_then(|_| frame(Rows::Loot)),
+        trade.merchant.as_ref().and_then(|_| frame(Rows::Merchant)),
+    );
+    // Windows that closed.
+    for (_, entity) in open {
+        commands.entity(entity).despawn();
     }
     if let Some(window) = &trade.loot {
         let rows: Vec<(Action, String)> = window
@@ -537,8 +554,9 @@ pub(super) fn present(
         } else {
             "Opening..."
         };
-        spawn_panel(
+        show_panel(
             &mut commands,
+            loot_frame,
             // Stable titles keep a dragged window in place for every corpse.
             "LOOT",
             (px(24), Val::Auto, px(110)),
@@ -582,8 +600,9 @@ pub(super) fn present(
         let coins = trade
             .coins
             .map_or_else(|| "--".into(), |coins| coin_text(coins.total_copper()));
-        spawn_panel(
+        show_panel(
             &mut commands,
+            merchant_frame,
             "MERCHANT",
             (Val::Auto, px(24), px(96)),
             &format!("{}   Your coin: {coins}", window.name),
@@ -593,26 +612,14 @@ pub(super) fn present(
     }
 }
 
-/// Scrolls the loot or merchant list under the pointer; the camera ignores wheel
-/// input over windows.
+/// Scrolls the loot or merchant list the wheel turns.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn scroll(
-    windows: Query<&Window, With<PrimaryWindow>>,
-    mut lists: Query<(&UiGlobalTransform, &ComputedNode, &mut ScrollPosition), With<Rows>>,
-    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    wheel: Res<windows::pointer::Wheel>,
+    mut lists: Query<(&ComputedNode, &mut ScrollPosition), With<Rows>>,
 ) {
-    let delta = windows::wheel_pixels(&mut wheel);
-    let Some(cursor) = windows
-        .single()
-        .ok()
-        .and_then(Window::physical_cursor_position)
-    else {
-        return;
-    };
-    for (transform, node, mut position) in &mut lists {
-        if windows::contains(cursor, transform, node) {
-            windows::scroll_by(&mut position, node, delta);
-        }
+    if let Some((node, mut position)) = wheel.surface.and_then(|list| lists.get_mut(list).ok()) {
+        windows::scroll_by(&mut position, node, wheel.pixels);
     }
 }
 
@@ -646,35 +653,42 @@ fn item_label(item: &InventoryItem) -> String {
 }
 
 /// A window whose item list scrolls between a fixed status line and footer, so
-/// the closing buttons stay reachable however long the list is.
-fn spawn_panel(
+/// the closing buttons stay reachable however long the list is. An open window
+/// keeps its frame and only its contents are rebuilt.
+fn show_panel(
     commands: &mut Commands,
+    frame: Option<Entity>,
     title: &str,
     (left, right, top): (Val, Val, Val),
     status: &str,
     (list, rows, offset): (Rows, &[(Action, String)], f32),
     footer: &[(Action, &str)],
 ) {
-    let frame = commands
-        .spawn((
-            Panel,
-            windows::Frame::default(),
-            Node {
-                position_type: PositionType::Absolute,
-                left,
-                right,
-                top,
-                width: px(300),
-                padding: UiRect::all(px(6)),
-                row_gap: px(4),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-            // Above inventory and spellbook, below item inspection.
-            GlobalZIndex(26),
-            BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.94)),
-        ))
-        .id();
+    let frame = if let Some(frame) = frame {
+        commands.entity(frame).despawn_children();
+        frame
+    } else {
+        commands
+            .spawn((
+                Panel(list),
+                windows::Frame::default(),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left,
+                    right,
+                    top,
+                    width: px(300),
+                    padding: UiRect::all(px(6)),
+                    row_gap: px(4),
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+                // Above inventory and spellbook, below item inspection.
+                GlobalZIndex(26),
+                BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.94)),
+            ))
+            .id()
+    };
     commands.entity(frame).with_children(|parent| {
         windows::title_bar(parent, frame, title);
         parent.spawn((
@@ -688,6 +702,7 @@ fn spawn_panel(
         parent
             .spawn((
                 list,
+                windows::pointer::TakesWheel,
                 ScrollPosition(Vec2::new(0.0, offset)),
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -741,6 +756,121 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loot_window_being_dragged_follows_the_pointer_while_its_rows_change() {
+        use bevy::math::{Affine2, DVec2};
+        let mut app = App::new();
+        app.insert_resource(TradeState {
+            loot: Some(LootWindow {
+                corpse_id: 7,
+                name: "Corpse".into(),
+                items: BTreeMap::new(),
+                listed: true,
+                pending: None,
+                loot_all: false,
+            }),
+            ..TradeState::default()
+        })
+        .init_resource::<super::super::inventory::InventoryState>()
+        .init_resource::<ButtonInput<MouseButton>>()
+        .init_resource::<windows::DragState>()
+        .add_systems(Update, (present, windows::input).chain());
+        let mut window = Window {
+            focused: true,
+            resolution: bevy::window::WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.set_physical_cursor_position(Some(DVec2::new(100.0, 100.0)));
+        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        app.update();
+        let panel = |app: &mut App| {
+            app.world_mut()
+                .query_filtered::<Entity, With<Panel>>()
+                .single(app.world())
+                .unwrap()
+        };
+        let frame = panel(&mut app);
+        // Where the UI layout puts the window: 300 by 200 at (24, 110).
+        app.world_mut().entity_mut(frame).insert((
+            ComputedNode {
+                size: Vec2::new(300.0, 200.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            UiGlobalTransform::from(Affine2::from_translation(Vec2::new(174.0, 210.0))),
+        ));
+        let title = app
+            .world_mut()
+            .query_filtered::<Entity, With<windows::TitleBar>>()
+            .single(app.world())
+            .unwrap();
+        *app.world_mut().get_mut::<Interaction>(title).unwrap() = Interaction::Pressed;
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        // A loot reply changes the rows while the pointer moves on.
+        app.world_mut().resource_mut::<TradeState>().changed();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(DVec2::new(140.0, 120.0)));
+        app.update();
+        assert_eq!(panel(&mut app), frame);
+        let node = app.world().get::<Node>(frame).unwrap();
+        assert_eq!((node.left, node.top), (px(64.0), px(130.0)));
+    }
+
+    #[test]
+    fn one_wheel_turn_scrolls_only_the_list_on_top() {
+        use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+        let mut app = App::new();
+        app.add_message::<MouseWheel>()
+            .init_resource::<windows::pointer::Wheel>()
+            .add_systems(Update, (windows::pointer::wheel, scroll).chain());
+        let mut window = Window::default();
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::new(100.0, 100.0)));
+        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        // The merchant's list dragged over the loot list, both long enough to scroll.
+        let list = |app: &mut App, rows: Rows, stack: u32| {
+            app.world_mut()
+                .spawn((
+                    rows,
+                    windows::pointer::TakesWheel,
+                    ScrollPosition(Vec2::new(0.0, 50.0)),
+                    ComputedNode {
+                        size: Vec2::new(200.0, 200.0),
+                        content_size: Vec2::new(200.0, 1000.0),
+                        inverse_scale_factor: 1.0,
+                        ..default()
+                    },
+                    bevy::ui::ComputedStackIndex(stack),
+                    UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(
+                        100.0, 100.0,
+                    ))),
+                ))
+                .id()
+        };
+        let (below, above) = (
+            list(&mut app, Rows::Loot, 1),
+            list(&mut app, Rows::Merchant, 2),
+        );
+        app.world_mut().write_message(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y: -1.0,
+            window,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        });
+        app.update();
+        let offset = |entity| app.world().get::<ScrollPosition>(entity).unwrap().y;
+        assert!(offset(above) > 50.0);
+        assert!((offset(below) - 50.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn containers_with_contents_are_not_offered_for_sale() {
