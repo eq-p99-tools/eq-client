@@ -444,6 +444,7 @@ impl ClientWorld {
             WorldEvent::AbilityRefused { session_id, reason } => {
                 self.ability_refused(*session_id, reason, news);
             }
+            WorldEvent::WhoList(list) => news.notices.push(Notice::WhoList(list.clone())),
 
             // Food and drink: the session eats and drinks for the player.
             WorldEvent::Nourishment(nourishment) => self.nourishment = Some(*nourishment),

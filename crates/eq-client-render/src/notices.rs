@@ -139,6 +139,18 @@ fn nothing_to_eat(
         .collect()
 }
 
+/// A `/who all` answer's lines; without the installed strings, each still
+/// says which string it is.
+fn who_lines(
+    list: &eq_client_core::who::WhoList,
+    messages: Option<&Messages>,
+) -> Vec<(Place, String)> {
+    super::who::lines(list, messages.unwrap_or(&Messages::default()))
+        .into_iter()
+        .map(|line| (Place::Chat, line))
+        .collect()
+}
+
 /// How a notice reads, and where each part shows.
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
     let chat = |text: String| vec![(Place::Chat, text)];
@@ -215,6 +227,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::TradeRefused(reason)
         | Notice::AbilityRefused(reason)
         | Notice::ConsumeRefused(reason) => chat(reason.clone()),
+        Notice::WhoList(list) => who_lines(list, messages),
         Notice::NothingToEat { food, water } => nothing_to_eat(*food, *water, messages)
             .into_iter()
             .map(|line| (Place::Chat, line))

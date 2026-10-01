@@ -518,6 +518,12 @@ The target panel lists the keys that apply to the current target:
 - **/camp** sits, waits the 30-second preparation, logs out and returns to
   character selection. Standing, moving, zoning or dying abandons it. **/sit** and
   **/stand** change posture from chat.
+- **/who all** asks the world who is online and prints its answer in the
+  official client's words, from the installed `eqstr_us.txt`: class titles
+  from level 51, race names, guilds and zones. Words after it narrow the
+  list as the official client's do: a class (`wizard` or `wiz`), a race
+  (`dark elf` or `def`), a level or two for a range, `gm`, and the start of
+  a name, guild or zone. The zone's own `/who` is not supported yet.
 
 Melee and non-melee damage involving the player prints Titanium-style combat
 text. Server string-table messages (for example experience, skill-up and range

@@ -439,6 +439,19 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
             effect_flag = effect.effect_flag,
             "Own spell effect"
         ),
+        // Hunger and thirst, and each bite the session takes for them.
+        WorldEvent::Nourishment(nourishment) => debug!(
+            food = nourishment.food,
+            water = nourishment.water,
+            "Stamina report"
+        ),
+        WorldEvent::NothingToEat { food, water } => debug!(?food, ?water, "Nothing to eat"),
+        WorldEvent::Inventory(eq_client_core::inventory::InventoryUpdate::Deduct {
+            slot,
+            quantity,
+        }) => {
+            debug!(slot = slot.0, quantity, "Inventory deduction");
+        }
         _ => (),
     }
 }

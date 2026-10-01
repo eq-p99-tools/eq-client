@@ -611,7 +611,11 @@ fn game_commands(
     online: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
 ) -> Option<Result<Vec<ClientCommand>, String>> {
-    let name = input.strip_prefix('/')?.trim().to_ascii_lowercase();
+    let command = input.strip_prefix('/')?.trim();
+    let (name, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    let name = name.to_ascii_lowercase();
     let stamp = || {
         outbox
             .stamp(online.world())
@@ -628,6 +632,17 @@ fn game_commands(
         })
     };
     Some(match name.as_str() {
+        "who" => eq_client_core::who::parse(words).and_then(|request| {
+            if !request.everywhere {
+                return Err("Use /who all: the zone's own list is not ready yet".into());
+            }
+            Ok(vec![ClientCommand::WhoAll {
+                session_id: stamp()?.session_id,
+                filter: request.filter,
+            }])
+        }),
+        // The rest take no words; with words, they are chat.
+        _ if !words.is_empty() => return None,
         "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
         // Camping requires sitting, so sit first as a player would.
@@ -859,6 +874,23 @@ mod tests {
                 ..
             }]
         ));
+        // Words after a command that takes none make it chat.
+        assert!(game_commands("/sit down", &online, &outbox).is_none());
+        assert!(matches!(
+            game_commands("/who all wiz 50 60", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::WhoAll {
+                session_id: 4,
+                filter: eq_client_core::who::WhoFilter {
+                    class: Some(12),
+                    levels: Some((50, 60)),
+                    ..
+                },
+            }]
+        ));
+        assert!(game_commands("/who", &online, &outbox).unwrap().is_err());
     }
     #[test]
     fn sending_a_line_or_an_empty_enter_returns_the_keyboard_to_the_game() {
