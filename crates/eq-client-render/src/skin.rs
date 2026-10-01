@@ -35,10 +35,10 @@ fn follow(
         return;
     }
     let current = online
-        .player
-        .as_ref()
+        .world
+        .player()
         .map(|player| player.name.as_str())
-        .zip(online.world.as_deref());
+        .zip(online.world.world_name());
     if chosen_for
         .as_ref()
         .map(|(character, world)| (character.as_str(), world.as_str()))
@@ -76,29 +76,33 @@ mod tests {
     }
 
     fn enter(app: &mut App, name: &str) {
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .player = Some(eq_client_core::PlayerState {
-            name: name.into(),
-            base_attributes: None,
-            deity: None,
-            class: Some(1),
-            spawn_id: 7,
-            race: 1,
-            gender: 0,
-            level: 1,
-            position: eq_client_core::WorldPosition::default(),
-            mana: 0,
-            endurance: None,
-            skills: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 0.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: None,
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            1,
+            eq_client_core::PlayerState {
+                name: name.into(),
+                base_attributes: None,
+                deity: None,
+                class: Some(1),
+                spawn_id: 7,
+                race: 1,
+                gender: 0,
+                level: 1,
+                position: eq_client_core::WorldPosition::default(),
+                mana: 0,
+                endurance: None,
+                skills: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 0.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: None,
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
     }
 
     fn skin(app: &App) -> &str {
@@ -118,9 +122,14 @@ mod tests {
         enter(&mut app, "Example");
         app.update();
         assert_eq!(skin(&app), DEFAULT_SKIN);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .world = Some("ExampleWorld".into());
+        crate::online::testing::news(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            [eq_client_core::WorldEvent::WorldName {
+                short_name: "ExampleWorld".into(),
+            }],
+        );
         app.update();
         let chosen = skin(&app).to_owned();
         // Another character without settings goes back to the default skin.

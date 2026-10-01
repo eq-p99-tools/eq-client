@@ -307,22 +307,28 @@ pub(super) fn input(
     windows: Query<&Window, With<PrimaryWindow>>,
     escape: Res<super::escape::Escape>,
 ) {
-    trade.reset(online.session_id);
-    let (Some(session_id), Some(player), Some(sender)) =
-        (online.session_id, online.player.as_ref(), sender.0.as_ref())
-    else {
+    trade.reset(online.world.session_id());
+    let (Some(session_id), Some(player), Some(sender)) = (
+        online.world.session_id(),
+        online.world.player(),
+        sender.0.as_ref(),
+    ) else {
         return;
     };
-    if !online.connected || online.death.is_some() {
+    if !online.world.connected() || online.world.death().is_some() {
         return;
     }
     let now = std::time::Instant::now();
     let own_id = player.spawn_id;
     let send = |command: ClientCommand| sender.try_send(command).is_ok();
     let focused = !chat.composing && windows.single().is_ok_and(|window| window.focused);
-    let targeted = target
-        .selected
-        .and_then(|id| online.spawns.get(&id).map(|spawn| (id, spawn)));
+    let targeted = target.selected.and_then(|id| {
+        online
+            .world
+            .spawn(id)
+            .map(|spawn| &spawn.state)
+            .map(|spawn| (id, spawn))
+    });
     let mut clicked: Vec<Action> = buttons
         .iter()
         .filter(|(interaction, _)| **interaction == Interaction::Pressed)
@@ -1081,29 +1087,31 @@ mod tests {
     #[test]
     fn a_window_closes_only_once_the_server_is_told() {
         let mut online = super::super::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(1);
-        online.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            spawn_id: 7,
-            race: 1,
-            gender: 0,
-            class: Some(2),
-            deity: None,
-            level: 1,
-            position: eq_client_core::WorldPosition::default(),
-            mana: 0,
-            endurance: None,
-            skills: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 6.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: Some(100),
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut online,
+            1,
+            eq_client_core::PlayerState {
+                name: "Example".into(),
+                base_attributes: None,
+                spawn_id: 7,
+                race: 1,
+                gender: 0,
+                class: Some(2),
+                deity: None,
+                level: 1,
+                position: eq_client_core::WorldPosition::default(),
+                mana: 0,
+                endurance: None,
+                skills: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 6.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: Some(100),
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
         // A command queue that can no longer take anything.
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         drop(receiver);

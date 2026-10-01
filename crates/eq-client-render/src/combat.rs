@@ -60,29 +60,31 @@ pub(super) fn input(
     mut chat: ResMut<super::chat::ChatState>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    if combat.session != online.session_id {
-        combat.reset(online.session_id);
+    if combat.session != online.world.session_id() {
+        combat.reset(online.world.session_id());
     }
-    let (Some(session_id), Some(player), Some(sender)) =
-        (online.session_id, online.player.as_ref(), sender.0.as_ref())
-    else {
+    let (Some(session_id), Some(player), Some(sender)) = (
+        online.world.session_id(),
+        online.world.player(),
+        sender.0.as_ref(),
+    ) else {
         return;
     };
     let now = std::time::Instant::now();
     let spawn = target
         .selected
         .filter(|id| *id != player.spawn_id)
-        .and_then(|id| online.spawns.get(&id).map(|spawn| (id, spawn)));
+        .and_then(|id| online.world.spawn(id).map(|spawn| (id, &spawn.state)));
     let attackable = spawn.filter(|(_, spawn)| spawn.kind == SpawnKind::Npc && !spawn.invisible);
     // The official client stops attacking when its target goes away.
     if combat.auto_attack
-        && (!online.connected
-            || online.death.is_some()
+        && (!online.world.connected()
+            || online.world.death().is_some()
             || attackable.map(|(id, _)| id) != combat.attack_target)
     {
         combat.auto_attack = false;
         combat.attack_target = None;
-        if online.connected
+        if online.world.connected()
             && sender
                 .try_send(ClientCommand::AutoAttack {
                     session_id,
@@ -95,8 +97,8 @@ pub(super) fn input(
                 .push(super::chat::system_line(messages.format(1466, &[])));
         }
     }
-    if !online.connected
-        || online.death.is_some()
+    if !online.world.connected()
+        || online.world.death().is_some()
         || chat.composing
         || keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
         || !windows.single().is_ok_and(|window| window.focused)

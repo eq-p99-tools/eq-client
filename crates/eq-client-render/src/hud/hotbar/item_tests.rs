@@ -29,29 +29,31 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
     let mut inventory = crate::inventory::InventoryState::default();
     inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
     let mut online = crate::online::OnlineState::new(true);
-    online.connected = true;
-    online.session_id = Some(9);
-    online.player = Some(eq_client_core::PlayerState {
-        name: "Example".into(),
-        base_attributes: None,
-        deity: None,
-        class: Some(1),
-        spawn_id: 1,
-        race: 1,
-        gender: 0,
-        level: 60,
-        position: eq_client_core::WorldPosition::default(),
-        mana: 0,
-        endurance: None,
-        skills: None,
-        spell_refresh_ms: None,
-        memorized_spells: [None; 8],
-        size: 6.0,
-        walk_speed: 0.0,
-        run_speed: 0.0,
-        hp_percent: Some(100),
-        appearance: eq_client_core::outfit::Appearance::default(),
-    });
+    crate::online::testing::admit(
+        &mut online,
+        9,
+        eq_client_core::PlayerState {
+            name: "Example".into(),
+            base_attributes: None,
+            deity: None,
+            class: Some(1),
+            spawn_id: 1,
+            race: 1,
+            gender: 0,
+            level: 60,
+            position: eq_client_core::WorldPosition::default(),
+            mana: 0,
+            endurance: None,
+            skills: None,
+            spell_refresh_ms: None,
+            memorized_spells: [None; 8],
+            size: 6.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            hp_percent: Some(100),
+            appearance: eq_client_core::outfit::Appearance::default(),
+        },
+    );
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut app = App::new();
     app.init_resource::<Bindings>()

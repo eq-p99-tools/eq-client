@@ -48,7 +48,7 @@ impl InventoryState {
         let result = (|| -> anyhow::Result<()> {
             use anyhow::{Context, ensure};
             ensure!(
-                online.enabled && online.connected && online.death.is_none(),
+                online.enabled && online.world.connected() && online.world.death().is_none(),
                 "Connect to use an item"
             );
             ensure!(
@@ -75,10 +75,10 @@ impl InventoryState {
                 "Wait briefly before using another item"
             );
             let player = online
-                .player
-                .as_ref()
+                .world
+                .player()
                 .context("Character data is unavailable")?;
-            let session_id = online.session_id.context("No active admission")?;
+            let session_id = online.world.session_id().context("No active admission")?;
             let target_id = target.unwrap_or(player.spawn_id);
             let request = eq_client_core::inventory::ItemUse {
                 request_id: self
@@ -93,8 +93,9 @@ impl InventoryState {
             };
             let available = target_id == player.spawn_id
                 || online
-                    .spawns
-                    .get(&target_id)
+                    .world
+                    .spawn(target_id)
+                    .map(|spawn| &spawn.state)
                     .is_some_and(|spawn| !spawn.invisible);
             self.data
                 .prepare_item_cast(&request, session_id, player.level, available, now)?;
@@ -284,11 +285,11 @@ impl InventoryState {
             ));
         }
         let player = online
-            .player
-            .as_ref()
+            .world
+            .player()
             .context("Character data is unavailable")?;
         Ok((
-            online.session_id.context("No active admission")?,
+            online.world.session_id().context("No active admission")?,
             InventoryActor {
                 bank_access: self.bank_open,
                 deity: player.deity,
@@ -319,7 +320,7 @@ impl InventoryState {
             "Waiting for the queued move; it will not be retried"
         );
         ensure!(
-            self.demo || (online.connected && online.death.is_none()),
+            self.demo || (online.world.connected() && online.world.death().is_none()),
             "Connect to move items"
         );
         ensure!(
@@ -452,10 +453,8 @@ mod tests {
         state.apply(InventoryUpdate::Snapshot(vec![item]));
         let before = state.data.clone();
         let mut online = OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(9);
-        online.player = Some(test_player());
-        let own_id = online.player.as_ref().unwrap().spawn_id;
+        crate::online::testing::admit(&mut online, 9, test_player());
+        let own_id = online.world.player().unwrap().spawn_id;
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
         let sender = CommandsToServer(Some(sender));
         state.use_slot(InventorySlot(13), &online, &sender, None, true);
@@ -497,7 +496,7 @@ mod tests {
             false,
         );
         assert!(state.actions.last_use.is_none());
-        online.connected = false;
+        crate::online::testing::connect(&mut online, false);
         state.use_slot(InventorySlot(13), &online, &sender, None, false);
         assert!(receiver.try_recv().is_err());
         assert_eq!(state.data, before);
@@ -592,9 +591,7 @@ mod tests {
         click(&mut state, 251, false);
         state.demo = false;
         let mut online = OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(7);
-        online.player = Some(test_player());
+        crate::online::testing::admit(&mut online, 7, test_player());
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let sender = CommandsToServer(Some(tx));
         state.actions.auto_store = true;
@@ -688,9 +685,7 @@ mod tests {
         let mut state = demo();
         state.demo = false;
         let mut online = OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(7);
-        online.player = Some(test_player());
+        crate::online::testing::admit(&mut online, 7, test_player());
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let sender = CommandsToServer(Some(tx));
         let before = state.data.clone();
@@ -710,7 +705,7 @@ mod tests {
         assert!(state.actions.pending.is_none());
         assert_eq!(state.data, before);
         assert_eq!(state.actions.message, "Rejected");
-        online.connected = false;
+        crate::online::testing::connect(&mut online, false);
         state.click_slot(InventorySlot(251), false, &online, &sender);
         assert!(state.actions.pending.is_none());
         assert!(rx.try_recv().is_err());
@@ -718,10 +713,9 @@ mod tests {
     #[test]
     fn banking_tracks_nearby_service_and_queues_cursor_moves_without_prediction() {
         let mut online = OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(7);
-        online.player = Some(test_player());
-        online.spawns.insert(
+        crate::online::testing::admit(&mut online, 7, test_player());
+        crate::online::testing::spawn_entry(
+            &mut online,
             9,
             eq_client_core::SpawnState {
                 class: Some(40),
@@ -756,20 +750,20 @@ mod tests {
         );
         assert_eq!(state.data, before);
         state.tab = super::super::Tab::Bank;
-        online.player.as_mut().unwrap().position.x = 21.0;
+        crate::online::testing::place_axis(&mut online, |position| position.x = 21.0);
         state.refresh_bank_access(&online);
         assert!(!state.bank_open);
         assert_eq!(state.tab, super::super::Tab::Inventory);
         // Closing the bank never discards a move already submitted to the worker.
         assert!(state.actions.pending.is_some());
-        online.player.as_mut().unwrap().position.x = 0.0;
+        crate::online::testing::place_axis(&mut online, |position| position.x = 0.0);
         state.refresh_bank_access(&online);
         assert!(state.bank_open);
-        online.connected = false;
+        crate::online::testing::connect(&mut online, false);
         state.refresh_bank_access(&online);
         assert!(!state.bank_open);
-        online.connected = true;
-        online.spawns.clear();
+        crate::online::testing::connect(&mut online, true);
+        crate::online::testing::news(&mut online, [eq_client_core::WorldEvent::Despawn(9)]);
         state.refresh_bank_access(&online);
         assert!(!state.bank_open);
     }

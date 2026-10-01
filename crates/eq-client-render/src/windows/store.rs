@@ -43,9 +43,9 @@ pub(super) fn persist(
     mut store: Local<Store>,
 ) {
     let current = online
-        .player
-        .as_ref()
-        .zip(online.world.as_deref())
+        .world
+        .player()
+        .zip(online.world.world_name())
         .map(|(player, world)| (world, player.name.as_str()));
     let exiting = exits.read().count() > 0;
     let switched = store
@@ -325,8 +325,13 @@ mod tests {
         )
         .unwrap();
         let mut online = crate::online::OnlineState::new(true);
-        online.world = Some("ExampleWorld".into());
-        online.player = Some(player("Example"));
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::WorldName {
+                short_name: "ExampleWorld".into(),
+            }],
+        );
+        crate::online::testing::admit(&mut online, 1, player("Example"));
         let mut app = App::new();
         app.init_resource::<Time<Real>>()
             .init_resource::<Layouts>()
@@ -351,9 +356,11 @@ mod tests {
         let written =
             std::fs::read_to_string(directory.join("windows-ExampleWorld-Example.txt")).unwrap();
         // Another character with no file of its own starts from the shared one.
-        app.world_mut()
-            .resource_mut::<crate::online::OnlineState>()
-            .player = Some(player("Other"));
+        crate::online::testing::admit(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            2,
+            player("Other"),
+        );
         app.update();
         let other = app.world().resource::<Layouts>().0.clone();
         std::fs::remove_dir_all(&directory).unwrap();

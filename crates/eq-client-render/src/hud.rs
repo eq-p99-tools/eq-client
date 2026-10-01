@@ -463,17 +463,19 @@ pub(super) fn actions(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     definitions: (Res<super::spellbook::SpellNames>, Res<messages::Messages>),
 ) {
-    if !online.connected
-        || online.death.is_some()
+    if !online.world.connected()
+        || online.world.death().is_some()
         || chat.composing
         || keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
         || !windows.single().is_ok_and(|window| window.focused)
     {
         return;
     }
-    let (Some(session_id), Some(player), Some(sender)) =
-        (online.session_id, online.player.as_ref(), sender.0.as_ref())
-    else {
+    let (Some(session_id), Some(player), Some(sender)) = (
+        online.world.session_id(),
+        online.world.player(),
+        sender.0.as_ref(),
+    ) else {
         return;
     };
     let gem = clicks

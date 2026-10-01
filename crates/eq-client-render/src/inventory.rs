@@ -63,13 +63,15 @@ impl InventoryState {
             return;
         }
         let available = !self.demo
-            && online.connected
-            && online.death.is_none()
-            && online.session_id.is_some()
-            && online.player.as_ref().is_some_and(|player| {
+            && online.world.connected()
+            && online.world.death().is_none()
+            && online.world.session_id().is_some()
+            && online.world.player().is_some_and(|player| {
                 online
-                    .spawns
+                    .world
+                    .spawns()
                     .values()
+                    .map(|spawn| &spawn.state)
                     .any(|spawn| eq_client_core::inventory::banker_in_range(player.position, spawn))
             });
         if self.bank_open != available {

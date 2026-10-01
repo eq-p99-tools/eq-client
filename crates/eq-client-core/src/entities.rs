@@ -1,7 +1,7 @@
 //! Distance-based entity selection, independent of the rendering engine.
 
 use crate::{SpawnKind, SpawnState, WorldPosition};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 /// Longest a spawn's reported motion is carried forward. Servers repeat a moving
@@ -35,8 +35,8 @@ pub fn extrapolate(spawn: &SpawnState, elapsed: Duration) -> WorldPosition {
 
 /// Selects nearby visible entities, nearest first, with an exit margin and hard cap.
 /// Radius is three-dimensional EQ world distance, measured from the player.
-pub fn nearby(
-    spawns: &BTreeMap<u16, SpawnState>,
+pub fn nearby<'a>(
+    spawns: impl IntoIterator<Item = &'a SpawnState>,
     own_id: u16,
     position: WorldPosition,
     rendered: &BTreeSet<u16>,
@@ -47,7 +47,7 @@ pub fn nearby(
         return Vec::new();
     }
     let mut candidates: Vec<_> = spawns
-        .values()
+        .into_iter()
         .filter_map(|spawn| {
             if spawn.spawn_id == own_id
                 || spawn.invisible
@@ -85,6 +85,7 @@ pub fn within(from: WorldPosition, to: WorldPosition, range: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     #[allow(clippy::float_cmp)] // Exactly representable fixture values.
@@ -153,11 +154,11 @@ mod tests {
     }
     #[test]
     fn dense_crowds_keep_only_the_nearest_two_hundred() {
-        let all = (2u16..302)
+        let all: BTreeMap<_, _> = (2u16..302)
             .map(|id| (id, spawn(id, f32::from(id) / 10.0)))
             .collect();
         let ids = nearby(
-            &all,
+            all.values(),
             1,
             WorldPosition::default(),
             &BTreeSet::new(),
@@ -181,7 +182,7 @@ mod tests {
         all.get_mut(&5).unwrap().invisible = true;
         assert_eq!(
             nearby(
-                &all,
+                all.values(),
                 1,
                 WorldPosition::default(),
                 &BTreeSet::new(),
@@ -193,7 +194,7 @@ mod tests {
         all.get_mut(&4).unwrap().position.z = 300.0;
         assert_eq!(
             nearby(
-                &all,
+                all.values(),
                 1,
                 WorldPosition::default(),
                 &BTreeSet::new(),
@@ -208,7 +209,7 @@ mod tests {
         let mut all = BTreeMap::from([(2, spawn(2, 210.0))]);
         assert_eq!(
             nearby(
-                &all,
+                all.values(),
                 1,
                 WorldPosition::default(),
                 &BTreeSet::new(),
@@ -219,7 +220,7 @@ mod tests {
         );
         assert_eq!(
             nearby(
-                &all,
+                all.values(),
                 1,
                 WorldPosition::default(),
                 &BTreeSet::from([2]),
@@ -231,7 +232,7 @@ mod tests {
         all.get_mut(&2).unwrap().position.x = 241.0;
         assert_eq!(
             nearby(
-                &all,
+                all.values(),
                 1,
                 WorldPosition::default(),
                 &BTreeSet::from([2]),

@@ -121,7 +121,7 @@ pub(super) fn update(
     mut previous: Local<String>,
 ) {
     let keys = navigation.sample(&keys);
-    let visible = online.enabled && online.session_id.is_none();
+    let visible = online.enabled && online.world.session_id().is_none();
     if visible
         && windows.single().is_ok_and(|window| window.focused)
         && let Some(selection) = online.selection.as_mut()
@@ -329,7 +329,11 @@ mod tests {
         );
         app.update();
         assert!(rx.try_recv().is_err());
-        app.world_mut().resource_mut::<OnlineState>().session_id = Some(8);
+        crate::online::testing::admit(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            8,
+            crate::online::testing::player(1),
+        );
         app.update();
         let world = app.world_mut();
         assert_eq!(

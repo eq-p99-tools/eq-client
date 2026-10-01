@@ -404,7 +404,7 @@ pub(super) fn update(
     actions: BookActions,
 ) {
     let (scribe, mut deletion, mut requests) = actions;
-    let session = online.as_ref().and_then(|online| online.session_id);
+    let session = online.as_ref().and_then(|online| online.world.session_id());
     if selection.reset_session(session) {
         state.page = 0;
     }
@@ -583,8 +583,8 @@ fn delete_input(
     enabled: bool,
 ) {
     let session = online
-        .filter(|state| state.connected && state.death.is_none())
-        .and_then(|state| state.session_id);
+        .filter(|state| state.world.connected() && state.world.death().is_none())
+        .and_then(|state| state.world.session_id());
     selection
         .deletion
         .validate(session, selection.selected, hud.spell_book.as_ref());
@@ -881,7 +881,7 @@ fn request_memorize(
     ensure!(gem < 8, "Choose a gem from 1 to 8");
     let online = online.context("Connect to memorize a spell")?;
     ensure!(
-        online.connected && online.death.is_none(),
+        online.world.connected() && online.world.death().is_none(),
         "Connect to memorize a spell"
     );
     ensure!(
@@ -894,7 +894,7 @@ fn request_memorize(
         .and_then(|sender| sender.0.as_ref())
         .context("Network worker unavailable")?
         .try_send(eq_client_core::ClientCommand::MemorizeSpell {
-            session_id: online.session_id.context("No active admission")?,
+            session_id: online.world.session_id().context("No active admission")?,
             gem,
             spell_id,
             created: std::time::Instant::now(),
@@ -933,7 +933,7 @@ fn prepare_scribe(
     use anyhow::{Context, ensure};
     let online = online.context("Connect to scribe a scroll")?;
     ensure!(
-        online.connected && online.death.is_none(),
+        online.world.connected() && online.world.death().is_none(),
         "Connect to scribe a scroll"
     );
     let inventory = &inventory.context("Inventory unavailable")?.data;
@@ -959,7 +959,7 @@ fn prepare_scribe(
         .and_then(|sender| sender.0.as_ref())
         .context("Network worker unavailable")?;
     Ok(eq_client_core::ClientCommand::ScribeSpell {
-        session_id: online.session_id.context("No active admission")?,
+        session_id: online.world.session_id().context("No active admission")?,
         revision: inventory.revision(),
         slot,
         spell_id,
@@ -1101,8 +1101,7 @@ mod tests {
         let before = inventory.data.clone();
         let book = eq_client_core::SpellBook::titanium_profile(&vec![0; 19592]).unwrap();
         let mut online = super::super::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(7);
+        crate::online::testing::admit(&mut online, 7, crate::online::testing::player(1));
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let sender = super::super::target::CommandsToServer(Some(tx));
         request_scribe(Some(&online), Some(&inventory), Some(&book), Some(&sender)).unwrap();
@@ -1110,7 +1109,7 @@ mod tests {
             matches!(rx.try_recv().unwrap(), eq_client_core::ClientCommand::ScribeSpell { session_id: 7, slot: 0, spell_id: 73, revision, .. } if revision == before.revision())
         );
         assert_eq!(inventory.data, before);
-        online.connected = false;
+        crate::online::testing::connect(&mut online, false);
         assert!(
             request_scribe(Some(&online), Some(&inventory), Some(&book), Some(&sender)).is_err()
         );
@@ -1153,8 +1152,7 @@ mod tests {
         use crate::book_delete::Action;
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         let mut online = crate::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(7);
+        crate::online::testing::admit(&mut online, 7, crate::online::testing::player(1));
         let mut book = eq_client_core::SpellBook::default();
         book.apply(&eq_client_core::SpellUpdate::Slot {
             slot: 3,
@@ -1430,8 +1428,7 @@ mod tests {
             .resource_mut::<super::super::chat::ChatState>()
             .composing = false;
         let mut online = super::super::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(7);
+        crate::online::testing::admit(&mut online, 7, crate::online::testing::player(1));
         let (tx, rx) = std::sync::mpsc::sync_channel(2);
         app.insert_resource(online)
             .insert_resource(super::super::target::CommandsToServer(Some(tx)));

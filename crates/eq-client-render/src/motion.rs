@@ -242,14 +242,14 @@ pub(super) fn input(
     cameras: Query<&OrbitCamera>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    if !online.enabled || !online.connected || online.death.is_some() {
+    if !online.enabled || !online.world.connected() || online.world.death().is_some() {
         controls.reset(None);
         return;
     }
     let Some(_) = controls.speed else {
         return;
     };
-    let Some(session_id) = online.session_id else {
+    let Some(session_id) = online.world.session_id() else {
         return;
     };
     let focused = windows.single().is_ok_and(|window| window.focused) && !chat.composing;
@@ -278,11 +278,11 @@ pub(super) fn input(
         cameras.single(),
         collision.0.as_ref(),
         sender.0.as_ref(),
-        online.player.as_ref(),
+        online.world.player(),
     ) else {
         return;
     };
-    if let Some(player) = &online.player {
+    if let Some(player) = online.world.player() {
         let position = player.position;
         let boundary = online
             .regions
@@ -779,29 +779,31 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
         let mut state = online::OnlineState::new(true);
-        state.connected = true;
-        state.session_id = Some(11);
-        state.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            deity: None,
-            class: Some(1),
-            spawn_id: 7,
-            race: 1,
-            gender: 0,
-            level: 1,
-            position: world_position([0.0, 3.0, 0.0], 0.0),
-            mana: 0,
-            endurance: Some(0),
-            skills: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 0.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: Some(100),
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut state,
+            11,
+            eq_client_core::PlayerState {
+                name: "Example".into(),
+                base_attributes: None,
+                deity: None,
+                class: Some(1),
+                spawn_id: 7,
+                race: 1,
+                gender: 0,
+                level: 1,
+                position: world_position([0.0, 3.0, 0.0], 0.0),
+                mana: 0,
+                endurance: Some(0),
+                skills: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 0.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: Some(100),
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
         let floor = eq_client_core::movement::CollisionWorld::new([
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
             [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
@@ -1001,20 +1003,24 @@ mod tests {
         app.update();
         assert!(receiver.try_recv().is_err());
         app.world_mut().resource_mut::<Controls>().reset(Some(6.0));
-        app.world_mut()
-            .resource_mut::<online::OnlineState>()
-            .connected = false;
+        crate::online::testing::connect(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            false,
+        );
         app.update();
         assert!(app.world().resource::<Controls>().speed.is_none());
         assert!(receiver.try_recv().is_err());
         let mut state = app.world_mut().resource_mut::<online::OnlineState>();
-        state.connected = true;
-        state.death = Some(eq_client_core::Death {
-            spawn_id: 7,
-            killer_id: 0,
-            corpse_id: 0,
-            bind_zone_id: 0,
-        });
+        crate::online::testing::connect(&mut state, true);
+        crate::online::testing::news(
+            &mut state,
+            [eq_client_core::WorldEvent::Death(eq_client_core::Death {
+                spawn_id: 7,
+                killer_id: 0,
+                corpse_id: 0,
+                bind_zone_id: 0,
+            })],
+        );
         app.world_mut().resource_mut::<Controls>().reset(Some(6.0));
         app.update();
         assert!(app.world().resource::<Controls>().speed.is_none());

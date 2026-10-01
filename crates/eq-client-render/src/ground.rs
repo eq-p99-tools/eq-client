@@ -43,12 +43,12 @@ pub(super) fn reconcile(
     rendered: Query<(Entity, &GroundEntity)>,
 ) {
     let mut wanted = BTreeMap::new();
-    if state.connected
+    if state.world.connected()
         && zone_models.is_some()
-        && let Some(player) = &state.player
+        && let Some(player) = state.world.player()
     {
         let origin = Vec3::from_array(eq_client_core::render_position(player.position));
-        for object in state.objects.entries().values() {
+        for object in state.world.objects().entries().values() {
             let position = Vec3::from_array(eq_client_core::render_position(object.position));
             if position.distance_squared(origin) <= DRAW_RADIUS * DRAW_RADIUS {
                 wanted.insert(object.drop_id, object);
@@ -130,7 +130,8 @@ pub(super) fn pick_up(
     sender: &super::target::CommandsToServer,
 ) -> Result<(), String> {
     let session_id = state
-        .session_id
+        .world
+        .session_id()
         .filter(|_| state.in_world())
         .ok_or("You can't pick anything up right now.")?;
     sender
@@ -168,29 +169,31 @@ mod tests {
 
     fn online() -> super::super::online::OnlineState {
         let mut state = super::super::online::OnlineState::new(true);
-        state.connected = true;
-        state.session_id = Some(11);
-        state.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            spawn_id: 1,
-            race: 1,
-            class: None,
-            deity: None,
-            skills: None,
-            gender: 0,
-            level: 1,
-            position: default(),
-            mana: 0,
-            endurance: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 6.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: None,
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut state,
+            11,
+            eq_client_core::PlayerState {
+                name: "Example".into(),
+                base_attributes: None,
+                spawn_id: 1,
+                race: 1,
+                class: None,
+                deity: None,
+                skills: None,
+                gender: 0,
+                level: 1,
+                position: default(),
+                mana: 0,
+                endurance: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 6.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: None,
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
         state
     }
 
@@ -238,7 +241,7 @@ mod tests {
             object(73, "A FIXTURE 1", 30.0),
             object(74, "IT63_ACTORDEF", DRAW_RADIUS + 1.0),
         ] {
-            state.objects.apply(&ObjectUpdate::Spawn(update));
+            crate::online::testing::objects(&mut state, &ObjectUpdate::Spawn(update));
         }
         let mut app = app(state);
         app.update();
@@ -246,15 +249,21 @@ mod tests {
         let mut state = app
             .world_mut()
             .resource_mut::<super::super::online::OnlineState>();
-        state.objects.apply(&ObjectUpdate::Remove {
-            drop_id: 71,
-            taken_by: Some(1),
-        });
+        crate::online::testing::objects(
+            &mut state,
+            &ObjectUpdate::Remove {
+                drop_id: 71,
+                taken_by: Some(1),
+            },
+        );
         app.update();
         assert_eq!(drawn(&mut app), [72]);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .connected = false;
+        crate::online::testing::connect(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            false,
+        );
         app.update();
         assert_eq!(drawn(&mut app), Vec::<u32>::new());
     }

@@ -35,8 +35,8 @@ pub(super) fn hit_points(
         return;
     }
     let Some(items) = online
-        .player
-        .as_ref()
+        .world
+        .player()
         .and_then(|player| item_hit_points(player, &inventory.data))
     else {
         return;
@@ -57,13 +57,13 @@ pub(super) fn update(
     mut hud: ResMut<HudState>,
 ) {
     hud.resource_estimate = if settings.0.estimate_titanium_resources
-        && online.connected
-        && online.death.is_none()
-        && online.session_id.is_some()
+        && online.world.connected()
+        && online.world.death().is_none()
+        && online.world.session_id().is_some()
     {
         online
-            .player
-            .as_ref()
+            .world
+            .player()
             .and_then(|player| estimate(player, &inventory.data, &hud, &names))
     } else {
         None
@@ -343,7 +343,7 @@ mod tests {
         inventory.apply(InventoryUpdate::Snapshot(vec![chest]));
         assert_eq!(item_hit_points(&player(), &inventory.data), Some(100));
         let mut online = OnlineState::new(true);
-        online.player = Some(player());
+        crate::online::testing::admit(&mut online, 1, player());
         // Alive at 80 of 250 with a +100 HP chest, the server reports -20 of 150.
         let hud = HudState {
             reported_hp: Some(super::super::hud::ReportedHp {
@@ -362,8 +362,8 @@ mod tests {
         let hud = app.world().resource::<HudState>();
         assert_eq!((hud.hp, hud.hp_percent), (Some((80, 250)), Some(32)));
         let online = app.world().resource::<OnlineState>();
-        assert_eq!(online.health.get(&7), Some(&32));
-        assert_eq!(online.player.as_ref().unwrap().hp_percent, Some(32));
+        assert_eq!(online.world.health(7), Some(32));
+        assert_eq!(online.world.player().unwrap().hp_percent, Some(32));
         // Taking the chest off leaves the last report short of its bonus until
         // the server reports again, as in the official client.
         app.world_mut()
@@ -528,9 +528,7 @@ mod tests {
     fn scheduled_estimate_clears_on_disconnect_and_when_rules_are_disabled() {
         let mut app = App::new();
         let mut online = OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(1);
-        online.player = Some(player());
+        crate::online::testing::admit(&mut online, 1, player());
         let mut inventory = InventoryState::default();
         inventory.apply(InventoryUpdate::Snapshot(vec![]));
         app.insert_resource(ViewerSettings(super::super::ViewerConfig {
@@ -550,10 +548,10 @@ mod tests {
             app.world().resource::<HudState>().resource_estimate,
             Some((25, 20))
         );
-        app.world_mut().resource_mut::<OnlineState>().connected = false;
+        crate::online::testing::connect(&mut app.world_mut().resource_mut::<OnlineState>(), false);
         app.update();
         assert_eq!(app.world().resource::<HudState>().resource_estimate, None);
-        app.world_mut().resource_mut::<OnlineState>().connected = true;
+        crate::online::testing::connect(&mut app.world_mut().resource_mut::<OnlineState>(), true);
         app.world_mut()
             .resource_mut::<ViewerSettings>()
             .0
