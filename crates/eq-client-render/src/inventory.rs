@@ -22,13 +22,14 @@ pub(super) enum Tab {
 pub(super) struct InventoryState {
     colors: colors::Colors,
     pub hovered: bool,
+    /// The offline preview's inventory, whose moves settle here.
     demo: bool,
     tab: Tab,
     revision: u64,
     next_use_id: u64,
     bank_open: bool,
     actions: interaction::Actions,
-    /// Moves the offline demo settled itself, on their way to the world.
+    /// Moves the offline preview settled itself, on their way to the world.
     demo_news: Vec<InventoryUpdate>,
 }
 
@@ -41,6 +42,13 @@ pub(super) struct View<'a> {
 }
 
 impl InventoryState {
+    /// Shows the offline preview's inventory, on the bank's tab if asked.
+    pub(crate) fn preview(&mut self, bank: bool) {
+        self.demo = true;
+        self.bank_open = bank;
+        self.tab = if bank { Tab::Bank } else { Tab::Inventory };
+    }
+
     /// Whether an action is under way that Escape cancels: a split, or
     /// storing the cursor's item.
     pub(super) const fn action_under_way(&self) -> bool {
@@ -560,35 +568,10 @@ pub(super) fn scroll(
     }
 }
 
-/// Supplies clearly labelled synthetic contents for offline visual validation.
+/// The offline preview settles its own moves, as a server would: they
+/// reach the world as news. Only the preview runs this.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn demo(
-    settings: Res<super::ViewerSettings>,
-    mut online: ResMut<super::online::OnlineState>,
-    mut state: ResMut<InventoryState>,
-    mut shown: ResMut<super::windows::Shown>,
-) {
-    if !settings.0.demo_inventory || online.enabled {
-        return;
-    }
-    state
-        .demo_news
-        .push(InventoryUpdate::Snapshot(demo_items()));
-    tell(&mut state, &mut online);
-    shown.open(super::windows::WindowId::Inventory);
-    state.bank_open = settings.0.demo_bank;
-    state.tab = if state.bank_open {
-        Tab::Bank
-    } else {
-        Tab::Inventory
-    };
-    state.demo = true;
-}
-
-/// The offline demo settles its own moves: they reach the world as news, as
-/// the session's would.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn settle(
+pub(crate) fn settle(
     mut state: ResMut<InventoryState>,
     mut online: ResMut<super::online::OnlineState>,
 ) {
@@ -608,65 +591,6 @@ fn tell(state: &mut InventoryState, online: &mut super::online::OnlineState) {
             state.refresh(online.world.inventory().stale());
         }
     }
-}
-
-pub(crate) fn demo_items() -> Vec<eq_client_core::inventory::InventoryItem> {
-    use eq_client_core::{ItemDetails, inventory::InventoryItem};
-    let mut items = Vec::new();
-    for (slot, id, name, count, bag) in [
-        (13, 1, "Preview sword", None, 0),
-        (22, 2, "Preview backpack", None, 8),
-        (23, 7, "Preview satchel", None, 10),
-        (261, 8, "Preview arrows", Some(50), 0),
-        (251, 3, "Preview rations", Some(20), 0),
-        (252, 4, "Preview bandages", Some(7), 0),
-        (30, 5, "Preview lantern", None, 0),
-        (2000, 6, "Preview bank item", None, 0),
-    ] {
-        items.push(InventoryItem {
-            activation: eq_client_core::inventory::ItemActivation::default(),
-            scroll_spell: None,
-            rules: eq_client_core::inventory::ItemPlacement {
-                stack_size: if id == 8 { 100 } else { 20 },
-                size: 1,
-                bag_size: 4,
-                item_type: if id == 8 { 27 } else { 0 },
-                ..default()
-            },
-            slot: InventorySlot(slot),
-            icon: match id {
-                2 => 557,
-                7 => 539,
-                3 => 537,
-                4 => 538,
-                8 => 598,
-                _ => 519,
-            },
-            stack_count: count,
-            charges: 0,
-            bag_slots: bag,
-            details: ItemDetails {
-                equipment: None,
-                bonuses: None,
-                id,
-                name: name.into(),
-                lore: String::new(),
-                weight_tenths: 10,
-                slots: if id == 1 {
-                    1 << 13
-                } else if id == 8 {
-                    1 << 21
-                } else {
-                    0
-                },
-                classes: u32::MAX,
-                races: u32::MAX,
-                flags: Vec::new(),
-                stats: Vec::new(),
-            },
-        });
-    }
-    items
 }
 
 #[cfg(test)]
@@ -726,7 +650,7 @@ mod tests {
         let mut app = app();
         crate::online::testing::inventory(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
-            InventoryUpdate::Snapshot(demo_items()),
+            InventoryUpdate::Snapshot(crate::preview::items()),
         );
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -776,7 +700,7 @@ mod tests {
     #[test]
     fn bags_show_empty_capacity_and_bank_items_are_separate() {
         let mut inventory = Inventory::default();
-        inventory.apply(InventoryUpdate::Snapshot(demo_items()));
+        inventory.apply(InventoryUpdate::Snapshot(crate::preview::items()));
         let packs = visible_slots(&inventory, Tab::Inventory);
         assert!(packs.contains(&InventorySlot(254)));
         assert!(!packs.contains(&InventorySlot(2000)));
@@ -792,7 +716,7 @@ mod tests {
         crate::online::testing::inventory(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
             InventoryUpdate::Snapshot(
-                demo_items()
+                crate::preview::items()
                     .into_iter()
                     .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),
@@ -852,7 +776,7 @@ mod tests {
         crate::online::testing::inventory(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
             InventoryUpdate::Snapshot(
-                demo_items()
+                crate::preview::items()
                     .into_iter()
                     .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),

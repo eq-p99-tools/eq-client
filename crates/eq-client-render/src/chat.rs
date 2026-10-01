@@ -708,55 +708,6 @@ pub(super) fn scroll(
     }
 }
 
-/// Clearly synthetic messages for the existing offline preview; no packets are sent.
-pub(super) fn seed_demo(history: &mut ChatHistory) {
-    use eq_client_core::chat::{ChannelName, ChatLine, Message};
-    for (channel, text) in [
-        (
-            ChannelName::System,
-            "Offline preview - these are synthetic messages.",
-        ),
-        (
-            ChannelName::Guild,
-            "Meet by the tunnel when everyone is ready.",
-        ),
-        (ChannelName::Group, "Ready when you are."),
-        (
-            ChannelName::Auction,
-            "WTS Fine Steel Long Sword - send a tell.",
-        ),
-        (ChannelName::Ooc, "Anyone heading toward the inn?"),
-        (ChannelName::Tell, "I will wait here."),
-        (ChannelName::Emote, "waves hello."),
-    ] {
-        history.push(ChatLine {
-            channel,
-            sender: Some("Preview".into()),
-            target: None,
-            message: Message {
-                message: None,
-                message_hex: None,
-                text: text.into(),
-                item_links: if channel == ChannelName::Auction {
-                    let label = "Fine Steel Long Sword";
-                    let start = text.find(label).unwrap();
-                    vec![eq_client_core::ItemLink {
-                        body: format!("00002A{}1234ABCD", "0".repeat(31)),
-                        text: label.into(),
-                        item_id: 42,
-                        start: 0,
-                        end: 0,
-                        text_start: start,
-                        text_end: start + label.len(),
-                    }]
-                } else {
-                    vec![]
-                },
-            },
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -994,7 +945,12 @@ mod tests {
             .world_mut()
             .spawn((TabButton(ChatTab::Guild), Interaction::Pressed))
             .id();
-        seed_demo(&mut app.world_mut().resource_mut::<ChatState>().history);
+        for line in crate::preview::chat_lines() {
+            app.world_mut()
+                .resource_mut::<ChatState>()
+                .history
+                .push(line);
+        }
         app.update();
         assert_eq!(app.world().resource::<ChatState>().active, ChatTab::Guild);
         let messages = shown(&mut app);
@@ -1033,7 +989,9 @@ mod tests {
                     seen: 0,
                 },
             );
-            seed_demo(&mut state.history);
+            for line in crate::preview::chat_lines() {
+                state.history.push(line);
+            }
         }
         app.update();
         let state = app.world().resource::<ChatState>();

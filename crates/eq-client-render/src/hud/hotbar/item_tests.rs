@@ -10,7 +10,7 @@ use eq_client_core::{
     reason = "Keep the ordered integration scenario and its assertions together"
 )]
 fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
-    let mut item = crate::inventory::demo_items().remove(0);
+    let mut item = crate::preview::items().remove(0);
     item.slot = InventorySlot(13);
     item.charges = 3;
     item.activation = ItemActivation {

@@ -144,7 +144,7 @@ mod tests {
             .set_cursor_position(Some(Vec2::new(100.0, 80.0)));
         crate::online::testing::inventory(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
-            eq_client_core::inventory::InventoryUpdate::Snapshot(super::super::demo_items()),
+            eq_client_core::inventory::InventoryUpdate::Snapshot(crate::preview::items()),
         );
         app.update();
         let world = app.world_mut();

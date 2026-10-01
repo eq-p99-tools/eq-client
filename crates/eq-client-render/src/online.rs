@@ -50,60 +50,6 @@ pub(super) fn world(online: Option<&OnlineState>) -> &ClientWorld {
     online.map_or(&OFFLINE, |online| &online.world)
 }
 
-/// The offline demos' player, standing here with these spells memorized.
-pub(super) fn preview_player(
-    position: eq_client_core::WorldPosition,
-    gems: [Option<u32>; 8],
-) -> eq_client_core::PlayerState {
-    eq_client_core::PlayerState {
-        name: "Preview".into(),
-        base_attributes: None,
-        deity: None,
-        class: Some(1),
-        spawn_id: 1,
-        race: 1,
-        gender: 0,
-        level: 1,
-        position,
-        mana: 0,
-        endurance: Some(0),
-        skills: None,
-        spell_refresh_ms: None,
-        memorized_spells: gems,
-        size: 0.0,
-        walk_speed: 0.0,
-        run_speed: 0.0,
-        hp_percent: None,
-        appearance: eq_client_core::outfit::Appearance::default(),
-    }
-}
-
-/// Admits the offline demos' preview player where the viewer stands, as a
-/// session would, so that every demo fills the same admitted world.
-pub(super) fn admit_preview(
-    state: &mut OnlineState,
-    origin: eq_client_core::WorldPosition,
-    zone: &str,
-) {
-    let player = preview_player(origin, [None; 8]);
-    for update in [
-        WorldUpdate::Game(WorldEvent::Entered {
-            // The offline preview lets the player do everything, jumping
-            // included, so it never lags what eq-network adds.
-            capabilities: eq_client_core::Capability::ALL.to_vec(),
-            session_id: 1,
-            zone: zone.into(),
-            player: Box::new(player),
-            far_clip: None,
-        }),
-        WorldUpdate::Connection(eq_client_core::world::Link::Connected),
-    ] {
-        state
-            .world
-            .apply(&update, std::time::Instant::now(), &NoSpells);
-    }
-}
-
 /// Runs the world's clocks each frame: doors the server leaves open swing
 /// shut, and refreshed gems start their timers.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -350,7 +296,10 @@ pub(super) fn receive(
         if let Some(moved) = &changes.moved {
             panels.moved(moved, scene.player());
         }
+        // Offline, the zone on screen is the viewer's own, and the preview
+        // admits its player into it.
         if changes.entered
+            && state.enabled
             && let Some(directory) = &settings.0.eq_directory
         {
             // The session is this zone's even if its assets fail to load, so
@@ -810,7 +759,7 @@ mod tests {
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
-        let item = super::super::inventory::demo_items().remove(0).details;
+        let item = crate::preview::items().remove(0).details;
         app.world_mut()
             .resource_mut::<super::super::items::ItemState>()
             .open_received(item);

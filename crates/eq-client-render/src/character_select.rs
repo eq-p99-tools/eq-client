@@ -12,31 +12,6 @@ pub(super) struct Selection {
     message: String,
 }
 
-/// Provides synthetic names only for explicit offline screenshot validation.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn demo(settings: Res<super::ViewerSettings>, mut state: ResMut<OnlineState>) {
-    if settings.0.demo_character_select && !state.enabled {
-        state.enabled = true;
-        state.selection = Some(Selection::new(
-            1,
-            vec![
-                CharacterChoice {
-                    slot: 0,
-                    name: "Examplewarrior".into(),
-                    level: Some(12),
-                    zone_id: Some(22),
-                },
-                CharacterChoice {
-                    slot: 3,
-                    name: "Examplecleric".into(),
-                    level: Some(5),
-                    zone_id: Some(9),
-                },
-            ],
-        ));
-    }
-}
-
 impl Selection {
     pub fn new(id: u64, entries: Vec<CharacterChoice>) -> Self {
         Self {
@@ -115,7 +90,9 @@ pub(super) fn update(
 ) {
     let focused = keys.focused();
     let keys = navigation.sample(&keys.input);
-    let visible = online.enabled && online.world.session_id().is_none();
+    // A session, or the preview's characters, until a character is in.
+    let visible =
+        (online.enabled || online.selection.is_some()) && online.world.session_id().is_none();
     let state = &mut *online;
     if visible
         && focused

@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use eq_client_assets::ZoneAsset;
 use eq_client_core::WorldPosition;
-use eq_client_render::{ProjectionStyle, ValidationAction, ViewerConfig, script::Step};
+use eq_client_render::{
+    Preview, ProjectionStyle, Source, ValidationAction, ViewerConfig, script::Step,
+};
 use eq_network::client::ServerProtocol;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -281,7 +283,15 @@ fn main() {
             None
         }
     };
-    let (worker, updates) = if let Some(protocol) = protocol {
+    let preview = Preview {
+        entities: arguments.demo_entities,
+        inventory: arguments.demo_inventory,
+        bank: arguments.demo_bank,
+        spellbook: arguments.demo_spellbook,
+        character_select: arguments.demo_character_select,
+        trade: arguments.demo_trade,
+    };
+    let (worker, source) = if let Some(protocol) = protocol {
         match session::SessionWorker::start(
             &eq_directory,
             protocol,
@@ -289,14 +299,17 @@ fn main() {
             calibration,
             local,
         ) {
-            Ok((worker, receiver)) => (Some(worker), Some(receiver)),
+            Ok((worker, updates)) => {
+                let commands = worker.commands();
+                (Some(worker), Source::Online { updates, commands })
+            }
             Err(error) => {
                 eprintln!("Cannot start session: {error:#}");
                 std::process::exit(1);
             }
         }
     } else {
-        (None, None)
+        (None, Source::Offline(preview))
     };
     println!("Controls: WASD moves; right-drag orbits; the wheel zooms.");
     let config = viewer_config(
@@ -306,13 +319,7 @@ fn main() {
         (script, script_follow),
         local,
     );
-    let exit = eq_client_render::run(
-        zone,
-        character,
-        config,
-        updates,
-        worker.as_ref().map(session::SessionWorker::commands),
-    );
+    let exit = eq_client_render::run(zone, character, config, source);
     // Close the session before exiting with the viewer's status.
     drop(worker);
     std::process::exit(exit);
@@ -348,14 +355,8 @@ fn viewer_config(
         terrain_only: arguments.terrain_only,
         eq_directory: Some(eq_directory),
         entity_distance: Some(arguments.entity_distance),
-        demo_entities: arguments.demo_entities,
         hide_own_helm: arguments.hide_own_helm,
         frame_rate_cap: (arguments.max_fps > 0).then_some(arguments.max_fps),
-        demo_inventory: arguments.demo_inventory,
-        demo_bank: arguments.demo_bank,
-        demo_spellbook: arguments.demo_spellbook,
-        demo_character_select: arguments.demo_character_select,
-        demo_trade: arguments.demo_trade,
         validation: if arguments.target_nearest_player_once {
             Some(ValidationAction::TargetNearestPlayer)
         } else if arguments.inspect_first_chat_item_once {

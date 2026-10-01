@@ -5,13 +5,7 @@
 //! been told, so the server never keeps a session the player can no longer end.
 use crate::theme::{self, Size};
 use bevy::prelude::*;
-use eq_client_core::{
-    ClientCommand, SpawnKind,
-    inventory::InventoryItem,
-    loot::{LootResponse, LootUpdate},
-    merchant::MerchantUpdate,
-    world::ClientWorld,
-};
+use eq_client_core::{ClientCommand, SpawnKind, inventory::InventoryItem, world::ClientWorld};
 
 use super::windows;
 
@@ -42,6 +36,20 @@ impl TradeState {
     /// Something the windows show changed: draw them again.
     pub(super) fn changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Opens the offline preview's loot and merchant windows, named as the
+    /// player's own requests would name them.
+    pub(crate) fn preview(&mut self, corpse: &str, merchant: &str) {
+        self.loot = Some(LootWindow {
+            name: corpse.into(),
+            pending: None,
+            loot_all: false,
+        });
+        self.merchant = Some(MerchantWindow {
+            name: merchant.into(),
+        });
+        self.changed();
     }
 
     /// Closes the windows whose corpse or merchant the world no longer has
@@ -95,74 +103,6 @@ pub(super) fn summary(world: &ClientWorld) -> String {
         .collect::<Vec<_>>()
         .join("; ")
 }
-
-/// Fills both windows with synthetic items for an explicitly offline preview,
-/// as the server would.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn demo(
-    settings: Res<super::ViewerSettings>,
-    mut online: ResMut<super::online::OnlineState>,
-    mut trade: ResMut<TradeState>,
-) {
-    use eq_client_core::{
-        Coins, WorldEvent, WorldUpdate, inventory::InventorySlot, merchant::MerchantItem,
-        world::NoSpells,
-    };
-    if !settings.0.demo_trade || online.enabled {
-        return;
-    }
-    let items = super::inventory::demo_items();
-    online.world.open_loot(1);
-    online.world.open_shop(2);
-    let mut news = vec![
-        WorldEvent::Coins(Coins {
-            platinum: 3,
-            gold: 1,
-            silver: 4,
-            copper: 7,
-        }),
-        WorldEvent::Loot(LootUpdate::Opened {
-            response: LootResponse::Normal,
-            coins: Coins::default(),
-        }),
-        WorldEvent::Merchant(MerchantUpdate::Opened {
-            merchant_id: 2,
-            accepted: true,
-            rate: 1.0,
-        }),
-    ];
-    news.extend(items.iter().take(3).zip(22..).map(|(item, slot)| {
-        let mut item = item.clone();
-        item.slot = InventorySlot(slot);
-        WorldEvent::Loot(LootUpdate::Item(Box::new(item)))
-    }));
-    news.push(WorldEvent::Loot(LootUpdate::Listed { corpse_id: 1 }));
-    news.extend(items.into_iter().skip(3).zip(1u32..).map(|(item, slot)| {
-        WorldEvent::Merchant(MerchantUpdate::Item(Box::new(MerchantItem {
-            slot,
-            price: slot * 137,
-            quantity: 0,
-            item,
-        })))
-    }));
-    for event in news {
-        online.world.apply(
-            &WorldUpdate::Game(event),
-            std::time::Instant::now(),
-            &NoSpells,
-        );
-    }
-    trade.loot = Some(LootWindow {
-        name: "a preview rat".into(),
-        pending: None,
-        loot_all: false,
-    });
-    trade.merchant = Some(MerchantWindow {
-        name: "Preview merchant".into(),
-    });
-    trade.changed();
-}
-
 /// `1p 2g 3s 4c`, omitting empty denominations.
 pub(super) fn coin_text(copper: u64) -> String {
     let parts: Vec<String> = [
@@ -709,6 +649,7 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
 mod tests {
     use super::*;
     use eq_client_core::merchant::MerchantItem;
+    use eq_client_core::{loot::LootUpdate, merchant::MerchantUpdate};
     use std::collections::BTreeMap;
 
     /// A world where the player has this corpse and merchant open.
@@ -861,7 +802,7 @@ mod tests {
 
     #[test]
     fn containers_with_contents_are_not_offered_for_sale() {
-        let items: BTreeMap<_, _> = super::super::inventory::demo_items()
+        let items: BTreeMap<_, _> = crate::preview::items()
             .into_iter()
             .map(|item| (item.slot, item))
             .collect();
@@ -876,7 +817,7 @@ mod tests {
 
     #[test]
     fn long_lists_scroll_inside_the_window_while_its_buttons_stay_outside() {
-        let stock: BTreeMap<u32, MerchantItem> = super::super::inventory::demo_items()
+        let stock: BTreeMap<u32, MerchantItem> = crate::preview::items()
             .into_iter()
             .cycle()
             .take(30)
