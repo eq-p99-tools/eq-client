@@ -57,6 +57,14 @@ pub(super) struct Held {
 #[derive(Component)]
 pub(super) struct HeldItem;
 
+/// Held items, placed and shown by their character's animation.
+type HeldItems<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Transform, &'static mut Visibility),
+    (With<HeldItem>, Without<AnimatedCharacter>),
+>;
+
 /// The model a movement root wears, for views that draw it again elsewhere.
 #[derive(Component)]
 pub(super) struct Model(pub PreparedCharacter);
@@ -248,7 +256,7 @@ pub(super) fn animate(
         Option<&super::entities::RemoteEntity>,
         Has<super::Player>,
     )>,
-    mut held_items: Query<&mut Transform, (With<HeldItem>, Without<AnimatedCharacter>)>,
+    mut held_items: HeldItems,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for (transform, mut character, remote, own) in &mut characters {
@@ -287,15 +295,23 @@ pub(super) fn animate(
             character
                 .asset
                 .pose_with_attachments(clip, character.elapsed, !held, &character.shown);
-        // Held items follow their hand or shield point.
+        // Held items follow their hand or shield point, and stay hidden on a
+        // skeleton without one rather than sitting at the model's origin.
         character.attachments = attachments;
         for item in character.held.iter().flatten() {
-            if let (Ok(mut placed), Some(point)) = (
-                held_items.get_mut(item.entity),
-                attachments[item.point.index()],
-            ) {
+            let Ok((mut placed, mut shown)) = held_items.get_mut(item.entity) else {
+                continue;
+            };
+            let point = attachments[item.point.index()];
+            if let Some(point) = point {
                 *placed = Transform::from_matrix(point);
             }
+            let visibility = if point.is_some() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            shown.set_if_neq(visibility);
         }
         for (index, handle) in &character.meshes {
             let Some(pose) = poses.get_mut(*index).and_then(Option::take) else {
