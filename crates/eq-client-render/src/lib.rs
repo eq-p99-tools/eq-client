@@ -10,6 +10,7 @@ mod chat;
 mod combat;
 mod doors;
 mod entities;
+mod frame_limit;
 mod ground;
 mod hud;
 mod interact;
@@ -111,6 +112,9 @@ pub struct ViewerConfig {
     /// Hide the player's own helm, as the official client's show-helm option
     /// does; other characters always show theirs.
     pub hide_own_helm: bool,
+    /// The most frames the client draws a second; None leaves it to vsync,
+    /// which is the monitor's refresh rate.
+    pub frame_rate_cap: Option<u32>,
     /// Where this client keeps its own settings; None keeps nothing between runs.
     pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
@@ -178,6 +182,7 @@ pub fn run(
     let steps = config.script.clone();
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
+    let frame_rate_cap = config.frame_rate_cap;
     let online = updates.is_some();
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
     let window = primary_window(online, screenshot.is_none(), config.window_position);
@@ -254,6 +259,7 @@ pub fn run(
             .chain(),
     );
     navigation::install(&mut app);
+    frame_limit::install(&mut app, frame_rate_cap);
     install_overlays(&mut app);
     if let Some(steps) = steps {
         install_script(&mut app, steps, follow, local_session);

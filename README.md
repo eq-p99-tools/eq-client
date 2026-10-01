@@ -70,7 +70,9 @@ repository. On Windows, the viewer also detects the standard
 `Program Files (x86)\Sony\EverQuest` installation when neither setting is
 provided. `--start-x` and `--start-y` select an initial EQ location, and
 `--camera-distance` adjusts the initial view distance. `--terrain-only` hides
-placed objects when inspecting terrain materials.
+placed objects when inspecting terrain materials. The client draws at most 60
+frames a second; `--max-fps` sets another cap, and `--max-fps 0` leaves the
+rate to vsync, which is the monitor's refresh rate.
 
 ## Stationary online preview
 
