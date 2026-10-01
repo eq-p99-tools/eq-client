@@ -11,6 +11,7 @@ use eq_client_assets::{
     sidl::{Align, Element, Gauge, Label, Library, Piece, Screen},
     ui::Area,
 };
+use std::collections::HashMap;
 
 /// Where the skin defines a window the client draws from it.
 const fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
@@ -38,54 +39,86 @@ pub(crate) enum Shows {
     TargetLine,
 }
 
-/// Draws the skinned windows again whenever the skin changes, and once the
-/// installation is known.
+/// The skin's windows as read, by skin: read once, whatever rebuilds the
+/// frames they are drawn in.
+#[derive(Resource, Default)]
+pub(crate) struct Screens {
+    libraries: HashMap<String, Option<Library>>,
+    screens: HashMap<(String, WindowId), Option<Screen>>,
+}
+
+impl Screens {
+    /// A window as this skin defines it, if it does.
+    fn get(&mut self, directory: &std::path::Path, skin: &str, id: WindowId) -> Option<&Screen> {
+        let (file, name) = source(id)?;
+        let library = self
+            .libraries
+            .entry(skin.to_owned())
+            .or_insert_with(|| {
+                Library::read(directory, skin)
+                    .inspect_err(|error| warn!("UI skin {skin} unreadable: {error}"))
+                    .ok()
+            })
+            .as_ref();
+        self.screens
+            .entry((skin.to_owned(), id))
+            .or_insert_with(|| {
+                library?
+                    .window(directory, skin, file, name)
+                    .inspect_err(|error| warn!("Skin {skin} draws no {name}: {error}"))
+                    .ok()
+            })
+            .as_ref()
+    }
+}
+
+/// The skin a frame is drawn in.
+#[derive(Component)]
+pub(crate) struct Drawn(String);
+
+/// Window frames, with what the skin changes on them and the skin they are
+/// drawn in.
+type Frames<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static WindowId,
+        &'static mut Node,
+        &'static mut BackgroundColor,
+        &'static mut BorderColor,
+        Option<&'static Drawn>,
+    ),
+>;
+
+/// Draws each skinned window from the skin: a frame just built, or one
+/// drawn in another skin, is drawn again.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn apply(
     mut commands: Commands,
     skin: Res<super::skin::UiSkin>,
     settings: Res<super::ViewerSettings>,
-    mut drawn: Local<Option<String>>,
-    mut frames: Query<(
-        Entity,
-        &WindowId,
-        &mut Node,
-        &mut BackgroundColor,
-        &mut BorderColor,
-    )>,
+    mut screens: ResMut<Screens>,
+    mut frames: Frames,
     mut art: crate::sheets::Art,
 ) {
-    if drawn.as_deref() == Some(skin.0.as_str()) {
-        return;
-    }
     let Some(directory) = settings.0.eq_directory.as_deref() else {
         return;
     };
-    *drawn = Some(skin.0.clone());
-    let library = match Library::read(directory, &skin.0) {
-        Ok(library) => library,
-        Err(error) => {
-            warn!("UI skin {} unreadable: {error}", skin.0);
-            return;
+    for (frame, id, mut node, mut background, mut border, drawn) in &mut frames {
+        if drawn.is_some_and(|drawn| drawn.0 == skin.0) {
+            continue;
         }
-    };
-    for (frame, id, mut node, mut background, mut border) in &mut frames {
-        let Some((file, name)) = source(*id) else {
+        let Some(screen) = screens.get(directory, &skin.0, *id) else {
             continue;
         };
-        let screen = match library.window(directory, &skin.0, file, name) {
-            Ok(screen) => screen,
-            Err(error) => {
-                warn!("Skin {} draws no {name}: {error}", skin.0);
-                continue;
-            }
-        };
-        reshape(&mut node, &screen);
+        commands.entity(frame).insert(Drawn(skin.0.clone()));
+        reshape(&mut node, screen);
         background.0 = Color::NONE;
         *border = BorderColor::all(Color::NONE);
         commands.entity(frame).despawn_children();
         commands.entity(frame).with_children(|window| {
-            draw(window, &screen, &mut art);
+            draw(window, screen, &mut art);
             if *id == WindowId::Target {
                 window.spawn((
                     Shows::TargetLine,

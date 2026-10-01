@@ -259,6 +259,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<spellbook::BookView>()
         .init_resource::<spellbook::BookSelection>()
         .init_resource::<sheets::Sheets>()
+        .init_resource::<skinned::Screens>()
         .init_resource::<chat::ChatState>()
         .init_resource::<notices::Lines>()
         .init_resource::<items::ItemState>()
