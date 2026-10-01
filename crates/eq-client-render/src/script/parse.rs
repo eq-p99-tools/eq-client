@@ -12,9 +12,12 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 17] = [
+const GM_COMMANDS: [&str; 18] = [
     // GM mode on or off: off, the server lets the player go hungry.
     "gm",
+    // A rule changed in this zone only, such as how fast hunger comes, or
+    // the zone's rules reloaded; never stored or reset.
+    "rules",
     "summon",
     "summonitem",
     // A temporary NPC at the GM's feet, and coins or items on the target.
@@ -369,10 +372,13 @@ fn parse_gm(words: &[&str]) -> Result<Step, String> {
     let plain = |argument: &&str| {
         argument
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | ':'))
     };
     if arguments.len() > 4 || !arguments.iter().all(plain) {
         return Err("gm takes up to four plain arguments".into());
+    }
+    if *command == "rules" && !matches!(arguments, ["set", _, _] | ["reload"]) {
+        return Err("gm rules takes set <Category:Rule> <value> or reload".into());
     }
     Ok(Step::Gm(words.join(" ")))
 }
@@ -581,9 +587,25 @@ mod tests {
             "gm zone a b c d e",
             "gm goto 1;2",
             "gm summon Name,Other",
+            "gm rules reset",
+            "gm rules setdb Character:FoodLossPerUpdate 32",
+            "gm rules set Character:FoodLossPerUpdate",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+        assert_eq!(
+            parse(
+                "gm rules set Character:FoodLossPerUpdate 4000
+gm rules reload
+",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Gm("rules set Character:FoodLossPerUpdate 4000".into()),
+                Step::Gm("rules reload".into())
+            ]
+        );
         // `#` starts a comment, so a script can never smuggle one into a step.
         assert_eq!(
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
