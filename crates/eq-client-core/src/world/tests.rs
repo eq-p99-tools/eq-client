@@ -28,6 +28,7 @@ fn player(spawn_id: u16) -> PlayerState {
         run_speed: 0.0,
         hp_percent: Some(100),
         appearance: Appearance::default(),
+        listing: crate::listing::Listing::default(),
     }
 }
 
@@ -44,6 +45,8 @@ fn spawn(spawn_id: u16) -> SpawnState {
         size: 0.0,
         invisible: false,
         appearance: Appearance::default(),
+        level: 0,
+        listing: crate::listing::Listing::default(),
     }
 }
 
@@ -1376,4 +1379,77 @@ fn gems_read_the_admitted_players_memorized_spells() {
     assert_eq!(world.gem(2), Some(73));
     assert_eq!(world.gem(0), None);
     assert_eq!(world.gem(8), None);
+}
+
+#[test]
+fn the_zone_who_lists_the_zone_players_as_they_are_listed() {
+    use crate::listing::{Anonymity, ListingChange};
+    use crate::who::WhoFilter;
+    let mut world = admitted();
+    let other = |spawn_id, name: &str, class, level| SpawnState {
+        class: Some(class),
+        name: name.into(),
+        kind: SpawnKind::Player,
+        level,
+        ..spawn(spawn_id)
+    };
+    game(
+        &mut world,
+        WorldEvent::Spawns(vec![
+            other(6, "Zed", 12, 50),
+            other(7, "Ann", 2, 20),
+            SpawnState {
+                kind: SpawnKind::PlayerCorpse,
+                ..other(8, "Gone", 1, 5)
+            },
+        ]),
+    );
+    game(
+        &mut world,
+        WorldEvent::GuildNames(vec![(3, "Seekers".into())]),
+    );
+    for (spawn_id, change) in [
+        (6, ListingChange::Guild(Some(3))),
+        (6, ListingChange::Level(51)),
+        (7, ListingChange::Anonymity(Anonymity::Anonymous)),
+        (9, ListingChange::Away(true)),
+    ] {
+        game(&mut world, WorldEvent::Listing { spawn_id, change });
+    }
+    let names = |filter: &WhoFilter| -> Vec<String> {
+        world
+            .zone_who(filter)
+            .into_iter()
+            .map(|player| player.name)
+            .collect()
+    };
+    // The player and the zone's other players, by name; not corpses or NPCs.
+    assert_eq!(names(&WhoFilter::default()), ["Ann", "Example", "Zed"]);
+    let everyone = world.zone_who(&WhoFilter::default());
+    assert_eq!(everyone[2].guild.as_deref(), Some("Seekers"));
+    assert_eq!(everyone[2].level, 51);
+    assert!(everyone[1].listing.away);
+    // An anonymous player hides from class, race and level filters.
+    let clerics = WhoFilter {
+        class: Some(2),
+        ..WhoFilter::default()
+    };
+    assert_eq!(names(&clerics), Vec::<String>::new());
+    let levels = WhoFilter {
+        levels: Some((50, 60)),
+        ..WhoFilter::default()
+    };
+    assert_eq!(names(&levels), ["Zed"]);
+    // A name, guild or zone start matches any player.
+    for (text, expected) in [
+        ("se", vec!["Zed"]),
+        ("an", vec!["Ann"]),
+        ("QEY", vec!["Ann", "Example", "Zed"]),
+    ] {
+        let filter = WhoFilter {
+            text: text.into(),
+            ..WhoFilter::default()
+        };
+        assert_eq!(names(&filter), expected, "{text}");
+    }
 }

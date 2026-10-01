@@ -467,9 +467,13 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
-            let queued = match super::chat::target_request(command) {
-                Some(request) => request.map(|name| chat.requested_target = Some(name)),
-                None => super::chat::submit_game_command(command, &online, &observed.1),
+            let queued = match (
+                super::chat::target_request(command),
+                super::chat::zone_who_request(command),
+            ) {
+                (Some(request), _) => request.map(|name| chat.requested_target = Some(name)),
+                (None, Some(request)) => request.map(|filter| chat.zone_who = Some(filter)),
+                (None, None) => super::chat::submit_game_command(command, &online, &observed.1),
             };
             if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);

@@ -341,6 +341,7 @@ mod tests {
                 run_speed: 0.0,
                 hp_percent: None,
                 appearance: eq_client_core::outfit::Appearance::default(),
+                listing: eq_client_core::listing::Listing::default(),
             },
         );
         let mut bytes = [0u8; 80];

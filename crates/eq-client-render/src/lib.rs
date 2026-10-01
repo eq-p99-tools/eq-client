@@ -386,6 +386,7 @@ fn schedule(app: &mut App) {
             inventory::colors::input,
             interact::input,
             target::input,
+            who::zone_list,
             combat::input,
             trade::input,
             give::buttons,

@@ -49,6 +49,8 @@ pub(super) struct ChatState {
     pub hovered: bool,
     /// A `/target Name` request waiting for target selection to resolve it.
     pub requested_target: Option<String>,
+    /// A plain `/who`, waiting to list the zone's players.
+    pub zone_who: Option<eq_client_core::who::WhoFilter>,
     draft: String,
     status: String,
 }
@@ -524,6 +526,10 @@ fn submit_draft(
             state.requested_target = Some(request?);
             return Ok(());
         }
+        if let Some(request) = zone_who_request(state.draft.trim()) {
+            state.zone_who = Some(request?);
+            return Ok(());
+        }
         if let Some(line) = location(state.draft.trim(), online) {
             state.history.push(system_line(line?));
             return Ok(());
@@ -605,6 +611,25 @@ pub(super) fn target_request(input: &str) -> Option<Result<String, String>> {
     })
 }
 
+/// The words of a plain `/who`, which lists the zone's players; None for
+/// anything else, `/who all` among it.
+pub(super) fn zone_who_request(
+    input: &str,
+) -> Option<Result<eq_client_core::who::WhoFilter, String>> {
+    let command = input.strip_prefix('/')?.trim();
+    let (name, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    if !name.eq_ignore_ascii_case("who") {
+        return None;
+    }
+    match eq_client_core::who::parse(words) {
+        Ok(request) if request.everywhere => None,
+        Ok(request) => Some(Ok(request.filter)),
+        Err(error) => Some(Err(error)),
+    }
+}
+
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
     input: &str,
@@ -634,7 +659,7 @@ fn game_commands(
     Some(match name.as_str() {
         "who" => eq_client_core::who::parse(words).and_then(|request| {
             if !request.everywhere {
-                return Err("Use /who all: the zone's own list is not ready yet".into());
+                return Err("The zone's /who is listed by chat, not sent".into());
             }
             Ok(vec![ClientCommand::WhoAll {
                 session_id: stamp()?.session_id,
@@ -819,6 +844,24 @@ mod tests {
     }
 
     #[test]
+    fn plain_who_lists_the_zone_and_who_all_asks_the_world() {
+        assert_eq!(
+            zone_who_request("/who wiz"),
+            Some(Ok(eq_client_core::who::WhoFilter {
+                class: Some(12),
+                ..eq_client_core::who::WhoFilter::default()
+            }))
+        );
+        assert_eq!(
+            zone_who_request("/WHO"),
+            Some(Ok(eq_client_core::who::WhoFilter::default()))
+        );
+        assert_eq!(zone_who_request("/who all"), None);
+        assert_eq!(zone_who_request("/whoever"), None);
+        assert!(zone_who_request("/who 1 2 3").unwrap().is_err());
+    }
+
+    #[test]
     fn camp_sits_first_and_game_commands_never_become_chat() {
         let mut online = super::super::online::OnlineState::new(true);
         let (queue, _received) = std::sync::mpsc::sync_channel(4);
@@ -849,6 +892,7 @@ mod tests {
                 run_speed: 0.0,
                 hp_percent: Some(100),
                 appearance: eq_client_core::outfit::Appearance::default(),
+                listing: eq_client_core::listing::Listing::default(),
             },
         );
         let commands = game_commands("/CAMP", &online, &outbox).unwrap().unwrap();
