@@ -812,11 +812,12 @@ mod tests {
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Right);
         app.update();
-        let cache = &app
-            .world()
-            .resource::<super::super::items::ItemState>()
-            .cache;
-        assert_eq!(cache.get(3).unwrap().name, "Preview rations");
+        assert_eq!(
+            app.world()
+                .resource::<super::super::items::ItemState>()
+                .selected(),
+            Some(3)
+        );
         let world = app.world_mut();
         let mut text = world.query_filtered::<&Text, With<super::super::items::ItemText>>();
         assert!(text.single(world).unwrap().0.contains("Preview rations"));

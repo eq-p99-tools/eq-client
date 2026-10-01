@@ -92,6 +92,8 @@ pub(super) fn state(
         interrupted = ?online.world.casting().interrupted.map(|(_, id)| id),
         feedback = ?hud.action_feedback.as_ref().map(|(_, text)| text),
         target = ?online.world.target().selected,
+        considered = ?online.world.target().selected.and_then(|id| online.world.considered(id)),
+        camp = ?online.world.camp().map(|camp| camp.logging_out),
         ?gems,
         ?cooldowns,
         ?book,

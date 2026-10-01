@@ -2,55 +2,7 @@
 use super::{online::OnlineState, target::CommandsToServer};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, ItemDetails, ItemLink};
-use std::{
-    collections::{BTreeMap, VecDeque},
-    time::{Duration, Instant},
-};
-
-/// Item definitions the server sent this session. Once full, the one kept
-/// longest is forgotten first, never the one on screen.
-#[derive(Default)]
-pub(super) struct ItemCache {
-    items: BTreeMap<u32, ItemDetails>,
-    /// Item IDs, the one kept longest first.
-    order: VecDeque<u32>,
-}
-
-impl ItemCache {
-    /// How many definitions are kept.
-    const CAPACITY: usize = 128;
-
-    /// The definition of an item, if the server sent it.
-    pub(super) fn get(&self, id: u32) -> Option<&ItemDetails> {
-        self.items.get(&id)
-    }
-
-    /// Whether the server sent the definition of an item.
-    pub(super) fn contains(&self, id: u32) -> bool {
-        self.items.contains_key(&id)
-    }
-
-    /// Keeps a definition; when full, forgets the one kept longest other than
-    /// this one and `shown`, the item on screen.
-    pub(super) fn insert(&mut self, item: ItemDetails, shown: Option<u32>) {
-        let id = item.id;
-        self.order.retain(|kept| *kept != id);
-        self.order.push_back(id);
-        self.items.insert(id, item);
-        while self.items.len() > Self::CAPACITY {
-            let Some(index) = self
-                .order
-                .iter()
-                .position(|kept| *kept != id && Some(*kept) != shown)
-            else {
-                break;
-            };
-            if let Some(oldest) = self.order.remove(index) {
-                self.items.remove(&oldest);
-            }
-        }
-    }
-}
+use std::time::{Duration, Instant};
 
 #[derive(Component)]
 pub(super) struct ItemButton(pub ItemLink);
@@ -60,12 +12,13 @@ pub(super) struct ItemPanel;
 pub(super) struct ItemText;
 #[derive(Component)]
 pub(super) struct CloseItem;
+/// The item panel: the item chosen, and the definition on screen, which
+/// stays while it shows whatever the world's cache forgets.
 #[derive(Resource, Default)]
 pub(super) struct ItemState {
-    pub cache: ItemCache,
     pub hovered: bool,
-    session: Option<u64>,
     selected: Option<(u32, String)>,
+    shown: Option<ItemDetails>,
     pending: Option<Instant>,
     status: String,
 }
@@ -74,15 +27,21 @@ impl ItemState {
     /// Opens a received inventory definition without making an inspection request.
     pub(super) fn open_received(&mut self, item: ItemDetails) {
         self.selected = Some((item.id, item.name.clone()));
+        self.shown = Some(item);
         self.pending = None;
         self.status.clear();
-        self.cache.insert(item, None);
     }
 
-    /// Keeps a definition the server sent, holding on to the one on screen.
-    pub(super) fn received(&mut self, item: ItemDetails) {
-        let shown = self.selected.as_ref().map(|(id, _)| *id);
-        self.cache.insert(item, shown);
+    /// The item the panel shows or waits for.
+    pub(super) fn selected(&self) -> Option<u32> {
+        self.selected.as_ref().map(|(id, _)| *id)
+    }
+
+    /// The definition the panel shows, when it has one for the chosen item.
+    fn definition(&self) -> Option<&ItemDetails> {
+        self.shown
+            .as_ref()
+            .filter(|item| Some(item.id) == self.selected())
     }
 }
 
@@ -148,14 +107,9 @@ pub(super) fn input(
     sender: Res<CommandsToServer>,
     mut state: ResMut<ItemState>,
 ) {
-    if state.session != online.world.session_id() {
-        *state = ItemState {
-            session: online.world.session_id(),
-            ..default()
-        };
-    }
     if close.iter().any(|i| *i == Interaction::Pressed) {
         state.selected = None;
+        state.shown = None;
     }
     if state
         .pending
@@ -164,11 +118,11 @@ pub(super) fn input(
         state.pending = None;
         state.status = "No item definition received. Click the link to retry.".into();
     }
-    if state
-        .selected
-        .as_ref()
-        .is_some_and(|(id, _)| state.cache.contains(*id))
+    // A definition the server sent for the chosen item stays with the panel.
+    if state.definition().is_none()
+        && let Some(item) = state.selected().and_then(|id| online.world.item(id))
     {
+        state.shown = Some(item.clone());
         state.pending = None;
     }
     let automatic = if !*attempted
@@ -197,7 +151,8 @@ pub(super) fn input(
             continue;
         }
         state.selected = Some((link.item_id, link.text.clone()));
-        if state.cache.contains(link.item_id) {
+        if let Some(item) = online.world.item(link.item_id) {
+            state.shown = Some(item.clone());
             continue;
         }
         if !online.world.connected() || online.world.death().is_some() {
@@ -239,10 +194,10 @@ pub(super) fn update(
             Display::None
         };
     }
-    let Some((id, name)) = &state.selected else {
+    let Some((_, name)) = &state.selected else {
         return;
     };
-    let text = state.cache.get(*id).map_or_else(
+    let text = state.definition().map_or_else(
         || format!("{name}\n\n{}", state.status),
         |item| {
             let properties = item
@@ -500,17 +455,12 @@ mod tests {
     }
 
     #[test]
-    fn the_item_on_screen_is_never_forgotten_and_the_oldest_goes_first() {
+    fn the_definition_on_screen_belongs_to_the_chosen_item() {
         let mut state = ItemState::default();
-        // The item on screen has the lowest ID, which a map's first entry was.
         state.open_received(item(1));
-        for id in 1000..1000 + 200 {
-            state.received(item(id));
-        }
-        assert!(state.cache.contains(1));
-        assert!(!state.cache.contains(1000));
-        assert!(state.cache.contains(1199));
-        assert_eq!(state.cache.items.len(), ItemCache::CAPACITY);
+        assert_eq!(state.definition().map(|item| item.id), Some(1));
+        state.selected = Some((2, "Another".into()));
+        assert!(state.definition().is_none());
     }
     #[test]
     fn wrapped_link_uses_each_line_without_linking_the_gap() {
@@ -633,13 +583,19 @@ mod tests {
         );
         app.update();
         assert!(receiver.try_recv().is_err());
-        crate::online::testing::admit(
+        // The server's answer reaches the panel through the world.
+        let mut answer = item(42);
+        answer.name = "Synthetic blade".into();
+        crate::online::testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
-            78,
-            crate::online::testing::player(1),
+            [eq_client_core::WorldEvent::ItemDetails(answer)],
         );
         app.update();
-        assert!(app.world().resource::<ItemState>().selected.is_none());
-        assert!(app.world().resource::<ItemState>().pending.is_none());
+        let state = app.world().resource::<ItemState>();
+        assert_eq!(
+            state.definition().map(|item| item.name.as_str()),
+            Some("Synthetic blade")
+        );
+        assert!(state.pending.is_none());
     }
 }

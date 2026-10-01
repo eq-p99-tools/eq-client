@@ -102,13 +102,14 @@ type BookRows<'w, 's> = Query<
     (Without<BookText>, Without<BookFrame>),
 >;
 
-#[derive(Default)]
+/// The spell chosen in the book and what the book says about it; a new
+/// admission or a camp starts it over.
+#[derive(Resource, Default)]
 pub(super) struct BookSelection {
     deletion: super::book_delete::Confirmation,
     selected: Option<u32>,
     location: Option<(u32, usize)>,
     message: String,
-    session: Option<u64>,
     reply_revision: u64,
 }
 
@@ -139,17 +140,6 @@ impl BookSelection {
             self.message.clear();
             self.reply_revision = revision;
         }
-    }
-    /// Clears old-character selections when admission changes; callers reset pagination.
-    fn reset_session(&mut self, session: Option<u64>) -> bool {
-        if self.session == session {
-            return false;
-        }
-        *self = Self {
-            session,
-            ..Self::default()
-        };
-        true
     }
 }
 
@@ -422,15 +412,11 @@ pub(super) fn update(
     mut gems: GemChoices,
     online: Option<Res<super::online::OnlineState>>,
     sender: Option<Res<super::target::CommandsToServer>>,
-    mut selection: Local<BookSelection>,
+    mut selection: ResMut<BookSelection>,
     actions: BookActions,
 ) {
     let (scribe, mut deletion, mut requests) = actions;
     let world = super::online::world(online.as_deref());
-    let session = world.session_id();
-    if selection.reset_session(session) {
-        state.page = 0;
-    }
     selection.receive_reply(world.book_action_revision());
     let accepts_input = !chat.composing && windows.single().is_ok_and(|window| window.focused);
     if keys.just_pressed(KeyCode::KeyB) && accepts_input {
@@ -1167,8 +1153,6 @@ mod tests {
         assert_eq!(selection.relocated_page(&entries), None);
         entries.retain(|(_, id)| *id != 16);
         assert_eq!(selection.relocated_page(&entries), None);
-        selection.reset_session(Some(2));
-        assert!(selection.location.is_none());
     }
 
     #[test]
@@ -1198,6 +1182,7 @@ mod tests {
             })
             .insert_resource(crate::target::CommandsToServer(Some(sender)))
             .init_resource::<crate::hud::HudState>()
+            .init_resource::<BookSelection>()
             .insert_resource(BookView {
                 open: true,
                 page: 0,
@@ -1319,6 +1304,7 @@ mod tests {
             .init_resource::<super::super::hud::HudState>()
             .insert_resource(crate::online::OnlineState::new(false))
             .init_resource::<SpellNames>()
+            .init_resource::<BookSelection>()
             .insert_resource(BookView {
                 open: true,
                 page: 0,
@@ -1388,6 +1374,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<BookView>()
+            .init_resource::<BookSelection>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<super::super::hud::HudState>()
             .insert_resource({

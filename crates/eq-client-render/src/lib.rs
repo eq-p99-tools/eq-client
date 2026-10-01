@@ -281,6 +281,7 @@ fn init_presentation(app: &mut App) {
     app.init_resource::<hud::HudState>()
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<spellbook::BookView>()
+        .init_resource::<spellbook::BookSelection>()
         .init_resource::<spell_icons::Icons>()
         .init_resource::<chat::ChatState>()
         .init_resource::<target::TargetState>()

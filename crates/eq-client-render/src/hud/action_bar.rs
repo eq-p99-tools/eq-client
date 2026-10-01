@@ -20,8 +20,6 @@ const FEEDBACK: Duration = Duration::from_secs(3);
 pub(crate) struct ActionRequests {
     /// The latest spellbook request and when it was queued.
     pub(crate) book: Option<(Instant, String)>,
-    /// When camping began, and whether the logout itself has started.
-    pub(crate) camp: Option<(Instant, bool)>,
 }
 
 #[derive(Component)]
@@ -147,7 +145,7 @@ pub(super) fn current(
         }
         _ => (),
     }
-    if let Some((since, logging_out)) = requests.camp {
+    if let Some(eq_client_core::world::Camp { since, logging_out }) = world.camp() {
         return Some(if logging_out {
             Shown {
                 label: "Logging out".into(),
@@ -255,7 +253,13 @@ mod tests {
             None
         );
 
-        requests.camp = Some((now.checked_sub(Duration::from_secs(15)).unwrap(), false));
+        testing::news_at(
+            &mut online,
+            [eq_client_core::WorldEvent::Camp(
+                eq_client_core::CampStatus::Preparing,
+            )],
+            now.checked_sub(Duration::from_secs(15)).unwrap(),
+        );
         let camping = current(&hud, &online.world, &requests, &names, &messages, now).unwrap();
         assert_eq!(camping.label, "Camping (15s)");
         assert!((camping.progress.unwrap() - 0.5).abs() < 0.01);
@@ -298,7 +302,12 @@ mod tests {
             },
         );
         testing::book_action(&mut online, BookActionStatus::Confirmed);
-        requests.camp = None;
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Camp(
+                eq_client_core::CampStatus::Abandoned,
+            )],
+        );
         hud.action_feedback = Some((now, "Spell available in 2.0s".into()));
         assert_eq!(
             current(&hud, &online.world, &requests, &names, &messages, now)

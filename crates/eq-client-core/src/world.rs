@@ -8,11 +8,13 @@
 //! its rules are tested without one.
 
 mod casting;
+mod items;
 mod target;
 mod trade;
 mod vitals;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
+pub use items::ItemCache;
 pub use target::Target;
 pub use trade::{Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
@@ -70,6 +72,15 @@ pub enum Reset {
     },
 }
 
+/// Camping under way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Camp {
+    /// When the player began camping.
+    pub since: Instant,
+    /// Whether the logout itself has begun.
+    pub logging_out: bool,
+}
+
 /// What an update changed that a front end must redo.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[allow(
@@ -119,8 +130,11 @@ pub struct ClientWorld {
     revision: u64,
     vitals: Vitals,
     inventory: Inventory,
+    /// Item definitions the server sent for inspection.
+    items: ItemCache,
     coins: Option<Coins>,
     trade: trade::Trade,
+    camp: Option<Camp>,
     casting: Casting,
     buffs: BuffTracker,
     spell_book: Option<SpellBook>,
@@ -510,6 +524,20 @@ impl ClientWorld {
                 self.book_action_revision = self.book_action_revision.wrapping_add(1);
             }
             WorldEvent::Camp(CampStatus::Camped) => return self.reset(Reset::Camped),
+            WorldEvent::Camp(status) => {
+                self.camp = match status {
+                    CampStatus::Preparing => Some(Camp {
+                        since: now,
+                        logging_out: false,
+                    }),
+                    CampStatus::LoggingOut => Some(Camp {
+                        since: self.camp.map_or(now, |camp| camp.since),
+                        logging_out: true,
+                    }),
+                    _ => None,
+                };
+            }
+            WorldEvent::ItemDetails(item) => self.items.insert(item.clone()),
             _ => (),
         }
         changes
@@ -563,8 +591,12 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
-        // Whatever the reason, the player can no longer act on their target.
+        // Whatever the reason, the player can no longer act on their target,
+        // and only a death leaves camping under way.
         self.target = Target::default();
+        if reason != Reset::Died {
+            self.camp = None;
+        }
         match reason {
             Reset::Entered => {
                 self.forget_admission();
@@ -581,6 +613,7 @@ impl ClientWorld {
                 self.casting = Casting::default();
                 self.vitals = Vitals::default();
                 self.inventory = Inventory::default();
+                self.coins = None;
                 self.spell_book = None;
                 self.buffs.clear();
                 self.session_id = None;
@@ -628,6 +661,7 @@ impl ClientWorld {
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
         self.characters = None;
+        self.items = ItemCache::default();
         self.pending_transfer = None;
         self.death = None;
         self.forget_zone();
@@ -809,6 +843,18 @@ impl ClientWorld {
     #[must_use]
     pub const fn merchant(&self) -> Option<&Merchant> {
         self.trade.merchant.as_ref()
+    }
+
+    /// An item's definition, when the server sent it this admission.
+    #[must_use]
+    pub fn item(&self, id: u32) -> Option<&crate::ItemDetails> {
+        self.items.get(id)
+    }
+
+    /// Camping under way.
+    #[must_use]
+    pub const fn camp(&self) -> Option<Camp> {
+        self.camp
     }
 
     /// The coins the player carries, as last reported.
