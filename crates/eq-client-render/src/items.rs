@@ -1,5 +1,5 @@
 //! Clickable chat item links and a read-only server-backed details panel.
-use super::{online::OnlineState, target::CommandsToServer};
+use super::{online::OnlineState, outbox::Outbox};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, ItemDetails, ItemLink};
 use std::time::{Duration, Instant};
@@ -104,7 +104,7 @@ pub(super) fn input(
     buttons: Query<(&Interaction, &ItemButton), Changed<Interaction>>,
     close: Query<&Interaction, (With<CloseItem>, Changed<Interaction>)>,
     online: Res<OnlineState>,
-    sender: Res<CommandsToServer>,
+    sender: Res<Outbox>,
     mut state: ResMut<ItemState>,
 ) {
     if close.iter().any(|i| *i == Interaction::Pressed) {
@@ -155,27 +155,15 @@ pub(super) fn input(
             state.shown = Some(item.clone());
             continue;
         }
-        if !online.world.connected() || online.world.death().is_some() {
-            state.status = "Connect to inspect this item.".into();
-            continue;
-        }
-        let Some(session_id) = online.world.session_id() else {
-            continue;
-        };
-        let command = ClientCommand::InspectItem {
-            session_id,
+        // The outbox says why a request did not leave.
+        let sent = sender.post(&online.world, |stamp| ClientCommand::InspectItem {
+            session_id: stamp.session_id,
             link_body: link.body.clone(),
-        };
-        if sender
-            .0
-            .as_ref()
-            .is_some_and(|s| s.try_send(command).is_ok())
-        {
-            eprintln!("Item inspection requested: ID {}", link.item_id);
+        });
+        if sent.is_ok() {
+            debug!("Item inspection requested: ID {}", link.item_id);
             state.pending = Some(Instant::now());
             state.status = "Loading item from server...".into();
-        } else {
-            state.status = "Item request could not be queued.".into();
         }
     }
 }
@@ -549,7 +537,7 @@ mod tests {
             ))
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<ItemState>()
-            .insert_resource(CommandsToServer(Some(sender)))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, input);
         let body = format!("00002A{}1234ABCD", "0".repeat(31));
         app.world_mut().spawn((

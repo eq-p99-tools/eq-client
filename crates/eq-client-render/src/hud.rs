@@ -270,6 +270,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         commands.entity(slot).insert((
             Button,
             SpellGem(u8::try_from(number - 1).expect("eight gems")),
+            crate::outbox::Needs(eq_client_core::Capability::Casting),
         ));
         let value = label(commands, slot, "", 8.0, INK);
         commands.entity(value).insert((
@@ -373,7 +374,7 @@ pub(super) fn actions(
     mut hud: ResMut<HudState>,
     online: Res<super::online::OnlineState>,
     chat: Res<super::chat::ChatState>,
-    sender: Res<super::target::CommandsToServer>,
+    outbox: Res<crate::outbox::Outbox>,
     clicks: Query<(&Interaction, &SpellGem), Changed<Interaction>>,
     bar_clicks: Query<(&Interaction, &hotbar::Slot), Changed<Interaction>>,
     bindings: Res<hotbar::Bindings>,
@@ -388,11 +389,7 @@ pub(super) fn actions(
     {
         return;
     }
-    let (Some(session_id), Some(player), Some(sender)) = (
-        online.world.session_id(),
-        online.world.player(),
-        sender.0.as_ref(),
-    ) else {
+    let Some(player) = online.world.player() else {
         return;
     };
     let gem = clicks
@@ -435,9 +432,8 @@ pub(super) fn actions(
             &mut hud,
             &online.world,
             player,
-            sender,
+            &outbox,
             &requests::Request {
-                session_id,
                 gem,
                 target_id: online.world.target().selected.unwrap_or(player.spawn_id),
                 forgetting,
@@ -460,15 +456,15 @@ pub(super) fn actions(
         }
     };
     if let Some(posture) = posture {
-        let result = sender.try_send(eq_client_core::ClientCommand::SetPosture {
-            session_id,
-            spawn_id: player.spawn_id,
-            posture,
-            created: std::time::Instant::now(),
+        // The outbox shows why a stance did not go.
+        let _ = outbox.post(&online.world, |stamp| {
+            eq_client_core::ClientCommand::SetPosture {
+                session_id: stamp.session_id,
+                spawn_id: player.spawn_id,
+                posture,
+                created: stamp.created,
+            }
         });
-        if result.is_err() {
-            warn!("Posture request queue unavailable");
-        }
     }
 }
 

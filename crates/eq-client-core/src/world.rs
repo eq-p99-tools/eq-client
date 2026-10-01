@@ -673,7 +673,9 @@ impl ClientWorld {
                 };
             }
             WorldEvent::ItemDetails(item) => self.items.insert(item.clone()),
-            _ => (),
+            // No front end creates characters yet; when one does, the news
+            // lands here, and a new kind of news is a compile error here.
+            WorldEvent::CharacterCreation { .. } => (),
         }
         changes
     }

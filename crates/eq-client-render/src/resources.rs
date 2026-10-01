@@ -67,9 +67,7 @@ fn estimate(
         .items()
         .values()
         .chain(inventory.prediction_origins().filter_map(|(_, item)| item))
-        .filter(|item| {
-            matches!(item.slot.0, 22..=29 | 251..=330) && matches!(item.rules.item_type, 14 | 15)
-        })
+        .filter(|item| item.slot.is_carried() && matches!(item.rules.item_type, 14 | 15))
     {
         if item.details.bonuses? != eq_client_core::ItemBonuses::default()
             || item.details.equipment?.worn.is_some()
@@ -299,7 +297,7 @@ mod tests {
             let mut inventory = Inventory::default();
             inventory.apply(InventoryUpdate::Snapshot(vec![milk.clone()]));
             let mut held = milk.clone();
-            held.slot = InventorySlot(30);
+            held.slot = InventorySlot::CURSOR;
             inventory.apply(InventoryUpdate::Prediction(vec![held]));
             assert_eq!(
                 estimate(&player(), &inventory, &world, &names),

@@ -181,7 +181,7 @@ type Buttons<'w, 's> = Query<
 
 type Observed<'w> = (
     Res<'w, super::hud::HudState>,
-    Res<'w, super::target::CommandsToServer>,
+    Res<'w, crate::outbox::Outbox>,
     Res<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,
     Res<'w, super::motion::Controls>,
@@ -398,14 +398,16 @@ pub(super) fn drive(
     match &step {
         Step::Create(character) => {
             let sent = online.selection.as_ref().is_some_and(|selection| {
-                observed.1.0.as_ref().is_some_and(|sender| {
-                    sender
-                        .try_send(eq_client_core::ClientCommand::CreateCharacter {
+                observed
+                    .1
+                    .send(
+                        &online.world,
+                        eq_client_core::ClientCommand::CreateCharacter {
                             selection_id: selection.id(),
                             character: character.clone(),
-                        })
-                        .is_ok()
-                })
+                        },
+                    )
+                    .is_ok()
             });
             if !sent {
                 script.stop(
@@ -439,11 +441,8 @@ pub(super) fn drive(
             let sent = gm_chat(command, script.local).and_then(|chat| {
                 observed
                     .1
-                    .0
-                    .as_ref()
-                    .ok_or_else(|| String::from("Network worker is unavailable"))?
-                    .try_send(eq_client_core::ClientCommand::SendChat(chat))
-                    .map_err(|_| String::from("GM command could not be queued"))
+                    .send(&online.world, eq_client_core::ClientCommand::SendChat(chat))
+                    .map_err(|refusal| refusal.text().to_owned())
             });
             if let Err(error) = sent {
                 script.stop(&mut keys, &mut mouse, &error);

@@ -2,7 +2,8 @@ use super::*;
 use crate::{
     chat::ChatState,
     online::{OnlineState, testing},
-    target::{CommandsToServer, TargetState},
+    outbox::Outbox,
+    target::TargetState,
 };
 use eq_client_core::{
     ClientCommand, PlayerState, SpellUpdate, WorldEvent, WorldPosition, WorldUpdate,
@@ -276,7 +277,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     let mut app = App::new();
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     app.insert_resource(admitted())
-        .insert_resource(CommandsToServer(Some(tx)))
+        .insert_resource(crate::outbox::Outbox::new(Some(tx)))
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ChatState>()
         .init_resource::<TargetState>()
@@ -426,11 +427,13 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             .remaining(73, std::time::Instant::now())
             .is_zero()
     );
+    // Requests go out only while the player is in the world.
+    testing::connect(&mut online(&mut app), true);
     let player = world(&app).player().cloned().unwrap();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let sender = Outbox::new(Some(sender));
     let mut hud = HudState::default();
     let request = |gem, target_id| requests::Request {
-        session_id: 7,
         gem,
         target_id,
         forgetting: false,
@@ -461,8 +464,9 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &request(0, 99),
         &messages,
     );
-    assert!(hud.action_feedback.as_ref().unwrap().1.contains("queued"));
-    // A request never claims a cast the server has not answered.
+    // A request sent says nothing, and never claims a cast the server has
+    // not answered.
+    assert!(hud.action_feedback.is_none());
     assert!(world(&app).casting().pending.is_none());
     assert!(world(&app).casting().cast.is_none());
     requests::spell(
@@ -473,13 +477,8 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &request(0, 99),
         &messages,
     );
-    assert!(
-        hud.action_feedback
-            .as_ref()
-            .unwrap()
-            .1
-            .contains("queue is full")
-    );
+    // The outbox refuses a full queue and shows why in the feedback line.
+    assert_eq!(sender.take_refused(), [crate::outbox::Refusal::Busy]);
     assert!(matches!(
         receiver.try_recv().unwrap(),
         ClientCommand::CastSpell { target_id: 99, .. }
@@ -494,19 +493,12 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &request(0, 99),
         &messages,
     );
-    assert!(
-        hud.action_feedback
-            .as_ref()
-            .unwrap()
-            .1
-            .contains("was not sent")
-    );
+    assert_eq!(sender.take_refused(), [crate::outbox::Refusal::Ended]);
 }
 
 #[test]
 fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
     let player = caster();
-    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
     let messages = messages::Messages::parse(
         "EQST0002
 0
@@ -514,7 +506,6 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
 ",
     );
     let mut request = requests::Request {
-        session_id: 7,
         gem: 0,
         target_id: 12,
         forgetting: false,
@@ -532,47 +523,28 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
         }
         world
     };
-    let mut hud = HudState::default();
-    requests::spell(
-        &mut hud,
-        &with_mana(Some(9)),
-        &player,
-        &sender,
-        &request,
-        &messages,
-    );
+    let check = |world: &ClientWorld, request: &requests::Request| {
+        requests::check(
+            world,
+            &player,
+            request,
+            &messages,
+            std::time::Instant::now(),
+        )
+    };
     assert_eq!(
-        hud.action_feedback.as_ref().unwrap().1,
-        "Synthetic short mana"
+        check(&with_mana(Some(9)), &request),
+        Err("Synthetic short mana".into())
     );
-    assert!(receiver.try_recv().is_err());
     request.forgetting = true;
-    requests::spell(
-        &mut hud,
-        &with_mana(Some(9)),
-        &player,
-        &sender,
-        &request,
-        &messages,
-    );
-    assert!(matches!(
-        receiver.try_recv().unwrap(),
-        ClientCommand::ForgetSpell { gem: 0, .. }
-    ));
+    assert_eq!(check(&with_mana(Some(9)), &request), Ok(73));
     request.forgetting = false;
     for (mana, cost) in [(Some(10), Some(10)), (None, Some(10)), (Some(0), None)] {
         request.mana_cost = cost;
-        requests::spell(
-            &mut hud,
-            &with_mana(mana),
-            &player,
-            &sender,
-            &request,
-            &messages,
+        assert_eq!(
+            check(&with_mana(mana), &request),
+            Ok(73),
+            "{mana:?} {cost:?}"
         );
-        assert!(matches!(
-            receiver.try_recv().unwrap(),
-            ClientCommand::CastSpell { spell_id: 73, .. }
-        ));
     }
 }

@@ -78,26 +78,6 @@ pub(super) fn preview_player(
     }
 }
 
-/// What the offline preview lets the player do: what a Titanium zone does.
-const PREVIEW: [eq_client_core::Capability; 13] = {
-    use eq_client_core::Capability;
-    [
-        Capability::Casting,
-        Capability::Spellbook,
-        Capability::Inventory,
-        Capability::Trading,
-        Capability::Moving,
-        Capability::Targeting,
-        Capability::Combat,
-        Capability::Looting,
-        Capability::Talking,
-        Capability::Camping,
-        Capability::Doors,
-        Capability::GroundItems,
-        Capability::Zoning,
-    ]
-};
-
 /// Admits the offline demos' preview player where the viewer stands, as a
 /// session would, so that every demo fills the same admitted world.
 pub(super) fn admit_preview(
@@ -108,8 +88,9 @@ pub(super) fn admit_preview(
     let player = preview_player(origin, [None; 8]);
     for update in [
         WorldUpdate::Game(WorldEvent::Entered {
-            // The preview offers what a Titanium zone does.
-            capabilities: PREVIEW.to_vec(),
+            // The offline preview lets the player do everything, jumping
+            // included, so it never lags what eq-network adds.
+            capabilities: eq_client_core::Capability::ALL.to_vec(),
             session_id: 1,
             zone: zone.into(),
             player: Box::new(player),
@@ -521,7 +502,7 @@ pub(crate) mod testing {
         news(
             state,
             [WorldEvent::Entered {
-                capabilities: Vec::new(),
+                capabilities: eq_client_core::Capability::ALL.to_vec(),
                 session_id,
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),

@@ -128,7 +128,7 @@ fn storage_columns(
                         ..default()
                     })
                     .with_children(|cursor| {
-                        square(cursor, InventorySlot(30), view, art);
+                        square(cursor, InventorySlot::CURSOR, view, art);
                         cursor
                             .spawn((
                                 Button,
@@ -153,7 +153,8 @@ fn storage_columns(
 fn carried(parent: &mut ChildSpawnerCommands, view: View<'_>, tab: Tab, art: &mut Art<'_>) {
     let slots: Vec<_> = visible_slots(view.inventory, tab)
         .into_iter()
-        .filter(|slot| tab == Tab::Bank || matches!(slot.0,22..=29|251..=340))
+        // A bag on the cursor shows with the cursor, not with the carried bags.
+        .filter(|slot| tab == Tab::Bank || slot.is_carried())
         .collect();
     let mut remaining = slots.clone();
     for slot in &slots {
@@ -325,6 +326,7 @@ fn square(
         .spawn((
             Button,
             SlotButton(slot),
+            crate::outbox::Needs(eq_client_core::Capability::Inventory),
             Node {
                 width: px(CELL),
                 height: px(CELL),
@@ -379,7 +381,7 @@ fn square(
                             ..default()
                         },
                     ));
-                    if count > 1 && slot != InventorySlot(30) {
+                    if count > 1 && slot != InventorySlot::CURSOR {
                         quantity.insert((Button, super::SplitStack(slot)));
                     }
                 }
@@ -448,7 +450,7 @@ mod tests {
             InventoryUpdate::Snapshot(
                 super::super::demo_items()
                     .into_iter()
-                    .filter(|item| item.slot != InventorySlot(30))
+                    .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),
             ),
         );
@@ -466,7 +468,7 @@ mod tests {
             .init_resource::<crate::escape::Escape>()
             .init_resource::<crate::items::ItemState>()
             .insert_resource(online)
-            .insert_resource(crate::target::CommandsToServer(None))
+            .insert_resource(crate::outbox::Outbox::new(None))
             .add_systems(Update, (super::super::input, super::super::settle).chain());
         app.world_mut().spawn((
             Window {
@@ -501,7 +503,7 @@ mod tests {
             .unwrap();
         stack.stack_count = Some(19);
         let mut cursor = stack.clone();
-        cursor.slot = InventorySlot(30);
+        cursor.slot = InventorySlot::CURSOR;
         cursor.stack_count = Some(1);
         contents.push(cursor);
         crate::online::testing::inventory(
@@ -514,7 +516,7 @@ mod tests {
         app.update();
         let items = app.world().resource::<OnlineState>().world.inventory();
         assert_eq!(items.items()[&InventorySlot(251)].stack_count, Some(20));
-        assert!(!items.items().contains_key(&InventorySlot(30)));
+        assert!(!items.items().contains_key(&InventorySlot::CURSOR));
         assert!(
             app.world()
                 .resource::<InventoryState>()
@@ -528,7 +530,7 @@ mod tests {
     fn bank_layout_keeps_cursor_carried_bags_and_quantity_controls() {
         let mut state = InventoryState::default();
         let mut items = super::super::demo_items();
-        items.retain(|item| item.slot != InventorySlot(30));
+        items.retain(|item| item.slot != InventorySlot::CURSOR);
         let bank_stack = items
             .iter_mut()
             .find(|item| item.slot == InventorySlot(2000))
@@ -583,7 +585,7 @@ mod tests {
             .collect();
         assert!(counts.contains(&InventorySlot(2000)));
         assert!(counts.contains(&InventorySlot(251)));
-        assert!(!counts.contains(&InventorySlot(30)));
+        assert!(!counts.contains(&InventorySlot::CURSOR));
     }
 
     #[test]

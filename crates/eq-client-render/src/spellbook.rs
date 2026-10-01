@@ -323,6 +323,7 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
         .spawn((
             Button,
             ScribeCursor,
+            crate::outbox::Needs(eq_client_core::Capability::Spellbook),
             Node {
                 padding: UiRect::all(px(6)),
                 ..default()
@@ -405,7 +406,7 @@ pub(super) fn update(
     mut rows: BookRows,
     mut gems: GemChoices,
     online: Option<Res<super::online::OnlineState>>,
-    sender: Option<Res<super::target::CommandsToServer>>,
+    outbox: Option<Res<crate::outbox::Outbox>>,
     mut selection: ResMut<BookSelection>,
     actions: BookActions,
 ) {
@@ -435,12 +436,12 @@ pub(super) fn update(
             .any(|interaction| *interaction == Interaction::Pressed)
     {
         selection.message =
-            match request_scribe(online.as_deref(), world.spell_book(), sender.as_deref()) {
+            match request_scribe(online.as_deref(), world.spell_book(), outbox.as_deref()) {
                 Ok(spell) => {
                     let _ = note(&mut requests, format!("Scribing {}", names.label(spell)));
-                    "Scribe request queued; waiting for server updates".into()
+                    String::new()
                 }
-                Err(error) => error.to_string(),
+                Err(error) => crate::outbox::window_line(&error),
             };
     }
     let entries = known_entries(world.spell_book());
@@ -467,9 +468,8 @@ pub(super) fn update(
     delete_input(
         &deletion,
         &mut selection,
-        online.as_deref(),
         world,
-        sender.as_deref(),
+        outbox.as_deref(),
         &names,
         accepts_input && !pending,
     );
@@ -486,7 +486,7 @@ pub(super) fn update(
         let queued = request_memorize(
             online.as_deref(),
             world.spell_book(),
-            sender.as_deref(),
+            outbox.as_deref(),
             selection.selected,
             gem,
         );
@@ -494,9 +494,9 @@ pub(super) fn update(
             Ok(spell) => {
                 let label = format!("Memorizing {} into gem {}", names.label(spell), gem + 1);
                 let _ = note(&mut requests, label);
-                format!("Queued for gem {}; waiting for worker", gem + 1)
+                String::new()
             }
-            Err(error) => error.to_string(),
+            Err(error) => crate::outbox::window_line(&error),
         };
     }
     let label = book_label(world, &names, &selection, &entries, state.page, pages);
@@ -575,15 +575,14 @@ fn refresh_actions(buttons: &mut DeleteControls, confirmation: &super::book_dele
 fn delete_input(
     buttons: &DeleteControls,
     selection: &mut BookSelection,
-    online: Option<&super::online::OnlineState>,
     world: &ClientWorld,
-    sender: Option<&super::target::CommandsToServer>,
+    outbox: Option<&crate::outbox::Outbox>,
     names: &SpellNames,
     enabled: bool,
 ) {
-    let session = online
-        .filter(|state| state.world.connected() && state.world.death().is_none())
-        .and_then(|state| state.world.session_id());
+    let session = outbox
+        .and_then(|outbox| outbox.peek(world))
+        .map(|stamp| stamp.session_id);
     selection
         .deletion
         .validate(session, selection.selected, world.spell_book());
@@ -605,20 +604,13 @@ fn delete_input(
         .act(*action, session, selection.selected, world.spell_book());
     selection.message = match result {
         Err(error) => error.to_string(),
+        // A change sent says nothing until the server answers; the outbox
+        // says why one did not leave.
         Ok(Some(command)) => {
-            if let Some(sender) = sender.and_then(|sender| sender.0.as_ref()) {
-                match sender.try_send(command) {
-                    Ok(()) => {
-                        selection.deletion.queued = true;
-                        "Book change queued; waiting for server".into()
-                    }
-                    Err(_) => {
-                        "Book change was not queued; try again when the worker is available".into()
-                    }
-                }
-            } else {
-                "Network worker unavailable".into()
+            if outbox.is_some_and(|outbox| outbox.send(world, command).is_ok()) {
+                selection.deletion.queued = true;
             }
+            String::new()
         }
         Ok(None) => match action {
             super::book_delete::Action::Select => format!(
@@ -835,6 +827,7 @@ fn gem_choices(parent: &mut ChildSpawnerCommands) {
                 row.spawn((
                     Button,
                     GemChoice(gem),
+                    crate::outbox::Needs(eq_client_core::Capability::Spellbook),
                     Text::new(format!("{}", gem + 1)),
                     TextFont {
                         font_size: FontSize::Px(13.0),
@@ -878,72 +871,62 @@ fn gem_description(
     format!("Gem {}: {occupant}\n{action}", gem + 1)
 }
 
-/// Validates a gem click and queues it without predicting the resulting spell state.
+/// Validates a gem click and sends it without predicting the resulting spell state.
 fn request_memorize(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
-    sender: Option<&super::target::CommandsToServer>,
+    outbox: Option<&crate::outbox::Outbox>,
     selected: Option<u32>,
     gem: u8,
 ) -> anyhow::Result<u32> {
     use anyhow::{Context, ensure};
     let spell_id = selected.context("Select a spell first")?;
     ensure!(gem < 8, "Choose a gem from 1 to 8");
-    let online = online.context("Connect to memorize a spell")?;
-    ensure!(
-        online.world.connected() && online.world.death().is_none(),
-        "Connect to memorize a spell"
-    );
+    let (online, outbox) = online.zip(outbox).context("Connect to memorize a spell")?;
     ensure!(
         book.context("Spellbook unavailable")?
             .slots()
             .contains(&Some(spell_id)),
         "The selected spell is no longer in the spellbook"
     );
-    sender
-        .and_then(|sender| sender.0.as_ref())
-        .context("Network worker unavailable")?
-        .try_send(eq_client_core::ClientCommand::MemorizeSpell {
-            session_id: online.world.session_id().context("No active admission")?,
+    outbox.post(&online.world, |stamp| {
+        eq_client_core::ClientCommand::MemorizeSpell {
+            session_id: stamp.session_id,
             gem,
             spell_id,
-            created: std::time::Instant::now(),
-        })
-        .context("Memorization request could not be queued")?;
+            created: stamp.created,
+        }
+    })?;
     Ok(spell_id)
 }
 
-/// Queues the current cursor scroll without consuming or inserting it locally.
+/// Sends the current cursor scroll without consuming or inserting it locally.
 fn request_scribe(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
-    sender: Option<&super::target::CommandsToServer>,
+    outbox: Option<&crate::outbox::Outbox>,
 ) -> anyhow::Result<u32> {
     use anyhow::Context;
-    let command = prepare_scribe(online, book, sender)?;
+    let (state, outbox) = online.zip(outbox).context("Connect to scribe a scroll")?;
+    let stamp = outbox.stamp(&state.world)?;
+    let command = prepare_scribe(online, book, Some(stamp))?;
     let eq_client_core::ClientCommand::ScribeSpell { spell_id, .. } = command else {
         anyhow::bail!("Scribe request was not a scribe");
     };
-    sender
-        .and_then(|sender| sender.0.as_ref())
-        .context("Network worker unavailable")?
-        .try_send(command)
-        .context("Scribe request could not be queued")?;
+    outbox.send(&state.world, command)?;
     Ok(spell_id)
 }
 
-/// Shares admission, cursor and book validation between presentation and submission.
+/// Shares admission, cursor and book validation between presentation and
+/// submission; the stamp is the one the outbox gives a command made now.
 fn prepare_scribe(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
-    sender: Option<&super::target::CommandsToServer>,
+    stamp: Option<crate::outbox::Stamp>,
 ) -> anyhow::Result<eq_client_core::ClientCommand> {
     use anyhow::{Context, ensure};
     let online = online.context("Connect to scribe a scroll")?;
-    ensure!(
-        online.world.connected() && online.world.death().is_none(),
-        "Connect to scribe a scroll"
-    );
+    let stamp = stamp.context("Connect to scribe a scroll")?;
     let inventory = online.world.inventory();
     ensure!(
         inventory.received() && !inventory.stale(),
@@ -952,7 +935,7 @@ fn prepare_scribe(
     let book = book.context("Spellbook unavailable")?;
     let spell_id = inventory
         .items()
-        .get(&eq_client_core::inventory::InventorySlot(30))
+        .get(&eq_client_core::inventory::InventorySlot::CURSOR)
         .context("Put a scroll on the cursor first")?
         .scroll_spell
         .context("The cursor item is not a spell scroll")?;
@@ -963,15 +946,12 @@ fn prepare_scribe(
             .context("Spellbook is full")?,
     )?;
     book.scribe_packet(inventory, inventory.revision(), slot, spell_id)?;
-    sender
-        .and_then(|sender| sender.0.as_ref())
-        .context("Network worker unavailable")?;
     Ok(eq_client_core::ClientCommand::ScribeSpell {
-        session_id: online.world.session_id().context("No active admission")?,
+        session_id: stamp.session_id,
         revision: inventory.revision(),
         slot,
         spell_id,
-        created: std::time::Instant::now(),
+        created: stamp.created,
     })
 }
 
@@ -1103,7 +1083,7 @@ mod tests {
                 activation: eq_client_core::inventory::ItemActivation::default(),
                 scroll_spell: Some(73),
                 rules: ItemPlacement::default(),
-                slot: InventorySlot(30),
+                slot: InventorySlot::CURSOR,
                 details,
                 icon: 0,
                 stack_count: None,
@@ -1113,7 +1093,7 @@ mod tests {
         );
         let before = online.world.inventory().clone();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let sender = super::super::target::CommandsToServer(Some(tx));
+        let sender = crate::outbox::Outbox::new(Some(tx));
         request_scribe(Some(&online), Some(&book), Some(&sender)).unwrap();
         assert!(
             matches!(rx.try_recv().unwrap(), eq_client_core::ClientCommand::ScribeSpell { session_id: 7, slot: 0, spell_id: 73, revision, .. } if revision == before.revision())
@@ -1174,7 +1154,7 @@ mod tests {
                 crate::online::testing::book(&mut online, book.clone());
                 online
             })
-            .insert_resource(crate::target::CommandsToServer(Some(sender)))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .init_resource::<crate::hud::HudState>()
             .init_resource::<BookSelection>()
             .insert_resource(BookView {
@@ -1447,7 +1427,7 @@ mod tests {
         crate::online::testing::book(&mut online, book);
         let (tx, rx) = std::sync::mpsc::sync_channel(2);
         app.insert_resource(online)
-            .insert_resource(super::super::target::CommandsToServer(Some(tx)));
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)));
         let gem = app
             .world_mut()
             .spawn((GemChoice(2), Interaction::None, BackgroundColor::default()))
@@ -1510,22 +1490,9 @@ mod tests {
                 ..
             }
         ));
-        assert!(
-            app.world()
-                .get::<Text>(label)
-                .unwrap()
-                .0
-                .contains("Queued for gem 3")
-        );
-        app.update();
-        assert!(
-            app.world()
-                .get::<Text>(label)
-                .unwrap()
-                .0
-                .contains("Queued for gem 3")
-        );
-        // Even an identical rejection is a new reply and replaces local queue feedback.
+        // A request sent says nothing until the server answers.
+        assert!(app.world().resource::<BookSelection>().message.is_empty());
+        // Even an identical rejection is a new reply, and shows.
         crate::online::testing::book_action(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
             eq_client_core::BookActionStatus::Rejected("Example rejection".into()),

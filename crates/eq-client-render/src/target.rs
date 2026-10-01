@@ -2,17 +2,15 @@
 pub(super) mod marker;
 mod picking;
 use super::{entities::NearbyEntities, online::OnlineState};
+use crate::outbox::Outbox;
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::{ClientCommand, SpawnKind, targeting::cycle};
-use std::sync::mpsc::SyncSender;
 
 /// The target window's status line; the target itself is the world's.
 #[derive(Resource, Default)]
 pub(super) struct TargetState {
     pub status: String,
 }
-#[derive(Resource)]
-pub(super) struct CommandsToServer(pub Option<SyncSender<ClientCommand>>);
 #[derive(Component)]
 pub(super) struct TargetPanel;
 #[derive(Component)]
@@ -110,7 +108,7 @@ pub(super) fn input(
     nearby: Res<NearbyEntities>,
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
-    commands: Res<CommandsToServer>,
+    outbox: Res<Outbox>,
     mut target: ResMut<TargetState>,
     (ui, escape): (
         super::windows::pointer::PointerUi,
@@ -204,8 +202,8 @@ pub(super) fn input(
                 (spawn, Some((drop_id, distance)))
                     if spawn.is_none_or(|(_, nearer)| distance < nearer) =>
                 {
-                    if let Err(error) = super::ground::pick_up(drop_id, &online, &commands) {
-                        chat.history.push(super::chat::system_line(error));
+                    if let Some(line) = super::ground::pick_up(drop_id, &online, &outbox) {
+                        chat.history.push(super::chat::system_line(line));
                     }
                 }
                 (spawn, _) => proposal = Some(spawn.map(|(id, _)| id)),
@@ -218,24 +216,17 @@ pub(super) fn input(
     if selected == current && !invalid {
         return;
     }
-    if online.enabled {
-        let Some(session_id) = online.world.session_id() else {
-            return;
-        };
-        let Some(sender) = &commands.0 else {
-            target.status = "Command queue unavailable".into();
-            return;
-        };
-        if sender
-            .try_send(ClientCommand::SelectTarget {
-                session_id,
+    // Offline, the choice is the viewer's alone; online, the outbox says
+    // why a choice did not leave.
+    if online.enabled
+        && outbox
+            .post(&online.world, |stamp| ClientCommand::SelectTarget {
+                session_id: stamp.session_id,
                 spawn_id: selected,
             })
             .is_err()
-        {
-            target.status = "Target request could not be queued".into();
-            return;
-        }
+    {
+        return;
     }
     online.world.select_target(selected);
     // A new choice replaces an earlier refusal; a choice sent says nothing,
@@ -466,7 +457,7 @@ mod tests {
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<super::super::inventory::InventoryState>()
             .init_resource::<super::super::trade::TradeState>()
-            .insert_resource(CommandsToServer(None))
+            .insert_resource(crate::outbox::Outbox::new(None))
             .add_systems(Update, (super::super::escape::route, input).chain());
         app.world_mut().spawn((
             Window {
@@ -691,7 +682,7 @@ mod tests {
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<TargetState>()
             .init_resource::<super::super::escape::Escape>()
-            .insert_resource(CommandsToServer(Some(tx)))
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .add_systems(Update, (input, update).chain());
         app.world_mut().spawn((
             Window {
