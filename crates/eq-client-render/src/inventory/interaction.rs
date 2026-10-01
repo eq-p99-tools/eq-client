@@ -529,7 +529,7 @@ mod tests {
         state.next_use_id = 4;
         state.cancel_actions();
         state.item_use_result(9, 4, None);
-        assert!(state.actions.message.is_empty());
+        assert_eq!(state.actions.message, "");
         assert_eq!(state.next_use_id, 4);
         assert_eq!(state.data, before);
     }

@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn exit_margin_prevents_boundary_churn_but_never_admits_distant_new_entities() {
         let mut all = BTreeMap::from([(2, spawn(2, 210.0))]);
-        assert!(
+        assert_eq!(
             nearby(
                 &all,
                 1,
@@ -214,8 +214,8 @@ mod tests {
                 &BTreeSet::new(),
                 200.0,
                 64
-            )
-            .is_empty()
+            ),
+            []
         );
         assert_eq!(
             nearby(
@@ -229,7 +229,7 @@ mod tests {
             vec![2]
         );
         all.get_mut(&2).unwrap().position.x = 241.0;
-        assert!(
+        assert_eq!(
             nearby(
                 &all,
                 1,
@@ -237,8 +237,8 @@ mod tests {
                 &BTreeSet::from([2]),
                 200.0,
                 64
-            )
-            .is_empty()
+            ),
+            []
         );
     }
 }

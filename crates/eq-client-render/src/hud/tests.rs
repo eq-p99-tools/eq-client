@@ -174,7 +174,7 @@ fn interruption_label_uses_local_text_then_expires() {
         73,
     ));
     app.update();
-    assert!(app.world().get::<Text>(label).unwrap().0.is_empty());
+    assert_eq!(app.world().get::<Text>(label).unwrap().0, "");
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn pending_cast_is_labelled_as_awaiting_and_cleared_on_reset() {
     );
     app.world_mut().resource_mut::<HudState>().reset_cooldowns();
     app.update();
-    assert!(app.world().get::<Text>(label).unwrap().0.is_empty());
+    assert_eq!(app.world().get::<Text>(label).unwrap().0, "");
 }
 
 #[test]

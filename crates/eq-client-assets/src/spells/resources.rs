@@ -149,7 +149,7 @@ mod tests {
             (159, 20, 100),
         ])
         .resource_projection(1);
-        assert!(projection.unresolved.is_empty());
+        assert_eq!(projection.unresolved, []);
         assert_eq!(
             projection.modifiers,
             Modifiers {
@@ -201,7 +201,7 @@ mod tests {
     fn maximum_hp_and_one_time_heal_are_not_double_counted() {
         // Synthetic values for the documented buff pattern: AC, max HP, immediate HP.
         let projection = spell(&[(1, 3, 100), (69, 7, 100), (79, 7, 100)]).resource_projection(2);
-        assert!(projection.unresolved.is_empty());
+        assert_eq!(projection.unresolved, []);
         assert_eq!(
             projection.modifiers,
             Modifiers {

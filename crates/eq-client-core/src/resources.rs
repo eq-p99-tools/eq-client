@@ -278,11 +278,7 @@ mod tests {
             Err(EquipmentUnavailable::MissingSnapshot)
         );
         inventory.apply(InventoryUpdate::Snapshot(vec![]));
-        assert!(
-            eqemu_equipped_modifiers(&inventory, 2, 128, 1)
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(eqemu_equipped_modifiers(&inventory, 2, 128, 1).unwrap(), []);
         inventory.apply(InventoryUpdate::Snapshot(
             [0, 20, 21, 22, 30, 251, 2000].map(item).to_vec(),
         ));
@@ -296,16 +292,8 @@ mod tests {
                 .iter()
                 .all(|(_, contribution)| contribution.bonuses.mana == 15)
         );
-        assert!(
-            eqemu_equipped_modifiers(&inventory, 1, 128, 1)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            eqemu_equipped_modifiers(&inventory, 2, 1, 1)
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(eqemu_equipped_modifiers(&inventory, 1, 128, 1).unwrap(), []);
+        assert_eq!(eqemu_equipped_modifiers(&inventory, 2, 1, 1).unwrap(), []);
         assert_eq!(
             eqemu_equipped_modifiers(&inventory, 2, 999, 1),
             Err(EquipmentUnavailable::UnknownCharacter)

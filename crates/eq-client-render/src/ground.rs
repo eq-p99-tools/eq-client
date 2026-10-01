@@ -256,7 +256,7 @@ mod tests {
             .resource_mut::<super::super::online::OnlineState>()
             .connected = false;
         app.update();
-        assert!(drawn(&mut app).is_empty());
+        assert_eq!(drawn(&mut app), Vec::<u32>::new());
     }
 
     #[test]

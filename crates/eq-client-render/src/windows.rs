@@ -441,12 +441,9 @@ mod tests {
             app.world().get::<Node>(title).unwrap().display,
             Display::Flex
         );
-        assert!(
-            app.world()
-                .get::<Frame>(frame)
-                .unwrap()
-                .restored_display
-                .is_empty()
+        assert_eq!(
+            app.world().get::<Frame>(frame).unwrap().restored_display,
+            []
         );
         assert!(!app.world().get::<Frame>(frame).unwrap().minimized);
         let node = app.world().get::<Node>(frame).unwrap();
