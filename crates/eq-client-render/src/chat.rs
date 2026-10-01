@@ -935,6 +935,33 @@ mod tests {
             }]
         ));
         assert!(game_commands("/who", &online, &outbox).unwrap().is_err());
+        // Consent names a player; the corpse commands want a corpse targeted,
+        // but a drop without one drops them all.
+        assert!(matches!(
+            game_commands("/consent Helper", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::Consent { session_id: 4, name, given: true }] if name == "Helper"
+        ));
+        assert!(matches!(
+            game_commands("/deny Helper", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::Consent { given: false, .. }]
+        ));
+        assert_eq!(
+            game_commands("/corpsedrag", &online, &outbox).unwrap(),
+            Err("You must first target a corpse.".into())
+        );
+        assert!(matches!(
+            game_commands("/corpsedrop", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::DropCorpse { spawn_id: None, .. }]
+        ));
     }
     #[test]
     fn sending_a_line_or_an_empty_enter_returns_the_keyboard_to_the_game() {

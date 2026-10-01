@@ -391,6 +391,48 @@ mod tests {
     }
 
     #[test]
+    fn consents_read_for_the_owner_and_the_one_consented() {
+        let messages = Messages::parse(
+            "EQST0002\n0 4\n\
+             1427 You have given %1 permission to drag your corpse in %2.\n\
+             1428 You have denied %1 permission to drag your corpse in %2.\n\
+             2080 You have been given permission to drag %1's corpse in %2.\n\
+             2103 You have been denied permission to drag %1's corpse in %2.\n",
+        );
+        let line = |given, own| {
+            wording(
+                &Notice::Consent {
+                    consent: eq_client_core::corpses::Consent {
+                        granted: "Helper".into(),
+                        owner: "Owner".into(),
+                        given,
+                        zone: "The Qeynos Hills".into(),
+                    },
+                    own,
+                },
+                Some(&messages),
+            )
+        };
+        let chat = |text: &str| vec![(Place::Chat, text.to_owned())];
+        assert_eq!(
+            line(true, true),
+            chat("You have given Helper permission to drag your corpse in The Qeynos Hills.")
+        );
+        assert_eq!(
+            line(false, true),
+            chat("You have denied Helper permission to drag your corpse in The Qeynos Hills.")
+        );
+        assert_eq!(
+            line(true, false),
+            chat("You have been given permission to drag Owner's corpse in The Qeynos Hills.")
+        );
+        assert_eq!(
+            line(false, false),
+            chat("You have been denied permission to drag Owner's corpse in The Qeynos Hills.")
+        );
+    }
+
+    #[test]
     fn refusals_show_where_their_request_was_made() {
         assert_eq!(
             wording(&Notice::TargetRefused("Too far away".into()), None),
