@@ -94,7 +94,7 @@ impl Stat {
     }
 
     /// How full the bar is, from 0 to 1, when that is known.
-    fn ratio(
+    pub(super) fn ratio(
         self,
         world: &eq_client_core::world::ClientWorld,
         estimate: Option<(u32, u32)>,

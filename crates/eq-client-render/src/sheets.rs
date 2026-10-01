@@ -1,8 +1,9 @@
-//! Icons from the installed client's texture sheets, in the UI skin the
-//! windows follow (the default skin's sheet where the skin has none of its
-//! own), never bundled. Each sheet is read once per skin.
+//! Pictures from the installed client's textures, in the UI skin the
+//! windows follow (the default skin's file where the skin has none of its
+//! own), never bundled: icons, and the pieces skinned windows are drawn
+//! with. Each texture is read once per skin.
 use bevy::prelude::*;
-use eq_client_assets::ui::{SHEET_SIZE, texture_sheet};
+use eq_client_assets::{sidl::Piece, ui::texture};
 use std::collections::BTreeMap;
 
 /// Sheets read so far, by skin and file. A sheet that could not be read is
@@ -32,35 +33,50 @@ impl Art<'_> {
         self.piece(&format!("spells{sheet:02}.tga"), rect)
     }
 
-    fn piece(&mut self, file: &str, rect: Rect) -> Option<ImageNode> {
+    /// A piece of one of the skin's textures, as a skin window draws it.
+    pub(crate) fn cut(&mut self, piece: &Piece) -> Option<ImageNode> {
+        let [x, y, width, height] =
+            [piece.x, piece.y, piece.width, piece.height].map(|value| u16::try_from(value).ok());
+        let (x, y) = (f32::from(x?), f32::from(y?));
+        self.piece(
+            &piece.texture,
+            Rect::new(x, y, x + f32::from(width?), y + f32::from(height?)),
+        )
+    }
+
+    /// One of the skin's textures, whole, such as a window's background.
+    pub(crate) fn texture(&mut self, file: &str) -> Option<Handle<Image>> {
         let directory = self.settings.0.eq_directory.as_deref()?;
         let skin = &self.skin.0;
         let images = &mut self.images;
-        let handle = self
-            .sheets
+        self.sheets
             .0
             .entry((skin.clone(), file.to_owned()))
-            .or_insert_with(|| match texture_sheet(directory, skin, file) {
-                Ok(pixels) => Some(images.add(texture(pixels))),
+            .or_insert_with(|| match texture(directory, skin, file) {
+                Ok(pixels) => Some(images.add(image(pixels))),
                 Err(error) => {
-                    warn!("UI sheet unavailable: {error}");
+                    warn!("UI texture unavailable: {error}");
                     None
                 }
             })
-            .clone()?;
+            .clone()
+    }
+
+    fn piece(&mut self, file: &str, rect: Rect) -> Option<ImageNode> {
         Some(ImageNode {
-            image: handle,
+            image: self.texture(file)?,
             rect: Some(rect),
             ..default()
         })
     }
 }
 
-fn texture(pixels: image::RgbaImage) -> Image {
+fn image(pixels: image::RgbaImage) -> Image {
+    let (width, height) = pixels.dimensions();
     let mut texture = Image::new(
         bevy::render::render_resource::Extent3d {
-            width: SHEET_SIZE,
-            height: SHEET_SIZE,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
         bevy::render::render_resource::TextureDimension::D2,

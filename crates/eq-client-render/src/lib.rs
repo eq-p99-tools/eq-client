@@ -34,6 +34,7 @@ mod resources;
 pub mod script;
 mod sheets;
 mod skin;
+mod skinned;
 mod spell_icons;
 mod spellbook;
 mod target;
@@ -424,6 +425,8 @@ fn schedule(app: &mut App) {
                 spell_icons::update,
                 outbox::show,
                 hud::action_bar::update,
+                skinned::apply,
+                skinned::show,
             )
                 .chain(),
             (
