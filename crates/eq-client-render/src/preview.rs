@@ -143,6 +143,7 @@ pub(crate) fn player(
         run_speed: 0.0,
         hp_percent: None,
         appearance: eq_client_core::outfit::Appearance::default(),
+        listing: eq_client_core::listing::Listing::default(),
     }
 }
 
@@ -378,6 +379,8 @@ fn synthetic(id: u16, race: u32, size: f32, position: WorldPosition) -> eq_clien
         size,
         invisible: false,
         appearance: eq_client_core::outfit::Appearance::default(),
+        level: 0,
+        listing: eq_client_core::listing::Listing::default(),
     }
 }
 

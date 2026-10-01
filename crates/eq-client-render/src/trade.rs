@@ -954,6 +954,7 @@ mod tests {
                 run_speed: 0.0,
                 hp_percent: Some(100),
                 appearance: eq_client_core::outfit::Appearance::default(),
+                listing: eq_client_core::listing::Listing::default(),
             },
         );
         // A command queue that can no longer take anything.

@@ -112,6 +112,8 @@ mod tests {
                 size: 6.0,
                 invisible: false,
                 appearance: eq_client_core::outfit::Appearance::default(),
+                level: 0,
+                listing: eq_client_core::listing::Listing::default(),
             },
         );
         let entity = app

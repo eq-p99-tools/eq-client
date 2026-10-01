@@ -508,6 +508,7 @@ pub(crate) mod testing {
             run_speed: 0.0,
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
+            listing: eq_client_core::listing::Listing::default(),
         }
     }
 
@@ -695,6 +696,7 @@ mod tests {
             run_speed: 0.0,
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
+            listing: eq_client_core::listing::Listing::default(),
         };
         let spawn = eq_client_core::SpawnState {
             class: None,
@@ -708,6 +710,8 @@ mod tests {
             size: 0.0,
             invisible: false,
             appearance: eq_client_core::outfit::Appearance::default(),
+            level: 0,
+            listing: eq_client_core::listing::Listing::default(),
         };
         let door = Door {
             id: 3,
@@ -938,6 +942,7 @@ mod tests {
             run_speed: 0.0,
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
+            listing: eq_client_core::listing::Listing::default(),
         };
         let admitted = std::time::Instant::now();
         for update in [
