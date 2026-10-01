@@ -219,7 +219,8 @@ fn draw(window: &mut ChildSpawnerCommands, screen: &Screen, art: &mut crate::she
             }
             Element::SpellGem(gem) => spell_gem(window, art, gem, &inside),
             Element::Button(button) => self::button(window, art, button, &inside),
-            Element::Other(_) => (),
+            // The inventory's pieces are drawn with the inventory.
+            Element::InvSlot(_) | Element::Tabs(_) | Element::View(_) | Element::Other(_) => (),
         }
     }
 }

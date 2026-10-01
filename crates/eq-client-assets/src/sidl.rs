@@ -123,6 +123,57 @@ pub struct Button {
     pub checkbox: bool,
     /// Its words, if it has any.
     pub text: Option<String>,
+    /// Its words' colour.
+    pub text_color: Option<[u8; 3]>,
+    /// A picture on the button, such as a coin on a money button.
+    pub decal: Option<Piece>,
+    /// Where the picture sits, from the button's top left, and its size.
+    pub decal_area: Option<Area>,
+    /// The tooltip the skin gives it.
+    pub tooltip: Option<String>,
+}
+
+/// A slot that holds an item: one of the player's, or of a container.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InvSlot {
+    /// What the window calls it, such as `InvSlot1`.
+    pub id: Option<String>,
+    /// Where it sits in its window.
+    pub area: Area,
+    /// The slot's number in the official client's numbering (`EQType`): the
+    /// Titanium inventory slot for the player's own, the place in the
+    /// container for a container's.
+    pub slot: Option<u32>,
+    /// What the empty slot shows, such as an ear for an ear slot.
+    pub background: Option<Piece>,
+}
+
+/// One page of a set of tabs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Page {
+    /// What the window calls it.
+    pub name: String,
+    /// The words on its tab.
+    pub title: Option<String>,
+    /// Where it sits in its window, when the skin places it.
+    pub area: Option<Area>,
+    /// How its frame is drawn.
+    pub template: Option<WindowTemplate>,
+    /// What it shows.
+    pub pieces: Vec<(String, Element)>,
+}
+
+/// A window inside a window, such as the inventory's character view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct View {
+    /// What the window calls it, such as `IW_CharacterView`.
+    pub name: String,
+    /// Where it sits in its window.
+    pub area: Area,
+    /// How its frame is drawn.
+    pub template: Option<WindowTemplate>,
+    /// Whether it has a border.
+    pub border: bool,
     /// The tooltip the skin gives it.
     pub tooltip: Option<String>,
 }
@@ -193,6 +244,12 @@ pub enum Element {
     Button(Button),
     /// A spell gem.
     SpellGem(SpellGem),
+    /// An item slot.
+    InvSlot(InvSlot),
+    /// Pages behind tabs; the first is shown.
+    Tabs(Vec<Page>),
+    /// A window inside the window.
+    View(View),
     /// An element this reader does not draw yet, by its kind.
     Other(String),
 }
@@ -290,16 +347,7 @@ impl Library {
             .get(name)
             .filter(|node| node.has_tag_name("Screen"))
             .ok_or_else(|| UiLayoutError::MissingWindow(name.to_owned()))?;
-        let pieces = screen
-            .children()
-            .filter(|child| child.has_tag_name("Pieces"))
-            .filter_map(|child| child.text())
-            .map(str::trim)
-            .filter_map(|piece| {
-                let element = elements.get(piece)?;
-                Some((piece.to_owned(), local.element(*element)))
-            })
-            .collect();
+        let pieces = local.pieces(*screen, &elements, 0);
         Ok(Screen {
             name: name.to_owned(),
             area: area(*screen).unwrap_or(Area {
@@ -358,7 +406,95 @@ impl Library {
         }
     }
 
-    fn element(&self, node: roxmltree::Node<'_, '_>) -> Element {
+    /// What a screen or page lists as its pieces, in drawing order. A piece
+    /// may name its kind first, as `Page:IW_InvPage` does.
+    fn pieces(
+        &self,
+        node: roxmltree::Node<'_, '_>,
+        elements: &HashMap<&str, roxmltree::Node<'_, '_>>,
+        depth: u8,
+    ) -> Vec<(String, Element)> {
+        node.children()
+            .filter(|child| child.has_tag_name("Pieces"))
+            .filter_map(|child| child.text())
+            .map(str::trim)
+            .filter_map(|piece| {
+                let name = piece.split_once(':').map_or(piece, |(_, name)| name.trim());
+                let element = elements.get(name)?;
+                Some((name.to_owned(), self.element(*element, elements, depth)))
+            })
+            .collect()
+    }
+
+    fn button(&self, node: roxmltree::Node<'_, '_>) -> Element {
+        let at = || {
+            area(node).unwrap_or(Area {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            })
+        };
+        let look = child(node, "ButtonDrawTemplate");
+        let state = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
+        Element::Button(Button {
+            id: text_of(node, "ScreenID").map(str::to_owned),
+            area: at(),
+            look: ButtonLook {
+                normal: state("Normal"),
+                pressed: state("Pressed"),
+                flyby: state("Flyby"),
+                disabled: state("Disabled"),
+                pressed_flyby: state("PressedFlyby"),
+            },
+            checkbox: flag(node, "Style_Checkbox"),
+            text: text_of(node, "Text").map(str::to_owned),
+            text_color: color(node, "TextColor"),
+            decal: state("NormalDecal"),
+            decal_area: child(node, "DecalSize").and_then(|size| {
+                let offset = child(node, "DecalOffset");
+                Some(Area {
+                    x: offset.and_then(|at| number(at, "X")).unwrap_or(0.0),
+                    y: offset.and_then(|at| number(at, "Y")).unwrap_or(0.0),
+                    width: number(size, "CX")?,
+                    height: number(size, "CY")?,
+                })
+            }),
+            tooltip: text_of(node, "TooltipReference").map(str::to_owned),
+        })
+    }
+
+    fn pages(
+        &self,
+        node: roxmltree::Node<'_, '_>,
+        elements: &HashMap<&str, roxmltree::Node<'_, '_>>,
+        depth: u8,
+    ) -> Vec<Page> {
+        node.children()
+            .filter(|child| child.has_tag_name("Pages"))
+            .filter_map(|child| child.text())
+            .map(str::trim)
+            .filter_map(|page| {
+                let name = page.split_once(':').map_or(page, |(_, name)| name.trim());
+                let page = elements.get(name)?;
+                Some(Page {
+                    name: name.to_owned(),
+                    title: text_of(*page, "TabText").map(str::to_owned),
+                    area: area(*page),
+                    template: text_of(*page, "DrawTemplate")
+                        .and_then(|template| self.templates.get(template).cloned()),
+                    pieces: self.pieces(*page, elements, depth + 1),
+                })
+            })
+            .collect()
+    }
+
+    fn element(
+        &self,
+        node: roxmltree::Node<'_, '_>,
+        elements: &HashMap<&str, roxmltree::Node<'_, '_>>,
+        depth: u8,
+    ) -> Element {
         let at = || {
             area(node).unwrap_or(Area {
                 x: 0.0,
@@ -404,24 +540,23 @@ impl Library {
                 },
                 font: number(node, "Font"),
             }),
-            "Button" => {
-                let look = child(node, "ButtonDrawTemplate");
-                let state = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
-                Element::Button(Button {
-                    id: text_of(node, "ScreenID").map(str::to_owned),
-                    area: at(),
-                    look: ButtonLook {
-                        normal: state("Normal"),
-                        pressed: state("Pressed"),
-                        flyby: state("Flyby"),
-                        disabled: state("Disabled"),
-                        pressed_flyby: state("PressedFlyby"),
-                    },
-                    checkbox: flag(node, "Style_Checkbox"),
-                    text: text_of(node, "Text").map(str::to_owned),
-                    tooltip: text_of(node, "TooltipReference").map(str::to_owned),
-                })
-            }
+            "Button" => self.button(node),
+            "InvSlot" => Element::InvSlot(InvSlot {
+                id: text_of(node, "ScreenID").map(str::to_owned),
+                area: at(),
+                slot: number(node, "EQType"),
+                background: self.piece(text_of(node, "Background")),
+            }),
+            // Pages and windows within windows nest; skins go a few deep.
+            "TabBox" if depth < 4 => Element::Tabs(self.pages(node, elements, depth)),
+            "Screen" => Element::View(View {
+                name: node.attribute("item").unwrap_or_default().to_owned(),
+                area: at(),
+                template: text_of(node, "DrawTemplate")
+                    .and_then(|template| self.templates.get(template).cloned()),
+                border: flag(node, "Style_Border"),
+                tooltip: text_of(node, "TooltipReference").map(str::to_owned),
+            }),
             "SpellGem" => {
                 let look = child(node, "SpellGemDrawTemplate");
                 let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
@@ -575,6 +710,29 @@ mod tests {
             <Style_Checkbox>true</Style_Checkbox>
             <ButtonDrawTemplate><Normal>A_Fill</Normal><Pressed>A_Back</Pressed></ButtonDrawTemplate>
         </Button>
+        <InvSlot item="Ear"><ScreenID>InvSlot1</ScreenID>
+            <Location><X>123</X><Y>12</Y></Location><Size><CX>42</CX><CY>42</CY></Size>
+            <Background>A_Corner</Background><EQType>1</EQType>
+        </InvSlot>
+        <Screen item="Figure"><Location><X>166</X><Y>57</Y></Location>
+            <Size><CX>85</CX><CY>168</CY></Size><DrawTemplate>WDT_Plain</DrawTemplate>
+            <Style_Border>true</Style_Border>
+            <TooltipReference>Drop Item Here to Auto Equip</TooltipReference>
+        </Screen>
+        <Page item="FirstPage"><TabText>Inventory</TabText>
+            <Location><X>0</X><Y>22</Y></Location><Size><CX>388</CX><CY>401</CY></Size>
+            <Pieces>Ear</Pieces><Pieces>Screen:Figure</Pieces>
+        </Page>
+        <TabBox item="Tabs"><Pages>Page:FirstPage</Pages></TabBox>
+        <Button item="Platinum"><ScreenID>IW_Money0</ScreenID>
+            <Location><X>303</X><Y>121</Y></Location><Size><CX>70</CX><CY>24</CY></Size>
+            <Text>9999</Text><TextColor><R>255</R><G>255</G><B>255</B></TextColor>
+            <ButtonDrawTemplate><Normal>A_Back</Normal><NormalDecal>A_Corner</NormalDecal></ButtonDrawTemplate>
+            <DecalOffset><X>1</X><Y>3</Y></DecalOffset><DecalSize><CX>18</CX><CY>18</CY></DecalSize>
+        </Button>
+        <Screen item="Bags"><Size><CX>428</CX><CY>460</CY></Size>
+            <Pieces>Tabs</Pieces><Pieces>Platinum</Pieces>
+        </Screen>
         <Screen item="SampleWindow">
             <Location><X>516</X><Y>242</Y></Location><Size><CX>147</CX><CY>50</CY></Size>
             <TooltipReference>Your Current Target</TooltipReference>
@@ -659,6 +817,54 @@ mod tests {
     }
 
     #[test]
+    fn pages_hold_slots_and_windows_within_windows() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let screen = library.screen(WINDOW, "Bags").unwrap();
+        let Element::Tabs(pages) = &screen.pieces[0].1 else {
+            panic!("tabs")
+        };
+        let page = &pages[0];
+        assert_eq!(page.title.as_deref(), Some("Inventory"));
+        assert_eq!(
+            page.area,
+            Some(Area {
+                x: 0.0,
+                y: 22.0,
+                width: 388.0,
+                height: 401.0
+            })
+        );
+        let Element::InvSlot(slot) = &page.pieces[0].1 else {
+            panic!("a slot")
+        };
+        assert_eq!((slot.slot, slot.area.x), (Some(1), 123.0));
+        assert_eq!(slot.background.as_ref().unwrap().texture, "frame.tga");
+        let Element::View(view) = &page.pieces[1].1 else {
+            panic!("a view")
+        };
+        assert_eq!(view.name, "Figure");
+        assert!(view.border && view.template.is_some());
+        assert_eq!(
+            view.tooltip.as_deref(),
+            Some("Drop Item Here to Auto Equip")
+        );
+        let Element::Button(money) = &screen.pieces[1].1 else {
+            panic!("a button")
+        };
+        assert_eq!(money.decal.as_ref().unwrap().texture, "frame.tga");
+        assert_eq!(
+            money.decal_area,
+            Some(Area {
+                x: 1.0,
+                y: 3.0,
+                width: 18.0,
+                height: 18.0
+            })
+        );
+        assert_eq!(money.text_color, Some([255, 255, 255]));
+    }
+
+    #[test]
     #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
     fn the_installed_skin_defines_the_player_and_target_windows() {
         let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
@@ -667,12 +873,24 @@ mod tests {
         for (file, name) in [
             ("EQUI_PlayerWindow.xml", "PlayerWindow"),
             ("EQUI_TargetWindow.xml", "TargetWindow"),
+            ("EQUI_Inventory.xml", "InventoryWindow"),
         ] {
             let screen = library.window(install, "default", file, name).unwrap();
-            let gauges: Vec<_> = screen
+            // The inventory keeps its gauges on its first page.
+            let pieces: Vec<&Element> = screen
                 .pieces
                 .iter()
-                .filter_map(|(_, element)| match element {
+                .flat_map(|(_, element)| match element {
+                    Element::Tabs(pages) => pages
+                        .first()
+                        .map(|page| page.pieces.iter().map(|(_, piece)| piece).collect())
+                        .unwrap_or_default(),
+                    other => vec![other],
+                })
+                .collect();
+            let gauges: Vec<_> = pieces
+                .iter()
+                .filter_map(|element| match element {
                     Element::Gauge(gauge) => gauge.eq_type,
                     _ => None,
                 })
