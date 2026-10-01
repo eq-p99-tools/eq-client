@@ -612,6 +612,9 @@ pub(super) fn receive(
                     chat.history.push(super::chat::system_line(text));
                 }
             }
+            // The shop window still keeps its own copy, adjusted between
+            // money updates, until loot and merchant state join the world.
+            WorldUpdate::Game(WorldEvent::Coins(coins)) => trade.coins = Some(coins),
             WorldUpdate::Game(WorldEvent::Loot(update)) => {
                 if let Some(text) = trade.apply_loot(update) {
                     chat.history.push(super::chat::system_line(text));
