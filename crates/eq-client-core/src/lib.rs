@@ -23,6 +23,7 @@ pub use eq_network_game::creation;
 pub use eq_network_game::exchange;
 pub use eq_network_game::food;
 pub use eq_network_game::inventory;
+pub use eq_network_game::listing;
 pub use eq_network_game::loot;
 pub use eq_network_game::merchant;
 pub use eq_network_game::money;
