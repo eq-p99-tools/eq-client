@@ -1,70 +1,27 @@
 //! Explicitly approximate Titanium capacities, invalidated when inputs are incomplete.
-use super::{
-    ViewerSettings, hud::HudState, inventory::InventoryState, online::OnlineState,
-    spellbook::SpellNames,
-};
+use super::{ViewerSettings, hud::HudState, online::OnlineState, spellbook::SpellNames};
 use bevy::prelude::*;
 use eq_client_core::resources::{
-    EffectiveAttributes, eqemu_equipped_modifiers, eqemu_item_hit_points, eqemu_titanium_base,
+    EffectiveAttributes, eqemu_equipped_modifiers, eqemu_titanium_base,
 };
-
-/// HP the player's equipped items add, when the inventory allows telling.
-pub(super) fn item_hit_points(
-    player: &eq_client_core::PlayerState,
-    inventory: &eq_client_core::inventory::Inventory,
-) -> Option<i64> {
-    let equipment = eqemu_equipped_modifiers(
-        inventory,
-        player.class?,
-        player.race,
-        u16::from(player.level),
-    )
-    .ok()?;
-    Some(eqemu_item_hit_points(&equipment))
-}
-
-/// Keeps the shown HP in step with the equipped items when the server's report
-/// leaves them out, as a gear change alone brings no new report.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn hit_points(
-    mut online: ResMut<OnlineState>,
-    inventory: Res<InventoryState>,
-    mut hud: ResMut<HudState>,
-) {
-    if !hud.reported_hp.is_some_and(|report| report.without_items) {
-        return;
-    }
-    let Some(items) = online
-        .player
-        .as_ref()
-        .and_then(|player| item_hit_points(player, &inventory.data))
-    else {
-        return;
-    };
-    if hud.item_hp != Some(items) {
-        hud.item_hp = Some(items);
-        super::online::show_own_hp(&mut online, &mut hud);
-    }
-}
 
 /// Recomputes from current admission data; never carries a maximum across a disconnect.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn update(
     settings: Res<ViewerSettings>,
     online: Res<OnlineState>,
-    inventory: Res<InventoryState>,
     names: Res<SpellNames>,
     mut hud: ResMut<HudState>,
 ) {
     hud.resource_estimate = if settings.0.estimate_titanium_resources
-        && online.connected
-        && online.death.is_none()
-        && online.session_id.is_some()
+        && online.world().connected()
+        && online.world().death().is_none()
+        && online.world().session_id().is_some()
     {
         online
-            .player
-            .as_ref()
-            .and_then(|player| estimate(player, &inventory.data, &hud, &names))
+            .world()
+            .player()
+            .and_then(|player| estimate(player, online.world().inventory(), online.world(), &names))
     } else {
         None
     };
@@ -74,7 +31,7 @@ pub(super) fn update(
 fn estimate(
     player: &eq_client_core::PlayerState,
     inventory: &eq_client_core::inventory::Inventory,
-    hud: &HudState,
+    world: &eq_client_core::world::ClientWorld,
     names: &SpellNames,
 ) -> Option<(u32, u32)> {
     let base = player.base_attributes?;
@@ -83,12 +40,12 @@ fn estimate(
     if player.level > 60 {
         return None;
     }
-    let buffs = hud.buff_state.slots()?;
+    let buffs = world.buffs().slots()?;
     // Unknown slots may replace existing buffs. Preserve an estimate only when
     // every possible participant leaves both capacities unchanged, regardless
     // of stacking, level, duration or instrument scaling.
-    let uncertain_slots = !hud.buff_state.effects().is_empty();
-    if uncertain_slots && !capacity_independent_buffs(hud, names) {
+    let uncertain_slots = !world.buffs().effects().is_empty();
+    if uncertain_slots && !capacity_independent_buffs(world, names) {
         return None;
     }
     let equipment =
@@ -110,9 +67,7 @@ fn estimate(
         .items()
         .values()
         .chain(inventory.prediction_origins().filter_map(|(_, item)| item))
-        .filter(|item| {
-            matches!(item.slot.0, 22..=29 | 251..=330) && matches!(item.rules.item_type, 14 | 15)
-        })
+        .filter(|item| item.slot.is_carried() && matches!(item.rules.item_type, 14 | 15))
     {
         if item.details.bonuses? != eq_client_core::ItemBonuses::default()
             || item.details.equipment?.worn.is_some()
@@ -175,8 +130,11 @@ fn estimate(
         maximum(base.mana, totals[6])?
     };
     let endurance = maximum(base.endurance, totals[7])?;
-    if hud.mana.is_some_and(|value| value > mana)
-        || hud.endurance.is_some_and(|value| value > endurance)
+    if world.vitals().mana.is_some_and(|value| value > mana)
+        || world
+            .vitals()
+            .endurance
+            .is_some_and(|value| value > endurance)
     {
         return None;
     }
@@ -184,13 +142,17 @@ fn estimate(
 }
 
 /// Checks both incoming effects and the buffs they might replace.
-fn capacity_independent_buffs(hud: &HudState, names: &SpellNames) -> bool {
-    hud.buff_state
+fn capacity_independent_buffs(
+    world: &eq_client_core::world::ClientWorld,
+    names: &SpellNames,
+) -> bool {
+    world
+        .buffs()
         .slots()
         .iter()
         .flat_map(|buffs| buffs.values())
         .map(|buff| buff.spell_id)
-        .chain(hud.buff_state.effects().keys().map(|id| u32::from(*id)))
+        .chain(world.buffs().effects().keys().map(|id| u32::from(*id)))
         .all(|id| {
             names.mechanics(id).is_some_and(
                 eq_client_assets::spells::Mechanics::preserves_mana_and_endurance_capacity,
@@ -248,7 +210,43 @@ fn add_spell(totals: &mut [i64; 8], names: &SpellNames, id: u32, level: u16) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eq_client_core::{BaseAttributes, PlayerState, inventory::InventoryUpdate};
+    use eq_client_core::{
+        BaseAttributes, PlayerState, WorldEvent, WorldUpdate,
+        inventory::InventoryUpdate,
+        world::{ClientWorld, NoSpells, SpellCatalog},
+    };
+
+    /// Tells the world one piece of news, with this spell data to hand.
+    fn tell(world: &mut ClientWorld, event: WorldEvent, spells: &dyn SpellCatalog) {
+        world.apply(&WorldUpdate::Game(event), std::time::Instant::now(), spells);
+    }
+
+    /// The player admitted, with an empty buff table.
+    fn admitted() -> ClientWorld {
+        let mut world = ClientWorld::default();
+        for event in [
+            WorldEvent::Entered {
+                capabilities: Vec::new(),
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(player()),
+                far_clip: None,
+            },
+            WorldEvent::BuffSnapshot(Vec::new()),
+        ] {
+            tell(&mut world, event, &NoSpells);
+        }
+        world
+    }
+
+    fn buff(spell_id: u32, buff: Option<eq_client_core::Buff>) -> WorldEvent {
+        WorldEvent::Buff(eq_client_core::BuffUpdate {
+            entity_id: 7,
+            slot: 0,
+            spell_id,
+            buff,
+        })
+    }
 
     fn player() -> PlayerState {
         PlayerState {
@@ -286,12 +284,9 @@ mod tests {
     fn harmless_stack_moves_keep_estimates_but_stat_food_and_equipment_do_not() {
         use eq_client_core::ItemBonuses;
         use eq_client_core::inventory::{Inventory, InventorySlot};
-        let hud = HudState {
-            buff_state: eq_client_core::buffs::BuffTracker::empty_snapshot(),
-            ..default()
-        };
+        let world = admitted();
         let names = SpellNames::default();
-        let mut milk = super::super::inventory::demo_items().remove(0);
+        let mut milk = crate::preview::items().remove(0);
         milk.slot = InventorySlot(22);
         milk.rules.item_type = 15;
         milk.details.bonuses = Some(ItemBonuses::default());
@@ -302,16 +297,16 @@ mod tests {
             let mut inventory = Inventory::default();
             inventory.apply(InventoryUpdate::Snapshot(vec![milk.clone()]));
             let mut held = milk.clone();
-            held.slot = InventorySlot(30);
+            held.slot = InventorySlot::CURSOR;
             inventory.apply(InventoryUpdate::Prediction(vec![held]));
             assert_eq!(
-                estimate(&player(), &inventory, &hud, &names),
+                estimate(&player(), &inventory, &world, &names),
                 (mana_bonus == 0).then_some((25, 20))
             );
             // Moving the item onward cannot erase the unresolved original food.
             inventory.apply(InventoryUpdate::Prediction(vec![]));
             assert_eq!(
-                estimate(&player(), &inventory, &hud, &names),
+                estimate(&player(), &inventory, &world, &names),
                 (mana_bonus == 0).then_some((25, 20))
             );
         }
@@ -320,70 +315,14 @@ mod tests {
         let mut inventory = Inventory::default();
         inventory.apply(InventoryUpdate::Snapshot(vec![equipment]));
         inventory.apply(InventoryUpdate::Prediction(vec![]));
-        assert_eq!(estimate(&player(), &inventory, &hud, &names), None);
-    }
-
-    #[test]
-    fn shown_hp_adds_back_what_equipped_items_give() {
-        use eq_client_core::ItemBonuses;
-        use eq_client_core::inventory::InventorySlot;
-        let mut chest = super::super::inventory::demo_items().remove(0);
-        chest.slot = InventorySlot(17);
-        chest.stack_count = None;
-        chest.rules.item_type = 10;
-        chest.details.slots = 1 << 17;
-        chest.details.classes = u32::MAX;
-        chest.details.races = u32::MAX;
-        chest.details.bonuses = Some(ItemBonuses {
-            hit_points: 100,
-            ..ItemBonuses::default()
-        });
-        chest.details.equipment = Some(eq_client_core::EquipmentRules::default());
-        let mut inventory = InventoryState::default();
-        inventory.apply(InventoryUpdate::Snapshot(vec![chest]));
-        assert_eq!(item_hit_points(&player(), &inventory.data), Some(100));
-        let mut online = OnlineState::new(true);
-        online.player = Some(player());
-        // Alive at 80 of 250 with a +100 HP chest, the server reports -20 of 150.
-        let hud = HudState {
-            reported_hp: Some(super::super::hud::ReportedHp {
-                current: -20,
-                maximum: 150,
-                without_items: true,
-            }),
-            ..default()
-        };
-        let mut app = App::new();
-        app.insert_resource(online)
-            .insert_resource(inventory)
-            .insert_resource(hud)
-            .add_systems(Update, hit_points);
-        app.update();
-        let hud = app.world().resource::<HudState>();
-        assert_eq!((hud.hp, hud.hp_percent), (Some((80, 250)), Some(32)));
-        let online = app.world().resource::<OnlineState>();
-        assert_eq!(online.health.get(&7), Some(&32));
-        assert_eq!(online.player.as_ref().unwrap().hp_percent, Some(32));
-        // Taking the chest off leaves the last report short of its bonus until
-        // the server reports again, as in the official client.
-        app.world_mut()
-            .resource_mut::<InventoryState>()
-            .apply(InventoryUpdate::Snapshot(vec![]));
-        app.update();
-        let hud = app.world().resource::<HudState>();
-        assert_eq!((hud.hp, hud.hp_percent), (Some((0, 150)), Some(0)));
+        assert_eq!(estimate(&player(), &inventory, &world, &names), None);
     }
 
     #[test]
     fn estimates_follow_buffs_and_invalidate_missing_or_contradictory_data() {
         let mut inventory = eq_client_core::inventory::Inventory::default();
         inventory.apply(InventoryUpdate::Snapshot(vec![]));
-        let mut hud = HudState {
-            buff_state: eq_client_core::buffs::BuffTracker::empty_snapshot(),
-            mana: Some(25),
-            endurance: Some(20),
-            ..default()
-        };
+        let mut world = admitted();
         let mut fields = vec!["0"; 183];
         fields[0] = "42";
         fields[1] = "Synthetic wisdom";
@@ -392,34 +331,37 @@ mod tests {
         fields[86] = "9";
         let names = SpellNames::parse(&fields.join("^"));
         assert_eq!(
-            estimate(&player(), &inventory, &hud, &names),
+            estimate(&player(), &inventory, &world, &names),
             Some((25, 20))
         );
-        hud.buff_state.apply(eq_client_core::BuffUpdate {
-            entity_id: 7,
-            slot: 0,
-            spell_id: 42,
-            buff: Some(eq_client_core::Buff {
-                spell_id: 42,
-                caster_level: 1,
-                effect_type: 2,
-                bard_modifier: 10,
-                duration_ticks: 10,
-                counters: 0,
-                caster_id: 7,
-            }),
-        });
+        tell(
+            &mut world,
+            buff(
+                42,
+                Some(eq_client_core::Buff {
+                    spell_id: 42,
+                    caster_level: 1,
+                    effect_type: 2,
+                    bard_modifier: 10,
+                    duration_ticks: 10,
+                    counters: 0,
+                    caster_id: 7,
+                }),
+            ),
+            &NoSpells,
+        );
         assert_eq!(
-            estimate(&player(), &inventory, &hud, &names),
+            estimate(&player(), &inventory, &world, &names),
             Some((27, 20))
         );
         assert_eq!(
-            estimate(&player(), &inventory, &hud, &SpellNames::default()),
+            estimate(&player(), &inventory, &world, &SpellNames::default()),
             None
         );
-        let confirmed = hud.buff_state.slots().unwrap()[&0].clone();
-        hud.spell_effect(
-            eq_client_core::SpellEffect {
+        let confirmed = world.buffs().slots().unwrap()[&0].clone();
+        tell(
+            &mut world,
+            WorldEvent::SpellEffect(eq_client_core::SpellEffect {
                 target_id: 7,
                 caster_id: 7,
                 caster_level: 1,
@@ -427,35 +369,33 @@ mod tests {
                 spell_id: 42,
                 spell_level: 1,
                 effect_flag: 4,
-            },
-            None,
+            }),
+            &NoSpells,
         );
-        assert_eq!(estimate(&player(), &inventory, &hud, &names), None);
-        hud.buff_update(eq_client_core::BuffUpdate {
-            entity_id: 7,
-            slot: 0,
-            spell_id: 42,
-            buff: Some(confirmed),
-        });
+        assert_eq!(estimate(&player(), &inventory, &world, &names), None);
+        tell(&mut world, buff(42, Some(confirmed)), &NoSpells);
         assert_eq!(
-            estimate(&player(), &inventory, &hud, &names),
+            estimate(&player(), &inventory, &world, &names),
             Some((27, 20))
         );
-        hud.buff_state
-            .replace_snapshot(std::collections::BTreeMap::default());
+        tell(&mut world, WorldEvent::BuffSnapshot(Vec::new()), &NoSpells);
         assert_eq!(
-            estimate(&player(), &inventory, &hud, &names),
+            estimate(&player(), &inventory, &world, &names),
             Some((25, 20))
         );
-        hud.mana = Some(26);
-        assert_eq!(estimate(&player(), &inventory, &hud, &names), None);
-        hud.mana = Some(25);
-        hud.buff_state.clear();
-        assert_eq!(estimate(&player(), &inventory, &hud, &names), None);
-        hud.buff_state
-            .replace_snapshot(std::collections::BTreeMap::default());
+        tell(&mut world, WorldEvent::Mana(26), &NoSpells);
+        assert_eq!(estimate(&player(), &inventory, &world, &names), None);
+        tell(&mut world, WorldEvent::Mana(25), &NoSpells);
+        // A dropped connection forgets the buffs.
+        world.apply(
+            &WorldUpdate::Connection(eq_client_core::world::Link::Entering),
+            std::time::Instant::now(),
+            &NoSpells,
+        );
+        assert_eq!(estimate(&player(), &inventory, &world, &names), None);
+        tell(&mut world, WorldEvent::BuffSnapshot(Vec::new()), &NoSpells);
         inventory.apply(InventoryUpdate::Invalidated);
-        assert_eq!(estimate(&player(), &inventory, &hud, &names), None);
+        assert_eq!(estimate(&player(), &inventory, &world, &names), None);
     }
 
     #[test]
@@ -471,12 +411,10 @@ mod tests {
             fields[16] = primary.to_string();
             fields[181] = alternate.to_string();
             let names = SpellNames::parse(&fields.join("^"));
-            let mut hud = HudState {
-                buff_state: eq_client_core::buffs::BuffTracker::empty_snapshot(),
-                ..default()
-            };
-            hud.spell_effect(
-                eq_client_core::SpellEffect {
+            let mut world = admitted();
+            tell(
+                &mut world,
+                WorldEvent::SpellEffect(eq_client_core::SpellEffect {
                     target_id: 7,
                     caster_id: 7,
                     caster_level: 1,
@@ -484,32 +422,34 @@ mod tests {
                     spell_id: 42,
                     spell_level: 1,
                     effect_flag: 4,
-                },
-                Some(&names),
+                }),
+                &names,
             );
-            assert_eq!(hud.buff_state.effects().is_empty(), expected_instant);
+            assert_eq!(world.buffs().effects().is_empty(), expected_instant);
             assert_eq!(
-                estimate(&player(), &inventory, &hud, &names),
+                estimate(&player(), &inventory, &world, &names),
                 Some((25, 20))
             );
             if !expected_instant {
                 // An unknown or resource-bearing existing buff could have been
                 // replaced. Do not retain its old bonus or silently discard it.
-                hud.buff_state.apply(eq_client_core::BuffUpdate {
-                    entity_id: 7,
-                    slot: 0,
-                    spell_id: 43,
-                    buff: Some(eq_client_core::Buff {
-                        spell_id: 43,
-                        caster_level: 1,
-                        effect_type: 2,
-                        bard_modifier: 10,
-                        duration_ticks: 10,
-                        counters: 0,
-                        caster_id: 7,
-                    }),
-                });
-                assert_eq!(estimate(&player(), &inventory, &hud, &names), None);
+                tell(
+                    &mut world,
+                    buff(
+                        43,
+                        Some(eq_client_core::Buff {
+                            spell_id: 43,
+                            caster_level: 1,
+                            effect_type: 2,
+                            bard_modifier: 10,
+                            duration_ticks: 10,
+                            counters: 0,
+                            caster_id: 7,
+                        }),
+                    ),
+                    &NoSpells,
+                );
+                assert_eq!(estimate(&player(), &inventory, &world, &names), None);
                 for effect_id in ["9", "97", "190", "9999"] {
                     let mut other = fields.clone();
                     other[0] = "43".into();
@@ -518,7 +458,7 @@ mod tests {
                     other[86] = effect_id.into();
                     let combined =
                         SpellNames::parse(&format!("{}\n{}", fields.join("^"), other.join("^")));
-                    assert_eq!(estimate(&player(), &inventory, &hud, &combined), None);
+                    assert_eq!(estimate(&player(), &inventory, &world, &combined), None);
                 }
             }
         }
@@ -528,21 +468,15 @@ mod tests {
     fn scheduled_estimate_clears_on_disconnect_and_when_rules_are_disabled() {
         let mut app = App::new();
         let mut online = OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(1);
-        online.player = Some(player());
-        let mut inventory = InventoryState::default();
-        inventory.apply(InventoryUpdate::Snapshot(vec![]));
+        crate::online::testing::admit(&mut online, 1, player());
+        crate::online::testing::buffs(&mut online, std::collections::BTreeMap::new());
+        crate::online::testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![]));
         app.insert_resource(ViewerSettings(super::super::ViewerConfig {
             estimate_titanium_resources: true,
             ..default()
         }))
         .insert_resource(online)
-        .insert_resource(inventory)
-        .insert_resource(HudState {
-            buff_state: eq_client_core::buffs::BuffTracker::empty_snapshot(),
-            ..default()
-        })
+        .init_resource::<HudState>()
         .init_resource::<SpellNames>()
         .add_systems(Update, update);
         app.update();
@@ -550,10 +484,14 @@ mod tests {
             app.world().resource::<HudState>().resource_estimate,
             Some((25, 20))
         );
-        app.world_mut().resource_mut::<OnlineState>().connected = false;
+        crate::online::testing::connect(&mut app.world_mut().resource_mut::<OnlineState>(), false);
         app.update();
         assert_eq!(app.world().resource::<HudState>().resource_estimate, None);
-        app.world_mut().resource_mut::<OnlineState>().connected = true;
+        crate::online::testing::connect(&mut app.world_mut().resource_mut::<OnlineState>(), true);
+        crate::online::testing::buffs(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            std::collections::BTreeMap::new(),
+        );
         app.world_mut()
             .resource_mut::<ViewerSettings>()
             .0

@@ -1,5 +1,6 @@
 //! Compact server-owned buff display; clicking never cancels an effect.
-use super::{hud::HudState, spell_icons, spellbook::SpellNames, windows};
+use super::{online::OnlineState, spell_icons, spellbook::SpellNames, windows};
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use std::collections::BTreeMap;
 
@@ -18,14 +19,26 @@ pub(super) struct Hint;
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
     mut commands: Commands,
-    hud: Res<HudState>,
-    panels: Query<Entity, With<Panel>>,
+    online: Res<OnlineState>,
+    shown: Res<windows::Shown>,
+    mut panels: Query<(Entity, &mut Node), With<Panel>>,
     bodies: Query<Entity, With<Body>>,
     mut previous: Local<Option<BTreeMap<u32, eq_client_core::Buff>>>,
     mut previous_effects: Local<BTreeMap<u16, eq_client_core::SpellEffect>>,
 ) {
-    let Some(buffs) = hud.buff_state.slots() else {
-        for entity in &panels {
+    // The player closes and opens the window from the selector.
+    let display = if shown.is_open(windows::WindowId::Effects) {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for (_, mut node) in &mut panels {
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    let Some(buffs) = online.world().buffs().slots() else {
+        for (entity, _) in &panels {
             commands.entity(entity).despawn();
         }
         *previous = None;
@@ -33,38 +46,30 @@ pub(super) fn update(
         return;
     };
     if previous.as_ref() == Some(buffs)
-        && *previous_effects == *hud.buff_state.effects()
+        && *previous_effects == *online.world().buffs().effects()
         && !panels.is_empty()
     {
         return;
     }
     *previous = Some(buffs.clone());
-    previous_effects.clone_from(hud.buff_state.effects());
+    previous_effects.clone_from(online.world().buffs().effects());
     let body = if let Ok(body) = bodies.single() {
         commands.entity(body).despawn_children();
         body
     } else {
-        let frame = commands
-            .spawn((
-                Panel,
-                windows::Frame::default(),
-                Node {
-                    position_type: PositionType::Absolute,
-                    right: px(340),
-                    top: px(150),
-                    width: px(242),
-                    padding: UiRect::all(px(6)),
-                    row_gap: px(4),
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                GlobalZIndex(12),
-                BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.92)),
-            ))
-            .id();
-        commands
-            .entity(frame)
-            .with_children(|parent| windows::title_bar(parent, frame, "BUFFS"));
+        let frame = windows::frame(
+            &mut commands,
+            windows::WindowId::Effects,
+            Node {
+                width: px(242),
+                padding: UiRect::all(px(6)),
+                row_gap: px(4),
+                flex_direction: FlexDirection::Column,
+                display,
+                ..default()
+            },
+        );
+        commands.entity(frame).insert(Panel);
         let body = commands
             .spawn((
                 Body,
@@ -78,7 +83,7 @@ pub(super) fn update(
         commands.entity(frame).add_child(body);
         body
     };
-    content(&mut commands, body, buffs, hud.buff_state.effects());
+    content(&mut commands, body, buffs, online.world().buffs().effects());
 }
 
 /// Builds icons from occupied server slots without renumbering holes.
@@ -107,17 +112,14 @@ fn content(
                             border: UiRect::all(px(1)),
                             ..default()
                         },
-                        BorderColor::all(Color::srgb(0.28, 0.34, 0.40)),
-                        BackgroundColor(Color::srgb(0.08, 0.11, 0.14)),
+                        BorderColor::all(theme::EDGE),
+                        BackgroundColor(theme::INSET),
                     ))
                     .with_children(|icon| {
                         icon.spawn(spell_icons::artwork(spell_icons::Source::Buff(slot), 36.0));
                         icon.spawn((
                             Text::new((u64::from(slot) + 1).to_string()),
-                            TextFont {
-                                font_size: FontSize::Px(9.0),
-                                ..default()
-                            },
+                            theme::font(Size::Caption),
                             Node {
                                 position_type: PositionType::Absolute,
                                 bottom: px(0),
@@ -137,8 +139,8 @@ fn content(
                             border: UiRect::all(px(1)),
                             ..default()
                         },
-                        BorderColor::all(Color::srgb(0.28, 0.34, 0.40)),
-                        BackgroundColor(Color::srgb(0.08, 0.11, 0.14)),
+                        BorderColor::all(theme::EDGE),
+                        BackgroundColor(theme::INSET),
                     ))
                     .with_children(|icon| {
                         icon.spawn(spell_icons::artwork(
@@ -155,11 +157,8 @@ fn content(
             } else {
                 "Hover an effect for details"
             }),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.73, 0.77, 0.81)),
+            theme::font(Size::Body),
+            TextColor(theme::INK),
         ));
     });
 }
@@ -167,7 +166,7 @@ fn content(
 /// Labels the server's duration without pretending it is a synchronized countdown.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn hover(
-    hud: Res<HudState>,
+    online: Res<OnlineState>,
     names: Res<SpellNames>,
     entries: Query<(&Entry, &Interaction)>,
     effects: Query<(&Unplaced, &Interaction)>,
@@ -176,20 +175,26 @@ pub(super) fn hover(
     let hovered = entries
         .iter()
         .find(|(_, interaction)| **interaction != Interaction::None)
-        .and_then(|(entry, _)| hud.buff_state.slots()?.get(&entry.0));
+        .and_then(|(entry, _)| online.world().buffs().slots()?.get(&entry.0));
     let text = hovered.map_or_else(
         || {
             if let Some((entry, _)) = effects
                 .iter()
                 .find(|(_, interaction)| **interaction != Interaction::None)
             {
-                let duration = hud.buff_state.effects().get(&entry.0).and_then(|effect| {
-                    names
-                        .mechanics(u32::from(entry.0))?
-                        .base_duration(effect.caster_level)
-                });
-                let level = hud
-                    .buff_state
+                let duration = online
+                    .world()
+                    .buffs()
+                    .effects()
+                    .get(&entry.0)
+                    .and_then(|effect| {
+                        names
+                            .mechanics(u32::from(entry.0))?
+                            .base_duration(effect.caster_level)
+                    });
+                let level = online
+                    .world()
+                    .buffs()
                     .effects()
                     .get(&entry.0)
                     .map(|effect| effect.caster_level);
@@ -200,8 +205,12 @@ pub(super) fn hover(
                     resource_hint(names.mechanics(u32::from(entry.0)), level)
                 );
             }
-            if hud.buff_state.slots().is_some_and(BTreeMap::is_empty)
-                && hud.buff_state.effects().is_empty()
+            if online
+                .world()
+                .buffs()
+                .slots()
+                .is_some_and(BTreeMap::is_empty)
+                && online.world().buffs().effects().is_empty()
             {
                 "No active buffs".into()
             } else {
@@ -328,10 +337,13 @@ mod tests {
 
     #[test]
     fn updates_keep_the_frame_and_remove_faded_icons_and_stale_admissions() {
-        let mut app = App::new();
-        app.init_resource::<HudState>()
-            .init_resource::<SpellNames>()
-            .add_systems(Update, (update, hover).chain());
+        let mut app = crate::testing::app();
+        app.insert_resource({
+            let mut online = OnlineState::new(true);
+            crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+            online
+        })
+        .add_systems(Update, (update, hover).chain());
         let buff = eq_client_core::Buff {
             spell_id: 42,
             caster_level: 1,
@@ -341,10 +353,10 @@ mod tests {
             counters: 0,
             caster_id: 7,
         };
-        app.world_mut()
-            .resource_mut::<HudState>()
-            .buff_state
-            .replace_snapshot(BTreeMap::from([(3, buff.clone())]));
+        crate::online::testing::buffs(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            BTreeMap::from([(3, buff.clone())]),
+        );
         app.update();
         let frame = app
             .world_mut()
@@ -358,10 +370,10 @@ mod tests {
             .map(|entry| entry.0)
             .collect();
         assert_eq!(entries, [3]);
-        app.world_mut()
-            .resource_mut::<HudState>()
-            .buff_state
-            .replace_snapshot(BTreeMap::from([(6, buff)]));
+        crate::online::testing::buffs(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            BTreeMap::from([(6, buff)]),
+        );
         app.update();
         assert_eq!(
             app.world_mut()
@@ -377,10 +389,7 @@ mod tests {
             .map(|entry| entry.0)
             .collect();
         assert_eq!(entries, [6]);
-        app.world_mut()
-            .resource_mut::<HudState>()
-            .buff_state
-            .clear();
+        crate::online::testing::connect(&mut app.world_mut().resource_mut::<OnlineState>(), false);
         app.update();
         assert_eq!(
             app.world_mut().query::<&Entry>().iter(app.world()).count(),

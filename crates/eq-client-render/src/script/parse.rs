@@ -75,6 +75,9 @@ pub enum Step {
     Walk(f32, Duration),
     /// Left-clicks one UI control through Bevy's ordinary interaction state.
     Click(ClickTarget),
+    /// Right-clicks one UI control the same way, as a bag is opened or an
+    /// item inspected.
+    RightClick(ClickTarget),
     /// Logs a numeric summary of player, resource, cast and buff state.
     Report(String),
     /// Saves the primary window to a PNG beside the script.
@@ -198,6 +201,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
             Step::Walk(number(range, 1.0, 200.0)?, millis(duration, MAX_WALK)?)
         }
         ("click", target) => Step::Click(parse_click(target)?),
+        ("right_click", target) => Step::RightClick(parse_click(target)?),
         ("report", label) => Step::Report(label.join(" ")),
         ("screenshot", [name])
             if Path::new(name)
@@ -214,7 +218,8 @@ fn parse_step(line: &str) -> Result<Step, String> {
     })
 }
 
-/// `click <target>`: a slot, spellbook, trade or bag tint button.
+/// `click <target>` or `right_click <target>`: a slot, spellbook, trade or
+/// bag tint button.
 fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
     fn value<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
         text.parse().map_err(|_| format!("expected {what}"))
@@ -382,7 +387,7 @@ mod tests {
         let steps = parse(
             "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
              gm summon\ngm damage 10000\ngm givemoney 0 0 5 0\npress F1 # self\n\
-             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\n\
+             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\nreport after cast\nscreenshot a.png\nquit\n",
             base,
         )
@@ -427,6 +432,7 @@ mod tests {
                 Step::Approach(12.0, Duration::from_secs(5)),
                 Step::Walk(8.0, Duration::from_secs(30)),
                 Step::Click(ClickTarget::Slot(23)),
+                Step::RightClick(ClickTarget::Slot(22)),
                 Step::Click(ClickTarget::Scribe),
                 Step::Click(ClickTarget::Store),
                 Step::Click(ClickTarget::BookRow(0)),

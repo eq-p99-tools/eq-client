@@ -14,10 +14,12 @@ pub(super) enum Use {
 pub(super) fn nearest(state: &super::online::OnlineState) -> Option<Use> {
     let door = super::doors::nearest(state);
     let item = state
-        .player
-        .as_ref()
+        .world()
+        .player()
         .filter(|_| state.in_world())
-        .and_then(|player| eq_client_core::ground::nearest_item(&state.objects, player.position));
+        .and_then(|player| {
+            eq_client_core::ground::nearest_item(state.world().objects(), player.position)
+        });
     match (door, item) {
         (Some((door_distance, door)), item)
             if item.is_none_or(|(_, distance)| door_distance <= distance) =>
@@ -32,29 +34,22 @@ pub(super) fn nearest(state: &super::online::OnlineState) -> Option<Use> {
 /// One explicit key press queues one request; no state is predicted.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn input(
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: super::keys::Keys,
     mut chat: ResMut<super::chat::ChatState>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    sender: Res<super::target::CommandsToServer>,
-    mut state: ResMut<super::online::OnlineState>,
+    outbox: Res<crate::outbox::Outbox>,
+    state: Res<super::online::OnlineState>,
+    mut lines: ResMut<super::notices::Lines>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyF)
-        || chat.composing
-        || !windows.single().is_ok_and(|window| window.focused)
-        || keys.any_pressed([
-            KeyCode::ControlLeft,
-            KeyCode::ControlRight,
-            KeyCode::AltLeft,
-            KeyCode::AltRight,
-        ])
-    {
+    if !keys.pressed(super::keys::Act::Use) {
         return;
     }
     match nearest(&state) {
-        Some(Use::Door(door_id, _)) => super::doors::open(door_id, &mut state, &sender),
+        Some(Use::Door(door_id, _)) => {
+            super::doors::open(door_id, &state, &outbox, &mut lines.door);
+        }
         Some(Use::Item(drop_id)) => {
-            if let Err(error) = super::ground::pick_up(drop_id, &state, &sender) {
-                chat.history.push(super::chat::system_line(error));
+            if let Some(line) = super::ground::pick_up(drop_id, &state, &outbox) {
+                chat.history.push(super::chat::system_line(line));
             }
         }
         None => (),
@@ -68,29 +63,31 @@ mod tests {
 
     fn state() -> super::super::online::OnlineState {
         let mut state = super::super::online::OnlineState::new(true);
-        state.connected = true;
-        state.session_id = Some(11);
-        state.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            spawn_id: 1,
-            race: 1,
-            class: None,
-            deity: None,
-            skills: None,
-            gender: 0,
-            level: 1,
-            position: default(),
-            mana: 0,
-            endurance: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 6.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: None,
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut state,
+            11,
+            eq_client_core::PlayerState {
+                name: "Example".into(),
+                base_attributes: None,
+                spawn_id: 1,
+                race: 1,
+                class: None,
+                deity: None,
+                skills: None,
+                gender: 0,
+                level: 1,
+                position: default(),
+                mana: 0,
+                endurance: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 6.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: None,
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
         state
     }
 
@@ -117,29 +114,32 @@ mod tests {
     fn f_uses_whichever_of_a_door_and_an_item_is_nearer() {
         let mut state = state();
         assert_eq!(nearest(&state), None);
-        state.doors.apply(&door_at(6.0), std::time::Instant::now());
-        state.objects.apply(&item_at(3.0));
+        crate::online::testing::doors(&mut state, &door_at(6.0), std::time::Instant::now());
+        crate::online::testing::objects(&mut state, &item_at(3.0));
         assert_eq!(nearest(&state), Some(Use::Item(71)));
-        state.objects.apply(&item_at(9.0));
+        crate::online::testing::objects(&mut state, &item_at(9.0));
         assert_eq!(nearest(&state), Some(Use::Door(3, "DOOR".into())));
-        state.doors.apply(
+        crate::online::testing::doors(
+            &mut state,
             &eq_client_core::doors::DoorUpdate::RemoveAll,
             std::time::Instant::now(),
         );
         assert_eq!(nearest(&state), Some(Use::Item(71)));
-        state.connected = false;
+        crate::online::testing::connect(&mut state, false);
         assert_eq!(nearest(&state), None);
     }
 
     #[test]
     fn pressing_f_near_an_item_queues_a_pickup() {
         let mut state = state();
-        state.objects.apply(&item_at(3.0));
+        crate::online::testing::objects(&mut state, &item_at(3.0));
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
-            .insert_resource(super::super::target::CommandsToServer(Some(sender)))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .insert_resource(state)
             .add_systems(Update, input);
         app.world_mut().spawn((

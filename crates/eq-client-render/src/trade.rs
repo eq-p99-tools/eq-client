@@ -3,252 +3,108 @@
 //! L loots the targeted corpse, U trades with the targeted NPC, and Escape
 //! closes the window (see `escape`). A window closes only once the server has
 //! been told, so the server never keeps a session the player can no longer end.
-use bevy::{prelude::*, window::PrimaryWindow};
-use eq_client_core::{
-    ClientCommand, Coins, SpawnKind,
-    inventory::InventoryItem,
-    loot::{LootResponse, LootUpdate},
-    merchant::{MerchantItem, MerchantUpdate},
-};
-use std::collections::BTreeMap;
+use crate::theme::{self, Size};
+use bevy::prelude::*;
+use eq_client_core::{ClientCommand, SpawnKind, inventory::InventoryItem, world::ClientWorld};
 
 use super::windows;
 
 /// The NPC class that answers ordinary shop requests; servers ignore other classes.
 const MERCHANT_CLASS: u8 = 41;
+/// The NPC class that keeps the player's bank.
+const BANKER_CLASS: u8 = 40;
 
-/// Open loot and merchant sessions for the current admission.
+/// The open loot and merchant windows: what they show besides the world's
+/// lists, which say what is on the corpse and for sale.
 #[derive(Resource, Default)]
 pub(super) struct TradeState {
-    session: Option<u64>,
-    /// Carried coins last reported by the server.
-    pub coins: Option<Coins>,
     loot: Option<LootWindow>,
     merchant: Option<MerchantWindow>,
     revision: u64,
 }
 
 struct LootWindow {
-    corpse_id: u16,
     name: String,
-    items: BTreeMap<u16, InventoryItem>,
-    listed: bool,
+    /// The corpse slot asked for and not yet answered.
     pending: Option<u16>,
     loot_all: bool,
 }
 
 struct MerchantWindow {
-    merchant_id: u16,
     name: String,
-    stock: BTreeMap<u32, MerchantItem>,
 }
 
 impl TradeState {
-    /// Whether the loot window is open.
-    pub(super) const fn looting(&self) -> bool {
-        self.loot.is_some()
-    }
-
-    /// Whether the merchant window is open.
-    pub(super) const fn shopping(&self) -> bool {
-        self.merchant.is_some()
-    }
-
-    /// Forgets windows from an old admission; coins stay until the server reports them.
-    pub(super) fn reset(&mut self, session: Option<u64>) {
-        if self.session != session {
-            self.session = session;
-            self.loot = None;
-            self.merchant = None;
-            self.revision += 1;
-        }
-    }
-
-    fn changed(&mut self) {
+    /// Something the windows show changed: draw them again.
+    pub(super) fn changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Open windows as `(slot, item id)` lists, for script reports.
-    pub(super) fn summary(&self) -> String {
-        let loot = self.loot.as_ref().map(|window| {
-            let items: Vec<_> = window
-                .items
-                .iter()
-                .map(|(slot, item)| (*slot, item.details.id))
-                .collect();
-            format!("loot corpse={} items={items:?}", window.corpse_id)
+    /// Opens the offline preview's loot and merchant windows, named as the
+    /// player's own requests would name them.
+    pub(crate) fn preview(&mut self, corpse: &str, merchant: &str) {
+        self.loot = Some(LootWindow {
+            name: corpse.into(),
+            pending: None,
+            loot_all: false,
         });
-        let merchant = self.merchant.as_ref().map(|window| {
-            let stock: Vec<_> = window
-                .stock
-                .values()
-                .map(|entry| (entry.slot, entry.item.details.id, entry.price))
-                .collect();
-            format!("merchant {} stock={stock:?}", window.merchant_id)
+        self.merchant = Some(MerchantWindow {
+            name: merchant.into(),
         });
-        [loot, merchant]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-
-    /// Like the Titanium client, applies coin changes the server reports without a
-    /// money update (loot coins, purchase prices). Only the total is tracked exactly;
-    /// the next server money update restores the true denominations.
-    fn adjust_coins(&mut self, copper: i64) {
-        if let Some(coins) = &mut self.coins {
-            let total = i64::try_from(coins.total_copper()).unwrap_or(i64::MAX);
-            let total = u64::try_from(total.saturating_add(copper).max(0)).unwrap_or(0);
-            let denomination = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
-            *coins = Coins {
-                platinum: denomination(total / 1000),
-                gold: denomination(total / 100 % 10),
-                silver: denomination(total / 10 % 10),
-                copper: denomination(total % 10),
-            };
-        }
-    }
-
-    /// Applies one loot update and returns chat feedback.
-    pub(super) fn apply_loot(&mut self, update: LootUpdate) -> Option<String> {
         self.changed();
-        let window = self.loot.as_mut()?;
-        match update {
-            LootUpdate::Opened { response, coins } => {
-                let refusal = match response {
-                    LootResponse::Normal => None,
-                    LootResponse::SomeoneElse => Some("Someone else is looting that corpse."),
-                    LootResponse::NotAtThisTime => {
-                        Some("You cannot loot that corpse at this time.")
-                    }
-                    LootResponse::Hostiles => Some("You cannot loot while a hostile is nearby."),
-                    LootResponse::TooFar => Some("You are too far away to loot that corpse."),
-                    LootResponse::Other(_) => Some("You cannot loot that corpse."),
-                };
-                if let Some(refusal) = refusal {
-                    self.loot = None;
-                    return Some(refusal.into());
-                }
-                self.adjust_coins(i64::try_from(coins.total_copper()).unwrap_or(0));
-                (coins.total_copper() > 0).then(|| {
-                    format!(
-                        "You receive {} from the corpse.",
-                        coin_text(coins.total_copper())
-                    )
-                })
-            }
-            LootUpdate::Item(item) => {
-                if let Ok(slot) = u16::try_from(item.slot.0) {
-                    window.items.insert(slot, *item);
-                }
-                None
-            }
-            LootUpdate::Listed { corpse_id } => {
-                if corpse_id == window.corpse_id {
-                    window.listed = true;
-                }
-                None
-            }
-            LootUpdate::Taken { slot, accepted } => {
-                if window.pending == Some(slot) {
-                    window.pending = None;
-                }
-                if accepted {
-                    window.items.remove(&slot);
-                    None
-                } else {
-                    window.loot_all = false;
-                    Some("You cannot take that item.".into())
-                }
-            }
-            LootUpdate::Closed => {
-                self.loot = None;
-                None
-            }
+    }
+
+    /// Closes the windows whose corpse or merchant the world no longer has
+    /// open: the server closed or refused them, or the zone ended.
+    pub(super) fn follow(&mut self, world: &ClientWorld) {
+        if self.loot.is_some() && world.loot().is_none() {
+            self.loot = None;
+            self.changed();
+        }
+        if self.merchant.is_some() && world.merchant().is_none() {
+            self.merchant = None;
+            self.changed();
         }
     }
 
-    /// Applies one merchant update and returns chat feedback.
-    pub(super) fn apply_merchant(&mut self, update: MerchantUpdate) -> Option<String> {
-        self.changed();
-        let window = self.merchant.as_mut()?;
-        match update {
-            MerchantUpdate::Opened { accepted, .. } => {
-                if !accepted {
-                    self.merchant = None;
-                    return Some("That merchant will not trade with you.".into());
-                }
+    /// The server answered a request for a corpse slot.
+    pub(super) fn taken(&mut self, slot: u16, accepted: bool) {
+        if let Some(window) = self.loot.as_mut() {
+            if window.pending == Some(slot) {
+                window.pending = None;
             }
-            MerchantUpdate::Item(entry) => {
-                window.stock.insert(entry.slot, *entry);
+            if !accepted {
+                window.loot_all = false;
             }
-            MerchantUpdate::Removed { slot } => {
-                window.stock.remove(&slot);
-            }
-            MerchantUpdate::Closed => self.merchant = None,
-            MerchantUpdate::Bought { price, .. } => self.adjust_coins(-i64::from(price)),
-            // The session removes the sold units from the inventory, and a server
-            // money update follows.
-            MerchantUpdate::Sold { .. } => (),
         }
-        None
+        self.changed();
     }
 }
 
-/// Fills both windows with synthetic items for an explicitly offline preview.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn demo(
-    settings: Res<super::ViewerSettings>,
-    online: Res<super::online::OnlineState>,
-    mut trade: ResMut<TradeState>,
-) {
-    if !settings.0.demo_trade || online.enabled {
-        return;
-    }
-    let items = super::inventory::demo_items();
-    trade.coins = Some(Coins {
-        platinum: 3,
-        gold: 1,
-        silver: 4,
-        copper: 7,
-    });
-    trade.loot = Some(LootWindow {
-        corpse_id: 1,
-        name: "a preview rat".into(),
-        items: items
+/// The open corpse and merchant as `(slot, item id)` lists, for script reports.
+pub(super) fn summary(world: &ClientWorld) -> String {
+    let loot = world.loot().map(|loot| {
+        let items: Vec<_> = loot
+            .items
             .iter()
-            .take(3)
-            .zip(22u16..)
-            .map(|(item, slot)| (slot, item.clone()))
-            .collect(),
-        listed: true,
-        pending: None,
-        loot_all: false,
+            .map(|(slot, item)| (*slot, item.details.id))
+            .collect();
+        format!("loot corpse={} items={items:?}", loot.corpse_id)
     });
-    trade.merchant = Some(MerchantWindow {
-        merchant_id: 2,
-        name: "Preview merchant".into(),
-        stock: items
-            .into_iter()
-            .skip(3)
-            .zip(1u32..)
-            .map(|(item, slot)| {
-                (
-                    slot,
-                    MerchantItem {
-                        slot,
-                        price: slot * 137,
-                        quantity: 0,
-                        item,
-                    },
-                )
-            })
-            .collect(),
+    let merchant = world.merchant().map(|merchant| {
+        let stock: Vec<_> = merchant
+            .stock
+            .values()
+            .map(|entry| (entry.slot, entry.item.details.id, entry.price))
+            .collect();
+        format!("merchant {} stock={stock:?}", merchant.merchant_id)
     });
-    trade.changed();
+    [loot, merchant]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("; ")
 }
-
 /// `1p 2g 3s 4c`, omitting empty denominations.
 pub(super) fn coin_text(copper: u64) -> String {
     let parts: Vec<String> = [
@@ -296,59 +152,68 @@ pub(super) enum Action {
     clippy::too_many_lines
 )]
 pub(super) fn input(
-    keys: Res<ButtonInput<KeyCode>>,
-    online: Res<super::online::OnlineState>,
-    target: Res<super::target::TargetState>,
-    sender: Res<super::target::CommandsToServer>,
-    inventory: Res<super::inventory::InventoryState>,
+    keys: super::keys::Keys,
+    mut online: ResMut<super::online::OnlineState>,
+    outbox: Res<crate::outbox::Outbox>,
     mut trade: ResMut<TradeState>,
-    mut chat: ResMut<super::chat::ChatState>,
+    (mut chat, mut shown): (ResMut<super::chat::ChatState>, ResMut<windows::Shown>),
     buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     escape: Res<super::escape::Escape>,
 ) {
-    trade.reset(online.session_id);
-    let (Some(session_id), Some(player), Some(sender)) =
-        (online.session_id, online.player.as_ref(), sender.0.as_ref())
-    else {
+    trade.follow(online.world());
+    // Only a player in the world trades; the outbox stamps what they ask.
+    let (Some(stamp), Some(own_id)) = (
+        outbox.peek(online.world()),
+        online.world().player().map(|player| player.spawn_id),
+    ) else {
         return;
     };
-    if !online.connected || online.death.is_some() {
-        return;
-    }
-    let now = std::time::Instant::now();
-    let own_id = player.spawn_id;
-    let send = |command: ClientCommand| sender.try_send(command).is_ok();
-    let focused = !chat.composing && windows.single().is_ok_and(|window| window.focused);
-    let targeted = target
-        .selected
-        .and_then(|id| online.spawns.get(&id).map(|spawn| (id, spawn)));
+    let (session_id, now) = (stamp.session_id, stamp.created);
+    // The outbox says why a request did not leave.
+    let send = |world: &eq_client_core::world::ClientWorld, command: ClientCommand| {
+        outbox.send(world, command).is_ok()
+    };
+    // The target's ID, kind, class, visibility and shown name.
+    let targeted = online.world().target().selected.and_then(|id| {
+        let spawn = &online.world().spawn(id)?.state;
+        Some((
+            id,
+            spawn.kind,
+            spawn.class,
+            spawn.invisible,
+            eq_client_core::entities::display_name(&spawn.name),
+        ))
+    });
     let mut clicked: Vec<Action> = buttons
         .iter()
         .filter(|(interaction, _)| **interaction == Interaction::Pressed)
         .map(|(_, action)| *action)
         .collect();
     match *escape {
-        super::escape::Escape::Loot => clicked.push(Action::EndLoot),
-        super::escape::Escape::Shop => clicked.push(Action::EndShop),
+        super::escape::Escape::Close(windows::WindowId::Loot) => clicked.push(Action::EndLoot),
+        super::escape::Escape::Close(windows::WindowId::Merchant) => {
+            clicked.push(Action::EndShop);
+        }
         _ => (),
     }
-    if focused && keys.just_pressed(KeyCode::KeyL) {
+    if keys.pressed(super::keys::Act::Loot) {
         if trade.loot.is_some() {
             clicked.push(Action::EndLoot);
-        } else if let Some((corpse_id, spawn)) = targeted.filter(|(_, spawn)| {
-            matches!(spawn.kind, SpawnKind::NpcCorpse | SpawnKind::PlayerCorpse)
-        }) {
-            if send(ClientCommand::Loot {
-                session_id,
-                corpse_id,
-                created: now,
-            }) {
-                trade.loot = Some(LootWindow {
+        } else if let Some((corpse_id, _, _, _, name)) = targeted
+            .clone()
+            .filter(|(_, kind, ..)| matches!(kind, SpawnKind::NpcCorpse | SpawnKind::PlayerCorpse))
+        {
+            if send(
+                online.world(),
+                ClientCommand::Loot {
+                    session_id,
                     corpse_id,
-                    name: super::combat::display_name(&spawn.name),
-                    items: BTreeMap::new(),
-                    listed: false,
+                    created: now,
+                },
+            ) {
+                online.open_loot(corpse_id);
+                trade.loot = Some(LootWindow {
+                    name,
                     pending: None,
                     loot_all: false,
                 });
@@ -360,34 +225,47 @@ pub(super) fn input(
             ));
         }
     }
-    if focused && keys.just_pressed(KeyCode::KeyU) {
+    if keys.pressed(super::keys::Act::Trade) {
+        let banker = targeted.as_ref().is_some_and(|(_, kind, class, ..)| {
+            *kind == SpawnKind::Npc && *class == Some(BANKER_CLASS)
+        });
         if trade.merchant.is_some() {
             clicked.push(Action::EndShop);
-        } else if let Some((merchant_id, spawn)) = targeted.filter(|(_, spawn)| {
-            spawn.kind == SpawnKind::Npc
-                && !spawn.invisible
-                && spawn.class.is_none_or(|class| class == MERCHANT_CLASS)
-        }) {
-            if send(ClientCommand::Shop {
-                session_id,
-                merchant_id,
-                own_id,
-                open: true,
-                created: now,
-            }) {
-                trade.merchant = Some(MerchantWindow {
+        } else if let Some((merchant_id, _, _, _, name)) =
+            targeted.filter(|(_, kind, class, invisible, _)| {
+                *kind == SpawnKind::Npc
+                    && !invisible
+                    && class.is_none_or(|class| class == MERCHANT_CLASS)
+            })
+        {
+            if send(
+                online.world(),
+                ClientCommand::Shop {
+                    session_id,
                     merchant_id,
-                    name: super::combat::display_name(&spawn.name),
-                    stock: BTreeMap::new(),
-                });
+                    own_id,
+                    open: true,
+                    created: now,
+                },
+            ) {
+                online.open_shop(merchant_id);
+                trade.merchant = Some(MerchantWindow { name });
                 trade.changed();
             }
+        } else if banker {
+            // A banker opens the bank, drawn from the skin, while in reach.
+            shown.open(windows::WindowId::Bank);
         } else {
             chat.history.push(super::chat::system_line(
                 "Target a merchant to trade with it.".into(),
             ));
         }
     }
+    let corpse = online.world().loot().map(|loot| loot.corpse_id);
+    let merchant = online
+        .world()
+        .merchant()
+        .map(|merchant| merchant.merchant_id);
     for action in clicked {
         match action {
             Action::Take(slot) => {
@@ -395,14 +273,18 @@ pub(super) fn input(
                     .loot
                     .as_mut()
                     .filter(|window| window.pending.is_none())
-                    && send(ClientCommand::LootItem {
-                        session_id,
-                        corpse_id: window.corpse_id,
-                        own_id,
-                        slot,
-                        auto: true,
-                        created: now,
-                    })
+                    && let Some(corpse_id) = corpse
+                    && send(
+                        online.world(),
+                        ClientCommand::LootItem {
+                            session_id,
+                            corpse_id,
+                            own_id,
+                            slot,
+                            auto: true,
+                            created: now,
+                        },
+                    )
                 {
                     window.pending = Some(slot);
                 }
@@ -413,33 +295,41 @@ pub(super) fn input(
                 }
             }
             Action::EndLoot => {
-                if let Some(corpse_id) = trade.loot.as_ref().map(|window| window.corpse_id)
-                    && send(ClientCommand::EndLoot {
-                        session_id,
-                        corpse_id,
-                    })
+                if let Some(corpse_id) = corpse.filter(|_| trade.loot.is_some())
+                    && send(
+                        online.world(),
+                        ClientCommand::EndLoot {
+                            session_id,
+                            corpse_id,
+                        },
+                    )
                 {
+                    online.close_loot();
                     trade.loot = None;
                     trade.changed();
                 }
             }
             Action::Buy(slot) => {
-                if let Some(window) = &trade.merchant {
-                    send(ClientCommand::Buy {
-                        session_id,
-                        merchant_id: window.merchant_id,
-                        own_id,
-                        slot,
-                        quantity: 1,
-                        created: now,
-                    });
+                if let Some(merchant_id) = merchant.filter(|_| trade.merchant.is_some()) {
+                    send(
+                        online.world(),
+                        ClientCommand::Buy {
+                            session_id,
+                            merchant_id,
+                            own_id,
+                            slot,
+                            quantity: 1,
+                            created: now,
+                        },
+                    );
                 }
             }
             Action::Sell(slot) => {
                 // The row may be older than the inventory: sell only what the
                 // slot holds now.
-                let Some(item) = inventory
-                    .data
+                let Some(item) = online
+                    .world()
+                    .inventory()
                     .items()
                     .get(&eq_client_core::inventory::InventorySlot(slot))
                 else {
@@ -452,26 +342,33 @@ pub(super) fn input(
                     continue;
                 }
                 let quantity = item.stack_count.unwrap_or(1).max(1);
-                if let Some(window) = &trade.merchant {
-                    send(ClientCommand::Sell {
-                        session_id,
-                        merchant_id: window.merchant_id,
-                        slot,
-                        quantity,
-                        created: now,
-                    });
+                if let Some(merchant_id) = merchant.filter(|_| trade.merchant.is_some()) {
+                    send(
+                        online.world(),
+                        ClientCommand::Sell {
+                            session_id,
+                            merchant_id,
+                            slot,
+                            quantity,
+                            created: now,
+                        },
+                    );
                 }
             }
             Action::EndShop => {
-                if let Some(merchant_id) = trade.merchant.as_ref().map(|window| window.merchant_id)
-                    && send(ClientCommand::Shop {
-                        session_id,
-                        merchant_id,
-                        own_id,
-                        open: false,
-                        created: now,
-                    })
+                if let Some(merchant_id) = merchant.filter(|_| trade.merchant.is_some())
+                    && send(
+                        online.world(),
+                        ClientCommand::Shop {
+                            session_id,
+                            merchant_id,
+                            own_id,
+                            open: false,
+                            created: now,
+                        },
+                    )
                 {
+                    online.close_shop();
                     trade.merchant = None;
                     trade.changed();
                 }
@@ -482,28 +379,37 @@ pub(super) fn input(
     let next = trade
         .loot
         .as_ref()
-        .filter(|window| window.loot_all && window.listed && window.pending.is_none())
-        .map(|window| (window.corpse_id, window.items.keys().next().copied()));
+        .filter(|window| window.loot_all && window.pending.is_none())
+        .and(online.world().loot())
+        .filter(|loot| loot.listed)
+        .map(|loot| (loot.corpse_id, loot.items.keys().next().copied()));
     match next {
         Some((corpse_id, Some(slot))) => {
-            if send(ClientCommand::LootItem {
-                session_id,
-                corpse_id,
-                own_id,
-                slot,
-                auto: true,
-                created: now,
-            }) && let Some(window) = trade.loot.as_mut()
+            if send(
+                online.world(),
+                ClientCommand::LootItem {
+                    session_id,
+                    corpse_id,
+                    own_id,
+                    slot,
+                    auto: true,
+                    created: now,
+                },
+            ) && let Some(window) = trade.loot.as_mut()
             {
                 window.pending = Some(slot);
             }
         }
         Some((corpse_id, None))
-            if send(ClientCommand::EndLoot {
-                session_id,
-                corpse_id,
-            }) =>
+            if send(
+                online.world(),
+                ClientCommand::EndLoot {
+                    session_id,
+                    corpse_id,
+                },
+            ) =>
         {
+            online.close_loot();
             trade.loot = None;
             trade.changed();
         }
@@ -519,12 +425,13 @@ pub(super) fn input(
 pub(super) fn present(
     mut commands: Commands,
     trade: Res<TradeState>,
-    inventory: Res<super::inventory::InventoryState>,
+    online: Res<super::online::OnlineState>,
     panels: Query<(Entity, &Panel)>,
     lists: Query<(&Rows, &ScrollPosition)>,
     mut shown: Local<Option<(u64, u64)>>,
 ) {
-    let signature = (trade.revision, inventory.data.revision());
+    let inventory = online.world().inventory();
+    let signature = (trade.revision, inventory.revision());
     if *shown == Some(signature) {
         return;
     }
@@ -545,23 +452,26 @@ pub(super) fn present(
             .position(|(shown, _)| *shown == kind)
             .map(|index| open.swap_remove(index).1)
     };
+    // A window shows while both the player and the world have it open.
+    let loot = trade.loot.as_ref().zip(online.world().loot());
+    let merchant = trade.merchant.as_ref().zip(online.world().merchant());
     let (loot_frame, merchant_frame) = (
-        trade.loot.as_ref().and_then(|_| frame(Rows::Loot)),
-        trade.merchant.as_ref().and_then(|_| frame(Rows::Merchant)),
+        loot.and_then(|_| frame(Rows::Loot)),
+        merchant.and_then(|_| frame(Rows::Merchant)),
     );
     // Windows that closed.
     for (_, entity) in open {
         commands.entity(entity).despawn();
     }
-    if let Some(window) = &trade.loot {
-        let rows: Vec<(Action, String)> = window
+    if let Some((window, contents)) = loot {
+        let rows: Vec<(Action, String)> = contents
             .items
             .iter()
             .map(|(slot, item)| (Action::Take(*slot), item_label(item)))
             .collect();
-        let status = if window.listed && rows.is_empty() {
+        let status = if contents.listed && rows.is_empty() {
             "Nothing left on this corpse"
-        } else if window.listed {
+        } else if contents.listed {
             "Click an item to take it"
         } else {
             "Opening..."
@@ -569,16 +479,13 @@ pub(super) fn present(
         show_panel(
             &mut commands,
             loot_frame,
-            // Stable titles keep a dragged window in place for every corpse.
-            "LOOT",
-            (px(24), Val::Auto, px(110)),
             &format!("{}: {status}", window.name),
             (Rows::Loot, &rows, loot_offset),
             &[(Action::TakeAll, "Loot all"), (Action::EndLoot, "Done")],
         );
     }
-    if let Some(window) = &trade.merchant {
-        let mut rows: Vec<(Action, String)> = window
+    if let Some((window, stock)) = merchant {
+        let mut rows: Vec<(Action, String)> = stock
             .stock
             .values()
             .map(|entry| {
@@ -594,13 +501,12 @@ pub(super) fn present(
             .collect();
         rows.extend(
             inventory
-                .data
                 .items()
                 .values()
                 .filter(|item| {
                     sellable_slot(item.slot.0)
                         && !no_drop(item)
-                        && !holds_items(item, inventory.data.items())
+                        && !holds_items(item, inventory.items())
                 })
                 .map(|item| {
                     (
@@ -609,14 +515,13 @@ pub(super) fn present(
                     )
                 }),
         );
-        let coins = trade
-            .coins
+        let coins = online
+            .world()
+            .coins()
             .map_or_else(|| "--".into(), |coins| coin_text(coins.total_copper()));
         show_panel(
             &mut commands,
             merchant_frame,
-            "MERCHANT",
-            (Val::Auto, px(24), px(96)),
             &format!("{}   Your coin: {coins}", window.name),
             (Rows::Merchant, &rows, merchant_offset),
             &[(Action::EndShop, "Done")],
@@ -637,7 +542,7 @@ pub(super) fn scroll(
 
 /// Carried slots and their bag contents; equipment and the cursor are excluded.
 fn sellable_slot(slot: i32) -> bool {
-    (22..=29).contains(&slot) || (251..=330).contains(&slot)
+    eq_client_core::inventory::InventorySlot(slot).is_carried()
 }
 
 /// A container with anything inside: selling it would sell its contents too, and
@@ -670,46 +575,41 @@ fn item_label(item: &InventoryItem) -> String {
 fn show_panel(
     commands: &mut Commands,
     frame: Option<Entity>,
-    title: &str,
-    (left, right, top): (Val, Val, Val),
     status: &str,
     (list, rows, offset): (Rows, &[(Action, String)], f32),
     footer: &[(Action, &str)],
 ) {
+    // The window keeps its id for every corpse and merchant, and so its place.
+    let id = match list {
+        Rows::Loot => windows::WindowId::Loot,
+        Rows::Merchant => windows::WindowId::Merchant,
+    };
     let frame = if let Some(frame) = frame {
         commands.entity(frame).despawn_children();
+        commands
+            .entity(frame)
+            .with_children(|parent| windows::title_bar(parent, frame, id));
         frame
     } else {
-        commands
-            .spawn((
-                Panel(list),
-                windows::Frame::default(),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left,
-                    right,
-                    top,
-                    width: px(300),
-                    padding: UiRect::all(px(6)),
-                    row_gap: px(4),
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                // Above inventory and spellbook, below item inspection.
-                GlobalZIndex(26),
-                BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.94)),
-            ))
-            .id()
-    };
-    commands.entity(frame).with_children(|parent| {
-        windows::title_bar(parent, frame, title);
-        parent.spawn((
-            Text::new(status),
-            TextFont {
-                font_size: FontSize::Px(11.0),
+        let frame = windows::frame(
+            commands,
+            id,
+            Node {
+                width: px(300),
+                padding: UiRect::all(px(6)),
+                row_gap: px(4),
+                flex_direction: FlexDirection::Column,
                 ..default()
             },
-            TextColor(Color::srgb(0.73, 0.77, 0.81)),
+        );
+        commands.entity(frame).insert(Panel(list));
+        frame
+    };
+    commands.entity(frame).with_children(|parent| {
+        parent.spawn((
+            Text::new(status),
+            theme::font(Size::Body),
+            TextColor(theme::INK),
         ));
         parent
             .spawn((
@@ -743,31 +643,55 @@ fn show_panel(
 }
 
 fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
-    parent
-        .spawn((
-            Button,
-            action,
-            Node {
-                padding: UiRect::axes(px(6), px(3)),
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.10, 0.14, 0.18)),
-        ))
-        .with_children(|button| {
-            button.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.9, 0.92, 0.94)),
-            ));
-        });
+    use eq_client_core::Capability;
+    let needs = match action {
+        Action::Take(_) | Action::TakeAll | Action::EndLoot => Capability::Looting,
+        Action::Buy(_) | Action::Sell(_) | Action::EndShop => Capability::Trading,
+    };
+    theme::button_with(
+        parent,
+        (action, crate::outbox::Needs(needs)),
+        label,
+        Size::Label,
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eq_client_core::merchant::MerchantItem;
+    use eq_client_core::{loot::LootUpdate, merchant::MerchantUpdate};
+    use std::collections::BTreeMap;
+
+    /// A world where the player has this corpse and merchant open.
+    fn trading(
+        corpse: Option<u16>,
+        merchant: Option<(u16, BTreeMap<u32, MerchantItem>)>,
+    ) -> super::super::online::OnlineState {
+        use eq_client_core::{WorldEvent, WorldUpdate, world::NoSpells};
+        let mut online = super::super::online::OnlineState::new(false);
+        let mut news = Vec::new();
+        if let Some(corpse_id) = corpse {
+            online.open_loot(corpse_id);
+            news.push(WorldEvent::Loot(LootUpdate::Listed { corpse_id }));
+        }
+        if let Some((merchant_id, stock)) = merchant {
+            online.open_shop(merchant_id);
+            news.extend(
+                stock
+                    .into_values()
+                    .map(|entry| WorldEvent::Merchant(MerchantUpdate::Item(Box::new(entry)))),
+            );
+        }
+        for event in news {
+            online.tell(
+                &WorldUpdate::Game(event),
+                std::time::Instant::now(),
+                &NoSpells,
+            );
+        }
+        online
+    }
 
     #[test]
     fn a_loot_window_being_dragged_follows_the_pointer_while_its_rows_change() {
@@ -775,16 +699,13 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(TradeState {
             loot: Some(LootWindow {
-                corpse_id: 7,
                 name: "Corpse".into(),
-                items: BTreeMap::new(),
-                listed: true,
                 pending: None,
                 loot_all: false,
             }),
             ..TradeState::default()
         })
-        .init_resource::<super::super::inventory::InventoryState>()
+        .insert_resource(trading(Some(7), None))
         .init_resource::<ButtonInput<MouseButton>>()
         .init_resource::<windows::DragState>()
         .add_systems(Update, (present, windows::input).chain());
@@ -794,7 +715,10 @@ mod tests {
             ..default()
         };
         window.set_physical_cursor_position(Some(DVec2::new(100.0, 100.0)));
-        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        let window = app
+            .world_mut()
+            .spawn((window, bevy::window::PrimaryWindow))
+            .id();
         app.update();
         let panel = |app: &mut App| {
             app.world_mut()
@@ -846,7 +770,10 @@ mod tests {
             .add_systems(Update, (windows::pointer::wheel, scroll).chain());
         let mut window = Window::default();
         window.set_physical_cursor_position(Some(bevy::math::DVec2::new(100.0, 100.0)));
-        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        let window = app
+            .world_mut()
+            .spawn((window, bevy::window::PrimaryWindow))
+            .id();
         // The merchant's list dragged over the loot list, both long enough to scroll.
         let list = |app: &mut App, rows: Rows, stack: u32| {
             app.world_mut()
@@ -886,7 +813,7 @@ mod tests {
 
     #[test]
     fn containers_with_contents_are_not_offered_for_sale() {
-        let items: BTreeMap<_, _> = super::super::inventory::demo_items()
+        let items: BTreeMap<_, _> = crate::preview::items()
             .into_iter()
             .map(|item| (item.slot, item))
             .collect();
@@ -901,7 +828,7 @@ mod tests {
 
     #[test]
     fn long_lists_scroll_inside_the_window_while_its_buttons_stay_outside() {
-        let stock: BTreeMap<u32, MerchantItem> = super::super::inventory::demo_items()
+        let stock: BTreeMap<u32, MerchantItem> = crate::preview::items()
             .into_iter()
             .cycle()
             .take(30)
@@ -921,13 +848,11 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(TradeState {
             merchant: Some(MerchantWindow {
-                merchant_id: 8,
                 name: "Merchant".into(),
-                stock,
             }),
             ..TradeState::default()
         })
-        .init_resource::<super::super::inventory::InventoryState>()
+        .insert_resource(trading(None, Some((8, stock))))
         .add_systems(Update, present);
         app.update();
         let world = app.world_mut();
@@ -983,147 +908,72 @@ mod tests {
     }
 
     #[test]
-    fn loot_refusals_close_the_window_and_acknowledgements_remove_items() {
+    fn a_refused_item_ends_its_request_and_looting_everything() {
         let mut trade = TradeState {
             loot: Some(LootWindow {
-                corpse_id: 9,
                 name: "a rat".into(),
-                items: BTreeMap::new(),
-                listed: false,
                 pending: Some(22),
-                loot_all: false,
+                loot_all: true,
             }),
             ..TradeState::default()
         };
-        assert_eq!(
-            trade.apply_loot(LootUpdate::Opened {
-                response: LootResponse::Normal,
-                coins: Coins {
-                    platinum: 0,
-                    gold: 1,
-                    silver: 0,
-                    copper: 2,
-                },
-            }),
-            Some("You receive 1g 2c from the corpse.".into())
-        );
-        assert_eq!(trade.apply_loot(LootUpdate::Listed { corpse_id: 9 }), None);
-        assert!(trade.loot.as_ref().unwrap().listed);
-        assert_eq!(
-            trade.apply_loot(LootUpdate::Taken {
-                slot: 22,
-                accepted: false
-            }),
-            Some("You cannot take that item.".into())
-        );
-        assert_eq!(trade.loot.as_ref().unwrap().pending, None);
-        assert_eq!(
-            trade.apply_loot(LootUpdate::Opened {
-                response: LootResponse::TooFar,
-                coins: Coins::default(),
-            }),
-            Some("You are too far away to loot that corpse.".into())
-        );
+        trade.taken(23, true);
+        assert_eq!(trade.loot.as_ref().unwrap().pending, Some(22));
+        trade.taken(22, false);
+        let window = trade.loot.as_ref().unwrap();
+        assert_eq!(window.pending, None);
+        assert!(!window.loot_all);
+        // Windows the world closed close too.
+        trade.follow(&ClientWorld::default());
         assert!(trade.loot.is_none());
-        assert_eq!(trade.apply_loot(LootUpdate::Closed), None);
-    }
-
-    #[test]
-    fn loot_coins_and_purchases_adjust_the_carried_total() {
-        let mut trade = TradeState {
-            coins: Some(Coins {
-                platinum: 1,
-                gold: 0,
-                silver: 0,
-                copper: 0,
-            }),
-            loot: Some(LootWindow {
-                corpse_id: 9,
-                name: "a rat".into(),
-                items: BTreeMap::new(),
-                listed: false,
-                pending: None,
-                loot_all: false,
-            }),
-            merchant: Some(MerchantWindow {
-                merchant_id: 8,
-                name: "Merchant".into(),
-                stock: BTreeMap::new(),
-            }),
-            ..TradeState::default()
-        };
-        trade.apply_loot(LootUpdate::Opened {
-            response: LootResponse::Normal,
-            coins: Coins {
-                platinum: 0,
-                gold: 0,
-                silver: 1,
-                copper: 5,
-            },
-        });
-        assert_eq!(trade.coins.unwrap().total_copper(), 1015);
-        trade.apply_merchant(MerchantUpdate::Bought {
-            slot: 2,
-            quantity: 1,
-            price: 20,
-        });
-        assert_eq!(
-            trade.coins.unwrap(),
-            Coins {
-                platinum: 0,
-                gold: 9,
-                silver: 9,
-                copper: 5,
-            }
-        );
     }
 
     #[test]
     fn a_window_closes_only_once_the_server_is_told() {
         let mut online = super::super::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(1);
-        online.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            spawn_id: 7,
-            race: 1,
-            gender: 0,
-            class: Some(2),
-            deity: None,
-            level: 1,
-            position: eq_client_core::WorldPosition::default(),
-            mana: 0,
-            endurance: None,
-            skills: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 6.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: Some(100),
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut online,
+            1,
+            eq_client_core::PlayerState {
+                name: "Example".into(),
+                base_attributes: None,
+                spawn_id: 7,
+                race: 1,
+                gender: 0,
+                class: Some(2),
+                deity: None,
+                level: 1,
+                position: eq_client_core::WorldPosition::default(),
+                mana: 0,
+                endurance: None,
+                skills: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 6.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: Some(100),
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
         // A command queue that can no longer take anything.
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         drop(receiver);
         let mut app = App::new();
+        app.init_resource::<windows::Shown>();
+        crate::keys::testing::install(&mut app);
+        online.open_loot(9);
         app.insert_resource(online)
             .insert_resource(TradeState {
-                session: Some(1),
                 loot: Some(LootWindow {
-                    corpse_id: 9,
                     name: "a rat".into(),
-                    items: BTreeMap::new(),
-                    listed: true,
                     pending: None,
                     loot_all: false,
                 }),
                 ..TradeState::default()
             })
-            .insert_resource(super::super::target::CommandsToServer(Some(sender)))
-            .init_resource::<super::super::target::TargetState>()
-            .init_resource::<super::super::inventory::InventoryState>()
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -1133,7 +983,7 @@ mod tests {
                 focused: true,
                 ..default()
             },
-            PrimaryWindow,
+            bevy::window::PrimaryWindow,
         ));
         app.world_mut()
             .spawn((Button, Action::EndLoot, Interaction::Pressed));
@@ -1142,24 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn refused_or_closed_merchants_close_the_window() {
-        let mut trade = TradeState {
-            merchant: Some(MerchantWindow {
-                merchant_id: 9,
-                name: "Merchant".into(),
-                stock: BTreeMap::new(),
-            }),
-            ..TradeState::default()
-        };
-        assert_eq!(
-            trade.apply_merchant(MerchantUpdate::Opened {
-                merchant_id: 9,
-                accepted: false,
-                rate: 1.0
-            }),
-            Some("That merchant will not trade with you.".into())
-        );
-        assert!(trade.merchant.is_none());
+    fn sales_stay_off_view_only_slots() {
         assert!(
             sellable_slot(22) && sellable_slot(300) && !sellable_slot(30) && !sellable_slot(13)
         );

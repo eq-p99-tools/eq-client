@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use eq_client_assets::ZoneAsset;
 use eq_client_core::WorldPosition;
-use eq_client_render::{ProjectionStyle, ValidationAction, ViewerConfig, script::Step};
+use eq_client_render::{
+    Preview, ProjectionStyle, Source, ValidationAction, ViewerConfig, script::Step,
+};
 use eq_network::client::ServerProtocol;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -52,6 +54,11 @@ struct Arguments {
     #[arg(long, requires = "start_x", allow_negative_numbers = true, value_parser = finite)]
     start_y: Option<f32>,
 
+    /// Initial EQ Z coordinate, as `/loc` reports it: the viewer stands on the
+    /// floor below it instead of on the highest surface at X and Y.
+    #[arg(long, requires = "start_x", allow_negative_numbers = true, value_parser = finite)]
+    start_z: Option<f32>,
+
     /// Initial camera distance from the character.
     #[arg(long, value_parser = distance)]
     camera_distance: Option<f32>,
@@ -69,6 +76,11 @@ struct Arguments {
     /// is the monitor's refresh rate.
     #[arg(long, default_value = "60")]
     max_fps: u32,
+
+    /// Add coordinates, the movement mode and the nearby-entity count to the
+    /// status box, for development and live checks.
+    #[arg(long)]
+    debug_overlay: bool,
 
     /// Show synthetic moving entities offline, without connecting to a server.
     #[arg(long, conflicts_with = "online")]
@@ -123,7 +135,8 @@ struct Arguments {
     terrain_only: bool,
 
     /// Attended key script (press/hold/wait/report/screenshot/quit), run only
-    /// while the client window is focused, except on a local `EQEmu` server.
+    /// while the client window is focused, except offline or on a local
+    /// `EQEmu` server.
     /// Screenshots are saved beside it.
     #[arg(long, conflicts_with = "screenshot")]
     script: Option<PathBuf>,
@@ -190,16 +203,17 @@ fn parse_window_position(value: &str) -> Result<(i32, i32), String> {
     Ok((coordinate(x)?, coordinate(y)?))
 }
 
-/// The protocol an online session selects with `EQ_PROTOCOL` (P99 by default).
-fn online_protocol(online: bool) -> Option<ServerProtocol> {
-    online
-        .then(|| {
-            std::env::var("EQ_PROTOCOL")
-                .unwrap_or_else(|_| "p99".into())
-                .parse::<ServerProtocol>()
-                .ok()
-        })
-        .flatten()
+/// The protocol an online session selects with `EQ_PROTOCOL` (P99 by
+/// default), read once for the whole run.
+fn online_protocol(online: bool) -> Result<Option<ServerProtocol>, String> {
+    if !online {
+        return Ok(None);
+    }
+    let value = std::env::var("EQ_PROTOCOL").unwrap_or_else(|_| "p99".into());
+    value
+        .parse::<ServerProtocol>()
+        .map(Some)
+        .map_err(|error| format!("EQ_PROTOCOL={value:?}: {error}"))
 }
 
 /// Refuses `gm` script steps unless the session is local-only (see
@@ -219,6 +233,8 @@ fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
     script && protocol == Some(ServerProtocol::EqEmu)
 }
 
+/// Startup problems print to stderr before the viewer exists; once it
+/// runs, the session logs through `tracing` like the viewer.
 fn main() {
     let mut arguments = Arguments::parse();
     let calibration = arguments
@@ -227,7 +243,10 @@ fn main() {
         .map(load_calibration);
     // Validate every local input before the session logs in.
     let (script, script_follow) = script_input(&arguments);
-    let protocol = online_protocol(arguments.online);
+    let protocol = online_protocol(arguments.online).unwrap_or_else(|error| {
+        eprintln!("error: {error}");
+        std::process::exit(2);
+    });
     let local = local_session(script.is_some(), protocol);
     if let Err(error) = check_gm_steps(script.as_deref(), local) {
         eprintln!("error: {error}");
@@ -265,21 +284,33 @@ fn main() {
             None
         }
     };
-    let (worker, updates) = if arguments.online {
+    let preview = Preview {
+        entities: arguments.demo_entities,
+        inventory: arguments.demo_inventory,
+        bank: arguments.demo_bank,
+        spellbook: arguments.demo_spellbook,
+        character_select: arguments.demo_character_select,
+        trade: arguments.demo_trade,
+    };
+    let (worker, source) = if let Some(protocol) = protocol {
         match session::SessionWorker::start(
             &eq_directory,
+            protocol,
             arguments.session_seconds,
             calibration,
             local,
         ) {
-            Ok((worker, receiver)) => (Some(worker), Some(receiver)),
+            Ok((worker, updates)) => {
+                let commands = worker.commands();
+                (Some(worker), Source::Online { updates, commands })
+            }
             Err(error) => {
                 eprintln!("Cannot start session: {error:#}");
                 std::process::exit(1);
             }
         }
     } else {
-        (None, None)
+        (None, Source::Offline(preview))
     };
     println!("Controls: WASD moves; right-drag orbits; the wheel zooms.");
     let config = viewer_config(
@@ -289,13 +320,7 @@ fn main() {
         (script, script_follow),
         local,
     );
-    let exit = eq_client_render::run(
-        zone,
-        character,
-        config,
-        updates,
-        worker.as_ref().map(session::SessionWorker::commands),
-    );
+    let exit = eq_client_render::run(zone, character, config, source);
     // Close the session before exiting with the viewer's status.
     drop(worker);
     std::process::exit(exit);
@@ -323,21 +348,16 @@ fn viewer_config(
             .map(|(x, y)| WorldPosition {
                 x,
                 y,
-                z: 0.0,
+                z: arguments.start_z.unwrap_or(0.0),
                 heading: 0.0,
             }),
+        start_height_known: arguments.start_z.is_some(),
         camera_distance: arguments.camera_distance,
         terrain_only: arguments.terrain_only,
         eq_directory: Some(eq_directory),
         entity_distance: Some(arguments.entity_distance),
-        demo_entities: arguments.demo_entities,
         hide_own_helm: arguments.hide_own_helm,
         frame_rate_cap: (arguments.max_fps > 0).then_some(arguments.max_fps),
-        demo_inventory: arguments.demo_inventory,
-        demo_bank: arguments.demo_bank,
-        demo_spellbook: arguments.demo_spellbook,
-        demo_character_select: arguments.demo_character_select,
-        demo_trade: arguments.demo_trade,
         validation: if arguments.target_nearest_player_once {
             Some(ValidationAction::TargetNearestPlayer)
         } else if arguments.inspect_first_chat_item_once {
@@ -351,6 +371,7 @@ fn viewer_config(
         ui_skin: arguments.ui_skin,
         settings_directory: arguments.settings_dir.or_else(default_settings_directory),
         window_position: arguments.window_position,
+        debug_overlay: arguments.debug_overlay,
     }
 }
 

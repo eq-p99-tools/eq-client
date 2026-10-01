@@ -1,13 +1,11 @@
 //! Local spell-request feedback; server notifications remain authoritative.
 
-use super::HudState;
 use eq_client_core::{ClientCommand, PlayerState};
-use std::{sync::mpsc::SyncSender, time::Instant};
+use std::time::Instant;
 
 /// One user attempt to cast or forget a memorized gem.
 #[derive(Clone, Copy)]
 pub(super) struct Request {
-    pub session_id: u64,
     pub gem: u8,
     pub target_id: u16,
     pub forgetting: bool,
@@ -15,78 +13,97 @@ pub(super) struct Request {
     pub mana_cost: Option<u32>,
 }
 
-/// Validates local availability and queues a fresh request without predicting its result.
-pub(super) fn spell(
-    hud: &mut HudState,
+/// The gem's spell, if the request can go now; otherwise why not, in the
+/// player's words. Like the official client, a cast refuses locally when the
+/// server-reported mana is short (P99 otherwise answers with a generic
+/// interruption); forgetting never needs mana.
+pub(super) fn check(
+    world: &eq_client_core::world::ClientWorld,
     player: &PlayerState,
-    sender: &SyncSender<ClientCommand>,
     request: &Request,
-    messages: &super::messages::Messages,
-) {
+    (messages, map): (&super::messages::Messages, &crate::keys::KeyMap),
+    now: Instant,
+) -> Result<u32, String> {
     let Request {
-        session_id,
         gem,
-        target_id,
         forgetting,
         mana_cost,
+        ..
     } = *request;
-    let now = Instant::now();
-    let message = match player
+    let spell_id = player
         .memorized_spells
         .get(usize::from(gem))
         .copied()
         .flatten()
+        .ok_or_else(|| super::empty_gem(gem, map))?;
+    if world.casting().cast.is_some() {
+        return Err(format!(
+            "Already casting: {} to interrupt",
+            map.named(crate::keys::Act::Duck, "duck")
+        ));
+    }
+    if world.casting().pending.is_some() {
+        return Err("Waiting for the server to acknowledge the cast".into());
+    }
+    if forgetting {
+        return Ok(spell_id);
+    }
+    if mana_cost
+        .zip(world.vitals().mana)
+        .is_some_and(|(cost, mana)| cost > mana)
     {
-        None => "Empty spell gem — open the spellbook [B] to memorize".into(),
-        Some(_) if hud.casting.is_some() => "Already casting — duck [C] to interrupt".into(),
-        Some(_) if hud.pending_cast.is_some() => {
-            "Waiting for the server to acknowledge the cast".into()
-        }
-        // Like the official client, refuse locally when server-reported mana is short;
-        // P99 otherwise answers with a generic interruption.
-        Some(_)
-            if !forgetting
-                && mana_cost
-                    .zip(hud.mana)
-                    .is_some_and(|(cost, mana)| cost > mana) =>
-        {
-            messages.text(199, "Insufficient Mana to cast this spell!")
-        }
-        Some(spell_id) => {
-            let remaining = hud.cooldowns.remaining(spell_id, now);
-            if !forgetting && !remaining.is_zero() {
-                format!("Spell available in {:.1}s", remaining.as_secs_f32())
-            } else {
-                let command = if forgetting {
+        return Err(messages.text(199, "Insufficient Mana to cast this spell!"));
+    }
+    let remaining = world.casting().cooldowns.remaining(spell_id, now);
+    if !remaining.is_zero() {
+        return Err(format!(
+            "Spell available in {:.1}s",
+            remaining.as_secs_f32()
+        ));
+    }
+    Ok(spell_id)
+}
+
+/// Checks the request and sends it without predicting its result. A refusal
+/// is worth a line; a request sent says nothing, as the cast bar shows the
+/// cast once the server takes it, and the outbox shows its own refusals.
+pub(super) fn spell(
+    feedback: &mut crate::notices::Line,
+    world: &eq_client_core::world::ClientWorld,
+    player: &PlayerState,
+    outbox: &crate::outbox::Outbox,
+    request: &Request,
+    wording: (&super::messages::Messages, &crate::keys::KeyMap),
+) {
+    let now = Instant::now();
+    let Request {
+        gem,
+        target_id,
+        forgetting,
+        ..
+    } = *request;
+    match check(world, player, request, wording, now) {
+        Err(refusal) => feedback.flash(refusal, now),
+        Ok(spell_id) => {
+            feedback.clear();
+            let _ = outbox.post(world, |stamp| {
+                if forgetting {
                     ClientCommand::ForgetSpell {
-                        session_id,
+                        session_id: stamp.session_id,
                         gem,
                         spell_id,
-                        created: now,
+                        created: stamp.created,
                     }
                 } else {
                     ClientCommand::CastSpell {
-                        session_id,
+                        session_id: stamp.session_id,
                         gem,
                         spell_id,
                         target_id,
-                        created: now,
-                    }
-                };
-                match sender.try_send(command) {
-                    Ok(()) if forgetting => {
-                        "Forget request queued; waiting for server update".into()
-                    }
-                    Ok(()) => "Cast request queued; waiting for server response".into(),
-                    Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                        "Request queue is full — try again shortly".into()
-                    }
-                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                        "Connection worker stopped; request was not sent".into()
+                        created: stamp.created,
                     }
                 }
-            }
+            });
         }
-    };
-    hud.action_feedback = Some((now, message));
+    }
 }

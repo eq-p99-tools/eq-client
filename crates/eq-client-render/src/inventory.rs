@@ -1,10 +1,12 @@
 //! Compact inventory drawer with validated slot moves and local item inspection.
 pub(super) mod colors;
 pub(super) mod cursor;
-pub(super) mod icons;
 mod interaction;
 mod layout;
 
+pub(crate) use layout::quantity_picker;
+
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::inventory::{Inventory, InventorySlot, InventoryUpdate};
 
@@ -15,30 +17,71 @@ pub(super) enum Tab {
     Bank,
 }
 
+/// The inventory window: what it shows and the actions under way. The items
+/// themselves are the world's.
 #[derive(Resource, Default)]
 #[allow(clippy::struct_excessive_bools)] // These flags represent independent UI and server state.
 pub(super) struct InventoryState {
     colors: colors::Colors,
-    pub data: Inventory,
     pub hovered: bool,
-    open: bool,
+    /// The offline preview's inventory, whose moves settle here.
     demo: bool,
     tab: Tab,
     revision: u64,
     next_use_id: u64,
     bank_open: bool,
+    /// The banker in reach, by name, while the bank is open.
+    banker: String,
     actions: interaction::Actions,
+    /// Moves the offline preview settled itself, on their way to the world.
+    demo_news: Vec<InventoryUpdate>,
 }
+
+/// What the inventory window draws: its own state, and the items as the
+/// world has them.
+#[derive(Clone, Copy)]
+pub(super) struct View<'a> {
+    pub state: &'a InventoryState,
+    pub inventory: &'a Inventory,
+}
+
 impl InventoryState {
+    /// Shows the offline preview's inventory, on the bank's tab if asked.
+    pub(crate) fn preview(&mut self, bank: bool) {
+        self.demo = true;
+        self.bank_open = bank;
+        self.banker = if bank {
+            "Preview banker".into()
+        } else {
+            String::new()
+        };
+        self.tab = if bank { Tab::Bank } else { Tab::Inventory };
+    }
+
+    /// Changes whenever the window must be drawn again.
+    pub(crate) const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Whether a stack is being split, so the quantity picker shows.
+    pub(crate) const fn splitting(&self) -> bool {
+        self.actions.split.is_some()
+    }
+
+    /// Whether a banker is in reach, so the bank can be opened.
+    pub(crate) const fn bank_open(&self) -> bool {
+        self.bank_open
+    }
+
+    /// The banker in reach, by name; empty while none is.
+    pub(crate) fn banker(&self) -> &str {
+        &self.banker
+    }
+
     /// Whether an action is under way that Escape cancels: a split, or
     /// storing the cursor's item.
     pub(super) const fn action_under_way(&self) -> bool {
         self.actions.auto_store || self.actions.split.is_some()
-    }
-
-    /// Whether the inventory window is showing.
-    pub(super) const fn is_open(&self) -> bool {
-        self.open
     }
 
     /// Current request feedback, also shown when inventory is closed for hotbar use.
@@ -50,7 +93,7 @@ impl InventoryState {
         &mut self,
         slot: InventorySlot,
         online: &super::online::OnlineState,
-        sender: &super::target::CommandsToServer,
+        sender: &crate::outbox::Outbox,
         target: Option<u16>,
         casting: bool,
     ) -> String {
@@ -62,16 +105,16 @@ impl InventoryState {
         if self.demo && !online.enabled {
             return;
         }
-        let available = !self.demo
-            && online.connected
-            && online.death.is_none()
-            && online.session_id.is_some()
-            && online.player.as_ref().is_some_and(|player| {
-                online
-                    .spawns
-                    .values()
-                    .any(|spawn| eq_client_core::inventory::banker_in_range(player.position, spawn))
-            });
+        let world = online.world();
+        let banker = (!self.demo
+            && world.connected()
+            && world.death().is_none()
+            && world.session_id().is_some())
+        .then(|| world.player())
+        .flatten()
+        .and_then(|player| nearest_banker(world, player.position));
+        let available = banker.is_some();
+        self.banker = banker.unwrap_or_default();
         if self.bank_open != available {
             self.bank_open = available;
             self.actions.split = None;
@@ -82,27 +125,29 @@ impl InventoryState {
         }
     }
 
-    pub fn apply(&mut self, update: InventoryUpdate) {
-        self.data.apply(update);
-        if self.data.stale() {
+    /// Follows a change to the world's inventory: one gone stale ends the
+    /// split and the automatic storage under way.
+    pub fn refresh(&mut self, stale: bool) {
+        if stale {
             self.actions.auto_store = false;
             self.actions.split = None;
         }
         self.revision = self.revision.wrapping_add(1);
     }
-    pub fn clear(&mut self) {
-        self.data = Inventory::default();
+
+    /// Forgets the window's state along with the inventory the world forgot.
+    pub fn forget(&mut self) {
         self.cancel_actions();
+        self.demo_news.clear();
         self.demo = false;
         self.bank_open = false;
+        self.banker.clear();
         // The bank tab closes with the bank; a stale choice would show no slots.
         self.tab = Tab::Inventory;
         self.revision = self.revision.wrapping_add(1);
         self.hovered = false;
     }
 }
-#[derive(Component)]
-pub(super) struct Toggle;
 #[derive(Component)]
 pub(super) struct Panel;
 #[derive(Component)]
@@ -159,56 +204,36 @@ pub(super) struct RenderStamp {
     open: bool,
     bank_open: bool,
     root: Entity,
+    /// The world inventory's revision.
+    inventory: u64,
 }
 
-/// Creates the inventory toggle and an initially closed drawer.
+/// Creates the inventory window, closed; the selector and its key open it.
 pub(super) fn spawn(commands: &mut Commands) {
     cursor::spawn(commands);
-    commands
-        .spawn((
-            super::hud::HudRoot,
-            Button,
-            Toggle,
-            GlobalZIndex(25),
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(76),
-                left: px(20),
-                padding: UiRect::axes(px(12), px(7)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.95)),
-        ))
-        .with_children(|button| {
-            label(button, "Inventory [I]", 12.0);
-        });
-    let frame = commands
-        .spawn((
-            super::hud::HudRoot,
-            Panel,
-            super::windows::pointer::TakesWheel,
-            GlobalZIndex(25),
-            ScrollPosition::default(),
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(20),
-                top: px(110),
-                width: px(600),
-                max_width: percent(95),
-                max_height: percent(62),
-                overflow: Overflow::scroll_y(),
-                padding: UiRect::all(px(8)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(6),
-                display: Display::None,
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
-        ))
-        .id();
-    super::windows::interactive(commands, frame);
+    let frame = super::windows::frame(
+        commands,
+        super::windows::WindowId::Inventory,
+        Node {
+            width: px(600),
+            max_width: percent(95),
+            // Clear of the chat window below it on a 720-line screen.
+            max_height: percent(55),
+            overflow: Overflow::scroll_y(),
+            padding: UiRect::all(px(8)),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(6),
+            display: Display::None,
+            ..default()
+        },
+    );
+    commands.entity(frame).insert((
+        super::hud::HudRoot,
+        Panel,
+        super::windows::pointer::TakesWheel,
+        ScrollPosition::default(),
+    ));
     commands.entity(frame).with_children(|panel| {
-        super::windows::title_bar(panel, frame, "INVENTORY");
         panel
             .spawn(Node {
                 column_gap: px(6),
@@ -216,37 +241,20 @@ pub(super) fn spawn(commands: &mut Commands) {
             })
             .with_children(|tabs| {
                 for (tab, name) in [(Tab::Inventory, "Inventory"), (Tab::Bank, "Bank")] {
-                    tabs.spawn((
-                        Button,
-                        TabButton(tab),
-                        Node {
-                            padding: UiRect::axes(px(12), px(6)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.08, 0.10, 0.13)),
-                    ))
-                    .with_children(|button| {
-                        label(button, name, 12.0);
-                    });
+                    theme::button_with(tabs, TabButton(tab), name, Size::Label);
                 }
             });
         panel.spawn((
             Status,
             Text::new("Inventory not received"),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.75, 0.72, 0.60)),
+            theme::font(Size::Body),
+            TextColor(theme::INK),
         ));
         panel.spawn((
             HoverLabel,
-            Text::new("Click: move / count: split / right-click: inspect / Alt+right-click: use"),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.88, 0.87, 0.80)),
+            Text::new(SLOT_HELP),
+            theme::font(Size::Body),
+            TextColor(theme::INK_WARM),
             Node {
                 min_height: px(14),
                 ..default()
@@ -262,25 +270,19 @@ pub(super) fn spawn(commands: &mut Commands) {
         ));
     });
 }
-fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32) {
-    parent.spawn((
-        Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(size),
-            ..default()
-        },
-        TextColor(Color::srgb(0.88, 0.89, 0.91)),
-    ));
-}
+
+/// What the inventory's mouse does, shown until a slot is hovered.
+const SLOT_HELP: &str =
+    "Click: move | Shift-click a stack: split | Right-click: inspect | Alt+right-click: use";
 
 /// Left-click moves through the cursor, Shift opens a quantity picker, and right-click inspects.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: crate::keys::Keys,
     mouse: Res<ButtonInput<MouseButton>>,
     online: Res<super::online::OnlineState>,
-    sender: Res<super::target::CommandsToServer>,
-    toggles: Query<&Interaction, (With<Toggle>, Changed<Interaction>)>,
+    sender: Res<crate::outbox::Outbox>,
+    (mut shown, skinned): (ResMut<super::windows::Shown>, Res<crate::skinned::Skinned>),
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
     slots: Query<(&Interaction, &SlotButton)>,
     store: Query<&Interaction, (With<StoreCursor>, Changed<Interaction>)>,
@@ -288,13 +290,10 @@ pub(super) fn input(
     stack_counts: Query<(&Interaction, &SplitStack), Changed<Interaction>>,
     mut state: ResMut<InventoryState>,
     mut items: ResMut<super::items::ItemState>,
-    (chat, escape): (Res<super::chat::ChatState>, Res<super::escape::Escape>),
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    target: Option<Res<super::target::TargetState>>,
-    hud: Option<Res<super::hud::HudState>>,
+    escape: Res<super::escape::Escape>,
 ) {
     state.refresh_bank_access(&online);
-    if !windows.single().is_ok_and(|window| window.focused) {
+    if !keys.window_focused() {
         state.actions.auto_store = false;
         return;
     }
@@ -306,25 +305,26 @@ pub(super) fn input(
         }
         state.revision = state.revision.wrapping_add(1);
     }
-    if (!chat.composing && keys.just_pressed(KeyCode::KeyI))
-        || toggles.iter().any(|i| *i == Interaction::Pressed)
-    {
-        state.open = !state.open;
-    }
-    if !state.open {
+    // A closed inventory ends its own actions; slots in an open bag or bank
+    // still take clicks.
+    if !shown.is_open(super::windows::WindowId::Inventory) {
         state.actions.auto_store = false;
         state.actions.split = None;
-        return;
     }
     // A nested quantity button consumes the click before its enclosing item slot.
     if let Some((_, stack)) = stack_counts
         .iter()
         .find(|(interaction, _)| **interaction == Interaction::Pressed)
     {
-        if state.data.items().contains_key(&InventorySlot(30)) {
+        if online
+            .world()
+            .inventory()
+            .items()
+            .contains_key(&InventorySlot::CURSOR)
+        {
             state.click_slot(stack.0, false, &online, &sender);
         } else {
-            state.select_split(stack.0);
+            state.select_split(stack.0, online.world().inventory());
         }
         return;
     }
@@ -351,25 +351,36 @@ pub(super) fn input(
             continue;
         }
         if mouse.just_pressed(MouseButton::Right) {
-            if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
-                if !chat.composing {
-                    let casting = hud
-                        .as_ref()
-                        .is_none_or(|hud| hud.casting.is_some() || hud.pending_cast.is_some());
+            if keys
+                .input
+                .any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
+            {
+                if keys.focused() {
+                    let casting = online.world().casting();
+                    let casting = casting.cast.is_some() || casting.pending.is_some();
                     state.use_slot(
                         slot.0,
                         &online,
                         &sender,
-                        target.as_ref().and_then(|target| target.selected),
+                        online.world().target().selected,
                         casting,
                     );
                 }
-            } else if let Some(item) = state.data.items().get(&slot.0) {
-                items.open_received(item.details.clone());
+            } else if let Some(item) = online.world().inventory().items().get(&slot.0) {
+                // With the skin's bag windows, a bag opens as in the official
+                // client; anything else shows what it is.
+                if item.bag_slots > 0 && skinned.has(super::windows::WindowId::Inventory) {
+                    crate::skinned::toggle_bag(&mut shown, slot.0);
+                } else {
+                    items.open_received(item.details.clone());
+                }
             }
         } else if mouse.just_pressed(MouseButton::Left) && *interaction == Interaction::Pressed {
-            if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
-                state.select_split(slot.0);
+            if keys
+                .input
+                .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+            {
+                state.select_split(slot.0, online.world().inventory());
             } else {
                 state.click_slot(slot.0, false, &online, &sender);
             }
@@ -377,7 +388,26 @@ pub(super) fn input(
     }
 }
 
-fn visible_slots(state: &InventoryState, tab: Tab) -> Vec<InventorySlot> {
+/// The nearest banker in reach, by the name players see.
+fn nearest_banker(
+    world: &eq_client_core::world::ClientWorld,
+    position: eq_client_core::WorldPosition,
+) -> Option<String> {
+    let distance = |at: eq_client_core::WorldPosition| {
+        (position.x - at.x)
+            .hypot(position.y - at.y)
+            .hypot(position.z - at.z)
+    };
+    world
+        .spawns()
+        .values()
+        .map(|spawn| &spawn.state)
+        .filter(|spawn| eq_client_core::inventory::banker_in_range(position, spawn))
+        .min_by(|a, b| distance(a.position).total_cmp(&distance(b.position)))
+        .map(|spawn| eq_client_core::entities::display_name(&spawn.name))
+}
+
+fn visible_slots(inventory: &Inventory, tab: Tab) -> Vec<InventorySlot> {
     let roots: Vec<_> = match tab {
         Tab::Inventory => (0..31).map(InventorySlot).collect(),
         Tab::Bank => (2000..=2007).map(InventorySlot).collect(),
@@ -385,14 +415,14 @@ fn visible_slots(state: &InventoryState, tab: Tab) -> Vec<InventorySlot> {
     let mut slots = Vec::new();
     for root in roots {
         slots.push(root);
-        if let Some(item) = state.data.items().get(&root) {
+        if let Some(item) = inventory.items().get(&root) {
             slots.extend((0..item.bag_slots).filter_map(|index| root.child(index)));
         }
     }
     // Preserve unusual addresses and partial child-only updates visibly.
     if tab == Tab::Inventory {
-        for slot in state.data.items().keys() {
-            if !(0..22).contains(&slot.0) && slot.0 < 2000 && !slots.contains(slot) {
+        for slot in inventory.items().keys() {
+            if !slot.is_equipment() && slot.0 < 2000 && !slots.contains(slot) {
                 slots.push(*slot);
             }
         }
@@ -404,13 +434,13 @@ fn visible_slots(state: &InventoryState, tab: Tab) -> Vec<InventorySlot> {
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
     mut commands: Commands,
-    state: Res<InventoryState>,
+    (state, shown): (Res<InventoryState>, Res<super::windows::Shown>),
+    online: Res<super::online::OnlineState>,
     settings: Res<super::ViewerSettings>,
-    mut icons: Local<icons::Icons>,
+    mut art: super::sheets::Art,
     skin: Res<super::skin::UiSkin>,
     mut skin_layout: Local<SkinLayout>,
     figure: Option<Res<super::paperdoll::PaperdollImage>>,
-    mut images: ResMut<Assets<Image>>,
     mut previous: Local<Option<RenderStamp>>,
     mut panels: Query<&mut Node, (With<Panel>, Without<TabButton>)>,
     rows: Query<Entity, With<Rows>>,
@@ -418,7 +448,7 @@ pub(super) fn update(
     mut tabs: Query<(&TabButton, &mut BackgroundColor, &mut Node), Without<Panel>>,
 ) {
     for mut panel in &mut panels {
-        panel.display = if state.open {
+        panel.display = if shown.is_open(super::windows::WindowId::Inventory) {
             Display::Flex
         } else {
             Display::None
@@ -432,12 +462,14 @@ pub(super) fn update(
     if skin_layout.follow(directory, &skin.0) {
         *previous = None;
     }
+    let inventory = online.world().inventory();
     let stamp = RenderStamp {
         revision: state.revision,
         tab: state.tab,
-        open: state.open,
+        open: shown.is_open(super::windows::WindowId::Inventory),
         bank_open: state.bank_open,
         root,
+        inventory: inventory.revision(),
     };
     if *previous == Some(stamp) {
         return;
@@ -445,22 +477,22 @@ pub(super) fn update(
     *previous = Some(stamp);
     for mut status in &mut statuses {
         status.0 = if state.demo {
-            "Offline demo / click to pick up / click count: choose quantity".into()
-        } else if state.data.awaiting_correction() {
-            "Server corrected inventory / waiting for remaining slots".into()
-        } else if state.data.stale() {
+            "Offline demo: moves settle here, not on a server".into()
+        } else if inventory.awaiting_correction() {
+            "Server corrected the inventory; waiting for the remaining slots".into()
+        } else if inventory.stale() {
             "Contents may be outdated - awaiting refresh".into()
-        } else if !state.data.received() {
+        } else if !inventory.received() {
             "Inventory not received in full".into()
         } else {
-            "Click to pick up, place or swap / click count: choose quantity".into()
+            String::new()
         };
     }
     for mut status in &mut statuses {
-        if state.data.received() && !state.data.stale() && !state.actions.message.is_empty() {
+        if inventory.received() && !inventory.stale() && !state.actions.message.is_empty() {
             status.0.clone_from(&state.actions.message);
-        } else if state.data.predicted() && !state.data.stale() && !state.demo {
-            status.0 = "Move sent / contents include local prediction".into();
+        } else if inventory.predicted() && !inventory.stale() && !state.demo {
+            status.0 = "Move sent; contents include local prediction".into();
         }
     }
     if !state.bank_open && state.tab == Tab::Bank {
@@ -472,24 +504,21 @@ pub(super) fn update(
         } else {
             Display::Flex
         };
-        color.0 = if tab.0 == state.tab {
-            Color::srgb(0.20, 0.22, 0.28)
-        } else {
-            Color::srgb(0.08, 0.10, 0.13)
-        };
+        color.0 = theme::button(true, tab.0 == state.tab, Interaction::None);
     }
     commands.entity(root).despawn_children();
     commands.entity(root).with_children(|list| {
         layout::contents(
             list,
-            &state,
+            View {
+                state: &state,
+                inventory,
+            },
             skin_layout.layout.as_ref().map(|layout| layout::Paperdoll {
                 layout,
                 figure: figure.as_deref(),
             }),
-            &mut icons,
-            directory,
-            &mut images,
+            &mut art,
         );
     });
 }
@@ -497,29 +526,29 @@ pub(super) fn update(
 /// Highlights squares and shows full names without crowding the slot grid.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn feedback(
-    state: Res<InventoryState>,
+    online: Res<super::online::OnlineState>,
     mut slots: Query<(&SlotButton, &Interaction, &mut BorderColor)>,
     mut labels: Query<&mut Text, With<HoverLabel>>,
 ) {
-    let mut description =
-        "Click: move / count: split / right-click: inspect / Alt+right-click: use".to_owned();
+    let mut description = SLOT_HELP.to_owned();
+    let inventory = online.world().inventory();
     for (slot, interaction, mut border) in &mut slots {
-        let item = state.data.items().get(&slot.0);
+        let item = inventory.items().get(&slot.0);
         let hovered = *interaction != Interaction::None;
-        let tint = if slot.0 == InventorySlot(30) && item.is_some() {
-            Color::srgb(0.45, 0.82, 1.0)
+        let tint = if slot.0 == InventorySlot::CURSOR && item.is_some() {
+            theme::FOCUS
         } else if hovered {
-            Color::srgb(0.88, 0.77, 0.45)
+            theme::EDGE_HOVER
         } else if item.is_some() {
-            Color::srgb(0.48, 0.43, 0.31)
+            theme::EDGE_HELD
         } else {
-            Color::srgb(0.22, 0.25, 0.28)
+            theme::EDGE
         };
         *border = BorderColor::all(tint);
         if hovered {
             let value = item.map_or_else(
                 || {
-                    if state.data.received() && !state.data.stale() {
+                    if inventory.received() && !inventory.stale() {
                         "Empty".into()
                     } else {
                         "Unknown".into()
@@ -530,7 +559,7 @@ pub(super) fn feedback(
                         .stack_count
                         .map_or_else(String::new, |n| format!(" x{n}"));
                     let charges = if item.stack_count.is_none() && item.charges > 0 {
-                        format!(" / {} charges", item.charges)
+                        format!(", {} charges", item.charges)
                     } else {
                         String::new()
                     };
@@ -542,7 +571,7 @@ pub(super) fn feedback(
                 use std::fmt::Write;
                 let _ = write!(
                     description,
-                    "\nAlt+right-click: use spell {} / level {}",
+                    "\nAlt+right-click: use spell {} (level {})",
                     effect.spell_id, effect.required_level
                 );
             }
@@ -569,10 +598,11 @@ pub(super) fn scroll(
         With<Panel>,
     >,
     wheel: Res<super::windows::pointer::Wheel>,
+    shown: Res<super::windows::Shown>,
     mut state: ResMut<InventoryState>,
 ) {
     state.hovered = false;
-    if !state.open {
+    if !shown.is_open(super::windows::WindowId::Inventory) {
         return;
     }
     let Some(cursor) = windows
@@ -592,153 +622,98 @@ pub(super) fn scroll(
     }
 }
 
-/// Supplies clearly labelled synthetic contents for offline visual validation.
+/// The offline preview settles its own moves, as a server would: they
+/// reach the world as news. Only the preview runs this.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn demo(
-    settings: Res<super::ViewerSettings>,
-    online: Res<super::online::OnlineState>,
+pub(crate) fn settle(
     mut state: ResMut<InventoryState>,
+    mut online: ResMut<super::online::OnlineState>,
 ) {
-    if !settings.0.demo_inventory || online.enabled {
-        return;
-    }
-    state.apply(InventoryUpdate::Snapshot(demo_items()));
-    state.open = true;
-    state.bank_open = settings.0.demo_bank;
-    state.tab = if state.bank_open {
-        Tab::Bank
-    } else {
-        Tab::Inventory
-    };
-    state.demo = true;
+    tell(&mut state, &mut online);
 }
 
-pub(crate) fn demo_items() -> Vec<eq_client_core::inventory::InventoryItem> {
-    use eq_client_core::{ItemDetails, inventory::InventoryItem};
-    let mut items = Vec::new();
-    for (slot, id, name, count, bag) in [
-        (13, 1, "Preview sword", None, 0),
-        (22, 2, "Preview backpack", None, 8),
-        (23, 7, "Preview satchel", None, 10),
-        (261, 8, "Preview arrows", Some(50), 0),
-        (251, 3, "Preview rations", Some(20), 0),
-        (252, 4, "Preview bandages", Some(7), 0),
-        (30, 5, "Preview lantern", None, 0),
-        (2000, 6, "Preview bank item", None, 0),
-    ] {
-        items.push(InventoryItem {
-            activation: eq_client_core::inventory::ItemActivation::default(),
-            scroll_spell: None,
-            rules: eq_client_core::inventory::ItemPlacement {
-                stack_size: if id == 8 { 100 } else { 20 },
-                size: 1,
-                bag_size: 4,
-                item_type: if id == 8 { 27 } else { 0 },
-                ..default()
-            },
-            slot: InventorySlot(slot),
-            icon: match id {
-                2 => 557,
-                7 => 539,
-                3 => 537,
-                4 => 538,
-                8 => 598,
-                _ => 519,
-            },
-            stack_count: count,
-            charges: 0,
-            bag_slots: bag,
-            details: ItemDetails {
-                equipment: None,
-                bonuses: None,
-                id,
-                name: name.into(),
-                lore: String::new(),
-                weight_tenths: 10,
-                slots: if id == 1 {
-                    1 << 13
-                } else if id == 8 {
-                    1 << 21
-                } else {
-                    0
-                },
-                classes: u32::MAX,
-                races: u32::MAX,
-                flags: Vec::new(),
-                stats: Vec::new(),
-            },
-        });
+/// Gives the world the demo's news and follows what it changed.
+fn tell(state: &mut InventoryState, online: &mut super::online::OnlineState) {
+    use eq_client_core::{WorldEvent, WorldUpdate, world::NoSpells};
+    for update in std::mem::take(&mut state.demo_news) {
+        let news = WorldUpdate::Game(WorldEvent::Inventory(update));
+        if online
+            .tell(&news, std::time::Instant::now(), &NoSpells)
+            .inventory
+        {
+            state.refresh(online.world().inventory().stale());
+        }
     }
-    items
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     fn app() -> App {
-        let mut app = App::new();
-        app.init_resource::<InventoryState>()
-            .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<super::super::escape::Escape>()
-            .init_resource::<super::super::skin::UiSkin>()
-            .init_resource::<Assets<Image>>()
-            .insert_resource(super::super::ViewerSettings(
-                super::super::ViewerConfig::default(),
-            ))
-            .init_resource::<super::super::items::ItemState>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .insert_resource(super::super::online::OnlineState::new(false))
-            .insert_resource(super::super::target::CommandsToServer(None))
-            .add_systems(Startup, |mut commands: Commands| {
-                spawn(&mut commands);
-                super::super::items::spawn(&mut commands);
-            })
-            .add_systems(
-                Update,
-                (input, update, feedback, super::super::items::update).chain(),
-            );
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            bevy::window::PrimaryWindow,
-        ));
+        let mut app = crate::testing::app();
+        app.add_systems(Startup, |mut commands: Commands| {
+            spawn(&mut commands);
+            super::super::items::spawn(&mut commands);
+        })
+        .add_systems(
+            Update,
+            (
+                crate::windows::toggle,
+                input,
+                settle,
+                update,
+                feedback,
+                super::super::items::update,
+            )
+                .chain(),
+        );
         app
     }
     #[test]
     fn chat_typing_and_unfocused_keys_do_not_toggle_inventory() {
         let mut app = app();
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyI);
         app.update();
-        assert!(!app.world().resource::<InventoryState>().open);
+        assert!(
+            !app.world()
+                .resource::<crate::windows::Shown>()
+                .is_open(crate::windows::WindowId::Inventory)
+        );
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = false;
         let world = app.world_mut();
         let mut windows = world.query::<&mut Window>();
         windows.single_mut(world).unwrap().focused = false;
         app.update();
-        assert!(!app.world().resource::<InventoryState>().open);
+        assert!(
+            !app.world()
+                .resource::<crate::windows::Shown>()
+                .is_open(crate::windows::WindowId::Inventory)
+        );
     }
 
     #[test]
     fn inventory_toggle_tabs_and_local_inspection_work_without_a_network_sender() {
         let mut app = app();
-        app.world_mut()
-            .resource_mut::<InventoryState>()
-            .apply(InventoryUpdate::Snapshot(demo_items()));
+        crate::online::testing::inventory(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            InventoryUpdate::Snapshot(crate::preview::items()),
+        );
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyI);
         app.update();
-        assert!(app.world().resource::<InventoryState>().open);
+        assert!(
+            app.world()
+                .resource::<crate::windows::Shown>()
+                .is_open(crate::windows::WindowId::Inventory)
+        );
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .clear();
@@ -755,15 +730,20 @@ mod tests {
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Right);
         app.update();
-        let cache = &app
-            .world()
-            .resource::<super::super::items::ItemState>()
-            .cache;
-        assert_eq!(cache.get(3).unwrap().name, "Preview rations");
+        assert_eq!(
+            app.world()
+                .resource::<super::super::items::ItemState>()
+                .selected(),
+            Some(3)
+        );
         let world = app.world_mut();
         let mut text = world.query_filtered::<&Text, With<super::super::items::ItemText>>();
         assert!(text.single(world).unwrap().0.contains("Preview rations"));
-        app.world_mut().resource_mut::<InventoryState>().clear();
+        // The world forgets the inventory, as when the player camps.
+        *app.world_mut()
+            .resource_mut::<super::super::online::OnlineState>() =
+            super::super::online::OnlineState::new(false);
+        app.world_mut().resource_mut::<InventoryState>().forget();
         app.update();
         let world = app.world_mut();
         let mut text = world.query::<&Text>();
@@ -772,34 +752,35 @@ mod tests {
     }
     #[test]
     fn bags_show_empty_capacity_and_bank_items_are_separate() {
-        let mut state = InventoryState::default();
-        state.apply(InventoryUpdate::Snapshot(demo_items()));
-        state.tab = Tab::Inventory;
-        let packs = visible_slots(&state, state.tab);
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(crate::preview::items()));
+        let packs = visible_slots(&inventory, Tab::Inventory);
         assert!(packs.contains(&InventorySlot(254)));
         assert!(!packs.contains(&InventorySlot(2000)));
-        assert!(!state.bank_open);
-        state.tab = Tab::Bank;
+        assert!(!InventoryState::default().bank_open);
         assert_eq!(
-            visible_slots(&state, state.tab),
+            visible_slots(&inventory, Tab::Bank),
             (2000..=2007).map(InventorySlot).collect::<Vec<_>>()
         );
-        state.apply(InventoryUpdate::Invalidated);
-        assert!(state.data.stale());
     }
     #[test]
     fn shift_click_opens_picker_and_buttons_pick_up_the_selected_quantity() {
         let mut app = app();
-        {
-            let mut state = app.world_mut().resource_mut::<InventoryState>();
-            state.apply(InventoryUpdate::Snapshot(
-                demo_items()
+        crate::online::testing::inventory(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            InventoryUpdate::Snapshot(
+                crate::preview::items()
                     .into_iter()
-                    .filter(|item| item.slot != InventorySlot(30))
+                    .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),
-            ));
+            ),
+        );
+        {
+            app.world_mut()
+                .resource_mut::<crate::windows::Shown>()
+                .open(crate::windows::WindowId::Inventory);
+            let mut state = app.world_mut().resource_mut::<InventoryState>();
             state.demo = true;
-            state.open = true;
         }
         app.update();
         app.world_mut()
@@ -830,59 +811,64 @@ mod tests {
             }
             app.update();
         }
-        let state = app.world().resource::<InventoryState>();
-        assert!(state.actions.split.is_none());
-        assert_eq!(state.data.items()[&InventorySlot(30)].stack_count, Some(2));
-        assert_eq!(
-            state.data.items()[&InventorySlot(251)].stack_count,
-            Some(18)
+        assert!(
+            app.world()
+                .resource::<InventoryState>()
+                .actions
+                .split
+                .is_none()
         );
+        let items = items(&app);
+        assert_eq!(items.items()[&InventorySlot::CURSOR].stack_count, Some(2));
+        assert_eq!(items.items()[&InventorySlot(251)].stack_count, Some(18));
     }
 
     #[test]
     fn left_click_uses_the_cursor_and_escape_does_not_discard_a_held_item() {
         let mut app = app();
-        {
-            let mut state = app.world_mut().resource_mut::<InventoryState>();
-            state.apply(InventoryUpdate::Snapshot(
-                demo_items()
+        crate::online::testing::inventory(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            InventoryUpdate::Snapshot(
+                crate::preview::items()
                     .into_iter()
-                    .filter(|item| item.slot != InventorySlot(30))
+                    .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),
-            ));
+            ),
+        );
+        {
+            app.world_mut()
+                .resource_mut::<crate::windows::Shown>()
+                .open(crate::windows::WindowId::Inventory);
+            let mut state = app.world_mut().resource_mut::<InventoryState>();
             state.demo = true;
-            state.open = true;
             state.tab = Tab::Inventory;
         }
         app.update();
         press_slot(&mut app, 251);
         assert_eq!(
-            app.world().resource::<InventoryState>().data.items()[&InventorySlot(30)].stack_count,
+            items(&app).items()[&InventorySlot::CURSOR].stack_count,
             Some(20)
         );
         press_slot(&mut app, 24);
-        let state = app.world().resource::<InventoryState>();
-        assert_eq!(state.data.items()[&InventorySlot(24)].stack_count, Some(20));
-        assert!(!state.data.items().contains_key(&InventorySlot(251)));
+        assert_eq!(
+            items(&app).items()[&InventorySlot(24)].stack_count,
+            Some(20)
+        );
+        assert!(!items(&app).items().contains_key(&InventorySlot(251)));
         press_slot(&mut app, 24);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::Escape);
         app.update();
-        assert!(
-            app.world()
-                .resource::<InventoryState>()
-                .data
-                .items()
-                .contains_key(&InventorySlot(30))
-        );
-        assert!(
-            app.world()
-                .resource::<InventoryState>()
-                .data
-                .items()
-                .contains_key(&InventorySlot(30))
-        );
+        assert!(items(&app).items().contains_key(&InventorySlot::CURSOR));
+    }
+
+    /// The items as the world has them.
+    fn items(app: &App) -> &Inventory {
+        app.world()
+            .resource::<super::super::online::OnlineState>()
+            .world()
+            .inventory()
     }
     fn press_slot(app: &mut App, slot: i32) {
         app.world_mut()

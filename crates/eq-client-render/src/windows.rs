@@ -1,15 +1,37 @@
-//! Shared dragging and minimization behavior for HUD windows.
+//! What every window shares: the registry that describes each one, its frame,
+//! title bar, dragging and minimizing, the stack that orders the floating
+//! windows, and the placements kept between runs.
 
+use crate::theme::{self, Size};
 use bevy::{prelude::*, ui::FocusPolicy, window::PrimaryWindow};
 mod layout;
 pub(super) mod pointer;
+mod registry;
+mod stack;
 mod store;
 pub(super) use layout::Layouts;
+pub(crate) use registry::{Layer, WindowId};
+#[cfg(test)]
+pub(crate) use stack::toggle;
+pub(crate) use stack::{SelectorButton, Shown, Stack, spawn_selector};
 
 /// Restores saved positions before layout and constrains measured frames afterward;
-/// placements persist between runs per character.
+/// placements persist between runs per character. Orders the floating windows
+/// and opens and closes the toggled ones.
 pub(super) fn register_layout(app: &mut App) {
-    app.add_systems(Update, store::persist.after(super::online::receive));
+    app.add_systems(
+        Update,
+        (
+            stack::raise,
+            stack::toggle,
+            stack::light_selector,
+            stack::restack,
+        )
+            .chain()
+            .after(super::escape::route)
+            .in_set(super::Stage::Route),
+    );
+    app.add_systems(Update, store::persist.in_set(super::Stage::Present));
     app.add_systems(PostUpdate, block_clicks);
     app.add_systems(
         PostUpdate,
@@ -21,12 +43,44 @@ pub(super) fn register_layout(app: &mut App) {
     );
 }
 
+/// The window a drag surface belongs to, which keys its saved placement.
 #[derive(Component)]
-pub(super) struct LayoutKey(String);
+pub(super) struct LayoutKey(WindowId);
 
-/// Gives a passive panel a stable identity across HUD reconstruction.
-pub(super) fn identify(commands: &mut Commands, frame: Entity, key: &str) {
-    commands.entity(frame).insert(LayoutKey(key.into()));
+/// Gives a passive panel its window's identity, which survives HUD
+/// reconstruction and keys its saved placement.
+pub(super) fn identify(commands: &mut Commands, frame: Entity, id: WindowId) {
+    commands.entity(frame).insert((LayoutKey(id), id));
+}
+
+/// A node where the registry says this window opens.
+pub(crate) fn placed(id: WindowId, mut node: Node) -> Node {
+    id.describe().placement.apply(&mut node);
+    node
+}
+
+/// Spawns a window's frame where the registry says it opens, in its layer,
+/// with its id and background and, for a titled window, its title bar; the
+/// caller adds its own markers and body after the title bar.
+pub(crate) fn frame(commands: &mut Commands, id: WindowId, mut node: Node) -> Entity {
+    let description = id.describe();
+    description.placement.apply(&mut node);
+    node.border = UiRect::all(px(1));
+    let frame = commands
+        .spawn((
+            node,
+            theme::surface(),
+            GlobalZIndex(description.layer.base()),
+            Frame::default(),
+            id,
+        ))
+        .id();
+    if !description.title.is_empty() {
+        commands
+            .entity(frame)
+            .with_children(|parent| title_bar(parent, frame, id));
+    }
+    frame
 }
 
 /// Visible windows and standalone controls consume pointer input before the world.
@@ -55,6 +109,20 @@ pub(super) struct Frame {
 
 #[derive(Component)]
 pub(super) struct DragHandle(Entity);
+
+impl Frame {
+    /// Whether the player moved or minimized the window, or its placement
+    /// was restored, so it is not left where it opens.
+    pub(crate) const fn placed(&self) -> bool {
+        self.placed
+    }
+}
+
+/// Lets the player move a window by dragging anywhere on it that is not a
+/// control, as the official client's windows move.
+pub(crate) fn drag_anywhere(commands: &mut Commands, frame: Entity) {
+    commands.entity(frame).insert((Button, DragHandle(frame)));
+}
 
 #[derive(Component)]
 pub(super) struct TitleBar;
@@ -85,20 +153,22 @@ pub(super) fn passive(commands: &mut Commands, entity: Entity) {
 }
 
 /// Converts a passive frame to a title-bar-driven interactive window.
-pub(super) fn titled(commands: &mut Commands, entity: Entity, title: &str) {
+pub(super) fn titled(commands: &mut Commands, entity: Entity, id: WindowId) {
     commands.entity(entity).remove::<(Button, DragHandle)>();
+    commands.entity(entity).insert(id);
     commands
         .entity(entity)
-        .with_children(|parent| title_bar(parent, entity, title));
+        .with_children(|parent| title_bar(parent, entity, id));
 }
 
-/// Adds a compact drag bar and minimize button to an interactive window.
-pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, title: &str) {
+/// Adds a compact drag bar, with the window's title, and a minimize button.
+pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: WindowId) {
+    let title = id.describe().title;
     parent
         .spawn((
             Button,
             DragHandle(frame),
-            LayoutKey(title.into()),
+            LayoutKey(id),
             TitleBar,
             Node {
                 width: percent(100),
@@ -109,17 +179,10 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, title:
                 flex_shrink: 0.0,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.055, 0.067, 0.078)),
+            BackgroundColor(theme::TITLE_BAR),
         ))
         .with_children(|bar| {
-            bar.spawn((
-                Text::new(title),
-                TextFont {
-                    font_size: FontSize::Px(10.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.68, 0.71, 0.74)),
-            ));
+            bar.spawn(theme::text(title, Size::Small, theme::INK));
             bar.spawn((
                 Button,
                 Minimize(frame),
@@ -130,17 +193,12 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, title:
                     align_items: AlignItems::Center,
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.10, 0.12, 0.14)),
+                BackgroundColor(theme::BUTTON),
             ))
             .with_children(|button| {
                 button.spawn((
                     MinimizeLabel(frame),
-                    Text::new("_"),
-                    TextFont {
-                        font_size: FontSize::Px(11.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.82, 0.82, 0.78)),
+                    theme::text("_", Size::Body, theme::INK_BRIGHT),
                 ));
             });
         });
@@ -258,11 +316,6 @@ pub(super) fn scroll_by(position: &mut ScrollPosition, node: &ComputedNode, delt
     if y.to_bits() != position.y.to_bits() {
         position.y = y;
     }
-}
-
-/// Inserts the shared state on an interactive frame.
-pub(super) fn interactive(commands: &mut Commands, entity: Entity) {
-    commands.entity(entity).insert(Frame::default());
 }
 
 /// Applies minimized state using the current entity's body and original dimensions.

@@ -10,7 +10,7 @@ use eq_client_core::{
     reason = "Keep the ordered integration scenario and its assertions together"
 )]
 fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
-    let mut item = crate::inventory::demo_items().remove(0);
+    let mut item = crate::preview::items().remove(0);
     item.slot = InventorySlot(13);
     item.charges = 3;
     item.activation = ItemActivation {
@@ -26,42 +26,44 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         ..default()
     };
     let id = item.details.id;
-    let mut inventory = crate::inventory::InventoryState::default();
-    inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
     let mut online = crate::online::OnlineState::new(true);
-    online.connected = true;
-    online.session_id = Some(9);
-    online.player = Some(eq_client_core::PlayerState {
-        name: "Example".into(),
-        base_attributes: None,
-        deity: None,
-        class: Some(1),
-        spawn_id: 1,
-        race: 1,
-        gender: 0,
-        level: 60,
-        position: eq_client_core::WorldPosition::default(),
-        mana: 0,
-        endurance: None,
-        skills: None,
-        spell_refresh_ms: None,
-        memorized_spells: [None; 8],
-        size: 6.0,
-        walk_speed: 0.0,
-        run_speed: 0.0,
-        hp_percent: Some(100),
-        appearance: eq_client_core::outfit::Appearance::default(),
-    });
+    crate::online::testing::admit(
+        &mut online,
+        9,
+        eq_client_core::PlayerState {
+            name: "Example".into(),
+            base_attributes: None,
+            deity: None,
+            class: Some(1),
+            spawn_id: 1,
+            race: 1,
+            gender: 0,
+            level: 60,
+            position: eq_client_core::WorldPosition::default(),
+            mana: 0,
+            endurance: None,
+            skills: None,
+            spell_refresh_ms: None,
+            memorized_spells: [None; 8],
+            size: 6.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            hp_percent: Some(100),
+            appearance: eq_client_core::outfit::Appearance::default(),
+        },
+    );
+    crate::online::testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item.clone()]));
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut app = App::new();
+    crate::keys::testing::install(&mut app);
     app.init_resource::<Bindings>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<crate::chat::ChatState>()
-        .init_resource::<crate::target::TargetState>()
+        .init_resource::<crate::notices::Lines>()
         .init_resource::<crate::hud::HudState>()
-        .insert_resource(inventory)
+        .init_resource::<crate::inventory::InventoryState>()
         .insert_resource(online)
-        .insert_resource(crate::target::CommandsToServer(Some(tx)))
+        .insert_resource(crate::outbox::Outbox::new(Some(tx)))
         .add_systems(Update, (update, item_actions).chain());
     let window = app
         .world_mut()
@@ -95,12 +97,12 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         .resource_mut::<ButtonInput<KeyCode>>()
         .release(KeyCode::ControlLeft);
     app.world_mut()
-        .resource_mut::<crate::chat::ChatState>()
+        .resource_mut::<crate::keys::Typing>()
         .composing = true;
     app.update();
     assert!(rx.try_recv().is_err());
     app.world_mut()
-        .resource_mut::<crate::chat::ChatState>()
+        .resource_mut::<crate::keys::Typing>()
         .composing = false;
     app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
     app.update();
@@ -116,8 +118,9 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
     );
     assert_eq!(
         app.world()
-            .resource::<crate::inventory::InventoryState>()
-            .data
+            .resource::<crate::online::OnlineState>()
+            .world()
+            .inventory()
             .items()[&InventorySlot(13)]
             .charges,
         3
@@ -126,18 +129,17 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         .resource_mut::<crate::inventory::InventoryState>()
         .cancel_actions();
     item.details.id += 1;
-    app.world_mut()
-        .resource_mut::<crate::inventory::InventoryState>()
-        .apply(InventoryUpdate::Set(vec![item]));
+    crate::online::testing::inventory(
+        &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+        InventoryUpdate::Set(vec![item]),
+    );
     app.update();
     assert!(rx.try_recv().is_err());
     assert!(
         app.world()
-            .resource::<crate::hud::HudState>()
-            .action_feedback
-            .as_ref()
-            .unwrap()
-            .1
+            .resource::<crate::notices::Lines>()
+            .feedback
+            .text(std::time::Instant::now())
             .contains("unavailable")
     );
 }

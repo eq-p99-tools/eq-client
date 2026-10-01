@@ -8,11 +8,22 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Resource, Default)]
 pub(super) struct NearbyEntities {
-    session: Option<u64>,
     pub(super) rendered: BTreeMap<u16, Entity>,
     revisions: BTreeMap<u16, u64>,
     models: BTreeMap<&'static str, Option<character::PreparedCharacter>>,
     elapsed: f32,
+}
+
+impl NearbyEntities {
+    /// Forgets the spawns drawn for an admission the world forgot, and the
+    /// models loaded for its zone.
+    pub(super) fn forget(&mut self, commands: &mut Commands) {
+        for (_, entity) in std::mem::take(&mut self.rendered) {
+            commands.entity(entity).despawn();
+        }
+        self.models.clear();
+        self.revisions.clear();
+    }
 }
 
 #[derive(Component)]
@@ -38,18 +49,10 @@ pub(super) fn reconcile(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if nearby_state.session != state.session_id || state.finished {
-        for (_, entity) in std::mem::take(&mut nearby_state.rendered) {
-            commands.entity(entity).despawn();
-        }
-        nearby_state.models.clear();
-        nearby_state.revisions.clear();
-        nearby_state.session = state.session_id;
-    }
-    if !state.connected {
+    if !state.world().connected() {
         return;
     }
-    let Some(player) = &state.player else {
+    let Some(player) = state.world().player() else {
         return;
     };
     let Some(directory) = &settings.0.eq_directory else {
@@ -64,7 +67,10 @@ pub(super) fn reconcile(
         .rendered
         .keys()
         .copied()
-        .filter(|id| nearby_state.revisions.get(id) != state.revisions.get(id))
+        .filter(|id| {
+            nearby_state.revisions.get(id).copied()
+                != state.world().spawn(*id).map(|spawn| spawn.revision)
+        })
         .collect();
     for id in replaced {
         if let Some(entity) = nearby_state.rendered.remove(&id) {
@@ -74,7 +80,7 @@ pub(super) fn reconcile(
     }
     let present: BTreeSet<_> = nearby_state.rendered.keys().copied().collect();
     let selected = nearby(
-        &state.spawns,
+        state.world().spawns().values().map(|spawn| &spawn.state),
         player.spawn_id,
         player.position,
         &present,
@@ -83,7 +89,7 @@ pub(super) fn reconcile(
             .0
             .entity_distance
             .unwrap_or(200.0)
-            .min(state.far_clip.unwrap_or(f32::INFINITY)),
+            .min(state.world().far_clip().unwrap_or(f32::INFINITY)),
         200,
     );
     let desired: BTreeSet<_> = selected.iter().copied().collect();
@@ -98,7 +104,7 @@ pub(super) fn reconcile(
     else {
         return;
     };
-    let spawn = &state.spawns[&id];
+    let spawn = &state.world().spawns()[&id].state;
     let model = races::model(spawn.race, spawn.gender);
     let asset = model.and_then(|code| {
         nearby_state
@@ -106,7 +112,7 @@ pub(super) fn reconcile(
             .entry(code)
             .or_insert_with(|| {
                 // Cache failures too, avoiding repeated disk reads for unsupported models.
-                load_installed_character(directory, &state.zone, code)
+                load_installed_character(directory, state.world().zone(), code)
                     .ok()
                     .map(|asset| {
                         character::prepare(asset, &mut images, &mut meshes, &mut materials)
@@ -170,7 +176,9 @@ pub(super) fn reconcile(
         });
     }
     nearby_state.rendered.insert(id, entity);
-    nearby_state.revisions.insert(id, state.revisions[&id]);
+    nearby_state
+        .revisions
+        .insert(id, state.world().spawns()[&id].revision);
 }
 
 /// Interpolates between received locations without extrapolating beyond the server.
@@ -183,7 +191,7 @@ pub(super) fn interpolate(
     let weight = 1.0 - (-time.delta_secs().min(0.1) / 0.1).exp();
     let now = std::time::Instant::now();
     for (mut entity, mut transform) in &mut entities {
-        let Some(spawn) = state.spawns.get(&entity.id) else {
+        let Some(spawn) = state.world().spawn(entity.id).map(|spawn| &spawn.state) else {
             continue;
         };
         // A spawn moves on from its latest report at its reported velocity.
@@ -210,106 +218,5 @@ pub(super) fn interpolate(
             Quat::from_rotation_y(eq_client_core::render_heading(spawn.position.heading)),
             weight,
         );
-    }
-}
-
-/// Exercises the same nearby renderer using three synthetic, moving entities offline.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
-pub(super) fn demo(
-    settings: Res<ViewerSettings>,
-    time: Res<Time>,
-    mut state: ResMut<OnlineState>,
-    scene: Res<super::SceneInfo>,
-    players: Query<&Transform, With<super::Player>>,
-    surface: Res<super::TerrainSurface>,
-    mut hud: ResMut<super::hud::HudState>,
-    mut chat: ResMut<super::chat::ChatState>,
-) {
-    if !settings.0.demo_entities || state.enabled {
-        return;
-    }
-    let Ok(player) = players.single() else {
-        return;
-    };
-    let origin = super::world_position(player.translation.to_array(), 0.0);
-    state.connected = true;
-    state.session_id = Some(1);
-    state.zone.clone_from(&scene.zone_name);
-    hud.status = "Offline entity demo".into();
-    if chat.history.revision() == 0 {
-        super::chat::seed_demo(&mut chat.history);
-    }
-    state.player = Some(eq_client_core::PlayerState {
-        name: "Preview".into(),
-        base_attributes: None,
-        deity: None,
-        class: Some(1),
-        spawn_id: 1,
-        race: 1,
-        gender: 0,
-        level: 1,
-        position: origin,
-        mana: 0,
-        endurance: Some(0),
-        skills: None,
-        spell_refresh_ms: None,
-        memorized_spells: [None; 8],
-        size: 0.0,
-        walk_speed: 0.0,
-        run_speed: 0.0,
-        hp_percent: None,
-        appearance: eq_client_core::outfit::Appearance::default(),
-    });
-    for (id, race, offset, size) in [(2u16, 1, 0.0, 0.0), (3, 42, 2.1, 2.5), (4, 54, 4.2, 6.0)] {
-        let phase = time.elapsed_secs() % 18.0;
-        if id == 2 {
-            state.postures.insert(
-                id,
-                if phase < 6.0 {
-                    eq_client_core::PostureState::Sitting
-                } else if phase < 12.0 {
-                    eq_client_core::PostureState::Ducking
-                } else {
-                    eq_client_core::PostureState::Standing
-                },
-            );
-        }
-        let angle = if id == 2 && phase < 12.0 {
-            0.0
-        } else {
-            time.elapsed_secs() * 0.25 + offset
-        };
-        let mut p = origin;
-        let radius = if id == 2 { 6.0 } else { 14.0 };
-        p.x += angle.cos() * radius;
-        p.y += angle.sin() * radius;
-        let height = if size > 0.0 { size } else { 6.0 };
-        let [x, _, z] = render_position(p);
-        p.z = surface
-            .height_below(x, z, origin.z + 10.0)
-            .unwrap_or(origin.z - height * 0.5)
-            + height * 0.5;
-        p.heading = (-angle).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * 512.0;
-        state.spawns.insert(
-            id,
-            eq_client_core::SpawnState {
-                class: None,
-                spawn_id: id,
-                name: format!("Synthetic {id}"),
-                kind: if id == 2 {
-                    SpawnKind::Player
-                } else {
-                    SpawnKind::Npc
-                },
-                race,
-                gender: 0,
-                position: p,
-                velocity: [0.0; 3],
-                size,
-                invisible: false,
-                appearance: eq_client_core::outfit::Appearance::default(),
-            },
-        );
-        state.revisions.insert(id, 1);
     }
 }

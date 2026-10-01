@@ -15,12 +15,15 @@ use crate::LoadError;
 /// Finds a classic model in the zone archive or the installation's global archives.
 ///
 /// # Errors
-/// Returns the last asset error when no candidate supplies a usable model.
+/// Returns [`LoadError::InvalidZoneName`] for a zone name that could leave the
+/// installation, and otherwise the last asset error when no candidate supplies
+/// a usable model.
 pub fn load_installed_character(
     directory: &Path,
     zone: &str,
     model: &str,
 ) -> Result<CharacterAsset, LoadError> {
+    let zone = crate::zone_name(zone)?;
     let mut archives = vec![format!("{zone}_chr.s3d"), "global_chr.s3d".into()];
     archives.extend((2..=7).map(|i| format!("global{i}_chr.s3d")));
     let mut last_error = None;
@@ -160,6 +163,14 @@ fn invalid(detail: &str) -> LoadError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn server_zone_names_never_leave_the_installation() {
+        assert!(matches!(
+            super::load_installed_character(std::path::Path::new("unused"), "../secrets", "HUM"),
+            Err(crate::LoadError::InvalidZoneName(_))
+        ));
+    }
+
     use super::validate_parents;
 
     #[test]

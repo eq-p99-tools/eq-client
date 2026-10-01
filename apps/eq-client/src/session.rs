@@ -2,7 +2,7 @@
 mod movement;
 
 use anyhow::{Context, Result};
-use eq_client_core::{ClientCommand, MotionCalibration, WorldUpdate};
+use eq_client_core::{ClientCommand, MotionCalibration, WorldUpdate, world::Link};
 use eq_network::{
     assets::Assets,
     client::{
@@ -61,20 +61,16 @@ impl SessionWorker {
     /// A local-only session refuses servers outside this machine's network.
     pub fn start(
         install: &Path,
+        protocol: ServerProtocol,
         seconds: Option<u64>,
         calibration: Option<MotionCalibration>,
         local_only: bool,
     ) -> Result<(Self, Receiver<WorldUpdate>)> {
-        if calibration.is_some() {
-            let protocol: ServerProtocol = env::var("EQ_PROTOCOL")
-                .unwrap_or_else(|_| "p99".into())
-                .parse()?;
-            anyhow::ensure!(
-                protocol.is_titanium(),
-                "calibrated movement requires the Titanium protocol"
-            );
-        }
-        let client = client_from_environment(install, local_only)?;
+        anyhow::ensure!(
+            calibration.is_none() || protocol.is_titanium(),
+            "calibrated movement requires the Titanium protocol"
+        );
+        let client = client_from_environment(install, protocol, local_only)?;
         let cancel = CancellationToken::default();
         let worker_cancel = cancel.clone();
         // The limit covers the whole session: login, character select and every zone.
@@ -101,28 +97,33 @@ impl SessionWorker {
                                 && let Err(error) = configuration.try_send(command)
                             {
                                 // Movement stays disabled; the session itself is fine.
-                                eprintln!("Movement calibration was not carried over: {error}");
+                                tracing::warn!(
+                                    "Movement calibration was not carried over: {error}"
+                                );
                             }
                             Some(WorldUpdate::Game(event))
                         }
-                        ClientEvent::Status(status) => Some(WorldUpdate::Connection {
-                            connected: status.state == ConnectionState::Connected,
-                            terminal: matches!(
-                                status.state,
-                                ConnectionState::Stopped | ConnectionState::Disconnected
-                            ),
-                            label: format!("{:?}", status.state),
-                        }),
+                        ClientEvent::Status(status) => {
+                            Some(WorldUpdate::Connection(link(status.state)))
+                        }
                         ClientEvent::Progress(stage) => Some(progress_update(stage)),
                         ClientEvent::Record(record) => match record.event {
                             RecordEvent::Chat(event) => chat_update(event),
                             _ => None,
                         },
                         ClientEvent::Diagnostic(message) => {
-                            eprintln!("{message}");
+                            tracing::info!("{message}");
                             None
                         }
-                        _ => None,
+                        // A reconnect is a fresh login; this viewer asks for
+                        // none, but says so if one comes.
+                        ClientEvent::Reconnecting {
+                            error,
+                            delay_seconds,
+                        } => {
+                            tracing::warn!("Reconnecting in {delay_seconds} s: {error}");
+                            Some(WorldUpdate::Connection(Link::LoggingIn))
+                        }
                     };
                     if let Some(update) = update {
                         match sender.try_send(update) {
@@ -137,12 +138,8 @@ impl SessionWorker {
                 });
             if let Err(error) = result {
                 // Waits for room if the queue is full; fails only once the viewer is gone.
-                let _ = sender.send(WorldUpdate::Connection {
-                    connected: false,
-                    terminal: true,
-                    label: "Disconnected".into(),
-                });
-                eprintln!("Session ended: {error:#}");
+                let _ = sender.send(WorldUpdate::Connection(Link::Ended));
+                tracing::error!("Session ended: {error:#}");
             }
         });
         Ok((
@@ -158,19 +155,35 @@ impl SessionWorker {
 
 /// Ready is connected; treating it as a disconnect would discard admission data.
 fn progress_update(stage: eq_network::client::ConnectionStage) -> WorldUpdate {
-    WorldUpdate::Connection {
-        connected: matches!(stage, eq_network::client::ConnectionStage::Ready),
-        terminal: false,
-        label: format!("{stage:?}"),
+    use eq_network::client::ConnectionStage;
+    WorldUpdate::Connection(match stage {
+        ConnectionStage::Ready => Link::Connected,
+        ConnectionStage::ConnectingZone
+        | ConnectionStage::LoadingCharacter
+        | ConnectionStage::EnteringWorld => Link::Entering,
+        // The login and world servers, and the stages a later protocol adds
+        // before the zone.
+        _ => Link::LoggingIn,
+    })
+}
+
+/// The session's coarse state in the player's terms.
+fn link(state: ConnectionState) -> Link {
+    match state {
+        ConnectionState::Connected => Link::Connected,
+        ConnectionState::Zoning => Link::Zoning,
+        ConnectionState::Disconnected | ConnectionState::Stopped => Link::Ended,
+        _ => Link::LoggingIn,
     }
 }
 
 /// Builds a protocol-specific client without loading P99 checksums for Quarm.
-fn client_from_environment(install: &Path, local_only: bool) -> Result<Client> {
+fn client_from_environment(
+    install: &Path,
+    protocol: ServerProtocol,
+    local_only: bool,
+) -> Result<Client> {
     let value = |name| env::var(name).with_context(|| format!("missing {name}"));
-    let protocol: ServerProtocol = env::var("EQ_PROTOCOL")
-        .unwrap_or_else(|_| "p99".into())
-        .parse()?;
     let mut config = ClientConfig::for_protocol(
         protocol,
         value("EQ_ACCOUNT")?,
@@ -236,19 +249,15 @@ mod tests {
         use eq_network::client::ConnectionStage;
         assert!(matches!(
             progress_update(ConnectionStage::Ready),
-            WorldUpdate::Connection {
-                connected: true,
-                terminal: false,
-                ..
-            }
+            WorldUpdate::Connection(Link::Connected)
         ));
         assert!(matches!(
             progress_update(ConnectionStage::ConnectingZone),
-            WorldUpdate::Connection {
-                connected: false,
-                terminal: false,
-                ..
-            }
+            WorldUpdate::Connection(Link::Entering)
+        ));
+        assert!(matches!(
+            progress_update(ConnectionStage::Authenticating),
+            WorldUpdate::Connection(Link::LoggingIn)
         ));
     }
 

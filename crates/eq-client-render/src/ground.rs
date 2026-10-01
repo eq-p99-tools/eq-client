@@ -43,12 +43,12 @@ pub(super) fn reconcile(
     rendered: Query<(Entity, &GroundEntity)>,
 ) {
     let mut wanted = BTreeMap::new();
-    if state.connected
+    if state.world().connected()
         && zone_models.is_some()
-        && let Some(player) = &state.player
+        && let Some(player) = state.world().player()
     {
         let origin = Vec3::from_array(eq_client_core::render_position(player.position));
-        for object in state.objects.entries().values() {
+        for object in state.world().objects().entries().values() {
             let position = Vec3::from_array(eq_client_core::render_position(object.position));
             if position.distance_squared(origin) <= DRAW_RADIUS * DRAW_RADIUS {
                 wanted.insert(object.drop_id, object);
@@ -122,27 +122,26 @@ pub(super) fn hit<'a>(
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-/// Queues picking an item up; the session checks the cursor and reach and
-/// answers with the result.
+/// Asks to pick an item up; the session checks the cursor and reach and
+/// answers with the result. The chat line the player reads when they cannot
+/// pick anything up now; the outbox shows its own refusals.
 pub(super) fn pick_up(
     drop_id: u32,
     state: &super::online::OnlineState,
-    sender: &super::target::CommandsToServer,
-) -> Result<(), String> {
-    let session_id = state
-        .session_id
-        .filter(|_| state.in_world())
-        .ok_or("You can't pick anything up right now.")?;
-    sender
-        .0
-        .as_ref()
-        .ok_or("Command queue unavailable")?
-        .try_send(eq_client_core::ClientCommand::PickUp {
-            session_id,
+    outbox: &crate::outbox::Outbox,
+) -> Option<String> {
+    if !state.in_world() {
+        return Some("You can't pick anything up right now.".into());
+    }
+    // A refusal shows in the feedback line.
+    let _ = outbox.post(state.world(), |stamp| {
+        eq_client_core::ClientCommand::PickUp {
+            session_id: stamp.session_id,
             drop_id,
-            created: std::time::Instant::now(),
-        })
-        .map_err(|_| String::from("Pickup could not be queued"))
+            created: stamp.created,
+        }
+    });
+    None
 }
 
 /// A refused pickup as a chat line, such as "Too far away to pick that up."
@@ -168,29 +167,31 @@ mod tests {
 
     fn online() -> super::super::online::OnlineState {
         let mut state = super::super::online::OnlineState::new(true);
-        state.connected = true;
-        state.session_id = Some(11);
-        state.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            spawn_id: 1,
-            race: 1,
-            class: None,
-            deity: None,
-            skills: None,
-            gender: 0,
-            level: 1,
-            position: default(),
-            mana: 0,
-            endurance: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 6.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: None,
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut state,
+            11,
+            eq_client_core::PlayerState {
+                name: "Example".into(),
+                base_attributes: None,
+                spawn_id: 1,
+                race: 1,
+                class: None,
+                deity: None,
+                skills: None,
+                gender: 0,
+                level: 1,
+                position: default(),
+                mana: 0,
+                endurance: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 6.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: None,
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
         state
     }
 
@@ -238,7 +239,7 @@ mod tests {
             object(73, "A FIXTURE 1", 30.0),
             object(74, "IT63_ACTORDEF", DRAW_RADIUS + 1.0),
         ] {
-            state.objects.apply(&ObjectUpdate::Spawn(update));
+            crate::online::testing::objects(&mut state, &ObjectUpdate::Spawn(update));
         }
         let mut app = app(state);
         app.update();
@@ -246,15 +247,21 @@ mod tests {
         let mut state = app
             .world_mut()
             .resource_mut::<super::super::online::OnlineState>();
-        state.objects.apply(&ObjectUpdate::Remove {
-            drop_id: 71,
-            taken_by: Some(1),
-        });
+        crate::online::testing::objects(
+            &mut state,
+            &ObjectUpdate::Remove {
+                drop_id: 71,
+                taken_by: Some(1),
+            },
+        );
         app.update();
         assert_eq!(drawn(&mut app), [72]);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .connected = false;
+        crate::online::testing::connect(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            false,
+        );
         app.update();
         assert_eq!(drawn(&mut app), Vec::<u32>::new());
     }

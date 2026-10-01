@@ -1,5 +1,6 @@
 //! Paged view of the server's indexed spellbook.
-use bevy::{prelude::*, window::PrimaryWindow};
+use crate::theme::{self, Size};
+use bevy::prelude::*;
 mod scribe;
 pub(super) use scribe::presentation as scribe_presentation;
 
@@ -23,53 +24,7 @@ pub(super) struct ScribeCursor;
 
 #[derive(Resource, Default)]
 pub(super) struct BookView {
-    open: bool,
     pub(super) page: usize,
-}
-
-/// Populates a clearly offline book through normalized spell-slot updates.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn demo(
-    settings: Res<super::ViewerSettings>,
-    online: Res<super::online::OnlineState>,
-    mut hud: ResMut<super::hud::HudState>,
-    mut view: ResMut<BookView>,
-) {
-    if !settings.0.demo_spellbook || online.enabled {
-        return;
-    }
-    let mut book = eq_client_core::SpellBook::default();
-    for slot in 0..14 {
-        book.apply(&eq_client_core::SpellUpdate::Slot {
-            slot,
-            spell_id: slot + 1,
-            mode: 0,
-        });
-    }
-    hud.spell_book = Some(book);
-    hud.spells = std::array::from_fn(|index| u32::try_from(index + 1).ok());
-    hud.status = "Offline spellbook demo".into();
-    hud.buff_state.replace_snapshot(
-        [202u32, 200]
-            .into_iter()
-            .enumerate()
-            .map(|(index, spell_id)| {
-                (
-                    u32::try_from(index * 2).expect("two demo slots"),
-                    eq_client_core::Buff {
-                        spell_id,
-                        caster_level: 1,
-                        effect_type: 2,
-                        bard_modifier: 10,
-                        duration_ticks: 5,
-                        counters: 0,
-                        caster_id: 0,
-                    },
-                )
-            })
-            .collect(),
-    );
-    view.open = true;
 }
 
 type BookRows<'w, 's> = Query<
@@ -85,13 +40,14 @@ type BookRows<'w, 's> = Query<
     (Without<BookText>, Without<BookFrame>),
 >;
 
-#[derive(Default)]
+/// The spell chosen in the book and what the book says about it; a new
+/// admission or a camp starts it over.
+#[derive(Resource, Default)]
 pub(super) struct BookSelection {
     deletion: super::book_delete::Confirmation,
     selected: Option<u32>,
     location: Option<(u32, usize)>,
     message: String,
-    session: Option<u64>,
     reply_revision: u64,
 }
 
@@ -123,130 +79,81 @@ impl BookSelection {
             self.reply_revision = revision;
         }
     }
-    /// Clears old-character selections when admission changes; callers reset pagination.
-    fn reset_session(&mut self, session: Option<u64>) -> bool {
-        if self.session == session {
-            return false;
-        }
-        *self = Self {
-            session,
-            ..Self::default()
-        };
-        true
+}
+
+use eq_client_core::world::{ClientWorld, SpellTiming};
+
+/// The installed spell data answers the world's questions about spells.
+impl eq_client_core::world::SpellCatalog for SpellNames {
+    fn timing(&self, spell: u32) -> Option<SpellTiming> {
+        Self::timing(self, spell)
+    }
+
+    fn instant_effect(&self, spell: u32) -> bool {
+        Self::instant_effect(self, spell)
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct SpellTiming {
-    pub recovery_ms: u32,
-    pub recast_ms: u32,
-}
-
+/// The installed client's spells, with the client's words for them.
 #[derive(Resource, Default)]
-pub(super) struct SpellNames {
-    spells: std::collections::BTreeMap<u32, SpellDefinition>,
-}
-
-#[derive(Default)]
-struct SpellDefinition {
-    mechanics: Option<eq_client_assets::spells::Mechanics>,
-    name: Option<String>,
-    timing: Option<SpellTiming>,
-    icon: Option<u32>,
-    mana: Option<u32>,
-    cast_ms: Option<u32>,
-    range: Option<f32>,
-}
+pub(super) struct SpellNames(eq_client_assets::spells::Definitions);
 
 impl SpellNames {
     /// Loads labels and timing from the user's installation; assets are never bundled.
     pub fn load(directory: Option<&std::path::Path>) -> Self {
-        directory
-            .and_then(|path| std::fs::read(path.join("spells_us.txt")).ok())
-            .map_or_else(Self::default, |bytes| {
-                Self::parse(&String::from_utf8_lossy(&bytes))
-            })
+        Self(
+            directory
+                .and_then(|path| eq_client_assets::spells::Definitions::read(path).ok())
+                .unwrap_or_default(),
+        )
     }
 
-    /// Keeps valid names even when a line has unavailable or malformed timing fields.
+    /// Spells from the text of a spell file.
+    #[cfg(test)]
     pub(super) fn parse(text: &str) -> Self {
-        let mut result = Self::default();
-        for line in text.lines() {
-            let fields: Vec<_> = line.split('^').take(183).collect();
-            // EQEmu SPDat field 144 indexes the default UI's spell artwork grid.
-            let Some(id) = fields.first().and_then(|field| field.parse::<u32>().ok()) else {
-                continue;
-            };
-            let mut definition = SpellDefinition {
-                mechanics: eq_client_assets::spells::Mechanics::from_fields(&fields),
-                icon: fields.get(144).and_then(|field| field.parse().ok()),
-                mana: fields.get(19).and_then(|field| field.parse().ok()),
-                cast_ms: fields.get(13).and_then(|field| field.parse().ok()),
-                range: fields
-                    .get(9)
-                    .and_then(|field| field.parse::<f32>().ok())
-                    .filter(|range| range.is_finite() && *range >= 0.0),
-                ..Default::default()
-            };
-            definition.name = fields
-                .get(1)
-                .map(|name| name.trim())
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned);
-            // EQ spells_us.txt fields 14/15 are recovery and same-spell reuse milliseconds.
-            if let (Some(recovery_ms), Some(recast_ms)) = (
-                fields.get(14).and_then(|s| s.parse().ok()),
-                fields.get(15).and_then(|s| s.parse().ok()),
-            ) {
-                definition.timing = Some(SpellTiming {
-                    recovery_ms,
-                    recast_ms,
-                });
-            }
-            result.spells.insert(id, definition);
-        }
-        result
+        Self(eq_client_assets::spells::Definitions::parse(text))
+    }
+
+    fn spell(&self, id: u32) -> Option<&eq_client_assets::spells::Definition> {
+        self.0.get(id)
     }
 
     pub(super) fn timing(&self, id: u32) -> Option<SpellTiming> {
-        self.spells.get(&id).and_then(|spell| spell.timing)
+        self.spell(id)?.timing.map(|timing| SpellTiming {
+            recovery_ms: timing.recovery_ms,
+            recast_ms: timing.recast_ms,
+        })
     }
 
     /// Looks up local mechanics by the server's exact spell ID, never by display name.
     pub(super) fn mechanics(&self, id: u32) -> Option<&eq_client_assets::spells::Mechanics> {
-        self.spells.get(&id)?.mechanics.as_ref()
+        self.spell(id)?.mechanics.as_ref()
     }
 
     /// Only an explicit zero duration is an instant effect; unknown rules stay unresolved.
     pub(super) fn instant_effect(&self, id: u32) -> bool {
-        self.mechanics(id).is_some_and(|mechanics| {
-            mechanics.duration_formula == 0
-                && mechanics.duration_cap == 0
-                && mechanics
-                    .alternate_duration
-                    .is_some_and(|alternate| alternate.formula == 0 && alternate.duration == 0)
-        })
+        self.mechanics(id)
+            .is_some_and(eq_client_assets::spells::Mechanics::instant)
     }
 
     /// Unmodified installation mana cost.
     pub(super) fn mana(&self, id: u32) -> Option<u32> {
-        self.spells.get(&id).and_then(|spell| spell.mana)
+        self.spell(id)?.mana
     }
 
     pub(super) fn icon(&self, id: u32) -> Option<u32> {
-        self.spells.get(&id).and_then(|spell| spell.icon)
+        self.spell(id)?.icon
     }
 
     pub fn label(&self, id: u32) -> String {
-        self.spells
-            .get(&id)
+        self.spell(id)
             .and_then(|spell| spell.name.clone())
             .unwrap_or_else(|| format!("Spell {id}"))
     }
 
     /// Unmodified installation values, not server-adjusted costs or cast times.
     pub(super) fn details(&self, id: u32) -> String {
-        let Some(spell) = self.spells.get(&id) else {
+        let Some(spell) = self.spell(id) else {
             return "Local spell details unavailable".into();
         };
         format!(
@@ -267,28 +174,22 @@ impl SpellNames {
 
 /// Builds a compact movable book; empty and unavailable books remain distinct.
 pub(super) fn spawn(commands: &mut Commands) {
-    let frame = commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                right: px(20),
-                top: px(16),
-                width: px(310),
-                display: Display::None,
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::all(px(8)),
-                row_gap: px(4),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.96)),
-            GlobalZIndex(25),
-            BookFrame,
-            super::hud::HudRoot,
-        ))
-        .id();
-    super::windows::interactive(commands, frame);
+    let frame = super::windows::frame(
+        commands,
+        super::windows::WindowId::Spellbook,
+        Node {
+            width: px(310),
+            display: Display::None,
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::all(px(8)),
+            row_gap: px(4),
+            ..default()
+        },
+    );
+    commands
+        .entity(frame)
+        .insert((BookFrame, super::hud::HudRoot));
     commands.entity(frame).with_children(|parent| {
-        super::windows::title_bar(parent, frame, "SPELLBOOK [B]");
         parent
             .spawn(Node {
                 flex_direction: FlexDirection::Column,
@@ -304,31 +205,26 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
     super::book_delete::spawn(parent);
     parent.spawn((
         Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(13.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.78, 0.80, 0.84)),
+        theme::font(Size::Heading),
+        TextColor(theme::INK_BRIGHT),
         BookText,
     ));
     parent
         .spawn((
             Button,
             ScribeCursor,
+            crate::outbox::Needs(eq_client_core::Capability::Spellbook),
             Node {
                 padding: UiRect::all(px(6)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.10, 0.12, 0.16)),
+            BackgroundColor(theme::BUTTON),
         ))
         .with_child((
             scribe::Label,
             Text::new("Scribe cursor scroll"),
-            TextColor(Color::WHITE),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
+            TextColor(theme::INK_BRIGHT),
+            theme::font(Size::Label),
         ));
     for index in 0..ROWS_PER_PAGE {
         parent
@@ -336,10 +232,7 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
                 Button,
                 BookEntry(index),
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
+                theme::font(Size::Heading),
                 Node {
                     min_height: px(26),
                     padding: UiRect {
@@ -348,7 +241,7 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
                     },
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.07, 0.09, 0.12)),
+                BackgroundColor(theme::INSET),
             ))
             .with_child(super::spell_icons::artwork(
                 super::spell_icons::Source::Book(index),
@@ -363,22 +256,7 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             for (next, label) in [(false, "Previous"), (true, "Next")] {
-                row.spawn((
-                    Button,
-                    PageButton(next),
-                    Node {
-                        padding: UiRect::axes(px(12), px(6)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.10, 0.12, 0.16)),
-                ))
-                .with_child((
-                    Text::new(label),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
-                ));
+                theme::button_with(row, PageButton(next), label, Size::Label);
             }
         });
 }
@@ -386,11 +264,9 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
 /// Browses known spells and requests gem assignments without predicting server state.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
-    keys: Res<ButtonInput<KeyCode>>,
-    chat: Res<super::chat::ChatState>,
-    hud: Res<super::hud::HudState>,
+    shown: Res<super::windows::Shown>,
+    keys: crate::keys::Keys,
     names: Res<SpellNames>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     mut frames: Query<&mut Node, With<BookFrame>>,
     mut text: BookLabels,
     buttons: Query<(&Interaction, &PageButton), Changed<Interaction>>,
@@ -398,53 +274,39 @@ pub(super) fn update(
     mut rows: BookRows,
     mut gems: GemChoices,
     online: Option<Res<super::online::OnlineState>>,
-    sender: Option<Res<super::target::CommandsToServer>>,
-    mut selection: Local<BookSelection>,
-    inventory: Option<Res<super::inventory::InventoryState>>,
+    outbox: Option<Res<crate::outbox::Outbox>>,
+    mut selection: ResMut<BookSelection>,
     actions: BookActions,
 ) {
     let (scribe, mut deletion, mut requests) = actions;
-    let session = online.as_ref().and_then(|online| online.session_id);
-    if selection.reset_session(session) {
-        state.page = 0;
-    }
-    selection.receive_reply(hud.book_action_revision);
-    let accepts_input = !chat.composing && windows.single().is_ok_and(|window| window.focused);
-    if keys.just_pressed(KeyCode::KeyB) && accepts_input {
-        state.open = !state.open;
-    }
+    let world = super::online::world(online.as_deref());
+    selection.receive_reply(world.book_action_revision());
+    let accepts_input = keys.focused();
+    let open = shown.is_open(super::windows::WindowId::Spellbook);
     for mut node in &mut frames {
-        node.display = if state.open {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        node.display = if open { Display::Flex } else { Display::None };
     }
-    if !state.open {
+    if !open {
         selection.deletion.cancel();
         return;
     }
-    let pending = action_pending(&hud) || selection.deletion.queued;
+    let pending = action_pending(world) || selection.deletion.queued;
     if !pending
         && accepts_input
         && scribe
             .iter()
             .any(|interaction| *interaction == Interaction::Pressed)
     {
-        selection.message = match request_scribe(
-            online.as_deref(),
-            inventory.as_deref(),
-            hud.spell_book.as_ref(),
-            sender.as_deref(),
-        ) {
-            Ok(spell) => {
-                let _ = note(&mut requests, format!("Scribing {}", names.label(spell)));
-                "Scribe request queued; waiting for server updates".into()
-            }
-            Err(error) => error.to_string(),
-        };
+        selection.message =
+            match request_scribe(online.as_deref(), world.spell_book(), outbox.as_deref()) {
+                Ok(spell) => {
+                    let _ = note(&mut requests, format!("Scribing {}", names.label(spell)));
+                    String::new()
+                }
+                Err(error) => crate::outbox::window_line(&error),
+            };
     }
-    let entries = known_entries(hud.spell_book.as_ref());
+    let entries = known_entries(world.spell_book());
     if selection
         .selected
         .is_some_and(|selected| !entries.iter().any(|(_, id)| *id == selected))
@@ -468,16 +330,15 @@ pub(super) fn update(
     delete_input(
         &deletion,
         &mut selection,
-        online.as_deref(),
-        &hud,
-        sender.as_deref(),
+        world,
+        outbox.as_deref(),
         &names,
         accepts_input && !pending,
     );
     refresh_actions(&mut deletion, &selection.deletion);
     let (requested, gem_hint) = refresh_gems(
         &mut gems,
-        &hud,
+        world,
         selection.selected,
         &names,
         pending || selection.deletion.queued,
@@ -486,8 +347,8 @@ pub(super) fn update(
     if let Some(gem) = requested {
         let queued = request_memorize(
             online.as_deref(),
-            hud.spell_book.as_ref(),
-            sender.as_deref(),
+            world.spell_book(),
+            outbox.as_deref(),
             selection.selected,
             gem,
         );
@@ -495,12 +356,12 @@ pub(super) fn update(
             Ok(spell) => {
                 let label = format!("Memorizing {} into gem {}", names.label(spell), gem + 1);
                 let _ = note(&mut requests, label);
-                format!("Queued for gem {}; waiting for worker", gem + 1)
+                String::new()
             }
-            Err(error) => error.to_string(),
+            Err(error) => crate::outbox::window_line(&error),
         };
     }
-    let label = book_label(&hud, &names, &selection, &entries, state.page, pages);
+    let label = book_label(world, &names, &selection, &entries, state.page, pages);
     refresh_labels(&mut text, &label, gem_hint.as_deref());
 }
 
@@ -576,18 +437,17 @@ fn refresh_actions(buttons: &mut DeleteControls, confirmation: &super::book_dele
 fn delete_input(
     buttons: &DeleteControls,
     selection: &mut BookSelection,
-    online: Option<&super::online::OnlineState>,
-    hud: &super::hud::HudState,
-    sender: Option<&super::target::CommandsToServer>,
+    world: &ClientWorld,
+    outbox: Option<&crate::outbox::Outbox>,
     names: &SpellNames,
     enabled: bool,
 ) {
-    let session = online
-        .filter(|state| state.connected && state.death.is_none())
-        .and_then(|state| state.session_id);
+    let session = outbox
+        .and_then(|outbox| outbox.peek(world))
+        .map(|stamp| stamp.session_id);
     selection
         .deletion
-        .validate(session, selection.selected, hud.spell_book.as_ref());
+        .validate(session, selection.selected, world.spell_book());
     if !enabled {
         if !selection.deletion.queued {
             selection.deletion = super::book_delete::Confirmation::default();
@@ -601,28 +461,18 @@ fn delete_input(
     }) else {
         return;
     };
-    let result = selection.deletion.act(
-        *action,
-        session,
-        selection.selected,
-        hud.spell_book.as_ref(),
-    );
+    let result = selection
+        .deletion
+        .act(*action, session, selection.selected, world.spell_book());
     selection.message = match result {
         Err(error) => error.to_string(),
+        // A change sent says nothing until the server answers; the outbox
+        // says why one did not leave.
         Ok(Some(command)) => {
-            if let Some(sender) = sender.and_then(|sender| sender.0.as_ref()) {
-                match sender.try_send(command) {
-                    Ok(()) => {
-                        selection.deletion.queued = true;
-                        "Book change queued; waiting for server".into()
-                    }
-                    Err(_) => {
-                        "Book change was not queued; try again when the worker is available".into()
-                    }
-                }
-            } else {
-                "Network worker unavailable".into()
+            if outbox.is_some_and(|outbox| outbox.send(world, command).is_ok()) {
+                selection.deletion.queued = true;
             }
+            String::new()
         }
         Ok(None) => match action {
             super::book_delete::Action::Select => format!(
@@ -635,11 +485,11 @@ fn delete_input(
 }
 
 /// Book actions wait for outstanding casts or server assignment confirmation.
-fn action_pending(hud: &super::hud::HudState) -> bool {
-    hud.casting.is_some()
-        || hud.pending_cast.is_some()
+fn action_pending(world: &ClientWorld) -> bool {
+    world.casting().cast.is_some()
+        || world.casting().pending.is_some()
         || matches!(
-            hud.book_action,
+            world.book_action(),
             Some(
                 eq_client_core::BookActionStatus::Preparing
                     | eq_client_core::BookActionStatus::Submitted
@@ -669,7 +519,7 @@ type GemChoices<'w, 's> = Query<
 /// Styles current gem occupants and collects at most one fresh assignment click.
 fn refresh_gems(
     gems: &mut GemChoices,
-    hud: &super::hud::HudState,
+    world: &ClientWorld,
     selected: Option<u32>,
     names: &SpellNames,
     pending: bool,
@@ -678,18 +528,16 @@ fn refresh_gems(
     let mut gem_hint = None;
     let mut requested = None;
     for (interaction, GemChoice(gem), mut background) in gems.iter_mut() {
-        let available = !pending
-            && selected.is_some()
-            && hud.spells.get(usize::from(*gem)).copied().flatten() != selected;
-        background.0 = if !available {
-            Color::srgb(0.055, 0.065, 0.08)
-        } else if *interaction != Interaction::None {
-            Color::srgb(0.20, 0.29, 0.40)
-        } else {
-            Color::srgb(0.12, 0.16, 0.22)
-        };
+        let available = !pending && selected.is_some() && world.gem(usize::from(*gem)) != selected;
+        background.0 = theme::button(available, false, *interaction);
         if *interaction != Interaction::None {
-            gem_hint = Some(gem_description(*gem, &hud.spells, selected, names, pending));
+            gem_hint = Some(gem_description(
+                *gem,
+                &world.gems(),
+                selected,
+                names,
+                pending,
+            ));
         }
         if available
             && accepts_input
@@ -721,11 +569,11 @@ fn refresh_rows(
             node.display = Display::Flex;
             value.0 = format!("{} | {}", slot + 1, names.label(*id));
             background.0 = if selection.selected == Some(*id) {
-                Color::srgb(0.16, 0.23, 0.32)
+                theme::BUTTON_ON
             } else if *interaction == Interaction::Hovered {
-                Color::srgb(0.10, 0.13, 0.18)
+                theme::BUTTON_HOVER
             } else {
-                Color::srgb(0.07, 0.09, 0.12)
+                theme::INSET
             };
         } else {
             value.0.clear();
@@ -747,14 +595,14 @@ fn known_entries(book: Option<&eq_client_core::SpellBook>) -> Vec<(usize, u32)> 
 }
 
 fn book_label(
-    hud: &super::hud::HudState,
+    world: &ClientWorld,
     names: &SpellNames,
     selection: &BookSelection,
     entries: &[(usize, u32)],
     page: usize,
     pages: usize,
 ) -> String {
-    let mut label = if hud.spell_book.is_none() {
+    let mut label = if world.spell_book().is_none() {
         "Spellbook unavailable".into()
     } else if entries.is_empty() {
         "No scribed spells".into()
@@ -766,14 +614,14 @@ fn book_label(
         let _ = write!(label, "\n{} | choose gem 1-8", names.label(id));
         let _ = write!(label, "\n{}", names.details(id));
     }
-    if hud.pending_cast.is_some() {
+    if world.casting().pending.is_some() {
         label.push_str("\nWaiting for cast acknowledgement");
-    } else if hud.casting.is_some() {
+    } else if world.casting().cast.is_some() {
         label.push_str("\nFinish or interrupt casting before changing spells");
     } else if !selection.message.is_empty() {
         label.push('\n');
         label.push_str(&selection.message);
-    } else if let Some(status) = &hud.book_action {
+    } else if let Some(status) = &world.book_action() {
         use eq_client_core::BookActionStatus;
         use std::fmt::Write;
         label.push('\n');
@@ -800,11 +648,8 @@ fn gem_hint() -> impl Bundle {
     (
         GemHint,
         Text::new("Hover a gem to inspect its current spell"),
-        TextFont {
-            font_size: FontSize::Px(11.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.70, 0.76, 0.84)),
+        theme::font(Size::Body),
+        TextColor(theme::INK),
         Node {
             height: px(44),
             flex_shrink: 0.0,
@@ -825,11 +670,9 @@ fn gem_choices(parent: &mut ChildSpawnerCommands) {
                 row.spawn((
                     Button,
                     GemChoice(gem),
+                    crate::outbox::Needs(eq_client_core::Capability::Spellbook),
                     Text::new(format!("{}", gem + 1)),
-                    TextFont {
-                        font_size: FontSize::Px(13.0),
-                        ..default()
-                    },
+                    theme::font(Size::Heading),
                     Node {
                         width: px(32),
                         height: px(42),
@@ -837,7 +680,7 @@ fn gem_choices(parent: &mut ChildSpawnerCommands) {
                         justify_content: JustifyContent::Center,
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.12, 0.16, 0.22)),
+                    BackgroundColor(theme::BUTTON),
                 ))
                 .with_child(super::spell_icons::artwork(
                     super::spell_icons::Source::Gem(usize::from(gem)),
@@ -868,75 +711,63 @@ fn gem_description(
     format!("Gem {}: {occupant}\n{action}", gem + 1)
 }
 
-/// Validates a gem click and queues it without predicting the resulting spell state.
+/// Validates a gem click and sends it without predicting the resulting spell state.
 fn request_memorize(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
-    sender: Option<&super::target::CommandsToServer>,
+    outbox: Option<&crate::outbox::Outbox>,
     selected: Option<u32>,
     gem: u8,
 ) -> anyhow::Result<u32> {
     use anyhow::{Context, ensure};
     let spell_id = selected.context("Select a spell first")?;
     ensure!(gem < 8, "Choose a gem from 1 to 8");
-    let online = online.context("Connect to memorize a spell")?;
-    ensure!(
-        online.connected && online.death.is_none(),
-        "Connect to memorize a spell"
-    );
+    let (online, outbox) = online.zip(outbox).context("Connect to memorize a spell")?;
     ensure!(
         book.context("Spellbook unavailable")?
             .slots()
             .contains(&Some(spell_id)),
         "The selected spell is no longer in the spellbook"
     );
-    sender
-        .and_then(|sender| sender.0.as_ref())
-        .context("Network worker unavailable")?
-        .try_send(eq_client_core::ClientCommand::MemorizeSpell {
-            session_id: online.session_id.context("No active admission")?,
+    outbox.post(online.world(), |stamp| {
+        eq_client_core::ClientCommand::MemorizeSpell {
+            session_id: stamp.session_id,
             gem,
             spell_id,
-            created: std::time::Instant::now(),
-        })
-        .context("Memorization request could not be queued")?;
+            created: stamp.created,
+        }
+    })?;
     Ok(spell_id)
 }
 
-/// Queues the current cursor scroll without consuming or inserting it locally.
+/// Sends the current cursor scroll without consuming or inserting it locally.
 fn request_scribe(
     online: Option<&super::online::OnlineState>,
-    inventory: Option<&super::inventory::InventoryState>,
     book: Option<&eq_client_core::SpellBook>,
-    sender: Option<&super::target::CommandsToServer>,
+    outbox: Option<&crate::outbox::Outbox>,
 ) -> anyhow::Result<u32> {
     use anyhow::Context;
-    let command = prepare_scribe(online, inventory, book, sender)?;
+    let (state, outbox) = online.zip(outbox).context("Connect to scribe a scroll")?;
+    let stamp = outbox.stamp(state.world())?;
+    let command = prepare_scribe(online, book, Some(stamp))?;
     let eq_client_core::ClientCommand::ScribeSpell { spell_id, .. } = command else {
         anyhow::bail!("Scribe request was not a scribe");
     };
-    sender
-        .and_then(|sender| sender.0.as_ref())
-        .context("Network worker unavailable")?
-        .try_send(command)
-        .context("Scribe request could not be queued")?;
+    outbox.send(state.world(), command)?;
     Ok(spell_id)
 }
 
-/// Shares admission, cursor and book validation between presentation and submission.
+/// Shares admission, cursor and book validation between presentation and
+/// submission; the stamp is the one the outbox gives a command made now.
 fn prepare_scribe(
     online: Option<&super::online::OnlineState>,
-    inventory: Option<&super::inventory::InventoryState>,
     book: Option<&eq_client_core::SpellBook>,
-    sender: Option<&super::target::CommandsToServer>,
+    stamp: Option<crate::outbox::Stamp>,
 ) -> anyhow::Result<eq_client_core::ClientCommand> {
     use anyhow::{Context, ensure};
     let online = online.context("Connect to scribe a scroll")?;
-    ensure!(
-        online.connected && online.death.is_none(),
-        "Connect to scribe a scroll"
-    );
-    let inventory = &inventory.context("Inventory unavailable")?.data;
+    let stamp = stamp.context("Connect to scribe a scroll")?;
+    let inventory = online.world().inventory();
     ensure!(
         inventory.received() && !inventory.stale(),
         "Inventory awaiting refresh"
@@ -944,7 +775,7 @@ fn prepare_scribe(
     let book = book.context("Spellbook unavailable")?;
     let spell_id = inventory
         .items()
-        .get(&eq_client_core::inventory::InventorySlot(30))
+        .get(&eq_client_core::inventory::InventorySlot::CURSOR)
         .context("Put a scroll on the cursor first")?
         .scroll_spell
         .context("The cursor item is not a spell scroll")?;
@@ -955,15 +786,12 @@ fn prepare_scribe(
             .context("Spellbook is full")?,
     )?;
     book.scribe_packet(inventory, inventory.revision(), slot, spell_id)?;
-    sender
-        .and_then(|sender| sender.0.as_ref())
-        .context("Network worker unavailable")?;
     Ok(eq_client_core::ClientCommand::ScribeSpell {
-        session_id: online.session_id.context("No active admission")?,
+        session_id: stamp.session_id,
         revision: inventory.revision(),
         slot,
         spell_id,
-        created: std::time::Instant::now(),
+        created: stamp.created,
     })
 }
 
@@ -1013,6 +841,7 @@ mod tests {
         );
     }
     use super::*;
+    use bevy::window::PrimaryWindow;
 
     #[test]
     fn gem_hints_show_current_occupant_replacement_and_busy_state() {
@@ -1073,7 +902,6 @@ mod tests {
         use eq_client_core::inventory::{
             InventoryItem, InventorySlot, InventoryUpdate, ItemPlacement,
         };
-        let mut inventory = super::super::inventory::InventoryState::default();
         let details = eq_client_core::ItemDetails {
             equipment: None,
             bonuses: None,
@@ -1087,33 +915,33 @@ mod tests {
             flags: Vec::new(),
             stats: Vec::new(),
         };
-        inventory.apply(InventoryUpdate::Snapshot(vec![InventoryItem {
-            activation: eq_client_core::inventory::ItemActivation::default(),
-            scroll_spell: Some(73),
-            rules: ItemPlacement::default(),
-            slot: InventorySlot(30),
-            details,
-            icon: 0,
-            stack_count: None,
-            charges: 1,
-            bag_slots: 0,
-        }]));
-        let before = inventory.data.clone();
         let book = eq_client_core::SpellBook::titanium_profile(&vec![0; 19592]).unwrap();
         let mut online = super::super::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(7);
+        crate::online::testing::admit(&mut online, 7, crate::online::testing::player(1));
+        crate::online::testing::inventory(
+            &mut online,
+            InventoryUpdate::Snapshot(vec![InventoryItem {
+                activation: eq_client_core::inventory::ItemActivation::default(),
+                scroll_spell: Some(73),
+                rules: ItemPlacement::default(),
+                slot: InventorySlot::CURSOR,
+                details,
+                icon: 0,
+                stack_count: None,
+                charges: 1,
+                bag_slots: 0,
+            }]),
+        );
+        let before = online.world().inventory().clone();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let sender = super::super::target::CommandsToServer(Some(tx));
-        request_scribe(Some(&online), Some(&inventory), Some(&book), Some(&sender)).unwrap();
+        let sender = crate::outbox::Outbox::new(Some(tx));
+        request_scribe(Some(&online), Some(&book), Some(&sender)).unwrap();
         assert!(
             matches!(rx.try_recv().unwrap(), eq_client_core::ClientCommand::ScribeSpell { session_id: 7, slot: 0, spell_id: 73, revision, .. } if revision == before.revision())
         );
-        assert_eq!(inventory.data, before);
-        online.connected = false;
-        assert!(
-            request_scribe(Some(&online), Some(&inventory), Some(&book), Some(&sender)).is_err()
-        );
+        assert_eq!(online.world().inventory(), &before);
+        crate::online::testing::connect(&mut online, false);
+        assert!(request_scribe(Some(&online), Some(&book), Some(&sender)).is_err());
         assert!(rx.try_recv().is_err());
     }
 
@@ -1140,8 +968,6 @@ mod tests {
         assert_eq!(selection.relocated_page(&entries), None);
         entries.retain(|(_, id)| *id != 16);
         assert_eq!(selection.relocated_page(&entries), None);
-        selection.reset_session(Some(2));
-        assert!(selection.location.is_none());
     }
 
     #[test]
@@ -1153,8 +979,7 @@ mod tests {
         use crate::book_delete::Action;
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         let mut online = crate::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(7);
+        crate::online::testing::admit(&mut online, 7, crate::online::testing::player(1));
         let mut book = eq_client_core::SpellBook::default();
         book.apply(&eq_client_core::SpellUpdate::Slot {
             slot: 3,
@@ -1162,18 +987,23 @@ mod tests {
             mode: 0,
         });
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::chat::ChatState>()
             .init_resource::<SpellNames>()
-            .insert_resource(online)
-            .insert_resource(crate::target::CommandsToServer(Some(sender)))
-            .insert_resource(crate::hud::HudState {
-                spell_book: Some(book.clone()),
-                ..default()
+            .insert_resource({
+                let mut online = online;
+                crate::online::testing::book(&mut online, book.clone());
+                online
             })
-            .insert_resource(BookView {
-                open: true,
-                page: 0,
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<crate::hud::HudState>()
+            .init_resource::<BookSelection>()
+            .insert_resource(BookView { page: 0 })
+            .insert_resource({
+                let mut shown = crate::windows::Shown::default();
+                shown.open(crate::windows::WindowId::Spellbook);
+                shown
             })
             .add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
             .add_systems(Update, update);
@@ -1267,17 +1097,21 @@ mod tests {
                 ..
             }
         ));
-        app.world_mut().resource_mut::<BookView>().open = false;
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .close(crate::windows::WindowId::Spellbook);
         app.update();
-        app.world_mut().resource_mut::<BookView>().open = true;
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Spellbook);
         click(&mut app, button(Action::Select));
         click(&mut app, button(Action::Confirm));
         assert!(receiver.try_recv().is_err());
         assert_eq!(
             app.world()
-                .resource::<crate::hud::HudState>()
-                .spell_book
-                .as_ref(),
+                .resource::<crate::online::OnlineState>()
+                .world()
+                .spell_book(),
             Some(&book)
         );
     }
@@ -1285,15 +1119,20 @@ mod tests {
     #[test]
     fn minimized_book_stays_collapsed_while_spell_rows_refresh() {
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<super::super::windows::DragState>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<super::super::hud::HudState>()
+            .insert_resource(crate::online::OnlineState::new(false))
             .init_resource::<SpellNames>()
-            .insert_resource(BookView {
-                open: true,
-                page: 0,
+            .init_resource::<BookSelection>()
+            .insert_resource(BookView { page: 0 })
+            .insert_resource({
+                let mut shown = crate::windows::Shown::default();
+                shown.open(crate::windows::WindowId::Spellbook);
+                shown
             })
             .add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
             .add_systems(Update, (super::super::windows::input, update).chain());
@@ -1325,9 +1164,10 @@ mod tests {
             spell_id: 42,
             mode: 0,
         });
-        app.world_mut()
-            .resource_mut::<super::super::hud::HudState>()
-            .spell_book = Some(book);
+        crate::online::testing::book(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            book,
+        );
         app.update();
         assert_eq!(app.world().get::<Node>(row).unwrap().display, Display::Flex);
         assert_eq!(
@@ -1357,15 +1197,22 @@ mod tests {
         profile[2312..2316].copy_from_slice(&42u32.to_le_bytes());
         let book = eq_client_core::SpellBook::titanium_profile(&profile).unwrap();
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<BookView>()
+            .init_resource::<BookSelection>()
             .init_resource::<super::super::chat::ChatState>()
-            .insert_resource(super::super::hud::HudState {
-                spell_book: Some(book),
-                ..default()
+            .init_resource::<super::super::hud::HudState>()
+            .insert_resource({
+                let mut online = crate::online::OnlineState::new(false);
+                crate::online::testing::book(&mut online, book.clone());
+                online
             })
             .insert_resource(SpellNames::parse("42^Example spell"))
-            .add_systems(Update, update);
+            .init_resource::<crate::windows::Shown>()
+            .init_resource::<crate::windows::Stack>()
+            .init_resource::<crate::escape::Escape>()
+            .add_systems(Update, (crate::windows::toggle, update).chain());
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -1416,7 +1263,7 @@ mod tests {
             Display::None
         );
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         app.update();
         assert_eq!(
@@ -1427,14 +1274,15 @@ mod tests {
             .resource_mut::<ButtonInput<KeyCode>>()
             .clear();
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = false;
         let mut online = super::super::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(7);
+        crate::online::testing::admit(&mut online, 7, crate::online::testing::player(1));
+        // The admission brings its book along.
+        crate::online::testing::book(&mut online, book);
         let (tx, rx) = std::sync::mpsc::sync_channel(2);
         app.insert_resource(online)
-            .insert_resource(super::super::target::CommandsToServer(Some(tx)));
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)));
         let gem = app
             .world_mut()
             .spawn((GemChoice(2), Interaction::None, BackgroundColor::default()))
@@ -1450,29 +1298,24 @@ mod tests {
         );
         assert!(rx.try_recv().is_err());
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
-        {
-            let mut hud = app
-                .world_mut()
-                .resource_mut::<super::super::hud::HudState>();
-            hud.book_action = Some(eq_client_core::BookActionStatus::Rejected(
-                "Example rejection".into(),
-            ));
-            hud.book_action_revision += 1;
-        }
+        crate::online::testing::book_action(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::BookActionStatus::Rejected("Example rejection".into()),
+        );
         *app.world_mut().get_mut::<Interaction>(text).unwrap() = Interaction::Pressed;
         app.update();
         assert_eq!(
             app.world().get::<BackgroundColor>(text).unwrap().0,
-            Color::srgb(0.16, 0.23, 0.32)
+            crate::theme::BUTTON_ON
         );
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
         app.update();
         assert!(rx.try_recv().is_err());
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = false;
         let window = app
             .world_mut()
@@ -1502,25 +1345,13 @@ mod tests {
                 ..
             }
         ));
-        assert!(
-            app.world()
-                .get::<Text>(label)
-                .unwrap()
-                .0
-                .contains("Queued for gem 3")
+        // A request sent says nothing until the server answers.
+        assert_eq!(app.world().resource::<BookSelection>().message, "");
+        // Even an identical rejection is a new reply, and shows.
+        crate::online::testing::book_action(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::BookActionStatus::Rejected("Example rejection".into()),
         );
-        app.update();
-        assert!(
-            app.world()
-                .get::<Text>(label)
-                .unwrap()
-                .0
-                .contains("Queued for gem 3")
-        );
-        // Even an identical rejection is a new reply and replaces local queue feedback.
-        app.world_mut()
-            .resource_mut::<super::super::hud::HudState>()
-            .book_action_revision += 1;
         app.update();
         assert!(
             app.world()
@@ -1529,23 +1360,19 @@ mod tests {
                 .0
                 .contains("Rejected: Example rejection")
         );
-        app.world_mut()
-            .resource_mut::<super::super::hud::HudState>()
-            .book_action = Some(eq_client_core::BookActionStatus::Preparing);
+        crate::online::testing::book_action(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::BookActionStatus::Preparing,
+        );
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
         app.update();
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
         app.update();
         assert!(rx.try_recv().is_err());
-        {
-            let mut hud = app
-                .world_mut()
-                .resource_mut::<super::super::hud::HudState>();
-            hud.book_action = Some(eq_client_core::BookActionStatus::Cancelled(
-                "Server relocated character".into(),
-            ));
-            hud.book_action_revision += 1;
-        }
+        crate::online::testing::book_action(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::BookActionStatus::Cancelled("Server relocated character".into()),
+        );
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
         app.update();
         assert!(
@@ -1567,11 +1394,19 @@ mod tests {
             }
         ));
         {
-            let mut hud = app
-                .world_mut()
-                .resource_mut::<super::super::hud::HudState>();
-            hud.book_action = None;
-            hud.spells[2] = Some(42);
+            let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+            crate::online::testing::book_action(
+                &mut online,
+                eq_client_core::BookActionStatus::Confirmed,
+            );
+            crate::online::testing::spell(
+                &mut online,
+                eq_client_core::SpellUpdate::Slot {
+                    slot: 2,
+                    spell_id: 42,
+                    mode: 1,
+                },
+            );
         }
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
         app.update();

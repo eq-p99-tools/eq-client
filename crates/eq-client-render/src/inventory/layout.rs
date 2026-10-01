@@ -1,5 +1,7 @@
 //! Compact slots and bag-content grids.
-use super::{InventoryState, SlotButton, Tab, icons::Icons, label, visible_slots};
+use super::{SlotButton, Tab, View, visible_slots};
+use crate::sheets::Art;
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_assets::ui::{Area, EquipmentLayout};
 use eq_client_core::inventory::InventorySlot;
@@ -26,19 +28,17 @@ pub(super) struct Paperdoll<'a> {
 /// around the paperdoll when the installed skin's layout could be read.
 pub(super) fn contents(
     parent: &mut ChildSpawnerCommands,
-    state: &InventoryState,
+    view: View<'_>,
     paperdoll: Option<Paperdoll<'_>>,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    art: &mut Art<'_>,
 ) {
-    quantity_picker(parent, state);
-    storage_columns(parent, state, paperdoll, icons, directory, images);
+    quantity_picker(parent, view);
+    storage_columns(parent, view, paperdoll, art);
 }
 
 /// Keeps the quantity picker available for carried and bank stacks alike.
-fn quantity_picker(parent: &mut ChildSpawnerCommands, state: &InventoryState) {
-    if let Some(selection) = &state.actions.split {
+pub(crate) fn quantity_picker(parent: &mut ChildSpawnerCommands, view: View<'_>) {
+    if let Some(selection) = &view.state.actions.split {
         use super::interaction::SplitAction;
         parent
             .spawn(Node {
@@ -48,10 +48,10 @@ fn quantity_picker(parent: &mut ChildSpawnerCommands, state: &InventoryState) {
                 ..default()
             })
             .with_children(|picker| {
-                label(
+                theme::label(
                     picker,
                     &format!("PICK UP {} / {}", selection.amount, selection.available),
-                    12.0,
+                    Size::Label,
                 );
                 picker
                     .spawn(Node {
@@ -67,16 +67,7 @@ fn quantity_picker(parent: &mut ChildSpawnerCommands, state: &InventoryState) {
                             (SplitAction::Confirm, "Pick up"),
                             (SplitAction::Cancel, "Cancel"),
                         ] {
-                            row.spawn((
-                                Button,
-                                action,
-                                Node {
-                                    padding: UiRect::axes(px(10), px(6)),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgb(0.08, 0.10, 0.13)),
-                            ))
-                            .with_children(|button| label(button, title, 11.0));
+                            theme::button_with(row, action, title, Size::Body);
                         }
                     });
             });
@@ -86,11 +77,9 @@ fn quantity_picker(parent: &mut ChildSpawnerCommands, state: &InventoryState) {
 /// Shows equipment, cursor, carried bags and any requested bank storage together.
 fn storage_columns(
     parent: &mut ChildSpawnerCommands,
-    state: &InventoryState,
+    view: View<'_>,
     paperdoll: Option<Paperdoll<'_>>,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    art: &mut Art<'_>,
 ) {
     parent
         .spawn(Node {
@@ -107,12 +96,12 @@ fn storage_columns(
                     ..default()
                 })
                 .with_children(|equipment| {
-                    label(equipment, "EQUIPMENT", 10.0);
+                    theme::label(equipment, "EQUIPMENT", Size::Small);
                     if let Some(paperdoll) = paperdoll {
-                        placed(equipment, paperdoll, state, icons, directory, images);
+                        placed(equipment, paperdoll, view, art);
                     } else {
                         let slots: Vec<_> = (0..=21).map(InventorySlot).collect();
-                        grid(equipment, &slots, state, icons, directory, images);
+                        grid(equipment, &slots, view, art);
                     }
                 });
             columns
@@ -124,51 +113,40 @@ fn storage_columns(
                 })
                 .with_children(|bags| {
                     // The cursor heads the storage column, beside the paperdoll.
-                    label(bags, "CURSOR", 10.0);
+                    theme::label(bags, "CURSOR", Size::Small);
                     bags.spawn(Node {
                         column_gap: px(8),
                         align_items: AlignItems::Center,
                         ..default()
                     })
                     .with_children(|cursor| {
-                        square(cursor, InventorySlot(30), state, icons, directory, images);
-                        cursor
-                            .spawn((
-                                Button,
-                                super::StoreCursor,
-                                Node {
-                                    padding: UiRect::axes(px(10), px(6)),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgb(0.08, 0.10, 0.13)),
-                            ))
-                            .with_children(|button| label(button, "Auto inventory", 11.0));
+                        square(cursor, InventorySlot::CURSOR, view, art);
+                        theme::button_with(
+                            cursor,
+                            super::StoreCursor,
+                            "Auto inventory",
+                            Size::Body,
+                        );
                     });
-                    if state.tab == Tab::Bank {
-                        carried(bags, state, Tab::Bank, icons, directory, images);
+                    if view.state.tab == Tab::Bank {
+                        carried(bags, view, Tab::Bank, art);
                     }
-                    carried(bags, state, Tab::Inventory, icons, directory, images);
+                    carried(bags, view, Tab::Inventory, art);
                 });
         });
 }
 
 /// Builds bag rows and loose carried slots without duplicating equipment.
-fn carried(
-    parent: &mut ChildSpawnerCommands,
-    state: &InventoryState,
-    tab: Tab,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
-) {
-    let slots: Vec<_> = visible_slots(state, tab)
+fn carried(parent: &mut ChildSpawnerCommands, view: View<'_>, tab: Tab, art: &mut Art<'_>) {
+    let slots: Vec<_> = visible_slots(view.inventory, tab)
         .into_iter()
-        .filter(|slot| tab == Tab::Bank || matches!(slot.0,22..=29|251..=340))
+        // A bag on the cursor shows with the cursor, not with the carried bags.
+        .filter(|slot| tab == Tab::Bank || slot.is_carried())
         .collect();
     let mut remaining = slots.clone();
     for slot in &slots {
-        let Some(item) = state
-            .data
+        let Some(item) = view
+            .inventory
             .items()
             .get(slot)
             .filter(|item| item.bag_slots > 0)
@@ -192,7 +170,7 @@ fn carried(
                     flex_shrink: 0.0,
                     ..default()
                 },
-                BackgroundColor(state.colors.tint(*slot)),
+                BackgroundColor(view.state.colors.tint(*slot)),
             ))
             .with_children(|row| {
                 row.spawn(Node {
@@ -209,26 +187,26 @@ fn carried(
                         ..default()
                     })
                     .with_children(|heading| {
-                        square(heading, *slot, state, icons, directory, images);
-                        super::colors::controls(heading, &state.colors, *slot);
+                        square(heading, *slot, view, art);
+                        super::colors::controls(heading, &view.state.colors, *slot);
                     });
-                    label(bag, &item.details.name, 10.0);
+                    theme::label(bag, &item.details.name, Size::Small);
                 });
-                grid(row, &children, state, icons, directory, images);
+                grid(row, &children, view, art);
             });
     }
     if !remaining.is_empty() {
-        label(
+        theme::label(
             parent,
             match tab {
                 Tab::Inventory => "CARRIED",
                 Tab::Bank => "BANK",
             },
-            10.0,
+            Size::Small,
         );
-        grid(parent, &remaining, state, icons, directory, images);
+        grid(parent, &remaining, view, art);
     } else if slots.is_empty() {
-        label(parent, "No bank items received", 12.0);
+        theme::label(parent, "No bank items received", Size::Label);
     }
 }
 
@@ -237,10 +215,8 @@ fn carried(
 fn placed(
     parent: &mut ChildSpawnerCommands,
     Paperdoll { layout, figure }: Paperdoll<'_>,
-    state: &InventoryState,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    view: View<'_>,
+    art: &mut Art<'_>,
 ) {
     let size = layout
         .slots
@@ -286,14 +262,7 @@ fn placed(
                     ..default()
                 })
                 .with_children(|cell| {
-                    square(
-                        cell,
-                        InventorySlot(i32::from(placement.slot)),
-                        state,
-                        icons,
-                        directory,
-                        images,
-                    );
+                    square(cell, InventorySlot(i32::from(placement.slot)), view, art);
                 });
             }
         });
@@ -314,10 +283,8 @@ fn fit(area: Area, size: Vec2) -> Area {
 fn grid(
     parent: &mut ChildSpawnerCommands,
     slots: &[InventorySlot],
-    state: &InventoryState,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    view: View<'_>,
+    art: &mut Art<'_>,
 ) {
     parent
         .spawn(Node {
@@ -330,7 +297,7 @@ fn grid(
         })
         .with_children(|grid| {
             for slot in slots {
-                square(grid, *slot, state, icons, directory, images);
+                square(grid, *slot, view, art);
             }
         });
 }
@@ -338,16 +305,15 @@ fn grid(
 fn square(
     parent: &mut ChildSpawnerCommands,
     slot: InventorySlot,
-    state: &InventoryState,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    view: View<'_>,
+    art: &mut Art<'_>,
 ) {
-    let item = state.data.items().get(&slot);
+    let item = view.inventory.items().get(&slot);
     parent
         .spawn((
             Button,
             SlotButton(slot),
+            crate::outbox::Needs(eq_client_core::Capability::Inventory),
             Node {
                 width: px(CELL),
                 height: px(CELL),
@@ -357,16 +323,16 @@ fn square(
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.045, 0.055, 0.065)),
+            BackgroundColor(theme::WELL),
             BorderColor::all(if item.is_some() {
-                Color::srgb(0.48, 0.43, 0.31)
+                theme::EDGE_HELD
             } else {
-                Color::srgb(0.22, 0.25, 0.28)
+                theme::EDGE
             }),
         ))
         .with_children(|cell| {
             if let Some(item) = item {
-                if let Some(icon) = icons.get(item.icon, directory, images) {
+                if let Some(icon) = art.item(item.icon) {
                     cell.spawn((
                         icon,
                         Node {
@@ -383,17 +349,14 @@ fn square(
                         .filter_map(|w| w.chars().next())
                         .take(2)
                         .collect();
-                    label(cell, &initials, 12.0);
+                    theme::label(cell, &initials, Size::Label);
                 }
                 if let Some(count) = item.stack_count {
                     let mut quantity = cell.spawn((
                         Text::new(count.to_string()),
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+                        theme::font(Size::Body),
+                        TextColor(theme::INK_BRIGHT),
+                        BackgroundColor(theme::SCRIM),
                         Node {
                             position_type: PositionType::Absolute,
                             right: px(1),
@@ -402,23 +365,20 @@ fn square(
                             ..default()
                         },
                     ));
-                    if count > 1 && slot != InventorySlot(30) {
+                    if count > 1 && slot != InventorySlot::CURSOR {
                         quantity.insert((Button, super::SplitStack(slot)));
                     }
                 }
-            } else if !state.data.received() || state.data.stale() {
-                label(cell, "?", 12.0);
+            } else if !view.inventory.received() || view.inventory.stale() {
+                theme::label(cell, "?", Size::Label);
             } else if let Some(caption) = usize::try_from(slot.0)
                 .ok()
                 .and_then(|index| EQUIPMENT_CAPTIONS.get(index))
             {
                 cell.spawn((
                     Text::new(*caption),
-                    TextFont {
-                        font_size: FontSize::Px(7.5),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.45, 0.49, 0.53)),
+                    theme::font(Size::Caption),
+                    TextColor(theme::INK_DIM),
                     TextLayout::justify(Justify::Center),
                 ));
             }
@@ -428,37 +388,65 @@ fn square(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{inventory::InventoryState, online::OnlineState};
     use eq_client_core::inventory::InventoryUpdate;
+
+    /// Draws the window's contents once, from these resources.
+    fn draw(app: &mut App, paperdoll: Option<EquipmentLayout>) {
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<crate::sheets::Sheets>()
+            .init_resource::<crate::skin::UiSkin>()
+            .init_resource::<crate::ViewerSettings>()
+            .add_systems(
+                Startup,
+                move |mut commands: Commands,
+                      state: Res<InventoryState>,
+                      online: Res<OnlineState>,
+                      mut art: Art| {
+                    let view = View {
+                        state: &state,
+                        inventory: online.world().inventory(),
+                    };
+                    commands.spawn(Node::default()).with_children(|parent| {
+                        contents(
+                            parent,
+                            view,
+                            paperdoll.as_ref().map(|layout| Paperdoll {
+                                layout,
+                                figure: None,
+                            }),
+                            &mut art,
+                        );
+                    });
+                },
+            );
+        app.update();
+    }
 
     #[test]
     fn quantity_click_opens_picker_without_also_picking_up_the_stack() {
-        let mut inventory = InventoryState::default();
-        inventory.apply(InventoryUpdate::Snapshot(
-            super::super::demo_items()
-                .into_iter()
-                .filter(|item| item.slot != InventorySlot(30))
-                .collect(),
-        ));
-        inventory.open = true;
-        inventory.demo = true;
-        let before = inventory.data.clone();
-        let mut app = App::new();
+        let mut online = OnlineState::new(false);
+        crate::online::testing::inventory(
+            &mut online,
+            InventoryUpdate::Snapshot(
+                crate::preview::items()
+                    .into_iter()
+                    .filter(|item| item.slot != InventorySlot::CURSOR)
+                    .collect(),
+            ),
+        );
+        let before = online.world().inventory().clone();
+        let inventory = InventoryState {
+            demo: true,
+            ..InventoryState::default()
+        };
+        let mut app = crate::testing::app();
         app.insert_resource(inventory)
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<crate::chat::ChatState>()
-            .init_resource::<crate::escape::Escape>()
-            .init_resource::<crate::items::ItemState>()
-            .insert_resource(crate::online::OnlineState::new(false))
-            .insert_resource(crate::target::CommandsToServer(None))
-            .add_systems(Update, super::super::input);
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            bevy::window::PrimaryWindow,
-        ));
+            .insert_resource(online)
+            .add_systems(Update, (super::super::input, super::super::settle).chain());
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Inventory);
         app.world_mut()
             .spawn((SlotButton(InventorySlot(251)), Interaction::Pressed));
         let count_button = app
@@ -472,8 +460,9 @@ mod tests {
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Left);
         app.update();
+        let items = app.world().resource::<OnlineState>().world().inventory();
+        assert_eq!(items, &before);
         let inventory = app.world().resource::<InventoryState>();
-        assert_eq!(inventory.data, before);
         let selection = inventory.actions.split.as_ref().unwrap();
         assert_eq!((selection.slot, selection.amount), (InventorySlot(251), 1));
         // With an item on the cursor, the count is a placement target like its icon.
@@ -484,60 +473,47 @@ mod tests {
             .unwrap();
         stack.stack_count = Some(19);
         let mut cursor = stack.clone();
-        cursor.slot = InventorySlot(30);
+        cursor.slot = InventorySlot::CURSOR;
         cursor.stack_count = Some(1);
         contents.push(cursor);
-        app.world_mut()
-            .resource_mut::<InventoryState>()
-            .apply(InventoryUpdate::Snapshot(contents));
+        crate::online::testing::inventory(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            InventoryUpdate::Snapshot(contents),
+        );
         *app.world_mut()
             .get_mut::<Interaction>(count_button)
             .unwrap() = Interaction::Pressed;
         app.update();
-        let inventory = app.world().resource::<InventoryState>();
-        assert_eq!(
-            inventory.data.items()[&InventorySlot(251)].stack_count,
-            Some(20)
+        let items = app.world().resource::<OnlineState>().world().inventory();
+        assert_eq!(items.items()[&InventorySlot(251)].stack_count, Some(20));
+        assert!(!items.items().contains_key(&InventorySlot::CURSOR));
+        assert!(
+            app.world()
+                .resource::<InventoryState>()
+                .actions
+                .split
+                .is_none()
         );
-        assert!(!inventory.data.items().contains_key(&InventorySlot(30)));
-        assert!(inventory.actions.split.is_none());
     }
 
     #[test]
     fn bank_layout_keeps_cursor_carried_bags_and_quantity_controls() {
         let mut state = InventoryState::default();
-        let mut items = super::super::demo_items();
-        items.retain(|item| item.slot != InventorySlot(30));
+        let mut items = crate::preview::items();
+        items.retain(|item| item.slot != InventorySlot::CURSOR);
         let bank_stack = items
             .iter_mut()
             .find(|item| item.slot == InventorySlot(2000))
             .unwrap();
         bank_stack.stack_count = Some(12);
-        state.apply(InventoryUpdate::Snapshot(items));
+        let mut online = OnlineState::new(false);
+        crate::online::testing::inventory(&mut online, InventoryUpdate::Snapshot(items));
         state.bank_open = true;
         state.tab = Tab::Bank;
-        state.select_split(InventorySlot(2000));
+        state.select_split(InventorySlot(2000), online.world().inventory());
         let mut app = App::new();
-        app.insert_resource(state)
-            .init_resource::<Assets<Image>>()
-            .add_systems(
-                Startup,
-                |mut commands: Commands,
-                 state: Res<InventoryState>,
-                 mut images: ResMut<Assets<Image>>| {
-                    commands.spawn(Node::default()).with_children(|parent| {
-                        contents(
-                            parent,
-                            &state,
-                            None,
-                            &mut Icons::default(),
-                            None,
-                            &mut images,
-                        );
-                    });
-                },
-            );
-        app.update();
+        app.insert_resource(state).insert_resource(online);
+        draw(&mut app, None);
         let world = app.world_mut();
         let slots: Vec<_> = world
             .query::<&SlotButton>()
@@ -579,7 +555,7 @@ mod tests {
             .collect();
         assert!(counts.contains(&InventorySlot(2000)));
         assert!(counts.contains(&InventorySlot(251)));
-        assert!(!counts.contains(&InventorySlot(30)));
+        assert!(!counts.contains(&InventorySlot::CURSOR));
     }
 
     #[test]
@@ -597,39 +573,20 @@ mod tests {
                 .collect(),
             character: None,
         };
-        let mut state = InventoryState::default();
-        state.apply(InventoryUpdate::Snapshot(Vec::new()));
-        state.apply(InventoryUpdate::Snapshot(
-            super::super::demo_items()
-                .into_iter()
-                .filter(|item| item.slot == InventorySlot(13))
-                .collect(),
-        ));
+        let mut online = OnlineState::new(false);
+        crate::online::testing::inventory(
+            &mut online,
+            InventoryUpdate::Snapshot(
+                crate::preview::items()
+                    .into_iter()
+                    .filter(|item| item.slot == InventorySlot(13))
+                    .collect(),
+            ),
+        );
         let mut app = App::new();
-        app.insert_resource(state)
-            .init_resource::<Assets<Image>>()
-            .add_systems(
-                Startup,
-                move |mut commands: Commands,
-                      state: Res<InventoryState>,
-                      mut images: ResMut<Assets<Image>>| {
-                    let layout = layout.clone();
-                    commands.spawn(Node::default()).with_children(|parent| {
-                        contents(
-                            parent,
-                            &state,
-                            Some(Paperdoll {
-                                layout: &layout,
-                                figure: None,
-                            }),
-                            &mut Icons::default(),
-                            None,
-                            &mut images,
-                        );
-                    });
-                },
-            );
-        app.update();
+        app.init_resource::<InventoryState>()
+            .insert_resource(online);
+        draw(&mut app, Some(layout));
         let world = app.world_mut();
         let placed: Vec<(i32, Val, Val)> = world
             .query::<(&SlotButton, &ChildOf)>()

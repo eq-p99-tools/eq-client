@@ -1,5 +1,6 @@
 //! Availability feedback uses the same validation as the scribe action.
 use super::{ScribeCursor, SpellNames, action_pending, prepare_scribe};
+use crate::theme;
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -8,22 +9,17 @@ pub(crate) struct Label;
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn presentation(
     online: Option<Res<crate::online::OnlineState>>,
-    inventory: Option<Res<crate::inventory::InventoryState>>,
-    sender: Option<Res<crate::target::CommandsToServer>>,
-    hud: Res<crate::hud::HudState>,
+    outbox: Option<Res<crate::outbox::Outbox>>,
     names: Res<SpellNames>,
     mut buttons: Query<(&Interaction, &mut BackgroundColor), With<ScribeCursor>>,
     mut labels: Query<(&mut Text, &mut TextColor), With<Label>>,
 ) {
-    let available = if action_pending(&hud) {
+    let world = crate::online::world(online.as_deref());
+    let available = if action_pending(world) {
         Err(anyhow::anyhow!("Wait for the current spell action"))
     } else {
-        prepare_scribe(
-            online.as_deref(),
-            inventory.as_deref(),
-            hud.spell_book.as_ref(),
-            sender.as_deref(),
-        )
+        let stamp = outbox.as_deref().and_then(|outbox| outbox.peek(world));
+        prepare_scribe(online.as_deref(), world.spell_book(), stamp)
     };
     let enabled = available.is_ok();
     let label = match available {
@@ -34,22 +30,16 @@ pub(crate) fn presentation(
         Err(error) => error.to_string(),
     };
     for (interaction, mut color) in &mut buttons {
-        color.0 = if !enabled {
-            Color::srgb(0.055, 0.065, 0.08)
-        } else if *interaction == Interaction::Hovered {
-            Color::srgb(0.16, 0.24, 0.32)
-        } else {
-            Color::srgb(0.10, 0.16, 0.22)
-        };
+        color.0 = theme::button(enabled, false, *interaction);
     }
     for (mut text, mut color) in &mut labels {
         if text.0 != label {
             text.0.clone_from(&label);
         }
         color.0 = if enabled {
-            Color::srgb(0.9, 0.93, 0.96)
+            theme::INK_BRIGHT
         } else {
-            Color::srgb(0.55, 0.59, 0.64)
+            theme::INK_DIM
         };
     }
 }
@@ -86,18 +76,20 @@ mod tests {
             "Connect to scribe a scroll"
         );
         let mut online = crate::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(1);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let (queue, _received) = std::sync::mpsc::sync_channel(1);
         app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(queue)))
             .init_resource::<crate::inventory::InventoryState>();
         app.update();
         assert_eq!(
             app.world().get::<Text>(label).unwrap().0,
             "Inventory awaiting refresh"
         );
-        app.world_mut()
-            .resource_mut::<crate::hud::HudState>()
-            .book_action = Some(eq_client_core::BookActionStatus::Preparing);
+        crate::online::testing::book_action(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::BookActionStatus::Preparing,
+        );
         app.update();
         assert_eq!(
             app.world().get::<Text>(label).unwrap().0,

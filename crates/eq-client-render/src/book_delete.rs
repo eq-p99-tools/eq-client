@@ -1,4 +1,5 @@
 //! Confirmed deletion and server-authoritative reordering of spellbook entries.
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, SpellBook};
 
@@ -28,8 +29,10 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             for (action, label) in [
-                (Action::Earlier, "Earlier"),
-                (Action::Later, "Later"),
+                // These move the selected spell one slot; Previous and Next
+                // under the gems turn the page.
+                (Action::Earlier, "Move earlier"),
+                (Action::Later, "Move later"),
                 (Action::Select, "Delete spell"),
                 (Action::Confirm, "Confirm"),
                 (Action::Cancel, "Cancel"),
@@ -37,23 +40,18 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                 row.spawn((
                     Button,
                     action,
+                    crate::outbox::Needs(eq_client_core::Capability::Spellbook),
                     Node {
                         padding: UiRect::all(px(5)),
                         ..default()
                     },
                     BackgroundColor(if matches!(action, Action::Select | Action::Confirm) {
-                        Color::srgb(0.16, 0.09, 0.09)
+                        theme::BUTTON_DANGER
                     } else {
-                        Color::srgb(0.10, 0.12, 0.16)
+                        theme::BUTTON
                     }),
                 ))
-                .with_child((
-                    Text::new(label),
-                    TextFont {
-                        font_size: FontSize::Px(11.0),
-                        ..default()
-                    },
-                ));
+                .with_child((Text::new(label), theme::font(Size::Body)));
             }
         });
 }

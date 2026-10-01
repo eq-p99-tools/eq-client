@@ -1,6 +1,7 @@
 #![doc = "Bevy scene and camera support for renderer-independent EQ zone assets."]
 
 use std::{path::PathBuf, sync::mpsc::Receiver};
+use theme::Size;
 
 mod book_delete;
 mod buffs;
@@ -18,21 +19,30 @@ mod interact;
 mod inventory;
 mod item_models;
 mod items;
+mod keys;
 mod motion;
 mod navigation;
+mod notices;
 mod online;
+mod outbox;
 mod outfit;
 mod paperdoll;
+mod preview;
 #[cfg(test)]
 mod probes;
 mod resources;
 pub mod script;
+mod sheets;
 mod skin;
+mod skinned;
 mod spell_icons;
 mod spellbook;
 mod target;
+mod theme;
+mod tooltip;
 mod trade;
 mod windows;
+mod zone;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
@@ -65,9 +75,24 @@ pub enum ValidationAction {
     InspectFirstItem,
 }
 
-/// Settings for an offline viewer window.
+pub use preview::Preview;
+
+/// Where the viewer's world comes from.
+pub enum Source {
+    /// A server session: its news, and the channel for the player's requests.
+    Online {
+        /// What the session tells the client.
+        updates: Receiver<WorldUpdate>,
+        /// What the player asks the session to send.
+        commands: std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>,
+    },
+    /// No server. The offline preview, if it shows anything, stands in for one.
+    Offline(Preview),
+}
+
+/// Settings for a viewer window.
 #[derive(Clone, Debug, Default, PartialEq)]
-#[allow(clippy::struct_excessive_bools)] // Independent display and offline demo switches.
+#[allow(clippy::struct_excessive_bools)] // Independent display switches.
 pub struct ViewerConfig {
     /// Permit explicitly labeled pre-SoF resource estimates for the Titanium session.
     pub estimate_titanium_resources: bool,
@@ -79,6 +104,9 @@ pub struct ViewerConfig {
     pub screenshot_after: Option<f32>,
     /// Optional initial position in EQ world coordinates.
     pub start_position: Option<WorldPosition>,
+    /// Whether the start position's height was given; the viewer then stands
+    /// on the floor below it rather than on the highest surface.
+    pub start_height_known: bool,
     /// Optional initial camera distance from the character.
     pub camera_distance: Option<f32>,
     /// Whether to omit placed static objects for terrain inspection.
@@ -87,18 +115,6 @@ pub struct ViewerConfig {
     pub eq_directory: Option<PathBuf>,
     /// Nearby-entity radius in EQ units; None uses 200.
     pub entity_distance: Option<f32>,
-    /// Synthetic moving entities for offline visual validation.
-    pub demo_entities: bool,
-    /// Show synthetic inventory in an explicitly offline preview.
-    pub demo_inventory: bool,
-    /// Include synthetic bank storage in the offline inventory preview.
-    pub demo_bank: bool,
-    /// Open synthetic book entries for offline visual validation.
-    pub demo_spellbook: bool,
-    /// Preview character selection without a network worker.
-    pub demo_character_select: bool,
-    /// Preview loot and merchant windows with synthetic items.
-    pub demo_trade: bool,
     /// Optional read-only live validation action.
     pub validation: Option<ValidationAction>,
     /// Optional attended key script driven through the normal input paths.
@@ -120,6 +136,9 @@ pub struct ViewerConfig {
     pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
     pub window_position: Option<(i32, i32)>,
+    /// Add the developer's readings to the status box: coordinates, the
+    /// movement mode with its keys, and the count of nearby entities.
+    pub debug_overlay: bool,
 }
 
 #[derive(Resource)]
@@ -128,7 +147,7 @@ struct PendingZone {
     character: Option<CharacterAsset>,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct ViewerSettings(ViewerConfig);
 
 #[derive(Resource)]
@@ -176,18 +195,21 @@ pub fn run(
     zone: ZoneAsset,
     character: Option<CharacterAsset>,
     config: ViewerConfig,
-    updates: Option<Receiver<WorldUpdate>>,
-    commands: Option<std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>>,
+    source: Source,
 ) -> i32 {
     let screenshot = config.screenshot.clone();
     let steps = config.script.clone();
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
     let frame_rate_cap = config.frame_rate_cap;
-    let online = updates.is_some();
+    let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
     let window = primary_window(online, screenshot.is_none(), config.window_position);
     let mut app = App::new();
+    let (updates, commands) = match source {
+        Source::Online { updates, commands } => (Some(updates), Some(commands)),
+        Source::Offline(preview) => (preview::install(&mut app, preview), None),
+    };
     app.insert_resource(spellbook::SpellNames::load(config.eq_directory.as_deref()));
     app.insert_resource(hud::messages::Messages::load(
         config.eq_directory.as_deref(),
@@ -199,71 +221,19 @@ pub fn run(
     .insert_resource(ViewerSettings(config))
     .insert_resource(online::OnlineState::new(online))
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
-    .insert_resource(target::CommandsToServer(commands));
+    .insert_resource(outbox::Outbox::new(commands));
     init_presentation(&mut app);
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(window),
         ..default()
     }))
-    .add_systems(Startup, (setup_scene, inventory::demo, spellbook::demo))
-    .add_systems(
-        Update,
-        (
-            online::receive,
-            chat::input,
-            (items::link_input, items::input).chain(),
-            (
-                inventory::input,
-                inventory::colors::input,
-                inventory::update,
-                inventory::feedback,
-                inventory::scroll,
-                inventory::cursor::update,
-            )
-                .chain(),
-            chat::refresh,
-            (
-                entities::demo,
-                entities::reconcile,
-                entities::interpolate,
-                doors::close,
-                doors::reconcile,
-                ground::reconcile,
-                interact::input,
-            )
-                .chain(),
-            items::update,
-            items::scroll,
-            target::input,
-            target::update,
-            move_player,
-            (motion::input, motion::interpolate).chain(),
-            orbit_camera,
-            update_hud,
-            (
-                (resources::hit_points, resources::update, hud::update).chain(),
-                hud::spell_details,
-                hud::actions,
-                hud::hotbar::update,
-                hud::hotbar::item_actions,
-                hud::hotbar::item_artwork,
-                hud::hotbar::presentation,
-                spellbook::update,
-                spellbook::scribe_presentation,
-                spell_icons::update,
-            )
-                .chain(),
-            (outfit::dress, character::animate, target::marker::update).chain(),
-            schedule_screenshot,
-            exit_after_screenshot,
-        )
-            .chain(),
-    );
+    .add_systems(Startup, setup_scene);
+    schedule(&mut app);
     navigation::install(&mut app);
     frame_limit::install(&mut app, frame_rate_cap);
     install_overlays(&mut app);
     if let Some(steps) = steps {
-        install_script(&mut app, steps, follow, local_session);
+        install_script(&mut app, steps, follow, (local_session, online));
     }
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
@@ -274,15 +244,25 @@ pub fn run(
     exit_status(&app.run())
 }
 
-/// Starts the presentation state (HUD, windows, chat, targeting, inventory and
-/// motion) empty.
+/// Starts the presentation state (HUD, windows, chat, targeting, inventory,
+/// trade, combat and motion) empty: every resource the windows keep, in one
+/// list that the tests' app starts from too.
 fn init_presentation(app: &mut App) {
     app.init_resource::<hud::HudState>()
+        .init_resource::<hud::action_bar::ActionRequests>()
+        .init_resource::<combat::CombatState>()
+        .init_resource::<trade::TradeState>()
+        .init_resource::<escape::Escape>()
+        .init_resource::<windows::pointer::Wheel>()
+        .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<spellbook::BookView>()
-        .init_resource::<spell_icons::Icons>()
+        .init_resource::<spellbook::BookSelection>()
+        .init_resource::<sheets::Sheets>()
+        .init_resource::<skinned::Screens>()
+        .init_resource::<skinned::Skinned>()
         .init_resource::<chat::ChatState>()
-        .init_resource::<target::TargetState>()
+        .init_resource::<notices::Lines>()
         .init_resource::<items::ItemState>()
         .init_resource::<inventory::InventoryState>()
         .init_resource::<motion::Controls>()
@@ -290,7 +270,42 @@ fn init_presentation(app: &mut App) {
         .init_resource::<item_models::ItemLibrary>()
         .init_resource::<outfit::Wardrobe>()
         .init_resource::<windows::DragState>()
-        .init_resource::<windows::Layouts>();
+        .init_resource::<windows::Layouts>()
+        .init_resource::<windows::Shown>()
+        .init_resource::<windows::Stack>()
+        .init_resource::<keys::KeyMap>()
+        .init_resource::<keys::Typing>();
+}
+
+/// What the tests of the windows start from.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+
+    /// An app with every presentation resource the viewer starts with, empty
+    /// and offline, plus input and a focused primary window: a test adds the
+    /// systems it exercises, and a system that comes to need another
+    /// presentation resource breaks no test's setup.
+    pub(crate) fn app() -> App {
+        let mut app = App::new();
+        init_presentation(&mut app);
+        app.init_resource::<ViewerSettings>()
+            .init_resource::<spellbook::SpellNames>()
+            .init_resource::<hud::messages::Messages>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .insert_resource(online::OnlineState::new(false))
+            .insert_resource(outbox::Outbox::new(None));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        app
+    }
 }
 
 /// The process exit status for how the viewer ended.
@@ -301,66 +316,168 @@ fn exit_status(exit: &AppExit) -> i32 {
     }
 }
 
-/// Drives an attended script after UI focus, optionally following its file.
+/// Drives a script after UI focus, optionally following its file; it is
+/// attended unless the session is local-only or the preview is offline.
 fn install_script(
     app: &mut App,
     steps: Vec<script::Step>,
     follow: Option<(PathBuf, usize)>,
-    local_session: bool,
+    (local_session, online): (bool, bool),
 ) {
     let script = match follow {
         Some((path, offset)) => script::Script::following(steps, path, offset),
         None => script::Script::new(steps),
     };
-    app.insert_resource(script.local_session(local_session));
+    app.insert_resource(script.local_session(local_session).offline_preview(!online));
     app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
 }
 
-/// Registers overlay updates with their required network and layout ordering.
-fn install_overlays(app: &mut App) {
-    app.init_resource::<combat::CombatState>()
-        .init_resource::<trade::TradeState>()
-        .init_resource::<escape::Escape>()
-        .init_resource::<windows::pointer::Wheel>()
-        .add_systems(Update, windows::pointer::wheel.before(chat::input))
-        .add_systems(
-            Update,
-            escape::route
-                .after(chat::input)
-                .before(inventory::input)
-                .before(target::input)
-                .before(trade::input),
-        )
-        .init_resource::<hud::action_bar::ActionRequests>()
-        .add_systems(
-            Update,
-            hud::action_bar::update
-                .after(online::receive)
-                .after(hud::update),
-        )
-        .add_systems(Startup, trade::demo)
-        .add_systems(
-            Update,
-            (
-                combat::input.after(target::input).before(target::update),
-                combat::target_color.after(target::update),
-                (trade::input, trade::present)
-                    .chain()
-                    .after(online::receive)
-                    .after(target::input),
-                trade::scroll.after(windows::pointer::wheel),
-            ),
-        );
-    app.add_systems(Update, windows::input);
-    app.add_systems(
+/// Puts every frame's work in its stage, and orders within a stage the few
+/// systems that depend on one another.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one declarative listing of every system in its stage"
+)]
+fn schedule(app: &mut App) {
+    app.configure_sets(
         Update,
-        (buffs::update, buffs::hover)
+        (
+            Stage::Receive,
+            Stage::Scene,
+            Stage::Typing,
+            Stage::Route,
+            Stage::Input,
+            Stage::Present,
+        )
+            .chain(),
+    )
+    .add_systems(
+        Update,
+        (
+            (online::receive, online::tick)
+                .chain()
+                .in_set(Stage::Receive),
+            (
+                entities::reconcile,
+                entities::interpolate,
+                doors::reconcile,
+                ground::reconcile,
+            )
+                .chain()
+                .in_set(Stage::Scene),
+            (windows::pointer::wheel, navigation::update, chat::input)
+                .chain()
+                .in_set(Stage::Typing),
+            escape::route.in_set(Stage::Route),
+        ),
+    )
+    .add_systems(
+        Update,
+        (
+            items::link_input,
+            items::input,
+            inventory::input,
+            inventory::colors::input,
+            interact::input,
+            target::input,
+            combat::input,
+            trade::input,
+            hud::actions,
+            hud::hotbar::update,
+            hud::hotbar::item_actions,
+            spellbook::update,
+            character_select::update,
+            windows::input,
+            move_player,
+            motion::input,
+        )
             .chain()
-            .after(online::receive)
-            .before(spell_icons::update),
+            .in_set(Stage::Input),
+    )
+    .add_systems(
+        Update,
+        (
+            (
+                inventory::update,
+                inventory::feedback,
+                inventory::scroll,
+                inventory::cursor::update,
+                chat::refresh,
+                items::update,
+                items::scroll,
+                target::update,
+                combat::target_color,
+                trade::present,
+                trade::scroll,
+                motion::interpolate,
+                orbit_camera,
+                update_hud,
+            )
+                .chain(),
+            (
+                resources::update,
+                hud::update,
+                hud::spell_details,
+                hud::key_help,
+                target::key_help,
+                hud::hotbar::item_artwork,
+                hud::hotbar::presentation,
+                spellbook::scribe_presentation,
+                buffs::update,
+                buffs::hover,
+                spell_icons::update,
+                outbox::show,
+                hud::action_bar::update,
+                skinned::frames,
+                skinned::apply,
+                skinned::show,
+                skinned::buttons,
+                skinned::contents,
+                skinned::close,
+                skinned::picker,
+            )
+                .chain(),
+            (
+                hud::hotbar::needs,
+                outbox::veil,
+                outbox::grey_out,
+                tooltip::show,
+                outfit::dress,
+                character::animate,
+                target::marker::update,
+                schedule_screenshot,
+                exit_after_screenshot,
+            )
+                .chain(),
+        )
+            .chain()
+            .in_set(Stage::Present),
     );
-    app.add_systems(Update, character_select::update.after(online::receive));
-    app.add_systems(Startup, character_select::demo);
+}
+
+/// The order of every frame's work. A system joins the stage for what it
+/// does instead of naming the systems it must follow; within a stage, the
+/// listing above orders the few that depend on one another.
+#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Stage {
+    /// The session's news reaches the world, and the world's clocks run.
+    Receive,
+    /// The world reaches the scene: spawns, doors and items on the ground.
+    Scene,
+    /// The chat takes the keyboard first, and the wheel goes to one surface.
+    Typing,
+    /// Escape and the window stack decide what a press belongs to.
+    Route,
+    /// Keys and clicks become requests and moves.
+    Input,
+    /// Windows, the HUD, the camera and the models show the world; refusals
+    /// show once every input has had its say.
+    Present,
+}
+
+/// Registers the startup work of the overlays and the windows' shared systems.
+fn install_overlays(app: &mut App) {
+    app.add_systems(Startup, tooltip::spawn);
     windows::register_layout(app);
     paperdoll::register(app);
     skin::register(app);
@@ -390,9 +507,8 @@ fn setup_scene(
     mut ambient_light: ResMut<GlobalAmbientLight>,
     mut pending: ResMut<PendingZone>,
     settings: Res<ViewerSettings>,
-    mut images: ResMut<Assets<Image>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut online: ResMut<online::OnlineState>,
+    mut scene: zone::Scene,
 ) {
     let zone = pending
         .zone
@@ -410,13 +526,17 @@ fn setup_scene(
         .map_or(Vec3::ZERO, Vec3::from_array);
     let start_x = requested_position.x.clamp(min.x, max.x);
     let start_z = requested_position.z.clamp(min.z, max.z);
-    let start_y = terrain_surface
-        .height_at(start_x, start_z)
+    // A given height finds the floor under it, so a start inside a building
+    // is not put on its roof; without one, the highest surface is the guess.
+    let start_y = settings
+        .0
+        .start_height_known
+        .then(|| terrain_surface.height_below(start_x, start_z, requested_position.y + 5.0))
+        .flatten()
+        .or_else(|| terrain_surface.height_at(start_x, start_z))
         .unwrap_or(zone_center.y);
-    let height = pending
-        .character
-        .as_ref()
-        .map_or(6.0, CharacterAsset::height);
+    let character = pending.character.take();
+    let height = character.as_ref().map_or(6.0, CharacterAsset::height);
     let body = PlayerBody {
         feet_offset: height * 0.5,
         height,
@@ -428,39 +548,17 @@ fn setup_scene(
         .camera_distance
         .unwrap_or(default_radius)
         .clamp(20.0, 20_000.0);
-    commands.insert_resource(Collision(build_collision(&zone)));
-    commands.insert_resource(terrain_surface);
-    commands.insert_resource(SceneInfo {
-        zone_name: zone.short_name.clone(),
-    });
-
-    spawn_static_zone(
+    scene.enter(
         &mut commands,
-        zone,
+        zone::Entry {
+            zone,
+            character,
+            placed: Transform::from_translation(player_position),
+            body,
+        },
         settings.0.terrain_only,
-        &mut images,
-        &mut meshes,
-        &mut materials,
+        &mut online.regions,
     );
-    let player = spawn_player_and_hud(
-        &mut commands,
-        player_position,
-        pending.character.is_none(),
-        body,
-        &mut meshes,
-        &mut materials,
-    );
-    if let Some(asset) = pending.character.take() {
-        character::spawn(
-            &mut commands,
-            player,
-            asset,
-            body.feet_offset,
-            &mut images,
-            &mut meshes,
-            &mut materials,
-        );
-    }
     spawn_lighting(&mut commands, &mut ambient_light);
     spawn_camera(
         &mut commands,
@@ -564,23 +662,20 @@ fn spawn_player_and_hud(
         .spawn((
             HudText,
             Text::new(""),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.73, 0.77, 0.79)),
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(16),
-                left: px(16),
-                padding: UiRect::all(px(10)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.02, 0.03, 0.04, 0.82)),
+            theme::font(Size::Label),
+            TextColor(theme::INK),
+            windows::placed(
+                windows::WindowId::Status,
+                Node {
+                    padding: UiRect::all(px(10)),
+                    ..default()
+                },
+            ),
+            BackgroundColor(theme::SCRIM),
         ))
         .id();
     windows::passive(commands, status_panel);
-    windows::identify(commands, status_panel, "POSITION");
+    windows::identify(commands, status_panel, windows::WindowId::Status);
     hud::spawn(commands);
     player
 }
@@ -638,7 +733,10 @@ fn schedule_screenshot(
     request: Option<ResMut<CaptureRequest>>,
     online: Res<online::OnlineState>,
 ) {
-    if online.enabled && (!online.connected || online.player.is_none()) {
+    // Online, the scene is ready once the player is in the world, or once the
+    // character list shows.
+    let admitted = online.world().connected() && online.world().player().is_some();
+    if online.enabled && !admitted && online.selection.is_none() {
         return;
     }
     let Some(mut request) = request else {
@@ -662,7 +760,7 @@ fn exit_after_screenshot(
     online: Res<online::OnlineState>,
     settings: Res<ViewerSettings>,
 ) {
-    if online.finished && settings.0.screenshot.is_some() {
+    if online.world().ended() && settings.0.screenshot.is_some() {
         app_exit.write(AppExit::error());
     }
     // Scripted screenshots keep the session running; only `--screenshot` is one-shot.
@@ -915,12 +1013,10 @@ fn triangle_height_at(triangle: [Vec3; 3], position_x: f32, position_z: f32) -> 
 
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Bevy system parameters are value wrappers.
 fn move_player(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    keys: keys::Keys,
     online: Res<online::OnlineState>,
     time: Res<Time>,
     collision: Res<Collision>,
-    chat: Res<chat::ChatState>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut airborne: Local<eq_client_core::movement::AirborneController>,
     mut players: Query<(&mut Transform, &PlayerBody), With<Player>>,
     mut cameras: Query<&mut OrbitCamera>,
@@ -932,16 +1028,16 @@ fn move_player(
     let Ok((mut player, body)) = players.single_mut() else {
         return;
     };
-    let accepts_input = !chat.composing && windows.single().is_ok_and(|window| window.focused);
-    let horizontal = if accepts_input {
-        axis(&keyboard, KeyCode::KeyA, KeyCode::KeyD)
+    let accepts_input = keys.focused();
+    let (horizontal, vertical) = if accepts_input {
+        (
+            keys.map
+                .axis(&keys.input, keys::Act::CameraLeft, keys::Act::CameraRight),
+            keys.map
+                .axis(&keys.input, keys::Act::CameraBack, keys::Act::CameraForward),
+        )
     } else {
-        0.0
-    };
-    let vertical = if accepts_input {
-        axis(&keyboard, KeyCode::KeyS, KeyCode::KeyW)
-    } else {
-        0.0
+        (0.0, 0.0)
     };
     let Ok(mut camera) = cameras.single_mut() else {
         return;
@@ -967,7 +1063,7 @@ fn move_player(
         physics,
         eq_client_core::movement::MotionStep {
             horizontal: delta,
-            jump: accepts_input && keyboard.just_pressed(KeyCode::Space),
+            jump: keys.pressed(keys::Act::Jump),
             seconds: time.delta_secs(),
             height: body.height,
         },
@@ -982,20 +1078,23 @@ fn move_player(
     camera.focus = player.translation;
 }
 
-fn axis(keyboard: &ButtonInput<KeyCode>, negative: KeyCode, positive: KeyCode) -> f32 {
-    f32::from(keyboard.pressed(positive)) - f32::from(keyboard.pressed(negative))
-}
-
 fn camera_relative_direction(horizontal: f32, vertical: f32, yaw: f32) -> Vec3 {
     let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
     let right = Vec3::new(-forward.z, 0.0, forward.x);
     (right * horizontal + forward * vertical).normalize_or_zero()
 }
 
+/// Shows the zone, the status line and what the player can use here; the
+/// developer's readings only when the debug overlay is on.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn update_hud(
     motion: Res<motion::Controls>,
-    scene: Res<SceneInfo>,
+    (scene, settings, notices, map): (
+        Res<SceneInfo>,
+        Res<ViewerSettings>,
+        Res<notices::Lines>,
+        Res<keys::KeyMap>,
+    ),
     nearby: Res<entities::NearbyEntities>,
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
@@ -1004,43 +1103,73 @@ fn update_hud(
     let (Ok(player), Ok(mut label)) = (players.single(), labels.single_mut()) else {
         return;
     };
-    let position = world_position(player.translation.to_array(), 0.0);
-    label.0 = format!(
-        "{}   /   {:.0}, {:.0}, {:.0}\n{}\nNearby entities: {}",
-        scene.zone_name,
-        position.x,
-        position.y,
-        position.z,
-        if online.enabled && motion.speed.is_some() {
-            if motion.walking {
-                "Online / Walk   Insert: run   RMB orbit   Scroll zoom"
-            } else if motion.walk_speed.is_some() {
-                "Online / Run   Insert: walk   RMB orbit   Scroll zoom"
-            } else {
-                "Online / calibrated WASD   Walk unavailable   RMB orbit   Scroll zoom"
-            }
-        } else if online.enabled && !online.in_world() {
-            // Zoning or dead: the session takes movement away until it is over.
-            "Online / movement paused   RMB orbit   Scroll zoom"
-        } else if online.enabled {
-            "Online / movement disabled (start with --movement-calibration)   RMB orbit   Scroll zoom"
-        } else {
-            "Offline: WASD walk | Space jump   RMB orbit   Scroll zoom"
-        },
-        nearby.rendered.len()
-    );
-    match interact::nearest(&online) {
-        Some(interact::Use::Door(id, model)) => {
-            use std::fmt::Write;
-            let _ = write!(label.0, "\nF: use {model} (door {id})");
+    let now = std::time::Instant::now();
+    let mut lines = vec![scene.zone_name.clone(), notices.status.text(now).to_owned()];
+    if online.enabled && online.in_world() && motion.speed.is_none() {
+        lines.push("Movement unavailable: start with --movement-calibration".into());
+    }
+    let nearest = interact::nearest(&online);
+    lines.push(match nearest {
+        Some(interact::Use::Door(..)) => map.help(&[(keys::Act::Use, "use the door")]),
+        Some(interact::Use::Item(_)) => map.help(&[(keys::Act::Use, "pick up the item here")]),
+        None => String::new(),
+    });
+    lines.push(notices.door.text(now).to_owned());
+    if settings.0.debug_overlay {
+        let position = world_position(player.translation.to_array(), 0.0);
+        lines.push(format!(
+            "{:.0}, {:.0}, {:.0}",
+            position.x, position.y, position.z
+        ));
+        lines.push(movement_help(&online, &motion, &map));
+        lines.push(format!("Nearby entities: {}", nearby.rendered.len()));
+        if let Some(interact::Use::Door(id, model)) = nearest {
+            lines.push(format!("Door {id} ({model})"));
         }
-        Some(interact::Use::Item(_)) => label.0.push_str("\nF: pick up the item here"),
-        None => (),
     }
-    if !online.door_status.is_empty() {
-        label.0.push('\n');
-        label.0.push_str(&online.door_status);
+    let text = lines
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if label.0 != text {
+        label.0 = text;
     }
+}
+
+/// The movement mode and its keys, for the debug overlay.
+fn movement_help(
+    online: &online::OnlineState,
+    motion: &motion::Controls,
+    map: &keys::KeyMap,
+) -> String {
+    use keys::Act;
+    let moving = !online.enabled || motion.speed.is_some();
+    let mode = if !online.enabled {
+        "Offline"
+    } else if motion.speed.is_none() && !online.in_world() {
+        // Zoning or dead: the session takes movement away until it is over.
+        "Movement paused"
+    } else if motion.speed.is_none() {
+        "Movement disabled (start with --movement-calibration)"
+    } else if motion.walking {
+        "Walking"
+    } else {
+        "Running"
+    };
+    let mut acts = Vec::new();
+    if moving {
+        acts.push((Act::Jump, "jump"));
+    }
+    if online.enabled && motion.walk_speed.is_some() {
+        acts.push((Act::Walk, if motion.walking { "run" } else { "walk" }));
+    }
+    let keys = map.help(&acts);
+    [mode, &keys, "Right-drag: orbit", "Wheel: zoom"]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
@@ -1318,6 +1447,7 @@ mod tests {
             [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
         ];
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         let mut time = Time::<()>::default();
         time.advance_by(std::time::Duration::from_millis(50));
         app.insert_resource(time)

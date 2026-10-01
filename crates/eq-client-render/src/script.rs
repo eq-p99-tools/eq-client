@@ -33,7 +33,8 @@ pub struct Script {
     steps: VecDeque<Step>,
     current: Option<(Step, Duration)>,
     held: Vec<KeyCode>,
-    clicked: bool,
+    /// The mouse button a scripted click holds down until the next frame.
+    clicked: Option<MouseButton>,
     started: Option<Duration>,
     paused: bool,
     /// Newest chat line already included in a report.
@@ -45,6 +46,9 @@ pub struct Script {
     /// `EQEmu` test server): `gm` steps may send `#` commands there, and steps run
     /// without anyone watching the window.
     local: bool,
+    /// The preview runs offline: no step can reach a server, so steps run
+    /// without anyone watching the window, but `gm` steps stay refused.
+    offline: bool,
     /// The window focus winit last reported; None until it reports any.
     focus: Option<bool>,
     /// The route a `walk` step is searching for or following.
@@ -67,12 +71,13 @@ impl Script {
             steps: steps.into(),
             current: None,
             held: Vec::new(),
-            clicked: false,
+            clicked: None,
             started: None,
             paused: false,
             chat_seen: 0,
             follow: None,
             local: false,
+            offline: false,
             focus: None,
             route: None,
         }
@@ -98,6 +103,13 @@ impl Script {
     #[must_use]
     pub fn local_session(mut self, local: bool) -> Self {
         self.local = local;
+        self
+    }
+
+    /// Marks the run offline (see [`Script::offline`]).
+    #[must_use]
+    pub fn offline_preview(mut self, offline: bool) -> Self {
+        self.offline = offline;
         self
     }
 
@@ -143,8 +155,8 @@ impl Script {
         for key in self.held.drain(..) {
             keys.release(key);
         }
-        if std::mem::take(&mut self.clicked) {
-            mouse.release(MouseButton::Left);
+        if let Some(button) = self.clicked.take() {
+            mouse.release(button);
         }
     }
 
@@ -180,10 +192,11 @@ type Buttons<'w, 's> = Query<
 >;
 
 type Observed<'w> = (
-    Res<'w, super::hud::HudState>,
-    Res<'w, super::inventory::InventoryState>,
-    Res<'w, super::target::TargetState>,
-    Res<'w, super::target::CommandsToServer>,
+    (
+        Res<'w, super::hud::HudState>,
+        Res<'w, super::notices::Lines>,
+    ),
+    Res<'w, crate::outbox::Outbox>,
     Res<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,
     Res<'w, super::motion::Controls>,
@@ -244,7 +257,7 @@ pub(super) fn drive(
     }
     let window = windows.single().ok();
     if !may_run(
-        script.local,
+        script.local || script.offline,
         script.focus,
         window.is_some_and(|window| window.focused),
     ) {
@@ -266,8 +279,11 @@ pub(super) fn drive(
     // One-frame presses and clicks are released on the frame after they were pressed.
     if matches!(
         script.current,
-        Some((Step::Press(_) | Step::Select(_) | Step::Click(_), _))
-    ) && (!script.held.is_empty() || script.clicked)
+        Some((
+            Step::Press(_) | Step::Select(_) | Step::Click(_) | Step::RightClick(_),
+            _
+        ))
+    ) && (!script.held.is_empty() || script.clicked.is_some())
     {
         script.release(&mut keys, &mut mouse);
         script.current = None;
@@ -277,7 +293,7 @@ pub(super) fn drive(
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
             Step::Approach(range, duration) => {
-                let distance = face(&online, &observed, &players, &mut cameras);
+                let distance = face(&online, &players, &mut cameras);
                 distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
             }
             Step::Walk(_, duration) => {
@@ -285,7 +301,7 @@ pub(super) fn drive(
                 let ends = bodies
                     .single()
                     .ok()
-                    .and_then(|body| walk_ends((&*online, &observed), *body));
+                    .and_then(|body| walk_ends(&online, *body));
                 let world = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
@@ -303,7 +319,7 @@ pub(super) fn drive(
                     let (waypoints, partial) = (route.remaining(), route.partial());
                     info!(waypoints, partial, "Script route ready");
                 } else if !searching && route.is_searching() {
-                    let refused = observed.6.refused.as_deref();
+                    let refused = observed.4.refused.as_deref();
                     info!(?refused, "Script walk stalled; searching again from here");
                 }
                 match step {
@@ -312,7 +328,7 @@ pub(super) fn drive(
                         return;
                     }
                     RouteStep::Stalled => {
-                        let refused = observed.6.refused.as_deref();
+                        let refused = observed.4.refused.as_deref();
                         let reason = refused.map_or_else(
                             || "walk made no progress, even after searching again".to_owned(),
                             |refused| {
@@ -361,12 +377,14 @@ pub(super) fn drive(
                 match &step {
                     Step::WaitSelect => online.selection.is_some(),
                     Step::WaitZone(zone) => {
-                        online.connected && online.player.is_some() && online.zone == *zone
+                        online.world().connected()
+                            && online.world().player().is_some()
+                            && online.world().zone() == *zone
                     }
-                    _ => online.connected && online.player.is_some(),
+                    _ => online.world().connected() && online.world().player().is_some(),
                 }
             }
-            Step::Click(target) => {
+            Step::Click(target) | Step::RightClick(target) => {
                 if elapsed > MAX_WAIT {
                     script.stop(&mut keys, &mut mouse, "the pointer stayed over the window");
                     return;
@@ -378,8 +396,13 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "click target is not visible");
                     return;
                 }
-                mouse.press(MouseButton::Left);
-                script.clicked = true;
+                let button = if matches!(step, Step::RightClick(_)) {
+                    MouseButton::Right
+                } else {
+                    MouseButton::Left
+                };
+                mouse.press(button);
+                script.clicked = Some(button);
                 return;
             }
             _ => true,
@@ -398,14 +421,16 @@ pub(super) fn drive(
     match &step {
         Step::Create(character) => {
             let sent = online.selection.as_ref().is_some_and(|selection| {
-                observed.3.0.as_ref().is_some_and(|sender| {
-                    sender
-                        .try_send(eq_client_core::ClientCommand::CreateCharacter {
+                observed
+                    .1
+                    .send(
+                        online.world(),
+                        eq_client_core::ClientCommand::CreateCharacter {
                             selection_id: selection.id(),
                             character: character.clone(),
-                        })
-                        .is_ok()
-                })
+                        },
+                    )
+                    .is_ok()
             });
             if !sent {
                 script.stop(
@@ -428,7 +453,7 @@ pub(super) fn drive(
         Step::Slash(command) => {
             let queued = match super::chat::target_request(command) {
                 Some(request) => request.map(|name| chat.requested_target = Some(name)),
-                None => super::chat::submit_game_command(command, &online, &observed.3),
+                None => super::chat::submit_game_command(command, &online, &observed.1),
             };
             if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);
@@ -438,12 +463,12 @@ pub(super) fn drive(
         Step::Gm(command) => {
             let sent = gm_chat(command, script.local).and_then(|chat| {
                 observed
-                    .3
-                    .0
-                    .as_ref()
-                    .ok_or_else(|| String::from("Network worker is unavailable"))?
-                    .try_send(eq_client_core::ClientCommand::SendChat(chat))
-                    .map_err(|_| String::from("GM command could not be queued"))
+                    .1
+                    .send(
+                        online.world(),
+                        eq_client_core::ClientCommand::SendChat(chat),
+                    )
+                    .map_err(|refusal| refusal.text().to_owned())
             });
             if let Err(error) = sent {
                 script.stop(&mut keys, &mut mouse, &error);
@@ -487,7 +512,7 @@ pub(super) fn drive(
             }
             return;
         }
-        Step::Click(_) => {
+        Step::Click(_) | Step::RightClick(_) => {
             if window.is_some_and(|window| window.cursor_position().is_some()) {
                 info!("Scripted click waits until the pointer leaves the client window");
             }
@@ -510,13 +535,13 @@ pub(super) fn drive(
             return;
         }
         Step::Face => {
-            if face(&online, &observed, &players, &mut cameras).is_none() {
+            if face(&online, &players, &mut cameras).is_none() {
                 script.stop(&mut keys, &mut mouse, "face needs a visible target");
             }
             return;
         }
         Step::Approach(..) => {
-            if face(&online, &observed, &players, &mut cameras).is_none() {
+            if face(&online, &players, &mut cameras).is_none() {
                 script.stop(&mut keys, &mut mouse, "approach needs a visible target");
                 return;
             }
@@ -525,11 +550,11 @@ pub(super) fn drive(
         }
         Step::Walk(range, _) => {
             let route = bodies.single().ok().and_then(|body| {
-                let (feet, goal) = walk_ends((&*online, &observed), *body)?;
+                let (feet, goal) = walk_ends(&online, *body)?;
                 // Ledges are routes only where the session simulates falls.
                 Some(
                     eq_client_core::movement::Route::new(feet, goal, *range, body.height)
-                        .with_drops(observed.6.airborne.is_some()),
+                        .with_drops(observed.4.airborne.is_some()),
                 )
             });
             let Some(route) = route else {
@@ -548,10 +573,11 @@ pub(super) fn drive(
 }
 
 /// Steps run only while someone watches the window, unless the session is
-/// local-only. A window counts as focused before winit reports anything (and a
-/// hidden one never gets a report), so only a reported focus counts.
-fn may_run(local: bool, reported_focus: Option<bool>, window_focused: bool) -> bool {
-    local || (reported_focus == Some(true) && window_focused)
+/// local-only or there is none. A window counts as focused before winit
+/// reports anything (and a hidden one never gets a report), so only a
+/// reported focus counts.
+fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool) -> bool {
+    unattended || (reported_focus == Some(true) && window_focused)
 }
 
 /// The say line carrying a `gm` step's `#` command, refused unless the session is
@@ -603,13 +629,15 @@ fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
     false
 }
 
-type Seen<'a, 'w> = (&'a super::online::OnlineState, &'a Observed<'w>);
-
 /// The player's feet at its accepted position and the target's position, in
 /// render coordinates.
-fn walk_ends((online, observed): Seen, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
-    let player = online.player.as_ref()?;
-    let spawn = observed.2.selected.and_then(|id| online.spawns.get(&id))?;
+fn walk_ends(online: &super::online::OnlineState, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
+    let player = online.world().player()?;
+    let spawn = online
+        .world()
+        .target()
+        .selected
+        .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state))?;
     let origin = Vec3::from_array(eq_client_core::render_position(player.position));
     let goal = Vec3::from_array(eq_client_core::render_position(spawn.position));
     Some((origin - Vec3::Y * body.feet_offset, goal))
@@ -619,11 +647,14 @@ fn walk_ends((online, observed): Seen, body: super::PlayerBody) -> Option<(Vec3,
 /// distance between them, or None without a player and a known target.
 fn face(
     online: &super::online::OnlineState,
-    observed: &Observed,
     players: &Query<&Transform, With<super::Player>>,
     cameras: &mut Query<&mut super::OrbitCamera>,
 ) -> Option<f32> {
-    let spawn = observed.2.selected.and_then(|id| online.spawns.get(&id))?;
+    let spawn = online
+        .world()
+        .target()
+        .selected
+        .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state))?;
     let transform = players.single().ok()?;
     let to =
         Vec3::from_array(eq_client_core::render_position(spawn.position)) - transform.translation;
@@ -650,6 +681,9 @@ mod tests {
         );
         assert!(!Script::new(vec![Step::Gm("summon".into())]).local);
         assert!(Script::new(Vec::new()).local_session(true).local);
+        // Offline, steps run unattended but a gm step is still refused.
+        let offline = Script::new(Vec::new()).offline_preview(true);
+        assert!(offline.offline && !offline.local);
     }
 
     #[test]

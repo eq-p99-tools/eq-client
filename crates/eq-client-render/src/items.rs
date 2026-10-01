@@ -1,56 +1,9 @@
 //! Clickable chat item links and a read-only server-backed details panel.
-use super::{online::OnlineState, target::CommandsToServer};
+use super::{online::OnlineState, outbox::Outbox};
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, ItemDetails, ItemLink};
-use std::{
-    collections::{BTreeMap, VecDeque},
-    time::{Duration, Instant},
-};
-
-/// Item definitions the server sent this session. Once full, the one kept
-/// longest is forgotten first, never the one on screen.
-#[derive(Default)]
-pub(super) struct ItemCache {
-    items: BTreeMap<u32, ItemDetails>,
-    /// Item IDs, the one kept longest first.
-    order: VecDeque<u32>,
-}
-
-impl ItemCache {
-    /// How many definitions are kept.
-    const CAPACITY: usize = 128;
-
-    /// The definition of an item, if the server sent it.
-    pub(super) fn get(&self, id: u32) -> Option<&ItemDetails> {
-        self.items.get(&id)
-    }
-
-    /// Whether the server sent the definition of an item.
-    pub(super) fn contains(&self, id: u32) -> bool {
-        self.items.contains_key(&id)
-    }
-
-    /// Keeps a definition; when full, forgets the one kept longest other than
-    /// this one and `shown`, the item on screen.
-    pub(super) fn insert(&mut self, item: ItemDetails, shown: Option<u32>) {
-        let id = item.id;
-        self.order.retain(|kept| *kept != id);
-        self.order.push_back(id);
-        self.items.insert(id, item);
-        while self.items.len() > Self::CAPACITY {
-            let Some(index) = self
-                .order
-                .iter()
-                .position(|kept| *kept != id && Some(*kept) != shown)
-            else {
-                break;
-            };
-            if let Some(oldest) = self.order.remove(index) {
-                self.items.remove(&oldest);
-            }
-        }
-    }
-}
+use std::time::{Duration, Instant};
 
 #[derive(Component)]
 pub(super) struct ItemButton(pub ItemLink);
@@ -60,12 +13,13 @@ pub(super) struct ItemPanel;
 pub(super) struct ItemText;
 #[derive(Component)]
 pub(super) struct CloseItem;
+/// The item panel: the item chosen, and the definition on screen, which
+/// stays while it shows whatever the world's cache forgets.
 #[derive(Resource, Default)]
 pub(super) struct ItemState {
-    pub cache: ItemCache,
     pub hovered: bool,
-    session: Option<u64>,
     selected: Option<(u32, String)>,
+    shown: Option<ItemDetails>,
     pending: Option<Instant>,
     status: String,
 }
@@ -74,64 +28,59 @@ impl ItemState {
     /// Opens a received inventory definition without making an inspection request.
     pub(super) fn open_received(&mut self, item: ItemDetails) {
         self.selected = Some((item.id, item.name.clone()));
+        self.shown = Some(item);
         self.pending = None;
         self.status.clear();
-        self.cache.insert(item, None);
     }
 
-    /// Keeps a definition the server sent, holding on to the one on screen.
-    pub(super) fn received(&mut self, item: ItemDetails) {
-        let shown = self.selected.as_ref().map(|(id, _)| *id);
-        self.cache.insert(item, shown);
+    /// The item the panel shows or waits for.
+    pub(super) fn selected(&self) -> Option<u32> {
+        self.selected.as_ref().map(|(id, _)| *id)
+    }
+
+    /// The definition the panel shows, when it has one for the chosen item.
+    fn definition(&self) -> Option<&ItemDetails> {
+        self.shown
+            .as_ref()
+            .filter(|item| Some(item.id) == self.selected())
     }
 }
 
 /// Creates an initially hidden item panel; closing it has no server-side effect.
 pub(super) fn spawn(commands: &mut Commands) {
-    let frame = commands
-        .spawn((
-            super::hud::HudRoot,
-            ItemPanel,
-            super::windows::pointer::TakesWheel,
-            ScrollPosition::default(),
-            GlobalZIndex(30),
-            Node {
-                position_type: PositionType::Absolute,
-                right: px(20),
-                top: px(105),
-                width: px(310),
-                max_height: percent(68),
-                overflow: Overflow::scroll_y(),
-                padding: UiRect::all(px(12)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(8),
-                display: Display::None,
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
-        ))
-        .id();
-    super::windows::interactive(commands, frame);
+    let frame = super::windows::frame(
+        commands,
+        super::windows::WindowId::Item,
+        Node {
+            width: px(310),
+            max_height: percent(68),
+            overflow: Overflow::scroll_y(),
+            padding: UiRect::all(px(12)),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(8),
+            display: Display::None,
+            ..default()
+        },
+    );
+    commands.entity(frame).insert((
+        super::hud::HudRoot,
+        ItemPanel,
+        super::windows::pointer::TakesWheel,
+        ScrollPosition::default(),
+    ));
     commands.entity(frame).with_children(|panel| {
-        super::windows::title_bar(panel, frame, "ITEM");
         panel.spawn((
             Button,
             CloseItem,
             Text::new("Close item"),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.85, 0.8, 0.6)),
+            theme::font(Size::Label),
+            TextColor(theme::INK_WARM),
         ));
         panel.spawn((
             ItemText,
             Text::new(""),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+            theme::font(Size::Label),
+            TextColor(theme::INK_BRIGHT),
         ));
     });
 }
@@ -145,17 +94,15 @@ pub(super) fn input(
     buttons: Query<(&Interaction, &ItemButton), Changed<Interaction>>,
     close: Query<&Interaction, (With<CloseItem>, Changed<Interaction>)>,
     online: Res<OnlineState>,
-    sender: Res<CommandsToServer>,
+    sender: Res<Outbox>,
+    escape: Res<super::escape::Escape>,
     mut state: ResMut<ItemState>,
 ) {
-    if state.session != online.session_id {
-        *state = ItemState {
-            session: online.session_id,
-            ..default()
-        };
-    }
-    if close.iter().any(|i| *i == Interaction::Pressed) {
+    if close.iter().any(|i| *i == Interaction::Pressed)
+        || *escape == super::escape::Escape::Close(super::windows::WindowId::Item)
+    {
         state.selected = None;
+        state.shown = None;
     }
     if state
         .pending
@@ -164,16 +111,16 @@ pub(super) fn input(
         state.pending = None;
         state.status = "No item definition received. Click the link to retry.".into();
     }
-    if state
-        .selected
-        .as_ref()
-        .is_some_and(|(id, _)| state.cache.contains(*id))
+    // A definition the server sent for the chosen item stays with the panel.
+    if state.definition().is_none()
+        && let Some(item) = state.selected().and_then(|id| online.world().item(id))
     {
+        state.shown = Some(item.clone());
         state.pending = None;
     }
     let automatic = if !*attempted
         && settings.0.validation == Some(super::ValidationAction::InspectFirstItem)
-        && online.connected
+        && online.world().connected()
     {
         chat.history
             .lines(eq_client_core::chat::ChatTab::All)
@@ -197,30 +144,19 @@ pub(super) fn input(
             continue;
         }
         state.selected = Some((link.item_id, link.text.clone()));
-        if state.cache.contains(link.item_id) {
+        if let Some(item) = online.world().item(link.item_id) {
+            state.shown = Some(item.clone());
             continue;
         }
-        if !online.connected || online.death.is_some() {
-            state.status = "Connect to inspect this item.".into();
-            continue;
-        }
-        let Some(session_id) = online.session_id else {
-            continue;
-        };
-        let command = ClientCommand::InspectItem {
-            session_id,
+        // The outbox says why a request did not leave.
+        let sent = sender.post(online.world(), |stamp| ClientCommand::InspectItem {
+            session_id: stamp.session_id,
             link_body: link.body.clone(),
-        };
-        if sender
-            .0
-            .as_ref()
-            .is_some_and(|s| s.try_send(command).is_ok())
-        {
-            eprintln!("Item inspection requested: ID {}", link.item_id);
+        });
+        if sent.is_ok() {
+            debug!("Item inspection requested: ID {}", link.item_id);
             state.pending = Some(Instant::now());
             state.status = "Loading item from server...".into();
-        } else {
-            state.status = "Item request could not be queued.".into();
         }
     }
 }
@@ -239,10 +175,10 @@ pub(super) fn update(
             Display::None
         };
     }
-    let Some((id, name)) = &state.selected else {
+    let Some((_, name)) = &state.selected else {
         return;
     };
-    let text = state.cache.get(*id).map_or_else(
+    let text = state.definition().map_or_else(
         || format!("{name}\n\n{}", state.status),
         |item| {
             let properties = item
@@ -335,10 +271,7 @@ pub(super) fn spawn_message(
     parent
         .spawn((
             Text::new(prefix),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
+            theme::font(Size::Label),
             TextColor(color),
             Node {
                 width: percent(100),
@@ -357,19 +290,13 @@ pub(super) fn spawn_message(
                 }
                 text.spawn((
                     TextSpan::new(&message.text[end..link.text_start]),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    theme::font(Size::Label),
                     TextColor(color),
                 ));
                 text.spawn((
                     TextSpan::new(&message.text[link.text_start..link.text_end]),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb_u8(190, 80, 255)),
+                    theme::font(Size::Label),
+                    TextColor(theme::LINK),
                     ItemButton(link.clone()),
                     Interaction::None,
                 ));
@@ -377,10 +304,7 @@ pub(super) fn spawn_message(
             }
             text.spawn((
                 TextSpan::new(&message.text[end..]),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
+                theme::font(Size::Label),
                 TextColor(color),
             ));
         })
@@ -494,23 +418,18 @@ mod tests {
     use super::*;
 
     fn item(id: u32) -> ItemDetails {
-        let mut item = super::super::inventory::demo_items()[0].details.clone();
+        let mut item = crate::preview::items()[0].details.clone();
         item.id = id;
         item
     }
 
     #[test]
-    fn the_item_on_screen_is_never_forgotten_and_the_oldest_goes_first() {
+    fn the_definition_on_screen_belongs_to_the_chosen_item() {
         let mut state = ItemState::default();
-        // The item on screen has the lowest ID, which a map's first entry was.
         state.open_received(item(1));
-        for id in 1000..1000 + 200 {
-            state.received(item(id));
-        }
-        assert!(state.cache.contains(1));
-        assert!(!state.cache.contains(1000));
-        assert!(state.cache.contains(1199));
-        assert_eq!(state.cache.items.len(), ItemCache::CAPACITY);
+        assert_eq!(state.definition().map(|item| item.id), Some(1));
+        state.selected = Some((2, "Another".into()));
+        assert!(state.definition().is_none());
     }
     #[test]
     fn wrapped_link_uses_each_line_without_linking_the_gap() {
@@ -584,23 +503,17 @@ mod tests {
         let mut links = world.query::<(&ItemButton, &TextColor)>();
         let (link, color) = links.single(world).unwrap();
         assert_eq!(link.0.item_id, 42);
-        assert_eq!(color.0, Color::srgb_u8(190, 80, 255));
+        assert_eq!(color.0, crate::theme::LINK);
     }
 
     #[test]
     fn clicking_an_item_queues_inspection_and_reconnect_clears_the_panel() {
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
-        let mut app = App::new();
+        let mut app = crate::testing::app();
         let mut online = OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(77);
+        crate::online::testing::admit(&mut online, 77, crate::online::testing::player(1));
         app.insert_resource(online)
-            .insert_resource(super::super::ViewerSettings(
-                super::super::ViewerConfig::default(),
-            ))
-            .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<ItemState>()
-            .insert_resource(CommandsToServer(Some(sender)))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, input);
         let body = format!("00002A{}1234ABCD", "0".repeat(31));
         app.world_mut().spawn((
@@ -634,9 +547,19 @@ mod tests {
         );
         app.update();
         assert!(receiver.try_recv().is_err());
-        app.world_mut().resource_mut::<OnlineState>().session_id = Some(78);
+        // The server's answer reaches the panel through the world.
+        let mut answer = item(42);
+        answer.name = "Synthetic blade".into();
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::ItemDetails(answer)],
+        );
         app.update();
-        assert!(app.world().resource::<ItemState>().selected.is_none());
-        assert!(app.world().resource::<ItemState>().pending.is_none());
+        let state = app.world().resource::<ItemState>();
+        assert_eq!(
+            state.definition().map(|item| item.name.as_str()),
+            Some("Synthetic blade")
+        );
+        assert!(state.pending.is_none());
     }
 }

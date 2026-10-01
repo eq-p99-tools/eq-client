@@ -8,7 +8,6 @@ pub(crate) struct Marker;
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub(crate) fn update(
     mut commands: Commands,
-    target: Res<super::TargetState>,
     online: Res<crate::online::OnlineState>,
     nearby: Res<crate::entities::NearbyEntities>,
     poses: Query<&Transform, Without<Marker>>,
@@ -18,18 +17,24 @@ pub(crate) fn update(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let selected = target
+    let selected = online
+        .world()
+        .target()
         .selected
-        .filter(|_| online.connected && online.death.is_none());
+        .filter(|_| online.world().connected() && online.world().death().is_none());
     let pose = selected.and_then(|id| {
         let own = online
-            .player
-            .as_ref()
+            .world()
+            .player()
             .filter(|player| player.spawn_id == id);
         let (entity, size) = if let Some(own) = own {
             (player.single().ok()?, own.size)
         } else {
-            let spawn = online.spawns.get(&id).filter(|spawn| !spawn.invisible)?;
+            let spawn = online
+                .world()
+                .spawn(id)
+                .map(|spawn| &spawn.state)
+                .filter(|spawn| !spawn.invisible)?;
             (*nearby.rendered.get(&id)?, spawn.size)
         };
         let position = poses.get(entity).ok()?.translation;
@@ -91,8 +96,9 @@ mod tests {
     fn ring_follows_interpolated_entities_and_hides_when_selection_is_unavailable() {
         let mut app = App::new();
         let mut online = crate::online::OnlineState::new(false);
-        online.connected = true;
-        online.spawns.insert(
+        crate::online::testing::connect(&mut online, true);
+        crate::online::testing::spawn_entry(
+            &mut online,
             2,
             eq_client_core::SpawnState {
                 class: None,
@@ -114,12 +120,9 @@ mod tests {
             .id();
         let mut nearby = crate::entities::NearbyEntities::default();
         nearby.rendered.insert(2, entity);
+        online.select_target(Some(2));
         app.insert_resource(online)
             .insert_resource(nearby)
-            .insert_resource(super::super::TargetState {
-                selected: Some(2),
-                ..default()
-            })
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, update);
@@ -136,20 +139,22 @@ mod tests {
             .x = 11.0;
         app.update();
         assert_eq!(ring.single(app.world()).unwrap().0.translation.x, 11.0);
-        app.world_mut()
-            .resource_mut::<crate::online::OnlineState>()
-            .spawns
-            .get_mut(&2)
-            .unwrap()
-            .invisible = true;
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [eq_client_core::WorldEvent::Visibility {
+                spawn_id: 2,
+                invisible: true,
+            }],
+        );
         app.update();
         assert_eq!(*ring.single(app.world()).unwrap().1, Visibility::Hidden);
-        app.world_mut()
-            .resource_mut::<crate::online::OnlineState>()
-            .spawns
-            .get_mut(&2)
-            .unwrap()
-            .invisible = false;
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [eq_client_core::WorldEvent::Visibility {
+                spawn_id: 2,
+                invisible: false,
+            }],
+        );
         app.update();
         assert_eq!(*ring.single(app.world()).unwrap().1, Visibility::Inherited);
         app.world_mut()
@@ -162,9 +167,10 @@ mod tests {
             .resource_mut::<crate::entities::NearbyEntities>()
             .rendered
             .insert(2, entity);
-        app.world_mut()
-            .resource_mut::<crate::online::OnlineState>()
-            .connected = false;
+        crate::online::testing::connect(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            false,
+        );
         app.update();
         assert_eq!(*ring.single(app.world()).unwrap().1, Visibility::Hidden);
     }

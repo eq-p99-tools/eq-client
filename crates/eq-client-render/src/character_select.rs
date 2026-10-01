@@ -1,6 +1,7 @@
 //! Pre-zone character selection uses occupied server slots, never typed names.
-use super::{hud::HudState, online::OnlineState, target::CommandsToServer};
-use bevy::{prelude::*, window::PrimaryWindow};
+use super::{online::OnlineState, outbox::Outbox};
+use crate::theme::{self, Size};
+use bevy::prelude::*;
 use eq_client_core::{CharacterChoice, ClientCommand};
 
 pub(super) struct Selection {
@@ -9,31 +10,6 @@ pub(super) struct Selection {
     selected: Option<u8>,
     submitted: bool,
     message: String,
-}
-
-/// Provides synthetic names only for explicit offline screenshot validation.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn demo(settings: Res<super::ViewerSettings>, mut state: ResMut<OnlineState>) {
-    if settings.0.demo_character_select && !state.enabled {
-        state.enabled = true;
-        state.selection = Some(Selection::new(
-            1,
-            vec![
-                CharacterChoice {
-                    slot: 0,
-                    name: "Examplewarrior".into(),
-                    level: Some(12),
-                    zone_id: Some(22),
-                },
-                CharacterChoice {
-                    slot: 3,
-                    name: "Examplecleric".into(),
-                    level: Some(5),
-                    zone_id: Some(9),
-                },
-            ],
-        ));
-    }
 }
 
 impl Selection {
@@ -65,8 +41,9 @@ impl Selection {
         slot.is_some()
     }
 
-    /// Queues once; a full queue leaves the choice available for another click.
-    fn enter(&mut self, sender: &CommandsToServer) {
+    /// Asks once; a refused request leaves the choice available for another
+    /// click, and the outbox says why.
+    fn enter(&mut self, outbox: &Outbox, world: &eq_client_core::world::ClientWorld) {
         if self.submitted {
             return;
         }
@@ -76,24 +53,16 @@ impl Selection {
         if !self.entries.iter().any(|entry| entry.slot == slot) {
             return;
         }
-        let result = sender
-            .0
-            .as_ref()
-            .ok_or("Connection unavailable")
-            .and_then(|sender| {
-                sender
-                    .try_send(ClientCommand::SelectCharacter {
-                        selection_id: self.id,
-                        slot,
-                    })
-                    .map_err(|_| "Could not queue selection; try again")
-            });
-        match result {
+        let command = ClientCommand::SelectCharacter {
+            selection_id: self.id,
+            slot,
+        };
+        match outbox.send(world, command) {
             Ok(()) => {
                 self.submitted = true;
                 self.message = "Entering world...".into();
             }
-            Err(reason) => self.message = reason.into(),
+            Err(refusal) => self.message = refusal.text().into(),
         }
     }
 }
@@ -111,20 +80,23 @@ pub(super) enum Action {
 pub(super) fn update(
     mut commands: Commands,
     mut online: ResMut<OnlineState>,
-    hud: Res<HudState>,
-    sender: Res<CommandsToServer>,
-    keys: Res<ButtonInput<KeyCode>>,
+    lines: Res<crate::notices::Lines>,
+    outbox: Res<Outbox>,
+    keys: crate::keys::Keys,
     navigation: Res<super::navigation::NavigationKeys>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     buttons: Query<(Ref<Interaction>, &Action)>,
     roots: Query<Entity, With<Root>>,
     mut previous: Local<String>,
 ) {
-    let keys = navigation.sample(&keys);
-    let visible = online.enabled && online.session_id.is_none();
+    let focused = keys.focused();
+    let keys = navigation.sample(&keys.input);
+    // A session, or the preview's characters, until a character is in.
+    let visible =
+        (online.enabled || online.selection.is_some()) && online.world().session_id().is_none();
+    let (choosing, world) = online.choosing();
     if visible
-        && windows.single().is_ok_and(|window| window.focused)
-        && let Some(selection) = online.selection.as_mut()
+        && focused
+        && let Some(selection) = choosing
         && !selection.submitted
     {
         for (interaction, action) in &buttons {
@@ -133,7 +105,7 @@ pub(super) fn update(
             }
             match action {
                 Action::Choose(slot) => selection.selected = Some(*slot),
-                Action::Enter => selection.enter(&sender),
+                Action::Enter => selection.enter(&outbox, world),
             }
         }
         if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::ArrowUp) {
@@ -154,12 +126,12 @@ pub(super) fn update(
             }
         }
         if keys.just_pressed(KeyCode::Enter) {
-            selection.enter(&sender);
+            selection.enter(&outbox, world);
         }
     }
+    let status = lines.status.text(std::time::Instant::now());
     let signature = format!(
-        "{visible}:{}:{:?}",
-        hud.status,
+        "{visible}:{status}:{:?}",
         online
             .selection
             .as_ref()
@@ -173,7 +145,7 @@ pub(super) fn update(
         commands.entity(root).despawn();
     }
     if visible {
-        spawn(&mut commands, online.selection.as_ref(), &hud.status);
+        spawn(&mut commands, online.selection.as_ref(), status);
     }
 }
 
@@ -192,7 +164,7 @@ fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
+            BackgroundColor(theme::COVER),
         ))
         .with_children(|root| {
             root.spawn((
@@ -205,19 +177,19 @@ fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
                     border_radius: BorderRadius::all(px(8)),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.055, 0.067, 0.078)),
+                BackgroundColor(theme::TITLE_BAR),
             ))
             .with_children(|panel| {
-                label(panel, "CHARACTER SELECT", 20.0);
+                theme::label(panel, "CHARACTER SELECT", Size::Display);
                 let Some(selection) = selection else {
-                    label(panel, status, 14.0);
+                    theme::label(panel, status, Size::Large);
                     return;
                 };
                 if selection.entries.is_empty() {
-                    label(
+                    theme::label(
                         panel,
                         "No characters on this server. Create one with the official client first.",
-                        14.0,
+                        Size::Large,
                     );
                     return;
                 }
@@ -235,51 +207,33 @@ fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
                 if selection.selected.is_some() && !selection.submitted {
                     button(panel, Action::Enter, "Enter World", true);
                 }
-                label(
+                theme::label(
                     panel,
                     if selection.message.is_empty() {
-                        "Select a character | Up/Down to browse | Enter to connect"
+                        "Select a character | Up/Down: browse | Enter: connect"
                     } else {
                         &selection.message
                     },
-                    12.0,
+                    Size::Label,
                 );
             });
         });
 }
 
-fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32) {
-    parent.spawn((
-        Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(size),
+fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selected: bool) {
+    theme::button_with(parent, action, text, Size::Large).insert((
+        Node {
+            padding: UiRect::all(px(10)),
             ..default()
         },
-        TextColor(Color::srgb(0.84, 0.85, 0.82)),
+        BackgroundColor(theme::button(true, selected, Interaction::None)),
     ));
-}
-
-fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selected: bool) {
-    parent
-        .spawn((
-            Button,
-            action,
-            Node {
-                padding: UiRect::all(px(10)),
-                ..default()
-            },
-            BackgroundColor(if selected {
-                Color::srgb(0.22, 0.25, 0.23)
-            } else {
-                Color::srgb(0.09, 0.11, 0.13)
-            }),
-        ))
-        .with_children(|button| label(button, text, 15.0));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::window::PrimaryWindow;
     #[test]
     fn keyboard_selection_queues_the_server_slot_and_disappears_after_admission() {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
@@ -294,9 +248,10 @@ mod tests {
             }],
         ));
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.insert_resource(state)
-            .insert_resource(CommandsToServer(Some(tx)))
-            .init_resource::<HudState>()
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+            .init_resource::<crate::notices::Lines>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::navigation::NavigationKeys>()
             .add_systems(Update, update);
@@ -329,7 +284,11 @@ mod tests {
         );
         app.update();
         assert!(rx.try_recv().is_err());
-        app.world_mut().resource_mut::<OnlineState>().session_id = Some(8);
+        crate::online::testing::admit(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            8,
+            crate::online::testing::player(1),
+        );
         app.update();
         let world = app.world_mut();
         assert_eq!(
@@ -344,7 +303,9 @@ mod tests {
     #[test]
     fn entry_requires_selection_and_never_duplicates_or_discards_a_full_queue() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let sender = CommandsToServer(Some(tx));
+        let queue = tx.clone();
+        let sender = crate::outbox::Outbox::new(Some(tx));
+        let world = eq_client_core::world::ClientWorld::default();
         let mut selection = Selection::new(
             7,
             vec![CharacterChoice {
@@ -354,23 +315,20 @@ mod tests {
                 zone_id: Some(22),
             }],
         );
-        selection.enter(&sender);
+        selection.enter(&sender, &world);
         assert!(rx.try_recv().is_err());
         selection.selected = Some(3);
-        sender
-            .0
-            .as_ref()
-            .unwrap()
+        queue
             .try_send(ClientCommand::SelectCharacter {
                 selection_id: 6,
                 slot: 1,
             })
             .unwrap();
-        selection.enter(&sender);
+        selection.enter(&sender, &world);
         assert!(!selection.submitted);
         rx.try_recv().unwrap();
-        selection.enter(&sender);
-        selection.enter(&sender);
+        selection.enter(&sender, &world);
+        selection.enter(&sender, &world);
         assert!(selection.submitted);
         assert_eq!(
             rx.try_recv().unwrap(),

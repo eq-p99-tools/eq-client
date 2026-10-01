@@ -1,5 +1,6 @@
 //! Per-storage-slot bag tints; presentation choices never send inventory commands.
-use super::{InventoryState, label};
+use super::InventoryState;
+use crate::theme::{self, Size};
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::inventory::InventorySlot;
 use std::collections::BTreeMap;
@@ -51,10 +52,10 @@ pub(super) fn controls(parent: &mut ChildSpawnerCommands, colors: &Colors, slot:
                 ..default()
             },
             BackgroundColor(colors.tint(slot)),
-            BorderColor::all(Color::srgb(0.5, 0.55, 0.6)),
+            BorderColor::all(theme::EDGE_LIGHT),
         ))
         .with_children(|button| {
-            label(button, "+", 12.0);
+            theme::label(button, "+", Size::Label);
             if colors.picker != Some(slot) {
                 return;
             }
@@ -72,7 +73,7 @@ pub(super) fn controls(parent: &mut ChildSpawnerCommands, colors: &Colors, slot:
                         row_gap: px(4),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
+                    BackgroundColor(theme::PANEL),
                 ))
                 .with_children(|palette| {
                     for (index, [r, g, b]) in PALETTE.iter().copied().enumerate() {
@@ -86,7 +87,7 @@ pub(super) fn controls(parent: &mut ChildSpawnerCommands, colors: &Colors, slot:
                                 ..default()
                             },
                             BackgroundColor(Color::srgb(r, g, b)),
-                            BorderColor::all(Color::srgb(0.5, 0.55, 0.6)),
+                            BorderColor::all(theme::EDGE_LIGHT),
                         ));
                     }
                 });
@@ -97,10 +98,13 @@ pub(super) fn controls(parent: &mut ChildSpawnerCommands, colors: &Colors, slot:
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn input(
     mut state: ResMut<InventoryState>,
+    shown: Res<crate::windows::Shown>,
     actions: Query<(Ref<Interaction>, &Action)>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    if !state.open || !windows.single().is_ok_and(|window| window.focused) {
+    if !shown.is_open(crate::windows::WindowId::Inventory)
+        || !windows.single().is_ok_and(|window| window.focused)
+    {
         return;
     }
     // Resolve a swatch before its parent toggle if both report a press.
@@ -138,8 +142,11 @@ mod tests {
     fn palette_press_changes_only_its_group_and_closes_popup() {
         let mut app = App::new();
         app.init_resource::<InventoryState>()
+            .init_resource::<crate::windows::Shown>()
             .add_systems(Update, input);
-        app.world_mut().resource_mut::<InventoryState>().open = true;
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Inventory);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -167,6 +174,5 @@ mod tests {
         assert_eq!(state.colors.picker, None);
         assert_eq!(state.colors.tint(slot), Color::srgb(0.075, 0.16, 0.12));
         assert_eq!(state.colors.tint(InventorySlot(23)), original_other);
-        assert!(state.data.items().is_empty());
     }
 }
