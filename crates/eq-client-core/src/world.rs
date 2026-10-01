@@ -121,6 +121,8 @@ pub struct ClientWorld {
     inventory: Inventory,
     /// Where the player's coins are, as the session keeps and tells them.
     wallet: crate::money::Wallet,
+    /// How fed and watered the player is, as the server last said.
+    nourishment: Option<crate::food::Nourishment>,
     casting: Casting,
     buffs: BuffTracker,
     spell_book: Option<SpellBook>,
@@ -443,6 +445,20 @@ impl ClientWorld {
                 self.ability_refused(*session_id, reason, news);
             }
 
+            // Food and drink: the session eats and drinks for the player.
+            WorldEvent::Nourishment(nourishment) => self.nourishment = Some(*nourishment),
+            WorldEvent::NothingToEat { food, water } => news.notices.push(Notice::NothingToEat {
+                food: *food,
+                water: *water,
+            }),
+            WorldEvent::ConsumeRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ConsumeRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
+
             // The player's spells.
             WorldEvent::Spell(update) => news.cast = self.spell(update, now),
             WorldEvent::CastPending {
@@ -511,6 +527,7 @@ impl ClientWorld {
                 self.inventory = Inventory::default();
                 self.wallet = crate::money::Wallet::default();
                 self.ability_timers.clear();
+                self.nourishment = None;
                 self.spell_book = None;
                 self.buffs.clear();
                 self.session_id = None;

@@ -963,6 +963,43 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
 }
 
 #[test]
+fn the_player_hears_what_they_could_not_eat_or_drink() {
+    use crate::food::{Nourishment, Shortage};
+    let mut world = admitted();
+    let fed = Nourishment {
+        food: 2500,
+        water: 6000,
+    };
+    game(&mut world, WorldEvent::Nourishment(fed));
+    assert_eq!(world.nourishment(), Some(fed));
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::NothingToEat {
+                food: Some(Shortage::OnlyModified),
+                water: None
+            }
+        )
+        .notices,
+        [Notice::NothingToEat {
+            food: Some(Shortage::OnlyModified),
+            water: None
+        }]
+    );
+    let refused = |session_id| WorldEvent::ConsumeRefused {
+        session_id,
+        reason: "You cannot eat or drink that".into(),
+    };
+    assert!(game(&mut world, refused(2)).ignored, "another admission's");
+    assert_eq!(
+        game(&mut world, refused(1)).notices,
+        [Notice::ConsumeRefused(
+            "You cannot eat or drink that".into()
+        )]
+    );
+}
+
+#[test]
 fn the_give_window_opens_on_the_npcs_answer_and_closes_on_the_servers_word() {
     use crate::exchange::ExchangeUpdate;
     let mut world = admitted();

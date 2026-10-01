@@ -130,6 +130,12 @@ struct Arguments {
     #[arg(long, requires = "online")]
     session_seconds: Option<u64>,
 
+    /// When hungry or thirsty, eat and drink whatever comes first, as the
+    /// official client does. By default food and drink with modifiers are
+    /// left to eat or drink by hand.
+    #[arg(long, requires = "online")]
+    auto_eat_anything: bool,
+
     /// Hide placed objects to inspect terrain and material transitions.
     #[arg(long)]
     terrain_only: bool,
@@ -299,6 +305,11 @@ fn main() {
             arguments.session_seconds,
             calibration,
             local,
+            if arguments.auto_eat_anything {
+                eq_client_core::food::AutoEat::Anything
+            } else {
+                eq_client_core::food::AutoEat::Plain
+            },
         ) {
             Ok((worker, updates)) => {
                 let commands = worker.commands();
