@@ -113,14 +113,14 @@ pub(super) fn input(
     }
     // A definition the server sent for the chosen item stays with the panel.
     if state.definition().is_none()
-        && let Some(item) = state.selected().and_then(|id| online.world.item(id))
+        && let Some(item) = state.selected().and_then(|id| online.world().item(id))
     {
         state.shown = Some(item.clone());
         state.pending = None;
     }
     let automatic = if !*attempted
         && settings.0.validation == Some(super::ValidationAction::InspectFirstItem)
-        && online.world.connected()
+        && online.world().connected()
     {
         chat.history
             .lines(eq_client_core::chat::ChatTab::All)
@@ -144,12 +144,12 @@ pub(super) fn input(
             continue;
         }
         state.selected = Some((link.item_id, link.text.clone()));
-        if let Some(item) = online.world.item(link.item_id) {
+        if let Some(item) = online.world().item(link.item_id) {
             state.shown = Some(item.clone());
             continue;
         }
         // The outbox says why a request did not leave.
-        let sent = sender.post(&online.world, |stamp| ClientCommand::InspectItem {
+        let sent = sender.post(online.world(), |stamp| ClientCommand::InspectItem {
             session_id: stamp.session_id,
             link_body: link.body.clone(),
         });

@@ -34,10 +34,10 @@ fn follow(
         return;
     }
     let current = online
-        .world
+        .world()
         .player()
         .map(|player| player.name.as_str())
-        .zip(online.world.world_name());
+        .zip(online.world().world_name());
     if chosen_for
         .as_ref()
         .map(|(character, world)| (character.as_str(), world.as_str()))

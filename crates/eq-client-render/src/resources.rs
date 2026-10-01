@@ -14,14 +14,14 @@ pub(super) fn update(
     mut hud: ResMut<HudState>,
 ) {
     hud.resource_estimate = if settings.0.estimate_titanium_resources
-        && online.world.connected()
-        && online.world.death().is_none()
-        && online.world.session_id().is_some()
+        && online.world().connected()
+        && online.world().death().is_none()
+        && online.world().session_id().is_some()
     {
         online
-            .world
+            .world()
             .player()
-            .and_then(|player| estimate(player, online.world.inventory(), &online.world, &names))
+            .and_then(|player| estimate(player, online.world().inventory(), online.world(), &names))
     } else {
         None
     };

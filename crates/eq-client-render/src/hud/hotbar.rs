@@ -138,7 +138,7 @@ pub(crate) fn update(
             && let Some((_, slot)) = items
                 .iter()
                 .find(|(interaction, _)| **interaction != Interaction::None)
-            && let Some(item) = online.world.inventory().items().get(&slot.0)
+            && let Some(item) = online.world().inventory().items().get(&slot.0)
             && item.activation.effect.is_some()
         {
             bindings.0[index] = Some(Action::Item {
@@ -160,21 +160,13 @@ pub(crate) fn presentation(
     mut labels: Query<(&mut Text, Option<&Caption>, Option<&Hint>)>,
 ) {
     let now = std::time::Instant::now();
-    let inventory = online.world.inventory();
+    let inventory = online.world().inventory();
     let hovered = slots
         .iter()
         .find(|(interaction, ..)| **interaction != Interaction::None)
         .map(|(_, slot, ..)| slot.0);
     for (interaction, slot, mut color) in &mut slots {
-        let spell = bindings.gem(slot.0).and_then(|gem| {
-            online
-                .world
-                .player()
-                .map_or([None; 8], |player| player.memorized_spells)
-                .get(gem)
-                .copied()
-                .flatten()
-        });
+        let spell = bindings.gem(slot.0).and_then(|gem| online.world().gem(gem));
         let missing_item = match bindings.0[slot.0] {
             Some(Action::Item { slot, id }) => bound_item(inventory, slot, id).is_none(),
             _ => false,
@@ -183,10 +175,10 @@ pub(crate) fn presentation(
             || bindings.0[slot.0].is_none()
             || (bindings.gem(slot.0).is_some() && spell.is_none());
         let waiting = spell.is_some_and(|id| {
-            online.world.casting().pending.is_some()
-                || online.world.casting().cast.is_some()
+            online.world().casting().pending.is_some()
+                || online.world().casting().cast.is_some()
                 || !online
-                    .world
+                    .world()
                     .casting()
                     .cooldowns
                     .remaining(id, now)
@@ -198,15 +190,7 @@ pub(crate) fn presentation(
         if let Some(caption) = caption {
             text.0 = match bindings.0[caption.0] {
                 Some(Action::Gem(gem)) => {
-                    if online
-                        .world
-                        .player()
-                        .map_or([None; 8], |player| player.memorized_spells)
-                        .get(usize::from(gem))
-                        .copied()
-                        .flatten()
-                        .is_some()
-                    {
+                    if online.world().gem(usize::from(gem)).is_some() {
                         format!("G{}", gem + 1)
                     } else {
                         "-".into()
@@ -219,7 +203,7 @@ pub(crate) fn presentation(
             };
         }
         if hint.is_some() {
-            text.0 = hovered_detail(&bindings, hovered, &online.world, (&names, &map), now);
+            text.0 = hovered_detail(&bindings, hovered, online.world(), (&names, &map), now);
         }
     }
 }
@@ -234,13 +218,7 @@ fn hovered_detail(
 ) -> String {
     let inventory = world.inventory();
     match hovered.and_then(|index| bindings.0[index]) {
-        Some(Action::Gem(gem)) => match world
-            .player()
-            .map_or([None; 8], |player| player.memorized_spells)
-            .get(usize::from(gem))
-            .copied()
-            .flatten()
-        {
+        Some(Action::Gem(gem)) => match world.gem(usize::from(gem)) {
             Some(spell) => {
                 let status = if world.casting().pending.is_some() {
                     "Awaiting cast acknowledgement".into()
@@ -324,15 +302,15 @@ pub(crate) fn item_actions(
     let Some(Action::Item { slot, id }) = requested(&keys, &bindings, &clicks) else {
         return;
     };
-    let message = if bound_item(online.world.inventory(), slot, id).is_none() {
+    let message = if bound_item(online.world().inventory(), slot, id).is_none() {
         "Bound item unavailable; rebind after moving it".to_owned()
     } else {
         inventory.activate_shortcut(
             slot,
             &online,
             &sender,
-            online.world.target().selected,
-            online.world.casting().cast.is_some() || online.world.casting().pending.is_some(),
+            online.world().target().selected,
+            online.world().casting().cast.is_some() || online.world().casting().pending.is_some(),
         )
     };
     hud.action_feedback = Some((std::time::Instant::now(), message));

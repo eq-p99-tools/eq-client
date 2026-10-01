@@ -49,35 +49,21 @@ pub(super) fn update(
     for (mut artwork, mut image, mut node) in &mut icons {
         let spell = match artwork.source {
             Source::Effect(id) => online
-                .world
+                .world()
                 .buffs()
                 .effects()
                 .get(&id)
                 .map(|effect| u32::from(effect.spell_id)),
             Source::Buff(slot) => online
-                .world
+                .world()
                 .buffs()
                 .slots()
                 .as_ref()
                 .and_then(|buffs| buffs.get(&slot))
                 .map(|buff| buff.spell_id),
-            Source::Gem(index) => online
-                .world
-                .player()
-                .map_or([None; 8], |player| player.memorized_spells)
-                .get(index)
-                .copied()
-                .flatten(),
-            Source::Action(index) => bindings.gem(index).and_then(|gem| {
-                online
-                    .world
-                    .player()
-                    .map_or([None; 8], |player| player.memorized_spells)
-                    .get(gem)
-                    .copied()
-                    .flatten()
-            }),
-            Source::Book(index) => online.world.spell_book().and_then(|spells| {
+            Source::Gem(index) => online.world().gem(index),
+            Source::Action(index) => bindings.gem(index).and_then(|gem| online.world().gem(gem)),
+            Source::Book(index) => online.world().spell_book().and_then(|spells| {
                 spells
                     .slots()
                     .iter()

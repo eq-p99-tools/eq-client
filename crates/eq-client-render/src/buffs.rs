@@ -37,7 +37,7 @@ pub(super) fn update(
             node.display = display;
         }
     }
-    let Some(buffs) = online.world.buffs().slots() else {
+    let Some(buffs) = online.world().buffs().slots() else {
         for (entity, _) in &panels {
             commands.entity(entity).despawn();
         }
@@ -46,13 +46,13 @@ pub(super) fn update(
         return;
     };
     if previous.as_ref() == Some(buffs)
-        && *previous_effects == *online.world.buffs().effects()
+        && *previous_effects == *online.world().buffs().effects()
         && !panels.is_empty()
     {
         return;
     }
     *previous = Some(buffs.clone());
-    previous_effects.clone_from(online.world.buffs().effects());
+    previous_effects.clone_from(online.world().buffs().effects());
     let body = if let Ok(body) = bodies.single() {
         commands.entity(body).despawn_children();
         body
@@ -83,7 +83,7 @@ pub(super) fn update(
         commands.entity(frame).add_child(body);
         body
     };
-    content(&mut commands, body, buffs, online.world.buffs().effects());
+    content(&mut commands, body, buffs, online.world().buffs().effects());
 }
 
 /// Builds icons from occupied server slots without renumbering holes.
@@ -175,7 +175,7 @@ pub(super) fn hover(
     let hovered = entries
         .iter()
         .find(|(_, interaction)| **interaction != Interaction::None)
-        .and_then(|(entry, _)| online.world.buffs().slots()?.get(&entry.0));
+        .and_then(|(entry, _)| online.world().buffs().slots()?.get(&entry.0));
     let text = hovered.map_or_else(
         || {
             if let Some((entry, _)) = effects
@@ -183,7 +183,7 @@ pub(super) fn hover(
                 .find(|(_, interaction)| **interaction != Interaction::None)
             {
                 let duration = online
-                    .world
+                    .world()
                     .buffs()
                     .effects()
                     .get(&entry.0)
@@ -193,7 +193,7 @@ pub(super) fn hover(
                             .base_duration(effect.caster_level)
                     });
                 let level = online
-                    .world
+                    .world()
                     .buffs()
                     .effects()
                     .get(&entry.0)
@@ -205,8 +205,12 @@ pub(super) fn hover(
                     resource_hint(names.mechanics(u32::from(entry.0)), level)
                 );
             }
-            if online.world.buffs().slots().is_some_and(BTreeMap::is_empty)
-                && online.world.buffs().effects().is_empty()
+            if online
+                .world()
+                .buffs()
+                .slots()
+                .is_some_and(BTreeMap::is_empty)
+                && online.world().buffs().effects().is_empty()
             {
                 "No active buffs".into()
             } else {

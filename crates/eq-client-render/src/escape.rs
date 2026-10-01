@@ -41,7 +41,7 @@ pub(super) fn route(
         Escape::Inventory
     } else if let Some(id) = frontmost(&stack, &frames) {
         Escape::Close(id)
-    } else if online.world.target().selected.is_some() {
+    } else if online.world().target().selected.is_some() {
         Escape::Target
     } else {
         Escape::Unused
@@ -117,7 +117,7 @@ mod tests {
         let mut app = app();
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
-        online.world.select_target(Some(1));
+        online.select_target(Some(1));
         app.insert_resource(online);
         assert_eq!(press(&mut app), Escape::Target);
         app.world_mut()

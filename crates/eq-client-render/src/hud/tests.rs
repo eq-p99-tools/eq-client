@@ -45,7 +45,7 @@ fn admitted() -> OnlineState {
 }
 
 fn world(app: &App) -> &ClientWorld {
-    &app.world().resource::<OnlineState>().world
+    app.world().resource::<OnlineState>().world()
 }
 
 fn online(app: &mut App) -> Mut<'_, OnlineState> {
@@ -406,10 +406,17 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             reduction_ms: 0,
         };
         testing::news_at(&mut state, [WorldEvent::Spell(refresh(74))], now);
-        state.world.tick(now, &names);
-        assert!(state.world.casting().cooldowns.remaining(73, now).is_zero());
+        state.tick(now, &names);
+        assert!(
+            state
+                .world()
+                .casting()
+                .cooldowns
+                .remaining(73, now)
+                .is_zero()
+        );
         testing::news_at(&mut state, [WorldEvent::Spell(refresh(73))], now);
-        state.world.tick(now, &names);
+        state.tick(now, &names);
     }
     press(&mut app);
     assert!(rx.try_recv().is_err());

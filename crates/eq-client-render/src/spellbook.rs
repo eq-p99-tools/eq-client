@@ -528,22 +528,12 @@ fn refresh_gems(
     let mut gem_hint = None;
     let mut requested = None;
     for (interaction, GemChoice(gem), mut background) in gems.iter_mut() {
-        let available = !pending
-            && selected.is_some()
-            && world
-                .player()
-                .map_or([None; 8], |player| player.memorized_spells)
-                .get(usize::from(*gem))
-                .copied()
-                .flatten()
-                != selected;
+        let available = !pending && selected.is_some() && world.gem(usize::from(*gem)) != selected;
         background.0 = theme::button(available, false, *interaction);
         if *interaction != Interaction::None {
             gem_hint = Some(gem_description(
                 *gem,
-                &world
-                    .player()
-                    .map_or([None; 8], |player| player.memorized_spells),
+                &world.gems(),
                 selected,
                 names,
                 pending,
@@ -739,7 +729,7 @@ fn request_memorize(
             .contains(&Some(spell_id)),
         "The selected spell is no longer in the spellbook"
     );
-    outbox.post(&online.world, |stamp| {
+    outbox.post(online.world(), |stamp| {
         eq_client_core::ClientCommand::MemorizeSpell {
             session_id: stamp.session_id,
             gem,
@@ -758,12 +748,12 @@ fn request_scribe(
 ) -> anyhow::Result<u32> {
     use anyhow::Context;
     let (state, outbox) = online.zip(outbox).context("Connect to scribe a scroll")?;
-    let stamp = outbox.stamp(&state.world)?;
+    let stamp = outbox.stamp(state.world())?;
     let command = prepare_scribe(online, book, Some(stamp))?;
     let eq_client_core::ClientCommand::ScribeSpell { spell_id, .. } = command else {
         anyhow::bail!("Scribe request was not a scribe");
     };
-    outbox.send(&state.world, command)?;
+    outbox.send(state.world(), command)?;
     Ok(spell_id)
 }
 
@@ -777,7 +767,7 @@ fn prepare_scribe(
     use anyhow::{Context, ensure};
     let online = online.context("Connect to scribe a scroll")?;
     let stamp = stamp.context("Connect to scribe a scroll")?;
-    let inventory = online.world.inventory();
+    let inventory = online.world().inventory();
     ensure!(
         inventory.received() && !inventory.stale(),
         "Inventory awaiting refresh"
@@ -942,14 +932,14 @@ mod tests {
                 bag_slots: 0,
             }]),
         );
-        let before = online.world.inventory().clone();
+        let before = online.world().inventory().clone();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let sender = crate::outbox::Outbox::new(Some(tx));
         request_scribe(Some(&online), Some(&book), Some(&sender)).unwrap();
         assert!(
             matches!(rx.try_recv().unwrap(), eq_client_core::ClientCommand::ScribeSpell { session_id: 7, slot: 0, spell_id: 73, revision, .. } if revision == before.revision())
         );
-        assert_eq!(online.world.inventory(), &before);
+        assert_eq!(online.world().inventory(), &before);
         crate::online::testing::connect(&mut online, false);
         assert!(request_scribe(Some(&online), Some(&book), Some(&sender)).is_err());
         assert!(rx.try_recv().is_err());
@@ -1120,7 +1110,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<crate::online::OnlineState>()
-                .world
+                .world()
                 .spell_book(),
             Some(&book)
         );

@@ -14,11 +14,11 @@ pub(super) enum Use {
 pub(super) fn nearest(state: &super::online::OnlineState) -> Option<Use> {
     let door = super::doors::nearest(state);
     let item = state
-        .world
+        .world()
         .player()
         .filter(|_| state.in_world())
         .and_then(|player| {
-            eq_client_core::ground::nearest_item(state.world.objects(), player.position)
+            eq_client_core::ground::nearest_item(state.world().objects(), player.position)
         });
     match (door, item) {
         (Some((door_distance, door)), item)

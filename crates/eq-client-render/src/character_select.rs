@@ -92,14 +92,13 @@ pub(super) fn update(
     let keys = navigation.sample(&keys.input);
     // A session, or the preview's characters, until a character is in.
     let visible =
-        (online.enabled || online.selection.is_some()) && online.world.session_id().is_none();
-    let state = &mut *online;
+        (online.enabled || online.selection.is_some()) && online.world().session_id().is_none();
+    let (choosing, world) = online.choosing();
     if visible
         && focused
-        && let Some(selection) = state.selection.as_mut()
+        && let Some(selection) = choosing
         && !selection.submitted
     {
-        let world = &state.world;
         for (interaction, action) in &buttons {
             if !interaction.is_changed() || *interaction != Interaction::Pressed {
                 continue;

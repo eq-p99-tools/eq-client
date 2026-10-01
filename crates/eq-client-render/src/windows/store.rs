@@ -43,9 +43,9 @@ pub(super) fn persist(
     mut store: Local<Store>,
 ) {
     let current = online
-        .world
+        .world()
         .player()
-        .zip(online.world.world_name())
+        .zip(online.world().world_name())
         .map(|(player, world)| (world, player.name.as_str()));
     let exiting = exits.read().count() > 0;
     let switched = store

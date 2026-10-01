@@ -40,7 +40,7 @@ pub(crate) fn update(
     let Ok((entity, mut node)) = root.single_mut() else {
         return;
     };
-    let inventory = online.world.inventory();
+    let inventory = online.world().inventory();
     let item = inventory.items().get(&InventorySlot::CURSOR);
     let pointer = windows
         .single()

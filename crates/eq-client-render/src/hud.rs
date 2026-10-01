@@ -135,7 +135,7 @@ pub(super) fn update(
     mut fills: Query<(&mut Node, &HudFill)>,
 ) {
     let now = std::time::Instant::now();
-    let world = &online.world;
+    let world = online.world();
     let casting = world.casting();
     for (mut text, label) in &mut texts {
         let value = match label {
@@ -173,17 +173,14 @@ pub(super) fn update(
             HudLabel::Stat(stat) => stat
                 .text(world, state.resource_estimate)
                 .unwrap_or_else(|| "--".into()),
-            HudLabel::Spell(index) => world
-                .player()
-                .and_then(|player| player.memorized_spells[*index])
-                .map_or_else(String::new, |id| {
-                    let remaining = casting.cooldowns.remaining(id, now);
-                    if remaining.is_zero() {
-                        format!("{id}")
-                    } else {
-                        format!("{:.1}s", remaining.as_secs_f32())
-                    }
-                }),
+            HudLabel::Spell(index) => world.gem(*index).map_or_else(String::new, |id| {
+                let remaining = casting.cooldowns.remaining(id, now);
+                if remaining.is_zero() {
+                    format!("{id}")
+                } else {
+                    format!("{:.1}s", remaining.as_secs_f32())
+                }
+            }),
         };
         if text.0 != value {
             text.0 = value;
@@ -352,11 +349,8 @@ pub(super) fn spell_details(
     mut labels: Query<&mut Text, With<SpellDetails>>,
 ) {
     let now = std::time::Instant::now();
-    let casting = online.world.casting();
-    let held = online
-        .world
-        .player()
-        .map_or([None; 8], |player| player.memorized_spells);
+    let casting = online.world().casting();
+    let held = online.world().gems();
     let mut hovered = None;
     for (interaction, SpellGem(gem), mut background) in &mut gems {
         let spell = held.get(usize::from(*gem)).copied().flatten();
@@ -420,10 +414,10 @@ pub(super) fn actions(
     definitions: (Res<super::spellbook::SpellNames>, Res<messages::Messages>),
 ) {
     use super::keys::Act;
-    if !online.world.connected() || online.world.death().is_some() || !keys.focused() {
+    if !online.world().connected() || online.world().death().is_some() || !keys.focused() {
         return;
     }
-    let Some(player) = online.world.player() else {
+    let Some(player) = online.world().player() else {
         return;
     };
     let clicked = clicks
@@ -443,20 +437,18 @@ pub(super) fn actions(
     });
     if let Some(gem) = gem {
         let (names, messages) = definitions;
-        let mana_cost = player
-            .memorized_spells
-            .get(usize::from(gem))
-            .copied()
-            .flatten()
+        let mana_cost = online
+            .world()
+            .gem(usize::from(gem))
             .and_then(|spell| names.mana(spell));
         requests::spell(
             &mut hud,
-            &online.world,
+            online.world(),
             player,
             &outbox,
             &requests::Request {
                 gem,
-                target_id: online.world.target().selected.unwrap_or(player.spawn_id),
+                target_id: online.world().target().selected.unwrap_or(player.spawn_id),
                 forgetting,
                 mana_cost,
             },
@@ -478,7 +470,7 @@ pub(super) fn actions(
     };
     if let Some(posture) = posture {
         // The outbox shows why a stance did not go.
-        let _ = outbox.post(&online.world, |stamp| {
+        let _ = outbox.post(online.world(), |stamp| {
             eq_client_core::ClientCommand::SetPosture {
                 session_id: stamp.session_id,
                 spawn_id: player.spawn_id,

@@ -229,7 +229,7 @@ pub(super) fn input(
 ) {
     typing.escape_consumed = false;
     // Character selection owns keyboard input until the zone admits the player.
-    if online.enabled && online.world.session_id().is_none() {
+    if online.enabled && online.world().session_id().is_none() {
         keyboard.clear();
         typing.composing = false;
         state.hovered = false;
@@ -530,12 +530,12 @@ fn submit_draft(
         }
         if let Some(commands) = game_commands(state.draft.trim(), online, outbox) {
             for command in commands? {
-                outbox.send(&online.world, command)?;
+                outbox.send(online.world(), command)?;
             }
             return Ok(());
         }
         let message = outbound(state.active, state.draft.trim())?;
-        outbox.send(&online.world, ClientCommand::SendChat(message))?;
+        outbox.send(online.world(), ClientCommand::SendChat(message))?;
         Ok(())
     })();
     match result {
@@ -562,7 +562,7 @@ pub(super) fn submit_game_command(
         .ok_or_else(|| format!("{input} is not a game command"))??;
     for command in commands {
         outbox
-            .send(&online.world, command)
+            .send(online.world(), command)
             .map_err(|refusal| refusal.text().to_owned())?;
     }
     Ok(())
@@ -577,7 +577,7 @@ fn location(input: &str, online: &super::online::OnlineState) -> Option<Result<S
     }
     Some(
         online
-            .world
+            .world()
             .player()
             .map(|player| {
                 let position = player.position;
@@ -614,12 +614,12 @@ fn game_commands(
     let name = input.strip_prefix('/')?.trim().to_ascii_lowercase();
     let stamp = || {
         outbox
-            .stamp(&online.world)
+            .stamp(online.world())
             .map_err(|refusal| refusal.text().to_owned())
     };
     let posture = |posture| {
         let stamp = stamp()?;
-        let player = online.world.player().ok_or("Enter the world first")?;
+        let player = online.world().player().ok_or("Enter the world first")?;
         Ok(ClientCommand::SetPosture {
             session_id: stamp.session_id,
             spawn_id: player.spawn_id,

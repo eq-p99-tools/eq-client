@@ -261,10 +261,10 @@ pub(super) fn animate(
 ) {
     for (transform, mut character, remote, own) in &mut characters {
         let id = remote.map(|entity| entity.id).or_else(|| {
-            own.then(|| online.world.player().map(|player| player.spawn_id))
+            own.then(|| online.world().player().map(|player| player.spawn_id))
                 .flatten()
         });
-        let posture = id.and_then(|id| online.world.posture(id));
+        let posture = id.and_then(|id| online.world().posture(id));
         let moving = transform
             .translation
             .distance_squared(character.previous_position)

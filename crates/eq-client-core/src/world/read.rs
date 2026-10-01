@@ -83,6 +83,20 @@ impl ClientWorld {
         self.player.as_ref()
     }
 
+    /// The spells memorized in the player's eight gems; none before admission.
+    #[must_use]
+    pub fn gems(&self) -> [Option<u32>; 8] {
+        self.player
+            .as_ref()
+            .map_or([None; 8], |player| player.memorized_spells)
+    }
+
+    /// The spell memorized in this gem, counted from 0, if any.
+    #[must_use]
+    pub fn gem(&self, gem: usize) -> Option<u32> {
+        self.gems().get(gem).copied().flatten()
+    }
+
     /// The zone's spawns, by spawn ID.
     #[must_use]
     pub const fn spawns(&self) -> &BTreeMap<u16, Spawn> {

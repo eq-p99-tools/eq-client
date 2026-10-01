@@ -405,7 +405,7 @@ mod tests {
                       mut art: Art| {
                     let view = View {
                         state: &state,
-                        inventory: online.world.inventory(),
+                        inventory: online.world().inventory(),
                     };
                     commands.spawn(Node::default()).with_children(|parent| {
                         contents(
@@ -435,7 +435,7 @@ mod tests {
                     .collect(),
             ),
         );
-        let before = online.world.inventory().clone();
+        let before = online.world().inventory().clone();
         let inventory = InventoryState {
             demo: true,
             ..InventoryState::default()
@@ -460,7 +460,7 @@ mod tests {
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Left);
         app.update();
-        let items = app.world().resource::<OnlineState>().world.inventory();
+        let items = app.world().resource::<OnlineState>().world().inventory();
         assert_eq!(items, &before);
         let inventory = app.world().resource::<InventoryState>();
         let selection = inventory.actions.split.as_ref().unwrap();
@@ -484,7 +484,7 @@ mod tests {
             .get_mut::<Interaction>(count_button)
             .unwrap() = Interaction::Pressed;
         app.update();
-        let items = app.world().resource::<OnlineState>().world.inventory();
+        let items = app.world().resource::<OnlineState>().world().inventory();
         assert_eq!(items.items()[&InventorySlot(251)].stack_count, Some(20));
         assert!(!items.items().contains_key(&InventorySlot::CURSOR));
         assert!(
@@ -510,7 +510,7 @@ mod tests {
         crate::online::testing::inventory(&mut online, InventoryUpdate::Snapshot(items));
         state.bank_open = true;
         state.tab = Tab::Bank;
-        state.select_split(InventorySlot(2000), online.world.inventory());
+        state.select_split(InventorySlot(2000), online.world().inventory());
         let mut app = App::new();
         app.insert_resource(state).insert_resource(online);
         draw(&mut app, None);

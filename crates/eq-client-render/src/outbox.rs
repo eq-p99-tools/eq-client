@@ -244,7 +244,7 @@ pub(crate) fn grey_out(
     mut veils: Query<&mut Node, With<Veil>>,
 ) {
     for (Needs(capability), children) in &controls {
-        let display = if offered(&online.world, *capability) {
+        let display = if offered(online.world(), *capability) {
             Display::None
         } else {
             Display::Flex
@@ -367,14 +367,16 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(veil_display(&mut app), Display::None);
-        app.world_mut()
-            .resource_mut::<crate::online::OnlineState>()
-            .world = admitted(vec![Capability::Talking]);
+        crate::online::testing::set_world(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            admitted(vec![Capability::Talking]),
+        );
         app.update();
         assert_eq!(veil_display(&mut app), Display::Flex);
-        app.world_mut()
-            .resource_mut::<crate::online::OnlineState>()
-            .world = admitted(Capability::ALL.to_vec());
+        crate::online::testing::set_world(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            admitted(Capability::ALL.to_vec()),
+        );
         app.update();
         assert_eq!(veil_display(&mut app), Display::None);
     }
@@ -407,9 +409,10 @@ mod hud_tests {
         ] {
             world.apply(&update, Instant::now(), &eq_client_core::world::NoSpells);
         }
-        app.world_mut()
-            .resource_mut::<crate::online::OnlineState>()
-            .world = world;
+        crate::online::testing::set_world(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            world,
+        );
         app.update();
         app.update();
         let mut gems = app

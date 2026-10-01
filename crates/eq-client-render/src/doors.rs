@@ -91,12 +91,12 @@ fn posed(door: &eq_client_core::doors::Door, swing: f32) -> Transform {
 pub(super) fn nearest(
     state: &super::online::OnlineState,
 ) -> Option<(f32, &eq_client_core::doors::Door)> {
-    if !state.world.connected() || state.world.death().is_some() {
+    if !state.world().connected() || state.world().death().is_some() {
         return None;
     }
-    let player = state.world.player()?;
+    let player = state.world().player()?;
     state
-        .world
+        .world()
         .doors()
         .entries()
         .values()
@@ -117,7 +117,7 @@ pub(super) fn open(
     state: &mut super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
 ) {
-    let sent = outbox.post(&state.world, |stamp| {
+    let sent = outbox.post(state.world(), |stamp| {
         eq_client_core::ClientCommand::ClickDoor {
             session_id: stamp.session_id,
             door_id,
@@ -155,10 +155,10 @@ pub(super) fn reconcile(
 ) {
     let mut obstacles = Vec::new();
     let mut remaining = BTreeSet::new();
-    if state.world.connected()
-        && let Some(player) = state.world.player()
+    if state.world().connected()
+        && let Some(player) = state.world().player()
     {
-        for door in state.world.doors().entries().values() {
+        for door in state.world().doors().entries().values() {
             let delta = Vec3::from_array(eq_client_core::render_position(door.position))
                 - Vec3::from_array(eq_client_core::render_position(player.position));
             if delta.length_squared() <= 240.0 * 240.0 {
@@ -167,7 +167,7 @@ pub(super) fn reconcile(
         }
     }
     for (entity, mut door, mut transform) in &mut rendered {
-        let definition = state.world.doors().entries().get(&door.id);
+        let definition = state.world().doors().entries().get(&door.id);
         if !remaining.contains(&door.id)
             || definition.is_none_or(|definition| model_key(&definition.model) != door.model)
         {
@@ -204,7 +204,7 @@ pub(super) fn reconcile(
         return;
     };
     for id in remaining {
-        let door = &state.world.doors().entries()[&id];
+        let door = &state.world().doors().entries()[&id];
         let Some(model) = models.0.get(&model_key(&door.model)) else {
             continue;
         };
@@ -428,7 +428,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<super::super::online::OnlineState>()
-                .world
+                .world()
                 .doors()
                 .entries()[&0]
                 .action,
@@ -526,7 +526,7 @@ mod tests {
         let door = &app
             .world()
             .resource::<super::super::online::OnlineState>()
-            .world
+            .world()
             .doors()
             .entries()[&0];
         assert_eq!(door.active_endpoint(), Some(false));

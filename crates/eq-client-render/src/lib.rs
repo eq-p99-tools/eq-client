@@ -724,7 +724,7 @@ fn schedule_screenshot(
 ) {
     // Online, the scene is ready once the player is in the world, or once the
     // character list shows.
-    let admitted = online.world.connected() && online.world.player().is_some();
+    let admitted = online.world().connected() && online.world().player().is_some();
     if online.enabled && !admitted && online.selection.is_none() {
         return;
     }
@@ -749,7 +749,7 @@ fn exit_after_screenshot(
     online: Res<online::OnlineState>,
     settings: Res<ViewerSettings>,
 ) {
-    if online.world.ended() && settings.0.screenshot.is_some() {
+    if online.world().ended() && settings.0.screenshot.is_some() {
         app_exit.write(AppExit::error());
     }
     // Scripted screenshots keep the session running; only `--screenshot` is one-shot.

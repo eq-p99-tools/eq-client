@@ -18,17 +18,20 @@ pub(crate) fn update(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let selected = online
-        .world
+        .world()
         .target()
         .selected
-        .filter(|_| online.world.connected() && online.world.death().is_none());
+        .filter(|_| online.world().connected() && online.world().death().is_none());
     let pose = selected.and_then(|id| {
-        let own = online.world.player().filter(|player| player.spawn_id == id);
+        let own = online
+            .world()
+            .player()
+            .filter(|player| player.spawn_id == id);
         let (entity, size) = if let Some(own) = own {
             (player.single().ok()?, own.size)
         } else {
             let spawn = online
-                .world
+                .world()
                 .spawn(id)
                 .map(|spawn| &spawn.state)
                 .filter(|spawn| !spawn.invisible)?;
@@ -117,7 +120,7 @@ mod tests {
             .id();
         let mut nearby = crate::entities::NearbyEntities::default();
         nearby.rendered.insert(2, entity);
-        online.world.select_target(Some(2));
+        online.select_target(Some(2));
         app.insert_resource(online)
             .insert_resource(nearby)
             .init_resource::<Assets<Mesh>>()

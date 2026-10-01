@@ -248,7 +248,7 @@ pub(super) fn input(
     players: Query<&PlayerBody, With<Player>>,
     cameras: Query<&OrbitCamera>,
 ) {
-    if !online.enabled || !online.world.connected() || online.world.death().is_some() {
+    if !online.enabled || !online.world().connected() || online.world().death().is_some() {
         controls.reset(None);
         return;
     }
@@ -283,23 +283,23 @@ pub(super) fn input(
         players.single(),
         cameras.single(),
         collision.0.as_ref(),
-        online.world.player(),
+        online.world().player(),
     ) else {
         return;
     };
     // A request the outbox refuses resets the motion it would have made;
     // the outbox says why.
     let request = |command: fn(crate::outbox::Stamp) -> ClientCommand| {
-        outbox.post(&online.world, command).is_ok()
+        outbox.post(online.world(), command).is_ok()
     };
-    if let Some(player) = online.world.player() {
+    if let Some(player) = online.world().player() {
         let position = player.position;
         let boundary = online
             .regions
             .zone_line_at(eq_client_core::render_position(position));
         if let Some(destination) = controls.boundary.observe(boundary) {
             if outbox
-                .post(&online.world, |stamp| ClientCommand::CrossZoneLine {
+                .post(online.world(), |stamp| ClientCommand::CrossZoneLine {
                     session_id: stamp.session_id,
                     destination,
                     position,
@@ -380,7 +380,7 @@ pub(super) fn input(
         turn_toward(current_heading, desired, turn_limit)
     };
     let position_sent = world_position(position.to_array(), heading);
-    let sent = outbox.post(&online.world, |stamp| {
+    let sent = outbox.post(online.world(), |stamp| {
         ClientCommand::Move(MovementRequest {
             mode,
             session_id: stamp.session_id,

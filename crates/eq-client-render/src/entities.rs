@@ -49,10 +49,10 @@ pub(super) fn reconcile(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if !state.world.connected() {
+    if !state.world().connected() {
         return;
     }
-    let Some(player) = state.world.player() else {
+    let Some(player) = state.world().player() else {
         return;
     };
     let Some(directory) = &settings.0.eq_directory else {
@@ -69,7 +69,7 @@ pub(super) fn reconcile(
         .copied()
         .filter(|id| {
             nearby_state.revisions.get(id).copied()
-                != state.world.spawn(*id).map(|spawn| spawn.revision)
+                != state.world().spawn(*id).map(|spawn| spawn.revision)
         })
         .collect();
     for id in replaced {
@@ -80,7 +80,7 @@ pub(super) fn reconcile(
     }
     let present: BTreeSet<_> = nearby_state.rendered.keys().copied().collect();
     let selected = nearby(
-        state.world.spawns().values().map(|spawn| &spawn.state),
+        state.world().spawns().values().map(|spawn| &spawn.state),
         player.spawn_id,
         player.position,
         &present,
@@ -89,7 +89,7 @@ pub(super) fn reconcile(
             .0
             .entity_distance
             .unwrap_or(200.0)
-            .min(state.world.far_clip().unwrap_or(f32::INFINITY)),
+            .min(state.world().far_clip().unwrap_or(f32::INFINITY)),
         200,
     );
     let desired: BTreeSet<_> = selected.iter().copied().collect();
@@ -104,7 +104,7 @@ pub(super) fn reconcile(
     else {
         return;
     };
-    let spawn = &state.world.spawns()[&id].state;
+    let spawn = &state.world().spawns()[&id].state;
     let model = races::model(spawn.race, spawn.gender);
     let asset = model.and_then(|code| {
         nearby_state
@@ -112,7 +112,7 @@ pub(super) fn reconcile(
             .entry(code)
             .or_insert_with(|| {
                 // Cache failures too, avoiding repeated disk reads for unsupported models.
-                load_installed_character(directory, state.world.zone(), code)
+                load_installed_character(directory, state.world().zone(), code)
                     .ok()
                     .map(|asset| {
                         character::prepare(asset, &mut images, &mut meshes, &mut materials)
@@ -178,7 +178,7 @@ pub(super) fn reconcile(
     nearby_state.rendered.insert(id, entity);
     nearby_state
         .revisions
-        .insert(id, state.world.spawns()[&id].revision);
+        .insert(id, state.world().spawns()[&id].revision);
 }
 
 /// Interpolates between received locations without extrapolating beyond the server.
@@ -191,7 +191,7 @@ pub(super) fn interpolate(
     let weight = 1.0 - (-time.delta_secs().min(0.1) / 0.1).exp();
     let now = std::time::Instant::now();
     for (mut entity, mut transform) in &mut entities {
-        let Some(spawn) = state.world.spawn(entity.id).map(|spawn| &spawn.state) else {
+        let Some(spawn) = state.world().spawn(entity.id).map(|spawn| &spawn.state) else {
             continue;
         };
         // A spawn moves on from its latest report at its reported velocity.

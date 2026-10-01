@@ -77,12 +77,12 @@ impl InventoryState {
             return;
         }
         let available = !self.demo
-            && online.world.connected()
-            && online.world.death().is_none()
-            && online.world.session_id().is_some()
-            && online.world.player().is_some_and(|player| {
+            && online.world().connected()
+            && online.world().death().is_none()
+            && online.world().session_id().is_some()
+            && online.world().player().is_some_and(|player| {
                 online
-                    .world
+                    .world()
                     .spawns()
                     .values()
                     .map(|spawn| &spawn.state)
@@ -288,14 +288,14 @@ pub(super) fn input(
         .find(|(interaction, _)| **interaction == Interaction::Pressed)
     {
         if online
-            .world
+            .world()
             .inventory()
             .items()
             .contains_key(&InventorySlot::CURSOR)
         {
             state.click_slot(stack.0, false, &online, &sender);
         } else {
-            state.select_split(stack.0, online.world.inventory());
+            state.select_split(stack.0, online.world().inventory());
         }
         return;
     }
@@ -327,17 +327,17 @@ pub(super) fn input(
                 .any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
             {
                 if keys.focused() {
-                    let casting = online.world.casting();
+                    let casting = online.world().casting();
                     let casting = casting.cast.is_some() || casting.pending.is_some();
                     state.use_slot(
                         slot.0,
                         &online,
                         &sender,
-                        online.world.target().selected,
+                        online.world().target().selected,
                         casting,
                     );
                 }
-            } else if let Some(item) = online.world.inventory().items().get(&slot.0) {
+            } else if let Some(item) = online.world().inventory().items().get(&slot.0) {
                 items.open_received(item.details.clone());
             }
         } else if mouse.just_pressed(MouseButton::Left) && *interaction == Interaction::Pressed {
@@ -345,7 +345,7 @@ pub(super) fn input(
                 .input
                 .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
             {
-                state.select_split(slot.0, online.world.inventory());
+                state.select_split(slot.0, online.world().inventory());
             } else {
                 state.click_slot(slot.0, false, &online, &sender);
             }
@@ -408,7 +408,7 @@ pub(super) fn update(
     if skin_layout.follow(directory, &skin.0) {
         *previous = None;
     }
-    let inventory = online.world.inventory();
+    let inventory = online.world().inventory();
     let stamp = RenderStamp {
         revision: state.revision,
         tab: state.tab,
@@ -477,7 +477,7 @@ pub(super) fn feedback(
     mut labels: Query<&mut Text, With<HoverLabel>>,
 ) {
     let mut description = SLOT_HELP.to_owned();
-    let inventory = online.world.inventory();
+    let inventory = online.world().inventory();
     for (slot, interaction, mut border) in &mut slots {
         let item = inventory.items().get(&slot.0);
         let hovered = *interaction != Interaction::None;
@@ -584,11 +584,10 @@ fn tell(state: &mut InventoryState, online: &mut super::online::OnlineState) {
     for update in std::mem::take(&mut state.demo_news) {
         let news = WorldUpdate::Game(WorldEvent::Inventory(update));
         if online
-            .world
-            .apply(&news, std::time::Instant::now(), &NoSpells)
+            .tell(&news, std::time::Instant::now(), &NoSpells)
             .inventory
         {
-            state.refresh(online.world.inventory().stale());
+            state.refresh(online.world().inventory().stale());
         }
     }
 }
@@ -814,7 +813,7 @@ mod tests {
     fn items(app: &App) -> &Inventory {
         app.world()
             .resource::<super::super::online::OnlineState>()
-            .world
+            .world()
             .inventory()
     }
     fn press_slot(app: &mut App, slot: i32) {
