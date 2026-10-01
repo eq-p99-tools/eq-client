@@ -8,7 +8,7 @@ use super::windows::WindowId;
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_assets::{
-    sidl::{Align, Element, Gauge, Label, Library, Piece, Screen},
+    sidl::{Align, ButtonLook, Element, Gauge, Label, Library, Piece, Screen},
     ui::Area,
 };
 use std::collections::HashMap;
@@ -19,6 +19,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
     let file = match id {
         WindowId::Player => "EQUI_PlayerWindow.xml",
         WindowId::Target => "EQUI_TargetWindow.xml",
+        WindowId::Spells => "EQUI_CastSpellWnd.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -78,6 +79,10 @@ impl Screens {
 #[derive(Component)]
 pub(crate) struct Drawn(String);
 
+/// A button drawn from the skin, with its piece for each state.
+#[derive(Component, Clone)]
+pub(crate) struct SkinButton(ButtonLook);
+
 /// Window frames, with what the skin changes on them and the skin they are
 /// drawn in.
 type Frames<'w, 's> = Query<
@@ -90,6 +95,7 @@ type Frames<'w, 's> = Query<
         &'static mut BackgroundColor,
         &'static mut BorderColor,
         Option<&'static Drawn>,
+        &'static super::windows::Frame,
     ),
 >;
 
@@ -107,7 +113,7 @@ pub(crate) fn apply(
     let Some(directory) = settings.0.eq_directory.as_deref() else {
         return;
     };
-    for (frame, id, mut node, mut background, mut border, drawn) in &mut frames {
+    for (frame, id, mut node, mut background, mut border, drawn, state) in &mut frames {
         if drawn.is_some_and(|drawn| drawn.0 == skin.0) {
             continue;
         }
@@ -115,7 +121,8 @@ pub(crate) fn apply(
             continue;
         };
         commands.entity(frame).insert(Drawn(skin.0.clone()));
-        reshape(&mut node, screen);
+        reshape(&mut node, screen, state.placed());
+        super::windows::drag_anywhere(&mut commands, frame);
         background.0 = Color::NONE;
         *border = BorderColor::all(Color::NONE);
         commands.entity(frame).despawn_children();
@@ -139,16 +146,21 @@ pub(crate) fn apply(
     }
 }
 
-/// Sizes the frame as the skin does; a window centred by the registry stays
-/// centred at its new width.
-fn reshape(node: &mut Node, screen: &Screen) {
+/// Sizes the frame as the skin does. A window the player has not placed
+/// opens where the skin puts it, as the official client opens it.
+fn reshape(node: &mut Node, screen: &Screen, placed: bool) {
     node.width = px(screen.area.width);
     node.height = px(screen.area.height);
     node.padding = UiRect::ZERO;
     node.border = UiRect::ZERO;
     node.row_gap = Val::ZERO;
-    if node.left == Val::Percent(50.0) {
-        node.margin = UiRect::left(px(-screen.area.width / 2.0));
+    if !placed {
+        node.position_type = PositionType::Absolute;
+        node.left = px(screen.area.x);
+        node.top = px(screen.area.y);
+        node.right = Val::Auto;
+        node.bottom = Val::Auto;
+        node.margin = UiRect::ZERO;
     }
 }
 
@@ -205,7 +217,124 @@ fn draw(window: &mut ChildSpawnerCommands, screen: &Screen, art: &mut crate::she
                     }
                 }
             }
+            Element::SpellGem(gem) => spell_gem(window, art, gem, &inside),
+            Element::Button(button) => self::button(window, art, button, &inside),
             Element::Other(_) => (),
+        }
+    }
+}
+
+/// A gem: the spell's icon in the skin's holder. It behaves as the client's
+/// own gems do: a click casts, a shifted click forgets, and it greys out
+/// where the server takes no casts.
+fn spell_gem(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    gem: &eq_client_assets::sidl::SpellGem,
+    inside: &Area,
+) {
+    let Some(index) = gem
+        .id
+        .as_deref()
+        .and_then(|id| id.strip_prefix("CSPW_Spell"))
+        .and_then(|number| number.parse::<u8>().ok())
+        .filter(|index| *index < 8)
+    else {
+        return;
+    };
+    let area = gem.area;
+    let mut node = at(
+        inside.x + area.x,
+        inside.y + area.y,
+        area.width,
+        area.height,
+    );
+    node.justify_content = JustifyContent::Center;
+    node.align_items = AlignItems::Center;
+    window
+        .spawn((
+            Button,
+            super::hud::SpellGem(index),
+            crate::outbox::Needs(eq_client_core::Capability::Casting),
+            BackgroundColor(Color::NONE),
+            node,
+        ))
+        .with_children(|gem_node| {
+            if let Some(piece) = &gem.background {
+                picture(gem_node, art, piece, at(0.0, 0.0, area.width, area.height));
+            }
+            let icon = (area.height - 6.0).max(8.0);
+            gem_node.spawn(super::spell_icons::artwork(
+                super::spell_icons::Source::Gem(usize::from(index)),
+                icon,
+            ));
+            if let Some(piece) = &gem.holder {
+                picture(gem_node, art, piece, at(0.0, 0.0, area.width, area.height));
+            }
+        });
+}
+
+/// A button the client knows what to do with: for now the spellbook's
+/// toggle.
+fn button(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    button: &eq_client_assets::sidl::Button,
+    inside: &Area,
+) {
+    // Only buttons the client knows what to do with are drawn.
+    let toggles = match button.id.as_deref() {
+        Some("CSPW_SpellBook") => WindowId::Spellbook,
+        _ => return,
+    };
+    let Some(image) = button.look.normal.as_ref().and_then(|piece| art.cut(piece)) else {
+        return;
+    };
+    let area = button.area;
+    let mut drawn = window.spawn((
+        Button,
+        super::windows::SelectorButton(toggles),
+        SkinButton(button.look.clone()),
+        image,
+        at(
+            inside.x + area.x,
+            inside.y + area.y,
+            area.width,
+            area.height,
+        ),
+    ));
+    if let Some(tooltip) = &button.tooltip {
+        drawn.insert(crate::tooltip::Tooltip(tooltip.clone()));
+    }
+}
+
+/// Draws each skin button in its state: on while its window is open,
+/// lit under the pointer.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn buttons(
+    shown: Res<super::windows::Shown>,
+    mut art: crate::sheets::Art,
+    mut buttons: Query<(
+        &SkinButton,
+        &super::windows::SelectorButton,
+        &Interaction,
+        &mut ImageNode,
+    )>,
+) {
+    for (SkinButton(look), selector, interaction, mut image) in &mut buttons {
+        let on = shown.is_open(selector.0);
+        let hovered = *interaction != Interaction::None;
+        let piece = match (on, hovered) {
+            (true, true) => look.pressed_flyby.as_ref().or(look.pressed.as_ref()),
+            (true, false) => look.pressed.as_ref(),
+            (false, true) => look.flyby.as_ref(),
+            (false, false) => None,
+        }
+        .or(look.normal.as_ref());
+        if let Some(wanted) = piece.and_then(|piece| art.cut(piece))
+            && image.rect != wanted.rect
+        {
+            image.rect = wanted.rect;
         }
     }
 }

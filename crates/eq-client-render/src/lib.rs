@@ -428,6 +428,7 @@ fn schedule(app: &mut App) {
                 hud::action_bar::update,
                 skinned::apply,
                 skinned::show,
+                skinned::buttons,
             )
                 .chain(),
             (

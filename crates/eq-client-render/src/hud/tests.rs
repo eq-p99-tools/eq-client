@@ -236,8 +236,16 @@ fn spell_hover_tracks_live_gem_contents_and_clears_when_pointer_leaves() {
 fn gems_and_action_slots_name_their_keys_from_the_key_map() {
     let mut app = App::new();
     crate::keys::testing::install(&mut app);
-    app.add_systems(Update, key_help);
+    let mut online = OnlineState::new(true);
+    let mut player = caster();
+    player.memorized_spells = [None; 8];
+    player.memorized_spells[1] = Some(42);
+    testing::admit(&mut online, 7, player);
+    app.insert_resource(online)
+        .insert_resource(crate::spellbook::SpellNames::parse("42^Synthetic spell"))
+        .add_systems(Update, key_help);
     let gem = app.world_mut().spawn(SpellGem(0)).id();
+    let memorized = app.world_mut().spawn(SpellGem(1)).id();
     let slot = app.world_mut().spawn(hotbar::Slot(2)).id();
     app.update();
     let tooltip = |entity| {
@@ -248,6 +256,12 @@ fn gems_and_action_slots_name_their_keys_from_the_key_map() {
             .clone()
     };
     assert_eq!(tooltip(gem), "Alt+1: cast | Shift-click: forget");
+    // A gem with a spell names it first.
+    assert_eq!(
+        tooltip(memorized),
+        "Synthetic spell
+Alt+2: cast | Shift-click: forget"
+    );
     assert_eq!(
         tooltip(slot),
         "3: use | Ctrl+3: bind the hovered gem or item | Ctrl+Shift+3: empty"
