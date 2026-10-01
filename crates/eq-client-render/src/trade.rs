@@ -42,6 +42,16 @@ struct MerchantWindow {
 }
 
 impl TradeState {
+    /// Whether the loot window is open.
+    pub(super) const fn looting(&self) -> bool {
+        self.loot.is_some()
+    }
+
+    /// Whether the merchant window is open.
+    pub(super) const fn shopping(&self) -> bool {
+        self.merchant.is_some()
+    }
+
     /// Forgets windows from an old admission; coins stay until the server reports them.
     pub(super) fn reset(&mut self, session: Option<u64>) {
         if self.session != session {
@@ -292,6 +302,7 @@ pub(super) fn input(
     mut chat: ResMut<super::chat::ChatState>,
     buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    escape: Res<super::escape::Escape>,
 ) {
     trade.reset(online.session_id);
     let (Some(session_id), Some(player), Some(sender)) =
@@ -314,9 +325,10 @@ pub(super) fn input(
         .filter(|(interaction, _)| **interaction == Interaction::Pressed)
         .map(|(_, action)| *action)
         .collect();
-    // An Escape that cancelled typing belongs to the chat.
-    if focused && !chat.escape_consumed && keys.just_pressed(KeyCode::Escape) {
-        clicked.extend([Action::EndLoot, Action::EndShop]);
+    match *escape {
+        super::escape::Escape::Loot => clicked.push(Action::EndLoot),
+        super::escape::Escape::Shop => clicked.push(Action::EndShop),
+        _ => (),
     }
     if focused && keys.just_pressed(KeyCode::KeyL) {
         if trade.loot.is_some() {

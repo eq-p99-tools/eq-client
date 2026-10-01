@@ -30,6 +30,12 @@ pub(super) struct InventoryState {
     actions: interaction::Actions,
 }
 impl InventoryState {
+    /// Whether an action is under way that Escape cancels: a split, or
+    /// storing the cursor's item.
+    pub(super) const fn action_under_way(&self) -> bool {
+        self.actions.auto_store || self.actions.split.is_some()
+    }
+
     /// Whether the inventory window is showing.
     pub(super) const fn is_open(&self) -> bool {
         self.open
@@ -281,7 +287,7 @@ pub(super) fn input(
     stack_counts: Query<(&Interaction, &SplitStack), Changed<Interaction>>,
     mut state: ResMut<InventoryState>,
     mut items: ResMut<super::items::ItemState>,
-    chat: Res<super::chat::ChatState>,
+    (chat, escape): (Res<super::chat::ChatState>, Res<super::escape::Escape>),
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     target: Option<Res<super::target::TargetState>>,
     hud: Option<Res<super::hud::HudState>>,
@@ -291,8 +297,7 @@ pub(super) fn input(
         state.actions.auto_store = false;
         return;
     }
-    // An Escape that cancelled typing belongs to the chat.
-    if !chat.composing && !chat.escape_consumed && keys.just_pressed(KeyCode::Escape) {
+    if *escape == super::escape::Escape::Inventory {
         state.actions.auto_store = false;
         state.actions.split = None;
         if state.actions.pending.is_none() {
@@ -664,6 +669,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<InventoryState>()
             .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::escape::Escape>()
             .init_resource::<super::super::skin::UiSkin>()
             .init_resource::<Assets<Image>>()
             .insert_resource(super::super::ViewerSettings(

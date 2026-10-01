@@ -447,6 +447,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::escape::Escape>()
             .init_resource::<crate::items::ItemState>()
             .insert_resource(crate::online::OnlineState::new(false))
             .insert_resource(crate::target::CommandsToServer(None))
