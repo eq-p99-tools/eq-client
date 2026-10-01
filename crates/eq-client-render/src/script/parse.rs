@@ -233,6 +233,15 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("slash", ["target", name @ ..]) if !name.is_empty() => {
             Step::Slash(format!("/target {}", name.join(" ")))
         }
+        // Asking who is online changes nothing.
+        ("slash", ["who", words @ ..]) => Step::Slash(
+            ["/who"]
+                .iter()
+                .chain(words)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
         ("gm", words) => parse_gm(words)?,
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
@@ -618,6 +627,18 @@ mod tests {
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_script_may_ask_who_is_online() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("slash who\nslash who all wiz 50\n", base).unwrap(),
+            [
+                Step::Slash("/who".into()),
+                Step::Slash("/who all wiz 50".into())
+            ]
+        );
     }
 
     #[test]
