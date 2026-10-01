@@ -436,17 +436,22 @@ pub(super) fn input(
                 }
             }
             Action::Sell(slot) => {
-                let item = inventory
+                // The row may be older than the inventory: sell only what the
+                // slot holds now.
+                let Some(item) = inventory
                     .data
                     .items()
-                    .get(&eq_client_core::inventory::InventorySlot(slot));
-                if item.is_some_and(no_drop) {
+                    .get(&eq_client_core::inventory::InventorySlot(slot))
+                else {
+                    continue;
+                };
+                if no_drop(item) {
                     chat.history.push(super::chat::system_line(
                         "The merchant will not buy NO DROP items.".into(),
                     ));
                     continue;
                 }
-                let quantity = item.map_or(1, |item| item.stack_count.unwrap_or(1).max(1));
+                let quantity = item.stack_count.unwrap_or(1).max(1);
                 if let Some(window) = &trade.merchant {
                     send(ClientCommand::Sell {
                         session_id,
