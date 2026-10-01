@@ -52,6 +52,11 @@ struct Arguments {
     #[arg(long, requires = "start_x", allow_negative_numbers = true, value_parser = finite)]
     start_y: Option<f32>,
 
+    /// Initial EQ Z coordinate, as `/loc` reports it: the viewer stands on the
+    /// floor below it instead of on the highest surface at X and Y.
+    #[arg(long, requires = "start_x", allow_negative_numbers = true, value_parser = finite)]
+    start_z: Option<f32>,
+
     /// Initial camera distance from the character.
     #[arg(long, value_parser = distance)]
     camera_distance: Option<f32>,
@@ -69,6 +74,11 @@ struct Arguments {
     /// is the monitor's refresh rate.
     #[arg(long, default_value = "60")]
     max_fps: u32,
+
+    /// Add coordinates, the movement mode and the nearby-entity count to the
+    /// status box, for development and live checks.
+    #[arg(long)]
+    debug_overlay: bool,
 
     /// Show synthetic moving entities offline, without connecting to a server.
     #[arg(long, conflicts_with = "online")]
@@ -323,9 +333,10 @@ fn viewer_config(
             .map(|(x, y)| WorldPosition {
                 x,
                 y,
-                z: 0.0,
+                z: arguments.start_z.unwrap_or(0.0),
                 heading: 0.0,
             }),
+        start_height_known: arguments.start_z.is_some(),
         camera_distance: arguments.camera_distance,
         terrain_only: arguments.terrain_only,
         eq_directory: Some(eq_directory),
@@ -351,6 +362,7 @@ fn viewer_config(
         ui_skin: arguments.ui_skin,
         settings_directory: arguments.settings_dir.or_else(default_settings_directory),
         window_position: arguments.window_position,
+        debug_overlay: arguments.debug_overlay,
     }
 }
 

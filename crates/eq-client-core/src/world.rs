@@ -10,6 +10,7 @@
 mod casting;
 mod changes;
 mod items;
+mod link;
 mod notice;
 mod read;
 mod target;
@@ -19,6 +20,7 @@ mod vitals;
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
 pub use changes::{Changes, Moved, Reply, Reset};
 pub use items::ItemCache;
+pub use link::Link;
 pub use notice::Notice;
 pub use target::Target;
 pub use trade::{Loot, Merchant};
@@ -130,14 +132,10 @@ impl ClientWorld {
         spells: &dyn SpellCatalog,
     ) -> Changes {
         match update {
-            WorldUpdate::Connection {
-                connected,
-                terminal,
-                label,
-            } => {
-                let mut changes = self.connection(*connected, *terminal);
+            WorldUpdate::Connection(link) => {
+                let mut changes = self.connection(link.connected(), link.ended());
                 changes.notices.push(Notice::Connection {
-                    label: label.clone(),
+                    link: *link,
                     dead: self.death.is_some(),
                 });
                 changes

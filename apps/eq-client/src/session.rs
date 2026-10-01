@@ -2,7 +2,7 @@
 mod movement;
 
 use anyhow::{Context, Result};
-use eq_client_core::{ClientCommand, MotionCalibration, WorldUpdate};
+use eq_client_core::{ClientCommand, MotionCalibration, WorldUpdate, world::Link};
 use eq_network::{
     assets::Assets,
     client::{
@@ -105,14 +105,9 @@ impl SessionWorker {
                             }
                             Some(WorldUpdate::Game(event))
                         }
-                        ClientEvent::Status(status) => Some(WorldUpdate::Connection {
-                            connected: status.state == ConnectionState::Connected,
-                            terminal: matches!(
-                                status.state,
-                                ConnectionState::Stopped | ConnectionState::Disconnected
-                            ),
-                            label: format!("{:?}", status.state),
-                        }),
+                        ClientEvent::Status(status) => {
+                            Some(WorldUpdate::Connection(link(status.state)))
+                        }
                         ClientEvent::Progress(stage) => Some(progress_update(stage)),
                         ClientEvent::Record(record) => match record.event {
                             RecordEvent::Chat(event) => chat_update(event),
@@ -137,11 +132,7 @@ impl SessionWorker {
                 });
             if let Err(error) = result {
                 // Waits for room if the queue is full; fails only once the viewer is gone.
-                let _ = sender.send(WorldUpdate::Connection {
-                    connected: false,
-                    terminal: true,
-                    label: "Disconnected".into(),
-                });
+                let _ = sender.send(WorldUpdate::Connection(Link::Ended));
                 eprintln!("Session ended: {error:#}");
             }
         });
@@ -158,10 +149,25 @@ impl SessionWorker {
 
 /// Ready is connected; treating it as a disconnect would discard admission data.
 fn progress_update(stage: eq_network::client::ConnectionStage) -> WorldUpdate {
-    WorldUpdate::Connection {
-        connected: matches!(stage, eq_network::client::ConnectionStage::Ready),
-        terminal: false,
-        label: format!("{stage:?}"),
+    use eq_network::client::ConnectionStage;
+    WorldUpdate::Connection(match stage {
+        ConnectionStage::Ready => Link::Connected,
+        ConnectionStage::ConnectingZone
+        | ConnectionStage::LoadingCharacter
+        | ConnectionStage::EnteringWorld => Link::Entering,
+        // The login and world servers, and the stages a later protocol adds
+        // before the zone.
+        _ => Link::LoggingIn,
+    })
+}
+
+/// The session's coarse state in the player's terms.
+fn link(state: ConnectionState) -> Link {
+    match state {
+        ConnectionState::Connected => Link::Connected,
+        ConnectionState::Zoning => Link::Zoning,
+        ConnectionState::Disconnected | ConnectionState::Stopped => Link::Ended,
+        _ => Link::LoggingIn,
     }
 }
 
@@ -236,19 +242,15 @@ mod tests {
         use eq_network::client::ConnectionStage;
         assert!(matches!(
             progress_update(ConnectionStage::Ready),
-            WorldUpdate::Connection {
-                connected: true,
-                terminal: false,
-                ..
-            }
+            WorldUpdate::Connection(Link::Connected)
         ));
         assert!(matches!(
             progress_update(ConnectionStage::ConnectingZone),
-            WorldUpdate::Connection {
-                connected: false,
-                terminal: false,
-                ..
-            }
+            WorldUpdate::Connection(Link::Entering)
+        ));
+        assert!(matches!(
+            progress_update(ConnectionStage::Authenticating),
+            WorldUpdate::Connection(Link::LoggingIn)
         ));
     }
 

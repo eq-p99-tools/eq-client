@@ -232,7 +232,6 @@ pub(super) fn demo(
     scene: Res<super::SceneInfo>,
     players: Query<&Transform, With<super::Player>>,
     surface: Res<super::TerrainSurface>,
-    mut hud: ResMut<super::hud::HudState>,
     mut chat: ResMut<super::chat::ChatState>,
 ) {
     if !settings.0.demo_entities || state.enabled {
@@ -253,7 +252,6 @@ pub(super) fn demo(
     if state.world.session_id().is_none() {
         super::online::admit_preview(&mut state, origin, &scene.zone_name);
     }
-    hud.status = "Offline entity demo".into();
     if chat.history.revision() == 0 {
         super::chat::seed_demo(&mut chat.history);
     }

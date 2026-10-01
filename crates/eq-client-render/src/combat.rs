@@ -6,6 +6,7 @@ use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::{
     ClientCommand, OutboundChat, SpawnKind,
     combat::{ConColor, Consideration, Damage, DamageOutcome, SPELL_DAMAGE_KIND},
+    entities::display_name,
 };
 
 use super::hud::messages::Messages;
@@ -17,14 +18,6 @@ pub(super) struct CombatState {
     pub auto_attack: bool,
     /// Target that the current auto-attack request was made against.
     attack_target: Option<u16>,
-}
-
-/// Removes the server's numeric suffix and underscores from a spawn name.
-pub(super) fn display_name(raw: &str) -> String {
-    raw.trim_end_matches(|c: char| c.is_ascii_digit())
-        .replace('_', " ")
-        .trim()
-        .to_owned()
 }
 
 fn capitalized(text: &str) -> String {
@@ -322,12 +315,6 @@ mod tests {
             spell_id: None,
             outcome,
         }
-    }
-
-    #[test]
-    fn names_drop_server_suffixes() {
-        assert_eq!(display_name("a_rat00"), "a rat");
-        assert_eq!(display_name("Guard_Philips12"), "Guard Philips");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Non-interactive display of the actual inventory cursor slot.
-use super::{InventorySlot, InventoryState, icons};
+use super::{InventorySlot, InventoryState};
 use bevy::{prelude::*, ui::FocusPolicy, window::PrimaryWindow};
 
 #[derive(Component)]
@@ -30,13 +30,11 @@ pub(crate) fn update(
     mut commands: Commands,
     state: Res<InventoryState>,
     online: Res<crate::online::OnlineState>,
-    settings: Option<Res<crate::ViewerSettings>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     scale: Option<Res<UiScale>>,
     mut root: Query<(Entity, &mut Node), With<Overlay>>,
     mut stamp: Local<Option<(Entity, u64, u64)>>,
-    mut icons: Local<icons::Icons>,
-    mut images: ResMut<Assets<Image>>,
+    mut art: crate::sheets::Art,
 ) {
     let Ok((entity, mut node)) = root.single_mut() else {
         return;
@@ -70,10 +68,7 @@ pub(crate) fn update(
     let Some(item) = item else {
         return;
     };
-    let directory = settings
-        .as_ref()
-        .and_then(|settings| settings.0.eq_directory.as_deref());
-    let icon = icons.get(item.icon, directory, &mut images);
+    let icon = art.item(item.icon);
     let mut text = item.details.name.clone();
     if let Some(count) = item.stack_count {
         use std::fmt::Write;
@@ -136,19 +131,19 @@ mod tests {
 
     #[test]
     fn cursor_tracks_real_slot_when_inventory_is_closed_and_hides_after_clear() {
-        let mut app = App::new();
-        app.init_resource::<InventoryState>()
-            .insert_resource(crate::online::OnlineState::new(false))
-            .init_resource::<Assets<Image>>()
-            .insert_resource(UiScale(2.0))
+        let mut app = crate::testing::app();
+        app.insert_resource(UiScale(2.0))
             .add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
             .add_systems(Update, update);
-        let mut window = Window {
-            focused: true,
-            ..default()
-        };
-        window.set_cursor_position(Some(Vec2::new(100.0, 80.0)));
-        let window_id = app.world_mut().spawn((window, PrimaryWindow)).id();
+        let window_id = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(window_id)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(100.0, 80.0)));
         crate::online::testing::inventory(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
             eq_client_core::inventory::InventoryUpdate::Snapshot(super::super::demo_items()),

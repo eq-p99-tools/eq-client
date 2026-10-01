@@ -75,6 +75,17 @@ pub fn nearby<'a>(
         .collect()
 }
 
+/// A spawn's name as the official client shows it: the server's unique
+/// numeric suffix dropped and underscores read as spaces, so `a_rat003`
+/// shows as "a rat".
+#[must_use]
+pub fn display_name(raw: &str) -> String {
+    raw.trim_end_matches(|c: char| c.is_ascii_digit())
+        .replace('_', " ")
+        .trim()
+        .to_owned()
+}
+
 /// Whether `to` lies within `range` of `from`, in three-dimensional EQ world units.
 #[must_use]
 pub fn within(from: WorldPosition, to: WorldPosition, range: f32) -> bool {
@@ -86,6 +97,13 @@ pub fn within(from: WorldPosition, to: WorldPosition, range: f32) -> bool {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn names_drop_server_suffixes() {
+        assert_eq!(display_name("a_rat00"), "a rat");
+        assert_eq!(display_name("Guard_Philips12"), "Guard Philips");
+        assert_eq!(display_name("Marton_Sayer000"), "Marton Sayer");
+    }
 
     #[test]
     #[allow(clippy::float_cmp)] // Exactly representable fixture values.

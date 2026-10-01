@@ -28,6 +28,7 @@ mod paperdoll;
 mod probes;
 mod resources;
 pub mod script;
+mod sheets;
 mod skin;
 mod spell_icons;
 mod spellbook;
@@ -81,6 +82,9 @@ pub struct ViewerConfig {
     pub screenshot_after: Option<f32>,
     /// Optional initial position in EQ world coordinates.
     pub start_position: Option<WorldPosition>,
+    /// Whether the start position's height was given; the viewer then stands
+    /// on the floor below it rather than on the highest surface.
+    pub start_height_known: bool,
     /// Optional initial camera distance from the character.
     pub camera_distance: Option<f32>,
     /// Whether to omit placed static objects for terrain inspection.
@@ -122,6 +126,9 @@ pub struct ViewerConfig {
     pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
     pub window_position: Option<(i32, i32)>,
+    /// Add the developer's readings to the status box: coordinates, the
+    /// movement mode with its keys, and the count of nearby entities.
+    pub debug_overlay: bool,
 }
 
 #[derive(Resource)]
@@ -130,7 +137,7 @@ struct PendingZone {
     character: Option<CharacterAsset>,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct ViewerSettings(ViewerConfig);
 
 #[derive(Resource)]
@@ -283,14 +290,21 @@ pub fn run(
     exit_status(&app.run())
 }
 
-/// Starts the presentation state (HUD, windows, chat, targeting, inventory and
-/// motion) empty.
+/// Starts the presentation state (HUD, windows, chat, targeting, inventory,
+/// trade, combat and motion) empty: every resource the windows keep, in one
+/// list that the tests' app starts from too.
 fn init_presentation(app: &mut App) {
     app.init_resource::<hud::HudState>()
+        .init_resource::<hud::action_bar::ActionRequests>()
+        .init_resource::<combat::CombatState>()
+        .init_resource::<trade::TradeState>()
+        .init_resource::<escape::Escape>()
+        .init_resource::<windows::pointer::Wheel>()
+        .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<spellbook::BookView>()
         .init_resource::<spellbook::BookSelection>()
-        .init_resource::<spell_icons::Icons>()
+        .init_resource::<sheets::Sheets>()
         .init_resource::<chat::ChatState>()
         .init_resource::<target::TargetState>()
         .init_resource::<items::ItemState>()
@@ -301,6 +315,37 @@ fn init_presentation(app: &mut App) {
         .init_resource::<outfit::Wardrobe>()
         .init_resource::<windows::DragState>()
         .init_resource::<windows::Layouts>();
+}
+
+/// What the tests of the windows start from.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+
+    /// An app with every presentation resource the viewer starts with, empty
+    /// and offline, plus input and a focused primary window: a test adds the
+    /// systems it exercises, and a system that comes to need another
+    /// presentation resource breaks no test's setup.
+    pub(crate) fn app() -> App {
+        let mut app = App::new();
+        init_presentation(&mut app);
+        app.init_resource::<ViewerSettings>()
+            .init_resource::<spellbook::SpellNames>()
+            .init_resource::<hud::messages::Messages>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .insert_resource(online::OnlineState::new(false))
+            .insert_resource(target::CommandsToServer(None));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        app
+    }
 }
 
 /// The process exit status for how the viewer ended.
@@ -328,11 +373,7 @@ fn install_script(
 
 /// Registers overlay updates with their required network and layout ordering.
 fn install_overlays(app: &mut App) {
-    app.init_resource::<combat::CombatState>()
-        .init_resource::<trade::TradeState>()
-        .init_resource::<escape::Escape>()
-        .init_resource::<windows::pointer::Wheel>()
-        .add_systems(Update, windows::pointer::wheel.before(chat::input))
+    app.add_systems(Update, windows::pointer::wheel.before(chat::input))
         .add_systems(
             Update,
             escape::route
@@ -341,7 +382,6 @@ fn install_overlays(app: &mut App) {
                 .before(target::input)
                 .before(trade::input),
         )
-        .init_resource::<hud::action_bar::ActionRequests>()
         .add_systems(
             Update,
             hud::action_bar::update
@@ -419,8 +459,14 @@ fn setup_scene(
         .map_or(Vec3::ZERO, Vec3::from_array);
     let start_x = requested_position.x.clamp(min.x, max.x);
     let start_z = requested_position.z.clamp(min.z, max.z);
-    let start_y = terrain_surface
-        .height_at(start_x, start_z)
+    // A given height finds the floor under it, so a start inside a building
+    // is not put on its roof; without one, the highest surface is the guess.
+    let start_y = settings
+        .0
+        .start_height_known
+        .then(|| terrain_surface.height_below(start_x, start_z, requested_position.y + 5.0))
+        .flatten()
+        .or_else(|| terrain_surface.height_at(start_x, start_z))
         .unwrap_or(zone_center.y);
     let character = pending.character.take();
     let height = character.as_ref().map_or(6.0, CharacterAsset::height);
@@ -989,10 +1035,12 @@ fn camera_relative_direction(horizontal: f32, vertical: f32, yaw: f32) -> Vec3 {
     (right * horizontal + forward * vertical).normalize_or_zero()
 }
 
+/// Shows the zone, the status line and what the player can use here; the
+/// developer's readings only when the debug overlay is on.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn update_hud(
     motion: Res<motion::Controls>,
-    scene: Res<SceneInfo>,
+    (scene, settings, hud): (Res<SceneInfo>, Res<ViewerSettings>, Res<hud::HudState>),
     nearby: Res<entities::NearbyEntities>,
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
@@ -1001,42 +1049,56 @@ fn update_hud(
     let (Ok(player), Ok(mut label)) = (players.single(), labels.single_mut()) else {
         return;
     };
-    let position = world_position(player.translation.to_array(), 0.0);
-    label.0 = format!(
-        "{}   /   {:.0}, {:.0}, {:.0}\n{}\nNearby entities: {}",
-        scene.zone_name,
-        position.x,
-        position.y,
-        position.z,
-        if online.enabled && motion.speed.is_some() {
-            if motion.walking {
-                "Online / Walk   Insert: run   RMB orbit   Scroll zoom"
-            } else if motion.walk_speed.is_some() {
-                "Online / Run   Insert: walk   RMB orbit   Scroll zoom"
-            } else {
-                "Online / calibrated WASD   Walk unavailable   RMB orbit   Scroll zoom"
-            }
-        } else if online.enabled && !online.in_world() {
-            // Zoning or dead: the session takes movement away until it is over.
-            "Online / movement paused   RMB orbit   Scroll zoom"
-        } else if online.enabled {
-            "Online / movement disabled (start with --movement-calibration)   RMB orbit   Scroll zoom"
-        } else {
-            "Offline: WASD walk | Space jump   RMB orbit   Scroll zoom"
-        },
-        nearby.rendered.len()
-    );
-    match interact::nearest(&online) {
-        Some(interact::Use::Door(id, model)) => {
-            use std::fmt::Write;
-            let _ = write!(label.0, "\nF: use {model} (door {id})");
-        }
-        Some(interact::Use::Item(_)) => label.0.push_str("\nF: pick up the item here"),
-        None => (),
+    let mut lines = vec![scene.zone_name.clone(), hud.status.clone()];
+    if online.enabled && online.in_world() && motion.speed.is_none() {
+        lines.push("Movement unavailable: start with --movement-calibration".into());
     }
-    if !online.door_status.is_empty() {
-        label.0.push('\n');
-        label.0.push_str(&online.door_status);
+    let nearest = interact::nearest(&online);
+    lines.push(match nearest {
+        Some(interact::Use::Door(..)) => "F: use the door".into(),
+        Some(interact::Use::Item(_)) => "F: pick up the item here".into(),
+        None => String::new(),
+    });
+    lines.push(online.door_status.clone());
+    if settings.0.debug_overlay {
+        let position = world_position(player.translation.to_array(), 0.0);
+        lines.push(format!(
+            "{:.0}, {:.0}, {:.0}",
+            position.x, position.y, position.z
+        ));
+        lines.push(movement_help(&online, &motion).into());
+        lines.push(format!("Nearby entities: {}", nearby.rendered.len()));
+        if let Some(interact::Use::Door(id, model)) = nearest {
+            lines.push(format!("Door {id} ({model})"));
+        }
+    }
+    let text = lines
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if label.0 != text {
+        label.0 = text;
+    }
+}
+
+/// The movement mode and its keys, for the debug overlay.
+fn movement_help(online: &online::OnlineState, motion: &motion::Controls) -> &'static str {
+    if online.enabled && motion.speed.is_some() {
+        if motion.walking {
+            "Online / Walk   Insert: run   RMB orbit   Scroll zoom"
+        } else if motion.walk_speed.is_some() {
+            "Online / Run   Insert: walk   RMB orbit   Scroll zoom"
+        } else {
+            "Online / calibrated WASD   Walk unavailable   RMB orbit   Scroll zoom"
+        }
+    } else if online.enabled && !online.in_world() {
+        // Zoning or dead: the session takes movement away until it is over.
+        "Online / movement paused   RMB orbit   Scroll zoom"
+    } else if online.enabled {
+        "Online / movement disabled (start with --movement-calibration)   RMB orbit   Scroll zoom"
+    } else {
+        "Offline: WASD walk | Space jump   RMB orbit   Scroll zoom"
     }
 }
 

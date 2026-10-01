@@ -66,15 +66,15 @@ fn estimated_resource_bars_fill_and_clear_with_their_maxima() {
     .add_systems(Update, update);
     let mana = app
         .world_mut()
-        .spawn((Text::default(), HudLabel::Stat("MANA")))
+        .spawn((Text::default(), HudLabel::Stat(super::Stat::Mana)))
         .id();
     let fill = app
         .world_mut()
-        .spawn((Node::default(), HudFill("MANA")))
+        .spawn((Node::default(), HudFill(super::Stat::Mana)))
         .id();
     let stamina = app
         .world_mut()
-        .spawn((Node::default(), HudFill("STAMINA")))
+        .spawn((Node::default(), HudFill(super::Stat::Stamina)))
         .id();
     app.update();
     assert_eq!(app.world().get::<Text>(mana).unwrap().0, "10 / ~20");
@@ -98,11 +98,11 @@ fn current_resources_do_not_claim_an_unknown_maximum_or_percentage() {
         .add_systems(Update, update);
     let mana = app
         .world_mut()
-        .spawn((Text::default(), HudLabel::Stat("MANA")))
+        .spawn((Text::default(), HudLabel::Stat(super::Stat::Mana)))
         .id();
     let stamina = app
         .world_mut()
-        .spawn((Text::default(), HudLabel::Stat("STAMINA")))
+        .spawn((Text::default(), HudLabel::Stat(super::Stat::Stamina)))
         .id();
     app.update();
     assert_eq!(app.world().get::<Text>(mana).unwrap().0, "25 / ?");

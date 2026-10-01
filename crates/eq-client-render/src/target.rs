@@ -238,11 +238,9 @@ pub(super) fn input(
         }
     }
     online.world.select_target(selected);
-    target.status = if online.enabled {
-        "Sending selection".into()
-    } else {
-        "Offline selection".into()
-    };
+    // A new choice replaces an earlier refusal; a choice sent says nothing,
+    // as in the official client.
+    target.status.clear();
 }
 
 /// Drawn spawns the player may target: visible ones within the zone's far clip.
@@ -280,7 +278,7 @@ fn named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
     ids.iter()
         .filter_map(|id| {
             let spawn = &online.world.spawn(*id)?.state;
-            let shown = super::combat::display_name(&spawn.name).to_lowercase();
+            let shown = eq_client_core::entities::display_name(&spawn.name).to_lowercase();
             let full = spawn.name.replace('_', " ").to_lowercase();
             (shown.starts_with(&query) || full.starts_with(&query)).then(|| {
                 let position = Vec3::from_array(eq_client_core::render_position(spawn.position));
@@ -315,6 +313,7 @@ pub(super) fn update(
         .selected
         .and_then(|id| online.world.health(id))
         .or_else(|| own.and_then(|player| player.hp_percent));
+    let health = format!("HP {}", hp.map_or_else(|| "--".into(), |v| format!("{v}%")));
     for (mut text, name, details) in &mut texts {
         if name.is_some() {
             text.0 = spawn.map_or_else(
@@ -325,7 +324,7 @@ pub(super) fn update(
                         "No target".into()
                     }
                 },
-                |s| s.name.replace('_', " "),
+                |s| eq_client_core::entities::display_name(&s.name),
             );
         }
         if details.is_some() {
@@ -339,17 +338,7 @@ pub(super) fn update(
                                 target.status.clone()
                             }
                         },
-                        |_| {
-                            format!(
-                                "You   HP {}   {}",
-                                hp.map_or_else(|| "--".into(), |v| format!("{v}%")),
-                                if chosen.sent {
-                                    "Request sent"
-                                } else {
-                                    &target.status
-                                }
-                            )
-                        },
+                        |_| joined(&["You", &health, &target.status]),
                     )
                 },
                 |s| {
@@ -365,17 +354,12 @@ pub(super) fn update(
                         SpawnKind::Player => "K consider | H hail",
                         _ => "L loot",
                     };
-                    format!(
-                        "{kind}   HP {}   {}\n{keys}",
-                        hp.map_or_else(|| "--".into(), |v| format!("{v}%")),
-                        if attacking {
-                            "Attacking"
-                        } else if chosen.sent {
-                            "Request sent"
-                        } else {
-                            &target.status
-                        },
-                    )
+                    let doing = if attacking {
+                        "Attacking"
+                    } else {
+                        &target.status
+                    };
+                    format!("{}\n{keys}", joined(&[kind, &health, doing]))
                 },
             );
         }
@@ -383,6 +367,16 @@ pub(super) fn update(
     for mut bar in &mut bars {
         bar.width = percent(f32::from(hp.unwrap_or(0)));
     }
+}
+
+/// The target window's facts on one line, leaving out the empty ones.
+fn joined(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .filter(|part| !part.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("   ")
 }
 
 #[cfg(test)]

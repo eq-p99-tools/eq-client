@@ -174,13 +174,14 @@ pub enum LoadError {
     },
 }
 
-/// Loads a classic S3D zone from an `EverQuest` installation.
+/// A zone's short name, checked before it names a file: the server chooses
+/// it, so it may not reach outside the installation.
 ///
 /// # Errors
 ///
-/// Returns [`LoadError`] when the name is unsafe, files are missing or
-/// unreadable, or an archive, world, or texture cannot be decoded.
-pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
+/// Returns [`LoadError::InvalidZoneName`] unless the name is lowercase ASCII
+/// letters, digits and underscores.
+pub(crate) fn zone_name(short_name: &str) -> Result<&str, LoadError> {
     if short_name.is_empty()
         || !short_name
             .bytes()
@@ -188,7 +189,17 @@ pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, Loa
     {
         return Err(LoadError::InvalidZoneName(short_name.to_owned()));
     }
+    Ok(short_name)
+}
 
+/// Loads a classic S3D zone from an `EverQuest` installation.
+///
+/// # Errors
+///
+/// Returns [`LoadError`] when the name is unsafe, files are missing or
+/// unreadable, or an archive, world, or texture cannot be decoded.
+pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
+    let short_name = zone_name(short_name)?;
     let archive_path = eq_directory.join(format!("{short_name}.s3d"));
     let file = File::open(&archive_path).map_err(|source| LoadError::OpenArchive {
         path: archive_path,

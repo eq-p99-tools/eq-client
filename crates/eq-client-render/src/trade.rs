@@ -250,7 +250,7 @@ pub(super) fn input(
             spawn.kind,
             spawn.class,
             spawn.invisible,
-            super::combat::display_name(&spawn.name),
+            eq_client_core::entities::display_name(&spawn.name),
         ))
     });
     let mut clicked: Vec<Action> = buttons

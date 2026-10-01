@@ -29,25 +29,23 @@ pub(super) fn artwork(slot: usize) -> impl Bundle {
 pub(crate) fn update(
     bindings: Res<super::Bindings>,
     online: Res<crate::online::OnlineState>,
-    settings: Res<crate::ViewerSettings>,
-    mut icons: Local<crate::inventory::icons::Icons>,
-    mut images: ResMut<Assets<Image>>,
+    mut art: crate::sheets::Art,
     mut artwork: Query<(&mut Artwork, &mut ImageNode, &mut Node)>,
 ) {
-    for (mut art, mut image, mut node) in &mut artwork {
-        let icon = match bindings.0[art.slot] {
+    for (mut shown, mut image, mut node) in &mut artwork {
+        let icon = match bindings.0[shown.slot] {
             Some(super::Action::Item { slot, id }) => {
                 super::bound_item(online.world.inventory(), slot, id).map(|item| item.icon)
             }
             _ => None,
         };
-        if art.shown == icon {
+        if shown.shown == icon {
             continue;
         }
-        art.shown = icon;
+        shown.shown = icon;
         node.display = Display::None;
         if let Some(icon) = icon
-            && let Some(next) = icons.get(icon, settings.0.eq_directory.as_deref(), &mut images)
+            && let Some(next) = art.item(icon)
         {
             *image = next;
             node.display = Display::Flex;

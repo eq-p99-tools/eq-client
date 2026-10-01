@@ -42,15 +42,9 @@ pub use eq_network_game::world::{
 pub enum WorldUpdate {
     /// A typed game-state change.
     Game(WorldEvent),
-    /// Connection status; false disables local gameplay input immediately.
-    Connection {
-        /// Whether zone admission is complete.
-        connected: bool,
-        /// Whether this worker has ended and will not reconnect.
-        terminal: bool,
-        /// Credential-safe presentation label.
-        label: String,
-    },
+    /// Where the connection stands; anything but connected disables local
+    /// gameplay input immediately.
+    Connection(world::Link),
     /// A decoded line for the on-screen communication log.
     Chat(chat::ChatLine),
     /// A server string-table message; presentation resolves the ID locally.

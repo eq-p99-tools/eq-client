@@ -10,10 +10,10 @@ use crate::{
 /// Something to tell the player.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Notice {
-    /// The connection's state, in the session's own words.
+    /// Where the connection stands.
     Connection {
-        /// The session's label for it.
-        label: String,
+        /// Where it stands now.
+        link: super::Link,
         /// Whether the player is dead, awaiting their return home.
         dead: bool,
     },

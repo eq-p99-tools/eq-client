@@ -28,8 +28,10 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             for (action, label) in [
-                (Action::Earlier, "Earlier"),
-                (Action::Later, "Later"),
+                // These move the selected spell one slot; Previous and Next
+                // under the gems turn the page.
+                (Action::Earlier, "Move earlier"),
+                (Action::Later, "Move later"),
                 (Action::Select, "Delete spell"),
                 (Action::Confirm, "Confirm"),
                 (Action::Cancel, "Cancel"),
