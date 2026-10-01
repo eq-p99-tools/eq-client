@@ -1,6 +1,8 @@
 //! Corpse loot and merchant windows; the server settles every transfer.
 //!
-//! L loots the targeted corpse, U trades with the targeted NPC, Escape closes both.
+//! L loots the targeted corpse, U trades with the targeted NPC, and Escape
+//! closes the window (see `escape`). A window closes only once the server has
+//! been told, so the server never keeps a session the player can no longer end.
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::{
     ClientCommand, Coins, SpawnKind,
@@ -411,11 +413,13 @@ pub(super) fn input(
                 }
             }
             Action::EndLoot => {
-                if let Some(window) = trade.loot.take() {
-                    send(ClientCommand::EndLoot {
+                if let Some(corpse_id) = trade.loot.as_ref().map(|window| window.corpse_id)
+                    && send(ClientCommand::EndLoot {
                         session_id,
-                        corpse_id: window.corpse_id,
-                    });
+                        corpse_id,
+                    })
+                {
+                    trade.loot = None;
                     trade.changed();
                 }
             }
@@ -454,14 +458,16 @@ pub(super) fn input(
                 }
             }
             Action::EndShop => {
-                if let Some(window) = trade.merchant.take() {
-                    send(ClientCommand::Shop {
+                if let Some(merchant_id) = trade.merchant.as_ref().map(|window| window.merchant_id)
+                    && send(ClientCommand::Shop {
                         session_id,
-                        merchant_id: window.merchant_id,
+                        merchant_id,
                         own_id,
                         open: false,
                         created: now,
-                    });
+                    })
+                {
+                    trade.merchant = None;
                     trade.changed();
                 }
             }
@@ -487,15 +493,16 @@ pub(super) fn input(
                 window.pending = Some(slot);
             }
         }
-        Some((corpse_id, None)) => {
-            send(ClientCommand::EndLoot {
+        Some((corpse_id, None))
+            if send(ClientCommand::EndLoot {
                 session_id,
                 corpse_id,
-            });
+            }) =>
+        {
             trade.loot = None;
             trade.changed();
         }
-        None => (),
+        Some(_) | None => (),
     }
 }
 
@@ -1064,6 +1071,69 @@ mod tests {
                 copper: 5,
             }
         );
+    }
+
+    #[test]
+    fn a_window_closes_only_once_the_server_is_told() {
+        let mut online = super::super::online::OnlineState::new(true);
+        online.connected = true;
+        online.session_id = Some(1);
+        online.player = Some(eq_client_core::PlayerState {
+            name: "Example".into(),
+            base_attributes: None,
+            spawn_id: 7,
+            race: 1,
+            gender: 0,
+            class: Some(2),
+            deity: None,
+            level: 1,
+            position: eq_client_core::WorldPosition::default(),
+            mana: 0,
+            endurance: None,
+            skills: None,
+            spell_refresh_ms: None,
+            memorized_spells: [None; 8],
+            size: 6.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            hp_percent: Some(100),
+            appearance: eq_client_core::outfit::Appearance::default(),
+        });
+        // A command queue that can no longer take anything.
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        drop(receiver);
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(TradeState {
+                session: Some(1),
+                loot: Some(LootWindow {
+                    corpse_id: 9,
+                    name: "a rat".into(),
+                    items: BTreeMap::new(),
+                    listed: true,
+                    pending: None,
+                    loot_all: false,
+                }),
+                ..TradeState::default()
+            })
+            .insert_resource(super::super::target::CommandsToServer(Some(sender)))
+            .init_resource::<super::super::target::TargetState>()
+            .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::escape::Escape>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, input);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.world_mut()
+            .spawn((Button, Action::EndLoot, Interaction::Pressed));
+        app.update();
+        assert!(app.world().resource::<TradeState>().loot.is_some());
     }
 
     #[test]
