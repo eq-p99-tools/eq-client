@@ -632,7 +632,10 @@ fn schedule_screenshot(
     request: Option<ResMut<CaptureRequest>>,
     online: Res<online::OnlineState>,
 ) {
-    if online.enabled && (!online.world.connected() || online.world.player().is_none()) {
+    // Online, the scene is ready once the player is in the world, or once the
+    // character list shows.
+    let admitted = online.world.connected() && online.world.player().is_some();
+    if online.enabled && !admitted && online.selection.is_none() {
         return;
     }
     let Some(mut request) = request else {
