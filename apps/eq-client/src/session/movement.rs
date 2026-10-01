@@ -33,6 +33,7 @@ struct Admission {
     spawn: u16,
     identity: Option<Identity>,
     granted: bool,
+    dead: bool,
 }
 
 /// Calibration remains opt-in; only an uninterrupted normal transfer can carry it.
@@ -74,6 +75,7 @@ impl Continuity {
                     spawn: player.spawn_id,
                     identity,
                     granted: false,
+                    dead: false,
                 });
                 if (initial || carry) && player.hp_percent != Some(0) {
                     return self
@@ -114,6 +116,8 @@ impl Continuity {
                     .filter(|active| active.granted && !offer.to_bind)
                     .and_then(|active| active.identity);
             }
+            // A refused transfer leaves the player where they were, and the
+            // transfer took their movement away, so grant it again.
             WorldEvent::ZoneTransferRejected { session_id, .. }
                 if self
                     .admission
@@ -121,6 +125,7 @@ impl Continuity {
                     .is_some_and(|active| active.session == *session_id) =>
             {
                 self.invalidate();
+                return self.regrant(now);
             }
             // A server correction resets the session's movement grant; the measured
             // speed is unchanged, so grant it again for the same admission. Stock
@@ -132,14 +137,7 @@ impl Continuity {
                     .is_some_and(|active| active.spawn == *spawn_id) =>
             {
                 self.invalidate();
-                let session_id = self.admission.as_ref()?.session;
-                return self
-                    .calibration
-                    .map(|calibration| ClientCommand::ConfigureMotion {
-                        session_id,
-                        calibration,
-                        created: now,
-                    });
+                return self.regrant(now);
             }
             WorldEvent::Death(death)
                 if self
@@ -148,10 +146,24 @@ impl Continuity {
                     .is_some_and(|active| u32::from(active.spawn) == death.spawn_id) =>
             {
                 self.invalidate();
+                if let Some(active) = &mut self.admission {
+                    active.dead = true;
+                }
             }
             _ => (),
         }
         None
+    }
+
+    /// Asks again for movement in the current admission, unless the player died.
+    fn regrant(&self, now: Instant) -> Option<ClientCommand> {
+        let active = self.admission.as_ref().filter(|active| !active.dead)?;
+        self.calibration
+            .map(|calibration| ClientCommand::ConfigureMotion {
+                session_id: active.session,
+                calibration,
+                created: now,
+            })
     }
 
     /// A correction or death invalidates the measured mode; other entities do not.
@@ -286,6 +298,34 @@ mod tests {
             velocity: [0.0; 3],
         };
         assert!(policy.observe(&other, now).is_none());
+    }
+
+    #[test]
+    fn a_refused_transfer_grants_movement_again_unless_the_player_died() {
+        let now = Instant::now();
+        let refused = WorldEvent::ZoneTransferRejected {
+            session_id: 1,
+            reason: eq_client_core::ZoneRejection::Server(-1),
+        };
+        let mut policy = Continuity::new(Some(calibration()));
+        policy.observe(&entered(1, 0.7), now);
+        policy.observe(&grant(1), now);
+        policy.observe(&transfer(false), now);
+        assert!(matches!(
+            policy.observe(&refused, now),
+            Some(ClientCommand::ConfigureMotion { session_id: 1, .. })
+        ));
+        policy.observe(&transfer(true), now);
+        policy.observe(
+            &WorldEvent::Death(Death {
+                spawn_id: 7,
+                killer_id: 0,
+                corpse_id: 0,
+                bind_zone_id: 0,
+            }),
+            now,
+        );
+        assert!(policy.observe(&refused, now).is_none());
     }
 
     #[test]
