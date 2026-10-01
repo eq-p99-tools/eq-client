@@ -451,3 +451,39 @@ fn inspect_zone_lines() {
         println!("zone_line={line} samples={samples} eq_xyz_bounds={low:?}..{high:?}");
     }
 }
+
+/// Every model the race table names ships in the installed character archives.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL"]
+fn every_race_model_is_installed() {
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let mut installed = std::collections::BTreeSet::new();
+    let mut unreadable = 0;
+    for entry in std::fs::read_dir(&install).unwrap() {
+        let path = entry.unwrap().path();
+        let archive = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.to_ascii_lowercase().ends_with("_chr.s3d"));
+        if !archive {
+            continue;
+        }
+        match eq_client_assets::characters::inspect_archive(&path) {
+            Ok(definitions) => installed.extend(definitions.into_iter().filter_map(|definition| {
+                definition.name.strip_suffix("_HS_DEF").map(str::to_owned)
+            })),
+            Err(_) => unreadable += 1,
+        }
+    }
+    let missing: std::collections::BTreeSet<_> = (0..1000)
+        .flat_map(|race| {
+            (0..3).filter_map(move |gender| eq_client_core::races::model(race, gender))
+        })
+        .filter(|code| !installed.contains(*code))
+        .collect();
+    println!(
+        "installed models {} unreadable archives {unreadable}",
+        installed.len()
+    );
+    assert!(missing.is_empty(), "{missing:?}");
+}

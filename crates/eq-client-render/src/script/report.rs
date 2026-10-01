@@ -94,6 +94,9 @@ pub(super) fn state(
 /// tint and whether its helm shows.
 type Gear = (u16, [u32; 9], Option<[u8; 3]>, bool);
 
+/// A nearby spawn's model: its id, race, gender and the model they draw.
+type NearbyModel = (u16, u32, u32, Option<&'static str>);
+
 /// Spawn id, shown name, kind, class, distance and rounded EQ x, y, z.
 /// Door id, open type, latest action, distance and EQ position.
 type NearbyDoor = (u8, u8, Option<u8>, i32, [i32; 3]);
@@ -175,27 +178,47 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
         .collect();
     ground.sort_by_key(|object| object.3);
     ground.truncate(5);
-    // Gear of the nearest spawns.
-    let gear: Vec<Gear> = nearby
-        .iter()
-        .take(6)
-        .filter_map(|entry| {
-            let look = online.spawns.get(&entry.0)?.appearance;
-            Some((entry.0, look.materials, look.tints[1], look.show_helm))
-        })
-        .collect();
+    let (models, gear) = looks(online, &nearby);
     info!(
         ?nearby,
         ?creatures,
         ?doors,
         ?ground,
         ?gear,
+        ?models,
         door_status = online.door_status,
         coins = ?trade.coins,
         trade = trade.summary(),
         auto_attack = combat.auto_attack,
         "Script surroundings"
     );
+}
+
+/// How the nearest spawns look: each one's model by race and gender, and the
+/// gear of the nearest six.
+fn looks(
+    online: &crate::online::OnlineState,
+    nearby: &[NearbySpawn],
+) -> (Vec<NearbyModel>, Vec<Gear>) {
+    let spawns = || {
+        nearby
+            .iter()
+            .filter_map(|entry| Some((entry.0, online.spawns.get(&entry.0)?)))
+    };
+    let models = spawns()
+        .map(|(id, spawn)| {
+            let model = eq_client_core::races::model(spawn.race, spawn.gender);
+            (id, spawn.race, spawn.gender, model)
+        })
+        .collect();
+    let gear = spawns()
+        .take(6)
+        .map(|(id, spawn)| {
+            let look = spawn.appearance;
+            (id, look.materials, look.tints[1], look.show_helm)
+        })
+        .collect();
+    (models, gear)
 }
 
 /// Logs game messages (lines without a speaker) received since the last report.
