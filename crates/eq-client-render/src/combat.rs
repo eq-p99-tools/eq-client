@@ -32,20 +32,23 @@ fn capitalized(text: &str) -> String {
 pub(super) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     online: Res<super::online::OnlineState>,
-    sender: Res<super::target::CommandsToServer>,
+    outbox: Res<crate::outbox::Outbox>,
     messages: Res<Messages>,
     mut combat: ResMut<CombatState>,
     mut chat: ResMut<super::chat::ChatState>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let (Some(session_id), Some(player), Some(sender)) = (
-        online.world.session_id(),
-        online.world.player(),
-        sender.0.as_ref(),
-    ) else {
+    let Some(player) = online.world.player() else {
         return;
     };
-    let now = std::time::Instant::now();
+    let world = &online.world;
+    let attack = |enabled| {
+        move |stamp: crate::outbox::Stamp| ClientCommand::AutoAttack {
+            session_id: stamp.session_id,
+            enabled,
+            created: stamp.created,
+        }
+    };
     let spawn = online
         .world
         .target()
@@ -61,15 +64,7 @@ pub(super) fn input(
     {
         combat.auto_attack = false;
         combat.attack_target = None;
-        if online.world.connected()
-            && sender
-                .try_send(ClientCommand::AutoAttack {
-                    session_id,
-                    enabled: false,
-                    created: now,
-                })
-                .is_ok()
-        {
+        if online.world.connected() && outbox.post(world, attack(false)).is_ok() {
             chat.history
                 .push(super::chat::system_line(messages.format(1466, &[])));
         }
@@ -83,20 +78,16 @@ pub(super) fn input(
         return;
     }
     let mut feedback = |text: String| chat.history.push(super::chat::system_line(text));
+    // The outbox shows why a request did not leave.
     if keys.just_pressed(KeyCode::KeyK) {
         match spawn {
             Some((target_id, _)) => {
-                if sender
-                    .try_send(ClientCommand::Consider {
-                        session_id,
-                        own_id: player.spawn_id,
-                        target_id,
-                        created: now,
-                    })
-                    .is_err()
-                {
-                    feedback("Request queue is full — try again shortly".into());
-                }
+                let _ = outbox.post(world, |stamp| ClientCommand::Consider {
+                    session_id: stamp.session_id,
+                    own_id: player.spawn_id,
+                    target_id,
+                    created: stamp.created,
+                });
             }
             None => feedback(messages.format(12240, &[])),
         }
@@ -106,12 +97,7 @@ pub(super) fn input(
             || "Hail".to_owned(),
             |(_, spawn)| format!("Hail, {}", display_name(&spawn.name)),
         );
-        if sender
-            .try_send(ClientCommand::SendChat(OutboundChat::Say(text)))
-            .is_err()
-        {
-            feedback("Request queue is full — try again shortly".into());
-        }
+        let _ = outbox.send(world, ClientCommand::SendChat(OutboundChat::Say(text)));
     }
     if keys.just_pressed(KeyCode::KeyG) {
         let enable = !combat.auto_attack;
@@ -119,15 +105,7 @@ pub(super) fn input(
             feedback("Target a creature to attack it".into());
             return;
         }
-        if sender
-            .try_send(ClientCommand::AutoAttack {
-                session_id,
-                enabled: enable,
-                created: now,
-            })
-            .is_err()
-        {
-            feedback("Request queue is full — try again shortly".into());
+        if outbox.post(world, attack(enable)).is_err() {
             return;
         }
         combat.auto_attack = enable;

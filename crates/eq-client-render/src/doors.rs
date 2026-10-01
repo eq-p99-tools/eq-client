@@ -110,28 +110,23 @@ pub(super) fn nearest(
         .min_by(|a, b| a.0.total_cmp(&b.0))
 }
 
-/// Queues one ordinary-use request; no state is predicted.
+/// Asks to use a door; no state is predicted. A click sent says nothing; a
+/// refusal from the session or the outbox says why.
 pub(super) fn open(
     door_id: u8,
     state: &mut super::online::OnlineState,
-    sender: &super::target::CommandsToServer,
+    outbox: &crate::outbox::Outbox,
 ) {
-    let (Some(session_id), Some(sender)) = (state.world.session_id(), sender.0.as_ref()) else {
-        return;
-    };
-    // A click sent says nothing; a refusal from the session says why.
-    state.door_status = if sender
-        .try_send(eq_client_core::ClientCommand::ClickDoor {
-            session_id,
+    let sent = outbox.post(&state.world, |stamp| {
+        eq_client_core::ClientCommand::ClickDoor {
+            session_id: stamp.session_id,
             door_id,
-            created: std::time::Instant::now(),
-        })
-        .is_ok()
-    {
-        String::new()
-    } else {
-        "Door request could not be queued".into()
-    };
+            created: stamp.created,
+        }
+    });
+    if sent.is_ok() {
+        state.door_status.clear();
+    }
 }
 
 /// Normalizes an asset identifier without interpreting server strings as paths.
@@ -377,7 +372,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::chat::ChatState>()
-            .insert_resource(super::super::target::CommandsToServer(Some(sender)))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, super::super::interact::input);
         let window = app
             .world_mut()

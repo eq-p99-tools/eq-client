@@ -1,7 +1,5 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
-use super::{
-    Collision, OrbitCamera, Player, PlayerBody, axis, camera_relative_direction, online, target,
-};
+use super::{Collision, OrbitCamera, Player, PlayerBody, axis, camera_relative_direction, online};
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_assets::regions::ZoneLine;
 use eq_client_core::{ClientCommand, MovementMode, MovementRequest, world_position};
@@ -247,7 +245,7 @@ pub(super) fn input(
     online: Res<online::OnlineState>,
     chat: Res<super::chat::ChatState>,
     collision: Res<Collision>,
-    sender: Res<target::CommandsToServer>,
+    outbox: Res<crate::outbox::Outbox>,
     mut controls: ResMut<Controls>,
     players: Query<&PlayerBody, With<Player>>,
     cameras: Query<&OrbitCamera>,
@@ -258,9 +256,6 @@ pub(super) fn input(
         return;
     }
     let Some(_) = controls.speed else {
-        return;
-    };
-    let Some(session_id) = online.world.session_id() else {
         return;
     };
     let focused = windows.single().is_ok_and(|window| window.focused) && !chat.composing;
@@ -284,14 +279,18 @@ pub(super) fn input(
     if elapsed < Duration::from_millis(100) {
         return;
     }
-    let (Ok(body), Ok(camera), Some(world), Some(sender), Some(accepted)) = (
+    let (Ok(body), Ok(camera), Some(world), Some(accepted)) = (
         players.single(),
         cameras.single(),
         collision.0.as_ref(),
-        sender.0.as_ref(),
         online.world.player(),
     ) else {
         return;
+    };
+    // A request the outbox refuses resets the motion it would have made;
+    // the outbox says why.
+    let request = |command: fn(crate::outbox::Stamp) -> ClientCommand| {
+        outbox.post(&online.world, command).is_ok()
     };
     if let Some(player) = online.world.player() {
         let position = player.position;
@@ -299,12 +298,12 @@ pub(super) fn input(
             .regions
             .zone_line_at(eq_client_core::render_position(position));
         if let Some(destination) = controls.boundary.observe(boundary) {
-            if sender
-                .try_send(ClientCommand::CrossZoneLine {
-                    session_id,
+            if outbox
+                .post(&online.world, |stamp| ClientCommand::CrossZoneLine {
+                    session_id: stamp.session_id,
                     destination,
                     position,
-                    created: now,
+                    created: stamp.created,
                 })
                 .is_err()
             {
@@ -362,12 +361,10 @@ pub(super) fn input(
     };
     // The server charges the jump's endurance; the arc travels in position updates.
     if jumped
-        && sender
-            .try_send(ClientCommand::Jump {
-                session_id,
-                created: now,
-            })
-            .is_err()
+        && !request(|stamp| ClientCommand::Jump {
+            session_id: stamp.session_id,
+            created: stamp.created,
+        })
     {
         controls.reset(None);
         return;
@@ -382,13 +379,16 @@ pub(super) fn input(
         let desired = eq_client_core::world_heading(direction.x.atan2(direction.z));
         turn_toward(current_heading, desired, turn_limit)
     };
-    let request = MovementRequest {
-        mode,
-        session_id,
-        position: world_position(position.to_array(), heading),
-        created: now,
-    };
-    if sender.try_send(ClientCommand::Move(request)).is_err() {
+    let position_sent = world_position(position.to_array(), heading);
+    let sent = outbox.post(&online.world, |stamp| {
+        ClientCommand::Move(MovementRequest {
+            mode,
+            session_id: stamp.session_id,
+            position: position_sent,
+            created: stamp.created,
+        })
+    });
+    if sent.is_err() {
         controls.reset(None);
         return;
     }
@@ -826,7 +826,7 @@ mod tests {
             .init_resource::<crate::chat::ChatState>()
             .init_resource::<crate::navigation::NavigationKeys>()
             .insert_resource(Collision(Some(floor)))
-            .insert_resource(target::CommandsToServer(Some(sender)))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .insert_resource(keys)
             .insert_resource(Controls {
                 speed: Some(6.0),

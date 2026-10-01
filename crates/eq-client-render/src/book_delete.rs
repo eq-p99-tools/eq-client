@@ -39,6 +39,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                 row.spawn((
                     Button,
                     action,
+                    crate::outbox::Needs(eq_client_core::Capability::Spellbook),
                     Node {
                         padding: UiRect::all(px(5)),
                         ..default()

@@ -61,7 +61,7 @@ impl InventoryState {
         &mut self,
         slot: InventorySlot,
         online: &super::online::OnlineState,
-        sender: &super::target::CommandsToServer,
+        sender: &crate::outbox::Outbox,
         target: Option<u16>,
         casting: bool,
     ) -> String {
@@ -301,7 +301,7 @@ pub(super) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     online: Res<super::online::OnlineState>,
-    sender: Res<super::target::CommandsToServer>,
+    sender: Res<crate::outbox::Outbox>,
     toggles: Query<&Interaction, (With<Toggle>, Changed<Interaction>)>,
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
     slots: Query<(&Interaction, &SlotButton)>,
@@ -345,7 +345,7 @@ pub(super) fn input(
             .world
             .inventory()
             .items()
-            .contains_key(&InventorySlot(30))
+            .contains_key(&InventorySlot::CURSOR)
         {
             state.click_slot(stack.0, false, &online, &sender);
         } else {
@@ -416,7 +416,7 @@ fn visible_slots(inventory: &Inventory, tab: Tab) -> Vec<InventorySlot> {
     // Preserve unusual addresses and partial child-only updates visibly.
     if tab == Tab::Inventory {
         for slot in inventory.items().keys() {
-            if !(0..22).contains(&slot.0) && slot.0 < 2000 && !slots.contains(slot) {
+            if !slot.is_equipment() && slot.0 < 2000 && !slots.contains(slot) {
                 slots.push(*slot);
             }
         }
@@ -534,7 +534,7 @@ pub(super) fn feedback(
     for (slot, interaction, mut border) in &mut slots {
         let item = inventory.items().get(&slot.0);
         let hovered = *interaction != Interaction::None;
-        let tint = if slot.0 == InventorySlot(30) && item.is_some() {
+        let tint = if slot.0 == InventorySlot::CURSOR && item.is_some() {
             Color::srgb(0.45, 0.82, 1.0)
         } else if hovered {
             Color::srgb(0.88, 0.77, 0.45)
@@ -833,7 +833,7 @@ mod tests {
             InventoryUpdate::Snapshot(
                 demo_items()
                     .into_iter()
-                    .filter(|item| item.slot != InventorySlot(30))
+                    .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),
             ),
         );
@@ -879,7 +879,7 @@ mod tests {
                 .is_none()
         );
         let items = items(&app);
-        assert_eq!(items.items()[&InventorySlot(30)].stack_count, Some(2));
+        assert_eq!(items.items()[&InventorySlot::CURSOR].stack_count, Some(2));
         assert_eq!(items.items()[&InventorySlot(251)].stack_count, Some(18));
     }
 
@@ -891,7 +891,7 @@ mod tests {
             InventoryUpdate::Snapshot(
                 demo_items()
                     .into_iter()
-                    .filter(|item| item.slot != InventorySlot(30))
+                    .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),
             ),
         );
@@ -904,7 +904,7 @@ mod tests {
         app.update();
         press_slot(&mut app, 251);
         assert_eq!(
-            items(&app).items()[&InventorySlot(30)].stack_count,
+            items(&app).items()[&InventorySlot::CURSOR].stack_count,
             Some(20)
         );
         press_slot(&mut app, 24);
@@ -918,7 +918,7 @@ mod tests {
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::Escape);
         app.update();
-        assert!(items(&app).items().contains_key(&InventorySlot(30)));
+        assert!(items(&app).items().contains_key(&InventorySlot::CURSOR));
     }
 
     /// The items as the world has them.

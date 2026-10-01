@@ -274,7 +274,7 @@ pub(super) fn spawn(commands: &mut Commands) {
 pub(super) fn input(
     mut state: ResMut<ChatState>,
     online: Res<super::online::OnlineState>,
-    sender: Res<super::target::CommandsToServer>,
+    outbox: Res<crate::outbox::Outbox>,
     mut keyboard: MessageReader<KeyboardInput>,
     windows: Query<&Window, With<PrimaryWindow>>,
     panels: Query<(Entity, &UiGlobalTransform, &ComputedNode), With<Panel>>,
@@ -329,7 +329,7 @@ pub(super) fn input(
             // Enter on an empty line closes the input, as in the official client.
             state.composing = false;
         } else {
-            submit_draft(&mut state, &online, &sender);
+            submit_draft(&mut state, &online, &outbox);
         }
     }
     state.hovered = windows
@@ -563,19 +563,31 @@ fn spawn_line(parent: &mut ChildSpawnerCommands, id: u64, line: &ChatLine) {
     }
 }
 
+/// Why a draft did not go: a mistake in it, which the chat's status line
+/// shows, or a refusal, which the outbox shows in the feedback line.
+enum Unsent {
+    Mistake(String),
+    Refused,
+}
+
+impl From<String> for Unsent {
+    fn from(mistake: String) -> Self {
+        Self::Mistake(mistake)
+    }
+}
+
+impl From<crate::outbox::Refusal> for Unsent {
+    fn from(_: crate::outbox::Refusal) -> Self {
+        Self::Refused
+    }
+}
+
 fn submit_draft(
     state: &mut ChatState,
     online: &super::online::OnlineState,
-    sender: &super::target::CommandsToServer,
+    outbox: &crate::outbox::Outbox,
 ) {
-    let result = (|| -> Result<(), String> {
-        if !online.world.connected() || online.world.death().is_some() {
-            return Err("Connect before sending chat".into());
-        }
-        let sender = sender
-            .0
-            .as_ref()
-            .ok_or_else(|| "Network worker is unavailable".to_owned())?;
+    let result = (|| -> Result<(), Unsent> {
         if let Some(request) = target_request(state.draft.trim()) {
             state.requested_target = Some(request?);
             return Ok(());
@@ -584,47 +596,42 @@ fn submit_draft(
             state.history.push(system_line(line?));
             return Ok(());
         }
-        if let Some(commands) = game_commands(state.draft.trim(), online) {
+        if let Some(commands) = game_commands(state.draft.trim(), online, outbox) {
             for command in commands? {
-                sender
-                    .try_send(command)
-                    .map_err(|_| "Command could not be queued".to_owned())?;
+                outbox.send(&online.world, command)?;
             }
             return Ok(());
         }
         let message = outbound(state.active, state.draft.trim())?;
-        sender
-            .try_send(ClientCommand::SendChat(message))
-            .map_err(|_| "Chat could not be queued".to_owned())?;
+        outbox.send(&online.world, ClientCommand::SendChat(message))?;
         Ok(())
     })();
     match result {
         Ok(()) => {
             state.draft.clear();
-            // Sent lines return the keyboard to the game.
+            // Sent lines return the keyboard to the game; a line sent says
+            // nothing more.
             state.composing = false;
-            state.status = "Chat queued".into();
+            state.status.clear();
         }
-        Err(error) => state.status = error,
+        Err(Unsent::Mistake(mistake)) => state.status = mistake,
+        // The draft stays, to send again.
+        Err(Unsent::Refused) => (),
     }
 }
 
-/// Queues a game slash command for scripts; ordinary chat is never sent this way.
+/// Sends a game slash command for scripts; ordinary chat is never sent this way.
 pub(super) fn submit_game_command(
     input: &str,
     online: &super::online::OnlineState,
-    sender: &super::target::CommandsToServer,
+    outbox: &crate::outbox::Outbox,
 ) -> Result<(), String> {
-    let commands =
-        game_commands(input, online).ok_or_else(|| format!("{input} is not a game command"))??;
-    let sender = sender
-        .0
-        .as_ref()
-        .ok_or_else(|| "Network worker is unavailable".to_owned())?;
+    let commands = game_commands(input, online, outbox)
+        .ok_or_else(|| format!("{input} is not a game command"))??;
     for command in commands {
-        sender
-            .try_send(command)
-            .map_err(|_| "Command could not be queued".to_owned())?;
+        outbox
+            .send(&online.world, command)
+            .map_err(|refusal| refusal.text().to_owned())?;
     }
     Ok(())
 }
@@ -670,32 +677,37 @@ pub(super) fn target_request(input: &str) -> Option<Result<String, String>> {
 fn game_commands(
     input: &str,
     online: &super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
 ) -> Option<Result<Vec<ClientCommand>, String>> {
     let name = input.strip_prefix('/')?.trim().to_ascii_lowercase();
+    let stamp = || {
+        outbox
+            .stamp(&online.world)
+            .map_err(|refusal| refusal.text().to_owned())
+    };
     let posture = |posture| {
-        let (Some(session_id), Some(player)) = (online.world.session_id(), online.world.player())
-        else {
-            return Err("Enter the world first".to_owned());
-        };
+        let stamp = stamp()?;
+        let player = online.world.player().ok_or("Enter the world first")?;
         Ok(ClientCommand::SetPosture {
-            session_id,
+            session_id: stamp.session_id,
             spawn_id: player.spawn_id,
             posture,
-            created: std::time::Instant::now(),
+            created: stamp.created,
         })
     };
     Some(match name.as_str() {
         "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
         // Camping requires sitting, so sit first as a player would.
-        "camp" => posture(eq_client_core::Posture::Sitting).map(|sit| {
-            vec![
+        "camp" => posture(eq_client_core::Posture::Sitting).and_then(|sit| {
+            let stamp = stamp()?;
+            Ok(vec![
                 sit,
                 ClientCommand::Camp {
-                    session_id: online.world.session_id().unwrap_or_default(),
-                    created: std::time::Instant::now(),
+                    session_id: stamp.session_id,
+                    created: stamp.created,
                 },
-            ]
+            ])
         }),
         _ => return None,
     })
@@ -910,9 +922,11 @@ mod tests {
     #[test]
     fn camp_sits_first_and_game_commands_never_become_chat() {
         let mut online = super::super::online::OnlineState::new(true);
-        assert!(game_commands("/say hello", &online).is_none());
-        assert!(game_commands("hello", &online).is_none());
-        assert!(game_commands("/camp", &online).unwrap().is_err());
+        let (queue, _received) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        assert!(game_commands("/say hello", &online, &outbox).is_none());
+        assert!(game_commands("hello", &online, &outbox).is_none());
+        assert!(game_commands("/camp", &online, &outbox).unwrap().is_err());
         crate::online::testing::admit(
             &mut online,
             4,
@@ -938,7 +952,7 @@ mod tests {
                 appearance: eq_client_core::outfit::Appearance::default(),
             },
         );
-        let commands = game_commands("/CAMP", &online).unwrap().unwrap();
+        let commands = game_commands("/CAMP", &online, &outbox).unwrap().unwrap();
         assert!(matches!(
             commands.as_slice(),
             [
@@ -952,7 +966,7 @@ mod tests {
             ]
         ));
         assert!(matches!(
-            game_commands("/stand", &online)
+            game_commands("/stand", &online, &outbox)
                 .unwrap()
                 .unwrap()
                 .as_slice(),
@@ -972,7 +986,7 @@ mod tests {
             .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
             .insert_resource(online)
-            .insert_resource(super::super::target::CommandsToServer(Some(sender)))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, input);
         let enter = KeyboardInput {
             key_code: KeyCode::Enter,
@@ -1006,7 +1020,7 @@ mod tests {
             .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(true))
-            .insert_resource(super::super::target::CommandsToServer(None))
+            .insert_resource(crate::outbox::Outbox::new(None))
             .add_systems(Update, input);
         app.world_mut().write_message(KeyboardInput {
             key_code: KeyCode::Enter,
@@ -1036,7 +1050,7 @@ mod tests {
             .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(false))
-            .insert_resource(super::super::target::CommandsToServer(None))
+            .insert_resource(crate::outbox::Outbox::new(None))
             .add_systems(Update, (input, refresh).chain());
         app.world_mut().spawn(Content::default());
         let button = app

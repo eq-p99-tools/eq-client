@@ -122,28 +122,26 @@ pub(super) fn hit<'a>(
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-/// Queues picking an item up; the session checks the cursor and reach and
-/// answers with the result.
+/// Asks to pick an item up; the session checks the cursor and reach and
+/// answers with the result. The chat line the player reads when they cannot
+/// pick anything up now; the outbox shows its own refusals.
 pub(super) fn pick_up(
     drop_id: u32,
     state: &super::online::OnlineState,
-    sender: &super::target::CommandsToServer,
-) -> Result<(), String> {
-    let session_id = state
-        .world
-        .session_id()
-        .filter(|_| state.in_world())
-        .ok_or("You can't pick anything up right now.")?;
-    sender
-        .0
-        .as_ref()
-        .ok_or("Command queue unavailable")?
-        .try_send(eq_client_core::ClientCommand::PickUp {
-            session_id,
+    outbox: &crate::outbox::Outbox,
+) -> Option<String> {
+    if !state.in_world() {
+        return Some("You can't pick anything up right now.".into());
+    }
+    // A refusal shows in the feedback line.
+    let _ = outbox.post(&state.world, |stamp| {
+        eq_client_core::ClientCommand::PickUp {
+            session_id: stamp.session_id,
             drop_id,
-            created: std::time::Instant::now(),
-        })
-        .map_err(|_| String::from("Pickup could not be queued"))
+            created: stamp.created,
+        }
+    });
+    None
 }
 
 /// A refused pickup as a chat line, such as "Too far away to pick that up."

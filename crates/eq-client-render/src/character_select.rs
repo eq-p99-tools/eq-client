@@ -1,5 +1,5 @@
 //! Pre-zone character selection uses occupied server slots, never typed names.
-use super::{hud::HudState, online::OnlineState, target::CommandsToServer};
+use super::{hud::HudState, online::OnlineState, outbox::Outbox};
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::{CharacterChoice, ClientCommand};
 
@@ -65,8 +65,9 @@ impl Selection {
         slot.is_some()
     }
 
-    /// Queues once; a full queue leaves the choice available for another click.
-    fn enter(&mut self, sender: &CommandsToServer) {
+    /// Asks once; a refused request leaves the choice available for another
+    /// click, and the outbox says why.
+    fn enter(&mut self, outbox: &Outbox, world: &eq_client_core::world::ClientWorld) {
         if self.submitted {
             return;
         }
@@ -76,24 +77,16 @@ impl Selection {
         if !self.entries.iter().any(|entry| entry.slot == slot) {
             return;
         }
-        let result = sender
-            .0
-            .as_ref()
-            .ok_or("Connection unavailable")
-            .and_then(|sender| {
-                sender
-                    .try_send(ClientCommand::SelectCharacter {
-                        selection_id: self.id,
-                        slot,
-                    })
-                    .map_err(|_| "Could not queue selection; try again")
-            });
-        match result {
+        let command = ClientCommand::SelectCharacter {
+            selection_id: self.id,
+            slot,
+        };
+        match outbox.send(world, command) {
             Ok(()) => {
                 self.submitted = true;
                 self.message = "Entering world...".into();
             }
-            Err(reason) => self.message = reason.into(),
+            Err(refusal) => self.message = refusal.text().into(),
         }
     }
 }
@@ -112,7 +105,7 @@ pub(super) fn update(
     mut commands: Commands,
     mut online: ResMut<OnlineState>,
     hud: Res<HudState>,
-    sender: Res<CommandsToServer>,
+    outbox: Res<Outbox>,
     keys: Res<ButtonInput<KeyCode>>,
     navigation: Res<super::navigation::NavigationKeys>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -122,18 +115,20 @@ pub(super) fn update(
 ) {
     let keys = navigation.sample(&keys);
     let visible = online.enabled && online.world.session_id().is_none();
+    let state = &mut *online;
     if visible
         && windows.single().is_ok_and(|window| window.focused)
-        && let Some(selection) = online.selection.as_mut()
+        && let Some(selection) = state.selection.as_mut()
         && !selection.submitted
     {
+        let world = &state.world;
         for (interaction, action) in &buttons {
             if !interaction.is_changed() || *interaction != Interaction::Pressed {
                 continue;
             }
             match action {
                 Action::Choose(slot) => selection.selected = Some(*slot),
-                Action::Enter => selection.enter(&sender),
+                Action::Enter => selection.enter(&outbox, world),
             }
         }
         if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::ArrowUp) {
@@ -154,7 +149,7 @@ pub(super) fn update(
             }
         }
         if keys.just_pressed(KeyCode::Enter) {
-            selection.enter(&sender);
+            selection.enter(&outbox, world);
         }
     }
     let signature = format!(
@@ -295,7 +290,7 @@ mod tests {
         ));
         let mut app = App::new();
         app.insert_resource(state)
-            .insert_resource(CommandsToServer(Some(tx)))
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .init_resource::<HudState>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::navigation::NavigationKeys>()
@@ -348,7 +343,9 @@ mod tests {
     #[test]
     fn entry_requires_selection_and_never_duplicates_or_discards_a_full_queue() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let sender = CommandsToServer(Some(tx));
+        let queue = tx.clone();
+        let sender = crate::outbox::Outbox::new(Some(tx));
+        let world = eq_client_core::world::ClientWorld::default();
         let mut selection = Selection::new(
             7,
             vec![CharacterChoice {
@@ -358,23 +355,20 @@ mod tests {
                 zone_id: Some(22),
             }],
         );
-        selection.enter(&sender);
+        selection.enter(&sender, &world);
         assert!(rx.try_recv().is_err());
         selection.selected = Some(3);
-        sender
-            .0
-            .as_ref()
-            .unwrap()
+        queue
             .try_send(ClientCommand::SelectCharacter {
                 selection_id: 6,
                 slot: 1,
             })
             .unwrap();
-        selection.enter(&sender);
+        selection.enter(&sender, &world);
         assert!(!selection.submitted);
         rx.try_recv().unwrap();
-        selection.enter(&sender);
-        selection.enter(&sender);
+        selection.enter(&sender, &world);
+        selection.enter(&sender, &world);
         assert!(selection.submitted);
         assert_eq!(
             rx.try_recv().unwrap(),

@@ -8,7 +8,7 @@ pub(crate) struct Label;
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn presentation(
     online: Option<Res<crate::online::OnlineState>>,
-    sender: Option<Res<crate::target::CommandsToServer>>,
+    outbox: Option<Res<crate::outbox::Outbox>>,
     names: Res<SpellNames>,
     mut buttons: Query<(&Interaction, &mut BackgroundColor), With<ScribeCursor>>,
     mut labels: Query<(&mut Text, &mut TextColor), With<Label>>,
@@ -17,7 +17,8 @@ pub(crate) fn presentation(
     let available = if action_pending(world) {
         Err(anyhow::anyhow!("Wait for the current spell action"))
     } else {
-        prepare_scribe(online.as_deref(), world.spell_book(), sender.as_deref())
+        let stamp = outbox.as_deref().and_then(|outbox| outbox.peek(world));
+        prepare_scribe(online.as_deref(), world.spell_book(), stamp)
     };
     let enabled = available.is_ok();
     let label = match available {
@@ -81,7 +82,9 @@ mod tests {
         );
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let (queue, _received) = std::sync::mpsc::sync_channel(1);
         app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(queue)))
             .init_resource::<crate::inventory::InventoryState>();
         app.update();
         assert_eq!(

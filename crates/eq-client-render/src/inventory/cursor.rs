@@ -40,7 +40,7 @@ pub(crate) fn update(
         return;
     };
     let inventory = online.world.inventory();
-    let item = inventory.items().get(&InventorySlot(30));
+    let item = inventory.items().get(&InventorySlot::CURSOR);
     let pointer = windows
         .single()
         .ok()

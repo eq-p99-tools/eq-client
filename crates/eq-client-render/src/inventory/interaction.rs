@@ -1,6 +1,9 @@
 //! Inventory selection and submission; UI intent never carries raw packet bytes.
 use super::{InventorySlot, InventoryState};
-use crate::{online::OnlineState, target::CommandsToServer};
+use crate::{
+    online::OnlineState,
+    outbox::{Outbox, Stamp},
+};
 use eq_client_core::{
     ClientCommand,
     inventory::{Inventory, InventoryActor, InventoryMove, MoveQuantity},
@@ -39,7 +42,7 @@ impl InventoryState {
         &mut self,
         slot: InventorySlot,
         online: &OnlineState,
-        sender: &CommandsToServer,
+        sender: &Outbox,
         target: Option<u16>,
         casting: bool,
     ) {
@@ -48,10 +51,7 @@ impl InventoryState {
         let inventory = online.world.inventory();
         let result = (|| -> anyhow::Result<()> {
             use anyhow::{Context, ensure};
-            ensure!(
-                online.enabled && online.world.connected() && online.world.death().is_none(),
-                "Connect to use an item"
-            );
+            let stamp = sender.stamp(&online.world)?;
             ensure!(
                 !casting,
                 "Wait for the current cast to finish or interrupt it"
@@ -61,10 +61,10 @@ impl InventoryState {
                 "Finish the pending inventory move first"
             );
             ensure!(
-                !inventory.items().contains_key(&InventorySlot(30)),
+                !inventory.items().contains_key(&InventorySlot::CURSOR),
                 "Place the cursor item before using an item"
             );
-            let now = Instant::now();
+            let now = stamp.created;
             ensure!(
                 self.actions.pending_use.is_none(),
                 "Item use is already queued; wait for worker feedback"
@@ -79,7 +79,7 @@ impl InventoryState {
                 .world
                 .player()
                 .context("Character data is unavailable")?;
-            let session_id = online.world.session_id().context("No active admission")?;
+            let session_id = stamp.session_id;
             let target_id = target.unwrap_or(player.spawn_id);
             let request = eq_client_core::inventory::ItemUse {
                 request_id: self
@@ -98,22 +98,19 @@ impl InventoryState {
                     .spawn(target_id)
                     .map(|spawn| &spawn.state)
                     .is_some_and(|spawn| !spawn.invisible);
-            inventory.prepare_item_cast(&request, session_id, player.level, available, now)?;
+            inventory.prepare_item_cast(&request, player.level, available)?;
             let request_id = request.request_id;
-            sender
-                .0
-                .as_ref()
-                .context("Network worker unavailable")?
-                .try_send(ClientCommand::UseItem(request))
-                .context("Item-use request could not be queued")?;
+            sender.send(&online.world, ClientCommand::UseItem(request))?;
             self.actions.last_use = Some(now);
             self.next_use_id = request_id;
             self.actions.pending_use = Some((session_id, request_id));
             Ok(())
         })();
+        // A use sent says nothing; the cast bar shows the effect once the
+        // server takes it.
         self.actions.message = result.map_or_else(
-            |error| error.to_string(),
-            |()| "Item use queued; waiting for server cast updates".into(),
+            |error| crate::outbox::window_line(&error),
+            |()| String::new(),
         );
         self.revision = self.revision.wrapping_add(1);
     }
@@ -162,7 +159,7 @@ impl InventoryState {
             self.actions.auto_store = false;
         }
         self.actions.message = error.unwrap_or_else(|| {
-            if to_cursor || inventory.items().contains_key(&InventorySlot(30)) {
+            if to_cursor || inventory.items().contains_key(&InventorySlot::CURSOR) {
                 "Item is on the cursor / choose a destination".into()
             } else {
                 // Servers acknowledge only refused moves, so the placement
@@ -179,13 +176,13 @@ impl InventoryState {
         slot: InventorySlot,
         split: bool,
         online: &OnlineState,
-        sender: &CommandsToServer,
+        sender: &Outbox,
     ) {
         self.actions.auto_store = false;
         self.actions.split = None;
         let result = self.try_click(slot, split.then_some(NonZeroU32::MIN), online, sender);
         if let Err(error) = result {
-            self.actions.message = error.to_string();
+            self.actions.message = crate::outbox::window_line(&error);
         }
         self.revision = self.revision.wrapping_add(1);
     }
@@ -200,7 +197,7 @@ impl InventoryState {
             .and_then(|item| item.stack_count);
         if self.actions.pending.is_some()
             || inventory.stale()
-            || inventory.items().contains_key(&InventorySlot(30))
+            || inventory.items().contains_key(&InventorySlot::CURSOR)
         {
             self.actions.message = "Finish the current cursor move first".into();
         } else if let Some(available) = count.filter(|count| *count > 1) {
@@ -221,7 +218,7 @@ impl InventoryState {
         &mut self,
         action: SplitAction,
         online: &OnlineState,
-        sender: &CommandsToServer,
+        sender: &Outbox,
     ) {
         let Some(mut selection) = self.actions.split.take() else {
             return;
@@ -246,7 +243,7 @@ impl InventoryState {
                     online,
                     sender,
                 ) {
-                    self.actions.message = error.to_string();
+                    self.actions.message = crate::outbox::window_line(&error);
                 }
                 return;
             }
@@ -255,60 +252,54 @@ impl InventoryState {
     }
 
     /// Advances automatic storage by one validated move after the previous result arrives.
-    pub(super) fn store_cursor(&mut self, online: &OnlineState, sender: &CommandsToServer) {
+    pub(super) fn store_cursor(&mut self, online: &OnlineState, sender: &Outbox) {
         if !self.actions.auto_store || self.actions.pending.is_some() {
             return;
         }
         let inventory = online.world.inventory();
-        if !inventory.items().contains_key(&InventorySlot(30)) {
+        if !inventory.items().contains_key(&InventorySlot::CURSOR) {
             self.actions.auto_store = false;
             return;
         }
-        let result = self.actor(online).and_then(|(_, actor)| {
+        let result = self.actor(online).and_then(|actor| {
             let destination = inventory.auto_store_destination(actor)?;
             self.try_click(destination, None, online, sender)
         });
         if let Err(error) = result {
             self.actions.auto_store = false;
-            self.actions.message = error.to_string();
+            self.actions.message = crate::outbox::window_line(&error);
         }
         self.revision = self.revision.wrapping_add(1);
     }
 
-    fn actor(&self, online: &OnlineState) -> anyhow::Result<(u64, InventoryActor)> {
+    fn actor(&self, online: &OnlineState) -> anyhow::Result<InventoryActor> {
         use anyhow::Context;
         if self.demo {
-            return Ok((
-                0,
-                InventoryActor {
-                    bank_access: self.bank_open,
-                    dual_wield: None,
-                    deity: None,
-                    class: Some(1),
-                    race: 1,
-                    level: 60,
-                },
-            ));
+            return Ok(InventoryActor {
+                bank_access: self.bank_open,
+                dual_wield: None,
+                deity: None,
+                class: Some(1),
+                race: 1,
+                level: 60,
+            });
         }
         let player = online
             .world
             .player()
             .context("Character data is unavailable")?;
-        Ok((
-            online.world.session_id().context("No active admission")?,
-            InventoryActor {
-                bank_access: self.bank_open,
-                deity: player.deity,
-                dual_wield: player
-                    .skills
-                    .as_ref()
-                    .and_then(|skills| skills.get(22))
-                    .copied(),
-                class: player.class,
-                race: player.race,
-                level: player.level,
-            },
-        ))
+        Ok(InventoryActor {
+            bank_access: self.bank_open,
+            deity: player.deity,
+            dual_wield: player
+                .skills
+                .as_ref()
+                .and_then(|skills| skills.get(22))
+                .copied(),
+            class: player.class,
+            race: player.race,
+            level: player.level,
+        })
     }
 
     #[allow(clippy::too_many_lines)] // One transactional path keeps validation and submission adjacent.
@@ -317,30 +308,41 @@ impl InventoryState {
         slot: InventorySlot,
         split: Option<NonZeroU32>,
         online: &OnlineState,
-        sender: &CommandsToServer,
+        sender: &Outbox,
     ) -> anyhow::Result<()> {
-        const CURSOR: InventorySlot = InventorySlot(30);
         use anyhow::{Context, ensure};
         let inventory = online.world.inventory();
         ensure!(
             self.actions.pending.is_none(),
             "Waiting for the queued move; it will not be retried"
         );
-        ensure!(
-            self.demo || (online.world.connected() && online.world.death().is_none()),
-            "Connect to move items"
-        );
+        // The offline demo settles its own moves; online, the outbox stamps
+        // the move, or says why not.
+        let stamp = if self.demo {
+            Stamp {
+                session_id: 0,
+                created: Instant::now(),
+            }
+        } else {
+            sender.stamp(&online.world)?
+        };
         ensure!(
             inventory.received() && !inventory.stale(),
             "Wait for a current inventory snapshot"
         );
         ensure!(
-            matches!(slot.0,0..=30|251..=330) || (self.bank_open && slot.is_personal_bank()),
+            slot.is_equipment()
+                || slot.is_carried()
+                || slot == InventorySlot::CURSOR
+                || (self.bank_open && slot.is_personal_bank()),
             "This slot is view only"
         );
-        let cursor_item = inventory.items().get(&CURSOR);
+        let cursor_item = inventory.items().get(&InventorySlot::CURSOR);
         let (from, to, quantity, to_cursor) = if let Some(item) = cursor_item {
-            ensure!(slot != CURSOR, "Choose a destination for the cursor item");
+            ensure!(
+                slot != InventorySlot::CURSOR,
+                "Choose a destination for the cursor item"
+            );
             let quantity =
                 if let Some(destination) = inventory.items().get(&slot).filter(|other| {
                     other.details.id == item.details.id && item.stack_count.is_some()
@@ -357,10 +359,10 @@ impl InventoryState {
                 } else {
                     MoveQuantity::Whole
                 };
-            (CURSOR, slot, quantity, false)
+            (InventorySlot::CURSOR, slot, quantity, false)
         } else {
             ensure!(
-                slot != CURSOR,
+                slot != InventorySlot::CURSOR,
                 "The cursor is empty; choose an item to pick up"
             );
             let item = inventory
@@ -370,19 +372,19 @@ impl InventoryState {
             self.actions.message = format!("Picking up {}", item.details.name);
             (
                 slot,
-                CURSOR,
+                InventorySlot::CURSOR,
                 split.map_or(MoveQuantity::Whole, MoveQuantity::Count),
                 true,
             )
         };
         let revision = inventory.revision();
-        let (session_id, actor) = self.actor(online)?;
+        let actor = self.actor(online)?;
         let request = InventoryMove {
-            session_id,
+            session_id: stamp.session_id,
             revision,
             from,
             to,
-            created: Instant::now(),
+            created: stamp.created,
             quantity,
         };
         let update = inventory.plan_move(&request, actor)?;
@@ -391,19 +393,14 @@ impl InventoryState {
             let mut after = inventory.clone();
             after.apply(update.clone());
             self.demo_news.push(update);
-            self.actions.message = if after.items().contains_key(&CURSOR) {
+            self.actions.message = if after.items().contains_key(&InventorySlot::CURSOR) {
                 "Item is on the cursor / choose a destination".into()
             } else {
                 "Item placed locally / offline demo".into()
             };
         } else {
-            sender
-                .0
-                .as_ref()
-                .context("Network worker is unavailable")?
-                .try_send(ClientCommand::MoveInventory(request))
-                .context("Move could not be queued")?;
-            self.actions.pending = Some((session_id, revision, to_cursor));
+            sender.send(&online.world, ClientCommand::MoveInventory(request))?;
+            self.actions.pending = Some((stamp.session_id, revision, to_cursor));
             self.actions.message = if to_cursor {
                 "Picking item up onto cursor".into()
             } else {
@@ -439,7 +436,7 @@ mod tests {
             bench.tell(InventoryUpdate::Snapshot(
                 super::super::demo_items()
                     .into_iter()
-                    .filter(|item| item.slot != InventorySlot(30))
+                    .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),
             ));
             bench.state.demo = true;
@@ -469,20 +466,20 @@ mod tests {
                 InventorySlot(slot),
                 split,
                 &self.online,
-                &CommandsToServer(None),
+                &crate::outbox::Outbox::new(None),
             );
             self.settle();
         }
 
         fn split(&mut self, action: SplitAction) {
             self.state
-                .split_action(action, &self.online, &CommandsToServer(None));
+                .split_action(action, &self.online, &crate::outbox::Outbox::new(None));
             self.settle();
         }
 
         fn store(&mut self) {
             self.state
-                .store_cursor(&self.online, &CommandsToServer(None));
+                .store_cursor(&self.online, &crate::outbox::Outbox::new(None));
             self.settle();
         }
 
@@ -494,7 +491,7 @@ mod tests {
         /// Puts five of the rations on the cursor beside a stack of eighteen.
         fn hold_rations(&mut self) {
             let mut cursor = self.data().items()[&InventorySlot(251)].clone();
-            cursor.slot = InventorySlot(30);
+            cursor.slot = InventorySlot::CURSOR;
             cursor.stack_count = Some(5);
             let mut destination = self.data().items()[&InventorySlot(251)].clone();
             destination.stack_count = Some(18);
@@ -527,7 +524,7 @@ mod tests {
         let Bench { state, online } = &mut bench;
         let own_id = online.world.player().unwrap().spawn_id;
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
-        let sender = CommandsToServer(Some(sender));
+        let sender = crate::outbox::Outbox::new(Some(sender));
         state.use_slot(InventorySlot(13), online, &sender, None, true);
         assert!(receiver.try_recv().is_err());
         state.use_slot(InventorySlot(13), online, &sender, Some(65500), false);
@@ -562,7 +559,7 @@ mod tests {
         state.use_slot(
             InventorySlot(13),
             online,
-            &CommandsToServer(None),
+            &crate::outbox::Outbox::new(None),
             None,
             false,
         );
@@ -613,7 +610,7 @@ mod tests {
         bench.split(SplitAction::More);
         bench.split(SplitAction::Confirm);
         assert_eq!(
-            bench.data().items()[&InventorySlot(30)].stack_count,
+            bench.data().items()[&InventorySlot::CURSOR].stack_count,
             Some(3)
         );
         assert_eq!(
@@ -644,11 +641,11 @@ mod tests {
         bench.state.actions.auto_store = true;
         bench.store();
         assert_eq!(
-            bench.data().items()[&InventorySlot(30)].stack_count,
+            bench.data().items()[&InventorySlot::CURSOR].stack_count,
             Some(3)
         );
         bench.store();
-        assert!(!bench.data().items().contains_key(&InventorySlot(30)));
+        assert!(!bench.data().items().contains_key(&InventorySlot::CURSOR));
         assert_eq!(
             bench.data().items()[&InventorySlot(24)].stack_count,
             Some(3)
@@ -664,7 +661,7 @@ mod tests {
         let Bench { state, online } = &mut bench;
         state.demo = false;
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let sender = CommandsToServer(Some(tx));
+        let sender = crate::outbox::Outbox::new(Some(tx));
         state.actions.auto_store = true;
         state.store_cursor(online, &sender);
         let ClientCommand::MoveInventory(request) = rx.try_recv().unwrap() else {
@@ -686,7 +683,7 @@ mod tests {
                 .world
                 .inventory()
                 .items()
-                .contains_key(&InventorySlot(30))
+                .contains_key(&InventorySlot::CURSOR)
         );
     }
 
@@ -695,11 +692,11 @@ mod tests {
         let mut bench = Bench::demo(7);
         bench.click(251, true);
         assert_eq!(
-            bench.data().items()[&InventorySlot(30)].stack_count,
+            bench.data().items()[&InventorySlot::CURSOR].stack_count,
             Some(1)
         );
         bench.click(251, false);
-        assert!(!bench.data().items().contains_key(&InventorySlot(30)));
+        assert!(!bench.data().items().contains_key(&InventorySlot::CURSOR));
         assert_eq!(
             bench.data().items()[&InventorySlot(251)].stack_count,
             Some(20)
@@ -712,7 +709,7 @@ mod tests {
         bench.hold_rations();
         bench.click(251, false);
         assert_eq!(
-            bench.data().items()[&InventorySlot(30)].stack_count,
+            bench.data().items()[&InventorySlot::CURSOR].stack_count,
             Some(3)
         );
         assert_eq!(
@@ -762,7 +759,7 @@ mod tests {
         bench.tell(InventoryUpdate::Set(vec![
             super::super::demo_items()[0].clone(),
         ]));
-        assert!(bench.data().items().contains_key(&InventorySlot(30)));
+        assert!(bench.data().items().contains_key(&InventorySlot::CURSOR));
         bench.click(24, false);
         assert!(bench.data().items().contains_key(&InventorySlot(24)));
         let before = bench.data().clone();
@@ -777,7 +774,7 @@ mod tests {
         let Bench { state, online } = &mut bench;
         state.demo = false;
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let sender = CommandsToServer(Some(tx));
+        let sender = crate::outbox::Outbox::new(Some(tx));
         state.click_slot(InventorySlot(251), false, online, &sender);
         state.click_slot(InventorySlot(24), false, online, &sender);
         assert_eq!(online.world.inventory(), &before);
@@ -785,7 +782,7 @@ mod tests {
             panic!("wrong command")
         };
         assert_eq!(request.from, InventorySlot(251));
-        assert_eq!(request.to, InventorySlot(30));
+        assert_eq!(request.to, InventorySlot::CURSOR);
         state.click_slot(InventorySlot(25), false, online, &sender);
         assert!(rx.try_recv().is_err());
         state.action_result(8, request.revision, None, online.world.inventory());
@@ -829,13 +826,13 @@ mod tests {
             },
         );
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        let sender = CommandsToServer(Some(tx));
+        let sender = crate::outbox::Outbox::new(Some(tx));
         state.refresh_bank_access(online);
         assert!(state.bank_open);
         state.click_slot(InventorySlot(2000), false, online, &sender);
         assert!(
             matches!(rx.try_recv().unwrap(), ClientCommand::MoveInventory(request)
-            if request.from == InventorySlot(2000) && request.to == InventorySlot(30))
+            if request.from == InventorySlot(2000) && request.to == InventorySlot::CURSOR)
         );
         assert_eq!(online.world.inventory(), &before);
         state.tab = super::super::Tab::Bank;

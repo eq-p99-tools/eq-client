@@ -117,7 +117,15 @@ impl SessionWorker {
                             eprintln!("{message}");
                             None
                         }
-                        _ => None,
+                        // A reconnect is a fresh login; this viewer asks for
+                        // none, but says so if one comes.
+                        ClientEvent::Reconnecting {
+                            error,
+                            delay_seconds,
+                        } => {
+                            eprintln!("Reconnecting in {delay_seconds} s: {error}");
+                            Some(WorldUpdate::Connection(Link::LoggingIn))
+                        }
                     };
                     if let Some(update) = update {
                         match sender.try_send(update) {

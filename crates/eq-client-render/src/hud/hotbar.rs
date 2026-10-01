@@ -62,7 +62,11 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
             let button = super::slot(commands, row, key, 40.0, true);
             commands
                 .entity(button)
-                .insert((Button, Slot(index)))
+                .insert((
+                    Button,
+                    Slot(index),
+                    crate::outbox::Needs(eq_client_core::Capability::Casting),
+                ))
                 .with_child(crate::spell_icons::artwork(
                     crate::spell_icons::Source::Action(index),
                     30.0,
@@ -183,8 +187,8 @@ pub(crate) fn presentation(
     let inventory = online.world.inventory();
     let hovered = slots
         .iter()
-        .find(|(interaction, _, _)| **interaction != Interaction::None)
-        .map(|(_, slot, _)| slot.0);
+        .find(|(interaction, ..)| **interaction != Interaction::None)
+        .map(|(_, slot, ..)| slot.0);
     for (interaction, slot, mut color) in &mut slots {
         let spell = bindings.gem(slot.0).and_then(|gem| {
             online
@@ -287,6 +291,21 @@ fn bound_item(
         .filter(|item| item.details.id == id && item.activation.effect.is_some())
 }
 
+/// Keeps what each slot needs of the session in step with its binding:
+/// sitting and standing are moves, a gem or an item's effect is a cast.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate::outbox::Needs)>) {
+    for (slot, mut needs) in &mut slots {
+        let wanted = match bindings.0[slot.0] {
+            Some(Action::Sit | Action::Stand) => eq_client_core::Capability::Moving,
+            _ => eq_client_core::Capability::Casting,
+        };
+        if needs.0 != wanted {
+            needs.0 = wanted;
+        }
+    }
+}
+
 /// Item shortcuts share inventory validation, request IDs, cursor rules and worker feedback.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn item_actions(
@@ -296,7 +315,7 @@ pub(crate) fn item_actions(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     chat: Res<crate::chat::ChatState>,
     online: Res<crate::online::OnlineState>,
-    sender: Res<crate::target::CommandsToServer>,
+    sender: Res<crate::outbox::Outbox>,
     mut hud: ResMut<super::HudState>,
     mut inventory: ResMut<crate::inventory::InventoryState>,
 ) {

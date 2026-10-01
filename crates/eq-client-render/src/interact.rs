@@ -37,7 +37,7 @@ pub(super) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mut chat: ResMut<super::chat::ChatState>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    sender: Res<super::target::CommandsToServer>,
+    outbox: Res<crate::outbox::Outbox>,
     mut state: ResMut<super::online::OnlineState>,
 ) {
     if !keys.just_pressed(KeyCode::KeyF)
@@ -53,10 +53,10 @@ pub(super) fn input(
         return;
     }
     match nearest(&state) {
-        Some(Use::Door(door_id, _)) => super::doors::open(door_id, &mut state, &sender),
+        Some(Use::Door(door_id, _)) => super::doors::open(door_id, &mut state, &outbox),
         Some(Use::Item(drop_id)) => {
-            if let Err(error) = super::ground::pick_up(drop_id, &state, &sender) {
-                chat.history.push(super::chat::system_line(error));
+            if let Some(line) = super::ground::pick_up(drop_id, &state, &outbox) {
+                chat.history.push(super::chat::system_line(line));
             }
         }
         None => (),
@@ -144,7 +144,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::chat::ChatState>()
-            .insert_resource(super::super::target::CommandsToServer(Some(sender)))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .insert_resource(state)
             .add_systems(Update, input);
         app.world_mut().spawn((

@@ -22,6 +22,7 @@ mod motion;
 mod navigation;
 mod notices;
 mod online;
+mod outbox;
 mod outfit;
 mod paperdoll;
 #[cfg(test)]
@@ -33,6 +34,7 @@ mod skin;
 mod spell_icons;
 mod spellbook;
 mod target;
+mod tooltip;
 mod trade;
 mod windows;
 mod zone;
@@ -208,7 +210,7 @@ pub fn run(
     .insert_resource(ViewerSettings(config))
     .insert_resource(online::OnlineState::new(online))
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
-    .insert_resource(target::CommandsToServer(commands));
+    .insert_resource(outbox::Outbox::new(commands));
     init_presentation(&mut app);
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(window),
@@ -336,7 +338,7 @@ pub(crate) mod testing {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .insert_resource(online::OnlineState::new(false))
-            .insert_resource(target::CommandsToServer(None));
+            .insert_resource(outbox::Outbox::new(None));
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -410,6 +412,29 @@ fn install_overlays(app: &mut App) {
             .before(spell_icons::update),
     );
     app.add_systems(Update, character_select::update.after(online::receive));
+    // Refusals show once every input has had its say; controls grey out from
+    // the same answer the outbox gives, and the tooltip says why.
+    app.add_systems(Startup, tooltip::spawn).add_systems(
+        Update,
+        (
+            outbox::show
+                .after(hud::actions)
+                .after(trade::input)
+                .after(combat::input)
+                .after(target::input)
+                .after(chat::input)
+                .after(motion::input)
+                .before(hud::action_bar::update),
+            (
+                hud::hotbar::needs,
+                outbox::veil,
+                outbox::grey_out,
+                tooltip::show,
+            )
+                .chain()
+                .after(online::receive),
+        ),
+    );
     app.add_systems(Startup, character_select::demo);
     windows::register_layout(app);
     paperdoll::register(app);
