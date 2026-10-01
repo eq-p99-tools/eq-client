@@ -9,12 +9,14 @@
 
 mod casting;
 mod items;
+mod notice;
 mod target;
 mod trade;
 mod vitals;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
 pub use items::ItemCache;
+pub use notice::Notice;
 pub use target::Target;
 pub use trade::{Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
@@ -100,6 +102,8 @@ pub struct Changes {
     pub cast: Option<CastNews>,
     /// The inventory changed.
     pub inventory: bool,
+    /// What the news tells the player.
+    pub notices: Vec<Notice>,
     /// The update was for an earlier admission, or came when the world takes
     /// no such news, so nothing changed.
     pub ignored: bool,
@@ -160,7 +164,17 @@ impl ClientWorld {
                 ..
             } => self.connection(*connected, *terminal),
             WorldUpdate::Game(event) => self.event(event, now, spells),
-            WorldUpdate::Chat(_) | WorldUpdate::ServerMessage { .. } => Changes::default(),
+            WorldUpdate::ServerMessage {
+                string_id,
+                arguments,
+            } => Changes {
+                notices: vec![Notice::ServerString {
+                    id: *string_id,
+                    arguments: arguments.clone(),
+                }],
+                ..Changes::default()
+            },
+            WorldUpdate::Chat(_) => Changes::default(),
         }
     }
 
@@ -315,10 +329,20 @@ impl ClientWorld {
                     to_bind: offer.to_bind,
                 });
             }
-            WorldEvent::ZoneTransferRejected { session_id, .. } => {
+            WorldEvent::ZoneTransferRejected { session_id, reason } => {
                 if self.session_id == Some(*session_id) {
                     self.pending_transfer = None;
                     self.connected = self.death.is_none();
+                    changes.notices.push(Notice::TransferRefused(*reason));
+                } else {
+                    changes.ignored = true;
+                }
+            }
+            WorldEvent::ZoneLineRejected { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    changes
+                        .notices
+                        .push(Notice::ZoneLineRefused(reason.clone()));
                 } else {
                     changes.ignored = true;
                 }
@@ -346,7 +370,26 @@ impl ClientWorld {
             WorldEvent::Consideration(consideration) => {
                 self.considered
                     .insert(consideration.target_id, consideration.color);
+                changes.notices.push(Notice::Consideration {
+                    consideration: *consideration,
+                    name: self.name(consideration.target_id),
+                });
             }
+            WorldEvent::Damage(damage) => match self.player.as_ref() {
+                // Only damage the player dealt or took is theirs to read.
+                Some(player)
+                    if player.spawn_id == damage.source_id
+                        || player.spawn_id == damage.target_id =>
+                {
+                    changes.notices.push(Notice::Damage {
+                        damage: *damage,
+                        own_id: player.spawn_id,
+                        source: self.name(damage.source_id),
+                        target: self.name(damage.target_id),
+                    });
+                }
+                _ => changes.ignored = true,
+            },
             WorldEvent::TargetSent(id) => {
                 if self.target.selected == *id {
                     self.target.sent = true;
@@ -357,10 +400,11 @@ impl ClientWorld {
             WorldEvent::TargetRejected {
                 session_id,
                 spawn_id,
-                ..
+                reason,
             } => {
                 if self.accepts_reply(*session_id) && self.target.selected == *spawn_id {
                     self.target = Target::default();
+                    changes.notices.push(Notice::TargetRefused(reason.clone()));
                 } else {
                     changes.ignored = true;
                 }
@@ -420,7 +464,29 @@ impl ClientWorld {
                 }
             }
             WorldEvent::Doors(update) => self.doors.apply(update, now),
+            WorldEvent::DoorAction {
+                session_id,
+                door_id,
+                error,
+            } => {
+                if self.accepts_reply(*session_id) {
+                    changes.notices.push(Notice::Door {
+                        door_id: *door_id,
+                        error: error.clone(),
+                    });
+                } else {
+                    changes.ignored = true;
+                }
+            }
             WorldEvent::Objects(update) => self.objects.apply(update),
+            WorldEvent::ObjectAction {
+                session_id, error, ..
+            } => match error {
+                Some(error) if self.accepts_reply(*session_id) => {
+                    changes.notices.push(Notice::GroundRefused(error.clone()));
+                }
+                _ => changes.ignored = true,
+            },
             WorldEvent::Level {
                 current,
                 experience,
@@ -469,9 +535,26 @@ impl ClientWorld {
                 self.refresh_item_hp();
             }
             WorldEvent::Coins(coins) => self.coins = Some(*coins),
-            WorldEvent::Loot(update) => changes.ignored = !self.trade.loot(update, &mut self.coins),
+            WorldEvent::Loot(update) => {
+                if self.trade.loot(update, &mut self.coins) {
+                    changes.notices.extend(trade::loot_notice(update));
+                } else {
+                    changes.ignored = true;
+                }
+            }
             WorldEvent::Merchant(update) => {
-                changes.ignored = !self.trade.merchant(update, &mut self.coins);
+                if self.trade.merchant(update, &mut self.coins) {
+                    changes.notices.extend(trade::merchant_notice(update));
+                } else {
+                    changes.ignored = true;
+                }
+            }
+            WorldEvent::MerchantRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    changes.notices.push(Notice::TradeRefused(reason.clone()));
+                } else {
+                    changes.ignored = true;
+                }
             }
             WorldEvent::CastPending {
                 session_id,
@@ -483,8 +566,19 @@ impl ClientWorld {
                     changes.ignored = true;
                 }
             }
-            WorldEvent::CastRejected { session_id, .. } => {
-                changes.ignored = !(self.accepts_reply(*session_id) && self.death.is_none());
+            WorldEvent::CastRejected {
+                session_id,
+                spell_id,
+                reason,
+            } => {
+                if self.accepts_reply(*session_id) && self.death.is_none() {
+                    changes.notices.push(Notice::CastRefused {
+                        spell_id: *spell_id,
+                        reason: reason.clone(),
+                    });
+                } else {
+                    changes.ignored = true;
+                }
             }
             WorldEvent::BuffSnapshot(buffs) => self.buffs.replace_snapshot(
                 buffs
@@ -525,6 +619,7 @@ impl ClientWorld {
             }
             WorldEvent::Camp(CampStatus::Camped) => return self.reset(Reset::Camped),
             WorldEvent::Camp(status) => {
+                changes.notices.push(Notice::Camp(status.clone()));
                 self.camp = match status {
                     CampStatus::Preparing => Some(Camp {
                         since: now,
@@ -773,6 +868,11 @@ impl ClientWorld {
     #[must_use]
     pub fn considered(&self, id: u16) -> Option<ConColor> {
         self.considered.get(&id).copied()
+    }
+
+    /// A spawn's server name, when it is known.
+    fn name(&self, id: u16) -> Option<String> {
+        self.spawns.get(&id).map(|spawn| spawn.state.name.clone())
     }
 
     /// Whether a spawn ID is the player's.

@@ -80,41 +80,6 @@ impl TradeState {
     }
 }
 
-/// What a loot reply says to the player, if anything.
-pub(super) fn loot_text(update: &LootUpdate) -> Option<String> {
-    match update {
-        LootUpdate::Opened { response, coins } => match response {
-            LootResponse::Normal => (coins.total_copper() > 0).then(|| {
-                format!(
-                    "You receive {} from the corpse.",
-                    coin_text(coins.total_copper())
-                )
-            }),
-            LootResponse::SomeoneElse => Some("Someone else is looting that corpse.".into()),
-            LootResponse::NotAtThisTime => Some("You cannot loot that corpse at this time.".into()),
-            LootResponse::Hostiles => Some("You cannot loot while a hostile is nearby.".into()),
-            LootResponse::TooFar => Some("You are too far away to loot that corpse.".into()),
-            LootResponse::Other(_) => Some("You cannot loot that corpse.".into()),
-        },
-        LootUpdate::Taken {
-            accepted: false, ..
-        } => Some("You cannot take that item.".into()),
-        _ => None,
-    }
-}
-
-/// What a merchant reply says to the player, if anything.
-pub(super) fn merchant_text(update: &MerchantUpdate) -> Option<String> {
-    matches!(
-        update,
-        MerchantUpdate::Opened {
-            accepted: false,
-            ..
-        }
-    )
-    .then(|| "That merchant will not trade with you.".into())
-}
-
 /// The open corpse and merchant as `(slot, item id)` lists, for script reports.
 pub(super) fn summary(world: &ClientWorld) -> String {
     let loot = world.loot().map(|loot| {
@@ -744,7 +709,7 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eq_client_core::{Coins, merchant::MerchantItem};
+    use eq_client_core::merchant::MerchantItem;
     use std::collections::BTreeMap;
 
     /// A world where the player has this corpse and merchant open.
@@ -986,45 +951,6 @@ mod tests {
     }
 
     #[test]
-    fn loot_replies_say_what_the_corpse_gave_or_refused() {
-        assert_eq!(
-            loot_text(&LootUpdate::Opened {
-                response: LootResponse::Normal,
-                coins: Coins {
-                    platinum: 0,
-                    gold: 1,
-                    silver: 0,
-                    copper: 2,
-                },
-            }),
-            Some("You receive 1g 2c from the corpse.".into())
-        );
-        assert_eq!(
-            loot_text(&LootUpdate::Opened {
-                response: LootResponse::Normal,
-                coins: Coins::default(),
-            }),
-            None
-        );
-        assert_eq!(loot_text(&LootUpdate::Listed { corpse_id: 9 }), None);
-        assert_eq!(
-            loot_text(&LootUpdate::Taken {
-                slot: 22,
-                accepted: false
-            }),
-            Some("You cannot take that item.".into())
-        );
-        assert_eq!(
-            loot_text(&LootUpdate::Opened {
-                response: LootResponse::TooFar,
-                coins: Coins::default(),
-            }),
-            Some("You are too far away to loot that corpse.".into())
-        );
-        assert_eq!(loot_text(&LootUpdate::Closed), None);
-    }
-
-    #[test]
     fn a_refused_item_ends_its_request_and_looting_everything() {
         let mut trade = TradeState {
             loot: Some(LootWindow {
@@ -1107,16 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refusing_merchant_says_so_and_sales_stay_off_view_only_slots() {
-        assert_eq!(
-            merchant_text(&MerchantUpdate::Opened {
-                merchant_id: 9,
-                accepted: false,
-                rate: 1.0
-            }),
-            Some("That merchant will not trade with you.".into())
-        );
-        assert_eq!(merchant_text(&MerchantUpdate::Closed), None);
+    fn sales_stay_off_view_only_slots() {
         assert!(
             sellable_slot(22) && sellable_slot(300) && !sellable_slot(30) && !sellable_slot(13)
         );

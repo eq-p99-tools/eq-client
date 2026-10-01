@@ -930,3 +930,126 @@ fn item_definitions_last_for_the_admission() {
     game(&mut world, entered(2));
     assert!(world.item(1).is_none());
 }
+
+#[test]
+fn news_for_the_player_comes_with_notices_and_others_news_without() {
+    use crate::combat::{ConColor, Consideration, DamageOutcome};
+    let mut world = admitted();
+    let notices = |world: &mut ClientWorld, event| game(world, event).notices;
+    // A consideration names the spawn as the server does.
+    let considered = Consideration {
+        target_id: 5,
+        faction: 5,
+        color: ConColor::Blue,
+        hit_points: None,
+    };
+    assert_eq!(
+        notices(&mut world, WorldEvent::Consideration(considered)),
+        [Notice::Consideration {
+            consideration: considered,
+            name: Some("a_rat".into()),
+        }]
+    );
+    // Damage between two others is not the player's to read.
+    let mut damage = crate::combat::Damage {
+        target_id: 5,
+        source_id: 6,
+        kind: 1,
+        spell_id: None,
+        outcome: DamageOutcome::Miss,
+    };
+    assert!(game(&mut world, WorldEvent::Damage(damage)).ignored);
+    damage.source_id = 9;
+    assert_eq!(
+        notices(&mut world, WorldEvent::Damage(damage)),
+        [Notice::Damage {
+            damage,
+            own_id: 9,
+            source: None,
+            target: Some("a_rat".into()),
+        }]
+    );
+    // A refusal for an earlier admission says nothing.
+    let refused = |session_id| WorldEvent::MerchantRefused {
+        session_id,
+        reason: "Too far away".into(),
+    };
+    assert!(notices(&mut world, refused(2)).is_empty());
+    assert_eq!(
+        notices(&mut world, refused(1)),
+        [Notice::TradeRefused("Too far away".into())]
+    );
+    assert_eq!(
+        notices(&mut world, WorldEvent::Camp(CampStatus::Preparing)),
+        [Notice::Camp(CampStatus::Preparing)]
+    );
+    let message = world.apply(
+        &WorldUpdate::ServerMessage {
+            string_id: 12293,
+            arguments: vec!["x".into()],
+        },
+        Instant::now(),
+        &NoSpells,
+    );
+    assert_eq!(
+        message.notices,
+        [Notice::ServerString {
+            id: 12293,
+            arguments: vec!["x".into()],
+        }]
+    );
+}
+
+#[test]
+fn loot_and_shop_replies_say_what_the_player_got_or_was_refused() {
+    use crate::{
+        loot::{LootResponse, LootUpdate},
+        merchant::MerchantUpdate,
+    };
+    let mut world = admitted();
+    world.open_loot(9);
+    let opened = |response, coins| WorldEvent::Loot(LootUpdate::Opened { response, coins });
+    assert_eq!(
+        game(&mut world, opened(LootResponse::Normal, coins(0, 1, 0, 2))).notices,
+        [Notice::LootCoins(coins(0, 1, 0, 2))]
+    );
+    assert!(
+        game(&mut world, opened(LootResponse::Normal, Coins::default()))
+            .notices
+            .is_empty()
+    );
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::Loot(LootUpdate::Taken {
+                slot: 22,
+                accepted: false
+            })
+        )
+        .notices,
+        [Notice::ItemRefused]
+    );
+    assert_eq!(
+        game(&mut world, opened(LootResponse::TooFar, Coins::default())).notices,
+        [Notice::LootRefused(LootResponse::TooFar)]
+    );
+    // Closed, the corpse's news says nothing more.
+    assert!(
+        game(&mut world, opened(LootResponse::TooFar, Coins::default()))
+            .notices
+            .is_empty()
+    );
+    world.open_shop(8);
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::Merchant(MerchantUpdate::Opened {
+                merchant_id: 8,
+                accepted: false,
+                rate: 1.0,
+            })
+        )
+        .notices,
+        [Notice::ShopRefused]
+    );
+}
