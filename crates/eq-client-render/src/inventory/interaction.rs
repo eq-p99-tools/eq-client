@@ -48,10 +48,10 @@ impl InventoryState {
     ) {
         self.actions.auto_store = false;
         self.actions.split = None;
-        let inventory = online.world.inventory();
+        let inventory = online.world().inventory();
         let result = (|| -> anyhow::Result<()> {
             use anyhow::{Context, ensure};
-            let stamp = sender.stamp(&online.world)?;
+            let stamp = sender.stamp(online.world())?;
             ensure!(
                 !casting,
                 "Wait for the current cast to finish or interrupt it"
@@ -76,7 +76,7 @@ impl InventoryState {
                 "Wait briefly before using another item"
             );
             let player = online
-                .world
+                .world()
                 .player()
                 .context("Character data is unavailable")?;
             let session_id = stamp.session_id;
@@ -94,13 +94,13 @@ impl InventoryState {
             };
             let available = target_id == player.spawn_id
                 || online
-                    .world
+                    .world()
                     .spawn(target_id)
                     .map(|spawn| &spawn.state)
                     .is_some_and(|spawn| !spawn.invisible);
             inventory.prepare_item_cast(&request, player.level, available)?;
             let request_id = request.request_id;
-            sender.send(&online.world, ClientCommand::UseItem(request))?;
+            sender.send(online.world(), ClientCommand::UseItem(request))?;
             self.actions.last_use = Some(now);
             self.next_use_id = request_id;
             self.actions.pending_use = Some((session_id, request_id));
@@ -224,7 +224,7 @@ impl InventoryState {
             return;
         };
         self.revision = self.revision.wrapping_add(1);
-        if selection.revision != online.world.inventory().revision() {
+        if selection.revision != online.world().inventory().revision() {
             self.actions.message = "Inventory changed; choose the stack again".into();
             return;
         }
@@ -256,7 +256,7 @@ impl InventoryState {
         if !self.actions.auto_store || self.actions.pending.is_some() {
             return;
         }
-        let inventory = online.world.inventory();
+        let inventory = online.world().inventory();
         if !inventory.items().contains_key(&InventorySlot::CURSOR) {
             self.actions.auto_store = false;
             return;
@@ -285,7 +285,7 @@ impl InventoryState {
             });
         }
         let player = online
-            .world
+            .world()
             .player()
             .context("Character data is unavailable")?;
         Ok(InventoryActor {
@@ -311,7 +311,7 @@ impl InventoryState {
         sender: &Outbox,
     ) -> anyhow::Result<()> {
         use anyhow::{Context, ensure};
-        let inventory = online.world.inventory();
+        let inventory = online.world().inventory();
         ensure!(
             self.actions.pending.is_none(),
             "Waiting for the queued move; it will not be retried"
@@ -324,7 +324,7 @@ impl InventoryState {
                 created: Instant::now(),
             }
         } else {
-            sender.stamp(&online.world)?
+            sender.stamp(online.world())?
         };
         ensure!(
             inventory.received() && !inventory.stale(),
@@ -399,7 +399,7 @@ impl InventoryState {
                 "Item placed locally (offline demo)".into()
             };
         } else {
-            sender.send(&online.world, ClientCommand::MoveInventory(request))?;
+            sender.send(online.world(), ClientCommand::MoveInventory(request))?;
             self.actions.pending = Some((stamp.session_id, revision, to_cursor));
             self.actions.message = if to_cursor {
                 "Picking item up onto cursor".into()
@@ -445,7 +445,7 @@ mod tests {
 
         /// The items as the world has them.
         fn data(&self) -> &Inventory {
-            self.online.world.inventory()
+            self.online.world().inventory()
         }
 
         /// The session reports a change to the inventory.
@@ -485,7 +485,7 @@ mod tests {
 
         fn select_split(&mut self, slot: i32) {
             self.state
-                .select_split(InventorySlot(slot), self.online.world.inventory());
+                .select_split(InventorySlot(slot), self.online.world().inventory());
         }
 
         /// Puts five of the rations on the cursor beside a stack of eighteen.
@@ -522,7 +522,7 @@ mod tests {
         bench.tell(InventoryUpdate::Snapshot(vec![item]));
         let before = bench.data().clone();
         let Bench { state, online } = &mut bench;
-        let own_id = online.world.player().unwrap().spawn_id;
+        let own_id = online.world().player().unwrap().spawn_id;
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
         let sender = crate::outbox::Outbox::new(Some(sender));
         state.use_slot(InventorySlot(13), online, &sender, None, true);
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(request.session_id, 9);
         assert_eq!(request.revision, before.revision());
         assert_eq!(request.target_id, own_id);
-        assert_eq!(online.world.inventory(), &before);
+        assert_eq!(online.world().inventory(), &before);
         state.use_slot(InventorySlot(13), online, &sender, None, false);
         assert!(receiver.try_recv().is_err());
         // Elapsing the rate limit cannot replace a request awaiting worker feedback.
@@ -567,7 +567,7 @@ mod tests {
         testing::connect(online, false);
         state.use_slot(InventorySlot(13), online, &sender, None, false);
         assert!(receiver.try_recv().is_err());
-        assert_eq!(online.world.inventory(), &before);
+        assert_eq!(online.world().inventory(), &before);
     }
 
     #[test]
@@ -673,14 +673,14 @@ mod tests {
             7,
             request.revision,
             Some("Rejected".into()),
-            online.world.inventory(),
+            online.world().inventory(),
         );
         state.store_cursor(online, &sender);
         assert!(!state.actions.auto_store);
         assert!(rx.try_recv().is_err());
         assert!(
             online
-                .world
+                .world()
                 .inventory()
                 .items()
                 .contains_key(&InventorySlot::CURSOR)
@@ -777,7 +777,7 @@ mod tests {
         let sender = crate::outbox::Outbox::new(Some(tx));
         state.click_slot(InventorySlot(251), false, online, &sender);
         state.click_slot(InventorySlot(24), false, online, &sender);
-        assert_eq!(online.world.inventory(), &before);
+        assert_eq!(online.world().inventory(), &before);
         let ClientCommand::MoveInventory(request) = rx.try_recv().unwrap() else {
             panic!("wrong command")
         };
@@ -785,16 +785,16 @@ mod tests {
         assert_eq!(request.to, InventorySlot::CURSOR);
         state.click_slot(InventorySlot(25), false, online, &sender);
         assert!(rx.try_recv().is_err());
-        state.action_result(8, request.revision, None, online.world.inventory());
+        state.action_result(8, request.revision, None, online.world().inventory());
         assert!(state.actions.pending.is_some());
         state.action_result(
             7,
             request.revision,
             Some("Rejected".into()),
-            online.world.inventory(),
+            online.world().inventory(),
         );
         assert!(state.actions.pending.is_none());
-        assert_eq!(online.world.inventory(), &before);
+        assert_eq!(online.world().inventory(), &before);
         assert_eq!(state.actions.message, "Rejected");
         testing::connect(online, false);
         state.click_slot(InventorySlot(251), false, online, &sender);
@@ -834,7 +834,7 @@ mod tests {
             matches!(rx.try_recv().unwrap(), ClientCommand::MoveInventory(request)
             if request.from == InventorySlot(2000) && request.to == InventorySlot::CURSOR)
         );
-        assert_eq!(online.world.inventory(), &before);
+        assert_eq!(online.world().inventory(), &before);
         state.tab = super::super::Tab::Bank;
         testing::place_axis(online, |position| position.x = 21.0);
         state.refresh_bank_access(online);

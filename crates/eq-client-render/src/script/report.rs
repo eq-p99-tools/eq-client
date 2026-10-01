@@ -23,18 +23,18 @@ pub(super) fn state(
 ) {
     let position = transform.map(placement);
     let slots: Vec<u32> = online
-        .world
+        .world()
         .buffs()
         .slots()
         .map(|slots| slots.values().map(|buff| buff.spell_id).collect())
         .unwrap_or_default();
-    let effects: Vec<u16> = online.world.buffs().effects().keys().copied().collect();
+    let effects: Vec<u16> = online.world().buffs().effects().keys().copied().collect();
     let posture = online
-        .world
+        .world()
         .player()
-        .and_then(|player| online.world.posture(player.spawn_id));
+        .and_then(|player| online.world().posture(player.spawn_id));
     let items: Vec<ReportedItem> = online
-        .world
+        .world()
         .inventory()
         .items()
         .values()
@@ -49,7 +49,7 @@ pub(super) fn state(
         })
         .collect();
     let book: Vec<(usize, u32)> = online
-        .world
+        .world()
         .spell_book()
         .map(|book| {
             book.slots()
@@ -59,16 +59,13 @@ pub(super) fn state(
                 .collect()
         })
         .unwrap_or_default();
-    let gems = online
-        .world
-        .player()
-        .map_or([None; 8], |player| player.memorized_spells);
+    let gems = online.world().gems();
     // Milliseconds until each memorized gem can be cast again.
     let now = std::time::Instant::now();
     let cooldowns = gems.map(|spell| {
         spell.map(|spell| {
             online
-                .world
+                .world()
                 .casting()
                 .cooldowns
                 .remaining(spell, now)
@@ -77,37 +74,37 @@ pub(super) fn state(
     });
     info!(
         label,
-        zone = online.world.zone(),
-        capabilities = ?online.world.capabilities(),
-        world = ?online.world.world_name(),
-        far_clip = ?online.world.far_clip(),
-        connected = online.world.connected(),
+        zone = online.world().zone(),
+        capabilities = ?online.world().capabilities(),
+        world = ?online.world().world_name(),
+        far_clip = ?online.world().far_clip(),
+        connected = online.world().connected(),
         ?position,
         ?posture,
-        hp = ?online.world.hit_points(),
-        mana = ?online.world.vitals().mana,
-        endurance = ?online.world.vitals().endurance,
+        hp = ?online.world().hit_points(),
+        mana = ?online.world().vitals().mana,
+        endurance = ?online.world().vitals().endurance,
         estimate = ?hud.resource_estimate,
-        casting = ?online.world.casting().cast.map(|(spell, _, _)| spell),
-        pending = ?online.world.casting().pending,
-        interrupted = ?online.world.casting().interrupted.map(|(_, id)| id),
+        casting = ?online.world().casting().cast.map(|(spell, _, _)| spell),
+        pending = ?online.world().casting().pending,
+        interrupted = ?online.world().casting().interrupted.map(|(_, id)| id),
         feedback = ?hud.action_feedback.as_ref().map(|(_, text)| text),
-        target = ?online.world.target().selected,
-        considered = ?online.world.target().selected.and_then(|id| online.world.considered(id)),
-        camp = ?online.world.camp().map(|camp| camp.logging_out),
+        target = ?online.world().target().selected,
+        considered = ?online.world().target().selected.and_then(|id| online.world().considered(id)),
+        camp = ?online.world().camp().map(|camp| camp.logging_out),
         ?gems,
         ?cooldowns,
         ?book,
         ?slots,
         ?effects,
         ?items,
-        inventory_predicted = online.world.inventory().predicted(),
-        inventory_stale = online.world.inventory().stale(),
-        cursor_queued = online.world.inventory().queued().count(),
-        gear = ?online.world.player().map(|player| player.appearance.materials),
-        tints = ?online.world.player().map(|player| player.appearance.tints),
-        face = ?online.world.player().map(|player| player.appearance.face),
-        show_helm = ?online.world.player().map(|player| player.appearance.show_helm),
+        inventory_predicted = online.world().inventory().predicted(),
+        inventory_stale = online.world().inventory().stale(),
+        cursor_queued = online.world().inventory().queued().count(),
+        gear = ?online.world().player().map(|player| player.appearance.materials),
+        tints = ?online.world().player().map(|player| player.appearance.tints),
+        face = ?online.world().player().map(|player| player.appearance.face),
+        show_helm = ?online.world().player().map(|player| player.appearance.show_helm),
         "Script report"
     );
 }
@@ -127,18 +124,18 @@ type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
 pub(super) fn surroundings(online: &crate::online::OnlineState, (.., combat, _): &Observed) {
     let origin = online
-        .world
+        .world()
         .player()
         .map(|player| Vec3::from_array(eq_client_core::render_position(player.position)));
     let mut nearby: Vec<NearbySpawn> = online
-        .world
+        .world()
         .spawns()
         .iter()
         .map(|(id, spawn)| (id, &spawn.state))
         .filter(|(id, spawn)| {
             !spawn.invisible
                 && online
-                    .world
+                    .world()
                     .player()
                     .is_none_or(|player| player.spawn_id != **id)
         })
@@ -169,7 +166,7 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., combat, _):
     nearby.truncate(12);
     // Doors near the player: id, open type, latest action, distance and position.
     let mut doors: Vec<NearbyDoor> = online
-        .world
+        .world()
         .doors()
         .entries()
         .values()
@@ -187,7 +184,7 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., combat, _):
     doors.truncate(3);
     // Objects on the ground: id, model, kind, distance and position.
     let mut ground: Vec<(u32, String, String, i32, [i32; 3])> = online
-        .world
+        .world()
         .objects()
         .entries()
         .values()
@@ -213,8 +210,8 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., combat, _):
         ?gear,
         ?models,
         door_status = online.door_status,
-        coins = ?online.world.coins(),
-        trade = crate::trade::summary(&online.world),
+        coins = ?online.world().coins(),
+        trade = crate::trade::summary(online.world()),
         auto_attack = combat.auto_attack,
         "Script surroundings"
     );
@@ -230,7 +227,7 @@ fn looks(
         nearby.iter().filter_map(|entry| {
             Some((
                 entry.0,
-                online.world.spawn(entry.0).map(|spawn| &spawn.state)?,
+                online.world().spawn(entry.0).map(|spawn| &spawn.state)?,
             ))
         })
     };

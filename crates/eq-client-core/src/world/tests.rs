@@ -1128,3 +1128,24 @@ fn the_admission_says_what_the_player_can_do_until_they_camp() {
     game(&mut world, WorldEvent::Camp(CampStatus::Camped));
     assert!(world.capabilities().is_empty());
 }
+
+#[test]
+fn gems_read_the_admitted_players_memorized_spells() {
+    let mut world = ClientWorld::default();
+    assert_eq!(world.gems(), [None; 8]);
+    let mut caster = player(9);
+    caster.memorized_spells[2] = Some(73);
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(caster),
+            far_clip: None,
+        },
+    );
+    assert_eq!(world.gem(2), Some(73));
+    assert_eq!(world.gem(0), None);
+    assert_eq!(world.gem(8), None);
+}

@@ -109,27 +109,27 @@ pub(super) fn input(
 ) {
     let requested = chat.requested_target.take();
     // The world forgets the target when the connection drops or the player dies.
-    if !online.world.connected() || online.world.death().is_some() {
+    if !online.world().connected() || online.world().death().is_some() {
         return;
     }
     let ids = targetable(nearby.rendered.keys().copied(), &online);
-    let own_id = online.world.player().map(|player| player.spawn_id);
+    let own_id = online.world().player().map(|player| player.spawn_id);
     // A target lasts until its spawn despawns, is replaced or turns invisible, however
     // far away it goes; drawing range only limits what can be clicked or cycled.
-    let invalid = online.world.target_stale();
-    let current = online.world.target().selected;
+    let invalid = online.world().target_stale();
+    let current = online.world().target().selected;
     let mut proposal = invalid.then_some(None);
     if !*attempted
         && settings
             .as_ref()
             .is_some_and(|s| s.0.validation == Some(super::ValidationAction::TargetNearestPlayer))
-        && let Some(player) = online.world.player()
+        && let Some(player) = online.world().player()
     {
         let origin = Vec3::from_array(eq_client_core::render_position(player.position));
         let nearest = ids
             .iter()
             .filter_map(|id| {
-                let spawn = &online.world.spawns()[id].state;
+                let spawn = &online.world().spawns()[id].state;
                 if spawn.kind != SpawnKind::Player || *id == player.spawn_id {
                     return None;
                 }
@@ -206,7 +206,7 @@ pub(super) fn input(
     // why a choice did not leave.
     if online.enabled
         && outbox
-            .post(&online.world, |stamp| ClientCommand::SelectTarget {
+            .post(online.world(), |stamp| ClientCommand::SelectTarget {
                 session_id: stamp.session_id,
                 spawn_id: selected,
             })
@@ -214,7 +214,7 @@ pub(super) fn input(
     {
         return;
     }
-    online.world.select_target(selected);
+    online.select_target(selected);
     // A new choice replaces an earlier refusal; a choice sent says nothing,
     // as in the official client.
     target.status.clear();
@@ -226,9 +226,9 @@ pub(super) fn input(
 fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<u16> {
     let reachable = |spawn: &eq_client_core::SpawnState| {
         online
-            .world
+            .world()
             .far_clip()
-            .zip(online.world.player())
+            .zip(online.world().player())
             .is_none_or(|(clip, player)| {
                 eq_client_core::entities::within(player.position, spawn.position, clip)
             })
@@ -236,7 +236,7 @@ fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<
     rendered
         .filter(|id| {
             online
-                .world
+                .world()
                 .spawn(*id)
                 .is_some_and(|spawn| !spawn.state.invisible && reachable(&spawn.state))
         })
@@ -249,12 +249,12 @@ fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<
 fn named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
     let query = query.to_lowercase();
     let origin = online
-        .world
+        .world()
         .player()
         .map(|player| Vec3::from_array(eq_client_core::render_position(player.position)));
     ids.iter()
         .filter_map(|id| {
-            let spawn = &online.world.spawn(*id)?.state;
+            let spawn = &online.world().spawn(*id)?.state;
             let shown = eq_client_core::entities::display_name(&spawn.name).to_lowercase();
             let full = spawn.name.replace('_', " ").to_lowercase();
             (shown.starts_with(&query) || full.starts_with(&query)).then(|| {
@@ -278,17 +278,17 @@ pub(super) fn update(
     mut texts: Query<(&mut Text, Option<&TargetName>, Option<&TargetDetails>)>,
     mut bars: Query<&mut Node, With<TargetHp>>,
 ) {
-    let chosen = online.world.target();
+    let chosen = online.world().target();
     let spawn = chosen
         .selected
-        .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state));
+        .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state));
     let own = online
-        .world
+        .world()
         .player()
         .filter(|player| chosen.selected == Some(player.spawn_id));
     let hp = chosen
         .selected
-        .and_then(|id| online.world.health(id))
+        .and_then(|id| online.world().health(id))
         .or_else(|| own.and_then(|player| player.hp_percent));
     let health = format!("HP {}", hp.map_or_else(|| "--".into(), |v| format!("{v}%")));
     for (mut text, name, details) in &mut texts {
@@ -496,7 +496,7 @@ mod tests {
             app.update();
             app.world()
                 .resource::<OnlineState>()
-                .world
+                .world()
                 .target()
                 .selected
         };
@@ -534,7 +534,7 @@ mod tests {
         let again = app
             .world()
             .resource::<OnlineState>()
-            .world
+            .world()
             .spawn(2)
             .unwrap()
             .state
@@ -547,7 +547,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<OnlineState>()
-                .world
+                .world()
                 .target()
                 .selected,
             None
@@ -568,7 +568,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<OnlineState>()
-                .world
+                .world()
                 .target()
                 .selected,
             None
@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<OnlineState>()
-                .world
+                .world()
                 .target()
                 .selected,
             Some(2)
@@ -607,7 +607,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<OnlineState>()
-                .world
+                .world()
                 .target()
                 .selected,
             None
@@ -621,7 +621,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<OnlineState>()
-                .world
+                .world()
                 .target()
                 .selected,
             None
@@ -697,7 +697,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<OnlineState>()
-                .world
+                .world()
                 .target()
                 .selected,
             Some(7)

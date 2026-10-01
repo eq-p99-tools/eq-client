@@ -192,7 +192,7 @@ pub(crate) fn update(
     let (names, messages) = definitions;
     let shown = current(
         &hud,
-        &online.world,
+        online.world(),
         &requests,
         &names,
         &messages,
@@ -245,7 +245,7 @@ mod tests {
         testing::admit(&mut online, 1, testing::player(7));
         let mut requests = ActionRequests::default();
         assert_eq!(
-            current(&hud, &online.world, &requests, &names, &messages, now),
+            current(&hud, online.world(), &requests, &names, &messages, now),
             None
         );
 
@@ -256,7 +256,7 @@ mod tests {
             )],
             now.checked_sub(Duration::from_secs(15)).unwrap(),
         );
-        let camping = current(&hud, &online.world, &requests, &names, &messages, now).unwrap();
+        let camping = current(&hud, online.world(), &requests, &names, &messages, now).unwrap();
         assert_eq!(camping.label, "Camping (15s)");
         assert!((camping.progress.unwrap() - 0.5).abs() < 0.01);
 
@@ -265,12 +265,12 @@ mod tests {
             now.checked_sub(Duration::from_secs(1)).unwrap(),
             "Memorizing Courage into gem 2".into(),
         ));
-        let book = current(&hud, &online.world, &requests, &names, &messages, now).unwrap();
+        let book = current(&hud, online.world(), &requests, &names, &messages, now).unwrap();
         assert_eq!(book.label, "Memorizing Courage into gem 2");
         assert!((book.progress.unwrap() - 0.2).abs() < 0.01);
         testing::book_action(&mut online, BookActionStatus::AwaitingReply);
         assert_eq!(
-            current(&hud, &online.world, &requests, &names, &messages, now)
+            current(&hud, online.world(), &requests, &names, &messages, now)
                 .unwrap()
                 .progress,
             None
@@ -286,7 +286,7 @@ mod tests {
             })],
             now.checked_sub(Duration::from_secs(1)).unwrap(),
         );
-        let casting = current(&hud, &online.world, &requests, &names, &messages, now).unwrap();
+        let casting = current(&hud, online.world(), &requests, &names, &messages, now).unwrap();
         assert!(casting.label.starts_with("Casting "));
         assert!((casting.progress.unwrap() - 0.25).abs() < 0.01);
 
@@ -306,14 +306,14 @@ mod tests {
         );
         hud.action_feedback = Some((now, "Spell available in 2.0s".into()));
         assert_eq!(
-            current(&hud, &online.world, &requests, &names, &messages, now)
+            current(&hud, online.world(), &requests, &names, &messages, now)
                 .unwrap()
                 .label,
             "Spell available in 2.0s"
         );
         let later = now + FEEDBACK;
         assert_eq!(
-            current(&hud, &online.world, &requests, &names, &messages, later),
+            current(&hud, online.world(), &requests, &names, &messages, later),
             None
         );
     }

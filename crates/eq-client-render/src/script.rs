@@ -359,11 +359,11 @@ pub(super) fn drive(
                 match &step {
                     Step::WaitSelect => online.selection.is_some(),
                     Step::WaitZone(zone) => {
-                        online.world.connected()
-                            && online.world.player().is_some()
-                            && online.world.zone() == *zone
+                        online.world().connected()
+                            && online.world().player().is_some()
+                            && online.world().zone() == *zone
                     }
-                    _ => online.world.connected() && online.world.player().is_some(),
+                    _ => online.world().connected() && online.world().player().is_some(),
                 }
             }
             Step::Click(target) => {
@@ -401,7 +401,7 @@ pub(super) fn drive(
                 observed
                     .1
                     .send(
-                        &online.world,
+                        online.world(),
                         eq_client_core::ClientCommand::CreateCharacter {
                             selection_id: selection.id(),
                             character: character.clone(),
@@ -441,7 +441,10 @@ pub(super) fn drive(
             let sent = gm_chat(command, script.local).and_then(|chat| {
                 observed
                     .1
-                    .send(&online.world, eq_client_core::ClientCommand::SendChat(chat))
+                    .send(
+                        online.world(),
+                        eq_client_core::ClientCommand::SendChat(chat),
+                    )
                     .map_err(|refusal| refusal.text().to_owned())
             });
             if let Err(error) = sent {
@@ -605,12 +608,12 @@ fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
 /// The player's feet at its accepted position and the target's position, in
 /// render coordinates.
 fn walk_ends(online: &super::online::OnlineState, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
-    let player = online.world.player()?;
+    let player = online.world().player()?;
     let spawn = online
-        .world
+        .world()
         .target()
         .selected
-        .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state))?;
+        .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state))?;
     let origin = Vec3::from_array(eq_client_core::render_position(player.position));
     let goal = Vec3::from_array(eq_client_core::render_position(spawn.position));
     Some((origin - Vec3::Y * body.feet_offset, goal))
@@ -624,10 +627,10 @@ fn face(
     cameras: &mut Query<&mut super::OrbitCamera>,
 ) -> Option<f32> {
     let spawn = online
-        .world
+        .world()
         .target()
         .selected
-        .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state))?;
+        .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state))?;
     let transform = players.single().ok()?;
     let to =
         Vec3::from_array(eq_client_core::render_position(spawn.position)) - transform.translation;

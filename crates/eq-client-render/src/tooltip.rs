@@ -57,7 +57,7 @@ pub(crate) fn show(
         .filter(|(interaction, ..)| **interaction != Interaction::None)
         .find_map(|(_, tooltip, needs)| match needs {
             Some(super::outbox::Needs(capability))
-                if !super::outbox::offered(&online.world, *capability) =>
+                if !super::outbox::offered(online.world(), *capability) =>
             {
                 Some(super::outbox::UNAVAILABLE.to_owned())
             }

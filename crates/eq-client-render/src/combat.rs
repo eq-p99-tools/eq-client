@@ -38,10 +38,10 @@ pub(super) fn input(
     mut chat: ResMut<super::chat::ChatState>,
 ) {
     use super::keys::Act;
-    let Some(player) = online.world.player() else {
+    let Some(player) = online.world().player() else {
         return;
     };
-    let world = &online.world;
+    let world = online.world();
     let attack = |enabled| {
         move |stamp: crate::outbox::Stamp| ClientCommand::AutoAttack {
             session_id: stamp.session_id,
@@ -50,26 +50,26 @@ pub(super) fn input(
         }
     };
     let spawn = online
-        .world
+        .world()
         .target()
         .selected
         .filter(|id| *id != player.spawn_id)
-        .and_then(|id| online.world.spawn(id).map(|spawn| (id, &spawn.state)));
+        .and_then(|id| online.world().spawn(id).map(|spawn| (id, &spawn.state)));
     let attackable = spawn.filter(|(_, spawn)| spawn.kind == SpawnKind::Npc && !spawn.invisible);
     // The official client stops attacking when its target goes away.
     if combat.auto_attack
-        && (!online.world.connected()
-            || online.world.death().is_some()
+        && (!online.world().connected()
+            || online.world().death().is_some()
             || attackable.map(|(id, _)| id) != combat.attack_target)
     {
         combat.auto_attack = false;
         combat.attack_target = None;
-        if online.world.connected() && outbox.post(world, attack(false)).is_ok() {
+        if online.world().connected() && outbox.post(world, attack(false)).is_ok() {
             chat.history
                 .push(super::chat::system_line(messages.format(1466, &[])));
         }
     }
-    if !online.world.connected() || online.world.death().is_some() || !keys.focused() {
+    if !online.world().connected() || online.world().death().is_some() || !keys.focused() {
         return;
     }
     let mut feedback = |text: String| chat.history.push(super::chat::system_line(text));
@@ -121,10 +121,10 @@ pub(super) fn target_color(
 ) {
     let color = crate::theme::con(
         online
-            .world
+            .world()
             .target()
             .selected
-            .and_then(|id| online.world.considered(id)),
+            .and_then(|id| online.world().considered(id)),
     );
     for mut text in &mut names {
         if text.0 != color {

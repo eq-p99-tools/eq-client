@@ -115,7 +115,7 @@ fn admitted(online: Res<super::online::OnlineState>, mut done: Local<bool>) -> b
 /// Whether the world has the preview's player.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn in_world(online: Res<super::online::OnlineState>) -> bool {
-    online.world.session_id().is_some()
+    online.world().session_id().is_some()
 }
 
 /// The preview's player, standing here with these spells memorized.
@@ -248,8 +248,8 @@ fn trade(
     mut online: ResMut<super::online::OnlineState>,
     mut trade: ResMut<super::trade::TradeState>,
 ) {
-    online.world.open_loot(1);
-    online.world.open_shop(2);
+    online.open_loot(1);
+    online.open_shop(2);
     trade.preview("a preview rat", "Preview merchant");
     let items = items();
     news.game(WorldEvent::Coins(Coins {
@@ -332,7 +332,7 @@ fn entities(
             + height * 0.5;
         p.heading = (-angle).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * 512.0;
         // A spawn appears once, then only moves, so it is not drawn again.
-        news.game(if online.world.spawn(id).is_none() {
+        news.game(if online.world().spawn(id).is_none() {
             WorldEvent::Spawns(vec![synthetic(id, race, size, p)])
         } else {
             WorldEvent::Position {

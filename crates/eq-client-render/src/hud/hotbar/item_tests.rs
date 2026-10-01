@@ -119,7 +119,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
     assert_eq!(
         app.world()
             .resource::<crate::online::OnlineState>()
-            .world
+            .world()
             .inventory()
             .items()[&InventorySlot(13)]
             .charges,

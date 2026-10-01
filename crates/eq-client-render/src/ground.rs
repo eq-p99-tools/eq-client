@@ -43,12 +43,12 @@ pub(super) fn reconcile(
     rendered: Query<(Entity, &GroundEntity)>,
 ) {
     let mut wanted = BTreeMap::new();
-    if state.world.connected()
+    if state.world().connected()
         && zone_models.is_some()
-        && let Some(player) = state.world.player()
+        && let Some(player) = state.world().player()
     {
         let origin = Vec3::from_array(eq_client_core::render_position(player.position));
-        for object in state.world.objects().entries().values() {
+        for object in state.world().objects().entries().values() {
             let position = Vec3::from_array(eq_client_core::render_position(object.position));
             if position.distance_squared(origin) <= DRAW_RADIUS * DRAW_RADIUS {
                 wanted.insert(object.drop_id, object);
@@ -134,7 +134,7 @@ pub(super) fn pick_up(
         return Some("You can't pick anything up right now.".into());
     }
     // A refusal shows in the feedback line.
-    let _ = outbox.post(&state.world, |stamp| {
+    let _ = outbox.post(state.world(), |stamp| {
         eq_client_core::ClientCommand::PickUp {
             session_id: stamp.session_id,
             drop_id,

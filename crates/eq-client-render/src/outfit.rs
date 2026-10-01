@@ -116,13 +116,13 @@ pub(super) fn dress(
     for (mut character, remote) in &mut characters {
         let (race, look) = match remote {
             Some(remote) => online
-                .world
+                .world()
                 .spawn(remote.id)
                 .map(|spawn| &spawn.state)
                 .map(|spawn| (spawn.race, spawn.appearance)),
             // The player's model and its paperdoll copy.
             None => online
-                .world
+                .world()
                 .player()
                 .map(|player| (player.race, player.appearance)),
         }

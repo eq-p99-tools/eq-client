@@ -16,8 +16,10 @@ pub(super) struct Updates(pub Mutex<Option<Receiver<WorldUpdate>>>);
 /// What the server has told the client, and what presenting it needs besides.
 #[derive(Resource)]
 pub(super) struct OnlineState {
-    /// What the server has told the client; only `receive` changes it.
-    pub world: ClientWorld,
+    /// What the server has told the client. Only news changes it (the
+    /// session's, through `receive`, or the preview's), and the player's
+    /// own requests, which the world then waits on; everything else reads it.
+    world: ClientWorld,
     /// The character choice in progress, from the world's character list.
     pub selection: Option<super::character_select::Selection>,
     /// The current zone's regions, from its assets.
@@ -28,6 +30,62 @@ pub(super) struct OnlineState {
 }
 
 impl OnlineState {
+    /// What the server has told the client.
+    pub(super) fn world(&self) -> &ClientWorld {
+        &self.world
+    }
+
+    /// News for the world, as a session would tell it; only the offline
+    /// preview's own settled moves come this way besides `receive`'s.
+    pub(super) fn tell(
+        &mut self,
+        update: &WorldUpdate,
+        now: std::time::Instant,
+        spells: &dyn SpellCatalog,
+    ) -> eq_client_core::world::Changes {
+        self.world.apply(update, now, spells)
+    }
+
+    /// Runs the world's clocks.
+    pub(super) fn tick(&mut self, now: std::time::Instant, spells: &dyn SpellCatalog) {
+        self.world.tick(now, spells);
+    }
+
+    /// The character choice in progress, with the world it is made in.
+    pub(super) fn choosing(
+        &mut self,
+    ) -> (
+        Option<&mut super::character_select::Selection>,
+        &ClientWorld,
+    ) {
+        (self.selection.as_mut(), &self.world)
+    }
+
+    /// The player chose a target, or none; the world waits for the server.
+    pub(super) fn select_target(&mut self, spawn: Option<u16>) {
+        self.world.select_target(spawn);
+    }
+
+    /// The player asked to loot this corpse.
+    pub(super) fn open_loot(&mut self, corpse_id: u16) {
+        self.world.open_loot(corpse_id);
+    }
+
+    /// The player closed the loot window.
+    pub(super) fn close_loot(&mut self) {
+        self.world.close_loot();
+    }
+
+    /// The player asked to trade with this merchant.
+    pub(super) fn open_shop(&mut self, merchant_id: u16) {
+        self.world.open_shop(merchant_id);
+    }
+
+    /// The player closed the merchant window.
+    pub(super) fn close_shop(&mut self) {
+        self.world.close_shop();
+    }
+
     /// Whether an admitted character can act now: connected, alive and not zoning.
     pub fn in_world(&self) -> bool {
         self.world.in_world()
@@ -61,7 +119,7 @@ pub(super) fn tick(
         Some(names) => names,
         None => &NoSpells,
     };
-    state.world.tick(std::time::Instant::now(), spells);
+    state.tick(std::time::Instant::now(), spells);
 }
 
 /// The panels the session's news reaches besides the world, and the one
@@ -381,6 +439,11 @@ pub(crate) mod testing {
         PlayerState, SpawnState, WorldEvent, WorldPosition, WorldUpdate, world::NoSpells,
     };
     use std::time::Instant;
+
+    /// Puts a world a test built in place of the session's.
+    pub(crate) fn set_world(state: &mut OnlineState, world: eq_client_core::world::ClientWorld) {
+        state.world = world;
+    }
 
     /// Applies session news to the world.
     pub(crate) fn news(state: &mut OnlineState, events: impl IntoIterator<Item = WorldEvent>) {
