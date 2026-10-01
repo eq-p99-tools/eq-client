@@ -51,7 +51,7 @@ fn address(icon: u32) -> (u32, Rect) {
 
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
-    hud: Res<super::hud::HudState>,
+    online: Res<super::online::OnlineState>,
     names: Res<super::spellbook::SpellNames>,
     book: Res<super::spellbook::BookView>,
     bindings: Res<super::hud::hotbar::Bindings>,
@@ -62,22 +62,36 @@ pub(super) fn update(
 ) {
     for (mut artwork, mut image, mut node) in &mut icons {
         let spell = match artwork.source {
-            Source::Effect(id) => hud
-                .buff_state
+            Source::Effect(id) => online
+                .world
+                .buffs()
                 .effects()
                 .get(&id)
                 .map(|effect| u32::from(effect.spell_id)),
-            Source::Buff(slot) => hud
-                .buff_state
+            Source::Buff(slot) => online
+                .world
+                .buffs()
                 .slots()
                 .as_ref()
                 .and_then(|buffs| buffs.get(&slot))
                 .map(|buff| buff.spell_id),
-            Source::Gem(index) => hud.spells.get(index).copied().flatten(),
-            Source::Action(index) => bindings
-                .gem(index)
-                .and_then(|gem| hud.spells.get(gem).copied().flatten()),
-            Source::Book(index) => hud.spell_book.as_ref().and_then(|spells| {
+            Source::Gem(index) => online
+                .world
+                .player()
+                .map_or([None; 8], |player| player.memorized_spells)
+                .get(index)
+                .copied()
+                .flatten(),
+            Source::Action(index) => bindings.gem(index).and_then(|gem| {
+                online
+                    .world
+                    .player()
+                    .map_or([None; 8], |player| player.memorized_spells)
+                    .get(gem)
+                    .copied()
+                    .flatten()
+            }),
+            Source::Book(index) => online.world.spell_book().and_then(|spells| {
                 spells
                     .slots()
                     .iter()
@@ -141,13 +155,15 @@ mod tests {
         fields[0] = "73";
         fields[1] = "Synthetic spell";
         let mut app = App::new();
-        let mut hud = super::super::hud::HudState::default();
-        hud.spells[0] = Some(73);
+        let mut online = super::super::online::OnlineState::new(true);
+        let mut player = crate::online::testing::player(1);
+        player.memorized_spells[0] = Some(73);
+        crate::online::testing::admit(&mut online, 1, player);
         let mut images = Assets::<Image>::default();
         let handle = images.add(Image::default());
         let mut icons = Icons::default();
         icons.0.insert(1, Some(handle));
-        app.insert_resource(hud)
+        app.insert_resource(online)
             .insert_resource(super::super::spellbook::SpellNames::parse(
                 &fields.join("^"),
             ))
@@ -171,9 +187,14 @@ mod tests {
             app.world().get::<Node>(entity).unwrap().display,
             Display::Flex
         );
-        app.world_mut()
-            .resource_mut::<super::super::hud::HudState>()
-            .spells[0] = None;
+        crate::online::testing::spell(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 0,
+                mode: 2,
+            },
+        );
         app.update();
         assert_eq!(
             app.world().get::<Node>(action).unwrap().display,

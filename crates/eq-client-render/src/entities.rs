@@ -241,7 +241,11 @@ pub(super) fn demo(
     let origin = super::world_position(player.translation.to_array(), 0.0);
     let now = std::time::Instant::now();
     let news = |state: &mut OnlineState, event| {
-        state.world.apply(&WorldUpdate::Game(event), now);
+        state.world.apply(
+            &WorldUpdate::Game(event),
+            now,
+            &eq_client_core::world::NoSpells,
+        );
     };
     if state.world.session_id().is_none() {
         admit_preview(&mut state, origin, &scene.zone_name, now);
@@ -319,27 +323,7 @@ fn admit_preview(
     zone: &str,
     now: std::time::Instant,
 ) {
-    let player = eq_client_core::PlayerState {
-        name: "Preview".into(),
-        base_attributes: None,
-        deity: None,
-        class: Some(1),
-        spawn_id: 1,
-        race: 1,
-        gender: 0,
-        level: 1,
-        position: origin,
-        mana: 0,
-        endurance: Some(0),
-        skills: None,
-        spell_refresh_ms: None,
-        memorized_spells: [None; 8],
-        size: 0.0,
-        walk_speed: 0.0,
-        run_speed: 0.0,
-        hp_percent: None,
-        appearance: eq_client_core::outfit::Appearance::default(),
-    };
+    let player = super::online::preview_player(origin, [None; 8]);
     for update in [
         WorldUpdate::Game(WorldEvent::Entered {
             session_id: 1,
@@ -353,7 +337,9 @@ fn admit_preview(
             label: String::new(),
         },
     ] {
-        state.world.apply(&update, now);
+        state
+            .world
+            .apply(&update, now, &eq_client_core::world::NoSpells);
     }
 }
 

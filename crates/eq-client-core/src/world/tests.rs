@@ -62,7 +62,7 @@ fn door(id: u8) -> Door {
 }
 
 fn game(world: &mut ClientWorld, event: WorldEvent) -> Changes {
-    world.apply(&WorldUpdate::Game(event), Instant::now())
+    world.apply(&WorldUpdate::Game(event), Instant::now(), &NoSpells)
 }
 
 fn connection(world: &mut ClientWorld, connected: bool, terminal: bool) -> Changes {
@@ -73,6 +73,7 @@ fn connection(world: &mut ClientWorld, connected: bool, terminal: bool) -> Chang
             label: String::new(),
         },
         Instant::now(),
+        &NoSpells,
     )
 }
 
@@ -162,12 +163,25 @@ fn a_new_zone_entry_forgets_the_old_zone_and_death() {
 #[test]
 fn camping_forgets_the_admission_and_its_zone() {
     let mut world = admitted();
+    game(&mut world, WorldEvent::Mana(25));
+    game(
+        &mut world,
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 9,
+            spell_id: 42,
+            duration_ms: 3000,
+        }),
+    );
+    assert!(world.casting().cast.is_some());
     let changes = game(&mut world, WorldEvent::Camp(CampStatus::Camped));
     assert_eq!(changes.reset, Some(Reset::Camped));
     assert!(zone_is_empty(&world));
     assert!(world.session_id().is_none());
     assert!(world.player().is_none());
     assert!(!world.connected());
+    // Nothing about the departed character lingers.
+    assert_eq!(world.vitals().mana, None);
+    assert!(world.casting().cast.is_none());
 }
 
 #[test]
@@ -331,4 +345,215 @@ fn a_spawn_sent_again_starts_over_with_a_new_revision() {
     assert_eq!((again.health, again.posture), (None, None));
     game(&mut world, WorldEvent::Despawn(5));
     assert!(world.spawn(5).is_none());
+}
+
+/// Knows spell 42 as instant, and nothing else.
+struct InstantFortyTwo;
+
+impl SpellCatalog for InstantFortyTwo {
+    fn timing(&self, _spell: u32) -> Option<SpellTiming> {
+        None
+    }
+
+    fn instant_effect(&self, spell: u32) -> bool {
+        spell == 42
+    }
+}
+
+fn buff(duration_ticks: i32) -> crate::Buff {
+    crate::Buff {
+        spell_id: 42,
+        caster_level: 1,
+        effect_type: 2,
+        bard_modifier: 10,
+        duration_ticks,
+        counters: 0,
+        caster_id: 9,
+    }
+}
+
+fn effect(target_id: u16, effect_flag: u8) -> crate::SpellEffect {
+    crate::SpellEffect {
+        target_id,
+        caster_id: 9,
+        caster_level: 1,
+        instrument_modifier: 10,
+        spell_id: 42,
+        spell_level: 1,
+        effect_flag,
+    }
+}
+
+#[test]
+fn an_instant_effect_never_removes_a_buff_the_server_slotted() {
+    let mut world = admitted();
+    game(&mut world, WorldEvent::BuffSnapshot(Vec::new()));
+    game(
+        &mut world,
+        WorldEvent::Buff(crate::BuffUpdate {
+            entity_id: 9,
+            slot: 2,
+            spell_id: 42,
+            buff: Some(buff(10)),
+        }),
+    );
+    world.apply(
+        &WorldUpdate::Game(WorldEvent::SpellEffect(effect(9, 4))),
+        Instant::now(),
+        &InstantFortyTwo,
+    );
+    assert_eq!(world.buffs().slots().unwrap()[&2].duration_ticks, 10);
+    assert!(world.buffs().effects().is_empty());
+}
+
+#[test]
+fn only_the_players_lasting_effects_wait_for_a_slot_and_a_fade_clears_them() {
+    let mut world = admitted();
+    game(&mut world, WorldEvent::BuffSnapshot(Vec::new()));
+    // Another spawn's effect, or one without the lasting flag, is not the player's buff.
+    assert!(game(&mut world, WorldEvent::SpellEffect(effect(5, 4))).ignored);
+    game(&mut world, WorldEvent::SpellEffect(effect(9, 0)));
+    assert!(world.buffs().effects().is_empty());
+    game(&mut world, WorldEvent::SpellEffect(effect(9, 4)));
+    game(&mut world, WorldEvent::SpellEffect(effect(9, 4)));
+    assert_eq!(world.buffs().effects().len(), 1);
+    assert!(world.buffs().slots().unwrap().is_empty());
+    game(
+        &mut world,
+        WorldEvent::Buff(crate::BuffUpdate {
+            entity_id: 9,
+            slot: 3,
+            spell_id: 42,
+            buff: None,
+        }),
+    );
+    assert!(world.buffs().effects().is_empty());
+}
+
+#[test]
+fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
+    let mut world = admitted();
+    let now = Instant::now();
+    let spell = |world: &mut ClientWorld, update| {
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::Spell(update)),
+            now,
+            &NoSpells,
+        )
+    };
+    let began = SpellUpdate::Began {
+        caster_id: 9,
+        spell_id: 42,
+        duration_ms: 3000,
+    };
+    assert_eq!(spell(&mut world, began.clone()).cast, Some(CastNews::Began));
+    let interrupted = |caster_id| SpellUpdate::Interrupted {
+        caster_id,
+        message_id: 439,
+    };
+    assert_eq!(spell(&mut world, interrupted(8)).cast, None);
+    assert!(world.casting().cast.is_some());
+    assert!(world.casting().interrupted.is_none());
+    let mana = |spell_id, keep_casting| SpellUpdate::Mana {
+        spell_id,
+        keep_casting,
+    };
+    spell(&mut world, mana(42, true));
+    assert!(world.casting().cast.is_some());
+    assert_eq!(
+        spell(&mut world, interrupted(9)).cast,
+        Some(CastNews::Interrupted)
+    );
+    assert!(world.casting().cast.is_none());
+    assert_eq!(world.casting().interrupted, Some((now, 439)));
+    spell(&mut world, mana(42, false));
+    assert_eq!(world.casting().interrupted, Some((now, 439)));
+    spell(&mut world, began);
+    assert!(world.casting().interrupted.is_none());
+    spell(&mut world, mana(99, false));
+    assert!(world.casting().cast.is_some());
+    assert_eq!(
+        spell(&mut world, mana(42, false)).cast,
+        Some(CastNews::Ended)
+    );
+    assert!(world.casting().cast.is_none());
+}
+
+#[test]
+fn a_dead_or_disconnected_player_casts_nothing() {
+    let mut world = admitted();
+    connection(&mut world, false, false);
+    let began = SpellUpdate::Began {
+        caster_id: 9,
+        spell_id: 42,
+        duration_ms: 3000,
+    };
+    assert_eq!(game(&mut world, WorldEvent::Spell(began)).cast, None);
+    assert!(world.casting().cast.is_none());
+}
+
+#[test]
+fn the_profile_restores_gem_timers_and_vitals_at_admission() {
+    let mut world = ClientWorld::default();
+    let mut caster = player(9);
+    caster.memorized_spells[0] = Some(42);
+    caster.spell_refresh_ms = Some([5000, 0, 0, 0, 0, 0, 0, 0]);
+    caster.mana = 30;
+    let now = Instant::now();
+    world.apply(
+        &WorldUpdate::Game(WorldEvent::Entered {
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(caster),
+            far_clip: None,
+        }),
+        now,
+        &NoSpells,
+    );
+    assert_eq!(
+        world.casting().cooldowns.remaining(42, now),
+        std::time::Duration::from_secs(5)
+    );
+    assert_eq!(world.vitals().mana, Some(30));
+    assert_eq!(world.vitals().experience, None);
+}
+
+#[test]
+fn a_book_change_holds_until_confirmed_and_every_reply_counts() {
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::BookAction(crate::BookActionStatus::Preparing),
+    );
+    game(
+        &mut world,
+        WorldEvent::BookAction(crate::BookActionStatus::Preparing),
+    );
+    assert_eq!(world.book_action_revision(), 2);
+    assert_eq!(
+        world.book_action(),
+        Some(&crate::BookActionStatus::Preparing)
+    );
+    game(
+        &mut world,
+        WorldEvent::BookAction(crate::BookActionStatus::Confirmed),
+    );
+    assert!(world.book_action().is_none());
+    // A zone transfer drops a change still in flight.
+    game(
+        &mut world,
+        WorldEvent::BookAction(crate::BookActionStatus::AwaitingReply),
+    );
+    game(
+        &mut world,
+        WorldEvent::ZoneTransfer(ZoneOffer {
+            zone_id: 2,
+            instance_id: 0,
+            position: WorldPosition::default(),
+            reason: 0,
+            to_bind: false,
+            solicited: true,
+        }),
+    );
+    assert!(world.book_action().is_none());
 }

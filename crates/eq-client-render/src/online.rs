@@ -9,9 +9,9 @@ use super::{
 use bevy::prelude::*;
 use eq_client_core::{
     WorldEvent, WorldUpdate, races, render_position,
-    world::{ClientWorld, Reset},
+    world::{CastNews, ClientWorld, NoSpells, Reset, SpellCatalog},
 };
-use std::sync::{Mutex, mpsc::Receiver};
+use std::sync::{LazyLock, Mutex, mpsc::Receiver};
 
 #[derive(Resource)]
 pub(super) struct Updates(pub Mutex<Option<Receiver<WorldUpdate>>>);
@@ -47,6 +47,12 @@ impl OnlineState {
     }
 }
 
+/// The world the session reports, or an empty one where no session runs.
+pub(super) fn world(online: Option<&OnlineState>) -> &ClientWorld {
+    static OFFLINE: LazyLock<ClientWorld> = LazyLock::new(ClientWorld::default);
+    online.map_or(&OFFLINE, |online| &online.world)
+}
+
 type SceneRoots = Or<(With<SceneEntity>, With<HudText>, With<hud::HudRoot>)>;
 
 /// Shows the player's HP from its last report and shares the percentage with
@@ -55,6 +61,48 @@ pub(super) fn show_own_hp(state: &mut OnlineState, hud: &mut hud::HudState) {
     if let Some(percent) = hud.show_hp() {
         state.world.note_own_health(percent);
     }
+}
+
+/// The offline demos' player, standing here with these spells memorized.
+pub(super) fn preview_player(
+    position: eq_client_core::WorldPosition,
+    gems: [Option<u32>; 8],
+) -> eq_client_core::PlayerState {
+    eq_client_core::PlayerState {
+        name: "Preview".into(),
+        base_attributes: None,
+        deity: None,
+        class: Some(1),
+        spawn_id: 1,
+        race: 1,
+        gender: 0,
+        level: 1,
+        position,
+        mana: 0,
+        endurance: Some(0),
+        skills: None,
+        spell_refresh_ms: None,
+        memorized_spells: gems,
+        size: 0.0,
+        walk_speed: 0.0,
+        run_speed: 0.0,
+        hp_percent: None,
+        appearance: eq_client_core::outfit::Appearance::default(),
+    }
+}
+
+/// Runs the world's clocks each frame: doors the server leaves open swing
+/// shut, and refreshed gems start their timers.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn tick(
+    mut state: ResMut<OnlineState>,
+    names: Option<Res<super::spellbook::SpellNames>>,
+) {
+    let spells: &dyn SpellCatalog = match names.as_deref() {
+        Some(names) => names,
+        None => &NoSpells,
+    };
+    state.world.tick(std::time::Instant::now(), spells);
 }
 
 /// The panels a reset reaches besides the world itself.
@@ -67,34 +115,17 @@ struct Panels<'a> {
 }
 
 impl Panels<'_> {
-    /// Drops the actions in flight: a cast, its interruption, a spellbook
-    /// change and their feedback.
-    fn drop_actions(&mut self) {
-        self.hud.casting = None;
-        self.hud.interrupted = None;
-        self.hud.pending_cast = None;
-        self.hud.action_feedback = None;
-        self.hud.book_action = None;
-    }
-
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
+        // Whatever was in flight, its feedback is stale.
+        self.hud.action_feedback = None;
         if !matches!(reason, Reset::Died)
             && let Some(actions) = self.actions.as_mut()
         {
             actions.camp = None;
         }
         match reason {
-            Reset::Lost {
-                ended,
-                transferring,
-            } => {
-                self.drop_actions();
-                if ended || !transferring {
-                    self.hud.reset_cooldowns();
-                    self.hud.spell_book = None;
-                    self.hud.buff_state.clear();
-                }
+            Reset::Lost { ended, .. } => {
                 self.inventory.cancel_actions();
                 self.motion.reset(None);
                 if ended {
@@ -107,13 +138,9 @@ impl Panels<'_> {
                 self.motion.reset(None);
                 state.selection = None;
                 state.door_status.clear();
-                self.hud.spell_book = None;
-                self.hud.buff_state.clear();
-                self.hud.interrupted = None;
                 self.inventory.clear();
             }
             Reset::Zoning { to_bind } => {
-                self.drop_actions();
                 self.inventory.cancel_actions();
                 self.motion.reset(None);
                 *self.target = super::target::TargetState::default();
@@ -126,11 +153,7 @@ impl Panels<'_> {
             Reset::Died => {
                 self.motion.reset(None);
                 self.inventory.cancel_actions();
-                self.hud.casting = None;
-                self.hud.book_action = None;
                 *self.target = super::target::TargetState::default();
-                self.hud.interrupted = None;
-                self.hud.reset_cooldowns();
                 self.hud.hp_percent = Some(0);
                 if let Some((_, maximum)) = self.hud.hp {
                     self.hud.hp = Some((0, maximum));
@@ -139,10 +162,7 @@ impl Panels<'_> {
             }
             Reset::Camped => {
                 // Leave the zone; the world server sends a fresh character list.
-                self.drop_actions();
                 state.door_status.clear();
-                self.hud.spell_book = None;
-                self.hud.buff_state.clear();
                 self.inventory.clear();
                 self.motion.reset(None);
                 self.hud.status = "Camped - choose a character".into();
@@ -204,6 +224,11 @@ pub(super) fn receive(
     })
     .take(256)
     .collect();
+    // The installed client's spell data, when there is one.
+    let spells: &dyn SpellCatalog = match spell_names.as_deref() {
+        Some(names) => names,
+        None => &NoSpells,
+    };
     // A worker that stopped without saying so (for example after a panic) ends
     // the session here, instead of leaving it looking connected.
     let lost = (ended && !state.world.ended()).then(|| WorldUpdate::Connection {
@@ -213,7 +238,13 @@ pub(super) fn receive(
     });
     for update in batch.into_iter().chain(lost) {
         let now = std::time::Instant::now();
-        let changes = state.world.apply(&update, now);
+        let changes = state.world.apply(&update, now, spells);
+        if matches!(
+            changes.cast,
+            Some(CastNews::Began | CastNews::Refreshed | CastNews::Interrupted)
+        ) {
+            hud.action_feedback = None;
+        }
         if let Some(reason) = changes.reset {
             Panels {
                 hud: &mut hud,
@@ -270,15 +301,10 @@ pub(super) fn receive(
             WorldUpdate::Game(WorldEvent::Entered { player, .. }) => {
                 // The session is this zone's even if its assets fail to load, so
                 // commands and later events never follow the previous zone's.
-                hud.restore_cooldowns(&player, now);
                 hud.hp = None;
                 hud.reported_hp = None;
                 hud.item_hp = None;
-                hud.experience = None;
-                hud.mana = Some(player.mana);
-                hud.endurance = player.endurance;
                 hud.hp_percent = player.hp_percent;
-                hud.spells = player.memorized_spells;
                 let Some(directory) = &settings.0.eq_directory else {
                     continue;
                 };
@@ -471,51 +497,24 @@ pub(super) fn receive(
                     debug!(?posture, "Own posture update");
                 }
             }
-            WorldUpdate::Game(WorldEvent::Mana(mana)) => hud.mana = Some(mana),
-            WorldUpdate::Game(WorldEvent::CastPending {
-                session_id,
-                spell_id,
-            }) => {
-                if state.world.accepts_reply(session_id) && state.world.death().is_none() {
-                    hud.pending_cast = spell_id;
-                }
-            }
             WorldUpdate::Game(WorldEvent::CastRejected {
-                session_id,
-                spell_id,
-                reason,
+                spell_id, reason, ..
             }) => {
-                if state.world.accepts_reply(session_id) && state.world.death().is_none() {
+                if !changes.ignored {
                     hud.action_feedback =
                         Some((now, format!("Cast rejected (spell {spell_id}): {reason}")));
                 }
             }
-            WorldUpdate::Game(WorldEvent::Spell(update)) => {
-                if matches!(update, eq_client_core::SpellUpdate::Slot { mode: 2, .. })
-                    && matches!(
-                        hud.book_action,
-                        Some(eq_client_core::BookActionStatus::Submitted)
-                    )
+            WorldUpdate::Game(WorldEvent::Spell(eq_client_core::SpellUpdate::Interrupted {
+                caster_id,
+                message_id,
+            })) => {
+                if state
+                    .world
+                    .player()
+                    .is_some_and(|player| u32::from(player.spawn_id) == caster_id)
                 {
-                    hud.book_action = None;
-                }
-                if let Some(book) = hud.spell_book.as_mut() {
-                    book.apply(&update);
-                }
-                let active = state.world.connected() && state.world.death().is_none();
-                if let Some(player) = state.world.player() {
-                    if let eq_client_core::SpellUpdate::Interrupted {
-                        caster_id,
-                        message_id,
-                    } = update
-                        && caster_id == u32::from(player.spawn_id)
-                    {
-                        debug!(message_id, "Own cast interrupted");
-                    }
-                    hud.spells = player.memorized_spells;
-                    if active {
-                        hud.cast_update(player.spawn_id, &update, now);
-                    }
+                    debug!(message_id, "Own cast interrupted");
                 }
             }
             WorldUpdate::Game(WorldEvent::HitPoints {
@@ -541,11 +540,6 @@ pub(super) fn receive(
                     show_own_hp(&mut state, &mut hud);
                 }
             }
-            WorldUpdate::Game(WorldEvent::Resources { mana, endurance }) => {
-                hud.mana = Some(mana);
-                hud.endurance = Some(endurance);
-            }
-            WorldUpdate::Game(WorldEvent::Experience(value)) => hud.experience = Some(value),
             WorldUpdate::Game(WorldEvent::Doors(update)) => {
                 if matches!(update, eq_client_core::doors::DoorUpdate::RemoveAll) {
                     state.door_status.clear();
@@ -573,52 +567,24 @@ pub(super) fn receive(
                     chat.history.push(super::chat::system_line(line));
                 }
             }
-            WorldUpdate::Game(WorldEvent::Level { experience, .. }) => {
-                if !changes.ignored {
-                    hud.experience = Some(experience);
-                }
-            }
-            WorldUpdate::Game(WorldEvent::BuffSnapshot(buffs)) => {
-                hud.buff_state.replace_snapshot(
-                    buffs
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(slot, buff)| {
-                            buff.map(|buff| {
-                                (u32::try_from(slot).expect("bounded buff table"), buff)
-                            })
-                        })
-                        .collect(),
-                );
-            }
             WorldUpdate::Game(WorldEvent::Buff(update)) => {
-                if state
-                    .world
-                    .player()
-                    .is_some_and(|player| u32::from(player.spawn_id) == update.entity_id)
-                {
+                if !changes.ignored {
                     debug!(
                         spell_id = update.spell_id,
                         slot = update.slot,
                         removed = update.buff.is_none(),
                         "Own buff slot update"
                     );
-                    hud.buff_update(update);
                 }
             }
             WorldUpdate::Game(WorldEvent::SpellEffect(effect)) => {
-                if state
-                    .world
-                    .player()
-                    .is_some_and(|player| player.spawn_id == effect.target_id)
-                {
+                if !changes.ignored {
                     debug!(
                         spell_id = effect.spell_id,
                         caster_level = effect.caster_level,
                         effect_flag = effect.effect_flag,
                         "Own spell effect"
                     );
-                    hud.spell_effect(effect, spell_names.as_deref());
                 }
             }
             WorldUpdate::Game(WorldEvent::Camp(status)) => {
@@ -646,7 +612,6 @@ pub(super) fn receive(
                     chat.history.push(super::chat::system_line(text));
                 }
             }
-            WorldUpdate::Game(WorldEvent::Coins(coins)) => trade.coins = Some(coins),
             WorldUpdate::Game(WorldEvent::Loot(update)) => {
                 if let Some(text) = trade.apply_loot(update) {
                     chat.history.push(super::chat::system_line(text));
@@ -698,12 +663,6 @@ pub(super) fn receive(
                     chat.history.push(super::chat::system_line(text));
                 }
             }
-            WorldUpdate::Game(WorldEvent::SpellBook(book)) => hud.spell_book = Some(book),
-            WorldUpdate::Game(WorldEvent::BookAction(status)) => {
-                hud.book_action = (!matches!(status, eq_client_core::BookActionStatus::Confirmed))
-                    .then_some(status);
-                hud.book_action_revision = hud.book_action_revision.wrapping_add(1);
-            }
             WorldUpdate::Game(_) => (),
         }
     }
@@ -713,7 +672,9 @@ pub(super) fn receive(
 #[cfg(test)]
 pub(crate) mod testing {
     use super::OnlineState;
-    use eq_client_core::{PlayerState, SpawnState, WorldEvent, WorldPosition, WorldUpdate};
+    use eq_client_core::{
+        PlayerState, SpawnState, WorldEvent, WorldPosition, WorldUpdate, world::NoSpells,
+    };
     use std::time::Instant;
 
     /// Applies session news to the world.
@@ -728,7 +689,7 @@ pub(crate) mod testing {
         now: Instant,
     ) {
         for event in events {
-            state.world.apply(&WorldUpdate::Game(event), now);
+            state.world.apply(&WorldUpdate::Game(event), now, &NoSpells);
         }
     }
 
@@ -766,6 +727,7 @@ pub(crate) mod testing {
                 label: String::new(),
             },
             Instant::now(),
+            &NoSpells,
         );
     }
 
@@ -834,6 +796,51 @@ pub(crate) mod testing {
                 spawn_id,
                 position,
                 velocity: [0.0; 3],
+            }],
+        );
+    }
+
+    /// Sets the player's mana and endurance, as a resource report would.
+    pub(crate) fn resources(state: &mut OnlineState, mana: u32, endurance: u32) {
+        news(state, [WorldEvent::Resources { mana, endurance }]);
+    }
+
+    /// Gives the player these buffs in their server slots.
+    pub(crate) fn buffs(
+        state: &mut OnlineState,
+        slots: std::collections::BTreeMap<u32, eq_client_core::Buff>,
+    ) {
+        let size = slots.keys().max().map_or(0, |slot| *slot as usize + 1);
+        let mut table = vec![None; size];
+        for (slot, buff) in slots {
+            table[slot as usize] = Some(buff);
+        }
+        news(state, [WorldEvent::BuffSnapshot(table)]);
+    }
+
+    /// Gives the player this spellbook.
+    pub(crate) fn book(state: &mut OnlineState, book: eq_client_core::SpellBook) {
+        news(state, [WorldEvent::SpellBook(book)]);
+    }
+
+    /// Reports how the spellbook change in flight stands.
+    pub(crate) fn book_action(state: &mut OnlineState, status: eq_client_core::BookActionStatus) {
+        news(state, [WorldEvent::BookAction(status)]);
+    }
+
+    /// Reports a spell notice.
+    pub(crate) fn spell(state: &mut OnlineState, update: eq_client_core::SpellUpdate) {
+        news(state, [WorldEvent::Spell(update)]);
+    }
+
+    /// Holds a cast request for this spell until it is answered.
+    pub(crate) fn pending_cast(state: &mut OnlineState, spell_id: Option<u32>) {
+        let session_id = state.world.session_id().expect("an admission");
+        news(
+            state,
+            [WorldEvent::CastPending {
+                session_id,
+                spell_id,
             }],
         );
     }
@@ -988,7 +995,7 @@ mod tests {
                 label: "Connected".into(),
             },
         ] {
-            state.world.apply(&update, admitted);
+            state.world.apply(&update, admitted, &NoSpells);
         }
         app.insert_resource(state)
             .insert_resource(Updates(Mutex::new(Some(receiver))))
@@ -1022,13 +1029,7 @@ mod tests {
             .unwrap();
         app.update();
         assert_eq!(
-            app.world()
-                .resource::<hud::HudState>()
-                .buff_state
-                .slots()
-                .as_ref()
-                .unwrap()
-                .get(&1),
+            world(&app).buffs().slots().as_ref().unwrap().get(&1),
             Some(&buff)
         );
         sender
@@ -1042,16 +1043,7 @@ mod tests {
             )))
             .unwrap();
         app.update();
-        assert_eq!(
-            app.world()
-                .resource::<hud::HudState>()
-                .buff_state
-                .slots()
-                .as_ref()
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(world(&app).buffs().slots().as_ref().unwrap().len(), 1);
         sender
             .send(WorldUpdate::Game(WorldEvent::Buff(
                 eq_client_core::BuffUpdate {
@@ -1063,29 +1055,33 @@ mod tests {
             )))
             .unwrap();
         app.update();
-        assert!(
-            app.world()
-                .resource::<hud::HudState>()
-                .buff_state
-                .slots()
-                .as_ref()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(world(&app).buffs().slots().as_ref().unwrap().is_empty());
         let now = std::time::Instant::now();
         let mut timed_player = world(&app).player().cloned().unwrap();
         timed_player.memorized_spells[0] = Some(42);
         timed_player.spell_refresh_ms = Some([10000; 8]);
         {
-            let mut hud = app.world_mut().resource_mut::<hud::HudState>();
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
             let mut book = eq_client_core::SpellBook::default();
             book.apply(&eq_client_core::SpellUpdate::Slot {
                 slot: 0,
                 spell_id: 42,
                 mode: 0,
             });
-            hud.spell_book = Some(book);
-            hud.restore_cooldowns(&timed_player, now);
+            // Admitted again with the spell recovering, and its book.
+            testing::news_at(
+                &mut online,
+                [
+                    WorldEvent::Entered {
+                        session_id: 1,
+                        zone: "qeytoqrg".into(),
+                        player: Box::new(timed_player),
+                        far_clip: None,
+                    },
+                    WorldEvent::SpellBook(book),
+                ],
+                now,
+            );
         }
         sender
             .send(WorldUpdate::Game(WorldEvent::ZoneTransfer(
@@ -1137,10 +1133,9 @@ mod tests {
         let notices = history.lines(eq_client_core::chat::ChatTab::System);
         assert_eq!(notices.len(), 1);
         assert!(notices[0].1.message.text.contains("server code -7"));
-        let hud = app.world().resource::<hud::HudState>();
-        assert_eq!(hud.spell_book.as_ref().unwrap().slots()[0], Some(42));
+        assert_eq!(world(&app).spell_book().unwrap().slots()[0], Some(42));
         assert_eq!(
-            hud.cooldowns.remaining(42, now),
+            world(&app).casting().cooldowns.remaining(42, now),
             std::time::Duration::from_secs(10)
         );
         for (current, maximum, percent) in [(34, 34, 100), (17, 34, 50), (35, 34, 100)] {
@@ -1160,8 +1155,10 @@ mod tests {
             );
         }
         for (success, expected) in [(false, Some(42)), (true, None)] {
-            app.world_mut().resource_mut::<hud::HudState>().book_action =
-                Some(eq_client_core::BookActionStatus::AwaitingReply);
+            testing::book_action(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                eq_client_core::BookActionStatus::AwaitingReply,
+            );
             sender
                 .send(WorldUpdate::Game(WorldEvent::Spell(
                     eq_client_core::SpellUpdate::BookDeletion { slot: 0, success },
@@ -1169,8 +1166,8 @@ mod tests {
                 .unwrap();
             app.update();
             assert_eq!(
-                app.world().resource::<hud::HudState>().book_action,
-                Some(eq_client_core::BookActionStatus::AwaitingReply)
+                world(&app).book_action(),
+                Some(&eq_client_core::BookActionStatus::AwaitingReply)
             );
             // Raw slot changes are independent from the worker's matched result.
             sender
@@ -1183,22 +1180,8 @@ mod tests {
                 })))
                 .unwrap();
             app.update();
-            assert_eq!(
-                app.world()
-                    .resource::<hud::HudState>()
-                    .book_action
-                    .is_none(),
-                success
-            );
-            assert_eq!(
-                app.world()
-                    .resource::<hud::HudState>()
-                    .spell_book
-                    .as_ref()
-                    .unwrap()
-                    .slots()[0],
-                expected
-            );
+            assert_eq!(world(&app).book_action().is_none(), success);
+            assert_eq!(world(&app).spell_book().unwrap().slots()[0], expected);
         }
         sender
             .send(WorldUpdate::Game(WorldEvent::Posture {
@@ -1239,7 +1222,7 @@ mod tests {
                 .unwrap();
             app.update();
             assert_eq!(world(&app).player().unwrap().level, level);
-            assert_eq!(app.world().resource::<hud::HudState>().experience, Some(99));
+            assert_eq!(world(&app).vitals().experience, Some(99));
         }
         let mut door_packet = [0u8; 80];
         door_packet[60] = 7;
@@ -1270,10 +1253,7 @@ mod tests {
             }))
             .unwrap();
         app.update();
-        assert_eq!(
-            app.world().resource::<hud::HudState>().pending_cast,
-            Some(42)
-        );
+        assert_eq!(world(&app).casting().pending, Some(42));
         sender
             .send(WorldUpdate::Game(WorldEvent::CastRejected {
                 session_id: 2,
@@ -1304,7 +1284,7 @@ mod tests {
                 .1
                 .contains("Target unavailable")
         );
-        assert_eq!(hud.pending_cast, Some(42));
+        assert_eq!(world(&app).casting().pending, Some(42));
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
@@ -1312,7 +1292,7 @@ mod tests {
             }))
             .unwrap();
         app.update();
-        assert_eq!(app.world().resource::<hud::HudState>().pending_cast, None);
+        assert_eq!(world(&app).casting().pending, None);
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
@@ -1332,12 +1312,12 @@ mod tests {
             .unwrap();
         app.update();
         assert_eq!(
-            app.world().resource::<hud::HudState>().book_action,
-            Some(eq_client_core::BookActionStatus::Preparing)
+            world(&app).book_action(),
+            Some(&eq_client_core::BookActionStatus::Preparing)
         );
         assert_eq!(
-            app.world().resource::<hud::HudState>().book_action_revision,
-            3 // Two deletion replies and one preparation notification.
+            world(&app).book_action_revision(),
+            5 // Two waits, two deletion replies and one preparation notification.
         );
         sender
             .send(WorldUpdate::Game(WorldEvent::BookAction(
@@ -1345,10 +1325,7 @@ mod tests {
             )))
             .unwrap();
         app.update();
-        assert_eq!(
-            app.world().resource::<hud::HudState>().book_action_revision,
-            4
-        );
+        assert_eq!(world(&app).book_action_revision(), 6);
         sender
             .send(WorldUpdate::Game(WorldEvent::Death(death.clone())))
             .unwrap();
@@ -1370,7 +1347,7 @@ mod tests {
             None
         );
         assert_eq!(app.world().resource::<hud::HudState>().hp_percent, Some(0));
-        assert_eq!(app.world().resource::<hud::HudState>().pending_cast, None);
+        assert_eq!(world(&app).casting().pending, None);
         sender
             .send(WorldUpdate::Game(WorldEvent::Spell(
                 eq_client_core::SpellUpdate::Began {
@@ -1381,13 +1358,8 @@ mod tests {
             )))
             .unwrap();
         app.update();
-        assert!(app.world().resource::<hud::HudState>().casting.is_none());
-        assert!(
-            app.world()
-                .resource::<hud::HudState>()
-                .book_action
-                .is_none()
-        );
+        assert!(world(&app).casting().cast.is_none());
+        assert!(world(&app).book_action().is_none());
         sender
             .send(WorldUpdate::Game(WorldEvent::ZoneTransferRejected {
                 session_id: 1,

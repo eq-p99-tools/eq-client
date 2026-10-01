@@ -293,7 +293,6 @@ pub(super) fn input(
     (chat, escape): (Res<super::chat::ChatState>, Res<super::escape::Escape>),
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     target: Option<Res<super::target::TargetState>>,
-    hud: Option<Res<super::hud::HudState>>,
 ) {
     state.refresh_bank_access(&online);
     if !windows.single().is_ok_and(|window| window.focused) {
@@ -355,9 +354,8 @@ pub(super) fn input(
         if mouse.just_pressed(MouseButton::Right) {
             if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
                 if !chat.composing {
-                    let casting = hud
-                        .as_ref()
-                        .is_none_or(|hud| hud.casting.is_some() || hud.pending_cast.is_some());
+                    let casting = online.world.casting();
+                    let casting = casting.cast.is_some() || casting.pending.is_some();
                     state.use_slot(
                         slot.0,
                         &online,

@@ -1,5 +1,5 @@
 //! Compact server-owned buff display; clicking never cancels an effect.
-use super::{hud::HudState, spell_icons, spellbook::SpellNames, windows};
+use super::{online::OnlineState, spell_icons, spellbook::SpellNames, windows};
 use bevy::prelude::*;
 use std::collections::BTreeMap;
 
@@ -18,13 +18,13 @@ pub(super) struct Hint;
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
     mut commands: Commands,
-    hud: Res<HudState>,
+    online: Res<OnlineState>,
     panels: Query<Entity, With<Panel>>,
     bodies: Query<Entity, With<Body>>,
     mut previous: Local<Option<BTreeMap<u32, eq_client_core::Buff>>>,
     mut previous_effects: Local<BTreeMap<u16, eq_client_core::SpellEffect>>,
 ) {
-    let Some(buffs) = hud.buff_state.slots() else {
+    let Some(buffs) = online.world.buffs().slots() else {
         for entity in &panels {
             commands.entity(entity).despawn();
         }
@@ -33,13 +33,13 @@ pub(super) fn update(
         return;
     };
     if previous.as_ref() == Some(buffs)
-        && *previous_effects == *hud.buff_state.effects()
+        && *previous_effects == *online.world.buffs().effects()
         && !panels.is_empty()
     {
         return;
     }
     *previous = Some(buffs.clone());
-    previous_effects.clone_from(hud.buff_state.effects());
+    previous_effects.clone_from(online.world.buffs().effects());
     let body = if let Ok(body) = bodies.single() {
         commands.entity(body).despawn_children();
         body
@@ -78,7 +78,7 @@ pub(super) fn update(
         commands.entity(frame).add_child(body);
         body
     };
-    content(&mut commands, body, buffs, hud.buff_state.effects());
+    content(&mut commands, body, buffs, online.world.buffs().effects());
 }
 
 /// Builds icons from occupied server slots without renumbering holes.
@@ -167,7 +167,7 @@ fn content(
 /// Labels the server's duration without pretending it is a synchronized countdown.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn hover(
-    hud: Res<HudState>,
+    online: Res<OnlineState>,
     names: Res<SpellNames>,
     entries: Query<(&Entry, &Interaction)>,
     effects: Query<(&Unplaced, &Interaction)>,
@@ -176,20 +176,26 @@ pub(super) fn hover(
     let hovered = entries
         .iter()
         .find(|(_, interaction)| **interaction != Interaction::None)
-        .and_then(|(entry, _)| hud.buff_state.slots()?.get(&entry.0));
+        .and_then(|(entry, _)| online.world.buffs().slots()?.get(&entry.0));
     let text = hovered.map_or_else(
         || {
             if let Some((entry, _)) = effects
                 .iter()
                 .find(|(_, interaction)| **interaction != Interaction::None)
             {
-                let duration = hud.buff_state.effects().get(&entry.0).and_then(|effect| {
-                    names
-                        .mechanics(u32::from(entry.0))?
-                        .base_duration(effect.caster_level)
-                });
-                let level = hud
-                    .buff_state
+                let duration = online
+                    .world
+                    .buffs()
+                    .effects()
+                    .get(&entry.0)
+                    .and_then(|effect| {
+                        names
+                            .mechanics(u32::from(entry.0))?
+                            .base_duration(effect.caster_level)
+                    });
+                let level = online
+                    .world
+                    .buffs()
                     .effects()
                     .get(&entry.0)
                     .map(|effect| effect.caster_level);
@@ -200,8 +206,8 @@ pub(super) fn hover(
                     resource_hint(names.mechanics(u32::from(entry.0)), level)
                 );
             }
-            if hud.buff_state.slots().is_some_and(BTreeMap::is_empty)
-                && hud.buff_state.effects().is_empty()
+            if online.world.buffs().slots().is_some_and(BTreeMap::is_empty)
+                && online.world.buffs().effects().is_empty()
             {
                 "No active buffs".into()
             } else {
@@ -329,9 +335,13 @@ mod tests {
     #[test]
     fn updates_keep_the_frame_and_remove_faded_icons_and_stale_admissions() {
         let mut app = App::new();
-        app.init_resource::<HudState>()
-            .init_resource::<SpellNames>()
-            .add_systems(Update, (update, hover).chain());
+        app.insert_resource({
+            let mut online = OnlineState::new(true);
+            crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+            online
+        })
+        .init_resource::<SpellNames>()
+        .add_systems(Update, (update, hover).chain());
         let buff = eq_client_core::Buff {
             spell_id: 42,
             caster_level: 1,
@@ -341,10 +351,10 @@ mod tests {
             counters: 0,
             caster_id: 7,
         };
-        app.world_mut()
-            .resource_mut::<HudState>()
-            .buff_state
-            .replace_snapshot(BTreeMap::from([(3, buff.clone())]));
+        crate::online::testing::buffs(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            BTreeMap::from([(3, buff.clone())]),
+        );
         app.update();
         let frame = app
             .world_mut()
@@ -358,10 +368,10 @@ mod tests {
             .map(|entry| entry.0)
             .collect();
         assert_eq!(entries, [3]);
-        app.world_mut()
-            .resource_mut::<HudState>()
-            .buff_state
-            .replace_snapshot(BTreeMap::from([(6, buff)]));
+        crate::online::testing::buffs(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            BTreeMap::from([(6, buff)]),
+        );
         app.update();
         assert_eq!(
             app.world_mut()
@@ -377,10 +387,7 @@ mod tests {
             .map(|entry| entry.0)
             .collect();
         assert_eq!(entries, [6]);
-        app.world_mut()
-            .resource_mut::<HudState>()
-            .buff_state
-            .clear();
+        crate::online::testing::connect(&mut app.world_mut().resource_mut::<OnlineState>(), false);
         app.update();
         assert_eq!(
             app.world_mut().query::<&Entry>().iter(app.world()).count(),

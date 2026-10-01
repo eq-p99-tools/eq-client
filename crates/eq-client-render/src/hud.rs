@@ -1,7 +1,6 @@
 //! Offline character panel and empty action slots, ready for session data.
 
 pub(super) mod action_bar;
-mod cooldowns;
 pub(crate) mod hotbar;
 pub(crate) mod messages;
 mod requests;
@@ -19,11 +18,10 @@ pub(super) struct ReportedHp {
     pub without_items: bool,
 }
 
+/// What the HUD shows besides the world: the status line, the player's HP as
+/// worked out from the last report, estimated maxima and timed feedback.
 #[derive(Resource, Default)]
 pub(super) struct HudState {
-    /// Shared gameplay buff state; presentation never assigns server slots.
-    pub buff_state: eq_client_core::buffs::BuffTracker,
-    pub(super) cooldowns: cooldowns::Cooldowns,
     pub status: String,
     pub hp: Option<(u32, u32)>,
     pub hp_percent: Option<u8>,
@@ -31,20 +29,9 @@ pub(super) struct HudState {
     pub reported_hp: Option<ReportedHp>,
     /// HP the equipped items add, as last calculated.
     pub item_hp: Option<i64>,
-    pub mana: Option<u32>,
-    pub endurance: Option<u32>,
     /// Calculated, unverified maxima (mana, endurance), never server-reported values.
     pub resource_estimate: Option<(u32, u32)>,
-    pub experience: Option<u32>,
-    pub spells: [Option<u32>; 8],
-    pub casting: Option<(u16, std::time::Instant, std::time::Duration)>,
-    pub pending_cast: Option<u32>,
     pub action_feedback: Option<(std::time::Instant, String)>,
-    pub interrupted: Option<(std::time::Instant, u32)>,
-    pub spell_book: Option<eq_client_core::SpellBook>,
-    pub book_action: Option<eq_client_core::BookActionStatus>,
-    /// Distinguishes consecutive worker replies, including identical rejections.
-    pub book_action_revision: u64,
 }
 
 impl HudState {
@@ -69,104 +56,6 @@ impl HudState {
         self.hp_percent = Some(percent);
         Some(percent)
     }
-
-    /// Keeps potentially lasting effects; explicit server buff slots remain authoritative.
-    pub(super) fn spell_effect(
-        &mut self,
-        effect: eq_client_core::SpellEffect,
-        names: Option<&super::spellbook::SpellNames>,
-    ) {
-        if effect.effect_flag != 4 || matches!(effect.spell_id, 0 | u16::MAX) {
-            return;
-        }
-        if names.is_some_and(|names| names.instant_effect(u32::from(effect.spell_id))) {
-            return;
-        }
-        self.buff_state.observe_effect(effect);
-    }
-
-    /// Reconciles explicit slots and fades without assigning slots to action-only effects.
-    pub(super) fn buff_update(&mut self, update: eq_client_core::BuffUpdate) {
-        self.buff_state.apply(update);
-    }
-
-    /// Restores spell reuse independently of local asset availability.
-    pub(super) fn restore_cooldowns(
-        &mut self,
-        player: &eq_client_core::PlayerState,
-        now: std::time::Instant,
-    ) {
-        self.pending_cast = None;
-        self.action_feedback = None;
-        self.cooldowns
-            .restore(&player.memorized_spells, player.spell_refresh_ms, now);
-    }
-    /// Discards old-admission reuse timers and unprocessed refreshes.
-    pub(super) fn reset_cooldowns(&mut self) {
-        self.pending_cast = None;
-        self.action_feedback = None;
-        self.cooldowns = cooldowns::Cooldowns::default();
-    }
-    /// Applies own-caster notifications; resource updates alone never claim a successful cast.
-    pub(super) fn cast_update(
-        &mut self,
-        own_id: u16,
-        update: &eq_client_core::SpellUpdate,
-        now: std::time::Instant,
-    ) {
-        use eq_client_core::SpellUpdate;
-        match *update {
-            SpellUpdate::BarRefresh {
-                slot,
-                spell_id,
-                reduction_ms,
-            } if usize::try_from(slot)
-                .ok()
-                .and_then(|slot| self.spells.get(slot))
-                == Some(&Some(spell_id)) =>
-            {
-                self.cooldowns.refresh(spell_id, reduction_ms, now);
-                self.action_feedback = None;
-                if self
-                    .casting
-                    .is_some_and(|(active, _, _)| u32::from(active) == spell_id)
-                {
-                    self.casting = None;
-                }
-            }
-            SpellUpdate::Began {
-                caster_id,
-                spell_id,
-                duration_ms,
-            } if caster_id == own_id => {
-                self.action_feedback = None;
-                self.interrupted = None;
-                self.casting = Some((
-                    spell_id,
-                    now,
-                    std::time::Duration::from_millis(u64::from(duration_ms)),
-                ));
-            }
-            SpellUpdate::Interrupted {
-                caster_id,
-                message_id,
-            } if caster_id == u32::from(own_id) => {
-                self.action_feedback = None;
-                self.casting = None;
-                self.interrupted = Some((now, message_id));
-            }
-            SpellUpdate::Mana {
-                spell_id,
-                keep_casting: false,
-            } if self
-                .casting
-                .is_some_and(|(active, _, _)| u32::from(active) == spell_id) =>
-            {
-                self.casting = None;
-            }
-            _ => (),
-        }
-    }
 }
 
 #[derive(Component)]
@@ -189,21 +78,23 @@ pub(super) struct HudFill(&'static str);
 /// Refreshes actual values without inventing unknown resource maxima.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn update(
-    mut state: ResMut<HudState>,
+    state: Res<HudState>,
+    online: Res<super::online::OnlineState>,
     names: Res<super::spellbook::SpellNames>,
     messages: Res<messages::Messages>,
     mut texts: Query<(&mut Text, &HudLabel)>,
     mut fills: Query<(&mut Node, &HudFill)>,
 ) {
     let now = std::time::Instant::now();
-    state.cooldowns.resolve(&names, now);
+    let world = &online.world;
+    let (casting, vitals) = (world.casting(), world.vitals());
     for (mut text, label) in &mut texts {
         let value = match label {
-            HudLabel::Casting => state.casting.map_or_else(
+            HudLabel::Casting => casting.cast.map_or_else(
                 || {
-                    if let Some(spell) = state.pending_cast {
+                    if let Some(spell) = casting.pending {
                         format!("Awaiting cast acknowledgement | {}", names.label(spell))
-                    } else if let Some((_, reason)) = state
+                    } else if let Some((_, reason)) = casting
                         .interrupted
                         .filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(3))
                     {
@@ -237,26 +128,29 @@ pub(super) fn update(
                     .hp
                     .map(|(a, b)| format!("{a}/{b}"))
                     .or_else(|| state.hp_percent.map(|p| format!("{p}%"))),
-                "MANA" => state
+                "MANA" => vitals
                     .mana
                     .map(|v| resource_label(v, state.resource_estimate.map(|v| v.0))),
-                "STAMINA" => state
+                "STAMINA" => vitals
                     .endurance
                     .map(|v| resource_label(v, state.resource_estimate.map(|v| v.1))),
-                "EXP" => state
+                "EXP" => vitals
                     .experience
                     .map(|v| format!("{:.1}%", f64::from(v) / 3.3)),
                 _ => None,
             }
             .unwrap_or_else(|| "--".into()),
-            HudLabel::Spell(index) => state.spells[*index].map_or_else(String::new, |id| {
-                let remaining = state.cooldowns.remaining(id, now);
-                if remaining.is_zero() {
-                    format!("{id}")
-                } else {
-                    format!("{:.1}s", remaining.as_secs_f32())
-                }
-            }),
+            HudLabel::Spell(index) => world
+                .player()
+                .and_then(|player| player.memorized_spells[*index])
+                .map_or_else(String::new, |id| {
+                    let remaining = casting.cooldowns.remaining(id, now);
+                    if remaining.is_zero() {
+                        format!("{id}")
+                    } else {
+                        format!("{:.1}s", remaining.as_secs_f32())
+                    }
+                }),
         };
         if text.0 != value {
             text.0 = value;
@@ -264,14 +158,14 @@ pub(super) fn update(
     }
     for (mut node, HudFill(stat)) in &mut fills {
         let ratio = match *stat {
-            "MANA" => resource_ratio(state.mana, state.resource_estimate.map(|v| v.0)),
-            "STAMINA" => resource_ratio(state.endurance, state.resource_estimate.map(|v| v.1)),
+            "MANA" => resource_ratio(vitals.mana, state.resource_estimate.map(|v| v.0)),
+            "STAMINA" => resource_ratio(vitals.endurance, state.resource_estimate.map(|v| v.1)),
             "HP" => state
                 .hp
                 .filter(|(_, max)| *max > 0)
                 .map(|(value, max)| f64::from(value) / f64::from(max))
                 .or_else(|| state.hp_percent.map(|v| f64::from(v) / 100.0)),
-            "EXP" => state.experience.map(|v| f64::from(v) / 330.0),
+            "EXP" => vitals.experience.map(|v| f64::from(v) / 330.0),
             _ => None,
         }
         .unwrap_or(0.0)
@@ -393,17 +287,23 @@ pub(super) fn spawn(commands: &mut Commands) {
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn spell_details(
     state: Res<HudState>,
+    online: Res<super::online::OnlineState>,
     names: Res<super::spellbook::SpellNames>,
     mut gems: Query<(&Interaction, &SpellGem, &mut BackgroundColor)>,
     mut labels: Query<&mut Text, With<SpellDetails>>,
 ) {
     let now = std::time::Instant::now();
+    let casting = online.world.casting();
+    let held = online
+        .world
+        .player()
+        .map_or([None; 8], |player| player.memorized_spells);
     let mut hovered = None;
     for (interaction, SpellGem(gem), mut background) in &mut gems {
-        let spell = state.spells.get(usize::from(*gem)).copied().flatten();
-        let waiting = state.casting.is_some()
-            || state.pending_cast.is_some()
-            || spell.is_some_and(|id| !state.cooldowns.remaining(id, now).is_zero());
+        let spell = held.get(usize::from(*gem)).copied().flatten();
+        let waiting = casting.cast.is_some()
+            || casting.pending.is_some()
+            || spell.is_some_and(|id| !casting.cooldowns.remaining(id, now).is_zero());
         background.0 = if *interaction != Interaction::None {
             hovered = Some((*gem, spell));
             Color::srgb(0.18, 0.25, 0.32)
@@ -428,7 +328,7 @@ pub(super) fn spell_details(
             } else {
                 text.push_str("\nLocal spell timing unavailable");
             }
-            let remaining = state.cooldowns.remaining(spell, now);
+            let remaining = casting.cooldowns.remaining(spell, now);
             if !remaining.is_zero() {
                 use std::fmt::Write;
                 let _ = write!(text, "\nAvailable in {:.1}s", remaining.as_secs_f32());
@@ -516,6 +416,7 @@ pub(super) fn actions(
             .and_then(|spell| names.mana(spell));
         requests::spell(
             &mut hud,
+            &online.world,
             player,
             sender,
             &requests::Request {

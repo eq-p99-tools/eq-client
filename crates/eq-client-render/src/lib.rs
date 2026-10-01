@@ -226,7 +226,7 @@ pub fn run(
                 entities::demo,
                 entities::reconcile,
                 entities::interpolate,
-                doors::close,
+                online::tick,
                 doors::reconcile,
                 ground::reconcile,
                 interact::input,

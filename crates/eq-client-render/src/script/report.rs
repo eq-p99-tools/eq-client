@@ -22,12 +22,13 @@ pub(super) fn state(
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
-    let slots: Vec<u32> = hud
-        .buff_state
+    let slots: Vec<u32> = online
+        .world
+        .buffs()
         .slots()
         .map(|slots| slots.values().map(|buff| buff.spell_id).collect())
         .unwrap_or_default();
-    let effects: Vec<u16> = hud.buff_state.effects().keys().copied().collect();
+    let effects: Vec<u16> = online.world.buffs().effects().keys().copied().collect();
     let posture = online
         .world
         .player()
@@ -46,9 +47,9 @@ pub(super) fn state(
             )
         })
         .collect();
-    let book: Vec<(usize, u32)> = hud
-        .spell_book
-        .as_ref()
+    let book: Vec<(usize, u32)> = online
+        .world
+        .spell_book()
         .map(|book| {
             book.slots()
                 .iter()
@@ -57,6 +58,22 @@ pub(super) fn state(
                 .collect()
         })
         .unwrap_or_default();
+    let gems = online
+        .world
+        .player()
+        .map_or([None; 8], |player| player.memorized_spells);
+    // Milliseconds until each memorized gem can be cast again.
+    let now = std::time::Instant::now();
+    let cooldowns = gems.map(|spell| {
+        spell.map(|spell| {
+            online
+                .world
+                .casting()
+                .cooldowns
+                .remaining(spell, now)
+                .as_millis()
+        })
+    });
     info!(
         label,
         zone = online.world.zone(),
@@ -66,15 +83,16 @@ pub(super) fn state(
         ?position,
         ?posture,
         hp = ?hud.hp,
-        mana = ?hud.mana,
-        endurance = ?hud.endurance,
+        mana = ?online.world.vitals().mana,
+        endurance = ?online.world.vitals().endurance,
         estimate = ?hud.resource_estimate,
-        casting = ?hud.casting.map(|(spell, _, _)| spell),
-        pending = ?hud.pending_cast,
-        interrupted = ?hud.interrupted.map(|(_, id)| id),
+        casting = ?online.world.casting().cast.map(|(spell, _, _)| spell),
+        pending = ?online.world.casting().pending,
+        interrupted = ?online.world.casting().interrupted.map(|(_, id)| id),
         feedback = ?hud.action_feedback.as_ref().map(|(_, text)| text),
         target = ?target.selected,
-        gems = ?hud.spells,
+        ?gems,
+        ?cooldowns,
         ?book,
         ?slots,
         ?effects,

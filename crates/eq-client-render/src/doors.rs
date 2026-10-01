@@ -133,12 +133,6 @@ pub(super) fn open(
     };
 }
 
-/// Closes opened doors on the client's own timer, since servers close ordinary
-/// doors without telling clients.
-pub(super) fn close(mut state: ResMut<super::online::OnlineState>) {
-    state.world.tick(std::time::Instant::now());
-}
-
 /// Normalizes an asset identifier without interpreting server strings as paths.
 pub(super) fn model_key(name: &str) -> String {
     eq_client_assets::model_key(name)
@@ -529,7 +523,8 @@ mod tests {
         crate::online::testing::doors(&mut state, &spawn, opened);
         crate::online::testing::doors(&mut state, &DoorUpdate::Move { id: 0, action: 2 }, opened);
         let mut app = App::new();
-        app.insert_resource(state).add_systems(Update, close);
+        app.insert_resource(state)
+            .add_systems(Update, crate::online::tick);
         app.update();
         let door = &app
             .world()

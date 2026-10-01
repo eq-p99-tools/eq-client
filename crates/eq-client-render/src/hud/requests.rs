@@ -18,6 +18,7 @@ pub(super) struct Request {
 /// Validates local availability and queues a fresh request without predicting its result.
 pub(super) fn spell(
     hud: &mut HudState,
+    world: &eq_client_core::world::ClientWorld,
     player: &PlayerState,
     sender: &SyncSender<ClientCommand>,
     request: &Request,
@@ -38,8 +39,10 @@ pub(super) fn spell(
         .flatten()
     {
         None => "Empty spell gem — open the spellbook [B] to memorize".into(),
-        Some(_) if hud.casting.is_some() => "Already casting — duck [C] to interrupt".into(),
-        Some(_) if hud.pending_cast.is_some() => {
+        Some(_) if world.casting().cast.is_some() => {
+            "Already casting — duck [C] to interrupt".into()
+        }
+        Some(_) if world.casting().pending.is_some() => {
             "Waiting for the server to acknowledge the cast".into()
         }
         // Like the official client, refuse locally when server-reported mana is short;
@@ -47,13 +50,13 @@ pub(super) fn spell(
         Some(_)
             if !forgetting
                 && mana_cost
-                    .zip(hud.mana)
+                    .zip(world.vitals().mana)
                     .is_some_and(|(cost, mana)| cost > mana) =>
         {
             messages.text(199, "Insufficient Mana to cast this spell!")
         }
         Some(spell_id) => {
-            let remaining = hud.cooldowns.remaining(spell_id, now);
+            let remaining = world.casting().cooldowns.remaining(spell_id, now);
             if !forgetting && !remaining.is_zero() {
                 format!("Spell available in {:.1}s", remaining.as_secs_f32())
             } else {
