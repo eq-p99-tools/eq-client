@@ -27,7 +27,8 @@ fn capitalized(text: &str) -> String {
     })
 }
 
-/// Handles K (consider), H (hail) and G (toggle auto-attack) for the current target.
+/// Handles K (consider), H (hail) and G (toggle auto-attack, as the skin's
+/// melee attack button does) for the current target.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
     keys: super::keys::Keys,
@@ -36,6 +37,7 @@ pub(super) fn input(
     messages: Res<Messages>,
     mut combat: ResMut<CombatState>,
     mut chat: ResMut<super::chat::ChatState>,
+    attack_button: Query<&Interaction, (Changed<Interaction>, With<super::skinned::AttackButton>)>,
 ) {
     use super::keys::Act;
     let Some(player) = online.world().player() else {
@@ -94,7 +96,11 @@ pub(super) fn input(
         );
         let _ = outbox.send(world, ClientCommand::SendChat(OutboundChat::Say(text)));
     }
-    if keys.pressed(Act::Attack) {
+    if keys.pressed(Act::Attack)
+        || attack_button
+            .iter()
+            .any(|interaction| *interaction == Interaction::Pressed)
+    {
         let enable = !combat.auto_attack;
         if enable && attackable.is_none() {
             feedback("Target a creature to attack it".into());

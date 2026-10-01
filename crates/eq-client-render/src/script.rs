@@ -9,7 +9,7 @@
 mod parse;
 mod report;
 
-pub use parse::{ClickTarget, PickButton, Step, TradeClick, parse};
+pub use parse::{AbilityPage, ClickTarget, PickButton, Step, TradeClick, parse};
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -193,6 +193,12 @@ type Buttons<'w, 's> = Query<
         (
             Option<&'static super::coins::CoinBox>,
             Option<&'static super::inventory::SplitAction>,
+        ),
+        (
+            Option<&'static super::windows::SelectorButton>,
+            Option<&'static super::skinned::SkinTab>,
+            Option<&'static super::abilities::AbilityButton>,
+            Has<super::skinned::AttackButton>,
         ),
     ),
 >;
@@ -623,9 +629,23 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
         tint,
         give,
         (coins, pick),
+        (selector, tab, ability, attack),
     ) in buttons.iter_mut()
     {
         let matches = match target {
+            ClickTarget::ActionsWindow => selector
+                .is_some_and(|selector| selector.0 == super::windows::WindowId::ActionsWindow),
+            ClickTarget::Tab(index) => tab.is_some_and(|tab| tab.index == index),
+            ClickTarget::Ability(page, index) => ability.is_some_and(|button| {
+                use super::abilities::Page;
+                button.index == index
+                    && button.page
+                        == match page {
+                            AbilityPage::Combat => Page::Combat,
+                            AbilityPage::Abilities => Page::Abilities,
+                        }
+            }),
+            ClickTarget::Attack => attack,
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,

@@ -3,6 +3,7 @@
 use std::{path::PathBuf, sync::mpsc::Receiver};
 use theme::Size;
 
+mod abilities;
 mod book_delete;
 mod buffs;
 mod character;
@@ -263,6 +264,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<sheets::Sheets>()
         .init_resource::<skinned::Screens>()
         .init_resource::<skinned::Skinned>()
+        .init_resource::<skinned::Tabs>()
         .init_resource::<chat::ChatState>()
         .init_resource::<notices::Lines>()
         .init_resource::<items::ItemState>()
@@ -386,6 +388,7 @@ fn schedule(app: &mut App) {
             combat::input,
             trade::input,
             give::buttons,
+            (abilities::input, skinned::slash),
             hud::actions,
             hud::hotbar::update,
             hud::hotbar::item_actions,
@@ -438,7 +441,7 @@ fn schedule(app: &mut App) {
                 skinned::apply,
                 skinned::show,
                 skinned::buttons,
-                skinned::contents,
+                (skinned::contents, skinned::tabs, abilities::present),
                 skinned::close,
                 skinned::picker,
             )

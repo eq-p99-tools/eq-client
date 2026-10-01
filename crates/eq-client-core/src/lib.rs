@@ -12,6 +12,7 @@ pub mod races;
 pub mod resources;
 pub mod targeting;
 pub mod world;
+pub use eq_network_game::abilities;
 pub use eq_network_game::characters::CharacterChoice;
 pub use eq_network_game::chat::OutboundChat;
 pub use eq_network_game::combat;

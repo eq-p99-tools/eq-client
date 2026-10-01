@@ -43,6 +43,9 @@ pub(crate) enum WindowId {
     Merchant,
     /// The give window: what the player hands an NPC, drawn from the skin.
     Give,
+    /// The skin's Actions window: its Main page's sit, stand and camp, and
+    /// the abilities on its Combat and Abilities pages.
+    ActionsWindow,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -220,7 +223,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 17] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -236,6 +239,7 @@ impl WindowId {
         Self::Loot,
         Self::Merchant,
         Self::Give,
+        Self::ActionsWindow,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -266,6 +270,7 @@ impl WindowId {
             Self::Loot => Some("LootWnd"),
             Self::Merchant => Some("MerchantWnd"),
             Self::Give => Some("GiveWnd"),
+            Self::ActionsWindow => Some("ActionsWindow"),
             _ => None,
         }
     }
@@ -300,6 +305,7 @@ impl WindowId {
             Self::Loot => "loot",
             Self::Merchant => "merchant",
             Self::Give => "give",
+            Self::ActionsWindow => "actions-window",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -333,7 +339,9 @@ impl WindowId {
             ),
             Self::Player => hud("", Placement::Docked, &["CHARACTER"]),
             Self::Spells => hud("SPELLS", Placement::Docked, &["SPELLS"]),
-            Self::Actions => hud("ACTIONS", Placement::Docked, &["ACTIONS"]),
+            // Named apart from the skin's Actions window; placements saved
+            // under its old title still find it.
+            Self::Actions => hud("HOTBAR", Placement::Docked, &["ACTIONS"]),
             Self::CastBar => Description {
                 persists: false,
                 ..hud(
@@ -394,6 +402,8 @@ impl WindowId {
             // Right of the effects window, clear of the inventory and its
             // bags, where the items to give come from.
             Self::Give => floating("GIVE", Placement::TopRight(220.0, 100.0), false, &[]),
+            // Where the skin places it, right of the player and target windows.
+            Self::ActionsWindow => floating("ACTIONS", Placement::TopLeft(516.0, 292.0), true, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(
