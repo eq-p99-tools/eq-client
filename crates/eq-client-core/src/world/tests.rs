@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
-    SpawnKind, WorldPosition, ZoneRejection,
+    CampStatus, SpawnKind, SpellUpdate, WorldPosition, ZoneRejection,
+    combat::ConColor,
     doors::{Door, DoorUpdate},
     ground::ObjectUpdate,
     outfit::Appearance,
