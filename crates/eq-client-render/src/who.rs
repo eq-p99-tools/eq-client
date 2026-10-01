@@ -50,7 +50,10 @@ fn line(player: &WhoPlayer, messages: &Messages) -> String {
     let account = player
         .account
         .as_ref()
-        .map(|(words, account)| messages.format(*words, std::slice::from_ref(account)))
+        .map(|(words, account)| {
+            let status = player.status.map(|status| status.to_string());
+            messages.format(*words, &[account.clone(), status.unwrap_or_default()])
+        })
         .unwrap_or_default();
     let name = player.name.clone();
     let guild = player.guild.clone();
@@ -82,6 +85,7 @@ mod tests {
 1517 Grave Lord
 1546 Wizard
 5001 Players in EverQuest:
+5003 (USER %1: PID %2)
 5006 ZONE: %1
 5015 * GM-Admin *
 5023 %T1[ANONYMOUS] %2 %3 %4
@@ -105,6 +109,7 @@ mod tests {
             level: 0,
             race: 0,
             account: None,
+            status: None,
         }
     }
 
@@ -125,6 +130,8 @@ mod tests {
             class: 12,
             level: 20,
             race: 12,
+            account: Some((5003, "guide".into())),
+            status: Some(100),
             ..player(OPEN, "Guide")
         };
         let roleplaying = WhoPlayer {
@@ -144,7 +151,11 @@ mod tests {
                 "Players in EverQuest:".to_owned(),
                 "-".repeat(27),
                 "[60 Grave Lord] Tester (Dark Elf) <Seekers> ZONE: qeytoqrg".into(),
-                "* GM-Admin *[20 Wizard] Guide (Gnome)  ZONE: poknowledge  <LINKDEAD>".into(),
+                concat!(
+                    "* GM-Admin *[20 Wizard] Guide (Gnome)  ZONE: poknowledge  <LINKDEAD> ",
+                    "(USER guide: PID 100)"
+                )
+                .into(),
                 "[ANONYMOUS] Bard <Seekers>".into(),
                 "[ANONYMOUS] Hidden".into(),
                 "There are 4 players in EverQuest.".into(),
