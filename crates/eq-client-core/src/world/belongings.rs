@@ -4,7 +4,7 @@
 use super::{Changes, ClientWorld, Notice, Reply, trade};
 use crate::{
     exchange::ExchangeUpdate, inventory::InventoryUpdate, loot::LootUpdate,
-    merchant::MerchantUpdate, money::CoinTransfer,
+    merchant::MerchantUpdate,
 };
 
 impl ClientWorld {
@@ -35,7 +35,7 @@ impl ClientWorld {
 
     /// News of the corpse being looted.
     pub(super) fn loot_news(&mut self, update: &LootUpdate, changes: &mut Changes) {
-        if self.zone.trade.loot(update, &mut self.coins) {
+        if self.zone.trade.loot(update) {
             changes.trade = true;
             changes.notices.extend(trade::loot_notice(update));
             if let LootUpdate::Taken { slot, accepted } = update {
@@ -51,7 +51,7 @@ impl ClientWorld {
 
     /// News of the merchant's stock and the player's trades with them.
     pub(super) fn merchant_news(&mut self, update: &MerchantUpdate, changes: &mut Changes) {
-        if self.zone.trade.merchant(update, &mut self.coins) {
+        if self.zone.trade.merchant(update) {
             changes.trade = true;
             changes.notices.extend(trade::merchant_notice(update));
         } else {
@@ -89,31 +89,15 @@ impl ClientWorld {
         }
     }
 
-    /// A coin move was not sent: the coins go back where they came from.
-    pub(super) fn coins_refused(
-        &mut self,
-        session_id: u64,
-        transfer: CoinTransfer,
-        reason: &str,
-        changes: &mut Changes,
-    ) {
-        if self.session_id != Some(session_id) {
+    /// A coin move was not sent; the coins stayed where they were.
+    pub(super) fn coins_refused(&self, session_id: u64, reason: &str, changes: &mut Changes) {
+        if self.session_id == Some(session_id) {
+            changes
+                .notices
+                .push(Notice::TradeRefused(reason.to_owned()));
+        } else {
             changes.ignored = true;
-            return;
         }
-        // What arrived goes back as what it was.
-        let (_, added) = transfer.amounts();
-        self.move_coins(CoinTransfer {
-            from: transfer.to,
-            to: transfer.from,
-            coin: transfer.into,
-            into: transfer.coin,
-            amount: added,
-        });
-        changes.trade = true;
-        changes
-            .notices
-            .push(Notice::TradeRefused(reason.to_owned()));
     }
 
     /// The merchant would not trade.

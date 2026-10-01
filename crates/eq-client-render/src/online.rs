@@ -89,11 +89,6 @@ impl OnlineState {
         self.world.offer_trade(with);
     }
 
-    /// The player moved coins; false when they could not go.
-    pub(super) fn move_coins(&mut self, transfer: eq_client_core::money::CoinTransfer) -> bool {
-        self.world.move_coins(transfer)
-    }
-
     /// The player clicked Give.
     pub(super) fn give(&mut self) {
         self.world.give();

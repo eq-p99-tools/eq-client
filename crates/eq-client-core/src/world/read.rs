@@ -205,15 +205,13 @@ impl ClientWorld {
     pub fn coins_in(&self, place: crate::money::CoinPlace) -> Option<Coins> {
         use crate::money::CoinPlace;
         match place {
-            CoinPlace::Purse => self.coins,
-            CoinPlace::Cursor => Some(self.cursor_coins),
-            CoinPlace::Bank => self.bank_coins,
             CoinPlace::Trade => self
                 .zone
                 .trade
                 .exchange
                 .filter(|exchange| exchange.open)
-                .map(|exchange| exchange.coins),
+                .map(|_| self.wallet.given),
+            place => self.wallet.get(place),
         }
     }
 
@@ -250,7 +248,7 @@ impl ClientWorld {
     /// The coins the player carries, as last reported.
     #[must_use]
     pub const fn coins(&self) -> Option<&Coins> {
-        self.coins.as_ref()
+        self.wallet.purse.as_ref()
     }
 
     /// The player's own casting and gem timers.
