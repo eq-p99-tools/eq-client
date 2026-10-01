@@ -181,7 +181,6 @@ type Buttons<'w, 's> = Query<
 
 type Observed<'w> = (
     Res<'w, super::hud::HudState>,
-    Res<'w, super::inventory::InventoryState>,
     Res<'w, super::target::TargetState>,
     Res<'w, super::target::CommandsToServer>,
     Res<'w, super::trade::TradeState>,
@@ -303,7 +302,7 @@ pub(super) fn drive(
                     let (waypoints, partial) = (route.remaining(), route.partial());
                     info!(waypoints, partial, "Script route ready");
                 } else if !searching && route.is_searching() {
-                    let refused = observed.6.refused.as_deref();
+                    let refused = observed.5.refused.as_deref();
                     info!(?refused, "Script walk stalled; searching again from here");
                 }
                 match step {
@@ -312,7 +311,7 @@ pub(super) fn drive(
                         return;
                     }
                     RouteStep::Stalled => {
-                        let refused = observed.6.refused.as_deref();
+                        let refused = observed.5.refused.as_deref();
                         let reason = refused.map_or_else(
                             || "walk made no progress, even after searching again".to_owned(),
                             |refused| {
@@ -400,7 +399,7 @@ pub(super) fn drive(
     match &step {
         Step::Create(character) => {
             let sent = online.selection.as_ref().is_some_and(|selection| {
-                observed.3.0.as_ref().is_some_and(|sender| {
+                observed.2.0.as_ref().is_some_and(|sender| {
                     sender
                         .try_send(eq_client_core::ClientCommand::CreateCharacter {
                             selection_id: selection.id(),
@@ -430,7 +429,7 @@ pub(super) fn drive(
         Step::Slash(command) => {
             let queued = match super::chat::target_request(command) {
                 Some(request) => request.map(|name| chat.requested_target = Some(name)),
-                None => super::chat::submit_game_command(command, &online, &observed.3),
+                None => super::chat::submit_game_command(command, &online, &observed.2),
             };
             if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);
@@ -440,7 +439,7 @@ pub(super) fn drive(
         Step::Gm(command) => {
             let sent = gm_chat(command, script.local).and_then(|chat| {
                 observed
-                    .3
+                    .2
                     .0
                     .as_ref()
                     .ok_or_else(|| String::from("Network worker is unavailable"))?
@@ -531,7 +530,7 @@ pub(super) fn drive(
                 // Ledges are routes only where the session simulates falls.
                 Some(
                     eq_client_core::movement::Route::new(feet, goal, *range, body.height)
-                        .with_drops(observed.6.airborne.is_some()),
+                        .with_drops(observed.5.airborne.is_some()),
                 )
             });
             let Some(route) = route else {
@@ -612,7 +611,7 @@ type Seen<'a, 'w> = (&'a super::online::OnlineState, &'a Observed<'w>);
 fn walk_ends((online, observed): Seen, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
     let player = online.world.player()?;
     let spawn = observed
-        .2
+        .1
         .selected
         .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state))?;
     let origin = Vec3::from_array(eq_client_core::render_position(player.position));
@@ -629,7 +628,7 @@ fn face(
     cameras: &mut Query<&mut super::OrbitCamera>,
 ) -> Option<f32> {
     let spawn = observed
-        .2
+        .1
         .selected
         .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state))?;
     let transform = players.single().ok()?;

@@ -26,8 +26,6 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         ..default()
     };
     let id = item.details.id;
-    let mut inventory = crate::inventory::InventoryState::default();
-    inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
     let mut online = crate::online::OnlineState::new(true);
     crate::online::testing::admit(
         &mut online,
@@ -54,6 +52,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
             appearance: eq_client_core::outfit::Appearance::default(),
         },
     );
+    crate::online::testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item.clone()]));
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut app = App::new();
     app.init_resource::<Bindings>()
@@ -61,7 +60,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         .init_resource::<crate::chat::ChatState>()
         .init_resource::<crate::target::TargetState>()
         .init_resource::<crate::hud::HudState>()
-        .insert_resource(inventory)
+        .init_resource::<crate::inventory::InventoryState>()
         .insert_resource(online)
         .insert_resource(crate::target::CommandsToServer(Some(tx)))
         .add_systems(Update, (update, item_actions).chain());
@@ -118,8 +117,9 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
     );
     assert_eq!(
         app.world()
-            .resource::<crate::inventory::InventoryState>()
-            .data
+            .resource::<crate::online::OnlineState>()
+            .world
+            .inventory()
             .items()[&InventorySlot(13)]
             .charges,
         3
@@ -128,9 +128,10 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         .resource_mut::<crate::inventory::InventoryState>()
         .cancel_actions();
     item.details.id += 1;
-    app.world_mut()
-        .resource_mut::<crate::inventory::InventoryState>()
-        .apply(InventoryUpdate::Set(vec![item]));
+    crate::online::testing::inventory(
+        &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+        InventoryUpdate::Set(vec![item]),
+    );
     app.update();
     assert!(rx.try_recv().is_err());
     assert!(

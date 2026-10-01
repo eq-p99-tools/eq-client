@@ -300,7 +300,6 @@ pub(super) fn input(
     online: Res<super::online::OnlineState>,
     target: Res<super::target::TargetState>,
     sender: Res<super::target::CommandsToServer>,
-    inventory: Res<super::inventory::InventoryState>,
     mut trade: ResMut<TradeState>,
     mut chat: ResMut<super::chat::ChatState>,
     buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
@@ -444,8 +443,9 @@ pub(super) fn input(
             Action::Sell(slot) => {
                 // The row may be older than the inventory: sell only what the
                 // slot holds now.
-                let Some(item) = inventory
-                    .data
+                let Some(item) = online
+                    .world
+                    .inventory()
                     .items()
                     .get(&eq_client_core::inventory::InventorySlot(slot))
                 else {
@@ -525,12 +525,13 @@ pub(super) fn input(
 pub(super) fn present(
     mut commands: Commands,
     trade: Res<TradeState>,
-    inventory: Res<super::inventory::InventoryState>,
+    online: Res<super::online::OnlineState>,
     panels: Query<(Entity, &Panel)>,
     lists: Query<(&Rows, &ScrollPosition)>,
     mut shown: Local<Option<(u64, u64)>>,
 ) {
-    let signature = (trade.revision, inventory.data.revision());
+    let inventory = online.world.inventory();
+    let signature = (trade.revision, inventory.revision());
     if *shown == Some(signature) {
         return;
     }
@@ -600,13 +601,12 @@ pub(super) fn present(
             .collect();
         rows.extend(
             inventory
-                .data
                 .items()
                 .values()
                 .filter(|item| {
                     sellable_slot(item.slot.0)
                         && !no_drop(item)
-                        && !holds_items(item, inventory.data.items())
+                        && !holds_items(item, inventory.items())
                 })
                 .map(|item| {
                     (
@@ -790,7 +790,7 @@ mod tests {
             }),
             ..TradeState::default()
         })
-        .init_resource::<super::super::inventory::InventoryState>()
+        .insert_resource(super::super::online::OnlineState::new(false))
         .init_resource::<ButtonInput<MouseButton>>()
         .init_resource::<windows::DragState>()
         .add_systems(Update, (present, windows::input).chain());
@@ -933,7 +933,7 @@ mod tests {
             }),
             ..TradeState::default()
         })
-        .init_resource::<super::super::inventory::InventoryState>()
+        .insert_resource(super::super::online::OnlineState::new(false))
         .add_systems(Update, present);
         app.update();
         let world = app.world_mut();
@@ -1131,7 +1131,6 @@ mod tests {
             })
             .insert_resource(super::super::target::CommandsToServer(Some(sender)))
             .init_resource::<super::super::target::TargetState>()
-            .init_resource::<super::super::inventory::InventoryState>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()

@@ -8,7 +8,6 @@ pub(crate) struct Label;
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn presentation(
     online: Option<Res<crate::online::OnlineState>>,
-    inventory: Option<Res<crate::inventory::InventoryState>>,
     sender: Option<Res<crate::target::CommandsToServer>>,
     names: Res<SpellNames>,
     mut buttons: Query<(&Interaction, &mut BackgroundColor), With<ScribeCursor>>,
@@ -18,12 +17,7 @@ pub(crate) fn presentation(
     let available = if action_pending(world) {
         Err(anyhow::anyhow!("Wait for the current spell action"))
     } else {
-        prepare_scribe(
-            online.as_deref(),
-            inventory.as_deref(),
-            world.spell_book(),
-            sender.as_deref(),
-        )
+        prepare_scribe(online.as_deref(), world.spell_book(), sender.as_deref())
     };
     let enabled = available.is_ok();
     let label = match available {

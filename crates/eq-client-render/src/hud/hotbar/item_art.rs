@@ -28,7 +28,7 @@ pub(super) fn artwork(slot: usize) -> impl Bundle {
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update(
     bindings: Res<super::Bindings>,
-    inventory: Res<crate::inventory::InventoryState>,
+    online: Res<crate::online::OnlineState>,
     settings: Res<crate::ViewerSettings>,
     mut icons: Local<crate::inventory::icons::Icons>,
     mut images: ResMut<Assets<Image>>,
@@ -37,7 +37,7 @@ pub(crate) fn update(
     for (mut art, mut image, mut node) in &mut artwork {
         let icon = match bindings.0[art.slot] {
             Some(super::Action::Item { slot, id }) => {
-                super::bound_item(&inventory, slot, id).map(|item| item.icon)
+                super::bound_item(online.world.inventory(), slot, id).map(|item| item.icon)
             }
             _ => None,
         };

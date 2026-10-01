@@ -18,7 +18,7 @@ pub(super) fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
 pub(super) fn state(
     label: &str,
     online: &crate::online::OnlineState,
-    (hud, inventory, target, ..): &Observed,
+    (hud, target, ..): &Observed,
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
@@ -33,8 +33,9 @@ pub(super) fn state(
         .world
         .player()
         .and_then(|player| online.world.posture(player.spawn_id));
-    let items: Vec<ReportedItem> = inventory
-        .data
+    let items: Vec<ReportedItem> = online
+        .world
+        .inventory()
         .items()
         .values()
         .map(|item| {
@@ -82,7 +83,7 @@ pub(super) fn state(
         connected = online.world.connected(),
         ?position,
         ?posture,
-        hp = ?hud.hp,
+        hp = ?online.world.hit_points(),
         mana = ?online.world.vitals().mana,
         endurance = ?online.world.vitals().endurance,
         estimate = ?hud.resource_estimate,
@@ -97,9 +98,9 @@ pub(super) fn state(
         ?slots,
         ?effects,
         ?items,
-        inventory_predicted = inventory.data.predicted(),
-        inventory_stale = inventory.data.stale(),
-        cursor_queued = inventory.data.queued().count(),
+        inventory_predicted = online.world.inventory().predicted(),
+        inventory_stale = online.world.inventory().stale(),
+        cursor_queued = online.world.inventory().queued().count(),
         gear = ?online.world.player().map(|player| player.appearance.materials),
         tints = ?online.world.player().map(|player| player.appearance.tints),
         face = ?online.world.player().map(|player| player.appearance.face),
