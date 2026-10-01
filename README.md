@@ -529,7 +529,11 @@ The target panel lists the keys that apply to the current target:
   from level 51, race names, guilds and zones. Words after it narrow the
   list as the official client's do: a class (`wizard` or `wiz`), a race
   (`dark elf` or `def`), a level or two for a range, `gm`, and the start of
-  a name, guild or zone. The zone's own `/who` is not supported yet.
+  a name, guild or zone. A plain **/who** lists the zone's players from what
+  the client knows of them, as the Titanium client does: the same words
+  narrow it, ` AFK ` or `* GM * ` comes before a line and ` LFG` after it,
+  guilds are named from the world's guild list, and the count names the
+  zone's long name.
 
 Melee and non-melee damage involving the player prints Titanium-style combat
 text. Server string-table messages (for example experience, skill-up and range

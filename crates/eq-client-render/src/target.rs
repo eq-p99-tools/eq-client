@@ -390,6 +390,8 @@ mod tests {
                     size: 0.0,
                     invisible: false,
                     appearance: eq_client_core::outfit::Appearance::default(),
+                    level: 0,
+                    listing: eq_client_core::listing::Listing::default(),
                 },
             );
         }
@@ -428,6 +430,8 @@ mod tests {
                         size: 0.0,
                         invisible: false,
                         appearance: eq_client_core::outfit::Appearance::default(),
+                        level: 0,
+                        listing: eq_client_core::listing::Listing::default(),
                     },
                 );
             }
@@ -469,6 +473,8 @@ mod tests {
                         size: 0.0,
                         invisible: false,
                         appearance: eq_client_core::outfit::Appearance::default(),
+                        level: 0,
+                        listing: eq_client_core::listing::Listing::default(),
                     },
                 );
             }
@@ -650,6 +656,7 @@ mod tests {
                 run_speed: 0.0,
                 hp_percent: Some(55),
                 appearance: eq_client_core::outfit::Appearance::default(),
+                listing: eq_client_core::listing::Listing::default(),
             },
         );
         let (tx, rx) = std::sync::mpsc::sync_channel(2);

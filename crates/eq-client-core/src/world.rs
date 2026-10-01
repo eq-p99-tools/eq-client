@@ -21,6 +21,7 @@ mod spells;
 mod target;
 mod trade;
 mod vitals;
+mod who;
 mod zone;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
@@ -31,6 +32,7 @@ pub use notice::Notice;
 pub use target::Target;
 pub use trade::{Exchange, Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
+pub use who::ZonePlayer;
 
 use crate::{
     BookActionStatus, CharacterChoice, Death, PlayerState, PostureState, SpawnState, SpellBook,
@@ -94,6 +96,8 @@ pub struct ClientWorld {
     connected: bool,
     ended: bool,
     world_name: Option<String>,
+    /// Guild names by number, from the world's guild list.
+    guild_names: BTreeMap<u32, String>,
     characters: Option<CharacterList>,
     /// The last revision given to a spawn, which never repeats.
     revision: u64,
@@ -336,6 +340,19 @@ impl ClientWorld {
                 spawn_id,
                 invisible,
             } => self.zone.visibility(*spawn_id, *invisible),
+            // How /who lists a player, and the guilds it names.
+            WorldEvent::Listing { spawn_id, change } => {
+                if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
+                    let state = &mut spawn.state;
+                    who::relist(*change, &mut state.level, &mut state.listing);
+                }
+                if self.is_player(*spawn_id)
+                    && let Some(player) = self.player.as_mut()
+                {
+                    who::relist(*change, &mut player.level, &mut player.listing);
+                }
+            }
+            WorldEvent::GuildNames(names) => self.guild_names = names.iter().cloned().collect(),
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
                 self.zone.posture(*spawn_id, *posture, player);
