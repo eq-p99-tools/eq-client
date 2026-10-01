@@ -56,7 +56,7 @@ impl ClientWorld {
     /// The zone's short name, as the server gave it.
     #[must_use]
     pub fn zone(&self) -> &str {
-        &self.zone
+        &self.zone_name
     }
 
     /// The zone's far clip distance, when the server gave one.
@@ -100,13 +100,13 @@ impl ClientWorld {
     /// The zone's spawns, by spawn ID.
     #[must_use]
     pub const fn spawns(&self) -> &BTreeMap<u16, Spawn> {
-        &self.spawns
+        &self.zone.spawns
     }
 
     /// One spawn.
     #[must_use]
     pub fn spawn(&self, id: u16) -> Option<&Spawn> {
-        self.spawns.get(&id)
+        self.zone.spawns.get(&id)
     }
 
     /// The player's target.
@@ -121,7 +121,7 @@ impl ClientWorld {
     pub fn target_stale(&self) -> bool {
         self.target.selected.is_some_and(|id| {
             !self.is_player(id)
-                && self.spawns.get(&id).is_none_or(|spawn| {
+                && self.zone.spawns.get(&id).is_none_or(|spawn| {
                     spawn.state.invisible || Some(spawn.revision) != self.target.revision
                 })
         })
@@ -131,7 +131,7 @@ impl ClientWorld {
     /// spawn.
     #[must_use]
     pub fn considered(&self, id: u16) -> Option<ConColor> {
-        self.considered.get(&id).copied()
+        self.zone.considered.get(&id).copied()
     }
 
     /// Whether a spawn ID is the player's.
@@ -146,9 +146,9 @@ impl ClientWorld {
     #[must_use]
     pub fn posture(&self, id: u16) -> Option<PostureState> {
         if self.is_player(id) {
-            return self.player_posture;
+            return self.zone.player_posture;
         }
-        self.spawns.get(&id).and_then(|spawn| spawn.posture)
+        self.zone.spawns.get(&id).and_then(|spawn| spawn.posture)
     }
 
     /// The health last reported for the player or a spawn, in percent.
@@ -156,20 +156,20 @@ impl ClientWorld {
     pub fn health(&self, id: u16) -> Option<u8> {
         match self.player.as_ref() {
             Some(player) if player.spawn_id == id => player.hp_percent,
-            _ => self.spawns.get(&id).and_then(|spawn| spawn.health),
+            _ => self.zone.spawns.get(&id).and_then(|spawn| spawn.health),
         }
     }
 
     /// The zone's doors.
     #[must_use]
     pub const fn doors(&self) -> &DoorTable {
-        &self.doors
+        &self.zone.doors
     }
 
     /// The zone's items on the ground and world containers.
     #[must_use]
     pub const fn objects(&self) -> &Objects {
-        &self.objects
+        &self.zone.objects
     }
 
     /// The player's mana, endurance and experience.
@@ -195,13 +195,13 @@ impl ClientWorld {
     /// The corpse the player is looting.
     #[must_use]
     pub const fn loot(&self) -> Option<&Loot> {
-        self.trade.loot.as_ref()
+        self.zone.trade.loot.as_ref()
     }
 
     /// The merchant the player is trading with.
     #[must_use]
     pub const fn merchant(&self) -> Option<&Merchant> {
-        self.trade.merchant.as_ref()
+        self.zone.trade.merchant.as_ref()
     }
 
     /// An item's definition, when the server sent it this admission.
