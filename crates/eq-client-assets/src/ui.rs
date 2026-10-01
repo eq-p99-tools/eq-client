@@ -185,6 +185,74 @@ pub fn chosen_skin(eq_directory: &Path, character: &str, world: &str) -> Option<
     ini_value(&String::from_utf8_lossy(&bytes), "Main", "UISkin").filter(|skin| valid_skin(skin))
 }
 
+/// Where the official client last put one of a character's windows, at one
+/// screen size: a section of `UI_<character>_<world>.ini`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowPosition {
+    /// The window, by the official client's name, such as `PlayerWindow`.
+    pub window: String,
+    /// The screen's width and height the position is for.
+    pub screen: (u32, u32),
+    /// Left edge, in that screen's pixels.
+    pub x: i32,
+    /// Top edge.
+    pub y: i32,
+}
+
+/// The window positions the official client saved for a character on a world,
+/// at every screen size it was played at; none when the file is missing.
+pub fn window_positions(eq_directory: &Path, character: &str, world: &str) -> Vec<WindowPosition> {
+    if !plain_name(character) || !plain_name(world) {
+        return Vec::new();
+    }
+    std::fs::read(eq_directory.join(format!("UI_{character}_{world}.ini")))
+        .map(|bytes| positions_from_ini(&String::from_utf8_lossy(&bytes)))
+        .unwrap_or_default()
+}
+
+/// `XPos<width>x<height>` and `YPos<width>x<height>` pairs, by section.
+fn positions_from_ini(text: &str) -> Vec<WindowPosition> {
+    let mut section = "";
+    let mut lefts: Vec<(String, (u32, u32), i32)> = Vec::new();
+    let mut tops: HashMap<(String, (u32, u32)), i32> = HashMap::new();
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            section = name.trim();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Ok(value) = value.trim().parse::<i32>() else {
+            continue;
+        };
+        let screen = |suffix: &str| {
+            let (width, height) = suffix.split_once('x')?;
+            Some((width.parse().ok()?, height.parse().ok()?))
+        };
+        if let Some(size) = key.trim().strip_prefix("XPos").and_then(screen) {
+            lefts.push((section.to_owned(), size, value));
+        } else if let Some(size) = key.trim().strip_prefix("YPos").and_then(screen) {
+            tops.insert((section.to_owned(), size), value);
+        }
+    }
+    lefts
+        .into_iter()
+        .filter_map(|(window, screen, x)| {
+            let y = *tops.get(&(window.clone(), screen))?;
+            Some(WindowPosition {
+                window,
+                screen,
+                x,
+                y,
+            })
+        })
+        .collect()
+}
+
 /// Reads the equipment layout of a skin's inventory window, from the default
 /// skin's file when the skin has none of its own, as the official client does.
 ///
@@ -370,6 +438,31 @@ fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_positions_pair_left_and_top_edges_by_screen_size() {
+        let positions = positions_from_ini(
+            "[Main]\nUISkin=default\n[PlayerWindow]\nXPos2560x1600=2022\nYPos2560x1600=2\n\
+             XPos1280x720=600\n[TargetWindow]\nXPos1280x720=500\nYPos1280x720=16\nAlpha=255\n",
+        );
+        assert_eq!(
+            positions,
+            [
+                WindowPosition {
+                    window: "PlayerWindow".into(),
+                    screen: (2560, 1600),
+                    x: 2022,
+                    y: 2,
+                },
+                WindowPosition {
+                    window: "TargetWindow".into(),
+                    screen: (1280, 720),
+                    x: 500,
+                    y: 16,
+                },
+            ]
+        );
+    }
 
     /// A synthetic window: slot `n` at (10 + 50n, 5 + 7n), 40 by 40, shown by one
     /// page with a general inventory slot and an unrelated element to ignore.
