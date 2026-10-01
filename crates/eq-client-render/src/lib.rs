@@ -1019,6 +1019,9 @@ fn update_hud(
             } else {
                 "Online / calibrated WASD   Walk unavailable   RMB orbit   Scroll zoom"
             }
+        } else if online.enabled && !online.in_world() {
+            // Zoning or dead: the session takes movement away until it is over.
+            "Online / movement paused   RMB orbit   Scroll zoom"
         } else if online.enabled {
             "Online / movement disabled (start with --movement-calibration)   RMB orbit   Scroll zoom"
         } else {
