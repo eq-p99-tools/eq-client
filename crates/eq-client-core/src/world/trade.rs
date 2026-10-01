@@ -1,5 +1,6 @@
 //! Looting a corpse and trading with a merchant: what the player opened, and
 //! what the server listed in it.
+use super::Notice;
 use crate::{
     Coins,
     inventory::InventoryItem,
@@ -98,6 +99,33 @@ impl Trade {
         }
         true
     }
+}
+
+/// What an applied loot reply tells the player.
+pub(super) fn loot_notice(update: &LootUpdate) -> Option<Notice> {
+    match update {
+        LootUpdate::Opened {
+            response: LootResponse::Normal,
+            coins,
+        } => (coins.total_copper() > 0).then_some(Notice::LootCoins(*coins)),
+        LootUpdate::Opened { response, .. } => Some(Notice::LootRefused(*response)),
+        LootUpdate::Taken {
+            accepted: false, ..
+        } => Some(Notice::ItemRefused),
+        _ => None,
+    }
+}
+
+/// What an applied merchant reply tells the player.
+pub(super) fn merchant_notice(update: &MerchantUpdate) -> Option<Notice> {
+    matches!(
+        update,
+        MerchantUpdate::Opened {
+            accepted: false,
+            ..
+        }
+    )
+    .then_some(Notice::ShopRefused)
 }
 
 /// Like the Titanium client, applies coin changes the server reports without

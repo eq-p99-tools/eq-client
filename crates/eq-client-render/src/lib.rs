@@ -20,6 +20,7 @@ mod item_models;
 mod items;
 mod motion;
 mod navigation;
+mod notices;
 mod online;
 mod outfit;
 mod paperdoll;

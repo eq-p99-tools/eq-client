@@ -114,6 +114,28 @@ pub(super) struct Panels<'w> {
 }
 
 impl Panels<'_> {
+    /// Shows what a notice says where it belongs.
+    fn tell(
+        &mut self,
+        notice: &eq_client_core::world::Notice,
+        messages: Option<&hud::messages::Messages>,
+        chat: &mut super::chat::ChatState,
+        state: &mut OnlineState,
+    ) {
+        use super::notices::Place;
+        for (place, text) in super::notices::wording(notice, messages) {
+            match place {
+                Place::Chat => chat.history.push(super::chat::system_line(text)),
+                Place::Status => self.hud.status = text,
+                Place::Target => self.target.status = text,
+                Place::Feedback => {
+                    self.hud.action_feedback = Some((std::time::Instant::now(), text));
+                }
+                Place::Door => state.door_status = text,
+            }
+        }
+    }
+
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
         // Whatever was in flight, its feedback is stale, and the world forgot
@@ -243,6 +265,9 @@ pub(super) fn receive(
         if changes.inventory {
             panels.inventory.refresh(state.world.inventory().stale());
         }
+        for notice in &changes.notices {
+            panels.tell(notice, messages.as_deref(), &mut chat, &mut state);
+        }
         if changes.characters {
             state.selection = state.world.characters().map(|list| {
                 super::character_select::Selection::new(list.selection_id, list.characters.clone())
@@ -275,16 +300,6 @@ pub(super) fn receive(
             }
             WorldUpdate::Chat(message) => {
                 chat.history.push(message);
-            }
-            WorldUpdate::ServerMessage {
-                string_id,
-                arguments,
-            } => {
-                let text = messages.as_deref().map_or_else(
-                    || format!("Server message {string_id}"),
-                    |messages| messages.format(string_id, &arguments),
-                );
-                chat.history.push(super::chat::system_line(text));
             }
             WorldUpdate::Game(WorldEvent::Entered { player, .. }) => {
                 // The session is this zone's even if its assets fail to load, so
@@ -439,27 +454,15 @@ pub(super) fn receive(
             WorldUpdate::Game(WorldEvent::ItemDetails(item)) => {
                 debug!("Item definition received: ID {}", item.id);
             }
-            WorldUpdate::Game(WorldEvent::ZoneTransferRejected { reason, .. }) => {
+            WorldUpdate::Game(WorldEvent::ZoneLineRejected { .. }) => {
+                // The refused crossing no longer holds the player's motion.
                 if !changes.ignored {
-                    panels.hud.status = reason.to_string();
-                    chat.history
-                        .push(super::chat::system_line(reason.to_string()));
-                }
-            }
-            WorldUpdate::Game(WorldEvent::ZoneLineRejected { session_id, reason }) => {
-                if state.world.session_id() == Some(session_id) {
                     panels.motion.accepted();
-                    panels.hud.status = format!("Cannot cross zone line: {reason}");
                 }
             }
             WorldUpdate::Game(WorldEvent::TargetSent(id)) => {
                 if !changes.ignored {
                     debug!("Target packet sent: {id:?}");
-                }
-            }
-            WorldUpdate::Game(WorldEvent::TargetRejected { reason, .. }) => {
-                if !changes.ignored {
-                    panels.target.status = format!("Target rejected: {reason}");
                 }
             }
             WorldUpdate::Game(WorldEvent::HealthPercent { spawn_id, percent }) => {
@@ -470,14 +473,6 @@ pub(super) fn receive(
             WorldUpdate::Game(WorldEvent::Posture { spawn_id, posture }) => {
                 if state.world.is_player(spawn_id) {
                     debug!(?posture, "Own posture update");
-                }
-            }
-            WorldUpdate::Game(WorldEvent::CastRejected {
-                spell_id, reason, ..
-            }) => {
-                if !changes.ignored {
-                    panels.hud.action_feedback =
-                        Some((now, format!("Cast rejected (spell {spell_id}): {reason}")));
                 }
             }
             WorldUpdate::Game(WorldEvent::Spell(eq_client_core::SpellUpdate::Interrupted {
@@ -495,28 +490,6 @@ pub(super) fn receive(
             WorldUpdate::Game(WorldEvent::Doors(update)) => {
                 if matches!(update, eq_client_core::doors::DoorUpdate::RemoveAll) {
                     state.door_status.clear();
-                }
-            }
-            WorldUpdate::Game(WorldEvent::DoorAction {
-                session_id,
-                door_id,
-                error,
-            }) => {
-                if state.world.accepts_reply(session_id) {
-                    state.door_status = error.map_or_else(
-                        || format!("Door {door_id}: request sent"),
-                        |error| format!("Door {door_id}: {error}"),
-                    );
-                }
-            }
-            WorldUpdate::Game(WorldEvent::ObjectAction {
-                session_id,
-                error: Some(error),
-                ..
-            }) => {
-                if state.world.accepts_reply(session_id) {
-                    let line = super::ground::refusal(&error);
-                    chat.history.push(super::chat::system_line(line));
                 }
             }
             WorldUpdate::Game(WorldEvent::Buff(update)) => {
@@ -539,82 +512,20 @@ pub(super) fn receive(
                     );
                 }
             }
-            WorldUpdate::Game(WorldEvent::Camp(status)) => {
-                let text = match &status {
-                    eq_client_core::CampStatus::Preparing => messages
-                        .as_deref()
-                        .map(|messages| messages.format(12293, &[])),
-                    eq_client_core::CampStatus::Abandoned => messages
-                        .as_deref()
-                        .map(|messages| messages.format(12290, &[])),
-                    eq_client_core::CampStatus::LoggingOut => Some("Logging out...".into()),
-                    eq_client_core::CampStatus::Camped => None,
-                    eq_client_core::CampStatus::Rejected(reason) => Some(reason.clone()),
-                };
-                if let Some(text) = text {
-                    chat.history.push(super::chat::system_line(text));
-                }
+            // The merchant window shows the coins and the stock.
+            WorldUpdate::Game(WorldEvent::Coins(_) | WorldEvent::Merchant(_)) => {
+                panels.trade.changed();
             }
-            // The merchant window shows the coins.
-            WorldUpdate::Game(WorldEvent::Coins(_)) => panels.trade.changed(),
             WorldUpdate::Game(WorldEvent::Loot(update)) => {
-                if !changes.ignored {
-                    if let eq_client_core::loot::LootUpdate::Taken { slot, accepted } = update {
-                        panels.trade.taken(slot, accepted);
-                    }
-                    if let Some(text) = super::trade::loot_text(&update) {
-                        chat.history.push(super::chat::system_line(text));
-                    }
-                }
-                panels.trade.changed();
-            }
-            WorldUpdate::Game(WorldEvent::Merchant(update)) => {
                 if !changes.ignored
-                    && let Some(text) = super::trade::merchant_text(&update)
+                    && let eq_client_core::loot::LootUpdate::Taken { slot, accepted } = update
                 {
-                    chat.history.push(super::chat::system_line(text));
+                    panels.trade.taken(slot, accepted);
                 }
                 panels.trade.changed();
             }
-            WorldUpdate::Game(WorldEvent::MerchantRefused { session_id, reason }) => {
-                if state.world.session_id() == Some(session_id) {
-                    chat.history.push(super::chat::system_line(reason));
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Consideration(consideration)) => {
-                let name = state
-                    .world
-                    .spawn(consideration.target_id)
-                    .map_or_else(String::new, |spawn| {
-                        super::combat::display_name(&spawn.state.name)
-                    });
-                if let Some(messages) = messages.as_deref() {
-                    chat.history
-                        .push(super::chat::system_line(super::combat::consideration_text(
-                            messages,
-                            &name,
-                            &consideration,
-                        )));
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Damage(damage)) => {
-                if let (Some(player), Some(messages)) = (state.world.player(), messages.as_deref())
-                    && let Some(text) = super::combat::damage_text(
-                        messages,
-                        player.spawn_id,
-                        |id| {
-                            state.world.spawn(id).map_or_else(
-                                || "someone".to_owned(),
-                                |spawn| super::combat::display_name(&spawn.state.name),
-                            )
-                        },
-                        &damage,
-                    )
-                {
-                    chat.history.push(super::chat::system_line(text));
-                }
-            }
-            WorldUpdate::Game(_) => (),
+            // The world's notices say what the rest tells the player.
+            WorldUpdate::Game(_) | WorldUpdate::ServerMessage { .. } => (),
         }
     }
 }
