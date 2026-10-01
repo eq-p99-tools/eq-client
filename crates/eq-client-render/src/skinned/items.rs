@@ -431,7 +431,7 @@ mod tests {
             .resource_mut::<Shown>()
             .close(WindowId::Bag(22));
         app.update();
-        assert!(bag_frames(&mut app).is_empty());
+        assert_eq!(bag_frames(&mut app), []);
     }
 
     #[test]

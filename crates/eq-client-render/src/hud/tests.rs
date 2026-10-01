@@ -229,7 +229,7 @@ fn spell_hover_tracks_live_gem_contents_and_clears_when_pointer_leaves() {
     );
     *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
     app.update();
-    assert!(app.world().get::<Text>(details).unwrap().0.is_empty());
+    assert_eq!(app.world().get::<Text>(details).unwrap().0, "");
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn action_feedback_expires() {
         .feedback
         .age(std::time::Duration::from_secs(4));
     app.update();
-    assert!(app.world().get::<Text>(label).unwrap().0.is_empty());
+    assert_eq!(app.world().get::<Text>(label).unwrap().0, "");
 }
 
 #[test]
@@ -498,7 +498,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     );
     // A request sent says nothing, and never claims a cast the server has
     // not answered.
-    assert!(feedback.text(std::time::Instant::now()).is_empty());
+    assert_eq!(feedback.text(std::time::Instant::now()), "");
     assert!(world(&app).casting().pending.is_none());
     assert!(world(&app).casting().cast.is_none());
     requests::spell(

@@ -1346,7 +1346,7 @@ mod tests {
             }
         ));
         // A request sent says nothing until the server answers.
-        assert!(app.world().resource::<BookSelection>().message.is_empty());
+        assert_eq!(app.world().resource::<BookSelection>().message, "");
         // Even an identical rejection is a new reply, and shows.
         crate::online::testing::book_action(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),

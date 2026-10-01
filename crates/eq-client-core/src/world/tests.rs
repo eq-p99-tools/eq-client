@@ -977,7 +977,7 @@ fn news_for_the_player_comes_with_notices_and_others_news_without() {
         session_id,
         reason: "Too far away".into(),
     };
-    assert!(notices(&mut world, refused(2)).is_empty());
+    assert_eq!(notices(&mut world, refused(2)), []);
     assert_eq!(
         notices(&mut world, refused(1)),
         [Notice::TradeRefused("Too far away".into())]
@@ -1016,10 +1016,9 @@ fn loot_and_shop_replies_say_what_the_player_got_or_was_refused() {
         game(&mut world, opened(LootResponse::Normal, coins(0, 1, 0, 2))).notices,
         [Notice::LootCoins(coins(0, 1, 0, 2))]
     );
-    assert!(
-        game(&mut world, opened(LootResponse::Normal, Coins::default()))
-            .notices
-            .is_empty()
+    assert_eq!(
+        game(&mut world, opened(LootResponse::Normal, Coins::default())).notices,
+        []
     );
     assert_eq!(
         game(
@@ -1037,10 +1036,9 @@ fn loot_and_shop_replies_say_what_the_player_got_or_was_refused() {
         [Notice::LootRefused(LootResponse::TooFar)]
     );
     // Closed, the corpse's news says nothing more.
-    assert!(
-        game(&mut world, opened(LootResponse::TooFar, Coins::default()))
-            .notices
-            .is_empty()
+    assert_eq!(
+        game(&mut world, opened(LootResponse::TooFar, Coins::default())).notices,
+        []
     );
     world.open_shop(8);
     assert_eq!(
@@ -1095,7 +1093,7 @@ fn moves_and_replies_reach_the_front_end_for_the_current_admission() {
         request_id: 3,
         error: None,
     };
-    assert!(game(&mut world, used(2)).replies.is_empty());
+    assert_eq!(game(&mut world, used(2)).replies, []);
     assert_eq!(
         game(&mut world, used(1)).replies,
         [Reply::ItemUse {
@@ -1127,7 +1125,7 @@ fn the_admission_says_what_the_player_can_do_until_they_camp() {
     assert!(world.can(Capability::Talking));
     assert!(!world.can(Capability::Falling));
     game(&mut world, WorldEvent::Camp(CampStatus::Camped));
-    assert!(world.capabilities().is_empty());
+    assert_eq!(world.capabilities(), []);
 }
 
 #[test]

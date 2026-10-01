@@ -764,11 +764,9 @@ mod tests {
             .unwrap();
         app.update();
         assert!(app.world().get_entity(old).is_err());
-        assert!(
-            app.world()
-                .resource::<super::super::TerrainSurface>()
-                .0
-                .is_empty()
+        assert_eq!(
+            app.world().resource::<super::super::TerrainSurface>().0,
+            Vec::<[Vec3; 3]>::new()
         );
         assert!(
             app.world()
@@ -776,11 +774,9 @@ mod tests {
                 .0
                 .is_none()
         );
-        assert!(
-            app.world()
-                .resource::<super::super::SceneInfo>()
-                .zone_name
-                .is_empty()
+        assert_eq!(
+            app.world().resource::<super::super::SceneInfo>().zone_name,
+            ""
         );
         let history = &app
             .world()
@@ -850,12 +846,12 @@ mod tests {
                 .selected()
                 .is_some()
         );
-        assert!(
+        assert_eq!(
             app.world()
                 .resource::<crate::notices::Lines>()
                 .target
-                .text(std::time::Instant::now())
-                .is_empty()
+                .text(std::time::Instant::now()),
+            ""
         );
         sender
             .send(WorldUpdate::Game(WorldEvent::Entered {
@@ -1188,12 +1184,12 @@ mod tests {
             }))
             .unwrap();
         app.update();
-        assert!(
+        assert_eq!(
             app.world()
                 .resource::<crate::notices::Lines>()
                 .feedback
-                .text(std::time::Instant::now())
-                .is_empty()
+                .text(std::time::Instant::now()),
+            ""
         );
         sender
             .send(WorldUpdate::Game(WorldEvent::CastRejected {

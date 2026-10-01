@@ -889,7 +889,7 @@ mod tests {
         app.update();
         assert!(receiver.try_recv().is_ok());
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
-        assert!(app.world().resource::<ChatState>().draft.is_empty());
+        assert_eq!(app.world().resource::<ChatState>().draft, "");
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = true;

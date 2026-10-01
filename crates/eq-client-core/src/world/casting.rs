@@ -231,7 +231,7 @@ mod tests {
         timers.refresh(99, 0, start);
         let gems = [Some(42), None, Some(42), Some(73), None, None, None, None];
         timers.restore(&gems, Some([1200, 9000, 3000, 0, 0, 0, 0, 0]), start);
-        assert!(timers.pending.is_empty());
+        assert_eq!(timers.pending, []);
         assert_eq!(timers.remaining(42, start), Duration::from_secs(3));
         assert_eq!(timers.remaining(73, start), Duration::ZERO);
         assert_eq!(timers.remaining(99, start), Duration::ZERO);

@@ -275,6 +275,6 @@ mod tests {
             ),
             [(Place::Chat, "Server message 12293".into())]
         );
-        assert!(wording(&Notice::Camp(CampStatus::Camped), None).is_empty());
+        assert_eq!(wording(&Notice::Camp(CampStatus::Camped), None), []);
     }
 }
