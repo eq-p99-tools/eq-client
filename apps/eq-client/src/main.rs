@@ -200,16 +200,17 @@ fn parse_window_position(value: &str) -> Result<(i32, i32), String> {
     Ok((coordinate(x)?, coordinate(y)?))
 }
 
-/// The protocol an online session selects with `EQ_PROTOCOL` (P99 by default).
-fn online_protocol(online: bool) -> Option<ServerProtocol> {
-    online
-        .then(|| {
-            std::env::var("EQ_PROTOCOL")
-                .unwrap_or_else(|_| "p99".into())
-                .parse::<ServerProtocol>()
-                .ok()
-        })
-        .flatten()
+/// The protocol an online session selects with `EQ_PROTOCOL` (P99 by
+/// default), read once for the whole run.
+fn online_protocol(online: bool) -> Result<Option<ServerProtocol>, String> {
+    if !online {
+        return Ok(None);
+    }
+    let value = std::env::var("EQ_PROTOCOL").unwrap_or_else(|_| "p99".into());
+    value
+        .parse::<ServerProtocol>()
+        .map(Some)
+        .map_err(|error| format!("EQ_PROTOCOL={value:?}: {error}"))
 }
 
 /// Refuses `gm` script steps unless the session is local-only (see
@@ -229,6 +230,8 @@ fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
     script && protocol == Some(ServerProtocol::EqEmu)
 }
 
+/// Startup problems print to stderr before the viewer exists; once it
+/// runs, the session logs through `tracing` like the viewer.
 fn main() {
     let mut arguments = Arguments::parse();
     let calibration = arguments
@@ -237,7 +240,10 @@ fn main() {
         .map(load_calibration);
     // Validate every local input before the session logs in.
     let (script, script_follow) = script_input(&arguments);
-    let protocol = online_protocol(arguments.online);
+    let protocol = online_protocol(arguments.online).unwrap_or_else(|error| {
+        eprintln!("error: {error}");
+        std::process::exit(2);
+    });
     let local = local_session(script.is_some(), protocol);
     if let Err(error) = check_gm_steps(script.as_deref(), local) {
         eprintln!("error: {error}");
@@ -275,9 +281,10 @@ fn main() {
             None
         }
     };
-    let (worker, updates) = if arguments.online {
+    let (worker, updates) = if let Some(protocol) = protocol {
         match session::SessionWorker::start(
             &eq_directory,
+            protocol,
             arguments.session_seconds,
             calibration,
             local,

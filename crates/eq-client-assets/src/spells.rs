@@ -1,7 +1,10 @@
 //! Numeric spell mechanics from the user's patched `spells_us.txt`.
 //! Field positions follow the `SPDat` layout; these are local base values, not server state.
+mod definitions;
 mod magnitude;
 pub mod resources;
+
+pub use definitions::{Definition, Definitions, Timing};
 
 /// One effect slot, preserving unsupported effect and formula numbers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,6 +56,17 @@ pub struct Mechanics {
 }
 
 impl Mechanics {
+    /// Whether the spell takes effect at once. Only an explicit zero
+    /// duration is instant; unknown duration rules stay unresolved.
+    #[must_use]
+    pub fn instant(&self) -> bool {
+        self.duration_formula == 0
+            && self.duration_cap == 0
+            && self
+                .alternate_duration
+                .is_some_and(|alternate| alternate.formula == 0 && alternate.duration == 0)
+    }
+
     /// Parses a complete numeric projection; missing/malformed fields remain unavailable.
     #[must_use]
     pub fn from_fields(fields: &[&str]) -> Option<Self> {
