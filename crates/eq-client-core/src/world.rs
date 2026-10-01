@@ -8,6 +8,7 @@
 //! its rules are tested without one.
 
 mod casting;
+mod changes;
 mod items;
 mod notice;
 mod target;
@@ -15,6 +16,7 @@ mod trade;
 mod vitals;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
+pub use changes::{Changes, Moved, Reply, Reset};
 pub use items::ItemCache;
 pub use notice::Notice;
 pub use target::Target;
@@ -23,8 +25,8 @@ pub use vitals::{ReportedHp, Vitals};
 
 use crate::{
     BookActionStatus, CampStatus, CharacterChoice, Coins, Death, PlayerState, PostureState,
-    SpawnState, SpellBook, SpellUpdate, WorldEvent, WorldPosition, WorldUpdate, ZoneOffer,
-    buffs::BuffTracker, combat::ConColor, doors::DoorTable, ground::Objects, inventory::Inventory,
+    SpawnState, SpellBook, SpellUpdate, WorldEvent, WorldUpdate, ZoneOffer, buffs::BuffTracker,
+    combat::ConColor, doors::DoorTable, ground::Objects, inventory::Inventory, loot::LootUpdate,
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -51,29 +53,6 @@ pub struct Spawn {
     pub revision: u64,
 }
 
-/// Why the world was reset, which decides what it forgot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Reset {
-    /// A new admission replaced the old one and its zone.
-    Entered,
-    /// The server offered a transfer; the zone stays until the next admission.
-    Zoning {
-        /// Whether the transfer returns the player to their bind point.
-        to_bind: bool,
-    },
-    /// The player died; the zone stays, with their corpse in it.
-    Died,
-    /// The player camped to the character list.
-    Camped,
-    /// The connection dropped.
-    Lost {
-        /// Whether the session is over and will not reconnect.
-        ended: bool,
-        /// Whether a transfer was under way when it dropped.
-        transferring: bool,
-    },
-}
-
 /// Camping under way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Camp {
@@ -83,30 +62,19 @@ pub struct Camp {
     pub logging_out: bool,
 }
 
-/// What an update changed that a front end must redo.
-#[derive(Clone, Debug, Default, PartialEq)]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "each flag names one independent thing to redo"
-)]
-pub struct Changes {
-    /// The world was reset, and why.
-    pub reset: Option<Reset>,
-    /// A new admission began: present its zone and player.
-    pub entered: bool,
-    /// The server put the player here.
-    pub placed: Option<WorldPosition>,
-    /// The world server offered characters to play.
-    pub characters: bool,
-    /// What a spell notice did to the player's casting.
-    pub cast: Option<CastNews>,
-    /// The inventory changed.
-    pub inventory: bool,
-    /// What the news tells the player.
-    pub notices: Vec<Notice>,
-    /// The update was for an earlier admission, or came when the world takes
-    /// no such news, so nothing changed.
-    pub ignored: bool,
+/// How the session lets the player move: calibrated speeds, or none.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MotionGrant {
+    /// World units per second running forward, when moving is allowed.
+    pub units_per_second: Option<f32>,
+    /// Backing up, when it is allowed.
+    pub backward_units_per_second: Option<f32>,
+    /// Walking, when calibrated apart from running.
+    pub walk_units_per_second: Option<f32>,
+    /// Moving sideways, when calibrated apart.
+    pub strafe_units_per_second: Option<f32>,
+    /// Whether the session sends falling samples.
+    pub falls: bool,
 }
 
 /// What the server has told the client, kept by one writer.
@@ -139,6 +107,7 @@ pub struct ClientWorld {
     coins: Option<Coins>,
     trade: trade::Trade,
     camp: Option<Camp>,
+    motion: Option<MotionGrant>,
     casting: Casting,
     buffs: BuffTracker,
     spell_book: Option<SpellBook>,
@@ -161,8 +130,15 @@ impl ClientWorld {
             WorldUpdate::Connection {
                 connected,
                 terminal,
-                ..
-            } => self.connection(*connected, *terminal),
+                label,
+            } => {
+                let mut changes = self.connection(*connected, *terminal);
+                changes.notices.push(Notice::Connection {
+                    label: label.clone(),
+                    dead: self.death.is_some(),
+                });
+                changes
+            }
             WorldUpdate::Game(event) => self.event(event, now, spells),
             WorldUpdate::ServerMessage {
                 string_id,
@@ -307,10 +283,31 @@ impl ClientWorld {
                 );
                 self.player = Some((**player).clone());
             }
+            WorldEvent::MotionState {
+                session_id,
+                units_per_second,
+                backward_units_per_second,
+                walk_units_per_second,
+                strafe_units_per_second,
+                falls,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    self.motion = Some(MotionGrant {
+                        units_per_second: *units_per_second,
+                        backward_units_per_second: *backward_units_per_second,
+                        walk_units_per_second: *walk_units_per_second,
+                        strafe_units_per_second: *strafe_units_per_second,
+                        falls: *falls,
+                    });
+                    changes.motion = true;
+                } else {
+                    changes.ignored = true;
+                }
+            }
             WorldEvent::MotionSent {
                 session_id,
                 position,
-                ..
+                refused,
             } => match self.player.as_mut() {
                 Some(player)
                     if self.connected
@@ -318,6 +315,10 @@ impl ClientWorld {
                         && self.death.is_none() =>
                 {
                     player.position = *position;
+                    changes.moved = Some(Moved {
+                        position: *position,
+                        refused: refused.clone(),
+                    });
                 }
                 _ => changes.ignored = true,
             },
@@ -343,6 +344,7 @@ impl ClientWorld {
                     changes
                         .notices
                         .push(Notice::ZoneLineRefused(reason.clone()));
+                    changes.replies.push(Reply::ZoneLineRefused);
                 } else {
                     changes.ignored = true;
                 }
@@ -534,16 +536,51 @@ impl ClientWorld {
                 changes.inventory = true;
                 self.refresh_item_hp();
             }
-            WorldEvent::Coins(coins) => self.coins = Some(*coins),
+            WorldEvent::InventoryAction {
+                session_id,
+                revision,
+                error,
+            } => changes.replies.push(Reply::InventoryMove {
+                session_id: *session_id,
+                revision: *revision,
+                error: error.clone(),
+            }),
+            WorldEvent::ItemUseAction {
+                session_id,
+                request_id,
+                error,
+            } => {
+                if self.accepts_reply(*session_id) {
+                    changes.replies.push(Reply::ItemUse {
+                        session_id: *session_id,
+                        request_id: *request_id,
+                        error: error.clone(),
+                    });
+                } else {
+                    changes.ignored = true;
+                }
+            }
+            WorldEvent::Coins(coins) => {
+                self.coins = Some(*coins);
+                changes.trade = true;
+            }
             WorldEvent::Loot(update) => {
                 if self.trade.loot(update, &mut self.coins) {
+                    changes.trade = true;
                     changes.notices.extend(trade::loot_notice(update));
+                    if let LootUpdate::Taken { slot, accepted } = update {
+                        changes.replies.push(Reply::LootTaken {
+                            slot: *slot,
+                            accepted: *accepted,
+                        });
+                    }
                 } else {
                     changes.ignored = true;
                 }
             }
             WorldEvent::Merchant(update) => {
                 if self.trade.merchant(update, &mut self.coins) {
+                    changes.trade = true;
                     changes.notices.extend(trade::merchant_notice(update));
                 } else {
                     changes.ignored = true;
@@ -686,9 +723,11 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
-        // Whatever the reason, the player can no longer act on their target,
-        // and only a death leaves camping under way.
+        // Whatever the reason, the player can no longer act on their target
+        // or move until the session says so again, and only a death leaves
+        // camping under way.
         self.target = Target::default();
+        self.motion = None;
         if reason != Reset::Died {
             self.camp = None;
         }
@@ -949,6 +988,12 @@ impl ClientWorld {
     #[must_use]
     pub fn item(&self, id: u32) -> Option<&crate::ItemDetails> {
         self.items.get(id)
+    }
+
+    /// How the session lets the player move, once it says.
+    #[must_use]
+    pub const fn motion(&self) -> Option<MotionGrant> {
+        self.motion
     }
 
     /// Camping under way.

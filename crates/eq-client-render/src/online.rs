@@ -2,14 +2,11 @@
 //! packets. The world model in `eq_client_core::world` applies each update;
 //! this module shows what it changed.
 
-use super::{
-    Collision, HudText, OrbitCamera, Player, PlayerBody, SceneEntity, SceneInfo, TerrainSurface,
-    ViewerSettings, build_collision, character, hud, spawn_player_and_hud, spawn_static_zone,
-};
+use super::{ViewerSettings, hud};
 use bevy::prelude::*;
 use eq_client_core::{
-    WorldEvent, WorldUpdate, races, render_position,
-    world::{CastNews, ClientWorld, NoSpells, Reset, SpellCatalog},
+    WorldEvent, WorldUpdate,
+    world::{CastNews, Changes, ClientWorld, Moved, NoSpells, Reply, Reset, SpellCatalog},
 };
 use std::sync::{LazyLock, Mutex, mpsc::Receiver};
 
@@ -53,8 +50,6 @@ pub(super) fn world(online: Option<&OnlineState>) -> &ClientWorld {
     online.map_or(&OFFLINE, |online| &online.world)
 }
 
-type SceneRoots = Or<(With<SceneEntity>, With<HudText>, With<hud::HudRoot>)>;
-
 /// The offline demos' player, standing here with these spells memorized.
 pub(super) fn preview_player(
     position: eq_client_core::WorldPosition,
@@ -80,6 +75,33 @@ pub(super) fn preview_player(
         run_speed: 0.0,
         hp_percent: None,
         appearance: eq_client_core::outfit::Appearance::default(),
+    }
+}
+
+/// Admits the offline demos' preview player where the viewer stands, as a
+/// session would, so that every demo fills the same admitted world.
+pub(super) fn admit_preview(
+    state: &mut OnlineState,
+    origin: eq_client_core::WorldPosition,
+    zone: &str,
+) {
+    let player = preview_player(origin, [None; 8]);
+    for update in [
+        WorldUpdate::Game(WorldEvent::Entered {
+            session_id: 1,
+            zone: zone.into(),
+            player: Box::new(player),
+            far_clip: None,
+        }),
+        WorldUpdate::Connection {
+            connected: true,
+            terminal: false,
+            label: String::new(),
+        },
+    ] {
+        state
+            .world
+            .apply(&update, std::time::Instant::now(), &NoSpells);
     }
 }
 
@@ -114,6 +136,82 @@ pub(super) struct Panels<'w> {
 }
 
 impl Panels<'_> {
+    /// Shows what the world's changes mean for the panels: feedback a cast
+    /// ends, the inventory, the notices, motion, the trade windows and the
+    /// answers to the panels' own requests.
+    fn show(
+        &mut self,
+        changes: &Changes,
+        state: &mut OnlineState,
+        messages: Option<&hud::messages::Messages>,
+        chat: &mut super::chat::ChatState,
+    ) {
+        if matches!(
+            changes.cast,
+            Some(CastNews::Began | CastNews::Refreshed | CastNews::Interrupted)
+        ) {
+            self.hud.action_feedback = None;
+        }
+        if changes.inventory {
+            self.inventory.refresh(state.world.inventory().stale());
+        }
+        for notice in &changes.notices {
+            self.tell(notice, messages, chat, state);
+        }
+        if changes.characters {
+            state.selection = state.world.characters().map(|list| {
+                super::character_select::Selection::new(list.selection_id, list.characters.clone())
+            });
+        }
+        if changes.motion
+            && let Some(grant) = state.world.motion()
+        {
+            self.motion.grant(grant);
+        }
+        if changes.trade {
+            self.trade.changed();
+        }
+        for reply in &changes.replies {
+            match reply {
+                Reply::ItemUse {
+                    session_id,
+                    request_id,
+                    error,
+                } => {
+                    if self
+                        .inventory
+                        .item_use_result(*session_id, *request_id, error.clone())
+                    {
+                        let message = self.inventory.action_message().to_owned();
+                        self.hud.action_feedback = Some((std::time::Instant::now(), message));
+                    }
+                }
+                Reply::InventoryMove {
+                    session_id,
+                    revision,
+                    error,
+                } => self.inventory.action_result(
+                    *session_id,
+                    *revision,
+                    error.clone(),
+                    state.world.inventory(),
+                ),
+                Reply::LootTaken { slot, accepted } => self.trade.taken(*slot, *accepted),
+                // The refused crossing no longer holds the player's motion.
+                Reply::ZoneLineRefused => self.motion.accepted(),
+            }
+        }
+    }
+
+    /// The session sent the player's move, or refused it.
+    fn moved(&mut self, moved: &Moved, drawn: Option<Transform>) {
+        self.motion.accepted();
+        self.motion.refused.clone_from(&moved.refused);
+        if let Some(transform) = drawn {
+            self.motion.display_sample(transform, moved.position);
+        }
+    }
+
     /// Shows what a notice says where it belongs.
     fn tell(
         &mut self,
@@ -194,12 +292,10 @@ impl Panels<'_> {
     }
 }
 
-/// Applies bounded event batches to the world and shows what they changed.
-#[allow(
-    clippy::needless_pass_by_value,
-    clippy::too_many_arguments,
-    clippy::too_many_lines
-)] // Bevy schedules these disjoint resources.
+/// Applies the session's news to the world and shows what it changed. The
+/// world decides what each update means; this only hands its changes to the
+/// panels, the chat and the scene.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn receive(
     mut commands: Commands,
     updates: Res<Updates>,
@@ -211,12 +307,7 @@ pub(super) fn receive(
     mut state: ResMut<OnlineState>,
     mut panels: Panels,
     mut chat: ResMut<super::chat::ChatState>,
-    entities: Query<Entity, SceneRoots>,
-    mut players: Query<&mut Transform, With<Player>>,
-    mut cameras: Query<&mut OrbitCamera>,
-    mut images: ResMut<Assets<Image>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut scene: super::zone::Scene,
 ) {
     let (settings, spell_names, messages) = definitions;
     let Ok(receiver) = updates.0.lock() else {
@@ -225,8 +316,6 @@ pub(super) fn receive(
     let Some(receiver) = receiver.as_ref() else {
         return;
     };
-    // The player entity spawned by zone entry in this batch, not yet in the world.
-    let mut entered_player = None;
     let mut ended = false;
     let batch: Vec<_> = std::iter::from_fn(|| match receiver.try_recv() {
         Ok(update) => Some(update),
@@ -250,283 +339,92 @@ pub(super) fn receive(
         terminal: true,
         label: "Disconnected".into(),
     });
+    // The player entity spawned by zone entry in this batch, not yet in the world.
+    let mut entered = None;
     for update in batch.into_iter().chain(lost) {
-        let now = std::time::Instant::now();
-        let changes = state.world.apply(&update, now, spells);
-        if matches!(
-            changes.cast,
-            Some(CastNews::Began | CastNews::Refreshed | CastNews::Interrupted)
-        ) {
-            panels.hud.action_feedback = None;
-        }
+        let changes = state
+            .world
+            .apply(&update, std::time::Instant::now(), spells);
+        trace(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
             panels.forget(reason, &mut state);
+            scene.forget(reason, &mut commands);
         }
-        if changes.inventory {
-            panels.inventory.refresh(state.world.inventory().stale());
+        panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
+        if let Some(moved) = &changes.moved {
+            panels.moved(moved, scene.player());
         }
-        for notice in &changes.notices {
-            panels.tell(notice, messages.as_deref(), &mut chat, &mut state);
-        }
-        if changes.characters {
-            state.selection = state.world.characters().map(|list| {
-                super::character_select::Selection::new(list.selection_id, list.characters.clone())
-            });
+        if changes.entered
+            && let Some(directory) = &settings.0.eq_directory
+        {
+            // The session is this zone's even if its assets fail to load, so
+            // nothing of the previous zone stays on screen either.
+            scene.leave(&mut commands, &mut state.regions);
+            match super::zone::Entry::admission(&state.world, directory) {
+                Ok(entry) => {
+                    let terrain_only = settings.0.terrain_only;
+                    entered =
+                        Some(scene.enter(&mut commands, entry, terrain_only, &mut state.regions));
+                }
+                Err(text) => {
+                    error!("{text}");
+                    chat.history.push(super::chat::system_line(text));
+                }
+            }
         }
         if let Some(position) = changes.placed {
             panels.motion.reset(None);
-            let placed = Transform::from_translation(Vec3::from_array(render_position(position)))
-                .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
-                    position.heading,
-                )));
-            // A correction right after zone entry belongs to the new player,
-            // which only exists once this batch's commands apply.
-            if let Some(entity) = entered_player {
-                commands.entity(entity).insert(placed);
-            } else if let Ok(mut transform) = players.single_mut() {
-                *transform = placed;
-            }
-            for mut camera in &mut cameras {
-                camera.focus = placed.translation;
-            }
+            scene.place(&mut commands, super::zone::placement(position), entered);
         }
         match update {
-            WorldUpdate::Connection { label, .. } => {
-                panels.hud.status = if state.world.death().is_some() {
-                    "Dead - awaiting respawn".into()
-                } else {
-                    label
-                };
+            WorldUpdate::Chat(line) => chat.history.push(line),
+            // The door line is about a door the zone no longer has.
+            WorldUpdate::Game(WorldEvent::Doors(eq_client_core::doors::DoorUpdate::RemoveAll)) => {
+                state.door_status.clear();
             }
-            WorldUpdate::Chat(message) => {
-                chat.history.push(message);
-            }
-            WorldUpdate::Game(WorldEvent::Entered { player, .. }) => {
-                // The session is this zone's even if its assets fail to load, so
-                // commands and later events never follow the previous zone's.
-                let Some(directory) = &settings.0.eq_directory else {
-                    continue;
-                };
-                let zone = match eq_client_assets::load_zone(directory, state.world.zone()) {
-                    Ok(zone) => zone,
-                    Err(error) => {
-                        for entity in &entities {
-                            commands.entity(entity).despawn();
-                        }
-                        let text =
-                            format!("Zone {} could not be loaded: {error}", state.world.zone());
-                        error!("{text}");
-                        chat.history.push(super::chat::system_line(text));
-                        continue;
-                    }
-                };
-                let asset = races::model(player.race, player.gender).and_then(|model| {
-                    match eq_client_assets::characters::load_installed_character(
-                        directory,
-                        state.world.zone(),
-                        model,
-                    ) {
-                        Ok(asset) => Some(asset),
-                        Err(error) => {
-                            warn!("Character model: {error}");
-                            None
-                        }
-                    }
-                });
-                for entity in &entities {
-                    commands.entity(entity).despawn();
-                }
-                let collision = build_collision(&zone);
-                state.regions = zone.regions.clone();
-                let surface = TerrainSurface::from_primitives(&zone.primitives);
-                let position = Vec3::from_array(render_position(player.position));
-                let height = asset
-                    .as_ref()
-                    .map_or(6.0, eq_client_assets::characters::CharacterAsset::height);
-                // EQ's rule for the model keeps every later server-placed position
-                // (zoning, teleports) at the same height above the feet.
-                let feet_offset = eq_client_core::z_offset(player.race, player.size);
-                // Lets a logged session be replayed offline with the same feet height.
-                debug!(
-                    "Admission feet offset {feet_offset} for size {} and model height {height}",
-                    player.size
-                );
-                commands.insert_resource(Collision(collision));
-                let body = PlayerBody {
-                    feet_offset,
-                    height,
-                };
-                commands.insert_resource(surface);
-                commands.insert_resource(SceneInfo {
-                    zone_name: zone.short_name.clone(),
-                });
-                spawn_static_zone(
-                    &mut commands,
-                    zone,
-                    settings.0.terrain_only,
-                    &mut images,
-                    &mut meshes,
-                    &mut materials,
-                );
-                let entity = spawn_player_and_hud(
-                    &mut commands,
-                    position,
-                    asset.is_none(),
-                    body,
-                    &mut meshes,
-                    &mut materials,
-                );
-                if let Some(asset) = asset {
-                    character::spawn(
-                        &mut commands,
-                        entity,
-                        asset,
-                        body.feet_offset,
-                        &mut images,
-                        &mut meshes,
-                        &mut materials,
-                    );
-                }
-                commands.entity(entity).insert(
-                    Transform::from_translation(position).with_rotation(Quat::from_rotation_y(
-                        eq_client_core::render_heading(player.position.heading),
-                    )),
-                );
-                for mut camera in &mut cameras {
-                    camera.focus = position;
-                }
-                entered_player = Some(entity);
-            }
-            WorldUpdate::Game(WorldEvent::MotionState {
-                session_id,
-                units_per_second,
-                backward_units_per_second,
-                walk_units_per_second,
-                strafe_units_per_second,
-                falls,
-            }) => {
-                if state.world.session_id() == Some(session_id) {
-                    panels.motion.reset(units_per_second);
-                    panels.motion.backward_speed = backward_units_per_second;
-                    panels.motion.walk_speed = walk_units_per_second;
-                    panels.motion.strafe_speed = strafe_units_per_second;
-                    panels.motion.airborne =
-                        falls.then(eq_client_core::movement::AirborneController::default);
-                }
-            }
-            WorldUpdate::Game(WorldEvent::MotionSent {
-                position, refused, ..
-            }) => {
-                if !changes.ignored {
-                    panels.motion.accepted();
-                    panels.motion.refused = refused;
-                    if let Ok(transform) = players.single_mut() {
-                        panels.motion.display_sample(*transform, position);
-                    }
-                }
-            }
-            WorldUpdate::Game(WorldEvent::ItemUseAction {
-                session_id,
-                request_id,
-                error,
-            }) => {
-                if state.world.accepts_reply(session_id)
-                    && panels
-                        .inventory
-                        .item_use_result(session_id, request_id, error)
-                {
-                    panels.hud.action_feedback =
-                        Some((now, panels.inventory.action_message().to_owned()));
-                }
-            }
-            WorldUpdate::Game(WorldEvent::InventoryAction {
-                session_id,
-                revision,
-                error,
-            }) => {
-                panels.inventory.action_result(
-                    session_id,
-                    revision,
-                    error,
-                    state.world.inventory(),
-                );
-            }
-            WorldUpdate::Game(WorldEvent::ItemDetails(item)) => {
-                debug!("Item definition received: ID {}", item.id);
-            }
-            WorldUpdate::Game(WorldEvent::ZoneLineRejected { .. }) => {
-                // The refused crossing no longer holds the player's motion.
-                if !changes.ignored {
-                    panels.motion.accepted();
-                }
-            }
-            WorldUpdate::Game(WorldEvent::TargetSent(id)) => {
-                if !changes.ignored {
-                    debug!("Target packet sent: {id:?}");
-                }
-            }
-            WorldUpdate::Game(WorldEvent::HealthPercent { spawn_id, percent }) => {
-                if state.world.target().selected == Some(spawn_id) {
-                    debug!("Target health received: spawn {spawn_id}, {percent}%");
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Posture { spawn_id, posture }) => {
-                if state.world.is_player(spawn_id) {
-                    debug!(?posture, "Own posture update");
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Spell(eq_client_core::SpellUpdate::Interrupted {
-                caster_id,
-                message_id,
-            })) => {
-                if state
-                    .world
-                    .player()
-                    .is_some_and(|player| u32::from(player.spawn_id) == caster_id)
-                {
-                    debug!(message_id, "Own cast interrupted");
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Doors(update)) => {
-                if matches!(update, eq_client_core::doors::DoorUpdate::RemoveAll) {
-                    state.door_status.clear();
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Buff(update)) => {
-                if !changes.ignored {
-                    debug!(
-                        spell_id = update.spell_id,
-                        slot = update.slot,
-                        removed = update.buff.is_none(),
-                        "Own buff slot update"
-                    );
-                }
-            }
-            WorldUpdate::Game(WorldEvent::SpellEffect(effect)) => {
-                if !changes.ignored {
-                    debug!(
-                        spell_id = effect.spell_id,
-                        caster_level = effect.caster_level,
-                        effect_flag = effect.effect_flag,
-                        "Own spell effect"
-                    );
-                }
-            }
-            // The merchant window shows the coins and the stock.
-            WorldUpdate::Game(WorldEvent::Coins(_) | WorldEvent::Merchant(_)) => {
-                panels.trade.changed();
-            }
-            WorldUpdate::Game(WorldEvent::Loot(update)) => {
-                if !changes.ignored
-                    && let eq_client_core::loot::LootUpdate::Taken { slot, accepted } = update
-                {
-                    panels.trade.taken(slot, accepted);
-                }
-                panels.trade.changed();
-            }
-            // The world's notices say what the rest tells the player.
-            WorldUpdate::Game(_) | WorldUpdate::ServerMessage { .. } => (),
+            _ => (),
         }
+    }
+}
+
+/// Logs what diagnosing a session needs from its news.
+fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: &ClientWorld) {
+    let WorldUpdate::Game(event) = update else {
+        return;
+    };
+    match event {
+        WorldEvent::ItemDetails(item) => debug!("Item definition received: ID {}", item.id),
+        WorldEvent::TargetSent(id) if !changes.ignored => debug!("Target packet sent: {id:?}"),
+        WorldEvent::HealthPercent { spawn_id, percent }
+            if world.target().selected == Some(*spawn_id) =>
+        {
+            debug!("Target health received: spawn {spawn_id}, {percent}%");
+        }
+        WorldEvent::Posture { spawn_id, posture } if world.is_player(*spawn_id) => {
+            debug!(?posture, "Own posture update");
+        }
+        WorldEvent::Spell(eq_client_core::SpellUpdate::Interrupted {
+            caster_id,
+            message_id,
+        }) if world
+            .player()
+            .is_some_and(|player| u32::from(player.spawn_id) == *caster_id) =>
+        {
+            debug!(message_id, "Own cast interrupted");
+        }
+        WorldEvent::Buff(update) if !changes.ignored => debug!(
+            spell_id = update.spell_id,
+            slot = update.slot,
+            removed = update.buff.is_none(),
+            "Own buff slot update"
+        ),
+        WorldEvent::SpellEffect(effect) if !changes.ignored => debug!(
+            spell_id = effect.spell_id,
+            caster_level = effect.caster_level,
+            effect_flag = effect.effect_flag,
+            "Own spell effect"
+        ),
+        _ => (),
     }
 }
 
@@ -815,6 +713,79 @@ mod tests {
             Some(eq_client_core::PostureState::Sitting)
         );
         assert!(world.doors().entries().contains_key(&3));
+    }
+
+    #[test]
+    fn a_zone_that_fails_to_load_leaves_nothing_of_the_last_one() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let missing = std::env::temp_dir().join("no-everquest-installed-here");
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig {
+                eq_directory: Some(missing),
+                ..default()
+            }))
+            .init_resource::<hud::HudState>()
+            .init_resource::<super::super::motion::Controls>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::target::TargetState>()
+            .init_resource::<super::super::combat::CombatState>()
+            .init_resource::<super::super::trade::TradeState>()
+            .init_resource::<super::super::items::ItemState>()
+            .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        // What the last zone left on screen.
+        let old = app.world_mut().spawn(super::super::SceneEntity).id();
+        app.insert_resource(super::super::TerrainSurface(vec![[Vec3::ZERO; 3]]))
+            .insert_resource(super::super::SceneInfo {
+                zone_name: "qeynos2".into(),
+            });
+        sender
+            .send(WorldUpdate::Game(WorldEvent::Entered {
+                session_id: 2,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+            }))
+            .unwrap();
+        app.update();
+        assert!(app.world().get_entity(old).is_err());
+        assert!(
+            app.world()
+                .resource::<super::super::TerrainSurface>()
+                .0
+                .is_empty()
+        );
+        assert!(
+            app.world()
+                .resource::<super::super::Collision>()
+                .0
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .resource::<super::super::SceneInfo>()
+                .zone_name
+                .is_empty()
+        );
+        let history = &app
+            .world()
+            .resource::<super::super::chat::ChatState>()
+            .history;
+        assert!(
+            history
+                .lines(eq_client_core::chat::ChatTab::System)
+                .iter()
+                .any(|(_, line)| line.message.text.contains("could not be loaded"))
+        );
+        // The session is the new zone's all the same.
+        assert_eq!(world(&app).session_id(), Some(2));
     }
 
     #[test]

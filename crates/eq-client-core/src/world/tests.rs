@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    SpawnKind, ZoneRejection,
+    SpawnKind, WorldPosition, ZoneRejection,
     doors::{Door, DoorUpdate},
     ground::ObjectUpdate,
     outfit::Appearance,
@@ -1051,5 +1051,63 @@ fn loot_and_shop_replies_say_what_the_player_got_or_was_refused() {
         )
         .notices,
         [Notice::ShopRefused]
+    );
+}
+
+#[test]
+fn the_session_grants_motion_until_any_reset() {
+    let grant = |session_id| WorldEvent::MotionState {
+        session_id,
+        units_per_second: Some(20.0),
+        backward_units_per_second: None,
+        walk_units_per_second: None,
+        strafe_units_per_second: None,
+        falls: true,
+    };
+    let mut world = admitted();
+    assert!(game(&mut world, grant(2)).ignored);
+    assert!(game(&mut world, grant(1)).motion);
+    assert_eq!(world.motion().map(|grant| grant.falls), Some(true));
+    connection(&mut world, false, false);
+    assert!(world.motion().is_none());
+}
+
+#[test]
+fn moves_and_replies_reach_the_front_end_for_the_current_admission() {
+    let mut world = admitted();
+    let sent = game(
+        &mut world,
+        WorldEvent::MotionSent {
+            session_id: 1,
+            position: WorldPosition::default(),
+            refused: Some("Too fast".into()),
+        },
+    );
+    assert_eq!(
+        sent.moved.map(|moved| moved.refused),
+        Some(Some("Too fast".into()))
+    );
+    let used = |session_id| WorldEvent::ItemUseAction {
+        session_id,
+        request_id: 3,
+        error: None,
+    };
+    assert!(game(&mut world, used(2)).replies.is_empty());
+    assert_eq!(
+        game(&mut world, used(1)).replies,
+        [Reply::ItemUse {
+            session_id: 1,
+            request_id: 3,
+            error: None
+        }]
+    );
+    // The connection's word names death when the player is dead.
+    let changes = connection(&mut world, true, false);
+    assert_eq!(
+        changes.notices,
+        [Notice::Connection {
+            label: String::new(),
+            dead: false
+        }]
     );
 }
