@@ -32,12 +32,14 @@ pub struct Shape {
 /// The body and head an appearance draws with, given which ones the model
 /// has. A robe puts a robe-wearing race in body 1. A head material picks the
 /// head of that number (1 to 3 are the leather, chain and plate helms) when
-/// the helm shows; servers mark helms shown on every NPC that has one and on
-/// players who chose to show theirs.
+/// `helm` says the helm shows: the official client shows every other
+/// character's helm, whatever the server's show-helm flag says, and leaves
+/// the player's own to the player's show-helm option.
 #[must_use]
 pub fn shape(
     race: u32,
     appearance: &Appearance,
+    helm: bool,
     has_body: impl Fn(u8) -> bool,
     has_head: impl Fn(u8) -> bool,
 ) -> Shape {
@@ -46,7 +48,7 @@ pub fn shape(
         && has_body(1);
     let head = u8::try_from(appearance.material(TextureSlot::Head))
         .ok()
-        .filter(|head| appearance.show_helm && *head > 0 && has_head(*head))
+        .filter(|head| helm && *head > 0 && has_head(*head))
         .unwrap_or(0);
     Shape {
         body: u8::from(robed),
@@ -249,11 +251,12 @@ mod tests {
     fn robes_put_robe_wearing_races_in_their_robe_body_and_set() {
         let robe = wearing(TextureSlot::Chest, 13);
         let all = |_| true;
-        assert_eq!(shape(1, &robe, all, all), Shape { body: 1, head: 0 });
+        assert_eq!(shape(1, &robe, true, all, all), Shape { body: 1, head: 0 });
         // Races without robes, and models without the body, keep their own.
-        assert_eq!(shape(2, &robe, all, all).body, 0);
-        assert_eq!(shape(1, &robe, |_| false, all).body, 0);
-        assert_eq!(shape(1, &wearing(TextureSlot::Chest, 3), all, all).body, 0);
+        assert_eq!(shape(2, &robe, true, all, all).body, 0);
+        assert_eq!(shape(1, &robe, true, |_| false, all).body, 0);
+        let chest = wearing(TextureSlot::Chest, 3);
+        assert_eq!(shape(1, &chest, true, all, all).body, 0);
         // Robe 13 draws set 7, on the robe body and on an erudite's hood.
         assert_eq!(dressed("CLK0401_MDF", &robe), "CLK0701_MDF");
         assert_eq!(dressed("clk0406_mdf", &robe), "CLK0706_MDF");
@@ -267,16 +270,17 @@ mod tests {
 
     #[test]
     fn shown_helms_pick_the_head_of_their_material() {
-        let mut plate = wearing(TextureSlot::Head, 3);
+        let plate = wearing(TextureSlot::Head, 3);
         let all = |_| true;
+        // The server's own flag does not hide a helm.
+        assert!(!plate.show_helm);
+        assert_eq!(shape(1, &plate, true, all, all).head, 3);
         // A hidden helm keeps the bare head.
-        assert_eq!(shape(1, &plate, all, all).head, 0);
-        plate.show_helm = true;
-        assert_eq!(shape(1, &plate, all, all).head, 3);
+        assert_eq!(shape(1, &plate, false, all, all).head, 0);
         // A model without that head keeps the bare one.
-        assert_eq!(shape(1, &plate, all, |head| head < 3).head, 0);
+        assert_eq!(shape(1, &plate, true, all, |head| head < 3).head, 0);
         let bare = wearing(TextureSlot::Head, 0);
-        assert_eq!(shape(1, &bare, all, all), Shape::default());
+        assert_eq!(shape(1, &bare, true, all, all), Shape::default());
     }
 
     #[test]

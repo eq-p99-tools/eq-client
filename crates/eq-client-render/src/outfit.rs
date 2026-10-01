@@ -85,11 +85,13 @@ pub(super) fn shows(piece: Piece, shape: Shape) -> bool {
     }
 }
 
-/// The body and head a model draws with for an appearance.
-fn shape_of(asset: &CharacterAsset, race: u32, look: &Appearance) -> Shape {
+/// The body and head a model draws with for an appearance; `helm` says
+/// whether its helm shows.
+fn shape_of(asset: &CharacterAsset, race: u32, look: &Appearance, helm: bool) -> Shape {
     outfit::shape(
         race,
         look,
+        helm,
         |body| asset.pieces.contains(&Piece::Body(body)),
         |head| asset.pieces.contains(&Piece::Head(head)),
     )
@@ -132,7 +134,10 @@ pub(super) fn dress(
         hold(&mut commands, &mut character, &look, |name| {
             library.shape(name, directory, (&mut images, &mut meshes, &mut materials))
         });
-        let shape = shape_of(&character.asset, race, &look);
+        // Other characters always show their helms; the player's own follows
+        // the show-helm option.
+        let helm = remote.is_some() || !settings.0.hide_own_helm;
+        let shape = shape_of(&character.asset, race, &look, helm);
         let character = &mut *character;
         for part in &character.parts {
             let piece = character
