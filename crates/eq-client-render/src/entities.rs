@@ -3,7 +3,7 @@
 use super::{ViewerSettings, character, online::OnlineState};
 use bevy::prelude::*;
 use eq_client_assets::characters::load_installed_character;
-use eq_client_core::{SpawnKind, classic_model, entities::nearby, render_position};
+use eq_client_core::{SpawnKind, entities::nearby, races, render_position};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Resource, Default)]
@@ -99,7 +99,7 @@ pub(super) fn reconcile(
         return;
     };
     let spawn = &state.spawns[&id];
-    let model = model_code(spawn.race, spawn.gender);
+    let model = races::model(spawn.race, spawn.gender);
     let asset = model.and_then(|code| {
         nearby_state
             .models
@@ -126,7 +126,9 @@ pub(super) fn reconcile(
             Visibility::Inherited,
         ))
         .id();
-    if let Some(asset) = asset.filter(|_| !corpse) {
+    if !races::drawn(spawn.race) {
+        // An unseen marker, such as a spawn point: nothing to draw.
+    } else if let Some(asset) = asset.filter(|_| !corpse) {
         let height = asset.height().max(0.1);
         let scale = if spawn.size > 0.0 {
             (spawn.size / height).clamp(0.05, 20.0)
@@ -209,21 +211,6 @@ pub(super) fn interpolate(
             weight,
         );
     }
-}
-
-fn model_code(race: u32, gender: u32) -> Option<&'static str> {
-    classic_model(race, gender).or(match race {
-        22 => Some("BET"),
-        37 => Some("SNA"),
-        42 => Some("WOL"),
-        43 => Some("BEA"),
-        44 => Some("GNN"),
-        50 => Some("LIM"),
-        54 => Some("ORC"),
-        60 => Some("SKE"),
-        70 => Some("ZOM"),
-        _ => None,
-    })
 }
 
 /// Exercises the same nearby renderer using three synthetic, moving entities offline.

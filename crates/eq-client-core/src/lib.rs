@@ -7,6 +7,7 @@ pub mod entities;
 pub mod ground;
 pub mod movement;
 pub mod outfit;
+pub mod races;
 pub mod resources;
 pub mod targeting;
 pub use eq_network_game::characters::CharacterChoice;
@@ -58,27 +59,6 @@ pub enum WorldUpdate {
         /// Ordered `%1`, `%2`, ... substitutions supplied by the server.
         arguments: Vec<String>,
     },
-}
-
-/// Resolves classic playable race/gender identifiers without guessing NPC models.
-pub fn classic_model(race: u32, gender: u32) -> Option<&'static str> {
-    let pair = match race {
-        1 => ["HUM", "HUF"],
-        2 => ["BAM", "BAF"],
-        3 => ["ERM", "ERF"],
-        4 => ["ELM", "ELF"],
-        5 => ["HIM", "HIF"],
-        6 => ["DAM", "DAF"],
-        7 => ["HAM", "HAF"],
-        8 => ["DWM", "DWF"],
-        9 => ["TRM", "TRF"],
-        10 => ["OGM", "OGF"],
-        11 => ["HOM", "HOF"],
-        12 => ["GNM", "GNF"],
-        128 => ["IKM", "IKF"],
-        _ => return None,
-    };
-    pair.get(usize::try_from(gender).ok()?).copied()
 }
 
 /// Converts an EQ position to the renderer's frame. `eq_client_axes` owns the

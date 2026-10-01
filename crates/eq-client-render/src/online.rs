@@ -5,7 +5,7 @@ use super::{
     ViewerSettings, build_collision, character, hud, spawn_player_and_hud, spawn_static_zone,
 };
 use bevy::prelude::*;
-use eq_client_core::{PlayerState, WorldEvent, WorldUpdate, classic_model, render_position};
+use eq_client_core::{PlayerState, WorldEvent, WorldUpdate, races, render_position};
 use std::{
     collections::BTreeMap,
     sync::{Mutex, mpsc::Receiver},
@@ -274,7 +274,7 @@ pub(super) fn receive(
                         continue;
                     }
                 };
-                let asset = classic_model(player.race, player.gender).and_then(|model| {
+                let asset = races::model(player.race, player.gender).and_then(|model| {
                     match eq_client_assets::characters::load_installed_character(
                         directory,
                         &state.zone,
