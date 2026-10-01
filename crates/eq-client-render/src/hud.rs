@@ -20,7 +20,7 @@ pub(super) struct HudState {
 #[derive(Component)]
 pub(super) struct HudRoot;
 #[derive(Component)]
-pub(super) struct SpellGem(u8);
+pub(crate) struct SpellGem(pub(crate) u8);
 #[derive(Component)]
 pub(super) struct SpellDetails;
 #[derive(Component, Clone, Copy)]
@@ -288,11 +288,15 @@ pub(super) fn spawn(commands: &mut Commands) {
     ));
 }
 
-/// Writes each gem's and action slot's keys into its tooltip from the key
-/// map, so the help follows the bindings.
+/// Writes each gem's spell and keys, and each action slot's keys, into its
+/// tooltip from the key map, so the help follows the bindings.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn key_help(
     map: Res<super::keys::KeyMap>,
+    (online, names): (
+        Res<super::online::OnlineState>,
+        Res<super::spellbook::SpellNames>,
+    ),
     mut commands: Commands,
     gems: Query<(Entity, &SpellGem, Option<&super::tooltip::Tooltip>)>,
     slots: Query<(Entity, &hotbar::Slot, Option<&super::tooltip::Tooltip>)>,
@@ -306,10 +310,20 @@ pub(super) fn key_help(
         }
     };
     for (entity, SpellGem(gem), tooltip) in &gems {
-        let help = format!(
+        let keys = format!(
             "{} | Shift-click: forget",
             map.help(&[(Act::Gem(*gem), "cast")])
         );
+        let help = online
+            .world()
+            .gem(usize::from(*gem))
+            .map_or(keys.clone(), |spell| {
+                format!(
+                    "{}
+{keys}",
+                    names.label(spell)
+                )
+            });
         write(entity, tooltip, help);
     }
     for (entity, hotbar::Slot(slot), tooltip) in &slots {

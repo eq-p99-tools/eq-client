@@ -13,7 +13,7 @@ pub(super) use layout::Layouts;
 pub(crate) use registry::{Layer, WindowId};
 #[cfg(test)]
 pub(crate) use stack::toggle;
-pub(crate) use stack::{Shown, Stack, spawn_selector};
+pub(crate) use stack::{SelectorButton, Shown, Stack, spawn_selector};
 
 /// Restores saved positions before layout and constrains measured frames afterward;
 /// placements persist between runs per character. Orders the floating windows
@@ -109,6 +109,20 @@ pub(super) struct Frame {
 
 #[derive(Component)]
 pub(super) struct DragHandle(Entity);
+
+impl Frame {
+    /// Whether the player moved or minimized the window, or its placement
+    /// was restored, so it is not left where it opens.
+    pub(crate) const fn placed(&self) -> bool {
+        self.placed
+    }
+}
+
+/// Lets the player move a window by dragging anywhere on it that is not a
+/// control, as the official client's windows move.
+pub(crate) fn drag_anywhere(commands: &mut Commands, frame: Entity) {
+    commands.entity(frame).insert((Button, DragHandle(frame)));
+}
 
 #[derive(Component)]
 pub(super) struct TitleBar;

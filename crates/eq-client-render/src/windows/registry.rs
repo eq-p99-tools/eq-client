@@ -263,7 +263,8 @@ impl WindowId {
     /// other on a 1280 by 720 screen.
     pub(crate) const fn describe(self) -> Description {
         match self {
-            Self::Status => hud("", Placement::TopLeft(16.0, 16.0), &["POSITION"]),
+            // Clear of the skin's spell gems along the left edge.
+            Self::Status => hud("", Placement::TopLeft(56.0, 16.0), &["POSITION"]),
             Self::Target => hud(
                 "",
                 Placement::TopCentre {
@@ -302,7 +303,8 @@ impl WindowId {
             Self::Inventory => Description {
                 ..floating(
                     "INVENTORY",
-                    Placement::TopLeft(16.0, 100.0),
+                    // Clear of the skin's spell gems along the left edge.
+                    Placement::TopLeft(56.0, 100.0),
                     true,
                     &["INVENTORY"],
                 )

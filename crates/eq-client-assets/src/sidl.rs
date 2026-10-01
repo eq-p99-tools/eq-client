@@ -95,6 +95,53 @@ pub struct Gauge {
     pub bar_offset: f32,
 }
 
+/// How a button is drawn in each of its states.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ButtonLook {
+    /// At rest.
+    pub normal: Option<Piece>,
+    /// Held down, or on.
+    pub pressed: Option<Piece>,
+    /// Under the pointer.
+    pub flyby: Option<Piece>,
+    /// Unusable.
+    pub disabled: Option<Piece>,
+    /// On, and under the pointer.
+    pub pressed_flyby: Option<Piece>,
+}
+
+/// A button.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Button {
+    /// What the window calls it (`ScreenID`), such as `CSPW_SpellBook`.
+    pub id: Option<String>,
+    /// Where it sits in its window.
+    pub area: Area,
+    /// How it is drawn.
+    pub look: ButtonLook,
+    /// Whether it stays on once pressed, as a window's toggle does.
+    pub checkbox: bool,
+    /// Its words, if it has any.
+    pub text: Option<String>,
+    /// The tooltip the skin gives it.
+    pub tooltip: Option<String>,
+}
+
+/// One of the gems that hold the player's memorized spells.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpellGem {
+    /// What the window calls it, such as `CSPW_Spell0` for the first gem.
+    pub id: Option<String>,
+    /// Where it sits in its window.
+    pub area: Area,
+    /// The frame around the gem's icon.
+    pub holder: Option<Piece>,
+    /// Behind the icon.
+    pub background: Option<Piece>,
+    /// Over the gem while it is under the pointer.
+    pub highlight: Option<Piece>,
+}
+
 /// Where a label's text sits in its box.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Align {
@@ -142,6 +189,10 @@ pub enum Element {
         /// The picture.
         piece: Piece,
     },
+    /// A button.
+    Button(Button),
+    /// A spell gem.
+    SpellGem(SpellGem),
     /// An element this reader does not draw yet, by its kind.
     Other(String),
 }
@@ -353,6 +404,35 @@ impl Library {
                 },
                 font: number(node, "Font"),
             }),
+            "Button" => {
+                let look = child(node, "ButtonDrawTemplate");
+                let state = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
+                Element::Button(Button {
+                    id: text_of(node, "ScreenID").map(str::to_owned),
+                    area: at(),
+                    look: ButtonLook {
+                        normal: state("Normal"),
+                        pressed: state("Pressed"),
+                        flyby: state("Flyby"),
+                        disabled: state("Disabled"),
+                        pressed_flyby: state("PressedFlyby"),
+                    },
+                    checkbox: flag(node, "Style_Checkbox"),
+                    text: text_of(node, "Text").map(str::to_owned),
+                    tooltip: text_of(node, "TooltipReference").map(str::to_owned),
+                })
+            }
+            "SpellGem" => {
+                let look = child(node, "SpellGemDrawTemplate");
+                let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
+                Element::SpellGem(SpellGem {
+                    id: text_of(node, "ScreenID").map(str::to_owned),
+                    area: at(),
+                    holder: part("Holder"),
+                    background: part("Background"),
+                    highlight: part("Highlight"),
+                })
+            }
             "StaticAnimation" => match self.piece(text_of(node, "Animation")) {
                 Some(piece) => {
                     let mut area = at();
@@ -485,12 +565,23 @@ mod tests {
             <Location><X>7</X><Y>17</Y></Location><Size><CX>60</CX><CY>12</CY></Size>
             <Text>100</Text><AlignRight>true</AlignRight><Font>1</Font>
         </Label>
+        <SpellGem item="Gem0"><ScreenID>CSPW_Spell0</ScreenID>
+            <Location><X>3</X><Y>10</Y></Location><Size><CX>36</CX><CY>28</CY></Size>
+            <SpellGemDrawTemplate><Holder>A_Back</Holder></SpellGemDrawTemplate>
+        </SpellGem>
+        <Button item="Book"><ScreenID>CSPW_SpellBook</ScreenID>
+            <Location><X>10</X><Y>252</Y></Location><Size><CX>22</CX><CY>22</CY></Size>
+            <TooltipReference>Opens and closes Your Spellbook</TooltipReference>
+            <Style_Checkbox>true</Style_Checkbox>
+            <ButtonDrawTemplate><Normal>A_Fill</Normal><Pressed>A_Back</Pressed></ButtonDrawTemplate>
+        </Button>
         <Screen item="SampleWindow">
             <Location><X>516</X><Y>242</Y></Location><Size><CX>147</CX><CY>50</CY></Size>
             <TooltipReference>Your Current Target</TooltipReference>
             <DrawTemplate>WDT_Plain</DrawTemplate>
             <Style_Titlebar>true</Style_Titlebar><Style_Border>true</Style_Border>
             <Pieces>Health</Pieces><Pieces>Percent</Pieces><Pieces>BoxPicture</Pieces>
+            <Pieces>Gem0</Pieces><Pieces>Book</Pieces>
             <Pieces>Undefined</Pieces>
         </Screen>
     </XML>"#;
@@ -521,7 +612,7 @@ mod tests {
             .iter()
             .map(|(name, _)| name.as_str())
             .collect();
-        assert_eq!(names, ["Health", "Percent", "BoxPicture"]);
+        assert_eq!(names, ["Health", "Percent", "BoxPicture", "Gem0", "Book"]);
         let Element::Gauge(gauge) = &screen.pieces[0].1 else {
             panic!("a gauge")
         };
@@ -543,6 +634,27 @@ mod tests {
         assert_eq!(
             (area.width, area.height, piece.texture.as_str()),
             (116.0, 30.0, "box.tga")
+        );
+    }
+
+    #[test]
+    fn gems_and_buttons_keep_their_names_and_pieces() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let screen = library.screen(WINDOW, "SampleWindow").unwrap();
+        let Element::SpellGem(gem) = &screen.pieces[3].1 else {
+            panic!("a gem")
+        };
+        assert_eq!(gem.id.as_deref(), Some("CSPW_Spell0"));
+        assert_eq!(gem.holder.as_ref().unwrap().y, 7);
+        let Element::Button(button) = &screen.pieces[4].1 else {
+            panic!("a button")
+        };
+        assert!(button.checkbox);
+        assert_eq!(button.look.normal.as_ref().unwrap().y, 18);
+        assert!(button.look.flyby.is_none());
+        assert_eq!(
+            button.tooltip.as_deref(),
+            Some("Opens and closes Your Spellbook")
         );
     }
 
