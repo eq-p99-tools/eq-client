@@ -1,59 +1,66 @@
 use super::*;
 use crate::{
     chat::ChatState,
-    online::OnlineState,
+    online::{OnlineState, testing},
     target::{CommandsToServer, TargetState},
 };
-use eq_client_core::{ClientCommand, PlayerState, WorldPosition};
+use eq_client_core::{
+    ClientCommand, PlayerState, SpellUpdate, WorldEvent, WorldPosition, WorldUpdate,
+    world::{ClientWorld, NoSpells},
+};
 
-#[test]
-fn local_instant_classification_never_removes_an_explicit_server_buff() {
-    let mut fields = vec!["0"; 183];
-    fields[0] = "42";
-    let names = crate::spellbook::SpellNames::parse(&fields.join("^"));
-    let mut hud = HudState {
-        buff_state: eq_client_core::buffs::BuffTracker::empty_snapshot(),
-        ..default()
-    };
-    hud.buff_update(eq_client_core::BuffUpdate {
-        entity_id: 7,
-        slot: 2,
-        spell_id: 42,
-        buff: Some(eq_client_core::Buff {
-            spell_id: 42,
-            caster_level: 1,
-            effect_type: 2,
-            bard_modifier: 10,
-            duration_ticks: 10,
-            counters: 0,
-            caster_id: 7,
-        }),
-    });
-    hud.spell_effect(
-        eq_client_core::SpellEffect {
-            target_id: 7,
-            caster_id: 7,
-            caster_level: 1,
-            instrument_modifier: 10,
-            spell_id: 42,
-            spell_level: 1,
-            effect_flag: 4,
-        },
-        Some(&names),
-    );
-    assert_eq!(hud.buff_state.slots().unwrap()[&2].duration_ticks, 10);
-    assert!(hud.buff_state.effects().is_empty());
+/// A cleric with spell 73 in its first gem, admitted in session 7 as spawn 12.
+fn caster() -> PlayerState {
+    let mut gems = [None; 8];
+    gems[0] = Some(73);
+    PlayerState {
+        name: "Example".into(),
+        base_attributes: None,
+        deity: None,
+        class: Some(2),
+        spawn_id: 12,
+        race: 1,
+        gender: 0,
+        level: 1,
+        position: WorldPosition::default(),
+        mana: 50,
+        endurance: None,
+        skills: None,
+        spell_refresh_ms: None,
+        memorized_spells: gems,
+        size: 6.0,
+        walk_speed: 0.0,
+        run_speed: 0.0,
+        hp_percent: Some(100),
+        appearance: eq_client_core::outfit::Appearance::default(),
+    }
+}
+
+/// The caster, admitted and connected.
+fn admitted() -> OnlineState {
+    let mut online = OnlineState::new(true);
+    testing::admit(&mut online, 7, caster());
+    online
+}
+
+fn world(app: &App) -> &ClientWorld {
+    &app.world().resource::<OnlineState>().world
+}
+
+fn online(app: &mut App) -> Mut<'_, OnlineState> {
+    app.world_mut().resource_mut::<OnlineState>()
 }
 
 #[test]
 fn estimated_resource_bars_fill_and_clear_with_their_maxima() {
     let mut app = App::new();
+    let mut state = OnlineState::new(true);
+    testing::resources(&mut state, 10, 15);
     app.insert_resource(HudState {
-        mana: Some(10),
-        endurance: Some(15),
         resource_estimate: Some((20, 20)),
         ..default()
     })
+    .insert_resource(state)
     .init_resource::<crate::spellbook::SpellNames>()
     .init_resource::<messages::Messages>()
     .add_systems(Update, update);
@@ -80,47 +87,15 @@ fn estimated_resource_bars_fill_and_clear_with_their_maxima() {
 }
 
 #[test]
-fn only_confirmed_effects_restore_icons_and_fades_clear_them_without_fake_slots() {
-    let mut hud = HudState {
-        buff_state: eq_client_core::buffs::BuffTracker::empty_snapshot(),
-        ..default()
-    };
-    let mut effect = eq_client_core::SpellEffect {
-        target_id: 7,
-        caster_id: 7,
-        caster_level: 1,
-        instrument_modifier: 10,
-        spell_id: 42,
-        spell_level: 0,
-        effect_flag: 0,
-    };
-    hud.spell_effect(effect.clone(), None);
-    assert!(hud.buff_state.effects().is_empty());
-    effect.effect_flag = 4;
-    hud.spell_effect(effect.clone(), None);
-    hud.spell_effect(effect, None);
-    assert_eq!(hud.buff_state.effects().len(), 1);
-    assert!(hud.buff_state.slots().unwrap().is_empty());
-    hud.buff_update(eq_client_core::BuffUpdate {
-        entity_id: 7,
-        slot: 3,
-        spell_id: 42,
-        buff: None,
-    });
-    assert!(hud.buff_state.effects().is_empty());
-}
-
-#[test]
 fn current_resources_do_not_claim_an_unknown_maximum_or_percentage() {
     let mut app = App::new();
-    app.insert_resource(HudState {
-        mana: Some(25),
-        endurance: Some(20),
-        ..default()
-    })
-    .init_resource::<crate::spellbook::SpellNames>()
-    .init_resource::<messages::Messages>()
-    .add_systems(Update, update);
+    let mut state = OnlineState::new(true);
+    testing::resources(&mut state, 25, 20);
+    app.init_resource::<HudState>()
+        .insert_resource(state)
+        .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<messages::Messages>()
+        .add_systems(Update, update);
     let mana = app
         .world_mut()
         .spawn((Text::default(), HudLabel::Stat("MANA")))
@@ -132,7 +107,7 @@ fn current_resources_do_not_claim_an_unknown_maximum_or_percentage() {
     app.update();
     assert_eq!(app.world().get::<Text>(mana).unwrap().0, "25 / ?");
     assert_eq!(app.world().get::<Text>(stamina).unwrap().0, "20 / ?");
-    app.world_mut().resource_mut::<HudState>().mana = Some(0);
+    testing::news(&mut online(&mut app), [WorldEvent::Mana(0)]);
     app.update();
     assert_eq!(app.world().get::<Text>(mana).unwrap().0, "0 / ?");
 }
@@ -140,15 +115,19 @@ fn current_resources_do_not_claim_an_unknown_maximum_or_percentage() {
 #[test]
 fn interruption_label_uses_local_text_then_expires() {
     let mut app = App::new();
-    app.insert_resource(HudState {
-        interrupted: Some((std::time::Instant::now(), 73)),
-        ..default()
-    })
-    .init_resource::<crate::spellbook::SpellNames>()
-    .insert_resource(messages::Messages::parse(
-        "EQST0002\n0 1\n73 Synthetic failure",
-    ))
-    .add_systems(Update, update);
+    let interrupted = |message_id| SpellUpdate::Interrupted {
+        caster_id: 12,
+        message_id,
+    };
+    let mut state = admitted();
+    testing::spell(&mut state, interrupted(73));
+    app.init_resource::<HudState>()
+        .insert_resource(state)
+        .init_resource::<crate::spellbook::SpellNames>()
+        .insert_resource(messages::Messages::parse(
+            "EQST0002\n0 1\n73 Synthetic failure",
+        ))
+        .add_systems(Update, update);
     let label = app
         .world_mut()
         .spawn((Text::default(), HudLabel::Casting))
@@ -158,7 +137,7 @@ fn interruption_label_uses_local_text_then_expires() {
         app.world().get::<Text>(label).unwrap().0,
         "Synthetic failure"
     );
-    app.world_mut().resource_mut::<HudState>().interrupted = Some((std::time::Instant::now(), 99));
+    testing::spell(&mut online(&mut app), interrupted(99));
     app.update();
     assert!(
         app.world()
@@ -167,12 +146,14 @@ fn interruption_label_uses_local_text_then_expires() {
             .0
             .contains("server reason 99")
     );
-    app.world_mut().resource_mut::<HudState>().interrupted = Some((
-        std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_secs(4))
-            .unwrap(),
-        73,
-    ));
+    let long_ago = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(4))
+        .unwrap();
+    testing::news_at(
+        &mut online(&mut app),
+        [WorldEvent::Spell(interrupted(73))],
+        long_ago,
+    );
     app.update();
     assert!(app.world().get::<Text>(label).unwrap().0.is_empty());
 }
@@ -180,13 +161,13 @@ fn interruption_label_uses_local_text_then_expires() {
 #[test]
 fn pending_cast_is_labelled_as_awaiting_and_cleared_on_reset() {
     let mut app = App::new();
-    app.insert_resource(HudState {
-        pending_cast: Some(73),
-        ..default()
-    })
-    .insert_resource(crate::spellbook::SpellNames::parse("73^Synthetic spell"))
-    .init_resource::<messages::Messages>()
-    .add_systems(Update, update);
+    let mut state = admitted();
+    testing::pending_cast(&mut state, Some(73));
+    app.init_resource::<HudState>()
+        .insert_resource(state)
+        .insert_resource(crate::spellbook::SpellNames::parse("73^Synthetic spell"))
+        .init_resource::<messages::Messages>()
+        .add_systems(Update, update);
     let label = app
         .world_mut()
         .spawn((Text::default(), HudLabel::Casting))
@@ -196,7 +177,8 @@ fn pending_cast_is_labelled_as_awaiting_and_cleared_on_reset() {
         app.world().get::<Text>(label).unwrap().0,
         "Awaiting cast acknowledgement | Synthetic spell"
     );
-    app.world_mut().resource_mut::<HudState>().reset_cooldowns();
+    // A dropped connection forgets the request.
+    testing::connect(&mut online(&mut app), false);
     app.update();
     assert!(app.world().get::<Text>(label).unwrap().0.is_empty());
 }
@@ -204,9 +186,12 @@ fn pending_cast_is_labelled_as_awaiting_and_cleared_on_reset() {
 #[test]
 fn spell_hover_tracks_live_gem_contents_and_clears_when_pointer_leaves() {
     let mut app = App::new();
-    let mut state = HudState::default();
-    state.spells[0] = Some(42);
-    app.insert_resource(state)
+    let mut state = OnlineState::new(true);
+    let mut player = caster();
+    player.memorized_spells[0] = Some(42);
+    testing::admit(&mut state, 7, player);
+    app.init_resource::<HudState>()
+        .insert_resource(state)
         .insert_resource(crate::spellbook::SpellNames::parse("42^Synthetic spell"))
         .add_systems(Update, spell_details);
     let gem = app
@@ -222,7 +207,15 @@ fn spell_hover_tracks_live_gem_contents_and_clears_when_pointer_leaves() {
     let text = &app.world().get::<Text>(details).unwrap().0;
     assert!(text.contains("Synthetic spell | Alt+1"));
     assert!(text.contains("timing unavailable"));
-    app.world_mut().resource_mut::<HudState>().spells[0] = None;
+    // The server empties the gem.
+    testing::spell(
+        &mut online(&mut app),
+        SpellUpdate::Slot {
+            slot: 0,
+            spell_id: 42,
+            mode: 2,
+        },
+    );
     app.update();
     assert!(
         app.world()
@@ -243,12 +236,13 @@ fn spell_hover_tracks_live_gem_contents_and_clears_when_pointer_leaves() {
 }
 
 #[test]
-fn action_feedback_expires_and_is_discarded_on_admission_reset() {
+fn action_feedback_expires() {
     let mut app = App::new();
     app.insert_resource(HudState {
         action_feedback: Some((std::time::Instant::now(), "Request queue is full".into())),
         ..default()
     })
+    .insert_resource(OnlineState::new(true))
     .init_resource::<crate::spellbook::SpellNames>()
     .add_systems(Update, spell_details);
     let label = app.world_mut().spawn((SpellDetails, Text::default())).id();
@@ -271,84 +265,6 @@ fn action_feedback_expires_and_is_discarded_on_admission_reset() {
             .0
             .contains("Hover a gem")
     );
-    app.world_mut().resource_mut::<HudState>().reset_cooldowns();
-    assert!(app.world().resource::<HudState>().action_feedback.is_none());
-}
-
-#[test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "Keep the ordered integration scenario and its assertions together"
-)]
-fn interruption_is_scoped_to_own_caster_and_cannot_be_undone_by_mana_updates() {
-    use eq_client_core::SpellUpdate;
-    let mut hud = HudState::default();
-    let now = std::time::Instant::now();
-    let begin = SpellUpdate::Began {
-        caster_id: 7,
-        spell_id: 42,
-        duration_ms: 3000,
-    };
-    hud.cast_update(7, &begin, now);
-    assert!(hud.casting.is_some());
-    hud.cast_update(
-        7,
-        &SpellUpdate::Interrupted {
-            caster_id: 8,
-            message_id: 439,
-        },
-        now,
-    );
-    assert!(hud.casting.is_some());
-    assert!(hud.interrupted.is_none());
-    hud.cast_update(
-        7,
-        &SpellUpdate::Mana {
-            spell_id: 42,
-            keep_casting: true,
-        },
-        now,
-    );
-    assert!(hud.casting.is_some());
-    hud.cast_update(
-        7,
-        &SpellUpdate::Interrupted {
-            caster_id: 7,
-            message_id: 439,
-        },
-        now,
-    );
-    assert!(hud.casting.is_none());
-    assert_eq!(hud.interrupted, Some((now, 439)));
-    hud.cast_update(
-        7,
-        &SpellUpdate::Mana {
-            spell_id: 42,
-            keep_casting: false,
-        },
-        now,
-    );
-    assert_eq!(hud.interrupted, Some((now, 439)));
-    hud.cast_update(7, &begin, now);
-    assert!(hud.interrupted.is_none());
-    hud.cast_update(
-        7,
-        &SpellUpdate::Mana {
-            spell_id: 99,
-            keep_casting: false,
-        },
-        now,
-    );
-    assert!(hud.casting.is_some());
-    hud.cast_update(
-        7,
-        &SpellUpdate::Mana {
-            spell_id: 42,
-            keep_casting: false,
-        },
-        now,
-    );
-    assert!(hud.casting.is_none());
 }
 
 #[test]
@@ -358,36 +274,8 @@ fn interruption_is_scoped_to_own_caster_and_cannot_be_undone_by_mana_updates() {
 )]
 fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() {
     let mut app = App::new();
-    let mut online = OnlineState::new(true);
-    let mut gems = [None; 8];
-    gems[0] = Some(73);
-    crate::online::testing::admit(
-        &mut online,
-        7,
-        PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            deity: None,
-            class: Some(2),
-            spawn_id: 12,
-            race: 1,
-            gender: 0,
-            level: 1,
-            position: WorldPosition::default(),
-            mana: 50,
-            endurance: None,
-            skills: None,
-            spell_refresh_ms: None,
-            memorized_spells: gems,
-            size: 6.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: Some(100),
-            appearance: eq_client_core::outfit::Appearance::default(),
-        },
-    );
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
-    app.insert_resource(online)
+    app.insert_resource(admitted())
         .insert_resource(CommandsToServer(Some(tx)))
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ChatState>()
@@ -447,43 +335,45 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .reset_all();
+    let press = |app: &mut App| {
+        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
+        app.update();
+        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
+        app.update();
+    };
+    let feedback = |app: &App| {
+        app.world()
+            .resource::<HudState>()
+            .action_feedback
+            .as_ref()
+            .unwrap()
+            .1
+            .clone()
+    };
     // A submitted request blocks another click even before a server Begin notification.
-    app.world_mut().resource_mut::<HudState>().pending_cast = Some(73);
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
-    app.update();
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-    app.update();
+    testing::pending_cast(&mut online(&mut app), Some(73));
+    press(&mut app);
     assert!(rx.try_recv().is_err());
-    app.world_mut().resource_mut::<HudState>().pending_cast = None;
-    assert!(
-        app.world()
-            .resource::<HudState>()
-            .action_feedback
-            .as_ref()
-            .unwrap()
-            .1
-            .contains("acknowledge")
-    );
+    testing::pending_cast(&mut online(&mut app), None);
+    assert!(feedback(&app).contains("acknowledge"));
     // A server-confirmed cast blocks further gem actions, but never predicts a new slot.
-    app.world_mut().resource_mut::<HudState>().casting = Some((
-        73,
-        std::time::Instant::now(),
-        std::time::Duration::from_secs(2),
-    ));
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
-    app.update();
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-    app.update();
+    testing::spell(
+        &mut online(&mut app),
+        SpellUpdate::Began {
+            caster_id: 12,
+            spell_id: 73,
+            duration_ms: 2000,
+        },
+    );
+    press(&mut app);
     assert!(rx.try_recv().is_err());
-    app.world_mut().resource_mut::<HudState>().casting = None;
-    assert!(
-        app.world()
-            .resource::<HudState>()
-            .action_feedback
-            .as_ref()
-            .unwrap()
-            .1
-            .contains("Already casting")
+    assert!(feedback(&app).contains("Already casting"));
+    testing::spell(
+        &mut online(&mut app),
+        SpellUpdate::Mana {
+            spell_id: 73,
+            keep_casting: false,
+        },
     );
     let mut fields = vec!["0"; 16];
     fields[0] = "73";
@@ -492,35 +382,20 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     let names = crate::spellbook::SpellNames::parse(&fields.join("^"));
     let now = std::time::Instant::now();
     {
-        let mut hud = app.world_mut().resource_mut::<HudState>();
-        hud.spells[0] = Some(73);
+        let mut state = online(&mut app);
         // A refresh for a changed slot cannot start a timer for an unrelated spell.
-        hud.cast_update(
-            12,
-            &eq_client_core::SpellUpdate::BarRefresh {
-                slot: 0,
-                spell_id: 74,
-                reduction_ms: 0,
-            },
-            now,
-        );
-        hud.cooldowns.resolve(&names, now);
-        assert!(hud.cooldowns.remaining(73, now).is_zero());
-        hud.cast_update(
-            12,
-            &eq_client_core::SpellUpdate::BarRefresh {
-                slot: 0,
-                spell_id: 73,
-                reduction_ms: 0,
-            },
-            now,
-        );
-        hud.cooldowns.resolve(&names, now);
+        let refresh = |spell_id| SpellUpdate::BarRefresh {
+            slot: 0,
+            spell_id,
+            reduction_ms: 0,
+        };
+        testing::news_at(&mut state, [WorldEvent::Spell(refresh(74))], now);
+        state.world.tick(now, &names);
+        assert!(state.world.casting().cooldowns.remaining(73, now).is_zero());
+        testing::news_at(&mut state, [WorldEvent::Spell(refresh(73))], now);
+        state.world.tick(now, &names);
     }
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
-    app.update();
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-    app.update();
+    press(&mut app);
     assert!(rx.try_recv().is_err());
     *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
     app.update();
@@ -538,50 +413,37 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             ..
         }
     ));
-    assert_eq!(
-        app.world()
-            .resource::<OnlineState>()
-            .world
-            .player()
-            .unwrap()
-            .memorized_spells[0],
-        Some(73)
-    );
+    assert_eq!(world(&app).player().unwrap().memorized_spells[0], Some(73));
     app.world_mut().resource_mut::<ChatState>().composing = true;
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
-    app.update();
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-    app.update();
+    press(&mut app);
     assert!(rx.try_recv().is_err());
-    let mut hud = app.world_mut().resource_mut::<HudState>();
-    hud.reset_cooldowns();
+    // A dropped connection forgets the gem timers.
+    testing::connect(&mut online(&mut app), false);
     assert!(
-        hud.cooldowns
+        world(&app)
+            .casting()
+            .cooldowns
             .remaining(73, std::time::Instant::now())
             .is_zero()
     );
-    assert!(hud.action_feedback.is_none());
-    let player = app
-        .world()
-        .resource::<OnlineState>()
-        .world
-        .player()
-        .cloned()
-        .unwrap();
+    let player = world(&app).player().cloned().unwrap();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let mut hud = HudState::default();
+    let request = |gem, target_id| requests::Request {
+        session_id: 7,
+        gem,
+        target_id,
+        forgetting: false,
+        mana_cost: None,
+    };
+    let messages = messages::Messages::default();
     requests::spell(
         &mut hud,
+        world(&app),
         &player,
         &sender,
-        &requests::Request {
-            session_id: 7,
-            gem: 1,
-            target_id: 12,
-            forgetting: false,
-            mana_cost: None,
-        },
-        &messages::Messages::default(),
+        &request(1, 12),
+        &messages,
     );
     assert!(
         hud.action_feedback
@@ -593,32 +455,23 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     assert!(receiver.try_recv().is_err());
     requests::spell(
         &mut hud,
+        world(&app),
         &player,
         &sender,
-        &requests::Request {
-            session_id: 7,
-            gem: 0,
-            target_id: 99,
-            forgetting: false,
-            mana_cost: None,
-        },
-        &messages::Messages::default(),
+        &request(0, 99),
+        &messages,
     );
     assert!(hud.action_feedback.as_ref().unwrap().1.contains("queued"));
-    assert!(hud.pending_cast.is_none());
-    assert!(hud.casting.is_none());
+    // A request never claims a cast the server has not answered.
+    assert!(world(&app).casting().pending.is_none());
+    assert!(world(&app).casting().cast.is_none());
     requests::spell(
         &mut hud,
+        world(&app),
         &player,
         &sender,
-        &requests::Request {
-            session_id: 7,
-            gem: 0,
-            target_id: 99,
-            forgetting: false,
-            mana_cost: None,
-        },
-        &messages::Messages::default(),
+        &request(0, 99),
+        &messages,
     );
     assert!(
         hud.action_feedback
@@ -635,16 +488,11 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     drop(receiver);
     requests::spell(
         &mut hud,
+        world(&app),
         &player,
         &sender,
-        &requests::Request {
-            session_id: 7,
-            gem: 0,
-            target_id: 99,
-            forgetting: false,
-            mana_cost: None,
-        },
-        &messages::Messages::default(),
+        &request(0, 99),
+        &messages,
     );
     assert!(
         hud.action_feedback
@@ -657,29 +505,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
 
 #[test]
 fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
-    let mut gems = [None; 8];
-    gems[0] = Some(73);
-    let player = PlayerState {
-        name: "Example".into(),
-        base_attributes: None,
-        deity: None,
-        class: Some(2),
-        spawn_id: 12,
-        race: 1,
-        gender: 0,
-        level: 1,
-        position: WorldPosition::default(),
-        mana: 50,
-        endurance: None,
-        skills: None,
-        spell_refresh_ms: None,
-        memorized_spells: gems,
-        size: 6.0,
-        walk_speed: 0.0,
-        run_speed: 0.0,
-        hp_percent: Some(100),
-        appearance: eq_client_core::outfit::Appearance::default(),
-    };
+    let player = caster();
     let (sender, receiver) = std::sync::mpsc::sync_channel(4);
     let messages = messages::Messages::parse(
         "EQST0002
@@ -694,27 +520,56 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
         forgetting: false,
         mana_cost: Some(10),
     };
-    let mut hud = HudState {
-        mana: Some(9),
-        ..HudState::default()
+    // The world as the server last reported the player's mana, if it has.
+    let with_mana = |mana: Option<u32>| {
+        let mut world = ClientWorld::default();
+        if let Some(mana) = mana {
+            world.apply(
+                &WorldUpdate::Game(WorldEvent::Mana(mana)),
+                std::time::Instant::now(),
+                &NoSpells,
+            );
+        }
+        world
     };
-    requests::spell(&mut hud, &player, &sender, &request, &messages);
+    let mut hud = HudState::default();
+    requests::spell(
+        &mut hud,
+        &with_mana(Some(9)),
+        &player,
+        &sender,
+        &request,
+        &messages,
+    );
     assert_eq!(
         hud.action_feedback.as_ref().unwrap().1,
         "Synthetic short mana"
     );
     assert!(receiver.try_recv().is_err());
     request.forgetting = true;
-    requests::spell(&mut hud, &player, &sender, &request, &messages);
+    requests::spell(
+        &mut hud,
+        &with_mana(Some(9)),
+        &player,
+        &sender,
+        &request,
+        &messages,
+    );
     assert!(matches!(
         receiver.try_recv().unwrap(),
         ClientCommand::ForgetSpell { gem: 0, .. }
     ));
     request.forgetting = false;
     for (mana, cost) in [(Some(10), Some(10)), (None, Some(10)), (Some(0), None)] {
-        hud.mana = mana;
         request.mana_cost = cost;
-        requests::spell(&mut hud, &player, &sender, &request, &messages);
+        requests::spell(
+            &mut hud,
+            &with_mana(mana),
+            &player,
+            &sender,
+            &request,
+            &messages,
+        );
         assert!(matches!(
             receiver.try_recv().unwrap(),
             ClientCommand::CastSpell { spell_id: 73, .. }

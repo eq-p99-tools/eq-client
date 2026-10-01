@@ -6,9 +6,14 @@
 //! is forgotten. Nothing here draws, so any front end can host the world and
 //! its rules are tested without one.
 
+mod casting;
+
+pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
+
 use crate::{
-    CampStatus, CharacterChoice, Death, PlayerState, PostureState, SpawnState, WorldEvent,
-    WorldPosition, WorldUpdate, ZoneOffer, doors::DoorTable, ground::Objects,
+    BookActionStatus, CampStatus, CharacterChoice, Coins, Death, PlayerState, PostureState,
+    SpawnState, SpellBook, SpellUpdate, WorldEvent, WorldPosition, WorldUpdate, ZoneOffer,
+    buffs::BuffTracker, doors::DoorTable, ground::Objects,
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -58,6 +63,17 @@ pub enum Reset {
     },
 }
 
+/// The player's mana, endurance and experience as last reported.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Vitals {
+    /// Current mana.
+    pub mana: Option<u32>,
+    /// Current endurance.
+    pub endurance: Option<u32>,
+    /// Experience on the Titanium 0..330 scale.
+    pub experience: Option<u32>,
+}
+
 /// What an update changed that a front end must redo.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Changes {
@@ -69,6 +85,8 @@ pub struct Changes {
     pub placed: Option<WorldPosition>,
     /// The world server offered characters to play.
     pub characters: bool,
+    /// What a spell notice did to the player's casting.
+    pub cast: Option<CastNews>,
     /// The update was for an earlier admission, or came when the world takes
     /// no such news, so nothing changed.
     pub ignored: bool,
@@ -94,30 +112,44 @@ pub struct ClientWorld {
     objects: Objects,
     /// The last revision given to a spawn.
     revision: u64,
+    vitals: Vitals,
+    coins: Option<Coins>,
+    casting: Casting,
+    buffs: BuffTracker,
+    spell_book: Option<SpellBook>,
+    /// The spellbook change in flight, until confirmed.
+    book_action: Option<BookActionStatus>,
+    /// Counts the session's spellbook replies, so that two alike still differ.
+    book_action_revision: u64,
 }
 
 impl ClientWorld {
     /// Applies one update from the session and says what a front end must redo.
-    pub fn apply(&mut self, update: &WorldUpdate, now: Instant) -> Changes {
+    /// The installed client's spell data tells lasting effects from instant ones.
+    pub fn apply(
+        &mut self,
+        update: &WorldUpdate,
+        now: Instant,
+        spells: &dyn SpellCatalog,
+    ) -> Changes {
         match update {
             WorldUpdate::Connection {
                 connected,
                 terminal,
                 ..
             } => self.connection(*connected, *terminal),
-            WorldUpdate::Game(event) => self.event(event, now),
+            WorldUpdate::Game(event) => self.event(event, now, spells),
             WorldUpdate::Chat(_) | WorldUpdate::ServerMessage { .. } => Changes::default(),
         }
     }
 
-    /// Closes the doors whose time is up, as the server's close action would;
-    /// true when any closed.
-    pub fn tick(&mut self, now: Instant) -> bool {
-        let due = self.doors.closes_due(now);
-        if due {
+    /// Runs the world's clocks: doors the server leaves open swing shut, and
+    /// refreshed gems start their timers once the spells' timing is known.
+    pub fn tick(&mut self, now: Instant, spells: &dyn SpellCatalog) {
+        if self.doors.closes_due(now) {
             self.doors.close_due(now);
         }
-        due
+        self.casting.cooldowns.resolve(spells, now);
     }
 
     /// Notes the player's health as the HUD computes it from the last report.
@@ -145,7 +177,7 @@ impl ClientWorld {
         clippy::too_many_lines,
         reason = "one arm per kind of news, each a line or two"
     )]
-    fn event(&mut self, event: &WorldEvent, now: Instant) -> Changes {
+    fn event(&mut self, event: &WorldEvent, now: Instant, spells: &dyn SpellCatalog) -> Changes {
         let mut changes = Changes::default();
         match event {
             WorldEvent::WorldName { short_name } => self.world_name = Some(short_name.clone()),
@@ -170,6 +202,17 @@ impl ClientWorld {
                 self.session_id = Some(*session_id);
                 self.zone.clone_from(zone);
                 self.far_clip = *far_clip;
+                self.vitals = Vitals {
+                    mana: Some(player.mana),
+                    endurance: player.endurance,
+                    experience: None,
+                };
+                self.casting.pending = None;
+                self.casting.cooldowns.restore(
+                    &player.memorized_spells,
+                    player.spell_refresh_ms,
+                    now,
+                );
                 self.player = Some((**player).clone());
             }
             WorldEvent::MotionSent {
@@ -275,23 +318,105 @@ impl ClientWorld {
             }
             WorldEvent::Doors(update) => self.doors.apply(update, now),
             WorldEvent::Objects(update) => self.objects.apply(update),
-            WorldEvent::Level { current, .. } => match self.player.as_mut() {
-                Some(player) if self.connected => player.level = *current,
+            WorldEvent::Level {
+                current,
+                experience,
+                ..
+            } => match self.player.as_mut() {
+                Some(player) if self.connected => {
+                    player.level = *current;
+                    self.vitals.experience = Some(*experience);
+                }
                 _ => changes.ignored = true,
             },
             WorldEvent::Skill { skill_id, value } => match self.player.as_mut() {
                 Some(player) if self.connected => player.apply_skill(*skill_id, *value),
                 _ => changes.ignored = true,
             },
-            WorldEvent::Spell(update) => {
-                if let Some(player) = self.player.as_mut() {
-                    update.apply_gems(&mut player.memorized_spells);
+            WorldEvent::Spell(update) => changes.cast = self.spell(update, now),
+            WorldEvent::Mana(mana) => self.vitals.mana = Some(*mana),
+            WorldEvent::Resources { mana, endurance } => {
+                self.vitals.mana = Some(*mana);
+                self.vitals.endurance = Some(*endurance);
+            }
+            WorldEvent::Experience(value) => self.vitals.experience = Some(*value),
+            WorldEvent::Coins(coins) => self.coins = Some(*coins),
+            WorldEvent::CastPending {
+                session_id,
+                spell_id,
+            } => {
+                if self.accepts_reply(*session_id) && self.death.is_none() {
+                    self.casting.pending = *spell_id;
+                } else {
+                    changes.ignored = true;
                 }
+            }
+            WorldEvent::CastRejected { session_id, .. } => {
+                changes.ignored = !(self.accepts_reply(*session_id) && self.death.is_none());
+            }
+            WorldEvent::BuffSnapshot(buffs) => self.buffs.replace_snapshot(
+                buffs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, buff)| Some((u32::try_from(slot).ok()?, buff.clone()?)))
+                    .collect(),
+            ),
+            WorldEvent::Buff(update) => {
+                if self
+                    .player
+                    .as_ref()
+                    .is_some_and(|player| u32::from(player.spawn_id) == update.entity_id)
+                {
+                    self.buffs.apply(update.clone());
+                } else {
+                    changes.ignored = true;
+                }
+            }
+            WorldEvent::SpellEffect(effect) => {
+                if self.is_player(effect.target_id) {
+                    // Only a lasting effect leaves a buff the server has not slotted.
+                    if effect.effect_flag == 4
+                        && !matches!(effect.spell_id, 0 | u16::MAX)
+                        && !spells.instant_effect(u32::from(effect.spell_id))
+                    {
+                        self.buffs.observe_effect(effect.clone());
+                    }
+                } else {
+                    changes.ignored = true;
+                }
+            }
+            WorldEvent::SpellBook(book) => self.spell_book = Some(book.clone()),
+            WorldEvent::BookAction(status) => {
+                self.book_action =
+                    (!matches!(status, BookActionStatus::Confirmed)).then(|| status.clone());
+                self.book_action_revision = self.book_action_revision.wrapping_add(1);
             }
             WorldEvent::Camp(CampStatus::Camped) => return self.reset(Reset::Camped),
             _ => (),
         }
         changes
+    }
+
+    /// A spell notice: the book and gems change, and the player's own casts
+    /// move along while they are connected and alive.
+    fn spell(&mut self, update: &SpellUpdate, now: Instant) -> Option<CastNews> {
+        // Forgetting a gem is answered only by the gem emptying.
+        if matches!(update, SpellUpdate::Slot { mode: 2, .. })
+            && matches!(self.book_action, Some(BookActionStatus::Submitted))
+        {
+            self.book_action = None;
+        }
+        if let Some(book) = self.spell_book.as_mut() {
+            book.apply(update);
+        }
+        let active = self.connected && self.death.is_none();
+        let player = self.player.as_mut()?;
+        update.apply_gems(&mut player.memorized_spells);
+        if !active {
+            return None;
+        }
+        self.casting
+            .observe(player.spawn_id, &player.memorized_spells, update, now)
     }
 
     /// A death: a spawn becomes a corpse, and the player's own death holds
@@ -321,24 +446,59 @@ impl ClientWorld {
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
         match reason {
-            Reset::Entered => self.forget_admission(),
-            Reset::Camped => {
+            Reset::Entered => {
                 self.forget_admission();
+                self.spell_book = None;
+                self.buffs.clear();
+                self.casting.interrupted = None;
+            }
+            Reset::Camped => {
+                // The character is gone, and with them everything about them.
+                self.forget_admission();
+                self.book_action = None;
+                self.casting = Casting::default();
+                self.vitals = Vitals::default();
+                self.spell_book = None;
+                self.buffs.clear();
                 self.session_id = None;
                 self.player = None;
                 self.connected = false;
             }
-            Reset::Lost { ended: true, .. } => {
-                self.characters = None;
-                self.pending_transfer = None;
-                self.forget_zone();
+            Reset::Lost {
+                ended,
+                transferring,
+            } => {
+                self.drop_actions();
+                if ended || !transferring {
+                    self.casting.reset_cooldowns();
+                    self.spell_book = None;
+                    self.buffs.clear();
+                }
+                if ended {
+                    self.characters = None;
+                    self.pending_transfer = None;
+                    self.forget_zone();
+                }
             }
-            Reset::Lost { ended: false, .. } | Reset::Zoning { .. } | Reset::Died => (),
+            Reset::Zoning { .. } => self.drop_actions(),
+            Reset::Died => {
+                self.casting.cast = None;
+                self.casting.interrupted = None;
+                self.casting.reset_cooldowns();
+                self.book_action = None;
+            }
         }
         Changes {
             reset: Some(reason),
             ..Changes::default()
         }
+    }
+
+    /// Drops the actions in flight: a cast, its request and interruption, and
+    /// a spellbook change.
+    fn drop_actions(&mut self) {
+        self.casting.drop_actions();
+        self.book_action = None;
     }
 
     /// Forgets the admission and its zone.
@@ -465,6 +625,48 @@ impl ClientWorld {
     #[must_use]
     pub const fn objects(&self) -> &Objects {
         &self.objects
+    }
+
+    /// The player's mana, endurance and experience.
+    #[must_use]
+    pub const fn vitals(&self) -> &Vitals {
+        &self.vitals
+    }
+
+    /// The coins the player carries, as last reported.
+    #[must_use]
+    pub const fn coins(&self) -> Option<&Coins> {
+        self.coins.as_ref()
+    }
+
+    /// The player's own casting and gem timers.
+    #[must_use]
+    pub const fn casting(&self) -> &Casting {
+        &self.casting
+    }
+
+    /// The player's buffs and the lasting effects not yet slotted.
+    #[must_use]
+    pub const fn buffs(&self) -> &BuffTracker {
+        &self.buffs
+    }
+
+    /// The player's spellbook.
+    #[must_use]
+    pub const fn spell_book(&self) -> Option<&SpellBook> {
+        self.spell_book.as_ref()
+    }
+
+    /// The spellbook change in flight, until confirmed.
+    #[must_use]
+    pub const fn book_action(&self) -> Option<&BookActionStatus> {
+        self.book_action.as_ref()
+    }
+
+    /// Counts the session's spellbook replies, so that two alike still differ.
+    #[must_use]
+    pub const fn book_action_revision(&self) -> u64 {
+        self.book_action_revision
     }
 
     /// Whether the player can act now: admitted, connected, alive and not

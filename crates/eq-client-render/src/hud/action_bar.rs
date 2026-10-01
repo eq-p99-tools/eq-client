@@ -109,6 +109,7 @@ pub(crate) fn spawn(commands: &mut Commands) {
 /// Chooses the most specific action in progress, then recent feedback.
 pub(super) fn current(
     hud: &HudState,
+    world: &eq_client_core::world::ClientWorld,
     requests: &ActionRequests,
     names: &crate::spellbook::SpellNames,
     messages: &super::messages::Messages,
@@ -117,13 +118,13 @@ pub(super) fn current(
     let fraction = |since: Instant, total: Duration| {
         Some((now.saturating_duration_since(since).as_secs_f32() / total.as_secs_f32()).min(1.0))
     };
-    if let Some((spell, started, duration)) = hud.casting {
+    if let Some((spell, started, duration)) = world.casting().cast {
         return Some(Shown {
             label: format!("Casting {}", names.label(u32::from(spell))),
             progress: fraction(started, duration.max(Duration::from_millis(1))),
         });
     }
-    if let Some(spell) = hud.pending_cast {
+    if let Some(spell) = world.casting().pending {
         return Some(Shown {
             label: format!("Casting {} (waiting for server)", names.label(spell)),
             progress: None,
@@ -131,7 +132,7 @@ pub(super) fn current(
     }
     let book = requests.book.as_ref();
     let book_label = || book.map_or("Changing spells", |(_, label)| label.as_str());
-    match hud.book_action {
+    match world.book_action() {
         Some(BookActionStatus::Preparing) => {
             return Some(Shown {
                 label: book_label().into(),
@@ -161,7 +162,7 @@ pub(super) fn current(
         });
     }
     let recent = |at: Instant| now.saturating_duration_since(at) < FEEDBACK;
-    if let Some((_, reason)) = hud.interrupted.filter(|(at, _)| recent(*at)) {
+    if let Some((_, reason)) = world.casting().interrupted.filter(|(at, _)| recent(*at)) {
         return Some(Shown {
             label: messages.interruption(reason),
             progress: Some(0.0),
@@ -179,8 +180,11 @@ pub(super) fn current(
 /// Shows or hides the bar and moves its fill; waiting states pulse at full width.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update(
-    hud: Res<HudState>,
-    requests: Res<ActionRequests>,
+    state: (
+        Res<HudState>,
+        Res<crate::online::OnlineState>,
+        Res<ActionRequests>,
+    ),
     definitions: (
         Res<crate::spellbook::SpellNames>,
         Res<super::messages::Messages>,
@@ -190,8 +194,16 @@ pub(crate) fn update(
     mut labels: Query<&mut Text, With<ActionLabel>>,
     mut fills: Query<(&mut Node, &mut BackgroundColor), With<ActionFill>>,
 ) {
+    let (hud, online, requests) = state;
     let (names, messages) = definitions;
-    let shown = current(&hud, &requests, &names, &messages, Instant::now());
+    let shown = current(
+        &hud,
+        &online.world,
+        &requests,
+        &names,
+        &messages,
+        Instant::now(),
+    );
     for mut node in &mut bars {
         let display = if shown.is_some() {
             Display::Flex
@@ -226,6 +238,8 @@ pub(crate) fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::online::{OnlineState, testing};
+    use eq_client_core::SpellUpdate;
 
     #[test]
     fn casting_wins_then_book_changes_then_camping_then_feedback() {
@@ -233,50 +247,69 @@ mod tests {
         let messages = super::super::messages::Messages::load(None);
         let now = Instant::now();
         let mut hud = HudState::default();
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
         let mut requests = ActionRequests::default();
-        assert_eq!(current(&hud, &requests, &names, &messages, now), None);
+        assert_eq!(
+            current(&hud, &online.world, &requests, &names, &messages, now),
+            None
+        );
 
         requests.camp = Some((now.checked_sub(Duration::from_secs(15)).unwrap(), false));
-        let camping = current(&hud, &requests, &names, &messages, now).unwrap();
+        let camping = current(&hud, &online.world, &requests, &names, &messages, now).unwrap();
         assert_eq!(camping.label, "Camping (15s)");
         assert!((camping.progress.unwrap() - 0.5).abs() < 0.01);
 
-        hud.book_action = Some(BookActionStatus::Preparing);
+        testing::book_action(&mut online, BookActionStatus::Preparing);
         requests.book = Some((
             now.checked_sub(Duration::from_secs(1)).unwrap(),
             "Memorizing Courage into gem 2".into(),
         ));
-        let book = current(&hud, &requests, &names, &messages, now).unwrap();
+        let book = current(&hud, &online.world, &requests, &names, &messages, now).unwrap();
         assert_eq!(book.label, "Memorizing Courage into gem 2");
         assert!((book.progress.unwrap() - 0.2).abs() < 0.01);
-        hud.book_action = Some(BookActionStatus::AwaitingReply);
+        testing::book_action(&mut online, BookActionStatus::AwaitingReply);
         assert_eq!(
-            current(&hud, &requests, &names, &messages, now)
+            current(&hud, &online.world, &requests, &names, &messages, now)
                 .unwrap()
                 .progress,
             None
         );
 
-        hud.casting = Some((
-            202,
+        // A cast that began a second ago and takes four.
+        testing::news_at(
+            &mut online,
+            [eq_client_core::WorldEvent::Spell(SpellUpdate::Began {
+                caster_id: 7,
+                spell_id: 202,
+                duration_ms: 4000,
+            })],
             now.checked_sub(Duration::from_secs(1)).unwrap(),
-            Duration::from_secs(4),
-        ));
-        let casting = current(&hud, &requests, &names, &messages, now).unwrap();
+        );
+        let casting = current(&hud, &online.world, &requests, &names, &messages, now).unwrap();
         assert!(casting.label.starts_with("Casting "));
         assert!((casting.progress.unwrap() - 0.25).abs() < 0.01);
 
-        hud.casting = None;
-        hud.book_action = None;
+        testing::spell(
+            &mut online,
+            SpellUpdate::Mana {
+                spell_id: 202,
+                keep_casting: false,
+            },
+        );
+        testing::book_action(&mut online, BookActionStatus::Confirmed);
         requests.camp = None;
         hud.action_feedback = Some((now, "Spell available in 2.0s".into()));
         assert_eq!(
-            current(&hud, &requests, &names, &messages, now)
+            current(&hud, &online.world, &requests, &names, &messages, now)
                 .unwrap()
                 .label,
             "Spell available in 2.0s"
         );
         let later = now + FEEDBACK;
-        assert_eq!(current(&hud, &requests, &names, &messages, later), None);
+        assert_eq!(
+            current(&hud, &online.world, &requests, &names, &messages, later),
+            None
+        );
     }
 }

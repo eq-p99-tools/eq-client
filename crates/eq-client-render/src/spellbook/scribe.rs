@@ -10,18 +10,18 @@ pub(crate) fn presentation(
     online: Option<Res<crate::online::OnlineState>>,
     inventory: Option<Res<crate::inventory::InventoryState>>,
     sender: Option<Res<crate::target::CommandsToServer>>,
-    hud: Res<crate::hud::HudState>,
     names: Res<SpellNames>,
     mut buttons: Query<(&Interaction, &mut BackgroundColor), With<ScribeCursor>>,
     mut labels: Query<(&mut Text, &mut TextColor), With<Label>>,
 ) {
-    let available = if action_pending(&hud) {
+    let world = crate::online::world(online.as_deref());
+    let available = if action_pending(world) {
         Err(anyhow::anyhow!("Wait for the current spell action"))
     } else {
         prepare_scribe(
             online.as_deref(),
             inventory.as_deref(),
-            hud.spell_book.as_ref(),
+            world.spell_book(),
             sender.as_deref(),
         )
     };
@@ -94,9 +94,10 @@ mod tests {
             app.world().get::<Text>(label).unwrap().0,
             "Inventory awaiting refresh"
         );
-        app.world_mut()
-            .resource_mut::<crate::hud::HudState>()
-            .book_action = Some(eq_client_core::BookActionStatus::Preparing);
+        crate::online::testing::book_action(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::BookActionStatus::Preparing,
+        );
         app.update();
         assert_eq!(
             app.world().get::<Text>(label).unwrap().0,

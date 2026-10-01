@@ -174,7 +174,7 @@ pub(crate) fn update(
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn presentation(
     bindings: Res<Bindings>,
-    hud: Res<super::HudState>,
+    online: Res<crate::online::OnlineState>,
     names: Res<crate::spellbook::SpellNames>,
     inventory: Option<Res<crate::inventory::InventoryState>>,
     mut slots: Query<(&Interaction, &Slot, &mut BackgroundColor)>,
@@ -186,9 +186,15 @@ pub(crate) fn presentation(
         .find(|(interaction, _, _)| **interaction != Interaction::None)
         .map(|(_, slot, _)| slot.0);
     for (interaction, slot, mut color) in &mut slots {
-        let spell = bindings
-            .gem(slot.0)
-            .and_then(|gem| hud.spells.get(gem).copied().flatten());
+        let spell = bindings.gem(slot.0).and_then(|gem| {
+            online
+                .world
+                .player()
+                .map_or([None; 8], |player| player.memorized_spells)
+                .get(gem)
+                .copied()
+                .flatten()
+        });
         let missing_item = match bindings.0[slot.0] {
             Some(Action::Item { slot, id }) => inventory
                 .as_ref()
@@ -199,9 +205,14 @@ pub(crate) fn presentation(
             || bindings.0[slot.0].is_none()
             || (bindings.gem(slot.0).is_some() && spell.is_none());
         let waiting = spell.is_some_and(|id| {
-            hud.pending_cast.is_some()
-                || hud.casting.is_some()
-                || !hud.cooldowns.remaining(id, now).is_zero()
+            online.world.casting().pending.is_some()
+                || online.world.casting().cast.is_some()
+                || !online
+                    .world
+                    .casting()
+                    .cooldowns
+                    .remaining(id, now)
+                    .is_zero()
         });
         color.0 = if *interaction != Interaction::None {
             Color::srgb(0.18, 0.25, 0.32)
@@ -217,8 +228,10 @@ pub(crate) fn presentation(
         if let Some(caption) = caption {
             text.0 = match bindings.0[caption.0] {
                 Some(Action::Gem(gem)) => {
-                    if hud
-                        .spells
+                    if online
+                        .world
+                        .player()
+                        .map_or([None; 8], |player| player.memorized_spells)
                         .get(usize::from(gem))
                         .copied()
                         .flatten()
@@ -237,14 +250,14 @@ pub(crate) fn presentation(
         }
         if hint.is_some() {
             text.0 = match hovered.and_then(|index| bindings.0[index]) {
-                Some(Action::Gem(gem)) => match hud.spells.get(usize::from(gem)).copied().flatten() {
+                Some(Action::Gem(gem)) => match online.world.player().map_or([None; 8], |player| player.memorized_spells).get(usize::from(gem)).copied().flatten() {
                     Some(spell) => {
-                        let status = if hud.pending_cast.is_some() {
+                        let status = if online.world.casting().pending.is_some() {
                             "Awaiting cast acknowledgement".into()
-                        } else if hud.casting.is_some() {
+                        } else if online.world.casting().cast.is_some() {
                             "Casting".into()
                         } else {
-                            let remaining = hud.cooldowns.remaining(spell, now);
+                            let remaining = online.world.casting().cooldowns.remaining(spell, now);
                             if remaining.is_zero() { "Uses current target".into() }
                             else { format!("Available in {:.1}s", remaining.as_secs_f32()) }
                         };
@@ -306,7 +319,7 @@ pub(crate) fn item_actions(
             &online,
             &sender,
             target.selected,
-            hud.casting.is_some() || hud.pending_cast.is_some(),
+            online.world.casting().cast.is_some() || online.world.casting().pending.is_some(),
         )
     };
     hud.action_feedback = Some((std::time::Instant::now(), message));
@@ -321,8 +334,10 @@ mod tests {
         fields[0] = "73";
         fields[1] = "Synthetic spell";
         let mut app = App::new();
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
         app.init_resource::<Bindings>()
-            .init_resource::<super::super::HudState>()
+            .insert_resource(online)
             .insert_resource(crate::spellbook::SpellNames::parse(&fields.join("^")))
             .add_systems(Update, presentation);
         app.world_mut()
@@ -336,9 +351,14 @@ mod tests {
                 .0
                 .contains("Gem 1 is empty")
         );
-        app.world_mut()
-            .resource_mut::<super::super::HudState>()
-            .spells[0] = Some(73);
+        crate::online::testing::spell(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 73,
+                mode: 1,
+            },
+        );
         app.update();
         assert!(
             app.world()
@@ -347,9 +367,10 @@ mod tests {
                 .0
                 .contains("Synthetic spell")
         );
-        app.world_mut()
-            .resource_mut::<super::super::HudState>()
-            .pending_cast = Some(73);
+        crate::online::testing::pending_cast(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            Some(73),
+        );
         app.update();
         assert!(
             app.world()
