@@ -47,32 +47,28 @@ impl ItemState {
 
 /// Creates an initially hidden item panel; closing it has no server-side effect.
 pub(super) fn spawn(commands: &mut Commands) {
-    let frame = commands
-        .spawn((
-            super::hud::HudRoot,
-            ItemPanel,
-            super::windows::pointer::TakesWheel,
-            ScrollPosition::default(),
-            GlobalZIndex(30),
-            Node {
-                position_type: PositionType::Absolute,
-                right: px(20),
-                top: px(105),
-                width: px(310),
-                max_height: percent(68),
-                overflow: Overflow::scroll_y(),
-                padding: UiRect::all(px(12)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(8),
-                display: Display::None,
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
-        ))
-        .id();
-    super::windows::interactive(commands, frame);
+    let frame = super::windows::frame(
+        commands,
+        super::windows::WindowId::Item,
+        Node {
+            width: px(310),
+            max_height: percent(68),
+            overflow: Overflow::scroll_y(),
+            padding: UiRect::all(px(12)),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(8),
+            display: Display::None,
+            ..default()
+        },
+        Color::srgb(0.025, 0.032, 0.04),
+    );
+    commands.entity(frame).insert((
+        super::hud::HudRoot,
+        ItemPanel,
+        super::windows::pointer::TakesWheel,
+        ScrollPosition::default(),
+    ));
     commands.entity(frame).with_children(|panel| {
-        super::windows::title_bar(panel, frame, "ITEM");
         panel.spawn((
             Button,
             CloseItem,
@@ -105,9 +101,12 @@ pub(super) fn input(
     close: Query<&Interaction, (With<CloseItem>, Changed<Interaction>)>,
     online: Res<OnlineState>,
     sender: Res<Outbox>,
+    escape: Res<super::escape::Escape>,
     mut state: ResMut<ItemState>,
 ) {
-    if close.iter().any(|i| *i == Interaction::Pressed) {
+    if close.iter().any(|i| *i == Interaction::Pressed)
+        || *escape == super::escape::Escape::Close(super::windows::WindowId::Item)
+    {
         state.selected = None;
         state.shown = None;
     }
@@ -528,15 +527,10 @@ mod tests {
     #[test]
     fn clicking_an_item_queues_inspection_and_reconnect_clears_the_panel() {
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
-        let mut app = App::new();
+        let mut app = crate::testing::app();
         let mut online = OnlineState::new(true);
         crate::online::testing::admit(&mut online, 77, crate::online::testing::player(1));
         app.insert_resource(online)
-            .insert_resource(super::super::ViewerSettings(
-                super::super::ViewerConfig::default(),
-            ))
-            .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<ItemState>()
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, input);
         let body = format!("00002A{}1234ABCD", "0".repeat(31));

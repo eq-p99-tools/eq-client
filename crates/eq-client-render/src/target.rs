@@ -26,26 +26,25 @@ pub(super) fn spawn(commands: &mut Commands) {
         .spawn((
             super::hud::HudRoot,
             TargetPanel,
-            GlobalZIndex(15),
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(16),
-                left: percent(50),
-                margin: UiRect::left(px(-140)),
-                width: px(280),
-                padding: UiRect::all(px(10)),
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(px(4)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(5),
-                ..default()
-            },
+            GlobalZIndex(super::windows::Layer::Hud.base()),
+            super::windows::placed(
+                super::windows::WindowId::Target,
+                Node {
+                    width: px(280),
+                    padding: UiRect::all(px(10)),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(4)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(5),
+                    ..default()
+                },
+            ),
             BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.93)),
             BorderColor::all(Color::srgb(0.4, 0.37, 0.26)),
         ))
         .id();
     super::windows::passive(commands, frame);
-    super::windows::identify(commands, frame, "TARGET");
+    super::windows::identify(commands, frame, super::windows::WindowId::Target);
     commands.entity(frame).with_children(|panel| {
         panel.spawn((
             TargetName,
@@ -447,25 +446,8 @@ mod tests {
         reason = "Keep the ordered integration scenario and its assertions together"
     )]
     fn keyboard_cycles_only_rendered_entities_and_keeps_targets_until_they_are_gone() {
-        let mut app = App::new();
-        app.init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<NearbyEntities>()
-            .insert_resource(OnlineState::new(false))
-            .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<TargetState>()
-            .init_resource::<super::super::escape::Escape>()
-            .init_resource::<super::super::inventory::InventoryState>()
-            .init_resource::<super::super::trade::TradeState>()
-            .insert_resource(crate::outbox::Outbox::new(None))
-            .add_systems(Update, (super::super::escape::route, input).chain());
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            PrimaryWindow,
-        ));
+        let mut app = crate::testing::app();
+        app.add_systems(Update, (super::super::escape::route, input).chain());
         {
             let mut online = app.world_mut().resource_mut::<OnlineState>();
             crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));

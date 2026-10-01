@@ -51,7 +51,7 @@ pub(crate) struct Hint;
 /// Builds ten bound action buttons in the requested five-by-two layout.
 pub(super) fn spawn(commands: &mut Commands, root: Entity) {
     let frame = super::panel(commands, root, 244.0);
-    crate::windows::titled(commands, frame, "ACTIONS");
+    crate::windows::titled(commands, frame, crate::windows::WindowId::Actions);
     for (row_index, keys) in [["1", "2", "3", "4", "5"], ["6", "7", "8", "9", "0"]]
         .into_iter()
         .enumerate()

@@ -16,9 +16,9 @@ pub(super) struct Saved {
     pub placed: bool,
 }
 
-/// Window placements by title, kept through scene despawns.
+/// Window placements by window, kept through scene despawns.
 #[derive(Resource, Default)]
-pub(crate) struct Layouts(pub(super) BTreeMap<String, Saved>);
+pub(crate) struct Layouts(pub(super) BTreeMap<super::WindowId, Saved>);
 
 /// Keeps explicitly placed panels reachable after resizing or UI scale changes.
 #[allow(clippy::needless_pass_by_value)]
@@ -97,7 +97,7 @@ pub(crate) fn remember(
             }
         }
         layouts.0.insert(
-            key.0.clone(),
+            key.0,
             Saved {
                 entity: handle.0,
                 edges: [node.left, node.top, node.right, node.bottom],
@@ -192,7 +192,7 @@ mod tests {
             .spawn((
                 Node::default(),
                 TitleBar,
-                LayoutKey("CHAT".into()),
+                LayoutKey(super::super::WindowId::Chat),
                 DragHandle(frame),
             ))
             .id();

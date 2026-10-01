@@ -130,14 +130,15 @@ fn file_name(profile: Option<&(String, String)>) -> String {
 }
 
 /// One line per window: four edges, four margins, positioning, whether it is
-/// minimized, then a tab and its title.
-fn encode(layouts: &BTreeMap<String, Saved>) -> String {
+/// minimized, then a tab and the window's name.
+fn encode(layouts: &BTreeMap<super::WindowId, Saved>) -> String {
     let mut text = format!("{HEADER}\n");
-    for (key, saved) in layouts {
+    for (id, saved) in layouts {
         // Windows left where they open follow the client's defaults instead.
-        if !saved.placed || key.contains(['\t', '\n', '\r']) {
+        if !saved.placed || !id.describe().persists {
             continue;
         }
+        let key = id.key();
         let UiRect {
             left,
             right,
@@ -161,8 +162,9 @@ fn encode(layouts: &BTreeMap<String, Saved>) -> String {
     text
 }
 
-/// Reads [`encode`]'s lines, skipping any it cannot understand.
-fn decode(text: &str) -> BTreeMap<String, Saved> {
+/// Reads [`encode`]'s lines, skipping any it cannot understand. A window
+/// saved under its old title, before windows had ids, keeps its placement.
+fn decode(text: &str) -> BTreeMap<super::WindowId, Saved> {
     text.lines()
         .filter(|line| !line.starts_with('#'))
         .filter_map(|line| {
@@ -193,7 +195,7 @@ fn decode(text: &str) -> BTreeMap<String, Saved> {
                 },
                 placed: true,
             };
-            (!key.is_empty()).then(|| (key.to_owned(), saved))
+            Some((super::WindowId::saved_under(key)?, saved))
         })
         .collect()
 }
@@ -253,12 +255,24 @@ mod tests {
     #[test]
     fn placements_survive_a_round_trip_through_the_file() {
         let layouts = BTreeMap::from([
-            ("CHAT".to_owned(), saved(px(71), true)),
-            ("SPELLBOOK [B]".to_owned(), saved(percent(50), false)),
+            (super::super::WindowId::Chat, saved(px(71), true)),
+            (super::super::WindowId::Spellbook, saved(percent(50), false)),
         ]);
         let text = encode(&layouts);
         assert!(text.starts_with(HEADER));
+        assert!(text.contains("\tspellbook\n"));
         assert_eq!(decode(&text), layouts);
+    }
+
+    #[test]
+    fn placements_saved_under_old_titles_are_kept() {
+        let text = format!(
+            "{HEADER}\n1px 2px auto auto 0px 0px 0px 0px absolute open\tSPELLBOOK [B]\n\
+             3px 4px auto auto 0px 0px 0px 0px absolute minimized\tBUFFS\n"
+        );
+        let layouts = decode(&text);
+        assert_eq!(layouts[&super::super::WindowId::Spellbook].edges[0], px(1));
+        assert!(layouts[&super::super::WindowId::Effects].minimized);
     }
 
     #[test]
@@ -267,18 +281,28 @@ mod tests {
             placed: false,
             ..saved(px(5), false)
         };
-        let text = encode(&BTreeMap::from([("BUFFS".to_owned(), untouched)]));
+        let text = encode(&BTreeMap::from([(
+            super::super::WindowId::Effects,
+            untouched,
+        )]));
         assert!(decode(&text).is_empty());
     }
 
     #[test]
     fn unreadable_lines_are_skipped_without_losing_the_rest() {
-        let good = encode(&BTreeMap::from([("CHAT".to_owned(), saved(px(1), false))]));
+        let good = encode(&BTreeMap::from([(
+            super::super::WindowId::Chat,
+            saved(px(1), false),
+        )]));
         let text = format!(
             "{good}broken line\n1px 2px auto auto 0px 0px 0px 0px sideways open\tTARGET\n\
-             1px 2px auto auto 0px 0px 0px 0px absolute open\t\n"
+             1px 2px auto auto 0px 0px 0px 0px absolute open\t\n\
+             1px 2px auto auto 0px 0px 0px 0px absolute open\tno such window\n"
         );
-        assert_eq!(decode(&text).keys().collect::<Vec<_>>(), ["CHAT"]);
+        assert_eq!(
+            decode(&text).keys().collect::<Vec<_>>(),
+            [&super::super::WindowId::Chat]
+        );
     }
 
     #[test]
@@ -318,7 +342,7 @@ mod tests {
     fn each_character_gets_its_own_placements_back_and_saves_changes() {
         let directory = std::env::temp_dir().join(format!("eq-windows-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
-        let chat = BTreeMap::from([("CHAT".to_owned(), saved(px(71), false))]);
+        let chat = BTreeMap::from([(super::super::WindowId::Chat, saved(px(71), false))]);
         std::fs::write(
             directory.join("windows-ExampleWorld-Example.txt"),
             encode(&chat),
@@ -348,7 +372,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<Layouts>()
             .0
-            .get_mut("CHAT")
+            .get_mut(&super::super::WindowId::Chat)
             .unwrap()
             .edges[0] = px(12);
         app.world_mut().write_message(AppExit::Success);
@@ -365,7 +389,10 @@ mod tests {
         let other = app.world().resource::<Layouts>().0.clone();
         std::fs::remove_dir_all(&directory).unwrap();
         assert_eq!(loaded, chat);
-        assert_eq!(decode(&written)["CHAT"].edges[0], px(12));
+        assert_eq!(
+            decode(&written)[&super::super::WindowId::Chat].edges[0],
+            px(12)
+        );
         assert!(other.is_empty());
     }
 }

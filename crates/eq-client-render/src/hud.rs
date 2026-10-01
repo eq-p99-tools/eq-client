@@ -238,6 +238,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         .id();
 
     super::chat::spawn(commands);
+    super::windows::spawn_selector(commands);
     super::target::spawn(commands);
     super::items::spawn(commands);
     super::inventory::spawn(commands);
@@ -245,7 +246,7 @@ pub(super) fn spawn(commands: &mut Commands) {
     action_bar::spawn(commands);
 
     let character = panel(commands, root, 186.0);
-    super::windows::identify(commands, character, "CHARACTER");
+    super::windows::identify(commands, character, super::windows::WindowId::Player);
     let name = label(commands, character, "CHARACTER", 10.0, INK);
     commands.entity(name).insert(HudLabel::Name);
     for stat in Stat::ALL {
@@ -255,7 +256,7 @@ pub(super) fn spawn(commands: &mut Commands) {
     hotbar::spawn(commands, root);
 
     let spells = panel(commands, root, 358.0);
-    super::windows::titled(commands, spells, "SPELLS");
+    super::windows::titled(commands, spells, super::windows::WindowId::Spells);
     let gems = row(commands, spells, 4.0);
     let casting = label(commands, spells, "", 10.0, INK);
     commands.entity(casting).insert(HudLabel::Casting);

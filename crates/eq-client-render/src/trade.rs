@@ -38,16 +38,6 @@ struct MerchantWindow {
 }
 
 impl TradeState {
-    /// Whether the loot window is open.
-    pub(super) const fn looting(&self) -> bool {
-        self.loot.is_some()
-    }
-
-    /// Whether the merchant window is open.
-    pub(super) const fn shopping(&self) -> bool {
-        self.merchant.is_some()
-    }
-
     /// Something the windows show changed: draw them again.
     pub(super) fn changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
@@ -259,8 +249,10 @@ pub(super) fn input(
         .map(|(_, action)| *action)
         .collect();
     match *escape {
-        super::escape::Escape::Loot => clicked.push(Action::EndLoot),
-        super::escape::Escape::Shop => clicked.push(Action::EndShop),
+        super::escape::Escape::Close(windows::WindowId::Loot) => clicked.push(Action::EndLoot),
+        super::escape::Escape::Close(windows::WindowId::Merchant) => {
+            clicked.push(Action::EndShop);
+        }
         _ => (),
     }
     if focused && keys.just_pressed(KeyCode::KeyL) {
@@ -537,9 +529,6 @@ pub(super) fn present(
         show_panel(
             &mut commands,
             loot_frame,
-            // Stable titles keep a dragged window in place for every corpse.
-            "LOOT",
-            (px(24), Val::Auto, px(110)),
             &format!("{}: {status}", window.name),
             (Rows::Loot, &rows, loot_offset),
             &[(Action::TakeAll, "Loot all"), (Action::EndLoot, "Done")],
@@ -583,8 +572,6 @@ pub(super) fn present(
         show_panel(
             &mut commands,
             merchant_frame,
-            "MERCHANT",
-            (Val::Auto, px(24), px(96)),
             &format!("{}   Your coin: {coins}", window.name),
             (Rows::Merchant, &rows, merchant_offset),
             &[(Action::EndShop, "Done")],
@@ -638,39 +625,38 @@ fn item_label(item: &InventoryItem) -> String {
 fn show_panel(
     commands: &mut Commands,
     frame: Option<Entity>,
-    title: &str,
-    (left, right, top): (Val, Val, Val),
     status: &str,
     (list, rows, offset): (Rows, &[(Action, String)], f32),
     footer: &[(Action, &str)],
 ) {
+    // The window keeps its id for every corpse and merchant, and so its place.
+    let id = match list {
+        Rows::Loot => windows::WindowId::Loot,
+        Rows::Merchant => windows::WindowId::Merchant,
+    };
     let frame = if let Some(frame) = frame {
         commands.entity(frame).despawn_children();
+        commands
+            .entity(frame)
+            .with_children(|parent| windows::title_bar(parent, frame, id));
         frame
     } else {
-        commands
-            .spawn((
-                Panel(list),
-                windows::Frame::default(),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left,
-                    right,
-                    top,
-                    width: px(300),
-                    padding: UiRect::all(px(6)),
-                    row_gap: px(4),
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                // Above inventory and spellbook, below item inspection.
-                GlobalZIndex(26),
-                BackgroundColor(Color::srgba(0.025, 0.032, 0.04, 0.94)),
-            ))
-            .id()
+        let frame = windows::frame(
+            commands,
+            id,
+            Node {
+                width: px(300),
+                padding: UiRect::all(px(6)),
+                row_gap: px(4),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            Color::srgba(0.025, 0.032, 0.04, 0.94),
+        );
+        commands.entity(frame).insert(Panel(list));
+        frame
     };
     commands.entity(frame).with_children(|parent| {
-        windows::title_bar(parent, frame, title);
         parent.spawn((
             Text::new(status),
             TextFont {

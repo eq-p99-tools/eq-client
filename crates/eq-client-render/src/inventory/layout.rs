@@ -456,27 +456,16 @@ mod tests {
         );
         let before = online.world.inventory().clone();
         let inventory = InventoryState {
-            open: true,
             demo: true,
             ..InventoryState::default()
         };
-        let mut app = App::new();
+        let mut app = crate::testing::app();
         app.insert_resource(inventory)
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<crate::chat::ChatState>()
-            .init_resource::<crate::escape::Escape>()
-            .init_resource::<crate::items::ItemState>()
             .insert_resource(online)
-            .insert_resource(crate::outbox::Outbox::new(None))
             .add_systems(Update, (super::super::input, super::super::settle).chain());
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            bevy::window::PrimaryWindow,
-        ));
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Inventory);
         app.world_mut()
             .spawn((SlotButton(InventorySlot(251)), Interaction::Pressed));
         let count_button = app
