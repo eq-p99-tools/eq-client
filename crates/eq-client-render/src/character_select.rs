@@ -1,5 +1,6 @@
 //! Pre-zone character selection uses occupied server slots, never typed names.
 use super::{hud::HudState, online::OnlineState, outbox::Outbox};
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{CharacterChoice, ClientCommand};
 
@@ -187,7 +188,7 @@ fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
+            BackgroundColor(theme::COVER),
         ))
         .with_children(|root| {
             root.spawn((
@@ -200,19 +201,19 @@ fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
                     border_radius: BorderRadius::all(px(8)),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.055, 0.067, 0.078)),
+                BackgroundColor(theme::TITLE_BAR),
             ))
             .with_children(|panel| {
-                label(panel, "CHARACTER SELECT", 20.0);
+                theme::label(panel, "CHARACTER SELECT", Size::Display);
                 let Some(selection) = selection else {
-                    label(panel, status, 14.0);
+                    theme::label(panel, status, Size::Large);
                     return;
                 };
                 if selection.entries.is_empty() {
-                    label(
+                    theme::label(
                         panel,
                         "No characters on this server. Create one with the official client first.",
-                        14.0,
+                        Size::Large,
                     );
                     return;
                 }
@@ -230,46 +231,27 @@ fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
                 if selection.selected.is_some() && !selection.submitted {
                     button(panel, Action::Enter, "Enter World", true);
                 }
-                label(
+                theme::label(
                     panel,
                     if selection.message.is_empty() {
                         "Select a character | Up/Down: browse | Enter: connect"
                     } else {
                         &selection.message
                     },
-                    12.0,
+                    Size::Label,
                 );
             });
         });
 }
 
-fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32) {
-    parent.spawn((
-        Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(size),
+fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selected: bool) {
+    theme::button_with(parent, action, text, Size::Large).insert((
+        Node {
+            padding: UiRect::all(px(10)),
             ..default()
         },
-        TextColor(Color::srgb(0.84, 0.85, 0.82)),
+        BackgroundColor(theme::button(true, selected, Interaction::None)),
     ));
-}
-
-fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selected: bool) {
-    parent
-        .spawn((
-            Button,
-            action,
-            Node {
-                padding: UiRect::all(px(10)),
-                ..default()
-            },
-            BackgroundColor(if selected {
-                Color::srgb(0.22, 0.25, 0.23)
-            } else {
-                Color::srgb(0.09, 0.11, 0.13)
-            }),
-        ))
-        .with_children(|button| label(button, text, 15.0));
 }
 
 #[cfg(test)]

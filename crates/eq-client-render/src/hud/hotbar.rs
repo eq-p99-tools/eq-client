@@ -1,4 +1,5 @@
 //! Session-local action bindings; activating a binding uses the normal command validators.
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 mod item_art;
 #[cfg(test)]
@@ -72,7 +73,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
                     30.0,
                 ))
                 .with_child(item_art::artwork(index));
-            let caption = super::label(commands, button, "", 8.0, super::INK);
+            let caption = super::label(commands, button, "", Size::Caption, theme::INK);
             commands.entity(caption).insert((
                 Caption(index),
                 Node {
@@ -84,7 +85,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
             ));
         }
     }
-    let hint = super::label(commands, frame, "", 9.0, super::INK);
+    let hint = super::label(commands, frame, "", Size::Caption, theme::INK);
     commands.entity(hint).insert((
         Hint,
         Node {
@@ -191,15 +192,7 @@ pub(crate) fn presentation(
                     .remaining(id, now)
                     .is_zero()
         });
-        color.0 = if *interaction != Interaction::None {
-            Color::srgb(0.18, 0.25, 0.32)
-        } else if empty {
-            Color::srgb(0.04, 0.05, 0.06)
-        } else if waiting {
-            Color::srgb(0.20, 0.14, 0.08)
-        } else {
-            Color::srgb(0.09, 0.16, 0.22)
-        };
+        color.0 = theme::readiness(*interaction != Interaction::None, empty, waiting);
     }
     for (mut text, caption, hint) in &mut labels {
         if let Some(caption) = caption {

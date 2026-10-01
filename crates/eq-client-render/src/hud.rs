@@ -7,6 +7,7 @@ mod requests;
 #[cfg(test)]
 mod tests;
 
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 
 /// What the HUD shows besides the world: the status line, estimated maxima
@@ -57,10 +58,10 @@ impl Stat {
 
     const fn tint(self) -> Color {
         match self {
-            Self::Hp => Color::srgb(0.60, 0.20, 0.20),
-            Self::Mana => Color::srgb(0.20, 0.36, 0.70),
-            Self::Stamina => Color::srgb(0.65, 0.49, 0.18),
-            Self::Experience => Color::srgb(0.30, 0.52, 0.36),
+            Self::Hp => theme::HP,
+            Self::Mana => theme::MANA,
+            Self::Stamina => theme::STAMINA,
+            Self::Experience => theme::EXPERIENCE,
         }
     }
 
@@ -213,10 +214,6 @@ fn resource_ratio(current: Option<u32>, maximum: Option<u32>) -> Option<f64> {
         .map(|(value, max)| f64::from(value) / f64::from(max))
 }
 
-const PANEL: Color = Color::srgba(0.025, 0.032, 0.04, 0.90);
-const EDGE: Color = Color::srgb(0.23, 0.25, 0.26);
-const INK: Color = Color::srgb(0.72, 0.75, 0.77);
-
 /// Builds the bottom HUD without inventing character statistics or abilities.
 pub(super) fn spawn(commands: &mut Commands) {
     let root = commands
@@ -247,7 +244,7 @@ pub(super) fn spawn(commands: &mut Commands) {
 
     let character = panel(commands, root, 186.0);
     super::windows::identify(commands, character, super::windows::WindowId::Player);
-    let name = label(commands, character, "CHARACTER", 10.0, INK);
+    let name = label(commands, character, "CHARACTER", Size::Small, theme::INK);
     commands.entity(name).insert(HudLabel::Name);
     for stat in Stat::ALL {
         stat_bar(commands, character, stat);
@@ -258,7 +255,7 @@ pub(super) fn spawn(commands: &mut Commands) {
     let spells = panel(commands, root, 358.0);
     super::windows::titled(commands, spells, super::windows::WindowId::Spells);
     let gems = row(commands, spells, 4.0);
-    let casting = label(commands, spells, "", 10.0, INK);
+    let casting = label(commands, spells, "", Size::Small, theme::INK);
     commands.entity(casting).insert(HudLabel::Casting);
     for number in 1..=8 {
         let slot = slot(commands, gems, &number.to_string(), 38.0, true);
@@ -273,7 +270,7 @@ pub(super) fn spawn(commands: &mut Commands) {
             SpellGem(u8::try_from(number - 1).expect("eight gems")),
             crate::outbox::Needs(eq_client_core::Capability::Casting),
         ));
-        let value = label(commands, slot, "", 8.0, INK);
+        let value = label(commands, slot, "", Size::Caption, theme::INK);
         commands.entity(value).insert((
             HudLabel::Spell(number - 1),
             Node {
@@ -284,7 +281,7 @@ pub(super) fn spawn(commands: &mut Commands) {
             },
         ));
     }
-    let details = label(commands, spells, "", 10.0, Color::srgb(0.43, 0.48, 0.53));
+    let details = label(commands, spells, "", Size::Small, theme::INK_DIM);
     commands.entity(details).insert((
         SpellDetails,
         Node {
@@ -366,16 +363,11 @@ pub(super) fn spell_details(
         let waiting = casting.cast.is_some()
             || casting.pending.is_some()
             || spell.is_some_and(|id| !casting.cooldowns.remaining(id, now).is_zero());
-        background.0 = if *interaction != Interaction::None {
+        let pointed = *interaction != Interaction::None;
+        if pointed {
             hovered = Some((*gem, spell));
-            Color::srgb(0.18, 0.25, 0.32)
-        } else if spell.is_none() {
-            Color::srgb(0.04, 0.05, 0.06)
-        } else if waiting {
-            Color::srgb(0.20, 0.14, 0.08)
-        } else {
-            Color::srgb(0.09, 0.16, 0.22)
-        };
+        }
+        background.0 = theme::readiness(pointed, spell.is_none(), waiting);
     }
     let mut text = match hovered {
         None => String::new(),
@@ -505,13 +497,11 @@ fn panel(commands: &mut Commands, parent: Entity, width: f32) -> Entity {
                 width: px(width),
                 padding: UiRect::all(px(10)),
                 border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(px(4)),
                 flex_direction: FlexDirection::Column,
                 row_gap: px(5),
                 ..default()
             },
-            BackgroundColor(PANEL),
-            BorderColor::all(EDGE),
+            theme::surface(),
         ))
         .id();
     commands.entity(parent).add_child(entity);
@@ -530,17 +520,8 @@ fn row(commands: &mut Commands, parent: Entity, gap: f32) -> Entity {
     entity
 }
 
-fn label(commands: &mut Commands, parent: Entity, text: &str, size: f32, color: Color) -> Entity {
-    let entity = commands
-        .spawn((
-            Text::new(text),
-            TextFont {
-                font_size: FontSize::Px(size),
-                ..default()
-            },
-            TextColor(color),
-        ))
-        .id();
+fn label(commands: &mut Commands, parent: Entity, text: &str, size: Size, ink: Color) -> Entity {
+    let entity = commands.spawn(theme::text(text, size, ink)).id();
     commands.entity(parent).add_child(entity);
     entity
 }
@@ -559,16 +540,12 @@ fn slot(commands: &mut Commands, parent: Entity, key: &str, size: f32, spell: bo
                 justify_content: JustifyContent::SpaceBetween,
                 ..default()
             },
-            BackgroundColor(if spell {
-                Color::srgb(0.075, 0.095, 0.14)
-            } else {
-                Color::srgb(0.09, 0.10, 0.11)
-            }),
-            BorderColor::all(EDGE),
+            BackgroundColor(theme::INSET),
+            BorderColor::all(theme::EDGE),
         ))
         .id();
     commands.entity(parent).add_child(entity);
-    let key_label = label(commands, entity, key, 10.0, Color::srgb(0.66, 0.71, 0.76));
+    let key_label = label(commands, entity, key, Size::Small, theme::INK);
     if spell {
         commands.entity(key_label).insert(Node {
             position_type: PositionType::Absolute,
@@ -593,7 +570,7 @@ fn stat_bar(commands: &mut Commands, parent: Entity, stat: Stat) {
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.085, 0.10, 0.115)),
+            BackgroundColor(theme::INSET),
             BorderColor::all(tint),
         ))
         .id();
@@ -613,7 +590,7 @@ fn stat_bar(commands: &mut Commands, parent: Entity, stat: Stat) {
         ))
         .id();
     commands.entity(entity).add_child(fill);
-    label(commands, entity, stat.label(), 10.0, INK);
-    let value = label(commands, entity, "--", 10.0, INK);
+    label(commands, entity, stat.label(), Size::Small, theme::INK);
+    let value = label(commands, entity, "--", Size::Small, theme::INK);
     commands.entity(value).insert(HudLabel::Stat(stat));
 }

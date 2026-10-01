@@ -3,7 +3,8 @@
 //! Casting, spellbook changes and camping each report elsewhere too; this bar
 //! only mirrors their state so timing is visible in the same spot every time.
 
-use super::{EDGE, HudState, INK, PANEL};
+use super::HudState;
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::BookActionStatus;
 use std::time::{Duration, Instant};
@@ -58,14 +59,12 @@ pub(crate) fn spawn(commands: &mut Commands) {
                     width: px(300),
                     padding: UiRect::all(px(6)),
                     border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(px(4)),
                     flex_direction: FlexDirection::Column,
                     row_gap: px(4),
                     display: Display::None,
                     ..default()
                 },
-                BackgroundColor(PANEL),
-                BorderColor::all(EDGE),
+                theme::surface(),
                 ActionBar,
                 // Clicks on the bar stay off the world beneath it.
                 crate::windows::Frame::default(),
@@ -73,11 +72,8 @@ pub(crate) fn spawn(commands: &mut Commands) {
             .with_children(|panel| {
                 panel.spawn((
                     Text::new(""),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
-                    TextColor(INK),
+                    theme::font(Size::Label),
+                    TextColor(theme::INK),
                     ActionLabel,
                 ));
                 panel
@@ -88,7 +84,7 @@ pub(crate) fn spawn(commands: &mut Commands) {
                             border_radius: BorderRadius::all(px(2)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgb(0.06, 0.07, 0.09)),
+                        BackgroundColor(theme::WELL),
                     ))
                     .with_child((
                         Node {
@@ -97,7 +93,7 @@ pub(crate) fn spawn(commands: &mut Commands) {
                             border_radius: BorderRadius::all(px(2)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgb(0.30, 0.50, 0.78)),
+                        BackgroundColor(theme::CAST),
                         ActionFill,
                     ));
             });
@@ -224,9 +220,9 @@ pub(crate) fn update(
         let (width, tint) = shown.progress.map_or_else(
             || {
                 let pulse = 0.35 + 0.25 * (time.elapsed_secs() * 4.0).sin().abs();
-                (100.0, Color::srgb(pulse * 0.6, pulse * 0.8, pulse))
+                (100.0, theme::awaiting(pulse))
             },
-            |progress| (progress * 100.0, Color::srgb(0.30, 0.50, 0.78)),
+            |progress| (progress * 100.0, theme::CAST),
         );
         node.width = percent(width);
         color.0 = tint;

@@ -5,6 +5,7 @@
 //! every refusal in one place: the HUD's feedback line. Windows grey out
 //! what the session does not offer from the same answer, the world's
 //! capability report.
+use crate::theme;
 use bevy::prelude::*;
 use eq_client_core::{Capability, ClientCommand, world::ClientWorld};
 use std::{
@@ -226,7 +227,7 @@ pub(crate) fn veil(mut commands: Commands, added: Query<Entity, Added<Needs>>) {
                 display: Display::None,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.03, 0.035, 0.04, 0.82)),
+            BackgroundColor(theme::VEIL),
             // Above the control's own icons and labels.
             ZIndex(10),
             bevy::ui::FocusPolicy::Pass,

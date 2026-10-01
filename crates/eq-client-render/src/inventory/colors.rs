@@ -1,5 +1,6 @@
 //! Per-storage-slot bag tints; presentation choices never send inventory commands.
-use super::{InventoryState, label};
+use super::InventoryState;
+use crate::theme::{self, Size};
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::inventory::InventorySlot;
 use std::collections::BTreeMap;
@@ -51,10 +52,10 @@ pub(super) fn controls(parent: &mut ChildSpawnerCommands, colors: &Colors, slot:
                 ..default()
             },
             BackgroundColor(colors.tint(slot)),
-            BorderColor::all(Color::srgb(0.5, 0.55, 0.6)),
+            BorderColor::all(theme::EDGE_LIGHT),
         ))
         .with_children(|button| {
-            label(button, "+", 12.0);
+            theme::label(button, "+", Size::Label);
             if colors.picker != Some(slot) {
                 return;
             }
@@ -72,7 +73,7 @@ pub(super) fn controls(parent: &mut ChildSpawnerCommands, colors: &Colors, slot:
                         row_gap: px(4),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.025, 0.032, 0.04)),
+                    BackgroundColor(theme::PANEL),
                 ))
                 .with_children(|palette| {
                     for (index, [r, g, b]) in PALETTE.iter().copied().enumerate() {
@@ -86,7 +87,7 @@ pub(super) fn controls(parent: &mut ChildSpawnerCommands, colors: &Colors, slot:
                                 ..default()
                             },
                             BackgroundColor(Color::srgb(r, g, b)),
-                            BorderColor::all(Color::srgb(0.5, 0.55, 0.6)),
+                            BorderColor::all(theme::EDGE_LIGHT),
                         ));
                     }
                 });

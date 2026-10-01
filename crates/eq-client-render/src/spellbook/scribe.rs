@@ -1,5 +1,6 @@
 //! Availability feedback uses the same validation as the scribe action.
 use super::{ScribeCursor, SpellNames, action_pending, prepare_scribe};
+use crate::theme;
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -29,22 +30,16 @@ pub(crate) fn presentation(
         Err(error) => error.to_string(),
     };
     for (interaction, mut color) in &mut buttons {
-        color.0 = if !enabled {
-            Color::srgb(0.055, 0.065, 0.08)
-        } else if *interaction == Interaction::Hovered {
-            Color::srgb(0.16, 0.24, 0.32)
-        } else {
-            Color::srgb(0.10, 0.16, 0.22)
-        };
+        color.0 = theme::button(enabled, false, *interaction);
     }
     for (mut text, mut color) in &mut labels {
         if text.0 != label {
             text.0.clone_from(&label);
         }
         color.0 = if enabled {
-            Color::srgb(0.9, 0.93, 0.96)
+            theme::INK_BRIGHT
         } else {
-            Color::srgb(0.55, 0.59, 0.64)
+            theme::INK_DIM
         };
     }
 }

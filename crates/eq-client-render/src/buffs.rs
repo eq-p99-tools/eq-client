@@ -1,5 +1,6 @@
 //! Compact server-owned buff display; clicking never cancels an effect.
 use super::{online::OnlineState, spell_icons, spellbook::SpellNames, windows};
+use crate::theme::{self, Size};
 use bevy::prelude::*;
 use std::collections::BTreeMap;
 
@@ -67,7 +68,6 @@ pub(super) fn update(
                 display,
                 ..default()
             },
-            Color::srgba(0.025, 0.032, 0.04, 0.92),
         );
         commands.entity(frame).insert(Panel);
         let body = commands
@@ -112,17 +112,14 @@ fn content(
                             border: UiRect::all(px(1)),
                             ..default()
                         },
-                        BorderColor::all(Color::srgb(0.28, 0.34, 0.40)),
-                        BackgroundColor(Color::srgb(0.08, 0.11, 0.14)),
+                        BorderColor::all(theme::EDGE),
+                        BackgroundColor(theme::INSET),
                     ))
                     .with_children(|icon| {
                         icon.spawn(spell_icons::artwork(spell_icons::Source::Buff(slot), 36.0));
                         icon.spawn((
                             Text::new((u64::from(slot) + 1).to_string()),
-                            TextFont {
-                                font_size: FontSize::Px(9.0),
-                                ..default()
-                            },
+                            theme::font(Size::Caption),
                             Node {
                                 position_type: PositionType::Absolute,
                                 bottom: px(0),
@@ -142,8 +139,8 @@ fn content(
                             border: UiRect::all(px(1)),
                             ..default()
                         },
-                        BorderColor::all(Color::srgb(0.28, 0.34, 0.40)),
-                        BackgroundColor(Color::srgb(0.08, 0.11, 0.14)),
+                        BorderColor::all(theme::EDGE),
+                        BackgroundColor(theme::INSET),
                     ))
                     .with_children(|icon| {
                         icon.spawn(spell_icons::artwork(
@@ -160,11 +157,8 @@ fn content(
             } else {
                 "Hover an effect for details"
             }),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.73, 0.77, 0.81)),
+            theme::font(Size::Body),
+            TextColor(theme::INK),
         ));
     });
 }

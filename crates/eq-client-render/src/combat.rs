@@ -119,28 +119,17 @@ pub(super) fn target_color(
     online: Res<super::online::OnlineState>,
     mut names: Query<&mut TextColor, With<super::target::TargetName>>,
 ) {
-    let color = online
-        .world
-        .target()
-        .selected
-        .and_then(|id| online.world.considered(id))
-        .map_or(Color::srgb(0.9, 0.85, 0.65), con_rgb);
+    let color = crate::theme::con(
+        online
+            .world
+            .target()
+            .selected
+            .and_then(|id| online.world.considered(id)),
+    );
     for mut text in &mut names {
         if text.0 != color {
             text.0 = color;
         }
-    }
-}
-
-fn con_rgb(color: ConColor) -> Color {
-    match color {
-        ConColor::Gray => Color::srgb(0.6, 0.6, 0.6),
-        ConColor::Green => Color::srgb(0.3, 0.85, 0.3),
-        ConColor::LightBlue => Color::srgb(0.45, 0.85, 1.0),
-        ConColor::Blue => Color::srgb(0.35, 0.5, 1.0),
-        ConColor::White | ConColor::Other(_) => Color::srgb(0.95, 0.95, 0.95),
-        ConColor::Yellow => Color::srgb(1.0, 0.9, 0.2),
-        ConColor::Red => Color::srgb(1.0, 0.3, 0.25),
     }
 }
 
