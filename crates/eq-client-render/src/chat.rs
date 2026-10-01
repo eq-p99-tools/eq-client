@@ -287,7 +287,7 @@ pub(super) fn input(
 ) {
     state.escape_consumed = false;
     // Character selection owns keyboard input until the zone admits the player.
-    if online.enabled && online.session_id.is_none() {
+    if online.enabled && online.world.session_id().is_none() {
         keyboard.clear();
         state.composing = false;
         state.hovered = false;
@@ -569,7 +569,7 @@ fn submit_draft(
     sender: &super::target::CommandsToServer,
 ) {
     let result = (|| -> Result<(), String> {
-        if !online.connected || online.death.is_some() {
+        if !online.world.connected() || online.world.death().is_some() {
             return Err("Connect before sending chat".into());
         }
         let sender = sender
@@ -647,7 +647,8 @@ fn game_commands(
 ) -> Option<Result<Vec<ClientCommand>, String>> {
     let name = input.strip_prefix('/')?.trim().to_ascii_lowercase();
     let posture = |posture| {
-        let (Some(session_id), Some(player)) = (online.session_id, online.player.as_ref()) else {
+        let (Some(session_id), Some(player)) = (online.world.session_id(), online.world.player())
+        else {
             return Err("Enter the world first".to_owned());
         };
         Ok(ClientCommand::SetPosture {
@@ -665,7 +666,7 @@ fn game_commands(
             vec![
                 sit,
                 ClientCommand::Camp {
-                    session_id: online.session_id.unwrap_or_default(),
+                    session_id: online.world.session_id().unwrap_or_default(),
                     created: std::time::Instant::now(),
                 },
             ]
@@ -886,28 +887,31 @@ mod tests {
         assert!(game_commands("/say hello", &online).is_none());
         assert!(game_commands("hello", &online).is_none());
         assert!(game_commands("/camp", &online).unwrap().is_err());
-        online.session_id = Some(4);
-        online.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            deity: None,
-            class: Some(2),
-            spawn_id: 12,
-            race: 1,
-            gender: 0,
-            level: 1,
-            position: eq_client_core::WorldPosition::default(),
-            mana: 0,
-            endurance: None,
-            skills: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 6.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: Some(100),
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut online,
+            4,
+            eq_client_core::PlayerState {
+                name: "Example".into(),
+                base_attributes: None,
+                deity: None,
+                class: Some(2),
+                spawn_id: 12,
+                race: 1,
+                gender: 0,
+                level: 1,
+                position: eq_client_core::WorldPosition::default(),
+                mana: 0,
+                endurance: None,
+                skills: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 6.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: Some(100),
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
         let commands = game_commands("/CAMP", &online).unwrap().unwrap();
         assert!(matches!(
             commands.as_slice(),
@@ -936,8 +940,7 @@ mod tests {
     fn sending_a_line_or_an_empty_enter_returns_the_keyboard_to_the_game() {
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         let mut online = super::super::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(1);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
         let mut app = App::new();
         app.init_resource::<ChatState>()
             .init_resource::<super::super::windows::pointer::Wheel>()
@@ -989,9 +992,13 @@ mod tests {
         });
         app.update();
         assert!(!app.world().resource::<ChatState>().composing);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .session_id = Some(1);
+        crate::online::testing::admit(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            1,
+            crate::online::testing::player(1),
+        );
         app.update();
         assert!(!app.world().resource::<ChatState>().composing);
     }

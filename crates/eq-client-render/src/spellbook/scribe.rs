@@ -86,8 +86,7 @@ mod tests {
             "Connect to scribe a scroll"
         );
         let mut online = crate::online::OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(1);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
         app.insert_resource(online)
             .init_resource::<crate::inventory::InventoryState>();
         app.update();

@@ -1,77 +1,48 @@
-//! Session events enter presentation here; this module never decodes wire packets.
+//! Session events enter presentation here; this module never decodes wire
+//! packets. The world model in `eq_client_core::world` applies each update;
+//! this module shows what it changed.
 
 use super::{
     Collision, HudText, OrbitCamera, Player, PlayerBody, SceneEntity, SceneInfo, TerrainSurface,
     ViewerSettings, build_collision, character, hud, spawn_player_and_hud, spawn_static_zone,
 };
 use bevy::prelude::*;
-use eq_client_core::{PlayerState, WorldEvent, WorldUpdate, races, render_position};
-use std::{
-    collections::BTreeMap,
-    sync::{Mutex, mpsc::Receiver},
+use eq_client_core::{
+    WorldEvent, WorldUpdate, races, render_position,
+    world::{ClientWorld, Reset},
 };
+use std::sync::{Mutex, mpsc::Receiver};
 
 #[derive(Resource)]
 pub(super) struct Updates(pub Mutex<Option<Receiver<WorldUpdate>>>);
 
+/// What the server has told the client, and what presenting it needs besides.
 #[derive(Resource)]
 pub(super) struct OnlineState {
+    /// What the server has told the client; only `receive` changes it.
+    pub world: ClientWorld,
+    /// The character choice in progress, from the world's character list.
     pub selection: Option<super::character_select::Selection>,
-    /// The world's short name, once the server has sent it.
-    pub world: Option<String>,
-    /// The current zone's far clip distance, when the server reported it.
-    pub far_clip: Option<f32>,
+    /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
-    pub zone: String,
-    pub connected: bool,
-    pending_transfer: Option<eq_client_core::ZoneOffer>,
-    pub death: Option<eq_client_core::Death>,
-    pub finished: bool,
-    pub session_id: Option<u64>,
-    pub player: Option<PlayerState>,
-    pub spawns: BTreeMap<u16, eq_client_core::SpawnState>,
-    pub doors: eq_client_core::doors::DoorTable,
+    /// What became of the last door the player used.
     pub door_status: String,
-    /// Items on the ground and world containers in this zone.
-    pub objects: eq_client_core::ground::Objects,
-    pub revisions: BTreeMap<u16, u64>,
-    pub health: BTreeMap<u16, u8>,
-    pub postures: BTreeMap<u16, eq_client_core::PostureState>,
-    revision: u64,
 }
 
 impl OnlineState {
     /// Whether an admitted character can act now: connected, alive and not zoning.
     pub fn in_world(&self) -> bool {
-        self.connected
-            && self.session_id.is_some()
-            && self.death.is_none()
-            && self.pending_transfer.is_none()
+        self.world.in_world()
     }
 
     pub fn new(enabled: bool) -> Self {
         Self {
+            world: ClientWorld::default(),
             selection: None,
-            world: None,
-            far_clip: None,
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
-            zone: String::new(),
-            connected: false,
-            pending_transfer: None,
-            death: None,
-            finished: false,
-            session_id: None,
-            player: None,
-            spawns: BTreeMap::new(),
-            doors: eq_client_core::doors::DoorTable::default(),
             door_status: String::new(),
-            objects: eq_client_core::ground::Objects::default(),
-            revisions: BTreeMap::new(),
-            health: BTreeMap::new(),
-            postures: BTreeMap::new(),
-            revision: 0,
         }
     }
 }
@@ -81,17 +52,106 @@ type SceneRoots = Or<(With<SceneEntity>, With<HudText>, With<hud::HudRoot>)>;
 /// Shows the player's HP from its last report and shares the percentage with
 /// the target window.
 pub(super) fn show_own_hp(state: &mut OnlineState, hud: &mut hud::HudState) {
-    let Some(percent) = hud.show_hp() else {
-        return;
-    };
-    if let Some(player) = state.player.as_mut() {
-        player.hp_percent = Some(percent);
-        let id = player.spawn_id;
-        state.health.insert(id, percent);
+    if let Some(percent) = hud.show_hp() {
+        state.world.note_own_health(percent);
     }
 }
 
-/// Applies bounded event batches; zone assets stay local and all movement stays disabled.
+/// The panels a reset reaches besides the world itself.
+struct Panels<'a> {
+    hud: &'a mut hud::HudState,
+    motion: &'a mut super::motion::Controls,
+    inventory: &'a mut super::inventory::InventoryState,
+    target: &'a mut super::target::TargetState,
+    actions: Option<&'a mut hud::action_bar::ActionRequests>,
+}
+
+impl Panels<'_> {
+    /// Drops the actions in flight: a cast, its interruption, a spellbook
+    /// change and their feedback.
+    fn drop_actions(&mut self) {
+        self.hud.casting = None;
+        self.hud.interrupted = None;
+        self.hud.pending_cast = None;
+        self.hud.action_feedback = None;
+        self.hud.book_action = None;
+    }
+
+    /// Forgets what the world's reset made stale on screen and in the panels.
+    fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
+        if !matches!(reason, Reset::Died)
+            && let Some(actions) = self.actions.as_mut()
+        {
+            actions.camp = None;
+        }
+        match reason {
+            Reset::Lost {
+                ended,
+                transferring,
+            } => {
+                self.drop_actions();
+                if ended || !transferring {
+                    self.hud.reset_cooldowns();
+                    self.hud.spell_book = None;
+                    self.hud.buff_state.clear();
+                }
+                self.inventory.cancel_actions();
+                self.motion.reset(None);
+                if ended {
+                    state.selection = None;
+                    state.door_status.clear();
+                    self.inventory.clear();
+                }
+            }
+            Reset::Entered => {
+                self.motion.reset(None);
+                state.selection = None;
+                state.door_status.clear();
+                self.hud.spell_book = None;
+                self.hud.buff_state.clear();
+                self.hud.interrupted = None;
+                self.inventory.clear();
+            }
+            Reset::Zoning { to_bind } => {
+                self.drop_actions();
+                self.inventory.cancel_actions();
+                self.motion.reset(None);
+                *self.target = super::target::TargetState::default();
+                self.hud.status = if to_bind {
+                    "Respawning at bind".into()
+                } else {
+                    "Zoning".into()
+                };
+            }
+            Reset::Died => {
+                self.motion.reset(None);
+                self.inventory.cancel_actions();
+                self.hud.casting = None;
+                self.hud.book_action = None;
+                *self.target = super::target::TargetState::default();
+                self.hud.interrupted = None;
+                self.hud.reset_cooldowns();
+                self.hud.hp_percent = Some(0);
+                if let Some((_, maximum)) = self.hud.hp {
+                    self.hud.hp = Some((0, maximum));
+                }
+                self.hud.status = "Dead - awaiting server bind destination".into();
+            }
+            Reset::Camped => {
+                // Leave the zone; the world server sends a fresh character list.
+                self.drop_actions();
+                state.door_status.clear();
+                self.hud.spell_book = None;
+                self.hud.buff_state.clear();
+                self.inventory.clear();
+                self.motion.reset(None);
+                self.hud.status = "Camped - choose a character".into();
+            }
+        }
+    }
+}
+
+/// Applies bounded event batches to the world and shows what they changed.
 #[allow(
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
@@ -146,50 +206,49 @@ pub(super) fn receive(
     .collect();
     // A worker that stopped without saying so (for example after a panic) ends
     // the session here, instead of leaving it looking connected.
-    let lost = (ended && !state.finished).then(|| WorldUpdate::Connection {
+    let lost = (ended && !state.world.ended()).then(|| WorldUpdate::Connection {
         connected: false,
         terminal: true,
         label: "Disconnected".into(),
     });
     for update in batch.into_iter().chain(lost) {
+        let now = std::time::Instant::now();
+        let changes = state.world.apply(&update, now);
+        if let Some(reason) = changes.reset {
+            Panels {
+                hud: &mut hud,
+                motion: &mut motion,
+                inventory: &mut inventory,
+                target: &mut target,
+                actions: actions.as_deref_mut(),
+            }
+            .forget(reason, &mut state);
+        }
+        if changes.characters {
+            state.selection = state.world.characters().map(|list| {
+                super::character_select::Selection::new(list.selection_id, list.characters.clone())
+            });
+        }
+        if let Some(position) = changes.placed {
+            motion.reset(None);
+            let placed = Transform::from_translation(Vec3::from_array(render_position(position)))
+                .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
+                    position.heading,
+                )));
+            // A correction right after zone entry belongs to the new player,
+            // which only exists once this batch's commands apply.
+            if let Some(entity) = entered_player {
+                commands.entity(entity).insert(placed);
+            } else if let Ok(mut transform) = players.single_mut() {
+                *transform = placed;
+            }
+            for mut camera in &mut cameras {
+                camera.focus = placed.translation;
+            }
+        }
         match update {
-            WorldUpdate::Connection {
-                connected,
-                terminal,
-                label,
-            } => {
-                state.connected = connected;
-                if !connected {
-                    hud.casting = None;
-                    hud.interrupted = None;
-                    hud.pending_cast = None;
-                    hud.action_feedback = None;
-                    hud.book_action = None;
-                    if terminal || state.pending_transfer.is_none() {
-                        hud.reset_cooldowns();
-                        hud.spell_book = None;
-                        hud.buff_state.clear();
-                    }
-                    inventory.cancel_actions();
-                    motion.reset(None);
-                    if let Some(actions) = actions.as_mut() {
-                        actions.camp = None;
-                    }
-                }
-                state.finished = terminal;
-                if terminal {
-                    state.selection = None;
-                    state.pending_transfer = None;
-                    inventory.clear();
-                    state.spawns.clear();
-                    state.doors = eq_client_core::doors::DoorTable::default();
-                    state.door_status.clear();
-                    state.objects = eq_client_core::ground::Objects::default();
-                    state.revisions.clear();
-                    state.health.clear();
-                    state.postures.clear();
-                }
-                hud.status = if state.death.is_some() {
+            WorldUpdate::Connection { label, .. } => {
+                hud.status = if state.world.death().is_some() {
                     "Dead - awaiting respawn".into()
                 } else {
                     label
@@ -208,47 +267,10 @@ pub(super) fn receive(
                 );
                 chat.history.push(super::chat::system_line(text));
             }
-            WorldUpdate::Game(WorldEvent::WorldName { short_name }) => {
-                state.world = Some(short_name);
-            }
-            WorldUpdate::Game(WorldEvent::CharacterSelection {
-                selection_id,
-                characters,
-            }) => {
-                state.selection = Some(super::character_select::Selection::new(
-                    selection_id,
-                    characters,
-                ));
-            }
-            WorldUpdate::Game(WorldEvent::Entered {
-                session_id,
-                zone,
-                player,
-                far_clip,
-            }) => {
-                state.far_clip = far_clip;
-                if let Some(actions) = actions.as_mut() {
-                    actions.camp = None;
-                }
-                motion.reset(None);
-                state.selection = None;
-                state.pending_transfer = None;
-                hud.spell_book = None;
-                hud.buff_state.clear();
-                hud.interrupted = None;
-                hud.restore_cooldowns(&player, std::time::Instant::now());
-                inventory.clear();
-                state.death = None;
-                state.spawns.clear();
-                state.doors = eq_client_core::doors::DoorTable::default();
-                state.door_status.clear();
-                state.objects = eq_client_core::ground::Objects::default();
-                state.revisions.clear();
-                state.health.clear();
-                state.postures.clear();
-                state.zone.clone_from(&zone);
+            WorldUpdate::Game(WorldEvent::Entered { player, .. }) => {
                 // The session is this zone's even if its assets fail to load, so
                 // commands and later events never follow the previous zone's.
+                hud.restore_cooldowns(&player, now);
                 hud.hp = None;
                 hud.reported_hp = None;
                 hud.item_hp = None;
@@ -257,18 +279,17 @@ pub(super) fn receive(
                 hud.endurance = player.endurance;
                 hud.hp_percent = player.hp_percent;
                 hud.spells = player.memorized_spells;
-                state.player = Some((*player).clone());
-                state.session_id = Some(session_id);
                 let Some(directory) = &settings.0.eq_directory else {
                     continue;
                 };
-                let zone = match eq_client_assets::load_zone(directory, &zone) {
+                let zone = match eq_client_assets::load_zone(directory, state.world.zone()) {
                     Ok(zone) => zone,
                     Err(error) => {
                         for entity in &entities {
                             commands.entity(entity).despawn();
                         }
-                        let text = format!("Zone {} could not be loaded: {error}", state.zone);
+                        let text =
+                            format!("Zone {} could not be loaded: {error}", state.world.zone());
                         error!("{text}");
                         chat.history.push(super::chat::system_line(text));
                         continue;
@@ -277,7 +298,7 @@ pub(super) fn receive(
                 let asset = races::model(player.race, player.gender).and_then(|model| {
                     match eq_client_assets::characters::load_installed_character(
                         directory,
-                        &state.zone,
+                        state.world.zone(),
                         model,
                     ) {
                         Ok(asset) => Some(asset),
@@ -359,7 +380,7 @@ pub(super) fn receive(
                 strafe_units_per_second,
                 falls,
             }) => {
-                if state.session_id == Some(session_id) {
+                if state.world.session_id() == Some(session_id) {
                     motion.reset(units_per_second);
                     motion.backward_speed = backward_units_per_second;
                     motion.walk_speed = walk_units_per_second;
@@ -369,17 +390,11 @@ pub(super) fn receive(
                 }
             }
             WorldUpdate::Game(WorldEvent::MotionSent {
-                session_id,
-                position,
-                refused,
+                position, refused, ..
             }) => {
-                if state.session_id == Some(session_id) && state.connected && state.death.is_none()
-                {
+                if !changes.ignored {
                     motion.accepted();
                     motion.refused = refused;
-                    if let Some(player) = &mut state.player {
-                        player.position = position;
-                    }
                     if let Ok(transform) = players.single_mut() {
                         motion.display_sample(*transform, position);
                     }
@@ -393,14 +408,10 @@ pub(super) fn receive(
                 request_id,
                 error,
             }) => {
-                if state.connected
-                    && state.session_id == Some(session_id)
+                if state.world.accepts_reply(session_id)
                     && inventory.item_use_result(session_id, request_id, error)
                 {
-                    hud.action_feedback = Some((
-                        std::time::Instant::now(),
-                        inventory.action_message().to_owned(),
-                    ));
+                    hud.action_feedback = Some((now, inventory.action_message().to_owned()));
                 }
             }
             WorldUpdate::Game(WorldEvent::InventoryAction {
@@ -411,73 +422,18 @@ pub(super) fn receive(
                 inventory.action_result(session_id, revision, error);
             }
             WorldUpdate::Game(WorldEvent::ItemDetails(item)) => {
-                eprintln!("Item definition received: ID {}", item.id);
+                debug!("Item definition received: ID {}", item.id);
                 items.received(item);
             }
-            WorldUpdate::Game(WorldEvent::Death(death)) => {
-                if let Ok(id) = u16::try_from(death.spawn_id) {
-                    state.health.insert(id, 0);
-                    // Titanium corpses keep the spawn ID; redraw the entity as a corpse.
-                    if let Some(spawn) = state.spawns.get_mut(&id) {
-                        spawn.kind = spawn.kind.corpse();
-                        state.revision = state.revision.wrapping_add(1);
-                        let revision = state.revision;
-                        state.revisions.insert(id, revision);
-                    }
+            WorldUpdate::Game(WorldEvent::ZoneTransferRejected { reason, .. }) => {
+                if !changes.ignored {
+                    hud.status = reason.to_string();
+                    chat.history
+                        .push(super::chat::system_line(reason.to_string()));
                 }
-                if state
-                    .player
-                    .as_ref()
-                    .is_some_and(|p| u32::from(p.spawn_id) == death.spawn_id)
-                {
-                    motion.reset(None);
-                    inventory.cancel_actions();
-                    state.death = Some(death.clone());
-                    hud.casting = None;
-                    hud.book_action = None;
-                    *target = super::target::TargetState::default();
-                    hud.interrupted = None;
-                    hud.reset_cooldowns();
-                    hud.hp_percent = Some(0);
-                    if let Some((_, maximum)) = hud.hp {
-                        hud.hp = Some((0, maximum));
-                    }
-                    hud.status = "Dead - awaiting server bind destination".into();
-                }
-            }
-            WorldUpdate::Game(WorldEvent::ZoneTransfer(offer)) => {
-                // The session keeps camp state per zone admission.
-                if let Some(actions) = actions.as_mut() {
-                    actions.camp = None;
-                }
-                state.pending_transfer = Some(offer.clone());
-                hud.casting = None;
-                hud.interrupted = None;
-                hud.pending_cast = None;
-                hud.action_feedback = None;
-                hud.book_action = None;
-                inventory.cancel_actions();
-                motion.reset(None);
-                state.connected = false;
-                *target = super::target::TargetState::default();
-                hud.status = if offer.to_bind {
-                    "Respawning at bind".into()
-                } else {
-                    "Zoning".into()
-                };
-            }
-            WorldUpdate::Game(WorldEvent::ZoneTransferRejected { session_id, reason }) => {
-                if state.session_id != Some(session_id) {
-                    continue;
-                }
-                state.pending_transfer = None;
-                state.connected = state.death.is_none();
-                hud.status = reason.to_string();
-                chat.history
-                    .push(super::chat::system_line(reason.to_string()));
             }
             WorldUpdate::Game(WorldEvent::ZoneLineRejected { session_id, reason }) => {
-                if state.session_id == Some(session_id) {
+                if state.world.session_id() == Some(session_id) {
                     motion.accepted();
                     hud.status = format!("Cannot cross zone line: {reason}");
                 }
@@ -485,7 +441,7 @@ pub(super) fn receive(
             WorldUpdate::Game(WorldEvent::TargetSent(id)) => {
                 if target.selected == id {
                     target.sent = true;
-                    eprintln!("Target packet sent: {id:?}");
+                    debug!("Target packet sent: {id:?}");
                 }
             }
             WorldUpdate::Game(WorldEvent::TargetRejected {
@@ -493,52 +449,26 @@ pub(super) fn receive(
                 spawn_id,
                 reason,
             }) => {
-                if state.connected && state.session_id == Some(session_id) {
+                if state.world.accepts_reply(session_id) {
                     target.reject(spawn_id, &reason);
                 }
             }
             WorldUpdate::Game(WorldEvent::HealthPercent { spawn_id, percent }) => {
-                state.health.insert(spawn_id, percent);
                 if target.selected == Some(spawn_id) {
-                    eprintln!("Target health received: spawn {spawn_id}, {percent}%");
+                    debug!("Target health received: spawn {spawn_id}, {percent}%");
                 }
             }
             WorldUpdate::Game(WorldEvent::Spawns(spawns)) => {
                 for spawn in spawns {
                     combat.considered.remove(&spawn.spawn_id);
-                    state.postures.remove(&spawn.spawn_id);
-                    state.revision = state.revision.wrapping_add(1);
-                    let revision = state.revision;
-                    state.revisions.insert(spawn.spawn_id, revision);
-                    state.health.remove(&spawn.spawn_id);
-                    state.spawns.insert(spawn.spawn_id, spawn);
                 }
             }
-            WorldUpdate::Game(WorldEvent::Visibility {
-                spawn_id,
-                invisible,
-            }) => {
-                if let Some(spawn) = state.spawns.get_mut(&spawn_id) {
-                    spawn.invisible = invisible;
-                }
+            WorldUpdate::Game(WorldEvent::Despawn(id)) => {
+                combat.considered.remove(&id);
             }
-            // Zone entry resets postures and doors, and admission sends both before
-            // the session reports it is connected, so neither waits for that.
             WorldUpdate::Game(WorldEvent::Posture { spawn_id, posture }) => {
-                if state.spawns.contains_key(&spawn_id)
-                    || state
-                        .player
-                        .as_ref()
-                        .is_some_and(|player| player.spawn_id == spawn_id)
-                {
-                    if state
-                        .player
-                        .as_ref()
-                        .is_some_and(|player| player.spawn_id == spawn_id)
-                    {
-                        debug!(?posture, "Own posture update");
-                    }
-                    state.postures.insert(spawn_id, posture);
+                if state.world.is_player(spawn_id) {
+                    debug!(?posture, "Own posture update");
                 }
             }
             WorldUpdate::Game(WorldEvent::Mana(mana)) => hud.mana = Some(mana),
@@ -546,8 +476,7 @@ pub(super) fn receive(
                 session_id,
                 spell_id,
             }) => {
-                if state.connected && state.death.is_none() && state.session_id == Some(session_id)
-                {
+                if state.world.accepts_reply(session_id) && state.world.death().is_none() {
                     hud.pending_cast = spell_id;
                 }
             }
@@ -556,12 +485,9 @@ pub(super) fn receive(
                 spell_id,
                 reason,
             }) => {
-                if state.connected && state.death.is_none() && state.session_id == Some(session_id)
-                {
-                    hud.action_feedback = Some((
-                        std::time::Instant::now(),
-                        format!("Cast rejected (spell {spell_id}): {reason}"),
-                    ));
+                if state.world.accepts_reply(session_id) && state.world.death().is_none() {
+                    hud.action_feedback =
+                        Some((now, format!("Cast rejected (spell {spell_id}): {reason}")));
                 }
             }
             WorldUpdate::Game(WorldEvent::Spell(update)) => {
@@ -576,8 +502,8 @@ pub(super) fn receive(
                 if let Some(book) = hud.spell_book.as_mut() {
                     book.apply(&update);
                 }
-                let active = state.connected && state.death.is_none();
-                if let Some(player) = state.player.as_mut() {
+                let active = state.world.connected() && state.world.death().is_none();
+                if let Some(player) = state.world.player() {
                     if let eq_client_core::SpellUpdate::Interrupted {
                         caster_id,
                         message_id,
@@ -586,48 +512,9 @@ pub(super) fn receive(
                     {
                         debug!(message_id, "Own cast interrupted");
                     }
-                    update.apply_gems(&mut player.memorized_spells);
                     hud.spells = player.memorized_spells;
                     if active {
-                        hud.cast_update(player.spawn_id, &update, std::time::Instant::now());
-                    }
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Despawn(id)) => {
-                combat.considered.remove(&id);
-                state.spawns.remove(&id);
-                state.revisions.remove(&id);
-                state.health.remove(&id);
-                state.postures.remove(&id);
-            }
-            WorldUpdate::Game(WorldEvent::Position {
-                spawn_id,
-                position,
-                velocity,
-            }) => {
-                if let Some(spawn) = state.spawns.get_mut(&spawn_id) {
-                    spawn.position = position;
-                    spawn.velocity = velocity;
-                }
-                if let Some(player) = &mut state.player
-                    && player.spawn_id == spawn_id
-                {
-                    motion.reset(None);
-                    player.position = position;
-                    let placed =
-                        Transform::from_translation(Vec3::from_array(render_position(position)))
-                            .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
-                                position.heading,
-                            )));
-                    // A correction right after zone entry belongs to the new player,
-                    // which only exists once this batch's commands apply.
-                    if let Some(entity) = entered_player {
-                        commands.entity(entity).insert(placed);
-                    } else if let Ok(mut transform) = players.single_mut() {
-                        *transform = placed;
-                    }
-                    for mut camera in &mut cameras {
-                        camera.focus = placed.translation;
+                        hud.cast_update(player.spawn_id, &update, now);
                     }
                 }
             }
@@ -638,8 +525,8 @@ pub(super) fn receive(
                 without_items,
             }) => {
                 if let Some(player) = state
-                    .player
-                    .as_ref()
+                    .world
+                    .player()
                     .filter(|player| player.spawn_id == spawn_id)
                 {
                     if without_items {
@@ -663,31 +550,17 @@ pub(super) fn receive(
                 if matches!(update, eq_client_core::doors::DoorUpdate::RemoveAll) {
                     state.door_status.clear();
                 }
-                state.doors.apply(&update, std::time::Instant::now());
             }
             WorldUpdate::Game(WorldEvent::DoorAction {
                 session_id,
                 door_id,
                 error,
             }) => {
-                if state.session_id == Some(session_id) && state.connected {
+                if state.world.accepts_reply(session_id) {
                     state.door_status = error.map_or_else(
                         || format!("Door {door_id}: request sent"),
                         |error| format!("Door {door_id}: {error}"),
                     );
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Objects(update)) => state.objects.apply(&update),
-            WorldUpdate::Game(WorldEvent::WearChange(change)) => {
-                if let Some(spawn) = state.spawns.get_mut(&change.spawn_id) {
-                    spawn.appearance.apply(&change);
-                }
-                if let Some(player) = state
-                    .player
-                    .as_mut()
-                    .filter(|player| player.spawn_id == change.spawn_id)
-                {
-                    player.appearance.apply(&change);
                 }
             }
             WorldUpdate::Game(WorldEvent::ObjectAction {
@@ -695,28 +568,14 @@ pub(super) fn receive(
                 error: Some(error),
                 ..
             }) => {
-                if state.session_id == Some(session_id) && state.connected {
+                if state.world.accepts_reply(session_id) {
                     let line = super::ground::refusal(&error);
                     chat.history.push(super::chat::system_line(line));
                 }
             }
-            WorldUpdate::Game(WorldEvent::Level {
-                current,
-                experience,
-                ..
-            }) => {
-                if state.connected
-                    && let Some(player) = state.player.as_mut()
-                {
-                    player.level = current;
+            WorldUpdate::Game(WorldEvent::Level { experience, .. }) => {
+                if !changes.ignored {
                     hud.experience = Some(experience);
-                }
-            }
-            WorldUpdate::Game(WorldEvent::Skill { skill_id, value }) => {
-                if state.connected
-                    && let Some(player) = state.player.as_mut()
-                {
-                    player.apply_skill(skill_id, value);
                 }
             }
             WorldUpdate::Game(WorldEvent::BuffSnapshot(buffs)) => {
@@ -734,8 +593,8 @@ pub(super) fn receive(
             }
             WorldUpdate::Game(WorldEvent::Buff(update)) => {
                 if state
-                    .player
-                    .as_ref()
+                    .world
+                    .player()
                     .is_some_and(|player| u32::from(player.spawn_id) == update.entity_id)
                 {
                     debug!(
@@ -749,8 +608,8 @@ pub(super) fn receive(
             }
             WorldUpdate::Game(WorldEvent::SpellEffect(effect)) => {
                 if state
-                    .player
-                    .as_ref()
+                    .world
+                    .player()
                     .is_some_and(|player| player.spawn_id == effect.target_id)
                 {
                     debug!(
@@ -765,16 +624,10 @@ pub(super) fn receive(
             WorldUpdate::Game(WorldEvent::Camp(status)) => {
                 if let Some(actions) = actions.as_mut() {
                     actions.camp = match &status {
-                        eq_client_core::CampStatus::Preparing => {
-                            Some((std::time::Instant::now(), false))
+                        eq_client_core::CampStatus::Preparing => Some((now, false)),
+                        eq_client_core::CampStatus::LoggingOut => {
+                            Some(actions.camp.map_or((now, true), |(since, _)| (since, true)))
                         }
-                        eq_client_core::CampStatus::LoggingOut => Some(
-                            actions
-                                .camp
-                                .map_or((std::time::Instant::now(), true), |(since, _)| {
-                                    (since, true)
-                                }),
-                        ),
                         _ => None,
                     };
                 }
@@ -786,25 +639,7 @@ pub(super) fn receive(
                         .as_deref()
                         .map(|messages| messages.format(12290, &[])),
                     eq_client_core::CampStatus::LoggingOut => Some("Logging out...".into()),
-                    eq_client_core::CampStatus::Camped => {
-                        // Leave the zone; the world server sends a fresh character list.
-                        state.session_id = None;
-                        state.player = None;
-                        state.connected = false;
-                        state.pending_transfer = None;
-                        state.spawns.clear();
-                        state.revisions.clear();
-                        state.health.clear();
-                        state.postures.clear();
-                        hud.spell_book = None;
-                        hud.buff_state.clear();
-                        hud.casting = None;
-                        hud.pending_cast = None;
-                        inventory.clear();
-                        motion.reset(None);
-                        hud.status = "Camped - choose a character".into();
-                        None
-                    }
+                    eq_client_core::CampStatus::Camped => None,
                     eq_client_core::CampStatus::Rejected(reason) => Some(reason.clone()),
                 };
                 if let Some(text) = text {
@@ -823,16 +658,16 @@ pub(super) fn receive(
                 }
             }
             WorldUpdate::Game(WorldEvent::MerchantRefused { session_id, reason }) => {
-                if state.session_id == Some(session_id) {
+                if state.world.session_id() == Some(session_id) {
                     chat.history.push(super::chat::system_line(reason));
                 }
             }
             WorldUpdate::Game(WorldEvent::Consideration(consideration)) => {
                 let name = state
-                    .spawns
-                    .get(&consideration.target_id)
+                    .world
+                    .spawn(consideration.target_id)
                     .map_or_else(String::new, |spawn| {
-                        super::combat::display_name(&spawn.name)
+                        super::combat::display_name(&spawn.state.name)
                     });
                 if let Some(messages) = messages.as_deref() {
                     chat.history
@@ -847,14 +682,14 @@ pub(super) fn receive(
                     .insert(consideration.target_id, consideration.color);
             }
             WorldUpdate::Game(WorldEvent::Damage(damage)) => {
-                if let (Some(player), Some(messages)) = (state.player.as_ref(), messages.as_deref())
+                if let (Some(player), Some(messages)) = (state.world.player(), messages.as_deref())
                     && let Some(text) = super::combat::damage_text(
                         messages,
                         player.spawn_id,
                         |id| {
-                            state.spawns.get(&id).map_or_else(
+                            state.world.spawn(id).map_or_else(
                                 || "someone".to_owned(),
-                                |spawn| super::combat::display_name(&spawn.name),
+                                |spawn| super::combat::display_name(&spawn.state.name),
                             )
                         },
                         &damage,
@@ -874,18 +709,148 @@ pub(super) fn receive(
     }
 }
 
+/// Puts the world in the state a test needs by sending what the session would.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::OnlineState;
+    use eq_client_core::{PlayerState, SpawnState, WorldEvent, WorldPosition, WorldUpdate};
+    use std::time::Instant;
+
+    /// Applies session news to the world.
+    pub(crate) fn news(state: &mut OnlineState, events: impl IntoIterator<Item = WorldEvent>) {
+        news_at(state, events, Instant::now());
+    }
+
+    /// Applies session news to the world as if it arrived at `now`.
+    pub(crate) fn news_at(
+        state: &mut OnlineState,
+        events: impl IntoIterator<Item = WorldEvent>,
+        now: Instant,
+    ) {
+        for event in events {
+            state.world.apply(&WorldUpdate::Game(event), now);
+        }
+    }
+
+    /// A level 1 human player with this spawn ID, at the origin.
+    pub(crate) fn player(spawn_id: u16) -> PlayerState {
+        PlayerState {
+            name: "Example".into(),
+            base_attributes: None,
+            deity: None,
+            class: Some(1),
+            spawn_id,
+            race: 1,
+            gender: 0,
+            level: 1,
+            position: WorldPosition::default(),
+            mana: 0,
+            endurance: Some(0),
+            skills: None,
+            spell_refresh_ms: None,
+            memorized_spells: [None; 8],
+            size: 6.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            hp_percent: Some(100),
+            appearance: eq_client_core::outfit::Appearance::default(),
+        }
+    }
+
+    /// Connects or disconnects the session without ending it.
+    pub(crate) fn connect(state: &mut OnlineState, connected: bool) {
+        state.world.apply(
+            &WorldUpdate::Connection {
+                connected,
+                terminal: false,
+                label: String::new(),
+            },
+            Instant::now(),
+        );
+    }
+
+    /// Admits this player in this session, connected.
+    pub(crate) fn admit(state: &mut OnlineState, session_id: u64, player: PlayerState) {
+        enter(state, session_id, player, None);
+    }
+
+    /// Admits this player in this session, connected, in a zone with this far clip.
+    pub(crate) fn enter(
+        state: &mut OnlineState,
+        session_id: u64,
+        player: PlayerState,
+        far_clip: Option<f32>,
+    ) {
+        news(
+            state,
+            [WorldEvent::Entered {
+                session_id,
+                zone: "qeytoqrg".into(),
+                player: Box::new(player),
+                far_clip,
+            }],
+        );
+        connect(state, true);
+    }
+
+    /// Puts spawns in the zone.
+    pub(crate) fn spawns(state: &mut OnlineState, spawns: Vec<SpawnState>) {
+        news(state, [WorldEvent::Spawns(spawns)]);
+    }
+
+    /// Puts one spawn in the zone under its own spawn ID.
+    pub(crate) fn spawn_entry(state: &mut OnlineState, spawn_id: u16, spawn: SpawnState) {
+        assert_eq!(spawn.spawn_id, spawn_id, "a spawn is kept under its own ID");
+        spawns(state, vec![spawn]);
+    }
+
+    /// Applies a door update as if it arrived at `now`.
+    pub(crate) fn doors(
+        state: &mut OnlineState,
+        update: &eq_client_core::doors::DoorUpdate,
+        now: Instant,
+    ) {
+        news_at(state, [WorldEvent::Doors(update.clone())], now);
+    }
+
+    /// Applies a ground-object update.
+    pub(crate) fn objects(state: &mut OnlineState, update: &eq_client_core::ground::ObjectUpdate) {
+        news(state, [WorldEvent::Objects(update.clone())]);
+    }
+
+    /// Moves the player as a server correction would, changing what `change` does.
+    pub(crate) fn place_axis(state: &mut OnlineState, change: impl FnOnce(&mut WorldPosition)) {
+        let mut position = state.world.player().expect("an admitted player").position;
+        change(&mut position);
+        place(state, position);
+    }
+
+    /// Puts the player where the server says.
+    pub(crate) fn place(state: &mut OnlineState, position: WorldPosition) {
+        let spawn_id = state.world.player().expect("an admitted player").spawn_id;
+        news(
+            state,
+            [WorldEvent::Position {
+                spawn_id,
+                position,
+                velocity: [0.0; 3],
+            }],
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eq_client_core::PlayerState;
 
     #[test]
     fn a_zone_entry_batch_keeps_doors_postures_and_the_new_session() {
         use eq_client_core::doors::{Door, DoorUpdate};
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut app = App::new();
-        let mut state = OnlineState::new(true);
         // Admission arrives while the session still reports it is zoning.
-        state.session_id = Some(1);
+        let state = OnlineState::new(true);
         app.insert_resource(state)
             .insert_resource(Updates(Mutex::new(Some(receiver))))
             .insert_resource(ViewerSettings(super::super::ViewerConfig::default()))
@@ -965,14 +930,18 @@ mod tests {
             sender.send(WorldUpdate::Game(update)).unwrap();
         }
         app.update();
-        let state = app.world().resource::<OnlineState>();
-        assert_eq!(state.session_id, Some(2));
-        assert_eq!(state.player.as_ref().map(|player| player.spawn_id), Some(9));
+        let world = &app.world().resource::<OnlineState>().world;
+        assert_eq!(world.session_id(), Some(2));
+        assert_eq!(world.player().map(|player| player.spawn_id), Some(9));
         assert_eq!(
-            state.postures.get(&5),
-            Some(&eq_client_core::PostureState::Sitting)
+            world.posture(5),
+            Some(eq_client_core::PostureState::Sitting)
         );
-        assert!(state.doors.entries().contains_key(&3));
+        assert!(world.doors().entries().contains_key(&3));
+    }
+
+    fn world(app: &App) -> &ClientWorld {
+        &app.world().resource::<OnlineState>().world
     }
 
     #[test]
@@ -984,9 +953,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut app = App::new();
         let mut state = OnlineState::new(true);
-        state.connected = true;
-        state.session_id = Some(1);
-        state.player = Some(PlayerState {
+        let player = PlayerState {
             name: "Example".into(),
             base_attributes: None,
             deity: None,
@@ -998,7 +965,7 @@ mod tests {
             position: eq_client_core::WorldPosition::default(),
             mana: 0,
             endurance: Some(0),
-            skills: None,
+            skills: Some(vec![0; 100]),
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,
@@ -1006,7 +973,23 @@ mod tests {
             run_speed: 0.0,
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        };
+        let admitted = std::time::Instant::now();
+        for update in [
+            WorldUpdate::Game(WorldEvent::Entered {
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(player),
+                far_clip: None,
+            }),
+            WorldUpdate::Connection {
+                connected: true,
+                terminal: false,
+                label: "Connected".into(),
+            },
+        ] {
+            state.world.apply(&update, admitted);
+        }
         app.insert_resource(state)
             .insert_resource(Updates(Mutex::new(Some(receiver))))
             .insert_resource(ViewerSettings(super::super::ViewerConfig::default()))
@@ -1090,12 +1073,7 @@ mod tests {
                 .is_empty()
         );
         let now = std::time::Instant::now();
-        let mut timed_player = app
-            .world()
-            .resource::<OnlineState>()
-            .player
-            .clone()
-            .unwrap();
+        let mut timed_player = world(&app).player().cloned().unwrap();
         timed_player.memorized_spells[0] = Some(42);
         timed_player.spell_refresh_ms = Some([10000; 8]);
         {
@@ -1135,13 +1113,8 @@ mod tests {
             }))
             .unwrap();
         app.update();
-        assert!(
-            app.world()
-                .resource::<OnlineState>()
-                .pending_transfer
-                .is_some()
-        );
-        assert!(!app.world().resource::<OnlineState>().connected);
+        assert!(world(&app).pending_transfer().is_some());
+        assert!(!world(&app).connected());
         sender
             .send(WorldUpdate::Game(WorldEvent::ZoneTransferRejected {
                 session_id: 1,
@@ -1156,7 +1129,7 @@ mod tests {
             })
             .unwrap();
         app.update();
-        assert!(app.world().resource::<OnlineState>().connected);
+        assert!(world(&app).connected());
         let history = &app
             .world()
             .resource::<super::super::chat::ChatState>()
@@ -1180,10 +1153,7 @@ mod tests {
                 }))
                 .unwrap();
             app.update();
-            assert_eq!(
-                app.world().resource::<OnlineState>().health.get(&7),
-                Some(&percent)
-            );
+            assert_eq!(world(&app).health(7), Some(percent));
             assert_eq!(
                 app.world().resource::<hud::HudState>().hp,
                 Some((current.unsigned_abs(), maximum.unsigned_abs()))
@@ -1230,12 +1200,6 @@ mod tests {
                 expected
             );
         }
-        app.world_mut()
-            .resource_mut::<OnlineState>()
-            .player
-            .as_mut()
-            .unwrap()
-            .skills = Some(vec![0; 100]);
         sender
             .send(WorldUpdate::Game(WorldEvent::Posture {
                 spawn_id: 7,
@@ -1250,15 +1214,10 @@ mod tests {
             .unwrap();
         app.update();
         assert_eq!(
-            app.world().resource::<OnlineState>().postures.get(&7),
-            Some(&eq_client_core::PostureState::Sitting)
+            world(&app).posture(7),
+            Some(eq_client_core::PostureState::Sitting)
         );
-        assert!(
-            !app.world()
-                .resource::<OnlineState>()
-                .postures
-                .contains_key(&999)
-        );
+        assert_eq!(world(&app).posture(999), None);
         sender
             .send(WorldUpdate::Game(WorldEvent::Skill {
                 skill_id: 22,
@@ -1267,14 +1226,7 @@ mod tests {
             .unwrap();
         app.update();
         assert_eq!(
-            app.world()
-                .resource::<OnlineState>()
-                .player
-                .as_ref()
-                .unwrap()
-                .skills
-                .as_ref()
-                .unwrap()[22],
+            world(&app).player().unwrap().skills.as_ref().unwrap()[22],
             1
         );
         for level in [2, 1] {
@@ -1286,15 +1238,7 @@ mod tests {
                 }))
                 .unwrap();
             app.update();
-            assert_eq!(
-                app.world()
-                    .resource::<OnlineState>()
-                    .player
-                    .as_ref()
-                    .unwrap()
-                    .level,
-                level
-            );
+            assert_eq!(world(&app).player().unwrap().level, level);
             assert_eq!(app.world().resource::<hud::HudState>().experience, Some(99));
         }
         let mut door_packet = [0u8; 80];
@@ -1312,10 +1256,7 @@ mod tests {
             )))
             .unwrap();
         app.update();
-        assert_eq!(
-            app.world().resource::<OnlineState>().doors.entries()[&7].action,
-            Some(2)
-        );
+        assert_eq!(world(&app).doors().entries()[&7].action, Some(2));
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
@@ -1412,7 +1353,7 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::Death(death.clone())))
             .unwrap();
         app.update();
-        assert!(app.world().resource::<OnlineState>().death.is_none());
+        assert!(world(&app).death().is_none());
         app.world_mut()
             .resource_mut::<super::super::target::TargetState>()
             .selected = Some(8);
@@ -1421,7 +1362,7 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::Death(death)))
             .unwrap();
         app.update();
-        assert!(app.world().resource::<OnlineState>().death.is_some());
+        assert!(world(&app).death().is_some());
         assert_eq!(
             app.world()
                 .resource::<super::super::target::TargetState>()
@@ -1454,13 +1395,8 @@ mod tests {
             }))
             .unwrap();
         app.update();
-        assert!(!app.world().resource::<OnlineState>().connected);
-        let player = app
-            .world()
-            .resource::<OnlineState>()
-            .player
-            .clone()
-            .unwrap();
+        assert!(!world(&app).connected());
+        let player = world(&app).player().cloned().unwrap();
         sender
             .send(WorldUpdate::Game(WorldEvent::Entered {
                 session_id: 2,
@@ -1471,14 +1407,8 @@ mod tests {
             .unwrap();
         app.update();
         // Asset loading is intentionally absent in this event-level test.
-        assert!(app.world().resource::<OnlineState>().death.is_none());
-        assert!(app.world().resource::<OnlineState>().health.is_empty());
-        assert!(
-            app.world()
-                .resource::<OnlineState>()
-                .doors
-                .entries()
-                .is_empty()
-        );
+        assert!(world(&app).death().is_none());
+        assert!(world(&app).spawns().is_empty());
+        assert!(world(&app).doors().entries().is_empty());
     }
 }

@@ -132,39 +132,42 @@ pub(super) fn input(
         Res<super::escape::Escape>,
     ),
 ) {
-    if target.session != online.session_id {
+    if target.session != online.world.session_id() {
         *target = TargetState {
-            session: online.session_id,
+            session: online.world.session_id(),
             ..default()
         };
     }
     let requested = chat.requested_target.take();
-    if !online.connected || online.death.is_some() {
+    if !online.world.connected() || online.world.death().is_some() {
         target.selected = None;
         target.sent = false;
         return;
     }
     let ids = targetable(nearby.rendered.keys().copied(), &online);
-    let own_id = online.player.as_ref().map(|player| player.spawn_id);
+    let own_id = online.world.player().map(|player| player.spawn_id);
     // A target lasts until its spawn despawns, is replaced or turns invisible, however
     // far away it goes; drawing range only limits what can be clicked or cycled.
     let invalid = target.selected.is_some_and(|id| {
         Some(id) != own_id
-            && (online.spawns.get(&id).is_none_or(|spawn| spawn.invisible)
-                || online.revisions.get(&id).copied() != target.revision)
+            && (online
+                .world
+                .spawn(id)
+                .is_none_or(|spawn| spawn.state.invisible)
+                || online.world.spawn(id).map(|spawn| spawn.revision) != target.revision)
     });
     let mut proposal = invalid.then_some(None);
     if !*attempted
         && settings
             .as_ref()
             .is_some_and(|s| s.0.validation == Some(super::ValidationAction::TargetNearestPlayer))
-        && let Some(player) = &online.player
+        && let Some(player) = online.world.player()
     {
         let origin = Vec3::from_array(eq_client_core::render_position(player.position));
         let nearest = ids
             .iter()
             .filter_map(|id| {
-                let spawn = &online.spawns[id];
+                let spawn = &online.world.spawns()[id].state;
                 if spawn.kind != SpawnKind::Player || *id == player.spawn_id {
                     return None;
                 }
@@ -244,7 +247,7 @@ pub(super) fn input(
         return;
     }
     if online.enabled {
-        let Some(session_id) = online.session_id else {
+        let Some(session_id) = online.world.session_id() else {
             return;
         };
         let Some(sender) = &commands.0 else {
@@ -263,7 +266,7 @@ pub(super) fn input(
         }
     }
     target.selected = selected;
-    target.revision = selected.and_then(|id| online.revisions.get(&id).copied());
+    target.revision = selected.and_then(|id| online.world.spawn(id).map(|spawn| spawn.revision));
     target.sent = false;
     target.status = if online.enabled {
         "Sending selection".into()
@@ -278,8 +281,9 @@ pub(super) fn input(
 fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<u16> {
     let reachable = |spawn: &eq_client_core::SpawnState| {
         online
-            .far_clip
-            .zip(online.player.as_ref())
+            .world
+            .far_clip()
+            .zip(online.world.player())
             .is_none_or(|(clip, player)| {
                 eq_client_core::entities::within(player.position, spawn.position, clip)
             })
@@ -287,9 +291,9 @@ fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<
     rendered
         .filter(|id| {
             online
-                .spawns
-                .get(id)
-                .is_some_and(|spawn| !spawn.invisible && reachable(spawn))
+                .world
+                .spawn(*id)
+                .is_some_and(|spawn| !spawn.state.invisible && reachable(&spawn.state))
         })
         .collect()
 }
@@ -300,12 +304,12 @@ fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<
 fn named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
     let query = query.to_lowercase();
     let origin = online
-        .player
-        .as_ref()
+        .world
+        .player()
         .map(|player| Vec3::from_array(eq_client_core::render_position(player.position)));
     ids.iter()
         .filter_map(|id| {
-            let spawn = online.spawns.get(id)?;
+            let spawn = &online.world.spawn(*id)?.state;
             let shown = super::combat::display_name(&spawn.name).to_lowercase();
             let full = spawn.name.replace('_', " ").to_lowercase();
             (shown.starts_with(&query) || full.starts_with(&query)).then(|| {
@@ -329,15 +333,16 @@ pub(super) fn update(
     mut texts: Query<(&mut Text, Option<&TargetName>, Option<&TargetDetails>)>,
     mut bars: Query<&mut Node, With<TargetHp>>,
 ) {
-    let spawn = target.selected.and_then(|id| online.spawns.get(&id));
+    let spawn = target
+        .selected
+        .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state));
     let own = online
-        .player
-        .as_ref()
+        .world
+        .player()
         .filter(|player| target.selected == Some(player.spawn_id));
     let hp = target
         .selected
-        .and_then(|id| online.health.get(&id))
-        .copied()
+        .and_then(|id| online.world.health(id))
         .or_else(|| own.and_then(|player| player.hp_percent));
     for (mut text, name, details) in &mut texts {
         if name.is_some() {
@@ -437,7 +442,8 @@ mod tests {
     fn named_targets_accept_the_shown_or_full_server_name() {
         let mut online = OnlineState::new(false);
         for (id, name) in [(2, "a_whiskered_bat002"), (3, "a_whiskered_bat005")] {
-            online.spawns.insert(
+            crate::online::testing::spawn_entry(
+                &mut online,
                 id,
                 SpawnState {
                     class: None,
@@ -462,52 +468,40 @@ mod tests {
 
     #[test]
     fn spawns_past_the_zones_far_clip_cannot_be_targeted() {
-        let mut online = OnlineState::new(true);
-        online.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            deity: None,
-            class: Some(1),
-            spawn_id: 1,
-            race: 1,
-            gender: 0,
-            level: 1,
-            position: WorldPosition::default(),
-            mana: 0,
-            endurance: None,
-            skills: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 0.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: None,
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
-        for (id, x) in [(2, 90.0), (3, 110.0)] {
-            online.spawns.insert(
-                id,
-                SpawnState {
-                    class: None,
-                    spawn_id: id,
-                    name: "a_bat".into(),
-                    kind: SpawnKind::Npc,
-                    race: 1,
-                    gender: 0,
-                    position: WorldPosition {
-                        x,
-                        ..WorldPosition::default()
-                    },
-                    velocity: [0.0; 3],
-                    size: 0.0,
-                    invisible: false,
-                    appearance: eq_client_core::outfit::Appearance::default(),
-                },
+        let zone = |far_clip| {
+            let mut online = OnlineState::new(true);
+            crate::online::testing::enter(
+                &mut online,
+                1,
+                crate::online::testing::player(1),
+                far_clip,
             );
-        }
-        assert_eq!(targetable([2, 3].into_iter(), &online), [2, 3]);
-        online.far_clip = Some(100.0);
-        assert_eq!(targetable([2, 3].into_iter(), &online), [2]);
+            for (id, x) in [(2, 90.0), (3, 110.0)] {
+                crate::online::testing::spawn_entry(
+                    &mut online,
+                    id,
+                    SpawnState {
+                        class: None,
+                        spawn_id: id,
+                        name: "a_bat".into(),
+                        kind: SpawnKind::Npc,
+                        race: 1,
+                        gender: 0,
+                        position: WorldPosition {
+                            x,
+                            ..WorldPosition::default()
+                        },
+                        velocity: [0.0; 3],
+                        size: 0.0,
+                        invisible: false,
+                        appearance: eq_client_core::outfit::Appearance::default(),
+                    },
+                );
+            }
+            online
+        };
+        assert_eq!(targetable([2, 3].into_iter(), &zone(None)), [2, 3]);
+        assert_eq!(targetable([2, 3].into_iter(), &zone(Some(100.0))), [2]);
     }
 
     #[test]
@@ -537,10 +531,10 @@ mod tests {
         ));
         {
             let mut online = app.world_mut().resource_mut::<OnlineState>();
-            online.connected = true;
-            online.session_id = Some(1);
+            crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
             for id in [2, 3, 4] {
-                online.spawns.insert(
+                crate::online::testing::spawn_entry(
+                    &mut online,
                     id,
                     SpawnState {
                         class: None,
@@ -561,7 +555,6 @@ mod tests {
                         appearance: eq_client_core::outfit::Appearance::default(),
                     },
                 );
-                online.revisions.insert(id, 1);
             }
         }
         for id in [2, 3] {
@@ -614,10 +607,18 @@ mod tests {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .reset_all();
-        app.world_mut()
-            .resource_mut::<OnlineState>()
-            .revisions
-            .insert(2, 2);
+        let again = app
+            .world()
+            .resource::<OnlineState>()
+            .world
+            .spawn(2)
+            .unwrap()
+            .state
+            .clone();
+        crate::online::testing::spawns(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            vec![again],
+        );
         app.update();
         assert_eq!(app.world().resource::<TargetState>().selected, None);
         assert_eq!(press(&mut app, KeyCode::Tab, false), Some(2));
@@ -625,21 +626,23 @@ mod tests {
             .resource_mut::<ButtonInput<KeyCode>>()
             .reset_all();
         // A visibility change clears a selected target and removes it from Tab cycling.
-        app.world_mut()
-            .resource_mut::<OnlineState>()
-            .spawns
-            .get_mut(&2)
-            .unwrap()
-            .invisible = true;
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::Visibility {
+                spawn_id: 2,
+                invisible: true,
+            }],
+        );
         app.update();
         assert_eq!(app.world().resource::<TargetState>().selected, None);
         assert_eq!(press(&mut app, KeyCode::Tab, false), Some(3));
-        app.world_mut()
-            .resource_mut::<OnlineState>()
-            .spawns
-            .get_mut(&2)
-            .unwrap()
-            .invisible = false;
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::Visibility {
+                spawn_id: 2,
+                invisible: false,
+            }],
+        );
         assert_eq!(press(&mut app, KeyCode::Tab, false), Some(2));
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -651,13 +654,17 @@ mod tests {
             .remove(&2);
         app.update();
         assert_eq!(app.world().resource::<TargetState>().selected, Some(2));
-        app.world_mut()
-            .resource_mut::<OnlineState>()
-            .spawns
-            .remove(&2);
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::Despawn(2)],
+        );
         app.update();
         assert_eq!(app.world().resource::<TargetState>().selected, None);
-        app.world_mut().resource_mut::<OnlineState>().session_id = Some(2);
+        crate::online::testing::admit(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            2,
+            crate::online::testing::player(1),
+        );
         app.update();
         assert_eq!(app.world().resource::<TargetState>().selected, None);
     }
@@ -666,29 +673,31 @@ mod tests {
     fn self_target_uses_profile_without_a_nearby_entity_and_survives_culling() {
         let mut app = App::new();
         let mut online = OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(1);
-        online.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            spawn_id: 7,
-            race: 1,
-            gender: 0,
-            class: Some(2),
-            deity: None,
-            level: 1,
-            position: WorldPosition::default(),
-            mana: 0,
-            endurance: None,
-            skills: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 6.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: Some(55),
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut online,
+            1,
+            eq_client_core::PlayerState {
+                name: "Example".into(),
+                base_attributes: None,
+                spawn_id: 7,
+                race: 1,
+                gender: 0,
+                class: Some(2),
+                deity: None,
+                level: 1,
+                position: WorldPosition::default(),
+                mana: 0,
+                endurance: None,
+                skills: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 6.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: Some(55),
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
         let (tx, rx) = std::sync::mpsc::sync_channel(2);
         app.insert_resource(online)
             .init_resource::<ButtonInput<KeyCode>>()
@@ -727,10 +736,13 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<TargetState>().selected, Some(7));
         assert!(rx.try_recv().is_err());
-        app.world_mut()
-            .resource_mut::<OnlineState>()
-            .health
-            .insert(7, 31);
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::HealthPercent {
+                spawn_id: 7,
+                percent: 31,
+            }],
+        );
         app.update();
         assert_eq!(app.world().get::<Node>(bar).unwrap().width, percent(31));
     }

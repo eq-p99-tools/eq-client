@@ -91,12 +91,13 @@ fn posed(door: &eq_client_core::doors::Door, swing: f32) -> Transform {
 pub(super) fn nearest(
     state: &super::online::OnlineState,
 ) -> Option<(f32, &eq_client_core::doors::Door)> {
-    if !state.connected || state.death.is_some() {
+    if !state.world.connected() || state.world.death().is_some() {
         return None;
     }
-    let player = state.player.as_ref()?;
+    let player = state.world.player()?;
     state
-        .doors
+        .world
+        .doors()
         .entries()
         .values()
         .filter_map(|door| {
@@ -115,7 +116,7 @@ pub(super) fn open(
     state: &mut super::online::OnlineState,
     sender: &super::target::CommandsToServer,
 ) {
-    let (Some(session_id), Some(sender)) = (state.session_id, sender.0.as_ref()) else {
+    let (Some(session_id), Some(sender)) = (state.world.session_id(), sender.0.as_ref()) else {
         return;
     };
     state.door_status = if sender
@@ -135,10 +136,7 @@ pub(super) fn open(
 /// Closes opened doors on the client's own timer, since servers close ordinary
 /// doors without telling clients.
 pub(super) fn close(mut state: ResMut<super::online::OnlineState>) {
-    let now = std::time::Instant::now();
-    if state.doors.closes_due(now) {
-        state.doors.close_due(now);
-    }
+    state.world.tick(std::time::Instant::now());
 }
 
 /// Normalizes an asset identifier without interpreting server strings as paths.
@@ -167,10 +165,10 @@ pub(super) fn reconcile(
 ) {
     let mut obstacles = Vec::new();
     let mut remaining = BTreeSet::new();
-    if state.connected
-        && let Some(player) = &state.player
+    if state.world.connected()
+        && let Some(player) = state.world.player()
     {
-        for door in state.doors.entries().values() {
+        for door in state.world.doors().entries().values() {
             let delta = Vec3::from_array(eq_client_core::render_position(door.position))
                 - Vec3::from_array(eq_client_core::render_position(player.position));
             if delta.length_squared() <= 240.0 * 240.0 {
@@ -179,7 +177,7 @@ pub(super) fn reconcile(
         }
     }
     for (entity, mut door, mut transform) in &mut rendered {
-        let definition = state.doors.entries().get(&door.id);
+        let definition = state.world.doors().entries().get(&door.id);
         if !remaining.contains(&door.id)
             || definition.is_none_or(|definition| model_key(&definition.model) != door.model)
         {
@@ -216,7 +214,7 @@ pub(super) fn reconcile(
         return;
     };
     for id in remaining {
-        let door = &state.doors.entries()[&id];
+        let door = &state.world.doors().entries()[&id];
         let Some(model) = models.0.get(&model_key(&door.model)) else {
             continue;
         };
@@ -329,36 +327,38 @@ mod tests {
     )]
     fn nearby_doors_reuse_meshes_and_disappear_on_disconnect_or_model_change() {
         let mut state = super::super::online::OnlineState::new(true);
-        state.connected = true;
-        state.session_id = Some(11);
-        state.player = Some(eq_client_core::PlayerState {
-            name: "Example".into(),
-            base_attributes: None,
-            spawn_id: 1,
-            race: 1,
-            class: None,
-            deity: None,
-            skills: None,
-            gender: 0,
-            level: 1,
-            position: default(),
-            mana: 0,
-            endurance: None,
-            spell_refresh_ms: None,
-            memorized_spells: [None; 8],
-            size: 6.0,
-            walk_speed: 0.0,
-            run_speed: 0.0,
-            hp_percent: None,
-            appearance: eq_client_core::outfit::Appearance::default(),
-        });
+        crate::online::testing::admit(
+            &mut state,
+            11,
+            eq_client_core::PlayerState {
+                name: "Example".into(),
+                base_attributes: None,
+                spawn_id: 1,
+                race: 1,
+                class: None,
+                deity: None,
+                skills: None,
+                gender: 0,
+                level: 1,
+                position: default(),
+                mana: 0,
+                endurance: None,
+                spell_refresh_ms: None,
+                memorized_spells: [None; 8],
+                size: 6.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                hp_percent: None,
+                appearance: eq_client_core::outfit::Appearance::default(),
+            },
+        );
         let mut bytes = [0u8; 80];
         bytes[..4].copy_from_slice(b"TEST");
         bytes[52] = 100;
         let update = eq_client_core::doors::decode(0x4c24, &bytes)
             .unwrap()
             .unwrap();
-        state.doors.apply(&update, std::time::Instant::now());
+        crate::online::testing::doors(&mut state, &update, std::time::Instant::now());
         let mut models = Models::default();
         models.0.insert(
             "TEST".into(),
@@ -437,7 +437,8 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<super::super::online::OnlineState>()
-                .doors
+                .world
+                .doors()
                 .entries()[&0]
                 .action,
             None
@@ -449,59 +450,66 @@ mod tests {
         assert_eq!(roots.iter(app.world()).count(), 1);
         // A changed model must not keep the previous door mesh.
         bytes[..4].copy_from_slice(b"NONE");
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .doors
-            .apply(
-                &eq_client_core::doors::decode(0x4c24, &bytes)
-                    .unwrap()
-                    .unwrap(),
-                std::time::Instant::now(),
-            );
+        crate::online::testing::doors(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            &eq_client_core::doors::decode(0x4c24, &bytes)
+                .unwrap()
+                .unwrap(),
+            std::time::Instant::now(),
+        );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 0);
         assert!(ground(&app).abs() < 0.001);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .doors
-            .apply(&update, std::time::Instant::now());
+        crate::online::testing::doors(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            &update,
+            std::time::Instant::now(),
+        );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 1);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .player
-            .as_mut()
-            .unwrap()
-            .position
-            .x = 241.0;
+        crate::online::testing::place_axis(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            |position| position.x = 241.0,
+        );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 0);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .player
-            .as_mut()
-            .unwrap()
-            .position
-            .x = 0.0;
+        crate::online::testing::place_axis(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            |position| position.x = 0.0,
+        );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 1);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .connected = false;
+        crate::online::testing::connect(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            false,
+        );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 0);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .connected = true;
+        crate::online::testing::connect(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            true,
+        );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 1);
-        app.world_mut()
-            .resource_mut::<super::super::online::OnlineState>()
-            .doors
-            .apply(
-                &eq_client_core::doors::DoorUpdate::RemoveAll,
-                std::time::Instant::now(),
-            );
+        crate::online::testing::doors(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            &eq_client_core::doors::DoorUpdate::RemoveAll,
+            std::time::Instant::now(),
+        );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 0);
         assert!(nearest(app.world().resource::<super::super::online::OnlineState>()).is_none());
@@ -518,17 +526,16 @@ mod tests {
         let spawn = eq_client_core::doors::decode(0x4c24, &[0u8; 80])
             .unwrap()
             .unwrap();
-        state.doors.apply(&spawn, opened);
-        state
-            .doors
-            .apply(&DoorUpdate::Move { id: 0, action: 2 }, opened);
+        crate::online::testing::doors(&mut state, &spawn, opened);
+        crate::online::testing::doors(&mut state, &DoorUpdate::Move { id: 0, action: 2 }, opened);
         let mut app = App::new();
         app.insert_resource(state).add_systems(Update, close);
         app.update();
         let door = &app
             .world()
             .resource::<super::super::online::OnlineState>()
-            .doors
+            .world
+            .doors()
             .entries()[&0];
         assert_eq!(door.active_endpoint(), Some(false));
     }

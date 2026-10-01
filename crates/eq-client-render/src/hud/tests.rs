@@ -359,31 +359,33 @@ fn interruption_is_scoped_to_own_caster_and_cannot_be_undone_by_mana_updates() {
 fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() {
     let mut app = App::new();
     let mut online = OnlineState::new(true);
-    online.connected = true;
-    online.session_id = Some(7);
     let mut gems = [None; 8];
     gems[0] = Some(73);
-    online.player = Some(PlayerState {
-        name: "Example".into(),
-        base_attributes: None,
-        deity: None,
-        class: Some(2),
-        spawn_id: 12,
-        race: 1,
-        gender: 0,
-        level: 1,
-        position: WorldPosition::default(),
-        mana: 50,
-        endurance: None,
-        skills: None,
-        spell_refresh_ms: None,
-        memorized_spells: gems,
-        size: 6.0,
-        walk_speed: 0.0,
-        run_speed: 0.0,
-        hp_percent: Some(100),
-        appearance: eq_client_core::outfit::Appearance::default(),
-    });
+    crate::online::testing::admit(
+        &mut online,
+        7,
+        PlayerState {
+            name: "Example".into(),
+            base_attributes: None,
+            deity: None,
+            class: Some(2),
+            spawn_id: 12,
+            race: 1,
+            gender: 0,
+            level: 1,
+            position: WorldPosition::default(),
+            mana: 50,
+            endurance: None,
+            skills: None,
+            spell_refresh_ms: None,
+            memorized_spells: gems,
+            size: 6.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            hp_percent: Some(100),
+            appearance: eq_client_core::outfit::Appearance::default(),
+        },
+    );
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     app.insert_resource(online)
         .insert_resource(CommandsToServer(Some(tx)))
@@ -539,8 +541,8 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     assert_eq!(
         app.world()
             .resource::<OnlineState>()
-            .player
-            .as_ref()
+            .world
+            .player()
             .unwrap()
             .memorized_spells[0],
         Some(73)
@@ -562,10 +564,10 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     let player = app
         .world()
         .resource::<OnlineState>()
-        .player
-        .as_ref()
-        .unwrap()
-        .clone();
+        .world
+        .player()
+        .cloned()
+        .unwrap();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let mut hud = HudState::default();
     requests::spell(

@@ -361,9 +361,11 @@ pub(super) fn drive(
                 match &step {
                     Step::WaitSelect => online.selection.is_some(),
                     Step::WaitZone(zone) => {
-                        online.connected && online.player.is_some() && online.zone == *zone
+                        online.world.connected()
+                            && online.world.player().is_some()
+                            && online.world.zone() == *zone
                     }
-                    _ => online.connected && online.player.is_some(),
+                    _ => online.world.connected() && online.world.player().is_some(),
                 }
             }
             Step::Click(target) => {
@@ -608,8 +610,11 @@ type Seen<'a, 'w> = (&'a super::online::OnlineState, &'a Observed<'w>);
 /// The player's feet at its accepted position and the target's position, in
 /// render coordinates.
 fn walk_ends((online, observed): Seen, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
-    let player = online.player.as_ref()?;
-    let spawn = observed.2.selected.and_then(|id| online.spawns.get(&id))?;
+    let player = online.world.player()?;
+    let spawn = observed
+        .2
+        .selected
+        .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state))?;
     let origin = Vec3::from_array(eq_client_core::render_position(player.position));
     let goal = Vec3::from_array(eq_client_core::render_position(spawn.position));
     Some((origin - Vec3::Y * body.feet_offset, goal))
@@ -623,7 +628,10 @@ fn face(
     players: &Query<&Transform, With<super::Player>>,
     cameras: &mut Query<&mut super::OrbitCamera>,
 ) -> Option<f32> {
-    let spawn = observed.2.selected.and_then(|id| online.spawns.get(&id))?;
+    let spawn = observed
+        .2
+        .selected
+        .and_then(|id| online.world.spawn(id).map(|spawn| &spawn.state))?;
     let transform = players.single().ok()?;
     let to =
         Vec3::from_array(eq_client_core::render_position(spawn.position)) - transform.translation;

@@ -148,9 +148,9 @@ pub(super) fn input(
     sender: Res<CommandsToServer>,
     mut state: ResMut<ItemState>,
 ) {
-    if state.session != online.session_id {
+    if state.session != online.world.session_id() {
         *state = ItemState {
-            session: online.session_id,
+            session: online.world.session_id(),
             ..default()
         };
     }
@@ -173,7 +173,7 @@ pub(super) fn input(
     }
     let automatic = if !*attempted
         && settings.0.validation == Some(super::ValidationAction::InspectFirstItem)
-        && online.connected
+        && online.world.connected()
     {
         chat.history
             .lines(eq_client_core::chat::ChatTab::All)
@@ -200,11 +200,11 @@ pub(super) fn input(
         if state.cache.contains(link.item_id) {
             continue;
         }
-        if !online.connected || online.death.is_some() {
+        if !online.world.connected() || online.world.death().is_some() {
             state.status = "Connect to inspect this item.".into();
             continue;
         }
-        let Some(session_id) = online.session_id else {
+        let Some(session_id) = online.world.session_id() else {
             continue;
         };
         let command = ClientCommand::InspectItem {
@@ -592,8 +592,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
         let mut app = App::new();
         let mut online = OnlineState::new(true);
-        online.connected = true;
-        online.session_id = Some(77);
+        crate::online::testing::admit(&mut online, 77, crate::online::testing::player(1));
         app.insert_resource(online)
             .insert_resource(super::super::ViewerSettings(
                 super::super::ViewerConfig::default(),
@@ -634,7 +633,11 @@ mod tests {
         );
         app.update();
         assert!(receiver.try_recv().is_err());
-        app.world_mut().resource_mut::<OnlineState>().session_id = Some(78);
+        crate::online::testing::admit(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            78,
+            crate::online::testing::player(1),
+        );
         app.update();
         assert!(app.world().resource::<ItemState>().selected.is_none());
         assert!(app.world().resource::<ItemState>().pending.is_none());

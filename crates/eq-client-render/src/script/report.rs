@@ -29,9 +29,9 @@ pub(super) fn state(
         .unwrap_or_default();
     let effects: Vec<u16> = hud.buff_state.effects().keys().copied().collect();
     let posture = online
-        .player
-        .as_ref()
-        .and_then(|player| online.postures.get(&player.spawn_id));
+        .world
+        .player()
+        .and_then(|player| online.world.posture(player.spawn_id));
     let items: Vec<ReportedItem> = inventory
         .data
         .items()
@@ -59,10 +59,10 @@ pub(super) fn state(
         .unwrap_or_default();
     info!(
         label,
-        zone = online.zone,
-        world = ?online.world,
-        far_clip = ?online.far_clip,
-        connected = online.connected,
+        zone = online.world.zone(),
+        world = ?online.world.world_name(),
+        far_clip = ?online.world.far_clip(),
+        connected = online.world.connected(),
         ?position,
         ?posture,
         hp = ?hud.hp,
@@ -82,10 +82,10 @@ pub(super) fn state(
         inventory_predicted = inventory.data.predicted(),
         inventory_stale = inventory.data.stale(),
         cursor_queued = inventory.data.queued().count(),
-        gear = ?online.player.as_ref().map(|player| player.appearance.materials),
-        tints = ?online.player.as_ref().map(|player| player.appearance.tints),
-        face = ?online.player.as_ref().map(|player| player.appearance.face),
-        show_helm = ?online.player.as_ref().map(|player| player.appearance.show_helm),
+        gear = ?online.world.player().map(|player| player.appearance.materials),
+        tints = ?online.world.player().map(|player| player.appearance.tints),
+        face = ?online.world.player().map(|player| player.appearance.face),
+        show_helm = ?online.world.player().map(|player| player.appearance.show_helm),
         "Script report"
     );
 }
@@ -105,17 +105,19 @@ type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
 pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, combat, _): &Observed) {
     let origin = online
-        .player
-        .as_ref()
+        .world
+        .player()
         .map(|player| Vec3::from_array(eq_client_core::render_position(player.position)));
     let mut nearby: Vec<NearbySpawn> = online
-        .spawns
+        .world
+        .spawns()
         .iter()
+        .map(|(id, spawn)| (id, &spawn.state))
         .filter(|(id, spawn)| {
             !spawn.invisible
                 && online
-                    .player
-                    .as_ref()
+                    .world
+                    .player()
                     .is_none_or(|player| player.spawn_id != **id)
         })
         .map(|(id, spawn)| {
@@ -145,7 +147,8 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
     nearby.truncate(12);
     // Doors near the player: id, open type, latest action, distance and position.
     let mut doors: Vec<NearbyDoor> = online
-        .doors
+        .world
+        .doors()
         .entries()
         .values()
         .map(|door| {
@@ -162,7 +165,8 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., trade, comb
     doors.truncate(3);
     // Objects on the ground: id, model, kind, distance and position.
     let mut ground: Vec<(u32, String, String, i32, [i32; 3])> = online
-        .objects
+        .world
+        .objects()
         .entries()
         .values()
         .map(|object| {
@@ -201,9 +205,12 @@ fn looks(
     nearby: &[NearbySpawn],
 ) -> (Vec<NearbyModel>, Vec<Gear>) {
     let spawns = || {
-        nearby
-            .iter()
-            .filter_map(|entry| Some((entry.0, online.spawns.get(&entry.0)?)))
+        nearby.iter().filter_map(|entry| {
+            Some((
+                entry.0,
+                online.world.spawn(entry.0).map(|spawn| &spawn.state)?,
+            ))
+        })
     };
     let models = spawns()
         .map(|(id, spawn)| {

@@ -638,7 +638,7 @@ fn schedule_screenshot(
     request: Option<ResMut<CaptureRequest>>,
     online: Res<online::OnlineState>,
 ) {
-    if online.enabled && (!online.connected || online.player.is_none()) {
+    if online.enabled && (!online.world.connected() || online.world.player().is_none()) {
         return;
     }
     let Some(mut request) = request else {
@@ -662,7 +662,7 @@ fn exit_after_screenshot(
     online: Res<online::OnlineState>,
     settings: Res<ViewerSettings>,
 ) {
-    if online.finished && settings.0.screenshot.is_some() {
+    if online.world.ended() && settings.0.screenshot.is_some() {
         app_exit.write(AppExit::error());
     }
     // Scripted screenshots keep the session running; only `--screenshot` is one-shot.
