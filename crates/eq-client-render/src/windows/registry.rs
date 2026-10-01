@@ -45,6 +45,9 @@ pub(crate) enum WindowId {
     Give,
     /// The trade window between two players, drawn from the skin.
     Trade,
+    /// The skin's Actions window: its Main page's sit, stand and camp, and
+    /// the abilities on its Combat and Abilities pages.
+    ActionsWindow,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -222,7 +225,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 18] = [
+    pub(crate) const ALL: [Self; 19] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -239,6 +242,7 @@ impl WindowId {
         Self::Merchant,
         Self::Give,
         Self::Trade,
+        Self::ActionsWindow,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -270,6 +274,7 @@ impl WindowId {
             Self::Merchant => Some("MerchantWnd"),
             Self::Give => Some("GiveWnd"),
             Self::Trade => Some("TradeWnd"),
+            Self::ActionsWindow => Some("ActionsWindow"),
             _ => None,
         }
     }
@@ -305,6 +310,7 @@ impl WindowId {
             Self::Merchant => "merchant",
             Self::Give => "give",
             Self::Trade => "trade",
+            Self::ActionsWindow => "actions-window",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -338,7 +344,9 @@ impl WindowId {
             ),
             Self::Player => hud("", Placement::Docked, &["CHARACTER"]),
             Self::Spells => hud("SPELLS", Placement::Docked, &["SPELLS"]),
-            Self::Actions => hud("ACTIONS", Placement::Docked, &["ACTIONS"]),
+            // Named apart from the skin's Actions window; placements saved
+            // under its old title still find it.
+            Self::Actions => hud("HOTBAR", Placement::Docked, &["ACTIONS"]),
             Self::CastBar => Description {
                 persists: false,
                 ..hud(
@@ -401,6 +409,8 @@ impl WindowId {
             Self::Give => floating("GIVE", Placement::TopRight(220.0, 100.0), false, &[]),
             // Where the give window opens: the two never show at once.
             Self::Trade => floating("TRADE", Placement::TopRight(220.0, 100.0), false, &[]),
+            // Where the skin places it, right of the player and target windows.
+            Self::ActionsWindow => floating("ACTIONS", Placement::TopLeft(516.0, 292.0), true, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(

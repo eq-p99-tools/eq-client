@@ -30,6 +30,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Bag(_) => "EQUI_Container.xml",
         WindowId::Give => "EQUI_GiveWnd.xml",
         WindowId::Trade => "EQUI_TradeWnd.xml",
+        WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -308,6 +309,9 @@ fn pieces(
             Element::SpellGem(gem) => spell_gem(window, art, gem, &inside),
             Element::Button(button) => self::button(window, art, button, &inside, context.id),
             Element::InvSlot(slot) => items::slot(window, art, slot, &inside, context.id),
+            Element::Tabs(pages) if TABBED.contains(&context.id) => {
+                tabbed(window, art, pages, &inside, context);
+            }
             // The first page shows; the client has nothing for the others yet.
             Element::Tabs(pages) => {
                 if let Some(page) = pages.first() {
@@ -330,6 +334,132 @@ fn pieces(
                 items::figure(window, view, &inside, context.paperdoll);
             }
             Element::View(_) | Element::Other(_) => (),
+        }
+    }
+}
+
+/// Windows whose tab boxes show every page, a tab for each.
+const TABBED: [WindowId; 1] = [WindowId::ActionsWindow];
+
+/// A tab of a skinned window's tab box: the page it shows.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SkinTab {
+    pub(crate) window: WindowId,
+    pub(crate) index: usize,
+}
+
+/// A page of a skinned window's tab box.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SkinPage(SkinTab);
+
+/// One of a tab's two pictures: the active one shows on the page shown.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct TabFace {
+    tab: SkinTab,
+    active: bool,
+}
+
+/// The page each tabbed window shows: its first until another is chosen.
+#[derive(Resource, Default)]
+pub(crate) struct Tabs(std::collections::BTreeMap<WindowId, usize>);
+
+impl Tabs {
+    fn shows(&self, tab: SkinTab) -> bool {
+        self.0.get(&tab.window).copied().unwrap_or(0) == tab.index
+    }
+}
+
+/// A tab box with every page: a row of tabs, each with its page's picture,
+/// across the top, and the chosen page below.
+fn tabbed(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    pages: &[eq_client_assets::sidl::Page],
+    inside: &Area,
+    context: &Context,
+) {
+    let size = |page: &eq_client_assets::sidl::Page| {
+        page.icon[0].as_ref().map_or((24.0, 24.0), |piece| {
+            (to_f32(piece.width), to_f32(piece.height))
+        })
+    };
+    let strip = pages.iter().map(|page| size(page).1).fold(0.0, f32::max) + 2.0;
+    let mut x = inside.x + 2.0;
+    for (index, page) in pages.iter().enumerate() {
+        let tab = SkinTab {
+            window: context.id,
+            index,
+        };
+        let (width, height) = size(page);
+        let mut cell = window.spawn((Button, tab, at(x, inside.y + 1.0, width, height)));
+        if let Some(tooltip) = &page.tooltip {
+            cell.insert(crate::tooltip::Tooltip(tooltip.clone()));
+        }
+        cell.with_children(|cell| {
+            for (face, piece) in page.icon.iter().enumerate() {
+                if let Some(image) = piece.as_ref().and_then(|piece| art.cut(piece)) {
+                    cell.spawn((
+                        image,
+                        TabFace {
+                            tab,
+                            active: face == 1,
+                        },
+                        at(0.0, 0.0, width, height),
+                    ));
+                }
+            }
+        });
+        x += width + 2.0;
+    }
+    let area = Area {
+        x: 0.0,
+        y: 0.0,
+        width: inside.width,
+        height: inside.height - strip,
+    };
+    for (index, page) in pages.iter().enumerate() {
+        let tab = SkinTab {
+            window: context.id,
+            index,
+        };
+        window
+            .spawn((
+                SkinPage(tab),
+                Node {
+                    display: Display::None,
+                    overflow: Overflow::clip(),
+                    ..at(inside.x, inside.y + strip, area.width, area.height)
+                },
+            ))
+            .with_children(|page_area| pieces(page_area, art, &page.pieces, &area, context));
+    }
+}
+
+/// Shows the page each tabbed window has chosen, and its tab's picture lit;
+/// a clicked tab chooses its page.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn tabs(
+    mut chosen: ResMut<Tabs>,
+    clicks: Query<(&Interaction, &SkinTab), Changed<Interaction>>,
+    mut pages: Query<(&SkinPage, &mut Node), Without<TabFace>>,
+    mut faces: Query<(&TabFace, &mut Node), Without<SkinPage>>,
+) {
+    for (interaction, tab) in &clicks {
+        if *interaction == Interaction::Pressed {
+            chosen.0.insert(tab.window, tab.index);
+        }
+    }
+    let display = |shown: bool| if shown { Display::Flex } else { Display::None };
+    for (SkinPage(tab), mut node) in &mut pages {
+        let wanted = display(chosen.shows(*tab));
+        if node.display != wanted {
+            node.display = wanted;
+        }
+    }
+    for (face, mut node) in &mut faces {
+        let wanted = display(chosen.shows(face.tab) == face.active);
+        if node.display != wanted {
+            node.display = wanted;
         }
     }
 }
@@ -385,6 +515,7 @@ fn spell_gem(
 }
 
 /// What a skin's button does in the client.
+#[derive(Clone, Copy)]
 enum Does {
     /// Opens and closes a window.
     Toggles(WindowId),
@@ -399,6 +530,12 @@ enum Does {
     Offered(Coin),
     /// Shows a bag's picture.
     BagIcon,
+    /// Turns melee auto-attack on or off.
+    Attack,
+    /// Uses the ability it holds.
+    Ability(super::abilities::AbilityButton),
+    /// Runs a game slash command, as the Actions window's sit does.
+    Slash(&'static str),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -412,10 +549,17 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     if let Some(coin) = their_coin_box(id) {
         return Some(Does::Offered(coin));
     }
+    if let Some(button) = ability_button(id) {
+        return Some(Does::Ability(button));
+    }
     Some(match id {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
         "DoneButton" | "GVW_Cancel_Button" | "TRDW_Cancel_Button" => Does::Closes,
         "GVW_Give_Button" | "TRDW_Trade_Button" => Does::Gives,
+        "ACP_MeleeAttackButton" => Does::Attack,
+        "AMP_SitButton" => Does::Slash("/sit"),
+        "AMP_StandButton" => Does::Slash("/stand"),
+        "AMP_CampButton" => Does::Slash("/camp"),
         "Container_Icon" if matches!(owner, WindowId::Bag(_)) => Does::BagIcon,
         // The official client shows Combine only on a tradeskill container,
         // and this client combines nothing.
@@ -432,6 +576,20 @@ fn coin_count(inner: &mut ChildSpawnerCommands, area: Area, shows: Shows, ink: C
         Align::Right,
         (shows, theme::text("", Size::Body, ink)),
     );
+}
+
+/// The Actions window's ability buttons: the Combat page's first to fourth
+/// and the Abilities page's first to sixth.
+fn ability_button(id: &str) -> Option<super::abilities::AbilityButton> {
+    use super::abilities::{AbilityButton, Page};
+    const PLACES: [&str; 6] = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth"];
+    let (page, rest) = match id.strip_prefix("ACP_") {
+        Some(rest) => (Page::Combat, rest),
+        None => (Page::Abilities, id.strip_prefix("AAP_")?),
+    };
+    let place = rest.strip_suffix("AbilityButton")?;
+    let index = PLACES.iter().position(|name| *name == place)?;
+    Some(AbilityButton { page, index })
 }
 
 /// A skin's button: what the client does with it, or greyed out where it
@@ -467,30 +625,7 @@ fn button(
         Some(image) => window.spawn((image, node)),
         None => window.spawn(node),
     };
-    match does {
-        Does::Toggles(toggles) => {
-            drawn.insert((
-                Button,
-                super::windows::SelectorButton(toggles),
-                SkinButton(button.look.clone()),
-            ));
-        }
-        Does::Closes => {
-            drawn.insert((Button, items::Closes(owner)));
-        }
-        Does::Gives => {
-            drawn.insert((Button, super::give::GiveButton));
-        }
-        Does::Coins(place, coin) => {
-            drawn.insert((Button, super::coins::CoinBox { place, coin }));
-        }
-        Does::Offered(_) | Does::BagIcon | Does::Nothing => (),
-    }
-    if let Some(tooltip) = &button.tooltip
-        && !matches!(does, Does::Nothing)
-    {
-        drawn.insert(crate::tooltip::Tooltip(tooltip.clone()));
-    }
+    behave(&mut drawn, does, button, owner);
     let ink = match does {
         Does::Nothing => theme::INK_DIM,
         _ => button.text_color.map_or(theme::INK_BRIGHT, rgb),
@@ -504,24 +639,95 @@ fn button(
                 at(place.x, place.y, place.width, place.height),
             );
         }
-        match does {
-            Does::Coins(place, coin) => coin_count(inner, area, Shows::Coins(place, coin), ink),
-            Does::Offered(coin) => coin_count(inner, area, Shows::Offered(coin), ink),
-            Does::BagIcon => {
-                if let WindowId::Bag(bag) = owner {
-                    inner.spawn((
-                        items::BagPart::Icon(eq_client_core::inventory::InventorySlot(bag)),
-                        ImageNode::default(),
-                        at(0.0, 0.0, area.width, area.height),
-                    ));
-                }
+        caption(inner, does, (button, area), owner, ink);
+    });
+}
+
+/// What a pressed skin button does, and the state it shows.
+fn behave(
+    drawn: &mut EntityCommands,
+    does: Does,
+    button: &eq_client_assets::sidl::Button,
+    owner: WindowId,
+) {
+    use eq_client_core::Capability;
+    let skin = || SkinButton(button.look.clone());
+    match does {
+        Does::Toggles(toggles) => {
+            drawn.insert((Button, super::windows::SelectorButton(toggles), skin()))
+        }
+        Does::Closes => drawn.insert((Button, items::Closes(owner))),
+        Does::Gives => drawn.insert((Button, super::give::GiveButton)),
+        Does::Coins(place, coin) => drawn.insert((Button, super::coins::CoinBox { place, coin })),
+        Does::Attack => drawn.insert((
+            Button,
+            AttackButton,
+            skin(),
+            crate::outbox::Needs(Capability::Combat),
+        )),
+        Does::Ability(place) => drawn.insert((
+            Button,
+            place,
+            skin(),
+            crate::outbox::Needs(Capability::Abilities),
+        )),
+        Does::Slash(command) => drawn.insert((Button, SlashButton(command), skin())),
+        Does::Offered(_) | Does::BagIcon | Does::Nothing => drawn,
+    };
+    if let Some(tooltip) = &button.tooltip
+        && !matches!(does, Does::Nothing)
+    {
+        drawn.insert(crate::tooltip::Tooltip(tooltip.clone()));
+    }
+}
+
+/// What a skin button shows on itself: its words, a count of coins, an
+/// ability's name or a bag's picture.
+fn caption(
+    inner: &mut ChildSpawnerCommands,
+    does: Does,
+    (button, area): (&eq_client_assets::sidl::Button, Area),
+    owner: WindowId,
+    ink: Color,
+) {
+    // A square button's words wrap, as the Actions window's do; a wide one
+    // keeps them on one line, centred.
+    let words = |text: &str| {
+        (
+            theme::text(text, Size::Small, ink),
+            TextLayout::new(Justify::Center, LineBreak::WordBoundary),
+            at(1.0, 2.0, area.width - 2.0, area.height - 4.0),
+        )
+    };
+    match does {
+        Does::Coins(place, coin) => coin_count(inner, area, Shows::Coins(place, coin), ink),
+        Does::Offered(coin) => coin_count(inner, area, Shows::Offered(coin), ink),
+        Does::BagIcon => {
+            if let WindowId::Bag(bag) = owner {
+                inner.spawn((
+                    items::BagPart::Icon(eq_client_core::inventory::InventorySlot(bag)),
+                    ImageNode::default(),
+                    at(0.0, 0.0, area.width, area.height),
+                ));
             }
-            // A box with a picture shows a value, such as the bank's coins;
-            // the skin's text there is only a sample, so it stays blank
-            // until the client has the value.
-            Does::Nothing if button.decal.is_some() => (),
-            Does::Toggles(_) | Does::Closes | Does::Gives | Does::Nothing => {
-                if let Some(text) = &button.text {
+        }
+        Does::Ability(place) => {
+            inner.spawn((super::abilities::AbilityLabel(place), words("")));
+        }
+        // A box with a picture shows a value, such as the bank's coins;
+        // the skin's text there is only a sample, so it stays blank until
+        // the client has the value.
+        Does::Nothing if button.decal.is_some() => (),
+        Does::Toggles(_)
+        | Does::Closes
+        | Does::Gives
+        | Does::Attack
+        | Does::Slash(_)
+        | Does::Nothing => {
+            if let Some(text) = &button.text {
+                if area.height >= 30.0 && area.width < area.height * 1.5 {
+                    inner.spawn(words(text));
+                } else {
                     aligned(
                         inner,
                         at(0.0, (area.height - 12.0) / 2.0, area.width, 12.0),
@@ -531,24 +737,61 @@ fn button(
                 }
             }
         }
-    });
+    }
 }
 
-/// Draws each skin button in its state: on while its window is open,
-/// lit under the pointer.
+/// The skin's melee attack button, lit while the player attacks.
+#[derive(Component)]
+pub(crate) struct AttackButton;
+
+/// A skin button that runs a game slash command.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct SlashButton(&'static str);
+
+/// Runs a pressed slash button's command, as typing it would; a refusal
+/// shows in chat.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn slash(
+    online: Res<super::online::OnlineState>,
+    outbox: Res<crate::outbox::Outbox>,
+    mut chat: ResMut<super::chat::ChatState>,
+    buttons: Query<(&Interaction, &SlashButton), Changed<Interaction>>,
+) {
+    for (interaction, SlashButton(command)) in &buttons {
+        if *interaction == Interaction::Pressed
+            && let Err(reason) = super::chat::submit_game_command(command, &online, &outbox)
+        {
+            chat.history.push(super::chat::system_line(reason));
+        }
+    }
+}
+
+/// The skin buttons that show a state, with what decides it.
+type Stateful<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static SkinButton,
+        Option<&'static super::windows::SelectorButton>,
+        Has<AttackButton>,
+        &'static Interaction,
+        &'static mut ImageNode,
+    ),
+>;
+
+/// Draws each skin button in its state: on while its window is open or the
+/// player attacks, lit under the pointer.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
     shown: Res<super::windows::Shown>,
+    combat: Res<super::combat::CombatState>,
     mut art: crate::sheets::Art,
-    mut buttons: Query<(
-        &SkinButton,
-        &super::windows::SelectorButton,
-        &Interaction,
-        &mut ImageNode,
-    )>,
+    mut buttons: Stateful,
 ) {
-    for (SkinButton(look), selector, interaction, mut image) in &mut buttons {
-        let on = shown.is_open(selector.0);
+    for (SkinButton(look), selector, attack, interaction, mut image) in &mut buttons {
+        let on = selector.map_or(attack && combat.auto_attack, |selector| {
+            shown.is_open(selector.0)
+        });
         let hovered = *interaction != Interaction::None;
         let piece = match (on, hovered) {
             (true, true) => look.pressed_flyby.as_ref().or(look.pressed.as_ref()),

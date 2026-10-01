@@ -15,6 +15,7 @@ pub(super) enum Action {
     },
     Sit,
     Stand,
+    Ability(eq_client_core::abilities::Ability),
 }
 
 #[derive(Resource)]
@@ -37,7 +38,7 @@ impl Bindings {
     pub(crate) fn gem(&self, slot: usize) -> Option<usize> {
         match self.0.get(slot).copied().flatten()? {
             Action::Gem(gem) => Some(usize::from(gem)),
-            Action::Sit | Action::Stand | Action::Item { .. } => None,
+            Action::Sit | Action::Stand | Action::Item { .. } | Action::Ability(_) => None,
         }
     }
 }
@@ -117,11 +118,26 @@ pub(super) fn requested(
     bindings.0.get(slot).copied().flatten()
 }
 
-/// Ctrl+number binds the hovered gem or item; Ctrl+Shift+number clears the slot.
+/// The spell gems and the Actions window's ability buttons, which Ctrl and a
+/// number bind while under the pointer.
+type Bindable<'w, 's> = (
+    Query<'w, 's, (&'static Interaction, &'static super::SpellGem)>,
+    Query<
+        'w,
+        's,
+        (
+            &'static Interaction,
+            &'static crate::abilities::AbilityButton,
+        ),
+    >,
+);
+
+/// Ctrl+number binds the hovered gem, ability or item; Ctrl+Shift+number
+/// clears the slot.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update(
     keys: crate::keys::Keys,
-    gems: Query<(&Interaction, &super::SpellGem)>,
+    (gems, abilities): Bindable,
     items: Query<(&Interaction, &crate::inventory::SlotButton)>,
     online: Option<Res<crate::online::OnlineState>>,
     mut bindings: ResMut<Bindings>,
@@ -129,11 +145,19 @@ pub(crate) fn update(
     if let Some(index) = slot_pressed(&keys, crate::keys::Act::ClearSlot) {
         bindings.0[index] = None;
     } else if let Some(index) = slot_pressed(&keys, crate::keys::Act::BindSlot) {
+        let ability = online.as_ref().and_then(|online| {
+            abilities
+                .iter()
+                .find(|(interaction, _)| **interaction != Interaction::None)
+                .and_then(|(_, button)| crate::abilities::assigned(online.world(), *button))
+        });
         if let Some((_, gem)) = gems
             .iter()
             .find(|(interaction, _)| **interaction != Interaction::None)
         {
             bindings.0[index] = Some(Action::Gem(gem.0));
+        } else if let Some(ability) = ability {
+            bindings.0[index] = Some(Action::Ability(ability));
         } else if let Some(online) = online
             && let Some((_, slot)) = items
                 .iter()
@@ -174,16 +198,21 @@ pub(crate) fn presentation(
         let empty = missing_item
             || bindings.0[slot.0].is_none()
             || (bindings.gem(slot.0).is_some() && spell.is_none());
-        let waiting = spell.is_some_and(|id| {
-            online.world().casting().pending.is_some()
-                || online.world().casting().cast.is_some()
-                || !online
-                    .world()
-                    .casting()
-                    .cooldowns
-                    .remaining(id, now)
-                    .is_zero()
-        });
+        let ability_waits = match bindings.0[slot.0] {
+            Some(Action::Ability(ability)) => online.world().ability_wait(ability, now).is_some(),
+            _ => false,
+        };
+        let waiting = ability_waits
+            || spell.is_some_and(|id| {
+                online.world().casting().pending.is_some()
+                    || online.world().casting().cast.is_some()
+                    || !online
+                        .world()
+                        .casting()
+                        .cooldowns
+                        .remaining(id, now)
+                        .is_zero()
+            });
         color.0 = theme::readiness(*interaction != Interaction::None, empty, waiting);
     }
     for (mut text, caption, hint) in &mut labels {
@@ -199,6 +228,7 @@ pub(crate) fn presentation(
                 Some(Action::Sit) => "Sit".into(),
                 Some(Action::Stand) => "Stand".into(),
                 Some(Action::Item { .. }) => "Item".into(),
+                Some(Action::Ability(ability)) => ability.name().into(),
                 None => "-".into(),
             };
         }
@@ -238,6 +268,14 @@ fn hovered_detail(
         },
         Some(Action::Sit) => "Sit down".into(),
         Some(Action::Stand) => "Stand up".into(),
+        Some(Action::Ability(ability)) => match world.ability_wait(ability, now) {
+            Some(wait) => format!(
+                "{}\nAvailable in {:.0}s",
+                ability.name(),
+                wait.as_secs_f32().ceil()
+            ),
+            None => format!("{}\nReady", ability.name()),
+        },
         Some(Action::Item { slot, id }) => bound_item(inventory, slot, id).map_or_else(
             || {
                 format!(
@@ -277,6 +315,7 @@ pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate
     for (slot, mut needs) in &mut slots {
         let wanted = match bindings.0[slot.0] {
             Some(Action::Sit | Action::Stand) => eq_client_core::Capability::Moving,
+            Some(Action::Ability(_)) => eq_client_core::Capability::Abilities,
             _ => eq_client_core::Capability::Casting,
         };
         if needs.0 != wanted {

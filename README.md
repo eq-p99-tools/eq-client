@@ -535,6 +535,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...`,
 `give` (asks the target to take the cursor item, as clicking it does),
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel`,
+`click actions` (opens the skin's Actions window), `click tab <n>`, `click ability combat|abilities <n>`, `click attack`,
 `right_click` with the same targets (a bag's slot opens its window),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client

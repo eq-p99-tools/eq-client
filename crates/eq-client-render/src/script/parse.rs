@@ -118,6 +118,24 @@ pub enum ClickTarget {
     ),
     /// A button of the quantity picker.
     Pick(PickButton),
+    /// The selector's button for the skin's Actions window.
+    ActionsWindow,
+    /// A tab of the open tabbed window, from zero.
+    Tab(usize),
+    /// An ability button of the Actions window: its page and place, from
+    /// zero.
+    Ability(AbilityPage, usize),
+    /// The Actions window's melee attack button.
+    Attack,
+}
+
+/// The Actions window's pages that hold ability buttons.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AbilityPage {
+    /// The Combat page's four.
+    Combat,
+    /// The Abilities page's six.
+    Abilities,
 }
 
 /// The quantity picker's buttons.
@@ -269,6 +287,17 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["sell", slot] => ClickTarget::Trade(TradeClick::Sell(value(slot, "an inventory slot")?)),
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
         ["give"] => ClickTarget::Give,
+        ["actions"] => ClickTarget::ActionsWindow,
+        ["attack"] => ClickTarget::Attack,
+        ["tab", tab] => ClickTarget::Tab(ordinal(tab, "a tab")?),
+        ["ability", page, place] => ClickTarget::Ability(
+            match *page {
+                "combat" => AbilityPage::Combat,
+                "abilities" => AbilityPage::Abilities,
+                _ => return Err("expected combat or abilities".into()),
+            },
+            ordinal(place, "an ability button")?,
+        ),
         ["coins", place, coin] => ClickTarget::Coins(coin_place(place)?, coin_kind(coin)?),
         ["pick", button] => ClickTarget::Pick(match *button {
             "less" => PickButton::Less,
@@ -304,6 +333,14 @@ fn coin_place(word: &str) -> Result<eq_client_core::money::CoinPlace, String> {
         "give" => CoinPlace::Trade,
         _ => return Err("expected purse, bank or give".into()),
     })
+}
+
+/// A place counted from one, as a script names it, from zero.
+fn ordinal(word: &str, what: &str) -> Result<usize, String> {
+    word.parse::<usize>()
+        .ok()
+        .and_then(|place| place.checked_sub(1))
+        .ok_or_else(|| format!("expected {what} counted from 1"))
 }
 
 /// A coin box's kind: `platinum`, `gold`, `silver` or `copper`.

@@ -172,7 +172,11 @@ pub(crate) fn frames(
     for (frame, id) in &frames {
         if matches!(
             id,
-            WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::Trade
+            WindowId::Bank
+                | WindowId::Bag(_)
+                | WindowId::Give
+                | WindowId::Trade
+                | WindowId::ActionsWindow
         ) {
             if shown.is_open(*id) {
                 drawn.insert(*id);
@@ -186,7 +190,11 @@ pub(crate) fn frames(
         .filter(|id| {
             matches!(
                 id,
-                WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::Trade
+                WindowId::Bank
+                    | WindowId::Bag(_)
+                    | WindowId::Give
+                    | WindowId::Trade
+                    | WindowId::ActionsWindow
             ) && !drawn.contains(id)
         })
         .collect();
@@ -370,7 +378,11 @@ pub(crate) fn close(
     // Closing the give or trade window cancels the exchange; see
     // `give::window`.
     if let crate::escape::Escape::Close(
-        id @ (WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::Trade),
+        id @ (WindowId::Bank
+        | WindowId::Bag(_)
+        | WindowId::Give
+        | WindowId::Trade
+        | WindowId::ActionsWindow),
     ) = *escape
     {
         shown.close(id);

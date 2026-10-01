@@ -215,6 +215,10 @@ pub struct Page {
     pub template: Option<WindowTemplate>,
     /// What it shows.
     pub pieces: Vec<(String, Element)>,
+    /// The picture on its tab, and while it is the page shown.
+    pub icon: [Option<Piece>; 2],
+    /// What its tab says under the pointer.
+    pub tooltip: Option<String>,
 }
 
 /// A window inside a window, such as the inventory's character view.
@@ -539,6 +543,11 @@ impl Library {
                     template: text_of(*page, "DrawTemplate")
                         .and_then(|template| self.templates.get(template).cloned()),
                     pieces: self.pieces(*page, elements, depth + 1),
+                    icon: [
+                        self.piece(text_of(*page, "TabIcon")),
+                        self.piece(text_of(*page, "TabIconActive")),
+                    ],
+                    tooltip: text_of(*page, "TooltipReference").map(str::to_owned),
                 })
             })
             .collect()
