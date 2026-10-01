@@ -78,6 +78,26 @@ pub(super) fn preview_player(
     }
 }
 
+/// What the offline preview lets the player do: what a Titanium zone does.
+const PREVIEW: [eq_client_core::Capability; 13] = {
+    use eq_client_core::Capability;
+    [
+        Capability::Casting,
+        Capability::Spellbook,
+        Capability::Inventory,
+        Capability::Trading,
+        Capability::Moving,
+        Capability::Targeting,
+        Capability::Combat,
+        Capability::Looting,
+        Capability::Talking,
+        Capability::Camping,
+        Capability::Doors,
+        Capability::GroundItems,
+        Capability::Zoning,
+    ]
+};
+
 /// Admits the offline demos' preview player where the viewer stands, as a
 /// session would, so that every demo fills the same admitted world.
 pub(super) fn admit_preview(
@@ -88,6 +108,8 @@ pub(super) fn admit_preview(
     let player = preview_player(origin, [None; 8]);
     for update in [
         WorldUpdate::Game(WorldEvent::Entered {
+            // The preview offers what a Titanium zone does.
+            capabilities: PREVIEW.to_vec(),
             session_id: 1,
             zone: zone.into(),
             player: Box::new(player),
@@ -506,6 +528,7 @@ pub(crate) mod testing {
         news(
             state,
             [WorldEvent::Entered {
+                capabilities: Vec::new(),
                 session_id,
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),
@@ -690,6 +713,7 @@ mod tests {
         // No installation is configured, so the zone's assets cannot load.
         for update in [
             WorldEvent::Entered {
+                capabilities: Vec::new(),
                 session_id: 2,
                 zone: "example".into(),
                 player: Box::new(player),
@@ -748,6 +772,7 @@ mod tests {
             });
         sender
             .send(WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
                 session_id: 2,
                 zone: "qeytoqrg".into(),
                 player: Box::new(testing::player(7)),
@@ -849,6 +874,7 @@ mod tests {
         );
         sender
             .send(WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
                 session_id: 2,
                 zone: "qeynos2".into(),
                 player: Box::new(testing::player(7)),
@@ -907,6 +933,7 @@ mod tests {
         let admitted = std::time::Instant::now();
         for update in [
             WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
                 session_id: 1,
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),
@@ -996,6 +1023,7 @@ mod tests {
                 &mut online,
                 [
                     WorldEvent::Entered {
+                        capabilities: Vec::new(),
                         session_id: 1,
                         zone: "qeytoqrg".into(),
                         player: Box::new(timed_player),
@@ -1290,6 +1318,7 @@ mod tests {
         let player = world(&app).player().cloned().unwrap();
         sender
             .send(WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
                 session_id: 2,
                 zone: "freportw".into(),
                 player: Box::new(player),

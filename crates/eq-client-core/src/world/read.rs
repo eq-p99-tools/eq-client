@@ -34,6 +34,19 @@ impl ClientWorld {
         self.characters.as_ref()
     }
 
+    /// What the admission lets the player do: a front end greys out or hides
+    /// the rest.
+    #[must_use]
+    pub fn capabilities(&self) -> &[crate::Capability] {
+        &self.capabilities
+    }
+
+    /// Whether the admission lets the player do this.
+    #[must_use]
+    pub fn can(&self, capability: crate::Capability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+
     /// The current admission, which commands must name.
     #[must_use]
     pub const fn session_id(&self) -> Option<u64> {

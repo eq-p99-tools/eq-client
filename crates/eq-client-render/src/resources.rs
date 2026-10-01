@@ -228,6 +228,7 @@ mod tests {
         let mut world = ClientWorld::default();
         for event in [
             WorldEvent::Entered {
+                capabilities: Vec::new(),
                 session_id: 1,
                 zone: "qeytoqrg".into(),
                 player: Box::new(player()),
