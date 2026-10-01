@@ -1,15 +1,77 @@
-//! Which materials dress a classic character model in its worn gear. The
-//! server says what each texture slot shows ([`Appearance`]); classic models
-//! name their materials by body part, material and piece, such as
-//! `HUMCH0001_MDF` (human chest, material 0, piece 1), and ship a set of
-//! looks for each part. This module only chooses names: the renderer loads
-//! them and keeps the base look when a model lacks one.
+//! Which meshes and materials dress a classic character model in its worn
+//! gear. The server says what each texture slot shows ([`Appearance`]);
+//! classic models name their materials by body part, material and piece, such
+//! as `HUMCH0001_MDF` (human chest, material 0, piece 1), and ship a set of
+//! looks for each part, plus whole bodies and heads to swap in for robes and
+//! helms ([`shape`]). This module only chooses: the renderer loads what it
+//! names and keeps the base look when a model lacks one.
 pub use eq_network_game::appearance::{Appearance, TextureSlot, WearChange};
 
 /// Armor materials classic models ship textures for: leather, chain, plate
-/// and, on some models, a fourth look. Robes (10 and up) and later
-/// race-specific materials are not drawn yet and keep the base look.
+/// and, on some models, a fourth look. Robes (10 and up) swap the whole body
+/// instead ([`shape`]); later race-specific materials keep the base look.
 const DRAWN_MATERIALS: std::ops::RangeInclusive<u32> = 1..=4;
+
+/// Races whose models have a robe body: human, erudite, high elf, dark elf,
+/// gnome and iksar.
+const ROBED_RACES: [u32; 6] = [1, 3, 5, 6, 12, 128];
+
+/// Chest materials that put those races in their robe body.
+const ROBES: std::ops::RangeInclusive<u32> = 10..=23;
+
+/// The body and head a model draws with, numbered as its meshes are (`HUM01`
+/// is body 1, `HUMHE03` head 3); 0 is the base body and the bare head.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Shape {
+    /// The body.
+    pub body: u8,
+    /// The head.
+    pub head: u8,
+}
+
+/// The body and head an appearance draws with, given which ones the model
+/// has. A robe puts a robe-wearing race in body 1. A head material picks the
+/// head of that number (1 to 3 are the leather, chain and plate helms) when
+/// the helm shows; servers mark helms shown on every NPC that has one and on
+/// players who chose to show theirs.
+#[must_use]
+pub fn shape(
+    race: u32,
+    appearance: &Appearance,
+    has_body: impl Fn(u8) -> bool,
+    has_head: impl Fn(u8) -> bool,
+) -> Shape {
+    let robed = ROBED_RACES.contains(&race)
+        && ROBES.contains(&appearance.material(TextureSlot::Chest))
+        && has_body(1);
+    let head = u8::try_from(appearance.material(TextureSlot::Head))
+        .ok()
+        .filter(|head| appearance.show_helm && *head > 0 && has_head(*head))
+        .unwrap_or(0);
+    Shape {
+        body: u8::from(robed),
+        head,
+    }
+}
+
+/// The robe texture set a chest material draws: the classic robes 10 to 16
+/// draw sets 4 to 10 (`CLK0401_MDF` to `CLK1006_MDF`).
+fn robe_set(appearance: &Appearance) -> Option<u32> {
+    let material = appearance.material(TextureSlot::Chest);
+    (10..=16).contains(&material).then(|| material - 6)
+}
+
+/// A robe material in another set: the robe body's `CLK04` pieces, or the
+/// hood an erudite's bare head wears (`CLKERM06_MDF`). None for any other name.
+fn robe(base: &str, set: u32) -> Option<String> {
+    let stem = base.strip_suffix("_MDF")?.strip_prefix("CLK")?;
+    let piece = match stem.strip_prefix("04") {
+        Some(piece) if piece.len() == 2 => piece,
+        _ if stem.len() == 5 && stem.ends_with("06") => "06",
+        _ => return None,
+    };
+    Some(format!("CLK{set:02}{piece}_MDF"))
+}
 
 /// A classic material name split into its parts.
 struct MaterialName<'a> {
@@ -48,10 +110,14 @@ fn slot(part: &str) -> Option<TextureSlot> {
 /// The material a primitive draws with for this appearance, from the one it
 /// uses in the base look. Armor swaps the two material digits (`HUMCH0201_MDF`
 /// for a chain tunic); a head swaps its face digit (`HUMHE0031_MDF` for face 3);
-/// anything else keeps its base material.
+/// a robe swaps its set (`CLK0701_MDF` for robe 13); anything else keeps its
+/// base material.
 #[must_use]
 pub fn dressed(base: &str, appearance: &Appearance) -> String {
     let base = base.to_ascii_uppercase();
+    if let Some(robed) = robe_set(appearance).and_then(|set| robe(&base, set)) {
+        return robed;
+    }
     let Some(name) = parse(&base) else {
         return base;
     };
@@ -72,15 +138,21 @@ pub fn dressed(base: &str, appearance: &Appearance) -> String {
     }
 }
 
-/// The tint on the slot that dresses this base material, if any. Faces are
-/// never tinted.
+/// The tint on the slot that dresses this base material, if any. Robes take
+/// the chest's tint and a helm the head's (`helm` says the material is on a
+/// helmed head); faces are never tinted.
 #[must_use]
-pub fn tint(base: &str, appearance: &Appearance) -> Option<[u8; 3]> {
+pub fn tint(base: &str, helm: bool, appearance: &Appearance) -> Option<[u8; 3]> {
     let base = base.to_ascii_uppercase();
-    let name = parse(&base)?;
-    slot(name.part)
-        .filter(|slot| *slot != TextureSlot::Head)
-        .and_then(|slot| appearance.tint(slot))
+    if base.starts_with("CLK") {
+        return appearance.tint(TextureSlot::Chest);
+    }
+    match parse(&base).and_then(|name| slot(name.part)) {
+        Some(TextureSlot::Head) => None,
+        Some(slot) => appearance.tint(slot),
+        None if helm => appearance.tint(TextureSlot::Head),
+        None => None,
+    }
 }
 
 /// The item model held in a hand, such as `IT10`, when one is held.
@@ -163,10 +235,48 @@ mod tests {
         let mut look = wearing(TextureSlot::Chest, 2);
         look.tints[TextureSlot::Chest.index()] = Some([200, 10, 10]);
         look.tints[TextureSlot::Head.index()] = Some([1, 2, 3]);
-        assert_eq!(tint("HUMCH0001_MDF", &look), Some([200, 10, 10]));
-        assert_eq!(tint("HUMLG0001_MDF", &look), None);
-        assert_eq!(tint("HUMHE0001_MDF", &look), None);
-        assert_eq!(tint("CLK0401_MDF", &look), None);
+        assert_eq!(tint("HUMCH0001_MDF", false, &look), Some([200, 10, 10]));
+        assert_eq!(tint("HUMLG0001_MDF", false, &look), None);
+        // Faces never take a tint, even under a helm; the helm itself does.
+        assert_eq!(tint("HUMHE0001_MDF", true, &look), None);
+        assert_eq!(tint("HELM14_MDF", true, &look), Some([1, 2, 3]));
+        assert_eq!(tint("HELM14_MDF", false, &look), None);
+        // Robes take the chest's tint.
+        assert_eq!(tint("CLK0401_MDF", false, &look), Some([200, 10, 10]));
+    }
+
+    #[test]
+    fn robes_put_robe_wearing_races_in_their_robe_body_and_set() {
+        let robe = wearing(TextureSlot::Chest, 13);
+        let all = |_| true;
+        assert_eq!(shape(1, &robe, all, all), Shape { body: 1, head: 0 });
+        // Races without robes, and models without the body, keep their own.
+        assert_eq!(shape(2, &robe, all, all).body, 0);
+        assert_eq!(shape(1, &robe, |_| false, all).body, 0);
+        assert_eq!(shape(1, &wearing(TextureSlot::Chest, 3), all, all).body, 0);
+        // Robe 13 draws set 7, on the robe body and on an erudite's hood.
+        assert_eq!(dressed("CLK0401_MDF", &robe), "CLK0701_MDF");
+        assert_eq!(dressed("clk0406_mdf", &robe), "CLK0706_MDF");
+        assert_eq!(dressed("CLKERM06_MDF", &robe), "CLK0706_MDF");
+        let last = wearing(TextureSlot::Chest, 16);
+        assert_eq!(dressed("CLK0401_MDF", &last), "CLK1001_MDF");
+        // Later robes keep the default set.
+        let later = wearing(TextureSlot::Chest, 17);
+        assert_eq!(dressed("CLK0401_MDF", &later), "CLK0401_MDF");
+    }
+
+    #[test]
+    fn shown_helms_pick_the_head_of_their_material() {
+        let mut plate = wearing(TextureSlot::Head, 3);
+        let all = |_| true;
+        // A hidden helm keeps the bare head.
+        assert_eq!(shape(1, &plate, all, all).head, 0);
+        plate.show_helm = true;
+        assert_eq!(shape(1, &plate, all, all).head, 3);
+        // A model without that head keeps the bare one.
+        assert_eq!(shape(1, &plate, all, |head| head < 3).head, 0);
+        let bare = wearing(TextureSlot::Head, 0);
+        assert_eq!(shape(1, &bare, all, all), Shape::default());
     }
 
     #[test]
