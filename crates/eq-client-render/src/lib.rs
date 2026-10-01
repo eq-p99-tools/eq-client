@@ -259,7 +259,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<spellbook::BookSelection>()
         .init_resource::<sheets::Sheets>()
         .init_resource::<chat::ChatState>()
-        .init_resource::<target::TargetState>()
+        .init_resource::<notices::Lines>()
         .init_resource::<items::ItemState>()
         .init_resource::<inventory::InventoryState>()
         .init_resource::<motion::Controls>()
@@ -1078,10 +1078,10 @@ fn camera_relative_direction(horizontal: f32, vertical: f32, yaw: f32) -> Vec3 {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn update_hud(
     motion: Res<motion::Controls>,
-    (scene, settings, hud, map): (
+    (scene, settings, notices, map): (
         Res<SceneInfo>,
         Res<ViewerSettings>,
-        Res<hud::HudState>,
+        Res<notices::Lines>,
         Res<keys::KeyMap>,
     ),
     nearby: Res<entities::NearbyEntities>,
@@ -1092,7 +1092,8 @@ fn update_hud(
     let (Ok(player), Ok(mut label)) = (players.single(), labels.single_mut()) else {
         return;
     };
-    let mut lines = vec![scene.zone_name.clone(), hud.status.clone()];
+    let now = std::time::Instant::now();
+    let mut lines = vec![scene.zone_name.clone(), notices.status.text(now).to_owned()];
     if online.enabled && online.in_world() && motion.speed.is_none() {
         lines.push("Movement unavailable: start with --movement-calibration".into());
     }
@@ -1102,7 +1103,7 @@ fn update_hud(
         Some(interact::Use::Item(_)) => map.help(&[(keys::Act::Use, "pick up the item here")]),
         None => String::new(),
     });
-    lines.push(online.door_status.clone());
+    lines.push(notices.door.text(now).to_owned());
     if settings.0.debug_overlay {
         let position = world_position(player.translation.to_array(), 0.0);
         lines.push(format!(

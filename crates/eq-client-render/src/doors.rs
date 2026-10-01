@@ -114,8 +114,9 @@ pub(super) fn nearest(
 /// refusal from the session or the outbox says why.
 pub(super) fn open(
     door_id: u8,
-    state: &mut super::online::OnlineState,
+    state: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
+    door: &mut crate::notices::Line,
 ) {
     let sent = outbox.post(state.world(), |stamp| {
         eq_client_core::ClientCommand::ClickDoor {
@@ -125,7 +126,7 @@ pub(super) fn open(
         }
     });
     if sent.is_ok() {
-        state.door_status.clear();
+        door.clear();
     }
 }
 
@@ -362,7 +363,8 @@ mod tests {
         );
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
-        app.init_resource::<Time>();
+        app.init_resource::<crate::notices::Lines>()
+            .init_resource::<Time>();
         app.insert_resource(super::super::Collision(Some(
             eq_client_core::movement::CollisionWorld::new([
                 [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],

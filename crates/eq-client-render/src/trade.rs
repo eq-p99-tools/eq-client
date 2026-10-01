@@ -964,7 +964,7 @@ mod tests {
                 ..TradeState::default()
             })
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
-            .init_resource::<super::super::target::TargetState>()
+            .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()

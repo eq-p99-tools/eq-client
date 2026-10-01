@@ -25,8 +25,6 @@ pub(super) struct OnlineState {
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
-    /// What became of the last door the player used.
-    pub door_status: String,
 }
 
 impl OnlineState {
@@ -97,7 +95,6 @@ impl OnlineState {
             selection: None,
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
-            door_status: String::new(),
         }
     }
 }
@@ -127,10 +124,9 @@ pub(super) fn tick(
 /// to reset itself.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct Panels<'w> {
-    hud: ResMut<'w, hud::HudState>,
+    lines: ResMut<'w, super::notices::Lines>,
     motion: ResMut<'w, super::motion::Controls>,
     inventory: ResMut<'w, super::inventory::InventoryState>,
-    target: ResMut<'w, super::target::TargetState>,
     combat: ResMut<'w, super::combat::CombatState>,
     trade: ResMut<'w, super::trade::TradeState>,
     items: ResMut<'w, super::items::ItemState>,
@@ -153,13 +149,13 @@ impl Panels<'_> {
             changes.cast,
             Some(CastNews::Began | CastNews::Refreshed | CastNews::Interrupted)
         ) {
-            self.hud.action_feedback = None;
+            self.lines.feedback.clear();
         }
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
         }
         for notice in &changes.notices {
-            self.tell(notice, messages, chat, state);
+            self.tell(notice, messages, chat);
         }
         if changes.characters {
             state.selection = state.world.characters().map(|list| {
@@ -186,7 +182,9 @@ impl Panels<'_> {
                         .item_use_result(*session_id, *request_id, error.clone())
                     {
                         let message = self.inventory.action_message().to_owned();
-                        self.hud.action_feedback = Some((std::time::Instant::now(), message));
+                        self.lines
+                            .feedback
+                            .flash(message, std::time::Instant::now());
                     }
                 }
                 Reply::InventoryMove {
@@ -221,18 +219,15 @@ impl Panels<'_> {
         notice: &eq_client_core::world::Notice,
         messages: Option<&hud::messages::Messages>,
         chat: &mut super::chat::ChatState,
-        state: &mut OnlineState,
     ) {
         use super::notices::Place;
         for (place, text) in super::notices::wording(notice, messages) {
             match place {
                 Place::Chat => chat.history.push(super::chat::system_line(text)),
-                Place::Status => self.hud.status = text,
-                Place::Target => self.target.status = text,
-                Place::Feedback => {
-                    self.hud.action_feedback = Some((std::time::Instant::now(), text));
-                }
-                Place::Door => state.door_status = text,
+                Place::Status => self.lines.status.set(text),
+                Place::Target => self.lines.target.set(text),
+                Place::Feedback => self.lines.feedback.flash(text, std::time::Instant::now()),
+                Place::Door => self.lines.door.set(text),
             }
         }
     }
@@ -241,8 +236,8 @@ impl Panels<'_> {
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
         // Whatever was in flight, its feedback is stale, and the world forgot
         // the target.
-        self.hud.action_feedback = None;
-        self.target.status.clear();
+        self.lines.feedback.clear();
+        self.lines.target.clear();
         if matches!(reason, Reset::Entered | Reset::Camped) {
             // Requests and choices made in the old admission are void.
             *self.combat = super::combat::CombatState::default();
@@ -260,36 +255,38 @@ impl Panels<'_> {
                 self.motion.reset(None);
                 if ended {
                     state.selection = None;
-                    state.door_status.clear();
+                    self.lines.door.clear();
                     self.inventory.forget();
                 }
             }
             Reset::Entered => {
                 self.motion.reset(None);
                 state.selection = None;
-                state.door_status.clear();
+                self.lines.door.clear();
                 self.inventory.forget();
             }
             Reset::Zoning { to_bind } => {
                 self.inventory.cancel_actions();
                 self.motion.reset(None);
-                self.hud.status = if to_bind {
-                    "Respawning at bind".into()
+                self.lines.status.set(if to_bind {
+                    "Respawning at bind"
                 } else {
-                    "Zoning".into()
-                };
+                    "Zoning"
+                });
             }
             Reset::Died => {
                 self.motion.reset(None);
                 self.inventory.cancel_actions();
-                self.hud.status = "Dead - awaiting server bind destination".into();
+                self.lines
+                    .status
+                    .set("Dead - awaiting server bind destination");
             }
             Reset::Camped => {
                 // Leave the zone; the world server sends a fresh character list.
-                state.door_status.clear();
+                self.lines.door.clear();
                 self.inventory.forget();
                 self.motion.reset(None);
-                self.hud.status = "Camped - choose a character".into();
+                self.lines.status.set("Camped - choose a character");
             }
         }
     }
@@ -383,7 +380,7 @@ pub(super) fn receive(
             WorldUpdate::Chat(line) => chat.history.push(line),
             // The door line is about a door the zone no longer has.
             WorldUpdate::Game(WorldEvent::Doors(eq_client_core::doors::DoorUpdate::RemoveAll)) => {
-                state.door_status.clear();
+                panels.lines.door.clear();
             }
             _ => (),
         }
@@ -641,7 +638,7 @@ mod tests {
             .init_resource::<hud::HudState>()
             .init_resource::<super::super::motion::Controls>()
             .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<super::super::target::TargetState>()
+            .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::combat::CombatState>()
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
@@ -741,7 +738,7 @@ mod tests {
             .init_resource::<hud::HudState>()
             .init_resource::<super::super::motion::Controls>()
             .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<super::super::target::TargetState>()
+            .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::combat::CombatState>()
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
@@ -811,7 +808,7 @@ mod tests {
             .init_resource::<hud::HudState>()
             .init_resource::<super::super::motion::Controls>()
             .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<super::super::target::TargetState>()
+            .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::combat::CombatState>()
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
@@ -830,8 +827,9 @@ mod tests {
             .resource_mut::<super::super::spellbook::BookView>()
             .page = 2;
         app.world_mut()
-            .resource_mut::<super::super::target::TargetState>()
-            .status = "Sending selection".into();
+            .resource_mut::<crate::notices::Lines>()
+            .target
+            .set("Sending selection");
         // Zoning keeps the item panel and the book's page.
         sender
             .send(WorldUpdate::Game(WorldEvent::ZoneTransfer(
@@ -854,8 +852,9 @@ mod tests {
         );
         assert!(
             app.world()
-                .resource::<super::super::target::TargetState>()
-                .status
+                .resource::<crate::notices::Lines>()
+                .target
+                .text(std::time::Instant::now())
                 .is_empty()
         );
         sender
@@ -935,7 +934,7 @@ mod tests {
             .init_resource::<hud::HudState>()
             .init_resource::<super::super::motion::Controls>()
             .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<super::super::target::TargetState>()
+            .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::combat::CombatState>()
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
@@ -1191,9 +1190,10 @@ mod tests {
         app.update();
         assert!(
             app.world()
-                .resource::<hud::HudState>()
-                .action_feedback
-                .is_none()
+                .resource::<crate::notices::Lines>()
+                .feedback
+                .text(std::time::Instant::now())
+                .is_empty()
         );
         sender
             .send(WorldUpdate::Game(WorldEvent::CastRejected {
@@ -1203,12 +1203,11 @@ mod tests {
             }))
             .unwrap();
         app.update();
-        let hud = app.world().resource::<hud::HudState>();
         assert!(
-            hud.action_feedback
-                .as_ref()
-                .unwrap()
-                .1
+            app.world()
+                .resource::<crate::notices::Lines>()
+                .feedback
+                .text(std::time::Instant::now())
                 .contains("Target unavailable")
         );
         assert_eq!(world(&app).casting().pending, Some(42));

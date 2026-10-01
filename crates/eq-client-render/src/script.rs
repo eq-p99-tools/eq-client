@@ -180,7 +180,10 @@ type Buttons<'w, 's> = Query<
 >;
 
 type Observed<'w> = (
-    Res<'w, super::hud::HudState>,
+    (
+        Res<'w, super::hud::HudState>,
+        Res<'w, super::notices::Lines>,
+    ),
     Res<'w, crate::outbox::Outbox>,
     Res<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,

@@ -18,7 +18,7 @@ pub(super) fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
 pub(super) fn state(
     label: &str,
     online: &crate::online::OnlineState,
-    (hud, ..): &Observed,
+    ((hud, lines), ..): &Observed,
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
@@ -88,7 +88,7 @@ pub(super) fn state(
         casting = ?online.world().casting().cast.map(|(spell, _, _)| spell),
         pending = ?online.world().casting().pending,
         interrupted = ?online.world().casting().interrupted.map(|(_, id)| id),
-        feedback = ?hud.action_feedback.as_ref().map(|(_, text)| text),
+        feedback = lines.feedback.text(std::time::Instant::now()),
         target = ?online.world().target().selected,
         considered = ?online.world().target().selected.and_then(|id| online.world().considered(id)),
         camp = ?online.world().camp().map(|camp| camp.logging_out),
@@ -122,7 +122,10 @@ type NearbyDoor = (u8, u8, Option<u8>, i32, [i32; 3]);
 type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
 
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
-pub(super) fn surroundings(online: &crate::online::OnlineState, (.., combat, _): &Observed) {
+pub(super) fn surroundings(
+    online: &crate::online::OnlineState,
+    ((_, lines), .., combat, _): &Observed,
+) {
     let origin = online
         .world()
         .player()
@@ -209,7 +212,7 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., combat, _):
         ?ground,
         ?gear,
         ?models,
-        door_status = online.door_status,
+        door_status = lines.door.text(std::time::Instant::now()),
         coins = ?online.world().coins(),
         trade = crate::trade::summary(online.world()),
         auto_attack = combat.auto_attack,
