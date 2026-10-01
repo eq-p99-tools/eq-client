@@ -46,8 +46,6 @@ pub(super) struct ChatState {
     active: ChatTab,
     views: BTreeMap<ChatTab, TabView>,
     pub hovered: bool,
-    pub composing: bool,
-    pub escape_consumed: bool,
     /// A `/target Name` request waiting for target selection to resolve it.
     pub requested_target: Option<String>,
     draft: String,
@@ -234,7 +232,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         .with_children(|footer| {
             footer.spawn((
                 InputStatus,
-                Text::new("Scroll for history / Enter to chat"),
+                Text::new("Wheel: history | Enter: chat"),
                 TextFont {
                     font_size: FontSize::Px(10.0),
                     ..default()
@@ -271,6 +269,7 @@ pub(super) fn input(
     mut state: ResMut<ChatState>,
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
+    mut typing: ResMut<crate::keys::Typing>,
     mut keyboard: MessageReader<KeyboardInput>,
     windows: Query<&Window, With<PrimaryWindow>>,
     panels: Query<(Entity, &UiGlobalTransform, &ComputedNode), With<Panel>>,
@@ -281,16 +280,16 @@ pub(super) fn input(
     send: Query<&Interaction, (With<Send>, Changed<Interaction>)>,
     viewport: Query<&ComputedNode, With<Viewport>>,
 ) {
-    state.escape_consumed = false;
+    typing.escape_consumed = false;
     // Character selection owns keyboard input until the zone admits the player.
     if online.enabled && online.world.session_id().is_none() {
         keyboard.clear();
-        state.composing = false;
+        typing.composing = false;
         state.hovered = false;
         return;
     }
     if input_box.iter().any(|value| *value == Interaction::Pressed) {
-        state.composing = true;
+        typing.composing = true;
     }
     let mut submit = send.iter().any(|value| *value == Interaction::Pressed);
     for event in keyboard.read() {
@@ -299,20 +298,20 @@ pub(super) fn input(
         }
         match &event.logical_key {
             Key::Enter => {
-                if state.composing {
+                if typing.composing {
                     submit = true;
                 } else {
-                    state.composing = true;
+                    typing.composing = true;
                 }
             }
-            Key::Escape if state.composing => {
-                state.composing = false;
-                state.escape_consumed = true;
+            Key::Escape if typing.composing => {
+                typing.composing = false;
+                typing.escape_consumed = true;
             }
-            Key::Backspace if state.composing => {
+            Key::Backspace if typing.composing => {
                 state.draft.pop();
             }
-            Key::Character(value) if state.composing && state.draft.len() < 512 => {
+            Key::Character(value) if typing.composing && state.draft.len() < 512 => {
                 state.draft.push_str(value);
                 let boundary = state.draft.floor_char_boundary(512);
                 state.draft.truncate(boundary);
@@ -323,9 +322,9 @@ pub(super) fn input(
     if submit {
         if state.draft.trim().is_empty() {
             // Enter on an empty line closes the input, as in the official client.
-            state.composing = false;
+            typing.composing = false;
         } else {
-            submit_draft(&mut state, &online, &outbox);
+            submit_draft(&mut state, &mut typing, &online, &outbox);
         }
     }
     state.hovered = windows
@@ -376,6 +375,7 @@ pub(super) fn input(
 pub(super) fn refresh(
     mut commands: Commands,
     mut state: ResMut<ChatState>,
+    typing: Res<crate::keys::Typing>,
     mut contents: Query<(Entity, &mut Content, Option<&Children>)>,
     rendered: Query<(Option<&LineId>, Has<Placeholder>)>,
     mut labels: Query<(&TabLabel, &mut Text), (Without<InputLabel>, Without<InputStatus>)>,
@@ -440,20 +440,20 @@ pub(super) fn refresh(
     }
     for mut text in &mut input_labels {
         text.0 = if state.draft.is_empty() {
-            if state.composing {
+            if typing.composing {
                 "|"
             } else {
                 "Press Enter to chat"
             }
             .into()
-        } else if state.composing {
+        } else if typing.composing {
             format!("{}|", state.draft)
         } else {
             state.draft.clone()
         };
     }
     for mut border in &mut input_boxes {
-        *border = BorderColor::all(if state.composing {
+        *border = BorderColor::all(if typing.composing {
             Color::srgb(0.45, 0.72, 0.95)
         } else {
             EDGE
@@ -461,7 +461,7 @@ pub(super) fn refresh(
     }
     for mut text in &mut input_status {
         text.0 = if state.status.is_empty() {
-            "Scroll for history / Enter to chat".into()
+            "Wheel: history | Enter: chat".into()
         } else {
             state.status.clone()
         };
@@ -580,6 +580,7 @@ impl From<crate::outbox::Refusal> for Unsent {
 
 fn submit_draft(
     state: &mut ChatState,
+    typing: &mut crate::keys::Typing,
     online: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
 ) {
@@ -607,7 +608,7 @@ fn submit_draft(
             state.draft.clear();
             // Sent lines return the keyboard to the game; a line sent says
             // nothing more.
-            state.composing = false;
+            typing.composing = false;
             state.status.clear();
         }
         Err(Unsent::Mistake(mistake)) => state.status = mistake,
@@ -858,6 +859,7 @@ mod tests {
     #[test]
     fn new_lines_join_the_ones_shown_and_evicted_lines_leave() {
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
             .add_systems(Update, refresh);
         app.world_mut().spawn(Content::default());
@@ -978,6 +980,7 @@ mod tests {
         let mut online = super::super::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
             .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
@@ -992,26 +995,28 @@ mod tests {
             repeat: false,
             window: Entity::PLACEHOLDER,
         };
-        {
-            let mut chat = app.world_mut().resource_mut::<ChatState>();
-            chat.composing = true;
-            chat.draft = "hello".into();
-        }
+        app.world_mut().resource_mut::<ChatState>().draft = "hello".into();
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
         app.world_mut().write_message(enter.clone());
         app.update();
         assert!(receiver.try_recv().is_ok());
-        let chat = app.world().resource::<ChatState>();
-        assert!(!chat.composing && chat.draft.is_empty());
-        app.world_mut().resource_mut::<ChatState>().composing = true;
+        assert!(!app.world().resource::<crate::keys::Typing>().composing);
+        assert!(app.world().resource::<ChatState>().draft.is_empty());
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
         app.world_mut().write_message(enter);
         app.update();
-        assert!(!app.world().resource::<ChatState>().composing);
+        assert!(!app.world().resource::<crate::keys::Typing>().composing);
         assert!(receiver.try_recv().is_err());
     }
 
     #[test]
     fn character_selection_enter_does_not_open_chat_or_leak_after_admission() {
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
             .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
@@ -1027,7 +1032,7 @@ mod tests {
             window: Entity::PLACEHOLDER,
         });
         app.update();
-        assert!(!app.world().resource::<ChatState>().composing);
+        assert!(!app.world().resource::<crate::keys::Typing>().composing);
         crate::online::testing::admit(
             &mut app
                 .world_mut()
@@ -1036,12 +1041,13 @@ mod tests {
             crate::online::testing::player(1),
         );
         app.update();
-        assert!(!app.world().resource::<ChatState>().composing);
+        assert!(!app.world().resource::<crate::keys::Typing>().composing);
     }
 
     #[test]
     fn pressing_tabs_filters_text_without_losing_history() {
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
             .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
@@ -1078,6 +1084,7 @@ mod tests {
     #[test]
     fn messages_do_not_force_a_scrolled_tab_back_to_latest() {
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
             .add_systems(Update, refresh);
         app.world_mut().spawn(Content::default());

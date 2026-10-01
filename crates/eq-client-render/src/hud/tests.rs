@@ -187,6 +187,7 @@ fn pending_cast_is_labelled_as_awaiting_and_cleared_on_reset() {
 #[test]
 fn spell_hover_tracks_live_gem_contents_and_clears_when_pointer_leaves() {
     let mut app = App::new();
+    crate::keys::testing::install(&mut app);
     let mut state = OnlineState::new(true);
     let mut player = caster();
     player.memorized_spells[0] = Some(42);
@@ -206,7 +207,9 @@ fn spell_hover_tracks_live_gem_contents_and_clears_when_pointer_leaves() {
     let details = app.world_mut().spawn((SpellDetails, Text::default())).id();
     app.update();
     let text = &app.world().get::<Text>(details).unwrap().0;
-    assert!(text.contains("Synthetic spell | Alt+1"));
+    assert!(text.contains("Synthetic spell"));
+    // The gem's key is in its tooltip, written from the key map.
+    assert!(!text.contains("Alt+1"));
     assert!(text.contains("timing unavailable"));
     // The server empties the gem.
     testing::spell(
@@ -227,18 +230,35 @@ fn spell_hover_tracks_live_gem_contents_and_clears_when_pointer_leaves() {
     );
     *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
     app.update();
-    assert!(
+    assert!(app.world().get::<Text>(details).unwrap().0.is_empty());
+}
+
+#[test]
+fn gems_and_action_slots_name_their_keys_from_the_key_map() {
+    let mut app = App::new();
+    crate::keys::testing::install(&mut app);
+    app.add_systems(Update, key_help);
+    let gem = app.world_mut().spawn(SpellGem(0)).id();
+    let slot = app.world_mut().spawn(hotbar::Slot(2)).id();
+    app.update();
+    let tooltip = |entity| {
         app.world()
-            .get::<Text>(details)
+            .get::<crate::tooltip::Tooltip>(entity)
             .unwrap()
             .0
-            .contains("Hover a gem")
+            .clone()
+    };
+    assert_eq!(tooltip(gem), "Alt+1: cast | Shift-click: forget");
+    assert_eq!(
+        tooltip(slot),
+        "3: use | Ctrl+3: bind the hovered gem or item | Ctrl+Shift+3: empty"
     );
 }
 
 #[test]
 fn action_feedback_expires() {
     let mut app = App::new();
+    crate::keys::testing::install(&mut app);
     app.insert_resource(HudState {
         action_feedback: Some((std::time::Instant::now(), "Request queue is full".into())),
         ..default()
@@ -259,13 +279,7 @@ fn action_feedback_expires() {
         .unwrap()
         .0 -= std::time::Duration::from_secs(4);
     app.update();
-    assert!(
-        app.world()
-            .get::<Text>(label)
-            .unwrap()
-            .0
-            .contains("Hover a gem")
-    );
+    assert!(app.world().get::<Text>(label).unwrap().0.is_empty());
 }
 
 #[test]
@@ -275,6 +289,7 @@ fn action_feedback_expires() {
 )]
 fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() {
     let mut app = App::new();
+    crate::keys::testing::install(&mut app);
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     app.insert_resource(admitted())
         .insert_resource(crate::outbox::Outbox::new(Some(tx)))
@@ -415,7 +430,9 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         }
     ));
     assert_eq!(world(&app).player().unwrap().memorized_spells[0], Some(73));
-    app.world_mut().resource_mut::<ChatState>().composing = true;
+    app.world_mut()
+        .resource_mut::<crate::keys::Typing>()
+        .composing = true;
     press(&mut app);
     assert!(rx.try_recv().is_err());
     // A dropped connection forgets the gem timers.
@@ -446,14 +463,14 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &player,
         &sender,
         &request(1, 12),
-        &messages,
+        (&messages, &crate::keys::KeyMap::default()),
     );
     assert!(
         hud.action_feedback
             .as_ref()
             .unwrap()
             .1
-            .contains("Empty spell gem")
+            .contains("Gem 2 is empty")
     );
     assert!(receiver.try_recv().is_err());
     requests::spell(
@@ -462,7 +479,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &player,
         &sender,
         &request(0, 99),
-        &messages,
+        (&messages, &crate::keys::KeyMap::default()),
     );
     // A request sent says nothing, and never claims a cast the server has
     // not answered.
@@ -475,7 +492,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &player,
         &sender,
         &request(0, 99),
-        &messages,
+        (&messages, &crate::keys::KeyMap::default()),
     );
     // The outbox refuses a full queue and shows why in the feedback line.
     assert_eq!(sender.take_refused(), [crate::outbox::Refusal::Busy]);
@@ -491,7 +508,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &player,
         &sender,
         &request(0, 99),
-        &messages,
+        (&messages, &crate::keys::KeyMap::default()),
     );
     assert_eq!(sender.take_refused(), [crate::outbox::Refusal::Ended]);
 }
@@ -528,7 +545,7 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
             world,
             &player,
             request,
-            &messages,
+            (&messages, &crate::keys::KeyMap::default()),
             std::time::Instant::now(),
         )
     };

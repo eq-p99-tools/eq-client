@@ -160,7 +160,7 @@ impl InventoryState {
         }
         self.actions.message = error.unwrap_or_else(|| {
             if to_cursor || inventory.items().contains_key(&InventorySlot::CURSOR) {
-                "Item is on the cursor / choose a destination".into()
+                "Item is on the cursor; choose a destination".into()
             } else {
                 // Servers acknowledge only refused moves, so the placement
                 // settles without a later message; claim nothing more.
@@ -394,9 +394,9 @@ impl InventoryState {
             after.apply(update.clone());
             self.demo_news.push(update);
             self.actions.message = if after.items().contains_key(&InventorySlot::CURSOR) {
-                "Item is on the cursor / choose a destination".into()
+                "Item is on the cursor; choose a destination".into()
             } else {
-                "Item placed locally / offline demo".into()
+                "Item placed locally (offline demo)".into()
             };
         } else {
             sender.send(&online.world, ClientCommand::MoveInventory(request))?;

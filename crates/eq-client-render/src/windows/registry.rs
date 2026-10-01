@@ -144,10 +144,9 @@ pub(crate) struct Description {
     pub title: &'static str,
     pub placement: Placement,
     pub layer: Layer,
-    /// Whether the player opens and closes it, from the selector and its key.
+    /// Whether the player opens and closes it, from the selector and its key
+    /// in the key map.
     pub toggled: bool,
-    /// The key that opens and closes it.
-    pub key: Option<KeyCode>,
     /// Whether Escape closes it, the top one first.
     pub closes_on_escape: bool,
     /// Whether its placement is kept between runs.
@@ -167,7 +166,6 @@ const fn hud(
         placement,
         layer: Layer::Hud,
         toggled: false,
-        key: None,
         closes_on_escape: false,
         persists: true,
         saved_as,
@@ -185,7 +183,6 @@ const fn floating(
         placement,
         layer: Layer::Floating,
         toggled,
-        key: None,
         closes_on_escape: true,
         persists: true,
         saved_as,
@@ -283,7 +280,6 @@ impl WindowId {
                 )
             },
             Self::Inventory => Description {
-                key: Some(KeyCode::KeyI),
                 ..floating(
                     "INVENTORY",
                     Placement::TopLeft(16.0, 100.0),
@@ -292,7 +288,6 @@ impl WindowId {
                 )
             },
             Self::Spellbook => Description {
-                key: Some(KeyCode::KeyB),
                 ..floating(
                     "SPELLBOOK",
                     Placement::TopRight(16.0, 56.0),

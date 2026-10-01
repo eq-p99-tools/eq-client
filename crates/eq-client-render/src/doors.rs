@@ -361,6 +361,7 @@ mod tests {
             },
         );
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<Time>();
         app.insert_resource(super::super::Collision(Some(
             eq_client_core::movement::CollisionWorld::new([
@@ -408,12 +409,12 @@ mod tests {
         assert!(receiver.try_recv().is_err());
         app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         app.update();
         assert!(receiver.try_recv().is_err());
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = false;
         app.update();
         assert!(matches!(

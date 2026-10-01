@@ -22,13 +22,15 @@ pub(super) fn register_layout(app: &mut App) {
         Update,
         (
             stack::raise,
-            stack::toggle.after(super::escape::route),
+            stack::toggle,
             stack::light_selector,
             stack::restack,
         )
-            .chain(),
+            .chain()
+            .after(super::escape::route)
+            .in_set(super::Stage::Route),
     );
-    app.add_systems(Update, store::persist.after(super::online::receive));
+    app.add_systems(Update, store::persist.in_set(super::Stage::Present));
     app.add_systems(PostUpdate, block_clicks);
     app.add_systems(
         PostUpdate,

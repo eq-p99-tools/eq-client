@@ -3,7 +3,7 @@
 //! L loots the targeted corpse, U trades with the targeted NPC, and Escape
 //! closes the window (see `escape`). A window closes only once the server has
 //! been told, so the server never keeps a session the player can no longer end.
-use bevy::{prelude::*, window::PrimaryWindow};
+use bevy::prelude::*;
 use eq_client_core::{
     ClientCommand, SpawnKind,
     inventory::InventoryItem,
@@ -209,13 +209,12 @@ pub(super) enum Action {
     clippy::too_many_lines
 )]
 pub(super) fn input(
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: super::keys::Keys,
     mut online: ResMut<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut trade: ResMut<TradeState>,
     mut chat: ResMut<super::chat::ChatState>,
     buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     escape: Res<super::escape::Escape>,
 ) {
     trade.follow(&online.world);
@@ -231,7 +230,6 @@ pub(super) fn input(
     let send = |world: &eq_client_core::world::ClientWorld, command: ClientCommand| {
         outbox.send(world, command).is_ok()
     };
-    let focused = !chat.composing && windows.single().is_ok_and(|window| window.focused);
     // The target's ID, kind, class, visibility and shown name.
     let targeted = online.world.target().selected.and_then(|id| {
         let spawn = &online.world.spawn(id)?.state;
@@ -255,7 +253,7 @@ pub(super) fn input(
         }
         _ => (),
     }
-    if focused && keys.just_pressed(KeyCode::KeyL) {
+    if keys.pressed(super::keys::Act::Loot) {
         if trade.loot.is_some() {
             clicked.push(Action::EndLoot);
         } else if let Some((corpse_id, _, _, _, name)) = targeted
@@ -284,7 +282,7 @@ pub(super) fn input(
             ));
         }
     }
-    if focused && keys.just_pressed(KeyCode::KeyU) {
+    if keys.pressed(super::keys::Act::Trade) {
         if trade.merchant.is_some() {
             clicked.push(Action::EndShop);
         } else if let Some((merchant_id, _, _, _, name)) =
@@ -783,7 +781,10 @@ mod tests {
             ..default()
         };
         window.set_physical_cursor_position(Some(DVec2::new(100.0, 100.0)));
-        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        let window = app
+            .world_mut()
+            .spawn((window, bevy::window::PrimaryWindow))
+            .id();
         app.update();
         let panel = |app: &mut App| {
             app.world_mut()
@@ -835,7 +836,10 @@ mod tests {
             .add_systems(Update, (windows::pointer::wheel, scroll).chain());
         let mut window = Window::default();
         window.set_physical_cursor_position(Some(bevy::math::DVec2::new(100.0, 100.0)));
-        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        let window = app
+            .world_mut()
+            .spawn((window, bevy::window::PrimaryWindow))
+            .id();
         // The merchant's list dragged over the loot list, both long enough to scroll.
         let list = |app: &mut App, rows: Rows, stack: u32| {
             app.world_mut()
@@ -1022,6 +1026,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         drop(receiver);
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         online.world.open_loot(9);
         app.insert_resource(online)
             .insert_resource(TradeState {
@@ -1043,7 +1048,7 @@ mod tests {
                 focused: true,
                 ..default()
             },
-            PrimaryWindow,
+            bevy::window::PrimaryWindow,
         ));
         app.world_mut()
             .spawn((Button, Action::EndLoot, Interaction::Pressed));

@@ -15,7 +15,7 @@ impl Default for UiSkin {
 
 /// Keeps [`UiSkin`] current, before the windows that draw with it.
 pub(super) fn register(app: &mut App) {
-    app.add_systems(Update, follow.before(super::inventory::update));
+    app.add_systems(Update, follow.in_set(super::Stage::Scene));
 }
 
 /// Picks the skin again when the character or world changes, reading the

@@ -95,66 +95,40 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
     ));
 }
 
-fn digit(keys: &ButtonInput<KeyCode>) -> Option<usize> {
-    [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-        KeyCode::Digit7,
-        KeyCode::Digit8,
-        KeyCode::Digit9,
-        KeyCode::Digit0,
-    ]
-    .iter()
-    .position(|key| keys.just_pressed(*key))
+/// The first of the ten slots whose action the keys freshly pressed.
+fn slot_pressed(keys: &crate::keys::Keys, act: fn(u8) -> crate::keys::Act) -> Option<usize> {
+    (0..10u8)
+        .find(|slot| keys.pressed(act(*slot)))
+        .map(usize::from)
 }
 
-/// Resolves unmodified number keys or a button press into a typed action.
+/// Resolves a slot's key or a button press into a typed action.
 pub(super) fn requested(
-    keys: &ButtonInput<KeyCode>,
+    keys: &crate::keys::Keys,
     bindings: &Bindings,
     clicks: &Query<(&Interaction, &Slot), Changed<Interaction>>,
 ) -> Option<Action> {
-    if keys.any_pressed([
-        KeyCode::ControlLeft,
-        KeyCode::ControlRight,
-        KeyCode::AltLeft,
-        KeyCode::AltRight,
-        KeyCode::ShiftLeft,
-        KeyCode::ShiftRight,
-    ]) {
-        return None;
-    }
     let slot = clicks
         .iter()
         .find(|(interaction, _)| **interaction == Interaction::Pressed)
         .map(|(_, slot)| slot.0)
-        .or_else(|| digit(keys))?;
+        .or_else(|| slot_pressed(keys, crate::keys::Act::Slot))?;
     bindings.0.get(slot).copied().flatten()
 }
 
 /// Ctrl+number binds the hovered gem or item; Ctrl+Shift+number clears the slot.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update(
-    keys: Res<ButtonInput<KeyCode>>,
-    chat: Res<crate::chat::ChatState>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    keys: crate::keys::Keys,
     gems: Query<(&Interaction, &super::SpellGem)>,
     items: Query<(&Interaction, &crate::inventory::SlotButton)>,
     online: Option<Res<crate::online::OnlineState>>,
     mut bindings: ResMut<Bindings>,
 ) {
-    if !chat.composing
-        && windows.single().is_ok_and(|window| window.focused)
-        && keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
-        && let Some(index) = digit(&keys)
-    {
-        if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
-            bindings.0[index] = None;
-        } else if let Some((_, gem)) = gems
+    if let Some(index) = slot_pressed(&keys, crate::keys::Act::ClearSlot) {
+        bindings.0[index] = None;
+    } else if let Some(index) = slot_pressed(&keys, crate::keys::Act::BindSlot) {
+        if let Some((_, gem)) = gems
             .iter()
             .find(|(interaction, _)| **interaction != Interaction::None)
         {
@@ -180,6 +154,7 @@ pub(crate) fn presentation(
     bindings: Res<Bindings>,
     online: Res<crate::online::OnlineState>,
     names: Res<crate::spellbook::SpellNames>,
+    map: Res<crate::keys::KeyMap>,
     mut slots: Query<(&Interaction, &Slot, &mut BackgroundColor)>,
     mut labels: Query<(&mut Text, Option<&Caption>, Option<&Hint>)>,
 ) {
@@ -241,41 +216,74 @@ pub(crate) fn presentation(
                     {
                         format!("G{}", gem + 1)
                     } else {
-                        "—".into()
+                        "-".into()
                     }
                 }
                 Some(Action::Sit) => "Sit".into(),
                 Some(Action::Stand) => "Stand".into(),
                 Some(Action::Item { .. }) => "Item".into(),
-                None => "—".into(),
+                None => "-".into(),
             };
         }
         if hint.is_some() {
-            text.0 = match hovered.and_then(|index| bindings.0[index]) {
-                Some(Action::Gem(gem)) => match online.world.player().map_or([None; 8], |player| player.memorized_spells).get(usize::from(gem)).copied().flatten() {
-                    Some(spell) => {
-                        let status = if online.world.casting().pending.is_some() {
-                            "Awaiting cast acknowledgement".into()
-                        } else if online.world.casting().cast.is_some() {
-                            "Casting".into()
-                        } else {
-                            let remaining = online.world.casting().cooldowns.remaining(spell, now);
-                            if remaining.is_zero() { "Uses current target".into() }
-                            else { format!("Available in {:.1}s", remaining.as_secs_f32()) }
-                        };
-                        format!("{}\n{}\n{status}", names.label(spell), names.details(spell))
-                    }
-                    None => format!("Gem {} is empty\nOpen spellbook [B] to memorize", gem + 1),
-                },
-                Some(Action::Sit) => "Sit down".into(),
-                Some(Action::Stand) => "Stand up".into(),
-                Some(Action::Item { slot, id }) => bound_item(inventory, slot, id)
-                    .map_or_else(|| format!("Bound item unavailable\n{} / rebind after moving it", slot.label()),
-                        |item| format!("{}\n{} / uses current target or self", item.details.name, slot.label())),
-                None if hovered.is_some() => "Unassigned\nHover gem or item + Ctrl+number: bind".into(),
-                None => "Hover action for details\nHover gem or item + Ctrl+number: bind\nCtrl+Shift+number: clear".into(),
-            };
+            text.0 = hovered_detail(&bindings, hovered, &online.world, (&names, &map), now);
         }
+    }
+}
+
+/// What the hovered slot holds, for the window's detail line.
+fn hovered_detail(
+    bindings: &Bindings,
+    hovered: Option<usize>,
+    world: &eq_client_core::world::ClientWorld,
+    (names, map): (&crate::spellbook::SpellNames, &crate::keys::KeyMap),
+    now: std::time::Instant,
+) -> String {
+    let inventory = world.inventory();
+    match hovered.and_then(|index| bindings.0[index]) {
+        Some(Action::Gem(gem)) => match world
+            .player()
+            .map_or([None; 8], |player| player.memorized_spells)
+            .get(usize::from(gem))
+            .copied()
+            .flatten()
+        {
+            Some(spell) => {
+                let status = if world.casting().pending.is_some() {
+                    "Awaiting cast acknowledgement".into()
+                } else if world.casting().cast.is_some() {
+                    "Casting".into()
+                } else {
+                    let remaining = world.casting().cooldowns.remaining(spell, now);
+                    if remaining.is_zero() {
+                        "Uses current target".into()
+                    } else {
+                        format!("Available in {:.1}s", remaining.as_secs_f32())
+                    }
+                };
+                format!("{}\n{}\n{status}", names.label(spell), names.details(spell))
+            }
+            None => super::empty_gem(gem, map),
+        },
+        Some(Action::Sit) => "Sit down".into(),
+        Some(Action::Stand) => "Stand up".into(),
+        Some(Action::Item { slot, id }) => bound_item(inventory, slot, id).map_or_else(
+            || {
+                format!(
+                    "Bound item unavailable\n{}; rebind after moving it",
+                    slot.label()
+                )
+            },
+            |item| {
+                format!(
+                    "{}\n{}; uses the current target or yourself",
+                    item.details.name,
+                    slot.label()
+                )
+            },
+        ),
+        None if hovered.is_some() => "Unassigned".into(),
+        None => String::new(),
     }
 }
 
@@ -309,17 +317,15 @@ pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate
 /// Item shortcuts share inventory validation, request IDs, cursor rules and worker feedback.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn item_actions(
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: crate::keys::Keys,
     bindings: Res<Bindings>,
     clicks: Query<(&Interaction, &Slot), Changed<Interaction>>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    chat: Res<crate::chat::ChatState>,
     online: Res<crate::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
     mut hud: ResMut<super::HudState>,
     mut inventory: ResMut<crate::inventory::InventoryState>,
 ) {
-    if chat.composing || !windows.single().is_ok_and(|window| window.focused) {
+    if !keys.focused() {
         return;
     }
     let Some(Action::Item { slot, id }) = requested(&keys, &bindings, &clicks) else {
@@ -348,6 +354,7 @@ mod tests {
         fields[0] = "73";
         fields[1] = "Synthetic spell";
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
         app.init_resource::<Bindings>()
@@ -416,6 +423,7 @@ mod tests {
     #[test]
     fn binding_and_clearing_requires_focused_non_chat_input() {
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<Bindings>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::chat::ChatState>()
@@ -446,7 +454,7 @@ mod tests {
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::ShiftLeft);
         app.world_mut()
-            .resource_mut::<crate::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         app.update();
         assert_eq!(
@@ -454,7 +462,7 @@ mod tests {
             Some(Action::Gem(4))
         );
         app.world_mut()
-            .resource_mut::<crate::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = false;
         app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
         app.update();

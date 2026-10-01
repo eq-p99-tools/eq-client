@@ -2,7 +2,7 @@
 pub(super) mod marker;
 mod picking;
 use super::{entities::NearbyEntities, online::OnlineState};
-use crate::outbox::Outbox;
+use crate::{keys::Act, outbox::Outbox};
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::{ClientCommand, SpawnKind, targeting::cycle};
 
@@ -96,7 +96,7 @@ pub(super) fn spawn(commands: &mut Commands) {
 pub(super) fn input(
     settings: Option<Res<super::ViewerSettings>>,
     mut attempted: Local<bool>,
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: super::keys::Keys,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     // The world camera; the paperdoll's camera films the inventory figure.
@@ -151,9 +151,7 @@ pub(super) fn input(
             eprintln!("One-shot target: selecting nearby player spawn {id}");
         }
     }
-    let accepts_input = !chat.composing
-        && !chat.escape_consumed
-        && windows.single().is_ok_and(|window| window.focused);
+    let accepts_input = keys.escape_free();
     if let Some(name) = requested {
         match named(&ids, &online, &name) {
             Some(id) => proposal = Some(Some(id)),
@@ -161,14 +159,10 @@ pub(super) fn input(
         }
     } else if *escape == super::escape::Escape::Target {
         proposal = Some(None);
-    } else if accepts_input && keys.just_pressed(KeyCode::F1) {
+    } else if keys.pressed(Act::TargetSelf) {
         proposal = own_id.map(Some);
-    } else if accepts_input && keys.just_pressed(KeyCode::Tab) {
-        proposal = Some(cycle(
-            &ids,
-            current,
-            keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
-        ));
+    } else if let Some(act) = keys.first([Act::TargetNext, Act::TargetPrevious]) {
+        proposal = Some(cycle(&ids, current, act == Act::TargetPrevious));
     } else if accepts_input
         && mouse.just_pressed(MouseButton::Left)
         && !chat.hovered
@@ -321,13 +315,7 @@ pub(super) fn update(
             text.0 = spawn.map_or_else(
                 || {
                     own.map_or_else(
-                        || {
-                            if target.status.is_empty() {
-                                "Click / Tab target | F1 self | Esc clear".into()
-                            } else {
-                                target.status.clone()
-                            }
-                        },
+                        || target.status.clone(),
                         |_| joined(&["You", &health, &target.status]),
                     )
                 },
@@ -338,24 +326,46 @@ pub(super) fn update(
                         _ => "Corpse",
                     };
                     let attacking = combat.as_ref().is_some_and(|combat| combat.auto_attack);
-                    let keys = match s.kind {
-                        _ if attacking => "G stop attacking | K consider",
-                        SpawnKind::Npc => "K consider | G attack | H hail | U trade",
-                        SpawnKind::Player => "K consider | H hail",
-                        _ => "L loot",
-                    };
                     let doing = if attacking {
                         "Attacking"
                     } else {
                         &target.status
                     };
-                    format!("{}\n{keys}", joined(&[kind, &health, doing]))
+                    joined(&[kind, &health, doing])
                 },
             );
         }
     }
     for mut bar in &mut bars {
         bar.width = percent(f32::from(hp.unwrap_or(0)));
+    }
+}
+
+/// Writes the target keys into the target window's tooltip from the key map,
+/// so the help follows the bindings; the window itself shows only facts.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn key_help(
+    map: Res<crate::keys::KeyMap>,
+    mut commands: Commands,
+    panels: Query<(Entity, Option<&crate::tooltip::Tooltip>), With<TargetPanel>>,
+) {
+    let help = map.help(&[
+        (Act::TargetNext, "next target"),
+        (Act::TargetPrevious, "previous"),
+        (Act::TargetSelf, "yourself"),
+        (Act::Consider, "consider"),
+        (Act::Attack, "attack"),
+        (Act::Hail, "hail"),
+        (Act::Trade, "trade"),
+        (Act::Loot, "loot"),
+    ]);
+    let help = format!("Click: target | {help} | Esc: clear");
+    for (panel, tooltip) in &panels {
+        if tooltip.is_none_or(|tooltip| tooltip.0 != help) {
+            commands
+                .entity(panel)
+                .insert(crate::tooltip::Tooltip(help.clone()));
+        }
     }
 }
 
@@ -499,20 +509,18 @@ mod tests {
         };
         assert_eq!(press(&mut app, KeyCode::Tab, false), Some(2));
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         assert_eq!(press(&mut app, KeyCode::Tab, false), Some(2));
         assert_eq!(press(&mut app, KeyCode::Escape, false), Some(2));
         {
-            let mut chat = app
-                .world_mut()
-                .resource_mut::<super::super::chat::ChatState>();
-            chat.composing = false;
-            chat.escape_consumed = true;
+            let mut typing = app.world_mut().resource_mut::<crate::keys::Typing>();
+            typing.composing = false;
+            typing.escape_consumed = true;
         }
         assert_eq!(press(&mut app, KeyCode::Escape, false), Some(2));
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .escape_consumed = false;
         let window = app
             .world_mut()
@@ -630,6 +638,7 @@ mod tests {
     #[test]
     fn self_target_uses_profile_without_a_nearby_entity_and_survives_culling() {
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         let mut online = OnlineState::new(true);
         crate::online::testing::admit(
             &mut online,

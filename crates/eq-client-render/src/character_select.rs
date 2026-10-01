@@ -1,6 +1,6 @@
 //! Pre-zone character selection uses occupied server slots, never typed names.
 use super::{hud::HudState, online::OnlineState, outbox::Outbox};
-use bevy::{prelude::*, window::PrimaryWindow};
+use bevy::prelude::*;
 use eq_client_core::{CharacterChoice, ClientCommand};
 
 pub(super) struct Selection {
@@ -106,18 +106,18 @@ pub(super) fn update(
     mut online: ResMut<OnlineState>,
     hud: Res<HudState>,
     outbox: Res<Outbox>,
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: crate::keys::Keys,
     navigation: Res<super::navigation::NavigationKeys>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     buttons: Query<(Ref<Interaction>, &Action)>,
     roots: Query<Entity, With<Root>>,
     mut previous: Local<String>,
 ) {
-    let keys = navigation.sample(&keys);
+    let focused = keys.focused();
+    let keys = navigation.sample(&keys.input);
     let visible = online.enabled && online.world.session_id().is_none();
     let state = &mut *online;
     if visible
-        && windows.single().is_ok_and(|window| window.focused)
+        && focused
         && let Some(selection) = state.selection.as_mut()
         && !selection.submitted
     {
@@ -233,7 +233,7 @@ fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
                 label(
                     panel,
                     if selection.message.is_empty() {
-                        "Select a character | Up/Down to browse | Enter to connect"
+                        "Select a character | Up/Down: browse | Enter: connect"
                     } else {
                         &selection.message
                     },
@@ -275,6 +275,7 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selecte
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::window::PrimaryWindow;
     #[test]
     fn keyboard_selection_queues_the_server_slot_and_disappears_after_admission() {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
@@ -289,6 +290,7 @@ mod tests {
             }],
         ));
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.insert_resource(state)
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .init_resource::<HudState>()

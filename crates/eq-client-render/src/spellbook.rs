@@ -1,5 +1,5 @@
 //! Paged view of the server's indexed spellbook.
-use bevy::{prelude::*, window::PrimaryWindow};
+use bevy::prelude::*;
 mod scribe;
 pub(super) use scribe::presentation as scribe_presentation;
 
@@ -390,9 +390,8 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
     shown: Res<super::windows::Shown>,
-    chat: Res<super::chat::ChatState>,
+    keys: crate::keys::Keys,
     names: Res<SpellNames>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     mut frames: Query<&mut Node, With<BookFrame>>,
     mut text: BookLabels,
     buttons: Query<(&Interaction, &PageButton), Changed<Interaction>>,
@@ -407,7 +406,7 @@ pub(super) fn update(
     let (scribe, mut deletion, mut requests) = actions;
     let world = super::online::world(online.as_deref());
     selection.receive_reply(world.book_action_revision());
-    let accepts_input = !chat.composing && windows.single().is_ok_and(|window| window.focused);
+    let accepts_input = keys.focused();
     let open = shown.is_open(super::windows::WindowId::Spellbook);
     for mut node in &mut frames {
         node.display = if open { Display::Flex } else { Display::None };
@@ -989,6 +988,7 @@ mod tests {
         );
     }
     use super::*;
+    use bevy::window::PrimaryWindow;
 
     #[test]
     fn gem_hints_show_current_occupant_replacement_and_busy_state() {
@@ -1134,6 +1134,7 @@ mod tests {
             mode: 0,
         });
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::chat::ChatState>()
             .init_resource::<SpellNames>()
@@ -1265,6 +1266,7 @@ mod tests {
     #[test]
     fn minimized_book_stays_collapsed_while_spell_rows_refresh() {
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<super::super::windows::DragState>()
@@ -1342,6 +1344,7 @@ mod tests {
         profile[2312..2316].copy_from_slice(&42u32.to_le_bytes());
         let book = eq_client_core::SpellBook::titanium_profile(&profile).unwrap();
         let mut app = App::new();
+        crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<BookView>()
             .init_resource::<BookSelection>()
@@ -1407,7 +1410,7 @@ mod tests {
             Display::None
         );
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         app.update();
         assert_eq!(
@@ -1418,7 +1421,7 @@ mod tests {
             .resource_mut::<ButtonInput<KeyCode>>()
             .clear();
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = false;
         let mut online = super::super::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 7, crate::online::testing::player(1));
@@ -1453,13 +1456,13 @@ mod tests {
             Color::srgb(0.16, 0.23, 0.32)
         );
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
         app.update();
         assert!(rx.try_recv().is_err());
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = false;
         let window = app
             .world_mut()

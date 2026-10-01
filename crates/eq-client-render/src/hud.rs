@@ -284,13 +284,7 @@ pub(super) fn spawn(commands: &mut Commands) {
             },
         ));
     }
-    let details = label(
-        commands,
-        spells,
-        "Click: cast | Shift-click: forget\nAlt+1-8 | X sit | C duck | V stand",
-        10.0,
-        Color::srgb(0.43, 0.48, 0.53),
-    );
+    let details = label(commands, spells, "", 10.0, Color::srgb(0.43, 0.48, 0.53));
     commands.entity(details).insert((
         SpellDetails,
         Node {
@@ -303,9 +297,57 @@ pub(super) fn spawn(commands: &mut Commands) {
     ));
 }
 
+/// Writes each gem's and action slot's keys into its tooltip from the key
+/// map, so the help follows the bindings.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn key_help(
+    map: Res<super::keys::KeyMap>,
+    mut commands: Commands,
+    gems: Query<(Entity, &SpellGem, Option<&super::tooltip::Tooltip>)>,
+    slots: Query<(Entity, &hotbar::Slot, Option<&super::tooltip::Tooltip>)>,
+) {
+    use super::keys::Act;
+    let mut write = |entity: Entity, current: Option<&super::tooltip::Tooltip>, help: String| {
+        if current.is_none_or(|tooltip| tooltip.0 != help) {
+            commands
+                .entity(entity)
+                .insert(super::tooltip::Tooltip(help));
+        }
+    };
+    for (entity, SpellGem(gem), tooltip) in &gems {
+        let help = format!(
+            "{} | Shift-click: forget",
+            map.help(&[(Act::Gem(*gem), "cast")])
+        );
+        write(entity, tooltip, help);
+    }
+    for (entity, hotbar::Slot(slot), tooltip) in &slots {
+        let slot = u8::try_from(*slot).unwrap_or(u8::MAX);
+        let help = map.help(&[
+            (Act::Slot(slot), "use"),
+            (Act::BindSlot(slot), "bind the hovered gem or item"),
+            (Act::ClearSlot(slot), "empty"),
+        ]);
+        write(entity, tooltip, help);
+    }
+}
+
+/// What an empty gem says: which gem, and where spells are memorized.
+pub(super) fn empty_gem(gem: u8, map: &super::keys::KeyMap) -> String {
+    format!(
+        "Gem {} is empty: {} to memorize a spell",
+        gem + 1,
+        map.named(
+            super::keys::Act::Toggle(super::windows::WindowId::Spellbook),
+            "open the spellbook"
+        )
+    )
+}
+
 /// Shows current gem identity and local timing without retaining stale hover state.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn spell_details(
+    map: Res<super::keys::KeyMap>,
     state: Res<HudState>,
     online: Res<super::online::OnlineState>,
     names: Res<super::spellbook::SpellNames>,
@@ -336,15 +378,20 @@ pub(super) fn spell_details(
         };
     }
     let mut text = match hovered {
-        None => "Hover a gem for spell details\nClick: cast | Shift-click: forget\nAlt+1-8 | X sit | C duck | V stand".into(),
-        Some((gem, None)) => format!("Gem {} is empty\nOpen spellbook [B] to memorize", gem + 1),
-        Some((gem, Some(spell))) => {
-            let mut text = format!("{} | Alt+{}", names.label(spell), gem + 1);
+        None => String::new(),
+        Some((gem, None)) => empty_gem(gem, &map),
+        Some((_, Some(spell))) => {
+            let mut text = names.label(spell);
             text.push('\n');
             text.push_str(&names.details(spell));
             if let Some(timing) = names.timing(spell) {
                 use std::fmt::Write;
-                let _ = write!(text, "\nBase reuse {:.1}s | recovery {:.1}s", f64::from(timing.recast_ms) / 1000.0, f64::from(timing.recovery_ms) / 1000.0);
+                let _ = write!(
+                    text,
+                    "\nBase reuse {:.1}s | recovery {:.1}s",
+                    f64::from(timing.recast_ms) / 1000.0,
+                    f64::from(timing.recovery_ms) / 1000.0
+                );
             } else {
                 text.push_str("\nLocal spell timing unavailable");
             }
@@ -371,52 +418,33 @@ pub(super) fn spell_details(
 /// Sends fresh admitted spell/posture requests; server events determine results.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn actions(
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: super::keys::Keys,
     mut hud: ResMut<HudState>,
     online: Res<super::online::OnlineState>,
-    chat: Res<super::chat::ChatState>,
     outbox: Res<crate::outbox::Outbox>,
     clicks: Query<(&Interaction, &SpellGem), Changed<Interaction>>,
     bar_clicks: Query<(&Interaction, &hotbar::Slot), Changed<Interaction>>,
     bindings: Res<hotbar::Bindings>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     definitions: (Res<super::spellbook::SpellNames>, Res<messages::Messages>),
 ) {
-    if !online.world.connected()
-        || online.world.death().is_some()
-        || chat.composing
-        || keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
-        || !windows.single().is_ok_and(|window| window.focused)
-    {
+    use super::keys::Act;
+    if !online.world.connected() || online.world.death().is_some() || !keys.focused() {
         return;
     }
     let Some(player) = online.world.player() else {
         return;
     };
-    let gem = clicks
+    let clicked = clicks
         .iter()
         .find(|(interaction, _)| **interaction == Interaction::Pressed)
-        .map(|(_, gem)| gem.0)
-        .or_else(|| {
-            if !keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
-                return None;
-            }
-            [
-                KeyCode::Digit1,
-                KeyCode::Digit2,
-                KeyCode::Digit3,
-                KeyCode::Digit4,
-                KeyCode::Digit5,
-                KeyCode::Digit6,
-                KeyCode::Digit7,
-                KeyCode::Digit8,
-            ]
-            .iter()
-            .position(|key| keys.just_pressed(*key))
-            .and_then(|index| u8::try_from(index).ok())
-        });
+        .map(|(_, gem)| gem.0);
+    // Shift-click forgets the gem; its key only casts.
+    let forgetting = clicked.is_some()
+        && keys
+            .input
+            .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let gem = clicked.or_else(|| (0..8).find(|gem| keys.pressed(Act::Gem(*gem))));
     let bar_action = hotbar::requested(&keys, &bindings, &bar_clicks);
-    let forgetting = gem.is_some() && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let gem = gem.or(match bar_action {
         Some(hotbar::Action::Gem(gem)) => Some(gem),
         _ => None,
@@ -440,14 +468,14 @@ pub(super) fn actions(
                 forgetting,
                 mana_cost,
             },
-            &messages,
+            (&messages, &keys.map),
         );
     }
-    let posture = if keys.just_pressed(KeyCode::KeyC) {
+    let posture = if keys.pressed(Act::Duck) {
         Some(eq_client_core::Posture::Ducking)
-    } else if keys.just_pressed(KeyCode::KeyX) {
+    } else if keys.pressed(Act::Sit) {
         Some(eq_client_core::Posture::Sitting)
-    } else if keys.just_pressed(KeyCode::KeyV) {
+    } else if keys.pressed(Act::Stand) {
         Some(eq_client_core::Posture::Standing)
     } else {
         match bar_action {

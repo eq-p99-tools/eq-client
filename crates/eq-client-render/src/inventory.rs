@@ -230,7 +230,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         ));
         panel.spawn((
             HoverLabel,
-            Text::new("Click: move / count: split / right-click: inspect / Alt+right-click: use"),
+            Text::new(SLOT_HELP),
             TextFont {
                 font_size: FontSize::Px(11.0),
                 ..default()
@@ -262,10 +262,14 @@ fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32) {
     ));
 }
 
+/// What the inventory's mouse does, shown until a slot is hovered.
+const SLOT_HELP: &str =
+    "Click: move | Shift-click a stack: split | Right-click: inspect | Alt+right-click: use";
+
 /// Left-click moves through the cursor, Shift opens a quantity picker, and right-click inspects.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: crate::keys::Keys,
     mouse: Res<ButtonInput<MouseButton>>,
     online: Res<super::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
@@ -277,11 +281,10 @@ pub(super) fn input(
     stack_counts: Query<(&Interaction, &SplitStack), Changed<Interaction>>,
     mut state: ResMut<InventoryState>,
     mut items: ResMut<super::items::ItemState>,
-    (chat, escape): (Res<super::chat::ChatState>, Res<super::escape::Escape>),
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    escape: Res<super::escape::Escape>,
 ) {
     state.refresh_bank_access(&online);
-    if !windows.single().is_ok_and(|window| window.focused) {
+    if !keys.window_focused() {
         state.actions.auto_store = false;
         return;
     }
@@ -338,8 +341,11 @@ pub(super) fn input(
             continue;
         }
         if mouse.just_pressed(MouseButton::Right) {
-            if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
-                if !chat.composing {
+            if keys
+                .input
+                .any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
+            {
+                if keys.focused() {
                     let casting = online.world.casting();
                     let casting = casting.cast.is_some() || casting.pending.is_some();
                     state.use_slot(
@@ -354,7 +360,10 @@ pub(super) fn input(
                 items.open_received(item.details.clone());
             }
         } else if mouse.just_pressed(MouseButton::Left) && *interaction == Interaction::Pressed {
-            if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+            if keys
+                .input
+                .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+            {
                 state.select_split(slot.0, online.world.inventory());
             } else {
                 state.click_slot(slot.0, false, &online, &sender);
@@ -433,22 +442,22 @@ pub(super) fn update(
     *previous = Some(stamp);
     for mut status in &mut statuses {
         status.0 = if state.demo {
-            "Offline demo / click to pick up / click count: choose quantity".into()
+            "Offline demo: moves settle here, not on a server".into()
         } else if inventory.awaiting_correction() {
-            "Server corrected inventory / waiting for remaining slots".into()
+            "Server corrected the inventory; waiting for the remaining slots".into()
         } else if inventory.stale() {
             "Contents may be outdated - awaiting refresh".into()
         } else if !inventory.received() {
             "Inventory not received in full".into()
         } else {
-            "Click to pick up, place or swap / click count: choose quantity".into()
+            String::new()
         };
     }
     for mut status in &mut statuses {
         if inventory.received() && !inventory.stale() && !state.actions.message.is_empty() {
             status.0.clone_from(&state.actions.message);
         } else if inventory.predicted() && !inventory.stale() && !state.demo {
-            status.0 = "Move sent / contents include local prediction".into();
+            status.0 = "Move sent; contents include local prediction".into();
         }
     }
     if !state.bank_open && state.tab == Tab::Bank {
@@ -490,8 +499,7 @@ pub(super) fn feedback(
     mut slots: Query<(&SlotButton, &Interaction, &mut BorderColor)>,
     mut labels: Query<&mut Text, With<HoverLabel>>,
 ) {
-    let mut description =
-        "Click: move / count: split / right-click: inspect / Alt+right-click: use".to_owned();
+    let mut description = SLOT_HELP.to_owned();
     let inventory = online.world.inventory();
     for (slot, interaction, mut border) in &mut slots {
         let item = inventory.items().get(&slot.0);
@@ -520,7 +528,7 @@ pub(super) fn feedback(
                         .stack_count
                         .map_or_else(String::new, |n| format!(" x{n}"));
                     let charges = if item.stack_count.is_none() && item.charges > 0 {
-                        format!(" / {} charges", item.charges)
+                        format!(", {} charges", item.charges)
                     } else {
                         String::new()
                     };
@@ -532,7 +540,7 @@ pub(super) fn feedback(
                 use std::fmt::Write;
                 let _ = write!(
                     description,
-                    "\nAlt+right-click: use spell {} / level {}",
+                    "\nAlt+right-click: use spell {} (level {})",
                     effect.spell_id, effect.required_level
                 );
             }
@@ -719,7 +727,7 @@ mod tests {
     fn chat_typing_and_unfocused_keys_do_not_toggle_inventory() {
         let mut app = app();
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = true;
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -731,7 +739,7 @@ mod tests {
                 .is_open(crate::windows::WindowId::Inventory)
         );
         app.world_mut()
-            .resource_mut::<super::super::chat::ChatState>()
+            .resource_mut::<crate::keys::Typing>()
             .composing = false;
         let world = app.world_mut();
         let mut windows = world.query::<&mut Window>();

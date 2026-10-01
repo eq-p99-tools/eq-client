@@ -55,6 +55,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
     crate::online::testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item.clone()]));
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut app = App::new();
+    crate::keys::testing::install(&mut app);
     app.init_resource::<Bindings>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<crate::chat::ChatState>()
@@ -96,12 +97,12 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         .resource_mut::<ButtonInput<KeyCode>>()
         .release(KeyCode::ControlLeft);
     app.world_mut()
-        .resource_mut::<crate::chat::ChatState>()
+        .resource_mut::<crate::keys::Typing>()
         .composing = true;
     app.update();
     assert!(rx.try_recv().is_err());
     app.world_mut()
-        .resource_mut::<crate::chat::ChatState>()
+        .resource_mut::<crate::keys::Typing>()
         .composing = false;
     app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
     app.update();

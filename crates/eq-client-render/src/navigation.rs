@@ -9,14 +9,10 @@ use bevy::{
 };
 use std::collections::HashMap;
 
-/// Installs normalization before movement and character selection consume keyboard input.
+/// Starts the arrow keys' state; their system runs with the chat's typing,
+/// before movement and character selection read them.
 pub(super) fn install(app: &mut App) {
-    app.init_resource::<NavigationKeys>().add_systems(
-        Update,
-        update
-            .before(super::motion::input)
-            .before(super::character_select::update),
-    );
+    app.init_resource::<NavigationKeys>();
 }
 
 #[derive(Resource, Default)]
