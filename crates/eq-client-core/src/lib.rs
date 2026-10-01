@@ -11,6 +11,7 @@ pub mod outfit;
 pub mod races;
 pub mod resources;
 pub mod targeting;
+pub mod who;
 pub mod world;
 pub use eq_network_game::abilities;
 pub use eq_network_game::characters::CharacterChoice;
@@ -32,6 +33,7 @@ pub use eq_network_game::movement::{
 pub use eq_network_game::spells::BookActionStatus;
 pub use eq_network_game::spells::SpellBook;
 pub use eq_network_game::spells::SpellUpdate;
+pub use eq_network_game::zones;
 pub use eq_network_game::zoning::ZoneLineDestination;
 pub use eq_network_game::zoning::ZoneOffer;
 pub use eq_network_game::zoning::ZoneRejection;

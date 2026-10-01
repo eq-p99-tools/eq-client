@@ -86,6 +86,8 @@ pub enum Notice {
     },
     /// An item was not eaten or drunk, and why.
     ConsumeRefused(String),
+    /// The world's answer to `/who all`.
+    WhoList(crate::who::WhoList),
     /// A cast request was refused, and why.
     CastRefused {
         /// The spell asked for.

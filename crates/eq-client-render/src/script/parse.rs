@@ -587,17 +587,22 @@ mod tests {
             "gm zone a b c d e",
             "gm goto 1;2",
             "gm summon Name,Other",
-            "gm rules reset",
-            "gm rules setdb Character:FoodLossPerUpdate 32",
-            "gm rules set Character:FoodLossPerUpdate",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+        // `#` starts a comment, so a script can never smuggle one into a step.
+        assert_eq!(
+            parse("gm zone qeynos #givemoney 999", base).unwrap(),
+            [Step::Gm("zone qeynos".into())]
+        );
+    }
+
+    #[test]
+    fn a_zone_rule_may_change_for_now_but_never_be_stored_or_reset() {
+        let base = Path::new("private");
         assert_eq!(
             parse(
-                "gm rules set Character:FoodLossPerUpdate 4000
-gm rules reload
-",
+                "gm rules set Character:FoodLossPerUpdate 4000\ngm rules reload\n",
                 base
             )
             .unwrap(),
@@ -606,11 +611,13 @@ gm rules reload
                 Step::Gm("rules reload".into())
             ]
         );
-        // `#` starts a comment, so a script can never smuggle one into a step.
-        assert_eq!(
-            parse("gm zone qeynos #givemoney 999", base).unwrap(),
-            [Step::Gm("zone qeynos".into())]
-        );
+        for bad in [
+            "gm rules reset",
+            "gm rules setdb Character:FoodLossPerUpdate 32",
+            "gm rules set Character:FoodLossPerUpdate",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

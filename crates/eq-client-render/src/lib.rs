@@ -44,6 +44,7 @@ mod target;
 mod theme;
 mod tooltip;
 mod trade;
+mod who;
 mod windows;
 mod zone;
 

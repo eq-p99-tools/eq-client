@@ -29,9 +29,10 @@ impl StringTable {
         Self(
             lines
                 .filter_map(|line| {
-                    let (id, message) = line.split_once(char::is_whitespace)?;
-                    let message = message.trim();
-                    if message.is_empty() {
+                    // One space parts the number from the words, whose own
+                    // spaces stand: " AFK " goes between parts of a line.
+                    let (id, message) = line.split_once(' ')?;
+                    if message.trim().is_empty() {
                         return None;
                     }
                     Some((id.parse().ok()?, message.to_owned()))
@@ -133,6 +134,9 @@ mod tests {
             assert_eq!(table.argument_free(id), None);
         }
         assert!(StringTable::parse("OTHER\n0 1\n73 Wrong format").is_empty());
+        // Spaces around the words are part of them.
+        let table = StringTable::parse("EQST0002\n0 1\n12311  AFK \n");
+        assert_eq!(table.argument_free(12311), Some(" AFK "));
     }
 
     #[test]
