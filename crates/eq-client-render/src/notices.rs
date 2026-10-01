@@ -151,6 +151,25 @@ fn who_lines(
         .collect()
 }
 
+/// A consent given or taken back, in the official client's words: to the
+/// owner, who was consented and where; to the one consented, whose corpses
+/// and where.
+fn consent_line(
+    consent: &eq_client_core::corpses::Consent,
+    own: bool,
+    messages: Option<&Messages>,
+) -> String {
+    let (id, who) = match (own, consent.given) {
+        (true, true) => (1427, &consent.granted),
+        (true, false) => (1428, &consent.granted),
+        (false, true) => (2080, &consent.owner),
+        (false, false) => (2103, &consent.owner),
+    };
+    messages
+        .unwrap_or(&Messages::default())
+        .format(id, &[who.clone(), consent.zone.clone()])
+}
+
 /// How a notice reads, and where each part shows.
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
     let chat = |text: String| vec![(Place::Chat, text)];
@@ -226,7 +245,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
         Notice::TradeRefused(reason)
         | Notice::AbilityRefused(reason)
-        | Notice::ConsumeRefused(reason) => chat(reason.clone()),
+        | Notice::ConsumeRefused(reason)
+        | Notice::CorpseRefused(reason) => chat(reason.clone()),
+        Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
         Notice::WhoList(list) => who_lines(list, messages),
         Notice::NothingToEat { food, water } => nothing_to_eat(*food, *water, messages)
             .into_iter()

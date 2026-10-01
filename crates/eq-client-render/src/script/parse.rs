@@ -233,6 +233,13 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("slash", ["target", name @ ..]) if !name.is_empty() => {
             Step::Slash(format!("/target {}", name.join(" ")))
         }
+        // Corpses: consent, summon and drag; a test death leaves one.
+        ("slash", [command @ ("consent" | "deny"), name]) => {
+            Step::Slash(format!("/{command} {name}"))
+        }
+        ("slash", [command @ ("corpse" | "corpsedrag" | "corpsedrop")]) => {
+            Step::Slash(format!("/{command}"))
+        }
         // Asking who is online changes nothing.
         ("slash", ["who", words @ ..]) => Step::Slash(
             ["/who"]
@@ -639,6 +646,14 @@ mod tests {
                 Step::Slash("/who all wiz 50".into())
             ]
         );
+        assert_eq!(
+            parse("slash consent Helper\nslash corpsedrag\n", base).unwrap(),
+            [
+                Step::Slash("/consent Helper".into()),
+                Step::Slash("/corpsedrag".into())
+            ]
+        );
+        assert!(parse("slash consent\n", base).is_err());
     }
 
     #[test]
