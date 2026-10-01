@@ -78,6 +78,7 @@ pub(super) fn state(
     info!(
         label,
         zone = online.world.zone(),
+        capabilities = ?online.world.capabilities(),
         world = ?online.world.world_name(),
         far_clip = ?online.world.far_clip(),
         connected = online.world.connected(),
