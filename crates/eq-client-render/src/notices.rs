@@ -1,11 +1,16 @@
 //! Words the world's notices: what each says to the player and where it
 //! shows. The server's strings come from the installed client's table.
 use super::{
-    combat::{consideration_text, damage_text, display_name},
+    combat::{consideration_text, damage_text},
     hud::messages::Messages,
     trade::coin_text,
 };
-use eq_client_core::{CampStatus, loot::LootResponse, world::Notice};
+use eq_client_core::{
+    CampStatus,
+    entities::display_name,
+    loot::LootResponse,
+    world::{Link, Notice},
+};
 
 /// Where a notice shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,12 +31,12 @@ pub(super) enum Place {
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
     let chat = |text: String| vec![(Place::Chat, text)];
     match notice {
-        Notice::Connection { label, dead } => vec![(
+        Notice::Connection { link, dead } => vec![(
             Place::Status,
             if *dead {
                 "Dead - awaiting respawn".into()
             } else {
-                label.clone()
+                link_text(*link).into()
             },
         )],
         Notice::ServerString { id, arguments } => chat(messages.map_or_else(
@@ -94,13 +99,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
         Notice::TradeRefused(reason) => chat(reason.clone()),
         Notice::GroundRefused(reason) => chat(super::ground::refusal(reason)),
-        Notice::Door { door_id, error } => vec![(
-            Place::Door,
-            error.as_ref().map_or_else(
-                || format!("Door {door_id}: request sent"),
-                |error| format!("Door {door_id}: {error}"),
-            ),
-        )],
+        // A click sent says nothing, as in the official client; a refused
+        // one says why, and a later click clears it.
+        Notice::Door { error, .. } => vec![(Place::Door, error.clone().unwrap_or_default())],
         Notice::TransferRefused(reason) => vec![
             (Place::Status, reason.to_string()),
             (Place::Chat, reason.to_string()),
@@ -115,6 +116,18 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             Place::Feedback,
             format!("Cast rejected (spell {spell_id}): {reason}"),
         )],
+    }
+}
+
+/// The status line for where the connection stands; nothing while the
+/// player is in the world.
+const fn link_text(link: Link) -> &'static str {
+    match link {
+        Link::Offline | Link::Connected => "",
+        Link::LoggingIn => "Logging in",
+        Link::Entering => "Entering the world",
+        Link::Zoning => "Zoning",
+        Link::Ended => "Disconnected",
     }
 }
 
@@ -166,7 +179,7 @@ mod tests {
                 },
                 None
             ),
-            [(Place::Door, "Door 4: request sent".into())]
+            [(Place::Door, String::new())]
         );
         let transfer = wording(
             &Notice::TransferRefused(eq_client_core::ZoneRejection::Cancelled),

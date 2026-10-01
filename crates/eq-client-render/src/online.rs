@@ -115,11 +115,7 @@ pub(super) fn admit_preview(
             player: Box::new(player),
             far_clip: None,
         }),
-        WorldUpdate::Connection {
-            connected: true,
-            terminal: false,
-            label: String::new(),
-        },
+        WorldUpdate::Connection(eq_client_core::world::Link::Connected),
     ] {
         state
             .world
@@ -356,11 +352,8 @@ pub(super) fn receive(
     };
     // A worker that stopped without saying so (for example after a panic) ends
     // the session here, instead of leaving it looking connected.
-    let lost = (ended && !state.world.ended()).then(|| WorldUpdate::Connection {
-        connected: false,
-        terminal: true,
-        label: "Disconnected".into(),
-    });
+    let lost = (ended && !state.world.ended())
+        .then_some(WorldUpdate::Connection(eq_client_core::world::Link::Ended));
     // The player entity spawned by zone entry in this batch, not yet in the world.
     let mut entered = None;
     for update in batch.into_iter().chain(lost) {
@@ -503,11 +496,11 @@ pub(crate) mod testing {
     /// Connects or disconnects the session without ending it.
     pub(crate) fn connect(state: &mut OnlineState, connected: bool) {
         state.world.apply(
-            &WorldUpdate::Connection {
-                connected,
-                terminal: false,
-                label: String::new(),
-            },
+            &WorldUpdate::Connection(if connected {
+                eq_client_core::world::Link::Connected
+            } else {
+                eq_client_core::world::Link::Entering
+            }),
             Instant::now(),
             &NoSpells,
         );
@@ -939,11 +932,7 @@ mod tests {
                 player: Box::new(player),
                 far_clip: None,
             }),
-            WorldUpdate::Connection {
-                connected: true,
-                terminal: false,
-                label: "Connected".into(),
-            },
+            WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {
             state.world.apply(&update, admitted, &NoSpells);
         }
@@ -1047,11 +1036,7 @@ mod tests {
             )))
             .unwrap();
         sender
-            .send(WorldUpdate::Connection {
-                connected: false,
-                terminal: false,
-                label: "Zoning".into(),
-            })
+            .send(WorldUpdate::Connection(eq_client_core::world::Link::Zoning))
             .unwrap();
         sender
             .send(WorldUpdate::Game(WorldEvent::ZoneTransferRejected {
@@ -1069,11 +1054,9 @@ mod tests {
             }))
             .unwrap();
         sender
-            .send(WorldUpdate::Connection {
-                connected: true,
-                terminal: false,
-                label: "Connected".into(),
-            })
+            .send(WorldUpdate::Connection(
+                eq_client_core::world::Link::Connected,
+            ))
             .unwrap();
         app.update();
         assert!(world(&app).connected());

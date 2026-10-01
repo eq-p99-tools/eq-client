@@ -580,6 +580,10 @@ fn submit_draft(
             state.requested_target = Some(request?);
             return Ok(());
         }
+        if let Some(line) = location(state.draft.trim(), online) {
+            state.history.push(system_line(line?));
+            return Ok(());
+        }
         if let Some(commands) = game_commands(state.draft.trim(), online) {
             for command in commands? {
                 sender
@@ -623,6 +627,28 @@ pub(super) fn submit_game_command(
             .map_err(|_| "Command could not be queued".to_owned())?;
     }
     Ok(())
+}
+
+/// `/loc`: where the player stands, worded as the official client words it,
+/// north-south first.
+fn location(input: &str, online: &super::online::OnlineState) -> Option<Result<String, String>> {
+    let name = input.strip_prefix('/')?.trim();
+    if !name.eq_ignore_ascii_case("loc") {
+        return None;
+    }
+    Some(
+        online
+            .world
+            .player()
+            .map(|player| {
+                let position = player.position;
+                format!(
+                    "Your Location is {:.2}, {:.2}, {:.2}",
+                    position.y, position.x, position.z
+                )
+            })
+            .ok_or_else(|| "Enter the world first".to_owned()),
+    )
 }
 
 /// The name in a `/target Name` command; underscores match spaces as in spawn names.

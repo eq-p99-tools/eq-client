@@ -27,14 +27,101 @@ pub(super) struct SpellGem(u8);
 pub(super) struct SpellDetails;
 #[derive(Component, Clone, Copy)]
 pub(super) enum HudLabel {
-    Stat(&'static str),
-    Status,
+    Stat(Stat),
+    /// The player window's title: the character's name.
+    Name,
     Spell(usize),
     Casting,
 }
 
+/// The player window's bars.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stat {
+    Hp,
+    Mana,
+    Stamina,
+    Experience,
+}
+
+impl Stat {
+    const ALL: [Self; 4] = [Self::Hp, Self::Mana, Self::Stamina, Self::Experience];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Hp => "HP",
+            Self::Mana => "MANA",
+            Self::Stamina => "STAMINA",
+            Self::Experience => "EXP",
+        }
+    }
+
+    const fn tint(self) -> Color {
+        match self {
+            Self::Hp => Color::srgb(0.60, 0.20, 0.20),
+            Self::Mana => Color::srgb(0.20, 0.36, 0.70),
+            Self::Stamina => Color::srgb(0.65, 0.49, 0.18),
+            Self::Experience => Color::srgb(0.30, 0.52, 0.36),
+        }
+    }
+
+    /// The bar's figure: what the server reported, with calculated maxima
+    /// marked as such.
+    fn text(
+        self,
+        world: &eq_client_core::world::ClientWorld,
+        estimate: Option<(u32, u32)>,
+    ) -> Option<String> {
+        let vitals = world.vitals();
+        match self {
+            Self::Hp => world
+                .hit_points()
+                .map(|(a, b)| format!("{a}/{b}"))
+                // Without a report, the health the server gave in percent.
+                .or_else(|| {
+                    world
+                        .player()
+                        .and_then(|player| player.hp_percent)
+                        .map(|p| format!("{p}%"))
+                }),
+            Self::Mana => vitals
+                .mana
+                .map(|v| resource_label(v, estimate.map(|v| v.0))),
+            Self::Stamina => vitals
+                .endurance
+                .map(|v| resource_label(v, estimate.map(|v| v.1))),
+            Self::Experience => vitals
+                .experience_ratio()
+                .map(|ratio| format!("{:.1}%", ratio * 100.0)),
+        }
+    }
+
+    /// How full the bar is, from 0 to 1, when that is known.
+    fn ratio(
+        self,
+        world: &eq_client_core::world::ClientWorld,
+        estimate: Option<(u32, u32)>,
+    ) -> Option<f64> {
+        let vitals = world.vitals();
+        match self {
+            Self::Hp => world
+                .hit_points()
+                .filter(|(_, max)| *max > 0)
+                .map(|(value, max)| f64::from(value) / f64::from(max))
+                .or_else(|| {
+                    world
+                        .player()
+                        .and_then(|player| player.hp_percent)
+                        .map(|v| f64::from(v) / 100.0)
+                }),
+            Self::Mana => resource_ratio(vitals.mana, estimate.map(|v| v.0)),
+            Self::Stamina => resource_ratio(vitals.endurance, estimate.map(|v| v.1)),
+            Self::Experience => vitals.experience_ratio(),
+        }
+    }
+}
+
 #[derive(Component)]
-pub(super) struct HudFill(&'static str);
+pub(super) struct HudFill(Stat);
 
 /// Refreshes actual values without inventing unknown resource maxima.
 #[allow(clippy::needless_pass_by_value)]
@@ -48,9 +135,7 @@ pub(super) fn update(
 ) {
     let now = std::time::Instant::now();
     let world = &online.world;
-    let (casting, vitals) = (world.casting(), world.vitals());
-    // Without a report, the health the server gave in percent.
-    let health = world.player().and_then(|player| player.hp_percent);
+    let casting = world.casting();
     for (mut text, label) in &mut texts {
         let value = match label {
             HudLabel::Casting => casting.cast.map_or_else(
@@ -79,30 +164,14 @@ pub(super) fn update(
                     }
                 },
             ),
-            HudLabel::Status => {
-                if state.status.is_empty() {
-                    "CHARACTER / OFFLINE".into()
-                } else {
-                    state.status.to_uppercase()
-                }
-            }
-            HudLabel::Stat(stat) => match *stat {
-                "HP" => world
-                    .hit_points()
-                    .map(|(a, b)| format!("{a}/{b}"))
-                    .or_else(|| health.map(|p| format!("{p}%"))),
-                "MANA" => vitals
-                    .mana
-                    .map(|v| resource_label(v, state.resource_estimate.map(|v| v.0))),
-                "STAMINA" => vitals
-                    .endurance
-                    .map(|v| resource_label(v, state.resource_estimate.map(|v| v.1))),
-                "EXP" => vitals
-                    .experience
-                    .map(|v| format!("{:.1}%", f64::from(v) / 3.3)),
-                _ => None,
-            }
-            .unwrap_or_else(|| "--".into()),
+            // The official player window names the character; where the
+            // connection stands shows in the status line instead.
+            HudLabel::Name => world
+                .player()
+                .map_or_else(|| "CHARACTER".into(), |player| player.name.clone()),
+            HudLabel::Stat(stat) => stat
+                .text(world, state.resource_estimate)
+                .unwrap_or_else(|| "--".into()),
             HudLabel::Spell(index) => world
                 .player()
                 .and_then(|player| player.memorized_spells[*index])
@@ -120,19 +189,10 @@ pub(super) fn update(
         }
     }
     for (mut node, HudFill(stat)) in &mut fills {
-        let ratio = match *stat {
-            "MANA" => resource_ratio(vitals.mana, state.resource_estimate.map(|v| v.0)),
-            "STAMINA" => resource_ratio(vitals.endurance, state.resource_estimate.map(|v| v.1)),
-            "HP" => world
-                .hit_points()
-                .filter(|(_, max)| *max > 0)
-                .map(|(value, max)| f64::from(value) / f64::from(max))
-                .or_else(|| health.map(|v| f64::from(v) / 100.0)),
-            "EXP" => vitals.experience.map(|v| f64::from(v) / 330.0),
-            _ => None,
-        }
-        .unwrap_or(0.0)
-        .clamp(0.0, 1.0);
+        let ratio = stat
+            .ratio(world, state.resource_estimate)
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
         #[allow(clippy::cast_possible_truncation)] // Ratio is bounded to 0..1.
         let width = (ratio * 100.0) as f32;
         node.width = percent(width);
@@ -186,15 +246,10 @@ pub(super) fn spawn(commands: &mut Commands) {
 
     let character = panel(commands, root, 186.0);
     super::windows::identify(commands, character, "CHARACTER");
-    let status = label(commands, character, "CHARACTER / OFFLINE", 10.0, INK);
-    commands.entity(status).insert(HudLabel::Status);
-    for (name, tint) in [
-        ("HP", Color::srgb(0.60, 0.20, 0.20)),
-        ("MANA", Color::srgb(0.20, 0.36, 0.70)),
-        ("STAMINA", Color::srgb(0.65, 0.49, 0.18)),
-        ("EXP", Color::srgb(0.30, 0.52, 0.36)),
-    ] {
-        stat_bar(commands, character, name, tint);
+    let name = label(commands, character, "CHARACTER", 10.0, INK);
+    commands.entity(name).insert(HudLabel::Name);
+    for stat in Stat::ALL {
+        stat_bar(commands, character, stat);
     }
 
     hotbar::spawn(commands, root);
@@ -501,7 +556,8 @@ fn slot(commands: &mut Commands, parent: Entity, key: &str, size: f32, spell: bo
 }
 
 /// Unknown values have no fill, so disconnected state cannot look like full health.
-fn stat_bar(commands: &mut Commands, parent: Entity, name: &'static str, tint: Color) {
+fn stat_bar(commands: &mut Commands, parent: Entity, stat: Stat) {
+    let tint = stat.tint();
     let entity = commands
         .spawn((
             Node {
@@ -519,7 +575,7 @@ fn stat_bar(commands: &mut Commands, parent: Entity, name: &'static str, tint: C
     commands.entity(parent).add_child(entity);
     let fill = commands
         .spawn((
-            HudFill(name),
+            HudFill(stat),
             Node {
                 position_type: PositionType::Absolute,
                 left: px(0),
@@ -532,7 +588,7 @@ fn stat_bar(commands: &mut Commands, parent: Entity, name: &'static str, tint: C
         ))
         .id();
     commands.entity(entity).add_child(fill);
-    label(commands, entity, name, 10.0, INK);
+    label(commands, entity, stat.label(), 10.0, INK);
     let value = label(commands, entity, "--", 10.0, INK);
-    commands.entity(value).insert(HudLabel::Stat(name));
+    commands.entity(value).insert(HudLabel::Stat(stat));
 }

@@ -32,13 +32,11 @@ pub(super) struct BookView {
 pub(super) fn demo(
     settings: Res<super::ViewerSettings>,
     mut online: ResMut<super::online::OnlineState>,
-    mut hud: ResMut<super::hud::HudState>,
     mut view: ResMut<BookView>,
 ) {
     if !settings.0.demo_spellbook || online.enabled {
         return;
     }
-    hud.status = "Offline spellbook demo".into();
     if online.world.spell_book().is_some() {
         return;
     }

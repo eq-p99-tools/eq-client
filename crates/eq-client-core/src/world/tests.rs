@@ -67,11 +67,11 @@ fn game(world: &mut ClientWorld, event: WorldEvent) -> Changes {
 
 fn connection(world: &mut ClientWorld, connected: bool, terminal: bool) -> Changes {
     world.apply(
-        &WorldUpdate::Connection {
-            connected,
-            terminal,
-            label: String::new(),
-        },
+        &WorldUpdate::Connection(match (connected, terminal) {
+            (true, _) => Link::Connected,
+            (false, true) => Link::Ended,
+            (false, false) => Link::Entering,
+        }),
         Instant::now(),
         &NoSpells,
     )
@@ -1108,7 +1108,7 @@ fn moves_and_replies_reach_the_front_end_for_the_current_admission() {
     assert_eq!(
         changes.notices,
         [Notice::Connection {
-            label: String::new(),
+            link: Link::Connected,
             dead: false
         }]
     );

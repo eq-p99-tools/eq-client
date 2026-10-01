@@ -119,6 +119,7 @@ pub(super) fn open(
     let (Some(session_id), Some(sender)) = (state.world.session_id(), sender.0.as_ref()) else {
         return;
     };
+    // A click sent says nothing; a refusal from the session says why.
     state.door_status = if sender
         .try_send(eq_client_core::ClientCommand::ClickDoor {
             session_id,
@@ -127,7 +128,7 @@ pub(super) fn open(
         })
         .is_ok()
     {
-        format!("Door {door_id}: request queued")
+        String::new()
     } else {
         "Door request could not be queued".into()
     };

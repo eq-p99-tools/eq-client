@@ -390,11 +390,7 @@ mod tests {
         tell(&mut world, WorldEvent::Mana(25), &NoSpells);
         // A dropped connection forgets the buffs.
         world.apply(
-            &WorldUpdate::Connection {
-                connected: false,
-                terminal: false,
-                label: String::new(),
-            },
+            &WorldUpdate::Connection(eq_client_core::world::Link::Entering),
             std::time::Instant::now(),
             &NoSpells,
         );

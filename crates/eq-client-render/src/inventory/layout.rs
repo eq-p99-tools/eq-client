@@ -1,5 +1,6 @@
 //! Compact slots and bag-content grids.
-use super::{SlotButton, Tab, View, icons::Icons, label, visible_slots};
+use super::{SlotButton, Tab, View, label, visible_slots};
+use crate::sheets::Art;
 use bevy::prelude::*;
 use eq_client_assets::ui::{Area, EquipmentLayout};
 use eq_client_core::inventory::InventorySlot;
@@ -28,12 +29,10 @@ pub(super) fn contents(
     parent: &mut ChildSpawnerCommands,
     view: View<'_>,
     paperdoll: Option<Paperdoll<'_>>,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    art: &mut Art<'_>,
 ) {
     quantity_picker(parent, view);
-    storage_columns(parent, view, paperdoll, icons, directory, images);
+    storage_columns(parent, view, paperdoll, art);
 }
 
 /// Keeps the quantity picker available for carried and bank stacks alike.
@@ -88,9 +87,7 @@ fn storage_columns(
     parent: &mut ChildSpawnerCommands,
     view: View<'_>,
     paperdoll: Option<Paperdoll<'_>>,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    art: &mut Art<'_>,
 ) {
     parent
         .spawn(Node {
@@ -109,10 +106,10 @@ fn storage_columns(
                 .with_children(|equipment| {
                     label(equipment, "EQUIPMENT", 10.0);
                     if let Some(paperdoll) = paperdoll {
-                        placed(equipment, paperdoll, view, icons, directory, images);
+                        placed(equipment, paperdoll, view, art);
                     } else {
                         let slots: Vec<_> = (0..=21).map(InventorySlot).collect();
-                        grid(equipment, &slots, view, icons, directory, images);
+                        grid(equipment, &slots, view, art);
                     }
                 });
             columns
@@ -131,7 +128,7 @@ fn storage_columns(
                         ..default()
                     })
                     .with_children(|cursor| {
-                        square(cursor, InventorySlot(30), view, icons, directory, images);
+                        square(cursor, InventorySlot(30), view, art);
                         cursor
                             .spawn((
                                 Button,
@@ -145,22 +142,15 @@ fn storage_columns(
                             .with_children(|button| label(button, "Auto inventory", 11.0));
                     });
                     if view.state.tab == Tab::Bank {
-                        carried(bags, view, Tab::Bank, icons, directory, images);
+                        carried(bags, view, Tab::Bank, art);
                     }
-                    carried(bags, view, Tab::Inventory, icons, directory, images);
+                    carried(bags, view, Tab::Inventory, art);
                 });
         });
 }
 
 /// Builds bag rows and loose carried slots without duplicating equipment.
-fn carried(
-    parent: &mut ChildSpawnerCommands,
-    view: View<'_>,
-    tab: Tab,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
-) {
+fn carried(parent: &mut ChildSpawnerCommands, view: View<'_>, tab: Tab, art: &mut Art<'_>) {
     let slots: Vec<_> = visible_slots(view.inventory, tab)
         .into_iter()
         .filter(|slot| tab == Tab::Bank || matches!(slot.0,22..=29|251..=340))
@@ -209,12 +199,12 @@ fn carried(
                         ..default()
                     })
                     .with_children(|heading| {
-                        square(heading, *slot, view, icons, directory, images);
+                        square(heading, *slot, view, art);
                         super::colors::controls(heading, &view.state.colors, *slot);
                     });
                     label(bag, &item.details.name, 10.0);
                 });
-                grid(row, &children, view, icons, directory, images);
+                grid(row, &children, view, art);
             });
     }
     if !remaining.is_empty() {
@@ -226,7 +216,7 @@ fn carried(
             },
             10.0,
         );
-        grid(parent, &remaining, view, icons, directory, images);
+        grid(parent, &remaining, view, art);
     } else if slots.is_empty() {
         label(parent, "No bank items received", 12.0);
     }
@@ -238,9 +228,7 @@ fn placed(
     parent: &mut ChildSpawnerCommands,
     Paperdoll { layout, figure }: Paperdoll<'_>,
     view: View<'_>,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    art: &mut Art<'_>,
 ) {
     let size = layout
         .slots
@@ -286,14 +274,7 @@ fn placed(
                     ..default()
                 })
                 .with_children(|cell| {
-                    square(
-                        cell,
-                        InventorySlot(i32::from(placement.slot)),
-                        view,
-                        icons,
-                        directory,
-                        images,
-                    );
+                    square(cell, InventorySlot(i32::from(placement.slot)), view, art);
                 });
             }
         });
@@ -315,9 +296,7 @@ fn grid(
     parent: &mut ChildSpawnerCommands,
     slots: &[InventorySlot],
     view: View<'_>,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    art: &mut Art<'_>,
 ) {
     parent
         .spawn(Node {
@@ -330,7 +309,7 @@ fn grid(
         })
         .with_children(|grid| {
             for slot in slots {
-                square(grid, *slot, view, icons, directory, images);
+                square(grid, *slot, view, art);
             }
         });
 }
@@ -339,9 +318,7 @@ fn square(
     parent: &mut ChildSpawnerCommands,
     slot: InventorySlot,
     view: View<'_>,
-    icons: &mut Icons,
-    directory: Option<&std::path::Path>,
-    images: &mut Assets<Image>,
+    art: &mut Art<'_>,
 ) {
     let item = view.inventory.items().get(&slot);
     parent
@@ -366,7 +343,7 @@ fn square(
         ))
         .with_children(|cell| {
             if let Some(item) = item {
-                if let Some(icon) = icons.get(item.icon, directory, images) {
+                if let Some(icon) = art.item(item.icon) {
                     cell.spawn((
                         icon,
                         Node {
@@ -433,31 +410,33 @@ mod tests {
 
     /// Draws the window's contents once, from these resources.
     fn draw(app: &mut App, paperdoll: Option<EquipmentLayout>) {
-        app.init_resource::<Assets<Image>>().add_systems(
-            Startup,
-            move |mut commands: Commands,
-                  state: Res<InventoryState>,
-                  online: Res<OnlineState>,
-                  mut images: ResMut<Assets<Image>>| {
-                let view = View {
-                    state: &state,
-                    inventory: online.world.inventory(),
-                };
-                commands.spawn(Node::default()).with_children(|parent| {
-                    contents(
-                        parent,
-                        view,
-                        paperdoll.as_ref().map(|layout| Paperdoll {
-                            layout,
-                            figure: None,
-                        }),
-                        &mut Icons::default(),
-                        None,
-                        &mut images,
-                    );
-                });
-            },
-        );
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<crate::sheets::Sheets>()
+            .init_resource::<crate::skin::UiSkin>()
+            .init_resource::<crate::ViewerSettings>()
+            .add_systems(
+                Startup,
+                move |mut commands: Commands,
+                      state: Res<InventoryState>,
+                      online: Res<OnlineState>,
+                      mut art: Art| {
+                    let view = View {
+                        state: &state,
+                        inventory: online.world.inventory(),
+                    };
+                    commands.spawn(Node::default()).with_children(|parent| {
+                        contents(
+                            parent,
+                            view,
+                            paperdoll.as_ref().map(|layout| Paperdoll {
+                                layout,
+                                figure: None,
+                            }),
+                            &mut art,
+                        );
+                    });
+                },
+            );
         app.update();
     }
 

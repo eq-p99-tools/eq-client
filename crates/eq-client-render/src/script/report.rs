@@ -151,7 +151,7 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (.., combat, _):
             );
             (
                 *id,
-                crate::combat::display_name(&spawn.name),
+                eq_client_core::entities::display_name(&spawn.name),
                 format!("{:?}", spawn.kind),
                 spawn.class,
                 distance,

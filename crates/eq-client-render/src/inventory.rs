@@ -1,7 +1,6 @@
 //! Compact inventory drawer with validated slot moves and local item inspection.
 pub(super) mod colors;
 pub(super) mod cursor;
-pub(super) mod icons;
 mod interaction;
 mod layout;
 
@@ -189,10 +188,14 @@ pub(super) fn spawn(commands: &mut Commands) {
             Button,
             Toggle,
             GlobalZIndex(25),
+            // Beside the target window, clear of the status box, which grows
+            // with the status line and the interaction prompt, and of the
+            // spellbook at the top right.
             Node {
                 position_type: PositionType::Absolute,
-                top: px(76),
-                left: px(20),
+                top: px(16),
+                left: percent(50),
+                margin: UiRect::left(px(156)),
                 padding: UiRect::axes(px(12), px(7)),
                 ..default()
             },
@@ -428,11 +431,10 @@ pub(super) fn update(
     state: Res<InventoryState>,
     online: Res<super::online::OnlineState>,
     settings: Res<super::ViewerSettings>,
-    mut icons: Local<icons::Icons>,
+    mut art: super::sheets::Art,
     skin: Res<super::skin::UiSkin>,
     mut skin_layout: Local<SkinLayout>,
     figure: Option<Res<super::paperdoll::PaperdollImage>>,
-    mut images: ResMut<Assets<Image>>,
     mut previous: Local<Option<RenderStamp>>,
     mut panels: Query<&mut Node, (With<Panel>, Without<TabButton>)>,
     rows: Query<Entity, With<Rows>>,
@@ -514,9 +516,7 @@ pub(super) fn update(
                 layout,
                 figure: figure.as_deref(),
             }),
-            &mut icons,
-            directory,
-            &mut images,
+            &mut art,
         );
     });
 }
@@ -732,35 +732,15 @@ pub(crate) fn demo_items() -> Vec<eq_client_core::inventory::InventoryItem> {
 mod tests {
     use super::*;
     fn app() -> App {
-        let mut app = App::new();
-        app.init_resource::<InventoryState>()
-            .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<super::super::escape::Escape>()
-            .init_resource::<super::super::skin::UiSkin>()
-            .init_resource::<Assets<Image>>()
-            .insert_resource(super::super::ViewerSettings(
-                super::super::ViewerConfig::default(),
-            ))
-            .init_resource::<super::super::items::ItemState>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .insert_resource(super::super::online::OnlineState::new(false))
-            .insert_resource(super::super::target::CommandsToServer(None))
-            .add_systems(Startup, |mut commands: Commands| {
-                spawn(&mut commands);
-                super::super::items::spawn(&mut commands);
-            })
-            .add_systems(
-                Update,
-                (input, settle, update, feedback, super::super::items::update).chain(),
-            );
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            bevy::window::PrimaryWindow,
-        ));
+        let mut app = crate::testing::app();
+        app.add_systems(Startup, |mut commands: Commands| {
+            spawn(&mut commands);
+            super::super::items::spawn(&mut commands);
+        })
+        .add_systems(
+            Update,
+            (input, settle, update, feedback, super::super::items::update).chain(),
+        );
         app
     }
     #[test]

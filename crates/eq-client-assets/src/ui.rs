@@ -80,6 +80,79 @@ pub enum UiLayoutError {
     /// A slot's location or size is missing or not a number.
     #[error("equipment slot {0} has no usable location or size")]
     Geometry(u16),
+    /// The file name could name a path outside the skin's directory.
+    #[error("invalid UI file name: {0}")]
+    InvalidFile(String),
+    /// A texture sheet could not be decoded.
+    #[error("could not decode {path}: {source}")]
+    Image {
+        /// Sheet path.
+        path: PathBuf,
+        /// Decoder error.
+        source: image::ImageError,
+    },
+    /// A texture sheet is not the size its cells assume.
+    #[error("{path} is {width}x{height}, not {SHEET_SIZE}x{SHEET_SIZE}")]
+    SheetSize {
+        /// Sheet path.
+        path: PathBuf,
+        /// Its width.
+        width: u32,
+        /// Its height.
+        height: u32,
+    },
+}
+
+/// Width and height of the texture sheets that hold icons, such as
+/// `dragitem1.tga` and `spells01.tga`.
+pub const SHEET_SIZE: u32 = 256;
+
+/// The file a skin uses for `file`: its own, or the default skin's when it
+/// has none, as the official client reads it.
+///
+/// # Errors
+/// Rejects skin and file names that could leave the skin's directory.
+pub fn skin_file(eq_directory: &Path, skin: &str, file: &str) -> Result<PathBuf, UiLayoutError> {
+    if !valid_skin(skin) {
+        return Err(UiLayoutError::InvalidSkin(skin.to_owned()));
+    }
+    if !plain_name(file) || file.chars().all(|c| c == '.') {
+        return Err(UiLayoutError::InvalidFile(file.to_owned()));
+    }
+    let skins = eq_directory.join("uifiles");
+    let own = skins.join(skin).join(file);
+    Ok(if own.is_file() {
+        own
+    } else {
+        skins.join(DEFAULT_SKIN).join(file)
+    })
+}
+
+/// Reads one of a skin's icon sheets, such as `dragitem1.tga`, as RGBA pixels.
+///
+/// # Errors
+/// Rejects unsafe names, unreadable or undecodable files, and sheets that are
+/// not [`SHEET_SIZE`] pixels square.
+pub fn texture_sheet(
+    eq_directory: &Path,
+    skin: &str,
+    file: &str,
+) -> Result<image::RgbaImage, UiLayoutError> {
+    let path = skin_file(eq_directory, skin, file)?;
+    let pixels = image::open(&path)
+        .map_err(|source| UiLayoutError::Image {
+            path: path.clone(),
+            source,
+        })?
+        .into_rgba8();
+    if pixels.width() != SHEET_SIZE || pixels.height() != SHEET_SIZE {
+        return Err(UiLayoutError::SheetSize {
+            path,
+            width: pixels.width(),
+            height: pixels.height(),
+        });
+    }
+    Ok(pixels)
 }
 
 /// The skin a character last chose in the official client: `UISkin` in the
@@ -100,16 +173,7 @@ pub fn chosen_skin(eq_directory: &Path, character: &str, world: &str) -> Option<
 /// Rejects unsafe skin names, unreadable or malformed files, and windows that
 /// show no equipment slot, show one twice, or place one without a positive size.
 pub fn equipment_layout(eq_directory: &Path, skin: &str) -> Result<EquipmentLayout, UiLayoutError> {
-    if !valid_skin(skin) {
-        return Err(UiLayoutError::InvalidSkin(skin.to_owned()));
-    }
-    let skins = eq_directory.join("uifiles");
-    let own = skins.join(skin).join("EQUI_Inventory.xml");
-    let path = if own.is_file() {
-        own
-    } else {
-        skins.join(DEFAULT_SKIN).join("EQUI_Inventory.xml")
-    };
+    let path = skin_file(eq_directory, skin, "EQUI_Inventory.xml")?;
     let bytes = std::fs::read(&path).map_err(|source| UiLayoutError::Read { path, source })?;
     // Skins declare an ASCII encoding, but hand-edited ones may carry Latin-1 text.
     equipment_from_xml(&String::from_utf8_lossy(&bytes))
@@ -424,6 +488,39 @@ mod tests {
         let layout = equipment_layout(&install, "sparse");
         std::fs::remove_dir_all(&install).unwrap();
         assert_eq!(layout.unwrap().slots.len(), 22);
+    }
+
+    #[test]
+    fn icon_sheets_come_from_the_skin_then_the_default_one() {
+        let install = std::env::temp_dir().join(format!("eq-ui-sheets-{}", std::process::id()));
+        std::fs::create_dir_all(install.join("uifiles/default")).unwrap();
+        std::fs::create_dir_all(install.join("uifiles/painted")).unwrap();
+        let sheet = |red| {
+            image::RgbaImage::from_pixel(SHEET_SIZE, SHEET_SIZE, image::Rgba([red, 0, 0, 255]))
+        };
+        sheet(1)
+            .save(install.join("uifiles/default/dragitem1.tga"))
+            .unwrap();
+        sheet(2)
+            .save(install.join("uifiles/default/spells01.tga"))
+            .unwrap();
+        sheet(3)
+            .save(install.join("uifiles/painted/dragitem1.tga"))
+            .unwrap();
+        image::RgbaImage::new(8, 8)
+            .save(install.join("uifiles/default/dragitem2.tga"))
+            .unwrap();
+        let red = |skin, file| {
+            texture_sheet(&install, skin, file).map(|pixels| pixels.get_pixel(0, 0).0[0])
+        };
+        let own = red("painted", "dragitem1.tga");
+        let fallback = red("painted", "spells01.tga");
+        let small = red("default", "dragitem2.tga");
+        let escaping = red("painted", "..");
+        std::fs::remove_dir_all(&install).unwrap();
+        assert_eq!((own.unwrap(), fallback.unwrap()), (3, 2));
+        assert!(matches!(small, Err(UiLayoutError::SheetSize { .. })));
+        assert!(matches!(escaping, Err(UiLayoutError::InvalidFile(_))));
     }
 
     #[test]

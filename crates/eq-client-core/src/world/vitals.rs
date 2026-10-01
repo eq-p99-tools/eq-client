@@ -34,6 +34,16 @@ pub struct Vitals {
 }
 
 impl Vitals {
+    /// The full experience bar on the Titanium scale: 330 is a whole level.
+    pub const EXPERIENCE_SCALE: u32 = 330;
+
+    /// How far through the level the player is, from 0 to 1.
+    #[must_use]
+    pub fn experience_ratio(&self) -> Option<f64> {
+        self.experience
+            .map(|value| f64::from(value) / f64::from(Self::EXPERIENCE_SCALE))
+    }
+
     /// The HP to show, current and maximum: the last report, adding back what
     /// equipped items give when the report leaves it out (unknown item HP
     /// counts as none). A dead player has none left.
