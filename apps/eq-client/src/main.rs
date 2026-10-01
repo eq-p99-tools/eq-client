@@ -65,6 +65,11 @@ struct Arguments {
     #[arg(long)]
     hide_own_helm: bool,
 
+    /// The most frames a second the client draws; 0 leaves it to vsync, which
+    /// is the monitor's refresh rate.
+    #[arg(long, default_value = "60")]
+    max_fps: u32,
+
     /// Show synthetic moving entities offline, without connecting to a server.
     #[arg(long, conflicts_with = "online")]
     demo_entities: bool,
@@ -327,6 +332,7 @@ fn viewer_config(
         entity_distance: Some(arguments.entity_distance),
         demo_entities: arguments.demo_entities,
         hide_own_helm: arguments.hide_own_helm,
+        frame_rate_cap: (arguments.max_fps > 0).then_some(arguments.max_fps),
         demo_inventory: arguments.demo_inventory,
         demo_bank: arguments.demo_bank,
         demo_spellbook: arguments.demo_spellbook,
