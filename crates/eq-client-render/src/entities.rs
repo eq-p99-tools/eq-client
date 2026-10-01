@@ -3,9 +3,7 @@
 use super::{ViewerSettings, character, online::OnlineState};
 use bevy::prelude::*;
 use eq_client_assets::characters::load_installed_character;
-use eq_client_core::{
-    SpawnKind, WorldEvent, WorldUpdate, entities::nearby, races, render_position,
-};
+use eq_client_core::{SpawnKind, entities::nearby, races, render_position};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Resource, Default)]
@@ -220,125 +218,5 @@ pub(super) fn interpolate(
             Quat::from_rotation_y(eq_client_core::render_heading(spawn.position.heading)),
             weight,
         );
-    }
-}
-
-/// Exercises the same nearby renderer using three synthetic, moving entities offline.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
-pub(super) fn demo(
-    settings: Res<ViewerSettings>,
-    time: Res<Time>,
-    mut state: ResMut<OnlineState>,
-    scene: Res<super::SceneInfo>,
-    players: Query<&Transform, With<super::Player>>,
-    surface: Res<super::TerrainSurface>,
-    mut chat: ResMut<super::chat::ChatState>,
-) {
-    if !settings.0.demo_entities || state.enabled {
-        return;
-    }
-    let Ok(player) = players.single() else {
-        return;
-    };
-    let origin = super::world_position(player.translation.to_array(), 0.0);
-    let now = std::time::Instant::now();
-    let news = |state: &mut OnlineState, event| {
-        state.world.apply(
-            &WorldUpdate::Game(event),
-            now,
-            &eq_client_core::world::NoSpells,
-        );
-    };
-    if state.world.session_id().is_none() {
-        super::online::admit_preview(&mut state, origin, &scene.zone_name);
-    }
-    if chat.history.revision() == 0 {
-        super::chat::seed_demo(&mut chat.history);
-    }
-    // The preview player stands wherever the viewer moved them.
-    news(
-        &mut state,
-        WorldEvent::Position {
-            spawn_id: 1,
-            position: origin,
-            velocity: [0.0; 3],
-        },
-    );
-    for (id, race, offset, size) in [(2u16, 1, 0.0, 0.0), (3, 42, 2.1, 2.5), (4, 54, 4.2, 6.0)] {
-        let phase = time.elapsed_secs() % 18.0;
-        let angle = if id == 2 && phase < 12.0 {
-            0.0
-        } else {
-            time.elapsed_secs() * 0.25 + offset
-        };
-        let mut p = origin;
-        let radius = if id == 2 { 6.0 } else { 14.0 };
-        p.x += angle.cos() * radius;
-        p.y += angle.sin() * radius;
-        let height = if size > 0.0 { size } else { 6.0 };
-        let [x, _, z] = render_position(p);
-        p.z = surface
-            .height_below(x, z, origin.z + 10.0)
-            .unwrap_or(origin.z - height * 0.5)
-            + height * 0.5;
-        p.heading = (-angle).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * 512.0;
-        // A spawn appears once, then only moves, so it is not drawn again.
-        if state.world.spawn(id).is_none() {
-            news(
-                &mut state,
-                WorldEvent::Spawns(vec![synthetic(id, race, size, p)]),
-            );
-        } else {
-            news(
-                &mut state,
-                WorldEvent::Position {
-                    spawn_id: id,
-                    position: p,
-                    velocity: [0.0; 3],
-                },
-            );
-        }
-        if id == 2 {
-            let posture = if phase < 6.0 {
-                eq_client_core::PostureState::Sitting
-            } else if phase < 12.0 {
-                eq_client_core::PostureState::Ducking
-            } else {
-                eq_client_core::PostureState::Standing
-            };
-            news(
-                &mut state,
-                WorldEvent::Posture {
-                    spawn_id: id,
-                    posture,
-                },
-            );
-        }
-    }
-}
-
-/// One of the demo's synthetic spawns: spawn 2 a player, the rest creatures.
-fn synthetic(
-    id: u16,
-    race: u32,
-    size: f32,
-    position: eq_client_core::WorldPosition,
-) -> eq_client_core::SpawnState {
-    eq_client_core::SpawnState {
-        class: None,
-        spawn_id: id,
-        name: format!("Synthetic {id}"),
-        kind: if id == 2 {
-            SpawnKind::Player
-        } else {
-            SpawnKind::Npc
-        },
-        race,
-        gender: 0,
-        position,
-        velocity: [0.0; 3],
-        size,
-        invisible: false,
-        appearance: eq_client_core::outfit::Appearance::default(),
     }
 }

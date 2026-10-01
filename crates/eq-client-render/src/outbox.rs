@@ -277,7 +277,7 @@ mod tests {
                 capabilities,
                 session_id: 4,
                 zone: "qeytoqrg".into(),
-                player: Box::new(crate::online::preview_player(
+                player: Box::new(crate::preview::player(
                     eq_client_core::WorldPosition::default(),
                     [None; 8],
                 )),
@@ -397,7 +397,7 @@ mod hud_tests {
                 capabilities: vec![Capability::Talking],
                 session_id: 4,
                 zone: "qeytoqrg".into(),
-                player: Box::new(crate::online::preview_player(
+                player: Box::new(crate::preview::player(
                     eq_client_core::WorldPosition::default(),
                     [None; 8],
                 )),

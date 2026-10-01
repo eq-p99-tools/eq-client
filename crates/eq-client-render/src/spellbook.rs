@@ -27,62 +27,6 @@ pub(super) struct BookView {
     pub(super) page: usize,
 }
 
-/// Populates a clearly offline book through normalized spell-slot updates.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn demo(
-    settings: Res<super::ViewerSettings>,
-    mut online: ResMut<super::online::OnlineState>,
-    mut shown: ResMut<super::windows::Shown>,
-) {
-    if !settings.0.demo_spellbook || online.enabled {
-        return;
-    }
-    if online.world.spell_book().is_some() {
-        return;
-    }
-    let mut book = eq_client_core::SpellBook::default();
-    for slot in 0..14 {
-        book.apply(&eq_client_core::SpellUpdate::Slot {
-            slot,
-            spell_id: slot + 1,
-            mode: 0,
-        });
-    }
-    let gems: [Option<u32>; 8] = std::array::from_fn(|index| u32::try_from(index + 1).ok());
-    let buff = |spell_id| eq_client_core::Buff {
-        spell_id,
-        caster_level: 1,
-        effect_type: 2,
-        bard_modifier: 10,
-        duration_ticks: 5,
-        counters: 0,
-        caster_id: 0,
-    };
-    let mut news = vec![
-        eq_client_core::WorldEvent::SpellBook(book),
-        eq_client_core::WorldEvent::BuffSnapshot(vec![Some(buff(202)), None, Some(buff(200))]),
-    ];
-    // The preview player, admitted at startup, memorizes the first spells.
-    news.extend(gems.iter().zip(0..).filter_map(|(spell, slot)| {
-        spell.map(|spell_id| {
-            eq_client_core::WorldEvent::Spell(eq_client_core::SpellUpdate::Slot {
-                slot,
-                spell_id,
-                mode: 1,
-            })
-        })
-    }));
-    let now = std::time::Instant::now();
-    for event in news {
-        online.world.apply(
-            &eq_client_core::WorldUpdate::Game(event),
-            now,
-            &eq_client_core::world::NoSpells,
-        );
-    }
-    shown.open(super::windows::WindowId::Spellbook);
-}
-
 type BookRows<'w, 's> = Query<
     'w,
     's,

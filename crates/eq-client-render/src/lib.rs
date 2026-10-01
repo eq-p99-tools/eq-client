@@ -27,6 +27,7 @@ mod online;
 mod outbox;
 mod outfit;
 mod paperdoll;
+mod preview;
 #[cfg(test)]
 mod probes;
 mod resources;
@@ -73,9 +74,24 @@ pub enum ValidationAction {
     InspectFirstItem,
 }
 
-/// Settings for an offline viewer window.
+pub use preview::Preview;
+
+/// Where the viewer's world comes from.
+pub enum Source {
+    /// A server session: its news, and the channel for the player's requests.
+    Online {
+        /// What the session tells the client.
+        updates: Receiver<WorldUpdate>,
+        /// What the player asks the session to send.
+        commands: std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>,
+    },
+    /// No server. The offline preview, if it shows anything, stands in for one.
+    Offline(Preview),
+}
+
+/// Settings for a viewer window.
 #[derive(Clone, Debug, Default, PartialEq)]
-#[allow(clippy::struct_excessive_bools)] // Independent display and offline demo switches.
+#[allow(clippy::struct_excessive_bools)] // Independent display switches.
 pub struct ViewerConfig {
     /// Permit explicitly labeled pre-SoF resource estimates for the Titanium session.
     pub estimate_titanium_resources: bool,
@@ -98,18 +114,6 @@ pub struct ViewerConfig {
     pub eq_directory: Option<PathBuf>,
     /// Nearby-entity radius in EQ units; None uses 200.
     pub entity_distance: Option<f32>,
-    /// Synthetic moving entities for offline visual validation.
-    pub demo_entities: bool,
-    /// Show synthetic inventory in an explicitly offline preview.
-    pub demo_inventory: bool,
-    /// Include synthetic bank storage in the offline inventory preview.
-    pub demo_bank: bool,
-    /// Open synthetic book entries for offline visual validation.
-    pub demo_spellbook: bool,
-    /// Preview character selection without a network worker.
-    pub demo_character_select: bool,
-    /// Preview loot and merchant windows with synthetic items.
-    pub demo_trade: bool,
     /// Optional read-only live validation action.
     pub validation: Option<ValidationAction>,
     /// Optional attended key script driven through the normal input paths.
@@ -190,18 +194,21 @@ pub fn run(
     zone: ZoneAsset,
     character: Option<CharacterAsset>,
     config: ViewerConfig,
-    updates: Option<Receiver<WorldUpdate>>,
-    commands: Option<std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>>,
+    source: Source,
 ) -> i32 {
     let screenshot = config.screenshot.clone();
     let steps = config.script.clone();
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
     let frame_rate_cap = config.frame_rate_cap;
-    let online = updates.is_some();
+    let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
     let window = primary_window(online, screenshot.is_none(), config.window_position);
     let mut app = App::new();
+    let (updates, commands) = match source {
+        Source::Online { updates, commands } => (Some(updates), Some(commands)),
+        Source::Offline(preview) => (preview::install(&mut app, preview), None),
+    };
     app.insert_resource(spellbook::SpellNames::load(config.eq_directory.as_deref()));
     app.insert_resource(hud::messages::Messages::load(
         config.eq_directory.as_deref(),
@@ -219,13 +226,7 @@ pub fn run(
         primary_window: Some(window),
         ..default()
     }))
-    .add_systems(
-        Startup,
-        (
-            setup_scene,
-            (inventory::demo, spellbook::demo).after(setup_scene),
-        ),
-    );
+    .add_systems(Startup, setup_scene);
     schedule(&mut app);
     navigation::install(&mut app);
     frame_limit::install(&mut app, frame_rate_cap);
@@ -353,7 +354,6 @@ fn schedule(app: &mut App) {
                 .chain()
                 .in_set(Stage::Receive),
             (
-                entities::demo,
                 entities::reconcile,
                 entities::interpolate,
                 doors::reconcile,
@@ -373,7 +373,6 @@ fn schedule(app: &mut App) {
             items::link_input,
             items::input,
             inventory::input,
-            inventory::settle,
             inventory::colors::input,
             interact::input,
             target::input,
@@ -467,9 +466,7 @@ pub(crate) enum Stage {
 
 /// Registers the startup work of the overlays and the windows' shared systems.
 fn install_overlays(app: &mut App) {
-    app.add_systems(Startup, trade::demo.after(setup_scene));
     app.add_systems(Startup, tooltip::spawn);
-    app.add_systems(Startup, character_select::demo);
     windows::register_layout(app);
     paperdoll::register(app);
     skin::register(app);
@@ -540,7 +537,6 @@ fn setup_scene(
         .camera_distance
         .unwrap_or(default_radius)
         .clamp(20.0, 20_000.0);
-    let zone_name = zone.short_name.clone();
     scene.enter(
         &mut commands,
         zone::Entry {
@@ -552,14 +548,6 @@ fn setup_scene(
         settings.0.terrain_only,
         &mut online.regions,
     );
-    let demos = &settings.0;
-    if !online.enabled
-        && (demos.demo_entities || demos.demo_inventory || demos.demo_spellbook || demos.demo_trade)
-    {
-        // Every offline demo fills one admitted world, as a session would.
-        let origin = world_position(player_position.to_array(), 0.0);
-        online::admit_preview(&mut online, origin, &zone_name);
-    }
     spawn_lighting(&mut commands, &mut ambient_light);
     spawn_camera(
         &mut commands,

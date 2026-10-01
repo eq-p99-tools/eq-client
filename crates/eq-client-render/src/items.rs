@@ -418,7 +418,7 @@ mod tests {
     use super::*;
 
     fn item(id: u32) -> ItemDetails {
-        let mut item = super::super::inventory::demo_items()[0].details.clone();
+        let mut item = crate::preview::items()[0].details.clone();
         item.id = id;
         item
     }

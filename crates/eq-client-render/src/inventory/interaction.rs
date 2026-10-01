@@ -434,7 +434,7 @@ mod tests {
                 online,
             };
             bench.tell(InventoryUpdate::Snapshot(
-                super::super::demo_items()
+                crate::preview::items()
                     .into_iter()
                     .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),
@@ -757,7 +757,7 @@ mod tests {
         let mut bench = Bench::demo(7);
         bench.click(251, false);
         bench.tell(InventoryUpdate::Set(vec![
-            super::super::demo_items()[0].clone(),
+            crate::preview::items()[0].clone(),
         ]));
         assert!(bench.data().items().contains_key(&InventorySlot::CURSOR));
         bench.click(24, false);

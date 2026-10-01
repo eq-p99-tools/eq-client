@@ -286,7 +286,7 @@ mod tests {
         use eq_client_core::inventory::{Inventory, InventorySlot};
         let world = admitted();
         let names = SpellNames::default();
-        let mut milk = super::super::inventory::demo_items().remove(0);
+        let mut milk = crate::preview::items().remove(0);
         milk.slot = InventorySlot(22);
         milk.rules.item_type = 15;
         milk.details.bonuses = Some(ItemBonuses::default());

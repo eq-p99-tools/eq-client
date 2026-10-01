@@ -429,7 +429,7 @@ mod tests {
         crate::online::testing::inventory(
             &mut online,
             InventoryUpdate::Snapshot(
-                super::super::demo_items()
+                crate::preview::items()
                     .into_iter()
                     .filter(|item| item.slot != InventorySlot::CURSOR)
                     .collect(),
@@ -499,7 +499,7 @@ mod tests {
     #[test]
     fn bank_layout_keeps_cursor_carried_bags_and_quantity_controls() {
         let mut state = InventoryState::default();
-        let mut items = super::super::demo_items();
+        let mut items = crate::preview::items();
         items.retain(|item| item.slot != InventorySlot::CURSOR);
         let bank_stack = items
             .iter_mut()
@@ -577,7 +577,7 @@ mod tests {
         crate::online::testing::inventory(
             &mut online,
             InventoryUpdate::Snapshot(
-                super::super::demo_items()
+                crate::preview::items()
                     .into_iter()
                     .filter(|item| item.slot == InventorySlot(13))
                     .collect(),
