@@ -36,7 +36,7 @@ mod windows;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::input::mouse::MouseMotion;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -321,6 +321,8 @@ fn install_overlays(app: &mut App) {
     app.init_resource::<combat::CombatState>()
         .init_resource::<trade::TradeState>()
         .init_resource::<escape::Escape>()
+        .init_resource::<windows::pointer::Wheel>()
+        .add_systems(Update, windows::pointer::wheel.before(chat::input))
         .add_systems(
             Update,
             escape::route
@@ -346,7 +348,7 @@ fn install_overlays(app: &mut App) {
                     .chain()
                     .after(online::receive)
                     .after(target::input),
-                trade::scroll,
+                trade::scroll.after(windows::pointer::wheel),
             ),
         );
     app.add_systems(Update, windows::input);
@@ -1046,7 +1048,7 @@ fn orbit_camera(
     inventory: Res<inventory::InventoryState>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut motion: MessageReader<MouseMotion>,
-    mut wheel: MessageReader<MouseWheel>,
+    wheel: Res<windows::pointer::Wheel>,
     mut cameras: Query<(&mut OrbitCamera, &mut Transform, Option<&mut Projection>)>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
@@ -1068,11 +1070,16 @@ fn orbit_camera(
         motion.clear();
         Vec2::ZERO
     };
-    let scroll = wheel.read().map(|event| event.y).sum::<f32>();
-    let scroll = if !accepts_input || chat.hovered || items.hovered || inventory.hovered {
+    // A turn over a window scrolls the window, never the camera too.
+    let scroll = if !accepts_input
+        || wheel.surface.is_some()
+        || chat.hovered
+        || items.hovered
+        || inventory.hovered
+    {
         0.0
     } else {
-        scroll
+        wheel.lines
     };
 
     for (mut camera, mut transform, projection) in &mut cameras {
@@ -1187,6 +1194,7 @@ mod tests {
     )]
     fn camera_input_is_consumed_over_panels_and_while_unfocused() {
         use super::*;
+        use bevy::input::mouse::MouseWheel;
         let mut app = App::new();
         app.init_resource::<chat::ChatState>()
             .init_resource::<items::ItemState>()
@@ -1194,7 +1202,8 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()
-            .add_systems(Update, orbit_camera);
+            .init_resource::<windows::pointer::Wheel>()
+            .add_systems(Update, (windows::pointer::wheel, orbit_camera).chain());
         let mut window = Window {
             focused: true,
             ..default()

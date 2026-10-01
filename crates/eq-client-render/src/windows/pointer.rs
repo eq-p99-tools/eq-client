@@ -1,5 +1,88 @@
-//! Shared world-input blocking using the renderer's visible UI geometry.
-use bevy::{ecs::system::SystemParam, prelude::*};
+//! Shared world-input blocking using the renderer's visible UI geometry, and the
+//! one reader of the mouse wheel.
+use bevy::{
+    ecs::system::SystemParam,
+    input::mouse::{MouseScrollUnit, MouseWheel},
+    prelude::*,
+    ui::ComputedStackIndex,
+    window::PrimaryWindow,
+};
+
+/// Pixels one wheel line scrolls.
+const LINE_PIXELS: f32 = 24.0;
+
+/// A surface the mouse wheel scrolls when it is the topmost under the pointer:
+/// a scrolling list, a window that scrolls as a whole, or the chat.
+#[derive(Component)]
+pub(crate) struct TakesWheel;
+
+/// This frame's wheel turn and the one surface it belongs to.
+#[derive(Resource, Default)]
+pub(crate) struct Wheel {
+    /// Pixels to scroll, upward positive.
+    pub(crate) pixels: f32,
+    /// The same turn in wheel lines, for zooming the camera.
+    pub(crate) lines: f32,
+    /// The topmost visible surface under the pointer that takes the wheel;
+    /// with none, the wheel zooms the camera.
+    pub(crate) surface: Option<Entity>,
+}
+
+/// The surfaces that take the wheel, with where they are drawn and how high.
+type WheelSurfaces<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static UiGlobalTransform,
+        &'static ComputedNode,
+        &'static ComputedStackIndex,
+        Option<&'static InheritedVisibility>,
+    ),
+    With<TakesWheel>,
+>;
+
+/// Reads the wheel once and gives it to the topmost surface under the pointer
+/// that takes it, so one turn scrolls one thing.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn wheel(
+    mut events: MessageReader<MouseWheel>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    surfaces: WheelSurfaces,
+    mut wheel: ResMut<Wheel>,
+) {
+    let (mut pixels, mut lines) = (0.0, 0.0);
+    for event in events.read() {
+        match event.unit {
+            MouseScrollUnit::Line => {
+                lines += event.y;
+                pixels += event.y * LINE_PIXELS;
+            }
+            MouseScrollUnit::Pixel => {
+                lines += event.y / LINE_PIXELS;
+                pixels += event.y;
+            }
+        }
+    }
+    let cursor = windows
+        .single()
+        .ok()
+        .and_then(Window::physical_cursor_position);
+    *wheel = Wheel {
+        pixels,
+        lines,
+        surface: cursor.and_then(|cursor| {
+            surfaces
+                .iter()
+                .filter(|(_, transform, node, _, visibility)| {
+                    visibility.is_none_or(|visibility| visibility.get())
+                        && super::contains(cursor, transform, node)
+                })
+                .max_by_key(|(_, _, _, stack, _)| stack.0)
+                .map(|(entity, ..)| entity)
+        }),
+    };
+}
 
 type Surfaces<'w, 's> = Query<
     'w,

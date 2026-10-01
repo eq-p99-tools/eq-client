@@ -1,7 +1,6 @@
 //! Tabbed receive-only chat, with mobile palette colors and independent scroll positions.
 use bevy::{
     input::keyboard::{Key, KeyboardInput},
-    input::mouse::{MouseScrollUnit, MouseWheel},
     prelude::*,
     window::PrimaryWindow,
 };
@@ -98,6 +97,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         .spawn((
             super::hud::HudRoot,
             Panel,
+            super::windows::pointer::TakesWheel,
             GlobalZIndex(15),
             Node {
                 position_type: PositionType::Absolute,
@@ -277,8 +277,8 @@ pub(super) fn input(
     sender: Res<super::target::CommandsToServer>,
     mut keyboard: MessageReader<KeyboardInput>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    panels: Query<(&UiGlobalTransform, &ComputedNode), With<Panel>>,
-    mut wheel: MessageReader<MouseWheel>,
+    panels: Query<(Entity, &UiGlobalTransform, &ComputedNode), With<Panel>>,
+    wheel: Res<super::windows::pointer::Wheel>,
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
     latest: Query<&Interaction, (With<Latest>, Changed<Interaction>)>,
     input_box: Query<&Interaction, (With<InputBox>, Changed<Interaction>)>,
@@ -289,7 +289,6 @@ pub(super) fn input(
     // Character selection owns keyboard input until the zone admits the player.
     if online.enabled && online.session_id.is_none() {
         keyboard.clear();
-        wheel.clear();
         state.composing = false;
         state.hovered = false;
         return;
@@ -338,7 +337,7 @@ pub(super) fn input(
         .ok()
         .and_then(Window::physical_cursor_position)
         .is_some_and(|cursor| {
-            panels.iter().any(|(transform, node)| {
+            panels.iter().any(|(_, transform, node)| {
                 transform.try_inverse().is_some_and(|inverse| {
                     let local = inverse.transform_point2(cursor).abs();
                     local.cmple(node.size() * 0.5).all()
@@ -354,10 +353,11 @@ pub(super) fn input(
     if latest.iter().any(|v| *v == Interaction::Pressed) {
         state.views.entry(active).or_default().follow = true;
     }
-    for event in wheel.read() {
-        if !state.hovered {
-            continue;
-        }
+    if wheel
+        .surface
+        .is_some_and(|surface| panels.contains(surface))
+        && wheel.pixels != 0.0
+    {
         let maximum = viewport.single().map_or(0.0, |node| {
             ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.0)
         });
@@ -365,13 +365,7 @@ pub(super) fn input(
         if view.follow {
             view.offset = maximum;
         }
-        let delta = -event.y
-            * if event.unit == MouseScrollUnit::Line {
-                30.0
-            } else {
-                1.0
-            };
-        view.offset = (view.offset + delta).clamp(0.0, maximum);
+        view.offset = (view.offset - wheel.pixels).clamp(0.0, maximum);
         view.follow = view.offset >= maximum - 1.0;
     }
 }
@@ -946,7 +940,7 @@ mod tests {
         online.session_id = Some(1);
         let mut app = App::new();
         app.init_resource::<ChatState>()
-            .add_message::<MouseWheel>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
             .insert_resource(online)
             .insert_resource(super::super::target::CommandsToServer(Some(sender)))
@@ -980,7 +974,7 @@ mod tests {
     fn character_selection_enter_does_not_open_chat_or_leak_after_admission() {
         let mut app = App::new();
         app.init_resource::<ChatState>()
-            .add_message::<MouseWheel>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(true))
             .insert_resource(super::super::target::CommandsToServer(None))
@@ -1006,7 +1000,7 @@ mod tests {
     fn pressing_tabs_filters_text_without_losing_history() {
         let mut app = App::new();
         app.init_resource::<ChatState>()
-            .add_message::<MouseWheel>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(false))
             .insert_resource(super::super::target::CommandsToServer(None))

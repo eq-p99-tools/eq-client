@@ -44,6 +44,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         .spawn((
             super::hud::HudRoot,
             ItemPanel,
+            super::windows::pointer::TakesWheel,
             ScrollPosition::default(),
             GlobalZIndex(30),
             Node {
@@ -407,12 +408,19 @@ fn hit_sections(runs: &[bevy::text::RunGeometry], point: Vec2) -> impl Iterator<
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn scroll(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut panels: Query<(&UiGlobalTransform, &ComputedNode, &mut ScrollPosition), With<ItemPanel>>,
-    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut panels: Query<
+        (
+            Entity,
+            &UiGlobalTransform,
+            &ComputedNode,
+            &mut ScrollPosition,
+        ),
+        With<ItemPanel>,
+    >,
+    wheel: Res<super::windows::pointer::Wheel>,
     mut state: ResMut<ItemState>,
 ) {
     state.hovered = false;
-    let delta = super::windows::wheel_pixels(&mut wheel);
     let Some(cursor) = windows
         .single()
         .ok()
@@ -423,10 +431,12 @@ pub(super) fn scroll(
     if state.selected.is_none() {
         return;
     }
-    for (transform, node, mut position) in &mut panels {
+    for (entity, transform, node, mut position) in &mut panels {
         if super::windows::contains(cursor, transform, node) {
             state.hovered = true;
-            super::windows::scroll_by(&mut position, node, delta);
+        }
+        if wheel.surface == Some(entity) {
+            super::windows::scroll_by(&mut position, node, wheel.pixels);
         }
     }
 }

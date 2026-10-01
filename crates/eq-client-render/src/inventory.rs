@@ -186,6 +186,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         .spawn((
             super::hud::HudRoot,
             Panel,
+            super::windows::pointer::TakesWheel,
             GlobalZIndex(25),
             ScrollPosition::default(),
             Node {
@@ -558,12 +559,19 @@ pub(super) fn feedback(
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn scroll(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut panels: Query<(&UiGlobalTransform, &ComputedNode, &mut ScrollPosition), With<Panel>>,
-    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut panels: Query<
+        (
+            Entity,
+            &UiGlobalTransform,
+            &ComputedNode,
+            &mut ScrollPosition,
+        ),
+        With<Panel>,
+    >,
+    wheel: Res<super::windows::pointer::Wheel>,
     mut state: ResMut<InventoryState>,
 ) {
     state.hovered = false;
-    let delta = super::windows::wheel_pixels(&mut wheel);
     if !state.open {
         return;
     }
@@ -574,10 +582,12 @@ pub(super) fn scroll(
     else {
         return;
     };
-    for (transform, node, mut position) in &mut panels {
+    for (entity, transform, node, mut position) in &mut panels {
         if super::windows::contains(cursor, transform, node) {
             state.hovered = true;
-            super::windows::scroll_by(&mut position, node, delta);
+        }
+        if wheel.surface == Some(entity) {
+            super::windows::scroll_by(&mut position, node, wheel.pixels);
         }
     }
 }
