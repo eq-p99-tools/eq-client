@@ -96,6 +96,8 @@ pub enum ClickTarget {
     MemorizeGem(u8),
     /// A loot, merchant or window-closing button.
     Trade(TradeClick),
+    /// A bag's tint swatch by storage slot, or one of its palette colors.
+    Tint(i32, Option<usize>),
 }
 
 /// Loot and merchant window buttons.
@@ -193,38 +195,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("walk", [range, duration]) => {
             Step::Walk(number(range, 1.0, 200.0)?, millis(duration, MAX_WALK)?)
         }
-        ("click", ["slot", slot]) => Step::Click(ClickTarget::Slot(
-            slot.parse()
-                .map_err(|_| String::from("expected a slot number"))?,
-        )),
-        ("click", ["scribe"]) => Step::Click(ClickTarget::Scribe),
-        ("click", ["store"]) => Step::Click(ClickTarget::Store),
-        ("click", ["book", row]) => Step::Click(ClickTarget::BookRow(
-            row.parse()
-                .map_err(|_| String::from("expected a book row number"))?,
-        )),
-        ("click", ["loot", slot]) => Step::Click(ClickTarget::Trade(TradeClick::Take(
-            slot.parse()
-                .map_err(|_| String::from("expected a corpse slot"))?,
-        ))),
-        ("click", ["loot_all"]) => Step::Click(ClickTarget::Trade(TradeClick::TakeAll)),
-        ("click", ["loot_done"]) => Step::Click(ClickTarget::Trade(TradeClick::EndLoot)),
-        ("click", ["buy", slot]) => Step::Click(ClickTarget::Trade(TradeClick::Buy(
-            slot.parse()
-                .map_err(|_| String::from("expected a merchant slot"))?,
-        ))),
-        ("click", ["sell", slot]) => Step::Click(ClickTarget::Trade(TradeClick::Sell(
-            slot.parse()
-                .map_err(|_| String::from("expected an inventory slot"))?,
-        ))),
-        ("click", ["shop_done"]) => Step::Click(ClickTarget::Trade(TradeClick::EndShop)),
-        ("click", ["memorize", gem]) => Step::Click(ClickTarget::MemorizeGem(
-            gem.parse::<u8>()
-                .ok()
-                .filter(|gem| (1..=8).contains(gem))
-                .map(|gem| gem - 1)
-                .ok_or_else(|| String::from("expected a gem from 1 to 8"))?,
-        )),
+        ("click", target) => Step::Click(parse_click(target)?),
         ("report", label) => Step::Report(label.join(" ")),
         ("screenshot", [name])
             if Path::new(name)
@@ -237,6 +208,38 @@ fn parse_step(line: &str) -> Result<Step, String> {
             Step::Screenshot(PathBuf::from(name))
         }
         ("quit", []) => Step::Quit,
+        _ => return Err("unknown or malformed step".into()),
+    })
+}
+
+/// `click <target>`: a slot, spellbook, trade or bag tint button.
+fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
+    fn value<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
+        text.parse().map_err(|_| format!("expected {what}"))
+    }
+    Ok(match words {
+        ["slot", slot] => ClickTarget::Slot(value(slot, "a slot number")?),
+        ["scribe"] => ClickTarget::Scribe,
+        ["store"] => ClickTarget::Store,
+        ["book", row] => ClickTarget::BookRow(value(row, "a book row number")?),
+        ["loot", slot] => ClickTarget::Trade(TradeClick::Take(value(slot, "a corpse slot")?)),
+        ["loot_all"] => ClickTarget::Trade(TradeClick::TakeAll),
+        ["loot_done"] => ClickTarget::Trade(TradeClick::EndLoot),
+        ["buy", slot] => ClickTarget::Trade(TradeClick::Buy(value(slot, "a merchant slot")?)),
+        ["sell", slot] => ClickTarget::Trade(TradeClick::Sell(value(slot, "an inventory slot")?)),
+        ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
+        ["tint", slot] => ClickTarget::Tint(value(slot, "a bag slot")?, None),
+        ["tint", slot, color] => ClickTarget::Tint(
+            value(slot, "a bag slot")?,
+            Some(value(color, "a palette color")?),
+        ),
+        ["memorize", gem] => ClickTarget::MemorizeGem(
+            gem.parse::<u8>()
+                .ok()
+                .filter(|gem| (1..=8).contains(gem))
+                .map(|gem| gem - 1)
+                .ok_or_else(|| String::from("expected a gem from 1 to 8"))?,
+        ),
         _ => return Err("unknown or malformed step".into()),
     })
 }
@@ -470,5 +473,20 @@ mod tests {
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
         );
+    }
+
+    #[test]
+    fn parses_bag_tint_clicks() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("click tint 23\nclick tint 23 4\n", base).unwrap(),
+            [
+                Step::Click(ClickTarget::Tint(23, None)),
+                Step::Click(ClickTarget::Tint(23, Some(4))),
+            ]
+        );
+        for bad in ["click tint x", "click tint 23 x", "click tint 23 4 5"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 }

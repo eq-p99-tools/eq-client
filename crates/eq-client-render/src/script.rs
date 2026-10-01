@@ -175,6 +175,7 @@ type Buttons<'w, 's> = Query<
         Option<&'static super::spellbook::BookEntry>,
         Option<&'static super::spellbook::GemChoice>,
         Option<&'static super::trade::Action>,
+        Option<&'static super::inventory::colors::Action>,
     ),
 >;
 
@@ -564,7 +565,9 @@ fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat,
 
 /// Marks the first visible matching control pressed; the focus system clears it next frame.
 fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
-    for (mut interaction, visibility, slot, scribe, store, row, gem, trade) in buttons.iter_mut() {
+    for (mut interaction, visibility, slot, scribe, store, row, gem, trade, tint) in
+        buttons.iter_mut()
+    {
         let matches = match target {
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
@@ -582,6 +585,14 @@ fn click(target: ClickTarget, buttons: &mut Buttons) -> bool {
                         TradeClick::Sell(slot) => Action::Sell(slot),
                         TradeClick::EndShop => Action::EndShop,
                     }
+            }),
+            ClickTarget::Tint(number, color) => tint.is_some_and(|action| {
+                use super::inventory::colors::Action;
+                match (action, color) {
+                    (Action::Toggle(slot), None) => slot.0 == number,
+                    (Action::Set(slot, index), Some(color)) => slot.0 == number && *index == color,
+                    _ => false,
+                }
             }),
         };
         if matches && visibility.get() {
