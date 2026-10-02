@@ -143,6 +143,8 @@ pub struct ClientWorld {
     /// When each ability timer the session started runs out; servers keep
     /// them across zones.
     ability_timers: std::collections::BTreeMap<crate::abilities::Recovery, Instant>,
+    /// The abilities the server type offers, once the session says.
+    offered_abilities: Option<Vec<crate::abilities::Ability>>,
 
     // The zone's contents, the corpse and merchant among them.
     zone: zone::Zone,
@@ -489,6 +491,9 @@ impl ClientWorld {
             }
 
             // The player's abilities.
+            WorldEvent::AbilitiesOffered(offered) => {
+                self.offered_abilities = Some(offered.clone());
+            }
             WorldEvent::AbilityUsed {
                 session_id,
                 ability,
@@ -670,6 +675,7 @@ impl ClientWorld {
                 self.inventory = Inventory::default();
                 self.wallet = crate::money::Wallet::default();
                 self.ability_timers.clear();
+                self.offered_abilities = None;
                 self.nourishment = None;
                 self.spell_book = None;
                 self.buffs.clear();

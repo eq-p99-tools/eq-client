@@ -87,8 +87,11 @@ pub(crate) fn present(
         if text.0 != wanted {
             wanted.clone_into(&mut text.0);
         }
-        let waiting =
-            ability.is_some_and(|ability| online.world().ability_wait(ability, now).is_some());
+        // Greyed while its timer runs, or where the server does not offer it.
+        let waiting = ability.is_some_and(|ability| {
+            online.world().ability_wait(ability, now).is_some()
+                || !online.world().ability_offered(ability)
+        });
         let ink = if waiting {
             theme::INK_DIM
         } else {

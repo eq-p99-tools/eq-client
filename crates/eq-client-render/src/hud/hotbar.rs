@@ -271,7 +271,10 @@ pub(crate) fn presentation(
             || bindings.0[slot.0].is_none()
             || (bindings.gem(slot.0).is_some() && spell.is_none());
         let ability_waits = match bindings.0[slot.0] {
-            Some(Action::Ability(ability)) => online.world().ability_wait(ability, now).is_some(),
+            Some(Action::Ability(ability)) => {
+                online.world().ability_wait(ability, now).is_some()
+                    || !online.world().ability_offered(ability)
+            }
             _ => false,
         };
         let waiting = ability_waits
