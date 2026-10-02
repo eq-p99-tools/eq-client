@@ -140,6 +140,12 @@ pub enum ClickTarget {
     Pet(&'static str),
     /// An Options window checkbox, by the option's name in a file.
     Option(eq_client_core::options::Toggle),
+    /// An Options window slider, pressed this far along it, in percent.
+    Slider(eq_client_core::options::Level, u8),
+    /// The Keyboard page's filter drop-down, which opens or closes its list.
+    KeyFilter,
+    /// A choice in the open drop-down's list, from zero.
+    Choice(usize),
 }
 
 /// The Actions window's pages that hold ability buttons.
@@ -340,6 +346,19 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                 .ok_or("expected an option, by its name in a file")?,
         ),
         ["attack"] => ClickTarget::Attack,
+        ["slider", name, percent] => ClickTarget::Slider(
+            eq_client_core::options::Level::ALL
+                .into_iter()
+                .find(|level| level.key() == *name)
+                .ok_or_else(|| String::from("expected clip_plane, max_fps or mouse_sensitivity"))?,
+            percent
+                .parse::<u8>()
+                .ok()
+                .filter(|percent| *percent <= 100)
+                .ok_or_else(|| String::from("expected a percentage from 0 to 100"))?,
+        ),
+        ["dropdown", "key_filter"] => ClickTarget::KeyFilter,
+        ["choice", choice] => ClickTarget::Choice(ordinal(choice, "a choice")?),
         ["tab", tab] => ClickTarget::Tab(ordinal(tab, "a tab")?),
         ["ability", page, place] => ClickTarget::Ability(
             match *page {

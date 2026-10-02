@@ -200,6 +200,15 @@ pub struct OfficialOptions {
     /// How much of a player's name `/shownames` shows, 0 for none:
     /// `ShowNamesLevel` in `[Defaults]`.
     pub show_names_level: Option<u32>,
+    /// The Display page's Far Clip Plane: `ClipPlane` in `[Options]`, from 0
+    /// to 20 as far as is known.
+    pub clip_plane: Option<u32>,
+    /// The Display page's Max. Frames Per Second, 0 for no cap: `MaxFPS` in
+    /// `[Options]`.
+    pub max_fps: Option<u32>,
+    /// The Mouse page's Mouselook Sensitivity: `MouseSensitivity` in
+    /// `[Options]`, from 0 to 10 as far as is known.
+    pub mouse_sensitivity: Option<u32>,
 }
 
 /// The options the official client keeps in the installation's
@@ -222,6 +231,10 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         npc_names: flag("Options", "NPCNames"),
         show_names_level: ini_value(text, "Defaults", "ShowNamesLevel")
             .and_then(|level| level.trim().parse().ok()),
+        clip_plane: ini_value(text, "Options", "ClipPlane").and_then(|v| v.trim().parse().ok()),
+        max_fps: ini_value(text, "Options", "MaxFPS").and_then(|v| v.trim().parse().ok()),
+        mouse_sensitivity: ini_value(text, "Options", "MouseSensitivity")
+            .and_then(|v| v.trim().parse().ok()),
     }
 }
 
@@ -511,7 +524,7 @@ Log=maybe
     }
 
     #[test]
-    fn eqclient_ini_says_whose_names_show() {
+    fn eqclient_ini_says_whose_names_show_and_how_far_and_fast_the_view_goes() {
         assert_eq!(
             options_from_ini(
                 "[Defaults]
@@ -519,6 +532,9 @@ ShowNamesLevel=4
 [Options]
 PCNames=1
 NPCNames=0
+ClipPlane=15
+MaxFPS=100
+MouseSensitivity=4
 "
             ),
             OfficialOptions {
@@ -526,6 +542,9 @@ NPCNames=0
                 pc_names: Some(true),
                 npc_names: Some(false),
                 show_names_level: Some(4),
+                clip_plane: Some(15),
+                max_fps: Some(100),
+                mouse_sensitivity: Some(4),
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());

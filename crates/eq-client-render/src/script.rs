@@ -202,8 +202,16 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::skinned::SlashButton>,
             Option<&'static super::options::OptionCheckbox>,
         ),
+        (
+            Option<&'static super::skinned::LevelSlider>,
+            Option<&'static super::skinned::DropDown>,
+            Option<&'static super::skinned::DropDownChoice>,
+        ),
     ),
 >;
+
+/// Where the pointer is over each slider, which a scripted press sets.
+type Pointers<'w, 's> = Query<'w, 's, &'static mut bevy::ui::RelativeCursorPosition>;
 
 /// Every UI node's display and parent: a closed window is only left out of
 /// the layout, so its buttons keep their visibility.
@@ -243,7 +251,7 @@ pub(super) fn drive(
     bodies: Query<&super::PlayerBody, With<super::Player>>,
     collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
-    (mut buttons, layout): (Buttons, Layout),
+    (mut buttons, layout, mut pointers): (Buttons, Layout, Pointers),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut exit: MessageWriter<AppExit>,
@@ -410,7 +418,7 @@ pub(super) fn drive(
                 if window.is_some_and(|window| window.cursor_position().is_some()) {
                     return;
                 }
-                if !click(*target, &mut buttons, &layout) {
+                if !click(*target, &mut buttons, &layout, &mut pointers) {
                     script.stop(&mut keys, &mut mouse, "click target is not visible");
                     return;
                 }
@@ -615,7 +623,12 @@ fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat,
 
 /// Marks the first visible matching control in an open window pressed; the
 /// focus system clears it next frame.
-fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
+fn click(
+    target: ClickTarget,
+    buttons: &mut Buttons,
+    layout: &Layout,
+    pointers: &mut Pointers,
+) -> bool {
     for (
         entity,
         mut interaction,
@@ -630,6 +643,7 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
         give,
         (coins, pick),
         (selector, tab, ability, attack, slash, checkbox),
+        (slider, drop_down, choice),
     ) in buttons.iter_mut()
     {
         let matches = match target {
@@ -649,6 +663,11 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
             ClickTarget::Attack => attack,
             ClickTarget::Pet(command) => slash.is_some_and(|button| button.0 == command),
             ClickTarget::Option(toggle) => checkbox.is_some_and(|checkbox| checkbox.0 == toggle),
+            ClickTarget::Slider(level, _) => slider.is_some_and(|slider| slider.level == level),
+            ClickTarget::KeyFilter => drop_down.is_some_and(|drop_down| {
+                drop_down.choosing() == super::skinned::Choosing::KeyFilter
+            }),
+            ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
@@ -692,6 +711,13 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
             }),
         };
         if matches && visibility.get() && displayed(entity, layout) {
+            // A slider is pressed where the setting is to go.
+            if let (ClickTarget::Slider(_, percent), Some(slider), Ok(mut pointer)) =
+                (target, slider, pointers.get_mut(entity))
+            {
+                pointer.normalized =
+                    Some(Vec2::new(slider.across(f32::from(percent) / 100.0), 0.0));
+            }
             *interaction = Interaction::Pressed;
             return true;
         }
@@ -791,12 +817,22 @@ mod tests {
                 .id()
         };
         let closed = button(&mut world, Display::None);
-        let mut state = SystemState::<(Buttons, Layout)>::new(&mut world);
-        let (mut buttons, layout) = state.get_mut(&mut world).unwrap();
-        assert!(!click(ClickTarget::Give, &mut buttons, &layout));
+        let mut state = SystemState::<(Buttons, Layout, Pointers)>::new(&mut world);
+        let (mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
+        assert!(!click(
+            ClickTarget::Give,
+            &mut buttons,
+            &layout,
+            &mut pointers
+        ));
         let open = button(&mut world, Display::Flex);
-        let (mut buttons, layout) = state.get_mut(&mut world).unwrap();
-        assert!(click(ClickTarget::Give, &mut buttons, &layout));
+        let (mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
+        assert!(click(
+            ClickTarget::Give,
+            &mut buttons,
+            &layout,
+            &mut pointers
+        ));
         assert_eq!(world.get::<Interaction>(open), Some(&Interaction::Pressed));
         assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
     }

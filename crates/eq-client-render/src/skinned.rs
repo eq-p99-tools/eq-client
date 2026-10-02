@@ -4,7 +4,13 @@
 //! frame and pieces, and what each gauge and label shows follows the
 //! official client's numbering. A skin without the window, or a viewer
 //! without an installation, keeps the client's own chrome.
+mod controls;
 mod items;
+
+pub(crate) use controls::{
+    Choosing, DropDown, DropDownChoice, KeyFilter, LevelSlider, drop_downs, fill_lists,
+    light_choices, scroll_lists, show_choices, show_levels, slide,
+};
 
 pub(crate) use items::{close, contents, frames, picker, toggle_bag};
 
@@ -318,6 +324,11 @@ fn pieces(
             Element::SpellGem(gem) => spell_gem(window, art, gem, &inside),
             Element::Button(button) => self::button(window, art, button, &inside, context.id),
             Element::InvSlot(slot) => items::slot(window, art, slot, &inside, context.id),
+            Element::Slider(slider) => controls::slider(window, art, slider, &inside, context.id),
+            Element::Combobox(combobox) => {
+                controls::combobox(window, art, combobox, &inside, context.id);
+            }
+            Element::Listbox(list) => controls::listbox(window, art, list, &inside, context.id),
             Element::Tabs(tabs) if TABBED.contains(&context.id) => {
                 // A tab box the skin places sits there; one it stretches
                 // fills its container.
@@ -327,7 +338,7 @@ fn pieces(
                     width: at.width,
                     height: at.height,
                 });
-                tabbed(window, art, &tabs.pages, &at, context);
+                tabbed(window, art, tabs, &at, context);
             }
             // The first page shows; the client has nothing for the others yet.
             Element::Tabs(tabs) => {
@@ -404,125 +415,101 @@ fn view(
         });
 }
 
-/// How wide a tab with these words is: the small font's letters are about
-/// six pixels wide.
-fn tab_width(title: &str) -> f32 {
-    let letters = u16::try_from(title.chars().count()).unwrap_or(u16::MAX);
-    f32::from(letters) * 6.0 + 10.0
-}
+/// The height of a tab that shows its page's words.
+const WORD_TAB_HEIGHT: f32 = 18.0;
 
 /// Windows whose tab boxes show every page, a tab for each.
 const TABBED: [WindowId; 2] = [WindowId::ActionsWindow, WindowId::Options];
 
-/// A tab of a skinned window's tab box: the page it shows. A tab box on
-/// another's page has a depth of one.
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
+/// A tab of a skinned window's tab box: the page it shows. Each tab box
+/// keeps its own choice, by the name the skin gives it; one on another's
+/// page has a depth of one.
+#[derive(Component, Clone, PartialEq, Eq)]
 pub(crate) struct SkinTab {
     pub(crate) window: WindowId,
+    /// The tab box's name.
+    pub(crate) tab_box: std::sync::Arc<str>,
     pub(crate) depth: u8,
     pub(crate) index: usize,
 }
 
 /// A page of a skinned window's tab box.
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Clone, PartialEq, Eq)]
 pub(crate) struct SkinPage(SkinTab);
 
 /// One of a tab's two pictures: the active one shows on the page shown.
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone)]
 pub(crate) struct TabFace {
     tab: SkinTab,
     active: bool,
 }
 
-/// The page each tab box of a tabbed window shows: its first until another
-/// is chosen.
+/// A tab's words, in the page's two colours: the first while another page
+/// shows, the second while it does.
+#[derive(Component, Clone)]
+pub(crate) struct TabWords {
+    tab: SkinTab,
+    colors: [Color; 2],
+}
+
+/// The page each tab box of a tabbed window shows, by the tab box's name:
+/// its first until another is chosen.
 #[derive(Resource, Default)]
-pub(crate) struct Tabs(std::collections::BTreeMap<(WindowId, u8), usize>);
+pub(crate) struct Tabs(std::collections::BTreeMap<(WindowId, std::sync::Arc<str>), usize>);
 
 impl Tabs {
-    fn shows(&self, tab: SkinTab) -> bool {
-        self.0.get(&(tab.window, tab.depth)).copied().unwrap_or(0) == tab.index
+    fn shows(&self, tab: &SkinTab) -> bool {
+        self.0
+            .get(&(tab.window, tab.tab_box.clone()))
+            .copied()
+            .unwrap_or(0)
+            == tab.index
     }
 }
 
-/// A tab box with every page: a row of tabs, each with its page's picture,
-/// across the top, and the chosen page below.
+/// A tab box with every page: a row of tabs, each with its page's picture
+/// or its words, across the top, and the chosen page below. A tab of words
+/// is as wide as the font lays them out.
 fn tabbed(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
-    pages: &[eq_client_assets::sidl::Page],
+    tabs: &eq_client_assets::sidl::TabBox,
     inside: &Area,
     context: &Context,
 ) {
-    let pages = with_client_page(pages, context.id);
+    let pages = with_client_page(&tabs.pages, context.id);
     let pages = pages.as_ref();
-    // A tab shows its page's picture, or else its words.
-    let size = |page: &eq_client_assets::sidl::Page| match (&page.icon[0], &page.title) {
-        (Some(piece), _) => (to_f32(piece.width), to_f32(piece.height)),
-        (None, Some(title)) => (tab_width(title), 18.0),
-        (None, None) => (24.0, 24.0),
+    let tab_box: std::sync::Arc<str> = tabs.name.as_str().into();
+    let tab = |index| SkinTab {
+        window: context.id,
+        tab_box: tab_box.clone(),
+        depth: context.depth,
+        index,
     };
-    let strip = pages.iter().map(|page| size(page).1).fold(0.0, f32::max) + 2.0;
-    let mut x = inside.x + 2.0;
-    for (index, page) in pages.iter().enumerate() {
-        let tab = SkinTab {
-            window: context.id,
-            depth: context.depth,
-            index,
-        };
-        let (width, height) = size(page);
-        let mut cell = window.spawn((Button, tab, at(x, inside.y + 1.0, width, height)));
-        if let Some(tooltip) = &page.tooltip {
-            cell.insert(crate::tooltip::Tooltip(tooltip.clone()));
-        }
-        let words = page.title.as_deref().filter(|_| page.icon[0].is_none());
-        if words.is_some() {
-            cell.insert((
-                BackgroundColor(theme::INSET),
-                BorderColor::all(theme::EDGE),
-                Node {
-                    border: UiRect::all(px(1)),
-                    ..at(x, inside.y + 1.0, width, height)
-                },
-            ));
-        }
-        cell.with_children(|cell| {
-            for (face, piece) in page.icon.iter().enumerate() {
-                if let Some(image) = piece.as_ref().and_then(|piece| art.cut(piece)) {
-                    cell.spawn((
-                        image,
-                        TabFace {
-                            tab,
-                            active: face == 1,
-                        },
-                        at(0.0, 0.0, width, height),
-                    ));
-                }
-            }
-            // The words in the page's colours: one while another page
-            // shows, the other while it does.
-            for (face, color) in page.title_colors.iter().enumerate() {
-                let Some(words) = words else {
-                    break;
-                };
-                let fallback = if face == 1 {
-                    theme::INK_BRIGHT
-                } else {
-                    theme::INK
-                };
-                cell.spawn((
-                    TabFace {
-                        tab,
-                        active: face == 1,
-                    },
-                    theme::text(words, Size::Small, color.map_or(fallback, rgb)),
-                    TextLayout::new(Justify::Center, LineBreak::NoWrap),
-                    at(0.0, 1.0, width - 2.0, height - 2.0),
-                ));
+    // A tab shows its page's picture, or else its words.
+    let height = |page: &eq_client_assets::sidl::Page| match (&page.icon[0], &page.title) {
+        (Some(piece), _) => to_f32(piece.height),
+        (None, Some(_)) => WORD_TAB_HEIGHT,
+        (None, None) => 24.0,
+    };
+    let strip = pages.iter().map(height).fold(0.0, f32::max) + 2.0;
+    window
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::FlexStart,
+            column_gap: px(2),
+            ..at(
+                inside.x + 2.0,
+                inside.y + 1.0,
+                inside.width - 4.0,
+                strip - 1.0,
+            )
+        })
+        .with_children(|row| {
+            for (index, page) in pages.iter().enumerate() {
+                tab_cell(row, art, page, tab(index));
             }
         });
-        x += width + 2.0;
-    }
     let area = Area {
         x: 0.0,
         y: 0.0,
@@ -534,14 +521,9 @@ fn tabbed(
         ..*context
     };
     for (index, page) in pages.iter().enumerate() {
-        let tab = SkinTab {
-            window: context.id,
-            depth: context.depth,
-            index,
-        };
         window
             .spawn((
-                SkinPage(tab),
+                SkinPage(tab(index)),
                 Node {
                     display: Display::None,
                     overflow: Overflow::clip(),
@@ -552,31 +534,111 @@ fn tabbed(
     }
 }
 
-/// Shows the page each tabbed window has chosen, and its tab's picture lit;
-/// a clicked tab chooses its page.
+/// One tab in a tab box's row: its page's picture, or its words in a box
+/// as wide as they lay out.
+fn tab_cell(
+    row: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    page: &eq_client_assets::sidl::Page,
+    tab: SkinTab,
+) {
+    let mut cell = row.spawn((Button, tab.clone()));
+    if let Some(tooltip) = &page.tooltip {
+        cell.insert(crate::tooltip::Tooltip(tooltip.clone()));
+    }
+    match (&page.icon[0], &page.title) {
+        (Some(piece), _) => {
+            let (width, height) = (to_f32(piece.width), to_f32(piece.height));
+            cell.insert(Node {
+                width: px(width),
+                height: px(height),
+                flex_shrink: 0.0,
+                ..default()
+            });
+            cell.with_children(|cell| {
+                for (face, piece) in page.icon.iter().enumerate() {
+                    if let Some(image) = piece.as_ref().and_then(|piece| art.cut(piece)) {
+                        cell.spawn((
+                            image,
+                            TabFace {
+                                tab: tab.clone(),
+                                active: face == 1,
+                            },
+                            at(0.0, 0.0, width, height),
+                        ));
+                    }
+                }
+            });
+        }
+        (None, Some(words)) => {
+            let [rest, chosen] = page.title_colors;
+            let colors = [
+                rest.map_or(theme::INK, rgb),
+                chosen.map_or(theme::INK_BRIGHT, rgb),
+            ];
+            cell.insert((
+                BackgroundColor(theme::INSET),
+                BorderColor::all(theme::EDGE),
+                Node {
+                    height: px(WORD_TAB_HEIGHT),
+                    padding: UiRect::horizontal(px(5)),
+                    border: UiRect::all(px(1)),
+                    align_items: AlignItems::Center,
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+            ));
+            cell.with_child((
+                TabWords { tab, colors },
+                theme::text(words.as_str(), Size::Small, colors[0]),
+                TextLayout::new(Justify::Center, LineBreak::NoWrap),
+            ));
+        }
+        (None, None) => {
+            cell.insert(Node {
+                width: px(24),
+                height: px(24),
+                flex_shrink: 0.0,
+                ..default()
+            });
+        }
+    }
+}
+
+/// Shows the page each tabbed window has chosen, and its tab lit; a clicked
+/// tab chooses its page.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn tabs(
     mut chosen: ResMut<Tabs>,
     clicks: Query<(&Interaction, &SkinTab), Changed<Interaction>>,
     mut pages: Query<(&SkinPage, &mut Node), Without<TabFace>>,
     mut faces: Query<(&TabFace, &mut Node), Without<SkinPage>>,
+    mut words: Query<(&TabWords, &mut TextColor)>,
 ) {
     for (interaction, tab) in &clicks {
         if *interaction == Interaction::Pressed {
-            chosen.0.insert((tab.window, tab.depth), tab.index);
+            chosen
+                .0
+                .insert((tab.window, tab.tab_box.clone()), tab.index);
         }
     }
     let display = |shown: bool| if shown { Display::Flex } else { Display::None };
     for (SkinPage(tab), mut node) in &mut pages {
-        let wanted = display(chosen.shows(*tab));
+        let wanted = display(chosen.shows(tab));
         if node.display != wanted {
             node.display = wanted;
         }
     }
     for (face, mut node) in &mut faces {
-        let wanted = display(chosen.shows(face.tab) == face.active);
+        let wanted = display(chosen.shows(&face.tab) == face.active);
         if node.display != wanted {
             node.display = wanted;
+        }
+    }
+    for (tab, mut color) in &mut words {
+        let wanted = tab.colors[usize::from(chosen.shows(&tab.tab))];
+        if color.0 != wanted {
+            color.0 = wanted;
         }
     }
 }
@@ -668,6 +730,11 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     if let Some(button) = ability_button(id) {
         return Some(Does::Ability(button));
     }
+    // A window's Done button, or the give window's Cancel, closes it; even
+    // in a window whose other buttons do nothing yet.
+    if matches!(id, "DoneButton" | "GVW_Cancel_Button") {
+        return Some(Does::Closes);
+    }
     if owner == WindowId::PetInfo {
         return Some(pet_button(id));
     }
@@ -686,7 +753,6 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     Some(match id {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
-        "DoneButton" | "GVW_Cancel_Button" => Does::Closes,
         "GVW_Give_Button" => Does::Gives,
         "ACP_MeleeAttackButton" => Does::Attack,
         "AMP_SitButton" => Does::Slash("/sit"),
@@ -1259,7 +1325,21 @@ fn label(
         (None, Some(bag)) => aligned(window, node, label.align, (text, items::BagPart::Name(bag))),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
         (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
-        (None, None) => aligned(window, node, label.align, text),
+        (None, None) => match controls::value_label(name, owner) {
+            Some(controls::ValueLabel::Shows(level)) => aligned(
+                window,
+                node,
+                label.align,
+                (text, controls::LevelValue(level)),
+            ),
+            Some(controls::ValueLabel::Blank) => aligned(
+                window,
+                node,
+                label.align,
+                theme::text("", font(label.font), theme::INK_DIM),
+            ),
+            None => aligned(window, node, label.align, text),
+        },
     }
 }
 

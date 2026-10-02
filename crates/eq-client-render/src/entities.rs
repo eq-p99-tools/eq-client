@@ -42,7 +42,7 @@ pub(super) struct RemoteEntity {
 pub(super) fn reconcile(
     mut commands: Commands,
     state: Res<OnlineState>,
-    settings: Res<ViewerSettings>,
+    (settings, options): (Res<ViewerSettings>, Res<crate::options::OptionsState>),
     time: Res<Time>,
     mut nearby_state: ResMut<NearbyEntities>,
     mut images: ResMut<Assets<Image>>,
@@ -84,12 +84,16 @@ pub(super) fn reconcile(
         player.spawn_id,
         player.position,
         &present,
-        // As the official client's clip plane, drawing stops at the zone's far clip.
-        settings
-            .0
-            .entity_distance
-            .unwrap_or(200.0)
-            .min(state.world().far_clip().unwrap_or(f32::INFINITY)),
+        // Drawing stops where the scene's does, the Far Clip Plane's share of
+        // the zone's far clip; with no far clip, at its share of the client's
+        // own distance.
+        {
+            let distance = settings.0.entity_distance.unwrap_or(200.0);
+            match options.options.clip_distance(state.world().far_clip()) {
+                Some(clip) => distance.min(clip),
+                None => distance * options.options.clip_share(),
+            }
+        },
         200,
     );
     let desired: BTreeSet<_> = selected.iter().copied().collect();

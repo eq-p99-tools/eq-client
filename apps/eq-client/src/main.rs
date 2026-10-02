@@ -74,9 +74,11 @@ struct Arguments {
     hide_own_helm: bool,
 
     /// The most frames a second the client draws; 0 leaves it to vsync, which
-    /// is the monitor's refresh rate.
-    #[arg(long, default_value = "60")]
-    max_fps: u32,
+    /// is the monitor's refresh rate. Wins over `eqclient.ini`'s `MaxFPS`;
+    /// the Options window's Max FPS wins over both once the character sets
+    /// it. Without either, 60.
+    #[arg(long)]
+    max_fps: Option<u32>,
 
     /// Add coordinates, the movement mode and the nearby-entity count to the
     /// status box, for development and live checks.
@@ -374,7 +376,9 @@ fn viewer_config(
             skip_modified_food: !arguments.auto_eat_anything,
             ..eq_client_core::options::Options::default()
         },
-        frame_rate_cap: (arguments.max_fps > 0).then_some(arguments.max_fps),
+        max_fps: arguments
+            .max_fps
+            .map(|cap| u16::try_from(cap.min(1000)).unwrap_or(1000)),
         validation: if arguments.target_nearest_player_once {
             Some(ValidationAction::TargetNearestPlayer)
         } else if arguments.inspect_first_chat_item_once {
