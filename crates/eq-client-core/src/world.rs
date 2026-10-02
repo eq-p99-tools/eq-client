@@ -474,6 +474,25 @@ impl ClientWorld {
                 food: *food,
                 water: *water,
             }),
+            // Players' corpses: the server's word on consents, and what the
+            // session would not send.
+            WorldEvent::Consent(consent) => {
+                let own = self
+                    .player
+                    .as_ref()
+                    .is_some_and(|player| player.name.eq_ignore_ascii_case(&consent.owner));
+                news.notices.push(Notice::Consent {
+                    consent: consent.clone(),
+                    own,
+                });
+            }
+            WorldEvent::CorpseRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::CorpseRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ConsumeRefused { session_id, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::ConsumeRefused(reason.clone()));

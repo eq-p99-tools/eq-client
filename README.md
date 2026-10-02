@@ -518,6 +518,12 @@ The target panel lists the keys that apply to the current target:
 - **/camp** sits, waits the 30-second preparation, logs out and returns to
   character selection. Standing, moving, zoning or dying abandons it. **/sit** and
   **/stand** change posture from chat.
+- **/consent Name** lets another player drag the player's corpses (also
+  `group`, `raid` or `guild`) and **/deny Name** takes it back; the server's
+  answer prints in the official client's words for both players.
+  **/corpse** pulls the targeted player corpse close when it lies within
+  reach, **/corpsedrag** starts dragging it, and **/corpsedrop** stops
+  dragging it, or every corpse when none is targeted.
 - **/who all** asks the world who is online and prints its answer in the
   official client's words, from the installed `eqstr_us.txt`: class titles
   from level 51, race names, guilds and zones. Words after it narrow the

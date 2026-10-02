@@ -611,6 +611,20 @@ pub(super) fn target_request(input: &str) -> Option<Result<String, String>> {
     })
 }
 
+/// The player corpse the player targets.
+fn targeted_corpse(online: &super::online::OnlineState) -> Result<u16, String> {
+    let world = online.world();
+    world
+        .target()
+        .selected
+        .filter(|id| {
+            world
+                .spawn(*id)
+                .is_some_and(|spawn| spawn.state.kind == eq_client_core::SpawnKind::PlayerCorpse)
+        })
+        .ok_or_else(|| "You must first target a corpse.".to_owned())
+}
+
 /// The words of a plain `/who`, which lists the zone's players; None for
 /// anything else, `/who all` among it.
 pub(super) fn zone_who_request(
@@ -666,8 +680,38 @@ fn game_commands(
                 filter: request.filter,
             }])
         }),
+        // Who may drag the player's corpses; the session refuses no name.
+        "consent" | "deny" => stamp().map(|stamp| {
+            vec![ClientCommand::Consent {
+                session_id: stamp.session_id,
+                name: words.to_owned(),
+                given: name == "consent",
+            }]
+        }),
         // The rest take no words; with words, they are chat.
         _ if !words.is_empty() => return None,
+        // A player's corpse the player targets, pulled close or dragged.
+        "corpse" | "corpsedrag" => targeted_corpse(online).and_then(|spawn_id| {
+            let session_id = stamp()?.session_id;
+            Ok(vec![if name == "corpse" {
+                ClientCommand::SummonCorpse {
+                    session_id,
+                    spawn_id,
+                }
+            } else {
+                ClientCommand::DragCorpse {
+                    session_id,
+                    spawn_id,
+                }
+            }])
+        }),
+        // The targeted corpse, or every corpse when none is targeted.
+        "corpsedrop" => stamp().map(|stamp| {
+            vec![ClientCommand::DropCorpse {
+                session_id: stamp.session_id,
+                spawn_id: targeted_corpse(online).ok(),
+            }]
+        }),
         "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
         // Camping requires sitting, so sit first as a player would.
@@ -935,6 +979,33 @@ mod tests {
             }]
         ));
         assert!(game_commands("/who", &online, &outbox).unwrap().is_err());
+        // Consent names a player; the corpse commands want a corpse targeted,
+        // but a drop without one drops them all.
+        assert!(matches!(
+            game_commands("/consent Helper", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::Consent { session_id: 4, name, given: true }] if name == "Helper"
+        ));
+        assert!(matches!(
+            game_commands("/deny Helper", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::Consent { given: false, .. }]
+        ));
+        assert_eq!(
+            game_commands("/corpsedrag", &online, &outbox).unwrap(),
+            Err("You must first target a corpse.".into())
+        );
+        assert!(matches!(
+            game_commands("/corpsedrop", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::DropCorpse { spawn_id: None, .. }]
+        ));
     }
     #[test]
     fn sending_a_line_or_an_empty_enter_returns_the_keyboard_to_the_game() {

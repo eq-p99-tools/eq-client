@@ -86,6 +86,16 @@ pub enum Notice {
     },
     /// An item was not eaten or drunk, and why.
     ConsumeRefused(String),
+    /// A consent to drag a player's corpses was given or taken back.
+    Consent {
+        /// What the server said.
+        consent: crate::corpses::Consent,
+        /// Whether the corpses are the player's own; otherwise the player
+        /// was the one consented.
+        own: bool,
+    },
+    /// A consent, summon or drag was not sent, and why.
+    CorpseRefused(String),
     /// The world's answer to `/who all`.
     WhoList(crate::who::WhoList),
     /// A cast request was refused, and why.

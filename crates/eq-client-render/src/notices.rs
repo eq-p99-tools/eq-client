@@ -151,6 +151,25 @@ fn who_lines(
         .collect()
 }
 
+/// A consent given or taken back, in the official client's words: to the
+/// owner, who was consented and where; to the one consented, whose corpses
+/// and where.
+fn consent_line(
+    consent: &eq_client_core::corpses::Consent,
+    own: bool,
+    messages: Option<&Messages>,
+) -> String {
+    let (id, who) = match (own, consent.given) {
+        (true, true) => (1427, &consent.granted),
+        (true, false) => (1428, &consent.granted),
+        (false, true) => (2080, &consent.owner),
+        (false, false) => (2103, &consent.owner),
+    };
+    messages
+        .unwrap_or(&Messages::default())
+        .format(id, &[who.clone(), consent.zone.clone()])
+}
+
 /// How a notice reads, and where each part shows.
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
     let chat = |text: String| vec![(Place::Chat, text)];
@@ -226,7 +245,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
         Notice::TradeRefused(reason)
         | Notice::AbilityRefused(reason)
-        | Notice::ConsumeRefused(reason) => chat(reason.clone()),
+        | Notice::ConsumeRefused(reason)
+        | Notice::CorpseRefused(reason) => chat(reason.clone()),
+        Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
         Notice::WhoList(list) => who_lines(list, messages),
         Notice::NothingToEat { food, water } => nothing_to_eat(*food, *water, messages)
             .into_iter()
@@ -366,6 +387,48 @@ mod tests {
                 None
             ),
             []
+        );
+    }
+
+    #[test]
+    fn consents_read_for_the_owner_and_the_one_consented() {
+        let messages = Messages::parse(
+            "EQST0002\n0 4\n\
+             1427 You have given %1 permission to drag your corpse in %2.\n\
+             1428 You have denied %1 permission to drag your corpse in %2.\n\
+             2080 You have been given permission to drag %1's corpse in %2.\n\
+             2103 You have been denied permission to drag %1's corpse in %2.\n",
+        );
+        let line = |given, own| {
+            wording(
+                &Notice::Consent {
+                    consent: eq_client_core::corpses::Consent {
+                        granted: "Helper".into(),
+                        owner: "Owner".into(),
+                        given,
+                        zone: "The Qeynos Hills".into(),
+                    },
+                    own,
+                },
+                Some(&messages),
+            )
+        };
+        let chat = |text: &str| vec![(Place::Chat, text.to_owned())];
+        assert_eq!(
+            line(true, true),
+            chat("You have given Helper permission to drag your corpse in The Qeynos Hills.")
+        );
+        assert_eq!(
+            line(false, true),
+            chat("You have denied Helper permission to drag your corpse in The Qeynos Hills.")
+        );
+        assert_eq!(
+            line(true, false),
+            chat("You have been given permission to drag Owner's corpse in The Qeynos Hills.")
+        );
+        assert_eq!(
+            line(false, false),
+            chat("You have been denied permission to drag Owner's corpse in The Qeynos Hills.")
         );
     }
 
