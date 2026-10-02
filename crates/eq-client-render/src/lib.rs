@@ -231,6 +231,7 @@ pub fn run(
     let steps = config.script.clone();
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
+    let installed_client = config.installed_client;
     let mut option_defaults = config.option_defaults;
     // The official client's own settings, for characters with no choice of
     // their own here; the client's defaults where it says nothing.
@@ -291,9 +292,10 @@ pub fn run(
                 custom_layer: exit_log::file_layer,
                 ..default()
             }),
-    )
-    .add_systems(Startup, setup_scene)
-    .add_systems(Update, exit_log::close_requests);
+    );
+    theme::install_font(&mut app, installed_client);
+    app.add_systems(Startup, setup_scene)
+        .add_systems(Update, exit_log::close_requests);
     schedule(&mut app);
     navigation::install(&mut app);
     frame_limit::install(&mut app);

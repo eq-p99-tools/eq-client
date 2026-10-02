@@ -5,8 +5,13 @@
 //! The world's own colours (lights, markers, placeholder models) stay with
 //! the scene, and colours that come from the game's data (chat channels,
 //! dyes) stay data.
-use bevy::{ecs::system::EntityCommands, prelude::*};
+//!
+//! Every text is in the face the official client writes in (Arial, for
+//! Titanium), read from Windows' own fonts at run time and never bundled;
+//! without it, Bevy's built-in face stays.
+use bevy::{asset::AssetId, ecs::system::EntityCommands, prelude::*};
 use eq_client_core::combat::ConColor;
+use std::path::{Path, PathBuf};
 
 // Surfaces, from the back.
 
@@ -170,6 +175,42 @@ impl Size {
     }
 }
 
+/// Where Windows keeps a font, under the system root the environment names
+/// (`SystemRoot`, else `windir`).
+fn font_path(system_root: Option<&Path>, file: &str) -> Option<PathBuf> {
+    Some(system_root?.join("Fonts").join(file))
+}
+
+/// Makes the face the installed official client writes in the face of
+/// every text that names none of its own, where Windows has it. It replaces
+/// Bevy's built-in face, so it runs after the text plugin is added and
+/// before any text is laid out.
+pub(crate) fn install_font(app: &mut App, client: eq_client_assets::ui::InstalledClient) {
+    let Some(face) = client.font_file() else {
+        info!(
+            "The face the {client:?} client writes in is unchecked: text keeps the built-in face"
+        );
+        return;
+    };
+    let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"));
+    let Some(file) = font_path(root.as_deref().map(Path::new), face) else {
+        info!("Not on Windows: text keeps the built-in face");
+        return;
+    };
+    match std::fs::read(&file) {
+        Ok(bytes) => {
+            let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
+            if let Err(error) = fonts.insert(AssetId::default(), Font::from_bytes(bytes)) {
+                warn!("Could not use {}: {error}", file.display());
+            }
+        }
+        Err(error) => info!(
+            "No {face} at {}: {error}; text keeps the built-in face",
+            file.display()
+        ),
+    }
+}
+
 /// The client's font at this size.
 pub(crate) fn font(size: Size) -> TextFont {
     TextFont {
@@ -223,6 +264,19 @@ mod tests {
         assert_eq!(button(true, true, Interaction::Hovered), BUTTON_ON);
         assert_eq!(button(true, false, Interaction::Pressed), BUTTON_HOVER);
         assert_eq!(button(true, false, Interaction::None), BUTTON);
+    }
+
+    #[test]
+    fn the_face_is_read_from_the_windows_fonts_for_a_checked_client() {
+        use eq_client_assets::ui::InstalledClient;
+        let face = InstalledClient::Titanium.font_file().unwrap();
+        assert_eq!(
+            font_path(Some(Path::new("C:/Windows")), face),
+            Some(Path::new("C:/Windows").join("Fonts").join("arial.ttf"))
+        );
+        assert_eq!(font_path(None, face), None);
+        // The Mac-era client's face is not checked yet.
+        assert_eq!(InstalledClient::EqMac.font_file(), None);
     }
 
     #[test]
