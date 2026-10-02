@@ -53,6 +53,90 @@ pub(crate) enum Act {
     Walk,
 }
 
+/// The groups the Options window's key list filters by, as the official
+/// client's filter names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeyGroup {
+    Movement,
+    Commands,
+    SpellCasting,
+    Target,
+    Camera,
+    Chat,
+    Ui,
+    /// One of the hotbars, from 1.
+    Hotbar(u8),
+}
+
+impl Act {
+    /// What the Options window's key list calls it.
+    pub(crate) fn command(self) -> String {
+        let fixed = match self {
+            Self::Toggle(WindowId::Inventory) => "Inventory Window",
+            Self::Toggle(WindowId::Spellbook) => "Spellbook",
+            Self::Toggle(WindowId::Options) => "Options Window",
+            Self::Toggle(window) => return format!("{window:?} Window"),
+            Self::TargetSelf => "Target Self",
+            Self::TargetNext => "Target Next",
+            Self::TargetPrevious => "Target Previous",
+            Self::Consider => "Consider",
+            Self::Hail => "Hail",
+            Self::Attack => "Auto Attack",
+            Self::Loot => "Loot",
+            Self::Trade => "Trade",
+            Self::Use => "Use Door or Item",
+            Self::Sit => "Sit",
+            Self::Duck => "Duck",
+            Self::Stand => "Stand",
+            Self::Gem(gem) => return format!("Cast Spell {}", gem + 1),
+            Self::Slot(slot) => return format!("Hotbar Button {}", slot + 1),
+            Self::BindSlot(slot) => return format!("Bind Hotbar Button {}", slot + 1),
+            Self::ClearSlot(slot) => return format!("Clear Hotbar Button {}", slot + 1),
+            Self::Forward => "Forward",
+            Self::Back => "Back",
+            Self::StrafeLeft => "Strafe Left",
+            Self::StrafeRight => "Strafe Right",
+            Self::CameraForward => "Forward, Facing the Camera",
+            Self::CameraBack => "Back, Facing the Camera",
+            Self::CameraLeft => "Left, Facing the Camera",
+            Self::CameraRight => "Right, Facing the Camera",
+            Self::TurnLeft => "Turn Left",
+            Self::TurnRight => "Turn Right",
+            Self::Jump => "Jump",
+            Self::Walk => "Walk or Run",
+        };
+        fixed.to_owned()
+    }
+
+    /// The key list's group for it.
+    pub(crate) const fn group(self) -> KeyGroup {
+        match self {
+            Self::Toggle(_) => KeyGroup::Ui,
+            Self::TargetSelf | Self::TargetNext | Self::TargetPrevious => KeyGroup::Target,
+            Self::Consider | Self::Hail | Self::Attack | Self::Loot | Self::Trade | Self::Use => {
+                KeyGroup::Commands
+            }
+            Self::Gem(_) => KeyGroup::SpellCasting,
+            Self::Slot(_) | Self::BindSlot(_) | Self::ClearSlot(_) => KeyGroup::Hotbar(1),
+            Self::Sit
+            | Self::Duck
+            | Self::Stand
+            | Self::Forward
+            | Self::Back
+            | Self::StrafeLeft
+            | Self::StrafeRight
+            | Self::CameraForward
+            | Self::CameraBack
+            | Self::CameraLeft
+            | Self::CameraRight
+            | Self::TurnLeft
+            | Self::TurnRight
+            | Self::Jump
+            | Self::Walk => KeyGroup::Movement,
+        }
+    }
+}
+
 /// A key with exactly these modifiers held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Chord {
@@ -206,6 +290,11 @@ impl Default for KeyMap {
 }
 
 impl KeyMap {
+    /// Every action with its keys, in the key map's order.
+    pub(crate) fn assignments(&self) -> impl Iterator<Item = (Act, &[Chord])> {
+        self.0.iter().map(|(act, chords)| (*act, chords.as_slice()))
+    }
+
     /// The chords bound to an action.
     pub(crate) fn chords(&self, act: Act) -> &[Chord] {
         self.0.get(&act).map_or(&[], Vec::as_slice)

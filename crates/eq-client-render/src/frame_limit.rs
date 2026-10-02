@@ -1,34 +1,34 @@
-//! A cap on the frame rate. Without one the client draws as fast as vsync
-//! allows, which on a fast monitor is its full refresh rate, in the background
-//! too, and keeps the machine hot for nothing anyone can see.
+//! A cap on the frame rate, the Options window's Max FPS. Without one the
+//! client draws as fast as vsync allows, which on a fast monitor is its full
+//! refresh rate, in the background too, and keeps the machine hot for nothing
+//! anyone can see.
 use bevy::prelude::*;
 use std::time::{Duration, Instant};
 
 /// When the next frame may begin.
 #[derive(Resource)]
 struct FrameLimit {
-    /// The shortest time from one frame to the next.
-    interval: Duration,
     /// The earliest the next frame may start.
     next: Instant,
 }
 
-/// Holds the client to `frames_per_second`; none, or zero, leaves the frame
-/// rate to vsync.
-pub(crate) fn install(app: &mut App, frames_per_second: Option<u32>) {
-    let Some(rate) = frames_per_second.filter(|rate| *rate > 0) else {
-        return;
-    };
+/// Holds the client to the frame rate the options set.
+pub(crate) fn install(app: &mut App) {
     app.insert_resource(FrameLimit {
-        interval: Duration::from_secs(1) / rate,
         next: Instant::now(),
     })
     .add_systems(Last, wait_for_next_frame);
 }
 
-/// Sleeps out the rest of the frame's interval.
-fn wait_for_next_frame(mut limit: ResMut<FrameLimit>) {
-    let (wait, next) = pace(limit.next, Instant::now(), limit.interval);
+/// Sleeps out the rest of the frame's interval; with no cap, the next frame
+/// may start at once.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+fn wait_for_next_frame(mut limit: ResMut<FrameLimit>, options: Res<crate::options::OptionsState>) {
+    let Some(rate) = options.options.frame_cap() else {
+        limit.next = Instant::now();
+        return;
+    };
+    let (wait, next) = pace(limit.next, Instant::now(), Duration::from_secs(1) / rate);
     if !wait.is_zero() {
         std::thread::sleep(wait);
     }
