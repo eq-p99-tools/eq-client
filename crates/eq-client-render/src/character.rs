@@ -13,8 +13,8 @@ pub(super) struct AnimatedCharacter {
     meshes: Vec<(usize, Handle<Mesh>)>,
     /// The entities drawing the primitives.
     pub(super) parts: Vec<Part>,
-    /// The gear last drawn, if dressed yet.
-    pub(super) dressed: Option<eq_client_core::outfit::Appearance>,
+    /// The gear last drawn and whether its helm showed, if dressed yet.
+    pub(super) dressed: Option<(eq_client_core::outfit::Appearance, bool)>,
     /// The entity the parts hang from; held items hang from it too.
     pub(super) model: Entity,
     /// The render layers the model draws on.

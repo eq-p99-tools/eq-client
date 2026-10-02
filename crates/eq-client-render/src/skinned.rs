@@ -702,11 +702,12 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
 
 /// The Options window's checkboxes for the options this client keeps, by
 /// screen ID; the Client page's is this client's own.
-const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 5] = {
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 6] = {
     use eq_client_core::options::Toggle;
     [
         ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
         ("ODP_ShowTargetRingCheckbox", Toggle::TargetRing),
+        ("ODP_ShowHelmCheckbox", Toggle::ShowHelm),
         ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
         ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
         (CLIENT_FOOD_CHECKBOX, Toggle::SkipModifiedFood),
@@ -1542,6 +1543,10 @@ mod tests {
         assert!(matches!(
             does("ODP_ShowTargetRingCheckbox", WindowId::Options),
             Some(Does::Option(Toggle::TargetRing))
+        ));
+        assert!(matches!(
+            does("ODP_ShowHelmCheckbox", WindowId::Options),
+            Some(Does::Option(Toggle::ShowHelm))
         ));
         // What this client does not keep yet is greyed out, and of the two
         // window-mode buttons the skin stacks, only fullscreen shows.

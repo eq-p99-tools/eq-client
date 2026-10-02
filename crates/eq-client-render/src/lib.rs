@@ -135,9 +135,6 @@ pub struct ViewerConfig {
     pub local_session: bool,
     /// UI skin to use instead of the one the character chose in the official client.
     pub ui_skin: Option<String>,
-    /// Hide the player's own helm, as the official client's show-helm option
-    /// does; other characters always show theirs.
-    pub hide_own_helm: bool,
     /// What a character with no options of their own starts with.
     pub option_defaults: eq_client_core::options::Options,
     /// The most frames the client draws a second; None leaves it to vsync,
@@ -213,13 +210,16 @@ pub fn run(
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
     let frame_rate_cap = config.frame_rate_cap;
-    let option_defaults = config.option_defaults;
-    // The official client's `/log` setting, or on.
-    let logging = config
+    let mut option_defaults = config.option_defaults;
+    // The official client's `/log` setting, for characters with no choice of
+    // their own here; on when it says nothing.
+    if let Some(logging) = config
         .eq_directory
         .as_deref()
         .and_then(eq_client_assets::ui::logging)
-        .unwrap_or(true);
+    {
+        option_defaults.log = logging;
+    }
     let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
     let window = primary_window(online, screenshot.is_none(), config.window_position);
@@ -241,8 +241,7 @@ pub fn run(
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
     .insert_resource(outbox::Outbox::new(commands));
     init_presentation(&mut app);
-    app.insert_resource(options::OptionsState::new(option_defaults))
-        .insert_resource(logs::ChatLog::new(logging));
+    app.insert_resource(options::OptionsState::new(option_defaults));
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(window),
         ..default()
