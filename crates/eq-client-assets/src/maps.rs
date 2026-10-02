@@ -167,9 +167,29 @@ mod tests {
     }
 
     #[test]
-    fn a_zone_without_files_has_no_map() {
-        let folder = std::env::temp_dir().join("eq-client-maps-test-none");
+    fn a_zone_without_files_has_no_map_and_no_name_reaches_outside() {
+        let folder = std::env::temp_dir().join(format!("eq-client-maps-{}", std::process::id()));
+        std::fs::create_dir_all(folder.join("maps")).unwrap();
+        // A decoy beside the maps folder, which only a name with a path in it
+        // could reach.
+        std::fs::write(
+            folder.join("outside.txt"),
+            "L 0, 0, 0, 1, 1, 1, 0, 0, 0
+",
+        )
+        .unwrap();
         assert_eq!(ZoneMap::load(&folder, "nowhere"), None);
         assert_eq!(ZoneMap::load(&folder, "../outside"), None);
+        std::fs::write(
+            folder.join("maps").join("inside.txt"),
+            "L 0, 0, 0, 1, 1, 1, 0, 0, 0
+",
+        )
+        .unwrap();
+        assert_eq!(
+            ZoneMap::load(&folder, "inside").map(|map| map.lines.len()),
+            Some(1)
+        );
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 }
