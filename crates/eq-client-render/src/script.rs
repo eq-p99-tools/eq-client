@@ -107,6 +107,13 @@ impl Script {
         self
     }
 
+    /// Whether the script runs without anyone watching the window: on a
+    /// local-only session, or offline.
+    #[must_use]
+    pub(crate) const fn unattended(&self) -> bool {
+        self.local || self.offline
+    }
+
     /// Marks the run offline (see [`Script::offline`]).
     #[must_use]
     pub fn offline_preview(mut self, offline: bool) -> Self {
@@ -296,7 +303,7 @@ pub(super) fn drive(
     }
     let window = windows.single().ok();
     if !may_run(
-        script.local || script.offline,
+        script.unattended(),
         script.focus,
         window.is_some_and(|window| window.focused),
     ) {

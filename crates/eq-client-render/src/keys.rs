@@ -394,13 +394,20 @@ pub(crate) struct Keys<'w, 's> {
     pub(crate) map: Res<'w, KeyMap>,
     typing: Res<'w, Typing>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    script: Option<Res<'w, crate::script::Script>>,
 }
 
 impl Keys<'_, '_> {
-    /// Whether the window has focus. Clicks count from then on, though the
-    /// chat may still have the keyboard.
+    /// Whether the window has focus, or a script that runs unattended drives
+    /// it: two clients on one PC take turns holding the focus, and the one
+    /// without it still takes its script's keys and clicks. Clicks count from
+    /// then on, though the chat may still have the keyboard.
     pub(crate) fn window_focused(&self) -> bool {
         self.windows.single().is_ok_and(|window| window.focused)
+            || self
+                .script
+                .as_ref()
+                .is_some_and(|script| script.unattended())
     }
 
     /// Whether the game has the keyboard.
@@ -441,6 +448,36 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unattended_script_drives_a_window_without_the_focus() {
+        #[derive(Resource, Default)]
+        struct Seen(Option<bool>);
+        let mut app = App::new();
+        testing::install(&mut app);
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Seen>()
+            .add_systems(Update, |keys: Keys, mut seen: ResMut<Seen>| {
+                seen.0 = Some(keys.window_focused());
+            });
+        app.world_mut().spawn((
+            Window {
+                focused: false,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+        assert_eq!(app.world().resource::<Seen>().0, Some(false));
+        // A script watched over, as on P99, still waits for the focus.
+        app.insert_resource(crate::script::Script::new(Vec::new()));
+        app.update();
+        assert_eq!(app.world().resource::<Seen>().0, Some(false));
+        // One on a local server runs unattended, focus or not.
+        app.insert_resource(crate::script::Script::new(Vec::new()).local_session(true));
+        app.update();
+        assert_eq!(app.world().resource::<Seen>().0, Some(true));
+    }
 
     fn keys(held: &[KeyCode], pressed: KeyCode) -> ButtonInput<KeyCode> {
         let mut keys = ButtonInput::default();
