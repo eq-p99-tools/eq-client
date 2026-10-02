@@ -42,6 +42,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Trade => "EQUI_TradeWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
+        WindowId::CastBar => "EQUI_CastingWindow.xml",
         WindowId::Effects => "EQUI_BuffWindow.xml",
         WindowId::ShortEffects => "EQUI_ShortDurationBuffWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
@@ -260,6 +261,11 @@ fn draw(
     context: &Context,
 ) {
     let (width, height) = (screen.area.width, screen.area.height);
+    // A window the skin sizes to nothing, as Velious hides its casting and
+    // short effects windows, shows nothing, not even its frame.
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
     let mut inside = Area {
         x: 0.0,
         y: 0.0,
@@ -1633,7 +1639,9 @@ fn label(
     inside: &Area,
     owner: WindowId,
 ) {
-    let area = label.area;
+    let area = label.anchors.map_or(label.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
     let bag = match owner {
         WindowId::Bag(bag) if name == "Container_Label" => {
             Some(items::BagPart::Name(InventorySlot(bag)))
@@ -1831,6 +1839,12 @@ pub(crate) fn show(
     for (shows, mut text, mut color) in &mut texts {
         let (wanted, tint) = match *shows {
             Shows::GaugeText(kind) => gauge_text(world, kind),
+            // The spell the player casts.
+            Shows::Label(134) => (
+                super::hud::action_bar::cast_spell(world)
+                    .map_or_else(String::new, |spell| names.label(spell)),
+                None,
+            ),
             Shows::Label(kind) => (label_text(world, hud.resource_estimate, kind), None),
             Shows::BuffName(window, index) => (
                 world
@@ -1892,6 +1906,10 @@ fn fraction(
         3 => stat(Stat::Stamina),
         4 => stat(Stat::Experience),
         6 => target_health(world).map(|percent| f32::from(percent) / 100.0),
+        // The player's cast; empty until the server begins it.
+        7 => Some(
+            super::hud::action_bar::cast_progress(world, std::time::Instant::now()).unwrap_or(0.0),
+        ),
         16 => world
             .pet()
             .and_then(|pet| world.health(pet.state.spawn_id))
@@ -2092,6 +2110,17 @@ mod tests {
         // Without a title bar, or words for it, there is no title.
         assert_eq!(words(screen(false, Some("Sample"))), Vec::<String>::new());
         assert_eq!(words(screen(true, None)), Vec::<String>::new());
+        // A window the skin sizes to nothing shows nothing.
+        let hidden = Screen {
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            ..screen(true, Some("Sample"))
+        };
+        assert_eq!(words(hidden), Vec::<String>::new());
     }
 
     #[test]

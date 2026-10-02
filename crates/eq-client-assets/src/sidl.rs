@@ -363,6 +363,9 @@ pub enum Align {
 pub struct Label {
     /// Where the label sits in its window.
     pub area: Area,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`), such as the casting window's spell name.
+    pub anchors: Option<Anchors>,
     /// What the label shows, in the official client's numbering; None for
     /// fixed text.
     pub eq_type: Option<u32>,
@@ -828,6 +831,7 @@ impl Library {
             // the skin writes a book's page numbers.
             "Label" | "StaticText" => Element::Label(Label {
                 area: at(),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
                 eq_type: number(node, "EQType"),
                 text: text_of(node, "Text").unwrap_or_default().to_owned(),
                 color: color(node, "TextColor"),
@@ -1172,6 +1176,28 @@ mod tests {
             <Pieces>Undefined</Pieces>
         </Screen>
     </XML>"#;
+
+    #[test]
+    fn a_stretching_label_keeps_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let window = r#"<XML>
+            <Label item="Name"><EQType>134</EQType><AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>1</LeftAnchorOffset><TopAnchorOffset>2</TopAnchorOffset>
+                <RightAnchorOffset>-2</RightAnchorOffset><BottomAnchorOffset>14</BottomAnchorOffset>
+                <RightAnchorToLeft>false</RightAnchorToLeft>
+            </Label>
+            <Screen item="Casting"><Size><CX>140</CX><CY>60</CY></Size><Pieces>Name</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(window, "Casting").unwrap();
+        let Element::Label(label) = &screen.pieces[0].1 else {
+            panic!("a label");
+        };
+        let area = label.anchors.unwrap().within(100.0, 40.0);
+        assert_eq!(
+            (area.x, area.y, area.width, area.height),
+            (1.0, 2.0, 101.0, 12.0)
+        );
+    }
 
     #[test]
     fn a_window_lists_its_pieces_with_their_geometry_and_chrome() {

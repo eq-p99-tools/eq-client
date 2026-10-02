@@ -550,7 +550,7 @@ fn schedule(app: &mut App) {
                     (options::toggle, options::persist, options::tell_session).chain(),
                 ),
                 (outbox::show, inventory::say_refusals),
-                hud::action_bar::update,
+                (hud::action_bar::cast_window, hud::action_bar::update),
                 skinned::frames,
                 skinned::apply,
                 skinned::show,
