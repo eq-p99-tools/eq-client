@@ -576,6 +576,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel`,
 `click actions` (opens the skin's Actions window), `click tab <n>`, `click ability combat|abilities <n>`, `click attack`,
 `right_click` with the same targets (a bag's slot opens its window),
+`hover` with the same targets (rests the pointer there, so its tooltip shows, until the next click or hover),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
 window is focused (except offline, or on a local `EQEmu` or TAKP server), stop if focus is lost while a key is held, cap each hold, wait

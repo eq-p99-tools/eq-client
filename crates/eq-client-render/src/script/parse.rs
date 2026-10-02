@@ -105,6 +105,9 @@ pub enum Step {
     /// Right-clicks one UI control the same way, as a bag is opened or an
     /// item inspected.
     RightClick(ClickTarget),
+    /// Rests the pointer on one UI control, found as a click finds it, so
+    /// its tooltip shows; it stays hovered until the next click or hover.
+    Hover(ClickTarget),
     /// Logs a numeric summary of player, resource, cast and buff state.
     Report(String),
     /// Saves the primary window to a PNG beside the script.
@@ -341,6 +344,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("give", []) => Step::Give,
         ("click", target) => Step::Click(parse_click(target)?),
         ("right_click", target) => Step::RightClick(parse_click(target)?),
+        ("hover", target) => Step::Hover(parse_click(target)?),
         ("report", label) => Step::Report(label.join(" ")),
         ("screenshot", [name])
             if Path::new(name)
@@ -697,7 +701,7 @@ mod tests {
         let steps = parse(
             "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
              gm summon\ngm damage 10000\ngm givemoney 0 0 5 0\npress F1 # self\n\
-             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\n\
+             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\nhover close_box chat\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 22\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\ngive\nclick give\nreport after cast\nscreenshot a.png\nquit\n",
             base,
         )
@@ -743,6 +747,7 @@ mod tests {
                 Step::Walk(8.0, Duration::from_secs(30)),
                 Step::Click(ClickTarget::Slot(23)),
                 Step::RightClick(ClickTarget::Slot(22)),
+                Step::Hover(ClickTarget::TitleBox("chat", true)),
                 Step::Click(ClickTarget::Scribe),
                 Step::Click(ClickTarget::Store),
                 Step::Click(ClickTarget::BookRow(0)),
