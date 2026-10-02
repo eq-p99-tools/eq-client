@@ -39,6 +39,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
         WindowId::Training => "EQUI_TrainWindow.xml",
+        WindowId::Skills => "EQUI_SkillsWindow.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -761,6 +762,7 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     Some(match id {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
+        "IW_Skills" => Does::Toggles(WindowId::Skills),
         "GVW_Give_Button" => Does::Gives,
         "ACP_MeleeAttackButton" => Does::Attack,
         "AMP_SitButton" => Does::Slash("/sit"),
@@ -904,7 +906,9 @@ fn button(
     let Some(does) = does(button.id.as_deref().unwrap_or_default(), owner) else {
         return;
     };
-    let area = button.area;
+    let area = button.anchors.map_or(button.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
     let node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -1676,6 +1680,7 @@ mod tests {
                 width: 150.0,
                 height: 20.0,
             },
+            anchors: None,
             look: ButtonLook::default(),
             checkbox: true,
             text: Some("Pet Window Popup".into()),

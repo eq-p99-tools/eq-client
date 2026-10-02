@@ -654,6 +654,7 @@ fn click(
         let matches = match target {
             ClickTarget::ActionsWindow => selector
                 .is_some_and(|selector| selector.0 == super::windows::WindowId::ActionsWindow),
+            ClickTarget::Toggle(key) => selector.is_some_and(|selector| selector.0.key() == key),
             // A tab of the window's own tab box, not one on its pages.
             ClickTarget::Tab(index) => tab.is_some_and(|tab| tab.depth == 0 && tab.index == index),
             ClickTarget::Ability(page, index) => ability.is_some_and(|button| {

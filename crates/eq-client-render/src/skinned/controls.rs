@@ -488,6 +488,8 @@ pub(crate) enum Listing {
     Keys,
     /// The skills a guildmaster teaches.
     Training,
+    /// The player's skills.
+    Skills,
 }
 
 /// A list's rows, which the client fills and the wheel scrolls.
@@ -507,6 +509,7 @@ fn listing(id: Option<&str>, owner: WindowId) -> Option<Listing> {
     match (owner, id) {
         (WindowId::Options, Some(KEY_LIST)) => Some(Listing::Keys),
         (WindowId::Training, Some("SkillList")) => Some(Listing::Training),
+        (WindowId::Skills, Some("SkillList")) => Some(Listing::Skills),
         _ => None,
     }
 }
@@ -596,6 +599,12 @@ pub(super) fn listbox(
                         crate::windows::pointer::TakesWheel,
                     ));
                 }
+                Some(Listing::Skills) => {
+                    rows.insert((
+                        crate::skills::SkillsList::new(columns),
+                        crate::windows::pointer::TakesWheel,
+                    ));
+                }
                 None => (),
             }
         });
@@ -613,8 +622,8 @@ pub(crate) fn fill_lists(
     for (entity, mut rows, children) in &mut lists {
         let wanted = match rows.listing {
             Listing::Keys => filter.0.clone(),
-            // The Training window's list fills itself.
-            Listing::Training => continue,
+            // The Training and Skills windows' lists fill themselves.
+            Listing::Training | Listing::Skills => continue,
         };
         if rows.filled && rows.filter == wanted && !keys.is_changed() {
             continue;
@@ -667,7 +676,11 @@ pub(crate) fn fill_lists(
 }
 
 /// The lists the wheel scrolls: those the client fills.
-type ScrolledList = Or<(With<ListRows>, With<crate::training::SkillRows>)>;
+type ScrolledList = Or<(
+    With<ListRows>,
+    With<crate::training::SkillRows>,
+    With<crate::skills::SkillsList>,
+)>;
 
 /// Scrolls the list the wheel turns.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.

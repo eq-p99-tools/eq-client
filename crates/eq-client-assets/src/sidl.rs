@@ -122,6 +122,9 @@ pub struct Button {
     pub id: Option<String>,
     /// Where it sits in its window.
     pub area: Area,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`), such as a Done button kept to the bottom corner.
+    pub anchors: Option<Anchors>,
     /// How it is drawn.
     pub look: ButtonLook,
     /// Whether it stays on once pressed, as a window's toggle does.
@@ -630,6 +633,7 @@ impl Library {
         Element::Button(Button {
             id: text_of(node, "ScreenID").map(str::to_owned),
             area: at(),
+            anchors: flag(node, "AutoStretch").then(|| anchors(node)),
             look: self.button_look(look),
             checkbox: flag(node, "Style_Checkbox"),
             text: text_of(node, "Text").map(str::to_owned),
@@ -1218,6 +1222,37 @@ mod tests {
                 y: 4.0,
                 width: 30.0,
                 height: 112.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_button_that_stretches_keeps_to_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        // The Skills window's Done button: 102 from the right, 22 above the
+        // bottom, to 2 from the right and 2 below the bottom.
+        let text = r#"<XML>
+            <Button item="SKLW_DoneButton"><ScreenID>DoneButton</ScreenID>
+                <AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>102</LeftAnchorOffset><TopAnchorOffset>22</TopAnchorOffset>
+                <RightAnchorOffset>2</RightAnchorOffset><BottomAnchorOffset>-2</BottomAnchorOffset>
+                <TopAnchorToTop>false</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+                <RightAnchorToLeft>false</RightAnchorToLeft><LeftAnchorToLeft>false</LeftAnchorToLeft>
+                <Text>Done</Text></Button>
+            <Screen item="SkillsWindow"><Size><CX>300</CX><CY>200</CY></Size>
+                <Pieces>SKLW_DoneButton</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "SkillsWindow").unwrap();
+        let Element::Button(done) = &screen.pieces[0].1 else {
+            panic!("a button")
+        };
+        assert_eq!(
+            done.anchors.unwrap().within(290.0, 170.0),
+            Area {
+                x: 188.0,
+                y: 148.0,
+                width: 100.0,
+                height: 24.0
             }
         );
     }

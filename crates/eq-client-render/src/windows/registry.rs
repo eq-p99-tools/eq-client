@@ -55,6 +55,9 @@ pub(crate) enum WindowId {
     /// The skin's Training window: the skills a guildmaster teaches, open
     /// while the player trains.
     Training,
+    /// The skin's Skills window: the player's skills and their values,
+    /// opened from the inventory's Skills button.
+    Skills,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -232,7 +235,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 21] = [
+    pub(crate) const ALL: [Self; 22] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -252,6 +255,7 @@ impl WindowId {
         Self::PetInfo,
         Self::Options,
         Self::Training,
+        Self::Skills,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -286,6 +290,7 @@ impl WindowId {
             Self::PetInfo => Some("PetInfoWindow"),
             Self::Options => Some("OptionsWindow"),
             Self::Training => Some("TrainWindow"),
+            Self::Skills => Some("SkillsWindow"),
             _ => None,
         }
     }
@@ -324,6 +329,7 @@ impl WindowId {
             Self::PetInfo => "pet-info",
             Self::Options => "options",
             Self::Training => "training",
+            Self::Skills => "skills",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -431,6 +437,9 @@ impl WindowId {
             // Where the skin places it; it opens with a guildmaster's answer
             // and closes when training ends.
             Self::Training => floating("TRAINING", Placement::TopLeft(120.0, 20.0), false, &[]),
+            // Between the chat and the hotbar, clear of the inventory whose
+            // Skills button also opens it; the skin puts it over the chat.
+            Self::Skills => floating("SKILLS", Placement::TopLeft(456.0, 512.0), true, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(

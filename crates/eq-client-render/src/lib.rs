@@ -42,6 +42,7 @@ mod profile_files;
 mod resources;
 pub mod script;
 mod sheets;
+mod skills;
 mod skin;
 mod skinned;
 mod spell_icons;
@@ -532,6 +533,7 @@ fn schedule(app: &mut App) {
                         skinned::show_choices,
                         skinned::fill_lists,
                         training::fill,
+                        skills::fill,
                     ),
                 ),
                 skinned::close,
