@@ -9,6 +9,7 @@ pub mod entities;
 pub mod ground;
 pub mod logs;
 pub mod movement;
+pub mod options;
 pub mod outfit;
 pub mod pet;
 pub mod races;

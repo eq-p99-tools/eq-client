@@ -29,6 +29,7 @@ mod motion;
 mod navigation;
 mod notices;
 mod online;
+mod options;
 mod outbox;
 mod outfit;
 mod paperdoll;
@@ -36,6 +37,7 @@ mod pet;
 mod preview;
 #[cfg(test)]
 mod probes;
+mod profile_files;
 mod resources;
 pub mod script;
 mod sheets;
@@ -136,6 +138,8 @@ pub struct ViewerConfig {
     /// Hide the player's own helm, as the official client's show-helm option
     /// does; other characters always show theirs.
     pub hide_own_helm: bool,
+    /// What a character with no options of their own starts with.
+    pub option_defaults: eq_client_core::options::Options,
     /// The most frames the client draws a second; None leaves it to vsync,
     /// which is the monitor's refresh rate.
     pub frame_rate_cap: Option<u32>,
@@ -209,6 +213,7 @@ pub fn run(
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
     let frame_rate_cap = config.frame_rate_cap;
+    let option_defaults = config.option_defaults;
     // The official client's `/log` setting, or on.
     let logging = config
         .eq_directory
@@ -236,7 +241,8 @@ pub fn run(
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
     .insert_resource(outbox::Outbox::new(commands));
     init_presentation(&mut app);
-    app.insert_resource(logs::ChatLog::new(logging));
+    app.insert_resource(options::OptionsState::new(option_defaults))
+        .insert_resource(logs::ChatLog::new(logging));
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(window),
         ..default()
@@ -262,7 +268,8 @@ pub fn run(
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 fn init_presentation(app: &mut App) {
-    app.init_resource::<logs::ChatLog>()
+    app.init_resource::<options::OptionsState>()
+        .init_resource::<logs::ChatLog>()
         .init_resource::<hud::HudState>()
         .init_resource::<hud::action_bar::ActionRequests>()
         .init_resource::<combat::CombatState>()
@@ -447,7 +454,11 @@ fn schedule(app: &mut App) {
                 spellbook::scribe_presentation,
                 buffs::update,
                 buffs::hover,
-                (spell_icons::update, logs::write),
+                (
+                    spell_icons::update,
+                    logs::write,
+                    (options::toggle, options::persist, options::tell_session).chain(),
+                ),
                 outbox::show,
                 hud::action_bar::update,
                 skinned::frames,
@@ -1205,7 +1216,7 @@ fn orbit_camera(
     inventory: Res<inventory::InventoryState>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut motion: MessageReader<MouseMotion>,
-    wheel: Res<windows::pointer::Wheel>,
+    (wheel, options): (Res<windows::pointer::Wheel>, Res<options::OptionsState>),
     mut cameras: Query<(&mut OrbitCamera, &mut Transform, Option<&mut Projection>)>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
@@ -1227,8 +1238,10 @@ fn orbit_camera(
         motion.clear();
         Vec2::ZERO
     };
-    // A turn over a window scrolls the window, never the camera too.
+    // A turn over a window scrolls the window, never the camera too; with
+    // the wheel's zoom turned off, it does nothing here.
     let scroll = if !accepts_input
+        || !options.options.wheel_zoom
         || wheel.surface.is_some()
         || chat.hovered
         || items.hovered
@@ -1239,9 +1252,10 @@ fn orbit_camera(
         wheel.lines
     };
 
+    let rise = if options.options.invert_y { -1.0 } else { 1.0 };
     for (mut camera, mut transform, projection) in &mut cameras {
         camera.yaw -= drag.x * 0.005;
-        camera.pitch = (camera.pitch - drag.y * 0.005).clamp(-1.45, -0.15);
+        camera.pitch = (camera.pitch - drag.y * 0.005 * rise).clamp(-1.45, -0.15);
         let radius = (camera.radius * (-scroll * 0.12).exp()).clamp(20.0, 20_000.0);
         if radius.to_bits() != camera.radius.to_bits() {
             camera.radius = radius;
@@ -1360,6 +1374,7 @@ mod tests {
             .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()
+            .init_resource::<options::OptionsState>()
             .add_systems(Update, (windows::pointer::wheel, orbit_camera).chain());
         let mut window = Window {
             focused: true,
@@ -1458,6 +1473,18 @@ mod tests {
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert_eq!((state.yaw, state.pitch, state.radius), previous);
+        // The Mouse page's options: moving up looks the other way, and the
+        // wheel no longer zooms.
+        {
+            let mut options = app.world_mut().resource_mut::<options::OptionsState>();
+            options.options.invert_y = true;
+            options.options.wheel_zoom = false;
+        }
+        send_input(&mut app);
+        app.update();
+        let state = app.world().get::<OrbitCamera>(camera).unwrap();
+        assert!(state.pitch > previous.1);
+        assert_eq!(state.radius, previous.2);
     }
 
     #[test]

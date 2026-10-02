@@ -168,8 +168,22 @@ pub struct Page {
     pub pieces: Vec<(String, Element)>,
     /// The picture on its tab, and while it is the page shown.
     pub icon: [Option<Piece>; 2],
+    /// The colour of its tab's words, and while it is the page shown.
+    pub title_colors: [Option<[u8; 3]>; 2],
     /// What its tab says under the pointer.
     pub tooltip: Option<String>,
+}
+
+/// Pages behind tabs, one shown at a time.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabBox {
+    /// What the window calls it.
+    pub name: String,
+    /// Where it sits in its container; None where the skin stretches it
+    /// over the container.
+    pub area: Option<Area>,
+    /// Its pages, the first shown until another is chosen.
+    pub pages: Vec<Page>,
 }
 
 /// A window inside a window, such as the inventory's character view or the
@@ -311,7 +325,7 @@ pub enum Element {
     /// An item slot.
     InvSlot(InvSlot),
     /// Pages behind tabs; the first is shown.
-    Tabs(Vec<Page>),
+    Tabs(TabBox),
     /// A window inside the window.
     View(Box<View>),
     /// An element this reader does not draw yet, by its kind.
@@ -552,6 +566,10 @@ impl Library {
                         self.piece(text_of(*page, "TabIcon")),
                         self.piece(text_of(*page, "TabIconActive")),
                     ],
+                    title_colors: [
+                        color(*page, "TabTextColor"),
+                        color(*page, "TabTextActiveColor"),
+                    ],
                     tooltip: text_of(*page, "TooltipReference").map(str::to_owned),
                 })
             })
@@ -618,7 +636,11 @@ impl Library {
                 background: self.piece(text_of(node, "Background")),
             }),
             // Pages and windows within windows nest; skins go a few deep.
-            "TabBox" if depth < 4 => Element::Tabs(self.pages(node, elements, depth)),
+            "TabBox" if depth < 4 => Element::Tabs(TabBox {
+                name: node.attribute("item").unwrap_or_default().to_owned(),
+                area: area(node).filter(|_| !flag(node, "AutoStretch")),
+                pages: self.pages(node, elements, depth),
+            }),
             "Screen" => Element::View(Box::new(View {
                 name: node.attribute("item").unwrap_or_default().to_owned(),
                 area: at(),
@@ -815,6 +837,7 @@ mod tests {
             <TooltipReference>Drop Item Here to Auto Equip</TooltipReference>
         </Screen>
         <Page item="FirstPage"><TabText>Inventory</TabText>
+            <TabTextActiveColor><R>255</R><G>255</G><B>0</B></TabTextActiveColor>
             <Location><X>0</X><Y>22</Y></Location><Size><CX>388</CX><CY>401</CY></Size>
             <Pieces>Ear</Pieces><Pieces>Screen:Figure</Pieces>
         </Page>
@@ -954,11 +977,13 @@ mod tests {
     fn pages_hold_slots_and_windows_within_windows() {
         let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
         let screen = library.screen(WINDOW, "Bags").unwrap();
-        let Element::Tabs(pages) = &screen.pieces[0].1 else {
+        let Element::Tabs(tabs) = &screen.pieces[0].1 else {
             panic!("tabs")
         };
-        let page = &pages[0];
+        assert_eq!((tabs.name.as_str(), tabs.area), ("Tabs", None));
+        let page = &tabs.pages[0];
         assert_eq!(page.title.as_deref(), Some("Inventory"));
+        assert_eq!(page.title_colors, [None, Some([255, 255, 0])]);
         assert_eq!(
             page.area,
             Some(Area {
@@ -1015,7 +1040,8 @@ mod tests {
                 .pieces
                 .iter()
                 .flat_map(|(_, element)| match element {
-                    Element::Tabs(pages) => pages
+                    Element::Tabs(tabs) => tabs
+                        .pages
                         .first()
                         .map(|page| page.pieces.iter().map(|(_, piece)| piece).collect())
                         .unwrap_or_default(),

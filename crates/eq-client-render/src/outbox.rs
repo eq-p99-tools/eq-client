@@ -139,6 +139,13 @@ impl Outbox {
         sent.inspect_err(|refusal| self.refused(*refusal))
     }
 
+    /// Sends a command the player did not ask for, such as a setting the
+    /// session must know. A refusal is not shown; the caller tries again.
+    pub(crate) fn tell(&self, world: &ClientWorld, command: ClientCommand) -> bool {
+        self.check(world, &command)
+            .is_ok_and(|queue| queue.try_send(command).is_ok())
+    }
+
     /// Stamps a command made now and sends it.
     ///
     /// # Errors
