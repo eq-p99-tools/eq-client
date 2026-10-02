@@ -134,9 +134,6 @@ pub struct ViewerConfig {
     pub local_session: bool,
     /// UI skin to use instead of the one the character chose in the official client.
     pub ui_skin: Option<String>,
-    /// Hide the player's own helm, as the official client's show-helm option
-    /// does; other characters always show theirs.
-    pub hide_own_helm: bool,
     /// What a character with no options of their own starts with.
     pub option_defaults: eq_client_core::options::Options,
     /// The most frames the client draws a second; None leaves it to vsync,

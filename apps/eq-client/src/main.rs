@@ -67,8 +67,9 @@ struct Arguments {
     #[arg(long, default_value = "200")]
     entity_distance: f32,
 
-    /// Hide your own character's helm, as the official client's show-helm
-    /// option does; other characters always show theirs.
+    /// Hide your own character's helm, as the official client's Show My Helm
+    /// option does; other characters always show theirs. A character's own
+    /// choice in the Options window's Display page wins over this.
     #[arg(long)]
     hide_own_helm: bool,
 
@@ -368,8 +369,8 @@ fn viewer_config(
         terrain_only: arguments.terrain_only,
         eq_directory: Some(eq_directory),
         entity_distance: Some(arguments.entity_distance),
-        hide_own_helm: arguments.hide_own_helm,
         option_defaults: eq_client_core::options::Options {
+            show_helm: !arguments.hide_own_helm,
             skip_modified_food: !arguments.auto_eat_anything,
             ..eq_client_core::options::Options::default()
         },

@@ -1,8 +1,6 @@
 //! The player's options: those of the official Options window this client
 //! keeps itself, and the ones only this client has. A file keeps them as one
 //! `name = value` line each, so a file from an older client still reads.
-//! Options the server keeps in the player's profile, such as Show My Helm,
-//! are not here.
 
 use crate::food::AutoEat;
 
@@ -18,6 +16,10 @@ pub enum Toggle {
     /// Draws a ring at the target's feet (the Display page's Show 3D Target
     /// Ring).
     TargetRing,
+    /// Shows the player's own helm (the Display page's Show My Helm). As on
+    /// P99, it changes only how the player sees themselves: other players'
+    /// helms always show, and the server hears nothing of it.
+    ShowHelm,
     /// Turns the camera the other way when the mouse moves up or down (the
     /// Mouse page's Invert Y Axis).
     InvertY,
@@ -31,9 +33,10 @@ pub enum Toggle {
 
 impl Toggle {
     /// Every toggle, in the order a file lists them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::PetWindowPopup,
         Self::TargetRing,
+        Self::ShowHelm,
         Self::InvertY,
         Self::WheelZoom,
         Self::SkipModifiedFood,
@@ -45,6 +48,7 @@ impl Toggle {
         match self {
             Self::PetWindowPopup => "pet_window_popup",
             Self::TargetRing => "target_ring",
+            Self::ShowHelm => "show_helm",
             Self::InvertY => "invert_y",
             Self::WheelZoom => "wheel_zoom",
             Self::SkipModifiedFood => "skip_modified_food",
@@ -63,6 +67,8 @@ pub struct Options {
     pub pet_window_popup: bool,
     /// See [`Toggle::TargetRing`].
     pub target_ring: bool,
+    /// See [`Toggle::ShowHelm`].
+    pub show_helm: bool,
     /// See [`Toggle::InvertY`].
     pub invert_y: bool,
     /// See [`Toggle::WheelZoom`].
@@ -72,13 +78,14 @@ pub struct Options {
 }
 
 impl Default for Options {
-    /// The client's defaults: the pet's window pops up, the target ring
-    /// shows, the mouse is not inverted and its wheel zooms, and food with
-    /// modifiers waits for the player.
+    /// The client's defaults: the pet's window pops up, the target ring and
+    /// the player's helm show, the mouse is not inverted and its wheel
+    /// zooms, and food with modifiers waits for the player.
     fn default() -> Self {
         Self {
             pet_window_popup: true,
             target_ring: true,
+            show_helm: true,
             invert_y: false,
             wheel_zoom: true,
             skip_modified_food: true,
@@ -93,6 +100,7 @@ impl Options {
         match toggle {
             Toggle::PetWindowPopup => self.pet_window_popup,
             Toggle::TargetRing => self.target_ring,
+            Toggle::ShowHelm => self.show_helm,
             Toggle::InvertY => self.invert_y,
             Toggle::WheelZoom => self.wheel_zoom,
             Toggle::SkipModifiedFood => self.skip_modified_food,
@@ -104,6 +112,7 @@ impl Options {
         let option = match toggle {
             Toggle::PetWindowPopup => &mut self.pet_window_popup,
             Toggle::TargetRing => &mut self.target_ring,
+            Toggle::ShowHelm => &mut self.show_helm,
             Toggle::InvertY => &mut self.invert_y,
             Toggle::WheelZoom => &mut self.wheel_zoom,
             Toggle::SkipModifiedFood => &mut self.skip_modified_food,
