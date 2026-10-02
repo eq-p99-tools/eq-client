@@ -435,6 +435,13 @@ pub struct TextBox {
 pub struct Screen {
     /// The window's name, such as `PlayerWindow`.
     pub name: String,
+    /// The words on its title bar (`Text`), where the skin gives some.
+    pub title: Option<String>,
+    /// The colour of its title, where the skin sets one.
+    pub title_color: Option<[u8; 3]>,
+    /// The official client's font number for its title, from 1 for the
+    /// smallest.
+    pub font: Option<u8>,
     /// Its default place and size on an 800 by 600 screen, borders and
     /// title bar included.
     pub area: Area,
@@ -540,6 +547,9 @@ impl Library {
         let pieces = local.pieces(*screen, &elements, 0);
         Ok(Screen {
             name: name.to_owned(),
+            title: text_of(*screen, "Text").map(str::to_owned),
+            title_color: color(*screen, "TextColor"),
+            font: number(*screen, "Font"),
             area: area(*screen).unwrap_or(Area {
                 x: 0.0,
                 y: 0.0,
@@ -1148,6 +1158,8 @@ mod tests {
         </Screen>
         <Screen item="SampleWindow">
             <Location><X>516</X><Y>242</Y></Location><Size><CX>147</CX><CY>50</CY></Size>
+            <Text>Sample title</Text><Font>3</Font>
+            <TextColor><R>10</R><G>20</G><B>30</B></TextColor>
             <TooltipReference>Your Current Target</TooltipReference>
             <DrawTemplate>WDT_Plain</DrawTemplate>
             <Style_Titlebar>true</Style_Titlebar><Style_Border>true</Style_Border>
@@ -1171,7 +1183,14 @@ mod tests {
             }
         );
         assert!(screen.titlebar && screen.border);
+        assert_eq!(screen.title.as_deref(), Some("Sample title"));
+        assert_eq!(
+            (screen.title_color, screen.font),
+            (Some([10, 20, 30]), Some(3))
+        );
         assert_eq!(screen.tooltip.as_deref(), Some("Your Current Target"));
+        // A window without words of its own has no title.
+        assert_eq!(library.screen(WINDOW, "Bags").unwrap().title, None);
         let template = screen.template.unwrap();
         assert_eq!(template.background.as_deref(), Some("rock.tga"));
         assert_eq!(template.border.top_left.unwrap().texture, "frame.tga");
