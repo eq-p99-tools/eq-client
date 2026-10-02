@@ -289,15 +289,19 @@ pub(super) fn skinned_details(
 
 /// Opens the skin's short effects window while the player has a short
 /// effect, such as a song, and closes it with the last one. Without the
-/// skin's effects window, the client's own lists them with the rest.
+/// skin's effects window, or a client known to have the short one, the
+/// client's own lists them with the rest.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn short_window(
-    online: Res<OnlineState>,
+    (online, settings): (Res<OnlineState>, Res<crate::ViewerSettings>),
     skinned: Res<crate::skinned::Skinned>,
     mut shown: ResMut<windows::Shown>,
 ) {
     let id = windows::WindowId::ShortEffects;
-    let wanted = skinned.has(windows::WindowId::Effects) && online.world().buffs().has_short();
+    // Only the client generations known to have the window open it.
+    let wanted = settings.0.installed_client.short_effects()
+        && skinned.has(windows::WindowId::Effects)
+        && online.world().buffs().has_short();
     if wanted != shown.is_open(id) {
         if wanted {
             shown.open(id);

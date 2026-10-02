@@ -93,6 +93,8 @@ pub(crate) enum Shows {
     /// A button of an effects window, shown only while its slot holds a
     /// buff, as the official client leaves an empty slot blank.
     Buff(EffectWindow, u32),
+    /// The name of the buff on this button of an effects window.
+    BuffName(EffectWindow, u32),
     /// The player's practice points, which the Training window counts.
     PracticePoints,
 }
@@ -1075,13 +1077,19 @@ const fn effect_window(id: WindowId) -> Option<EffectWindow> {
 
 /// The buff whose name a label of an effects window shows, by the label's
 /// number (`EQType`): 500 on for the long window's buttons and 600 on for
-/// the short one's, as the skins that name their buffs number them.
+/// the short one's, as the skins that name their buffs number them. Other
+/// windows' labels keep their own numbering.
 const fn effect_label(kind: u32) -> Option<(EffectWindow, u32)> {
     match kind {
         500..=599 => Some((EffectWindow::Long, kind - 500)),
         600..=699 => Some((EffectWindow::Short, kind - 600)),
         _ => None,
     }
+}
+
+/// The buff a label names, if its window is an effects window.
+fn buff_label(owner: WindowId, eq_type: Option<u32>) -> Option<(EffectWindow, u32)> {
+    effect_window(owner).and(eq_type).and_then(effect_label)
 }
 
 /// Whether a pet command's button shows only while the pet sits (Stand) or
@@ -1675,7 +1683,14 @@ fn label(
         area.width,
         area.height,
     );
+    let buff_name = buff_label(owner, label.eq_type);
     match (label.eq_type, bag) {
+        (Some(_), _) if let Some((effects, index)) = buff_name => aligned(
+            window,
+            node,
+            label.align,
+            (text, Shows::BuffName(effects, index)),
+        ),
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
         (None, Some(bag)) => aligned(window, node, label.align, (text, bag)),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
@@ -1816,16 +1831,14 @@ pub(crate) fn show(
     for (shows, mut text, mut color) in &mut texts {
         let (wanted, tint) = match *shows {
             Shows::GaugeText(kind) => gauge_text(world, kind),
-            Shows::Label(kind) => match effect_label(kind) {
-                Some((window, index)) => (
-                    world
-                        .buffs()
-                        .in_window(window, index)
-                        .map_or_else(String::new, |shown| names.label(shown.spell_id())),
-                    None,
-                ),
-                None => (label_text(world, hud.resource_estimate, kind), None),
-            },
+            Shows::Label(kind) => (label_text(world, hud.resource_estimate, kind), None),
+            Shows::BuffName(window, index) => (
+                world
+                    .buffs()
+                    .in_window(window, index)
+                    .map_or_else(String::new, |shown| names.label(shown.spell_id())),
+                None,
+            ),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Offered(coin) => (
                 world
@@ -2252,6 +2265,12 @@ mod tests {
         assert_eq!(effect_label(524), Some((EffectWindow::Long, 24)));
         assert_eq!(effect_label(600), Some((EffectWindow::Short, 0)));
         assert_eq!(effect_label(17), None);
+        // Only the effects windows' labels name buffs.
+        assert_eq!(
+            buff_label(WindowId::Effects, Some(503)),
+            Some((EffectWindow::Long, 3))
+        );
+        assert_eq!(buff_label(WindowId::Inventory, Some(503)), None);
     }
 
     #[test]

@@ -59,7 +59,10 @@ impl BuffTracker {
     /// table's slots in order, the short window's the slots after them. An
     /// effect without a slot takes the long window's first empty button
     /// that no earlier one took, since a server need not say where a new
-    /// buff went.
+    /// buff went: `EQEmu` sends a landing buff's slot only for a level
+    /// override, a hit counter or a duration past the spell's formula, at
+    /// the next buff tick, and gives a new buff the first empty slot of its
+    /// range, as here.
     #[must_use]
     pub fn in_window(&self, window: EffectWindow, button: u32) -> Option<Shown<'_>> {
         let slots = self.slots.as_ref()?;
