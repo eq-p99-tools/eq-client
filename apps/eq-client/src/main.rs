@@ -144,7 +144,7 @@ struct Arguments {
 
     /// Attended key script (press/hold/wait/report/screenshot/quit), run only
     /// while the client window is focused, except offline or on a local
-    /// `EQEmu` server.
+    /// `EQEmu` or TAKP server.
     /// Screenshots are saved beside it.
     #[arg(long, conflicts_with = "screenshot")]
     script: Option<PathBuf>,
@@ -229,16 +229,19 @@ fn online_protocol(online: bool) -> Result<Option<ServerProtocol>, String> {
 fn check_gm_steps(steps: Option<&[Step]>, local: bool) -> Result<(), &'static str> {
     let gm = steps.is_some_and(|steps| steps.iter().any(|step| matches!(step, Step::Gm(_))));
     if gm && !local {
-        return Err("gm script steps need --online with EQ_PROTOCOL=eqemu (a local EQEmu server)");
+        return Err(
+            "gm script steps need --online with EQ_PROTOCOL=eqemu or takp (a local EQEmu or TAKP server)",
+        );
     }
     Ok(())
 }
 
-/// A script on `EQEmu` is a local test run: its session refuses every server
-/// outside this machine's network, and only then may it send `gm` steps and run
-/// without anyone watching the window. P99 and Quarm scripts stay attended.
+/// A script on a stock server (`EQEmu` or TAKP) is a local test run: its
+/// session refuses every server outside this machine's network, and only then
+/// may it send `gm` steps and run without anyone watching the window. P99 and
+/// Quarm scripts stay attended.
 fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
-    script && protocol == Some(ServerProtocol::EqEmu)
+    script && protocol.is_some_and(ServerProtocol::is_stock)
 }
 
 /// Startup problems print to stderr before the viewer exists; once it
@@ -511,9 +514,11 @@ mod tests {
     };
 
     #[test]
-    fn only_eqemu_scripts_are_local_sessions() {
+    fn only_scripts_on_stock_servers_are_local_sessions() {
         assert!(local_session(true, Some(ServerProtocol::EqEmu)));
+        assert!(local_session(true, Some(ServerProtocol::Takp)));
         assert!(!local_session(true, Some(ServerProtocol::Project1999)));
+        assert!(!local_session(true, Some(ServerProtocol::Quarm)));
         assert!(!local_session(false, Some(ServerProtocol::EqEmu)));
         assert!(!local_session(true, None));
     }
@@ -540,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn gm_steps_are_refused_outside_a_local_eqemu_session() {
+    fn gm_steps_are_refused_outside_a_local_session() {
         let gm = [Step::Gm("summon".into())];
         assert!(check_gm_steps(Some(&gm), false).is_err());
         assert!(check_gm_steps(Some(&gm), true).is_ok());

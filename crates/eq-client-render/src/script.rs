@@ -605,10 +605,12 @@ fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool)
 }
 
 /// The say line carrying a `gm` step's `#` command, refused unless the session is
-/// on a local `EQEmu` server.
+/// on a local `EQEmu` or TAKP server.
 fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat, String> {
     if !allowed {
-        return Err("gm steps only run on a local EQEmu server (EQ_PROTOCOL=eqemu)".into());
+        return Err(
+            "gm steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)".into(),
+        );
     }
     Ok(eq_client_core::OutboundChat::Say(format!("#{command}")))
 }
