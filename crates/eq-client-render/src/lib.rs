@@ -566,6 +566,7 @@ fn schedule(app: &mut App) {
                 .chain(),
             (
                 hud::hotbar::needs,
+                abilities::needs,
                 outbox::veil,
                 outbox::grey_out,
                 tooltip::show,

@@ -238,7 +238,7 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
                 ));
                 // Greyed where the session does not offer the window.
                 if let Some(needs) = window.needs() {
-                    button.insert(crate::outbox::Needs(needs));
+                    button.insert(crate::outbox::Needs::Capability(needs));
                 }
             }
         });

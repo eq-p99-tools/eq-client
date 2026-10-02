@@ -58,6 +58,25 @@ pub(crate) fn use_ability(ability: Ability, online: &OnlineState, outbox: &Outbo
     });
 }
 
+/// Keeps what each ability button needs in step with the ability it holds:
+/// one the server type does not list is veiled, with the reason on hover.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn needs(
+    online: Res<OnlineState>,
+    mut buttons: Query<(&AbilityButton, &mut crate::outbox::Needs)>,
+) {
+    use crate::outbox::Needs;
+    for (button, mut needs) in &mut buttons {
+        let wanted = assigned(online.world(), *button).map_or(
+            Needs::Capability(eq_client_core::Capability::Abilities),
+            Needs::Ability,
+        );
+        if *needs != wanted {
+            *needs = wanted;
+        }
+    }
+}
+
 /// A pressed ability button uses its ability.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn input(
@@ -87,11 +106,10 @@ pub(crate) fn present(
         if text.0 != wanted {
             wanted.clone_into(&mut text.0);
         }
-        // Greyed while its timer runs, or where the server does not offer it.
-        let waiting = ability.is_some_and(|ability| {
-            online.world().ability_wait(ability, now).is_some()
-                || !online.world().ability_offered(ability)
-        });
+        // Dim while its timer runs; one the server does not offer is veiled
+        // instead (see `needs`).
+        let waiting =
+            ability.is_some_and(|ability| online.world().ability_wait(ability, now).is_some());
         let ink = if waiting {
             theme::INK_DIM
         } else {
@@ -128,6 +146,43 @@ mod tests {
         player.skills = Some(skills);
         testing::admit(&mut online, 1, player);
         online
+    }
+
+    #[test]
+    fn a_button_needs_the_ability_it_holds() {
+        use crate::outbox::Needs;
+        use eq_client_core::{Capability, WorldEvent};
+        let mut online = monk();
+        // The server offers everything but feign death.
+        testing::news(
+            &mut online,
+            [WorldEvent::AbilitiesOffered(
+                Ability::ALL
+                    .into_iter()
+                    .filter(|ability| *ability != Ability::FeignDeath)
+                    .collect(),
+            )],
+        );
+        let mut app = crate::testing::app();
+        app.add_systems(Update, needs);
+        app.insert_resource(online);
+        let button = |page, index| {
+            (
+                AbilityButton { page, index },
+                Needs::Capability(Capability::Abilities),
+            )
+        };
+        let kick = app.world_mut().spawn(button(Page::Combat, 0)).id();
+        let feign = app.world_mut().spawn(button(Page::Abilities, 3)).id();
+        let empty = app.world_mut().spawn(button(Page::Abilities, 5)).id();
+        app.update();
+        let needs = |entity| *app.world().get::<Needs>(entity).unwrap();
+        assert_eq!(needs(kick), Needs::Ability(Ability::Kick));
+        assert_eq!(needs(feign), Needs::Ability(Ability::FeignDeath));
+        assert_eq!(needs(empty), Needs::Capability(Capability::Abilities));
+        let world = app.world().resource::<OnlineState>().world();
+        assert!(needs(kick).offered(world));
+        assert!(!needs(feign).offered(world));
     }
 
     #[test]

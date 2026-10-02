@@ -666,7 +666,7 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
     };
     theme::button_with(
         parent,
-        (action, crate::outbox::Needs(needs)),
+        (action, crate::outbox::Needs::Capability(needs)),
         label,
         Size::Label,
     );

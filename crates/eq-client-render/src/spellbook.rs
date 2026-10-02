@@ -213,7 +213,7 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
         .spawn((
             Button,
             ScribeCursor,
-            crate::outbox::Needs(eq_client_core::Capability::Spellbook),
+            crate::outbox::Needs::Capability(eq_client_core::Capability::Spellbook),
             Node {
                 padding: UiRect::all(px(6)),
                 ..default()
@@ -670,7 +670,7 @@ fn gem_choices(parent: &mut ChildSpawnerCommands) {
                 row.spawn((
                     Button,
                     GemChoice(gem),
-                    crate::outbox::Needs(eq_client_core::Capability::Spellbook),
+                    crate::outbox::Needs::Capability(eq_client_core::Capability::Spellbook),
                     Text::new(format!("{}", gem + 1)),
                     theme::font(Size::Heading),
                     Node {

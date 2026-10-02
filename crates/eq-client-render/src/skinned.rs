@@ -771,7 +771,7 @@ fn spell_gem(
         .spawn((
             Button,
             super::hud::SpellGem(index),
-            crate::outbox::Needs(eq_client_core::Capability::Casting),
+            crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
             BackgroundColor(Color::NONE),
             node,
         ))
@@ -1095,13 +1095,13 @@ fn behave(
             Button,
             AttackButton,
             skin(),
-            crate::outbox::Needs(Capability::Combat),
+            crate::outbox::Needs::Capability(Capability::Combat),
         )),
         Does::Ability(place) => drawn.insert((
             Button,
             place,
             skin(),
-            crate::outbox::Needs(Capability::Abilities),
+            crate::outbox::Needs::Capability(Capability::Abilities),
         )),
         Does::Slash(command) => drawn.insert((Button, SlashButton(command), skin())),
         Does::PetBuff(slot) => drawn.insert((Shows::PetBuff(slot), Visibility::Hidden)),
@@ -1112,13 +1112,13 @@ fn behave(
             Button,
             super::training::TrainButton,
             skin(),
-            crate::outbox::Needs(Capability::Training),
+            crate::outbox::Needs::Capability(Capability::Training),
         )),
         Does::Answers(accept) => drawn.insert((
             Button,
             super::resurrection::AnswerButton(accept),
             skin(),
-            crate::outbox::Needs(Capability::Resurrection),
+            crate::outbox::Needs::Capability(Capability::Resurrection),
         )),
         Does::TurnsPage(forward) => {
             drawn.insert((Button, super::reading::PageButton(forward), skin()))
@@ -1127,7 +1127,7 @@ fn behave(
             Button,
             super::tradeskills::CombineButton(container),
             skin(),
-            crate::outbox::Needs(Capability::Tradeskills),
+            crate::outbox::Needs::Capability(Capability::Tradeskills),
         )),
         Does::Maps(action) => drawn.insert((Button, action, skin())),
         Does::BagIcon | Does::Nothing => drawn,
