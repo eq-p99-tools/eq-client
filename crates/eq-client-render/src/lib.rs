@@ -26,6 +26,7 @@ mod items;
 mod keys;
 mod logs;
 mod motion;
+mod names;
 mod navigation;
 mod notices;
 mod online;
@@ -211,14 +212,20 @@ pub fn run(
     let local_session = config.local_session;
     let frame_rate_cap = config.frame_rate_cap;
     let mut option_defaults = config.option_defaults;
-    // The official client's `/log` setting, for characters with no choice of
-    // their own here; on when it says nothing.
-    if let Some(logging) = config
-        .eq_directory
-        .as_deref()
-        .and_then(eq_client_assets::ui::logging)
-    {
-        option_defaults.log = logging;
+    // The official client's own settings, for characters with no choice of
+    // their own here; the client's defaults where it says nothing.
+    if let Some(directory) = config.eq_directory.as_deref() {
+        use eq_client_core::options::Toggle;
+        let official = eq_client_assets::ui::official_options(directory);
+        for (toggle, setting) in [
+            (Toggle::Log, official.log),
+            (Toggle::PcNames, official.pc_names),
+            (Toggle::NpcNames, official.npc_names),
+        ] {
+            if let Some(on) = setting {
+                option_defaults.set(toggle, on);
+            }
+        }
     }
     let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
@@ -289,6 +296,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<inventory::InventoryState>()
         .init_resource::<motion::Controls>()
         .init_resource::<entities::NearbyEntities>()
+        .init_resource::<names::NameTags>()
         .init_resource::<item_models::ItemLibrary>()
         .init_resource::<outfit::Wardrobe>()
         .init_resource::<windows::DragState>()
@@ -477,6 +485,7 @@ fn schedule(app: &mut App) {
                 outfit::dress,
                 character::animate,
                 target::marker::update,
+                names::update,
                 schedule_screenshot,
                 exit_after_screenshot,
             )
@@ -687,6 +696,7 @@ fn spawn_player_and_hud(
         commands.entity(player).insert((
             Mesh3d(meshes.add(Capsule3d::new(0.5, body.height - 1.0))),
             MeshMaterial3d(player_material),
+            names::Overhead(body.height / 2.0),
         ));
     }
 

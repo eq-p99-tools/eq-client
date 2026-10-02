@@ -180,14 +180,7 @@ pub(super) fn spawn_on_layers(
         .iter()
         .map(|(index, mesh, _)| (*index, mesh.clone()))
         .collect();
-    let bottom = asset
-        .primitives
-        .iter()
-        .zip(&asset.pieces)
-        .filter(|(_, piece)| piece.base())
-        .flat_map(|(p, _)| &p.positions)
-        .map(|p| p[1])
-        .fold(f32::INFINITY, f32::min);
+    let (bottom, top) = asset.span().unwrap_or_default();
     // Until gear says otherwise, only the base body and bare head show.
     let shown: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
     let mut parts = Vec::with_capacity(primitives.len());
@@ -227,6 +220,9 @@ pub(super) fn spawn_on_layers(
     commands
         .entity(parent)
         .add_child(child)
+        // The model hangs with its soles at the feet, so its top is this far
+        // above the root.
+        .insert(super::names::Overhead(top - bottom - feet_offset))
         .insert(AnimatedCharacter {
             asset,
             meshes: handles,

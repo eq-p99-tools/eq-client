@@ -164,6 +164,9 @@ pub(super) fn reconcile(
             SpawnKind::Npc => Color::srgb(0.8, 0.65, 0.3),
             _ => Color::srgb(0.4, 0.4, 0.4),
         };
+        commands
+            .entity(entity)
+            .insert(super::names::Overhead(height / 2.0));
         commands.entity(entity).with_children(|children| {
             children.spawn((
                 Mesh3d(meshes.add(Cuboid::new(0.6, height, 0.6))),
