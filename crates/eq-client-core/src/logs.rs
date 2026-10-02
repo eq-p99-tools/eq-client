@@ -22,10 +22,12 @@ pub fn file_name(character: &str, server: &str) -> String {
 }
 
 /// A log line: the local time in brackets, as `[Thu Oct 02 02:41:05 2026]`,
-/// then the words.
+/// then the words, ended with a carriage return and a line feed, as the
+/// official client ends every line of its logs. The words go as they are,
+/// non-ASCII text in the UTF-8 the server sent it in.
 #[must_use]
 pub fn line(time: chrono::NaiveDateTime, words: &str) -> String {
-    format!("[{}] {words}", time.format("%a %b %d %H:%M:%S %Y"))
+    format!("[{}] {words}\r\n", time.format("%a %b %d %H:%M:%S %Y"))
 }
 
 /// What a chat line says in a log: the installed client's string for it,
@@ -148,7 +150,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             line(time, "Arrived in The Qeynos Hills."),
-            "[Fri Oct 02 02:41:05 2026] Arrived in The Qeynos Hills."
+            "[Fri Oct 02 02:41:05 2026] Arrived in The Qeynos Hills.\r\n"
+        );
+        assert_eq!(
+            line(time, "\u{c9}p\u{e9}e \u{2026}").as_bytes(),
+            b"[Fri Oct 02 02:41:05 2026] \xC3\x89p\xC3\xA9e \xE2\x80\xA6\r\n"
         );
         assert_eq!(
             file_name("Examplar", "ExampleWorld"),
