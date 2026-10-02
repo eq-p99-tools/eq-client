@@ -67,10 +67,6 @@ impl SessionWorker {
         local_only: bool,
         auto_eat: AutoEat,
     ) -> Result<(Self, Receiver<WorldUpdate>)> {
-        anyhow::ensure!(
-            calibration.is_none() || protocol.is_titanium(),
-            "calibrated movement requires the Titanium protocol"
-        );
         let client = client_from_environment(install, protocol, local_only, auto_eat)?;
         let cancel = CancellationToken::default();
         let worker_cancel = cancel.clone();
