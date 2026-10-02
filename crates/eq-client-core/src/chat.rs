@@ -81,7 +81,7 @@ impl ChatTab {
             ChannelName::Ooc => Self::Ooc,
             ChannelName::Guild | ChannelName::GuildMotd => Self::Guild,
             ChannelName::Group => Self::Group,
-            ChannelName::Tell => Self::Tell,
+            ChannelName::Tell | ChannelName::TellEcho => Self::Tell,
             ChannelName::Raid => Self::Raid,
             ChannelName::Shout => Self::Shout,
             ChannelName::Emote => Self::Emote,
@@ -97,7 +97,7 @@ pub fn channel_rgb(channel: ChannelName) -> [u8; 3] {
         ChannelName::Ooc => [0xff, 0xcc, 0x66],
         ChannelName::Guild | ChannelName::GuildMotd => [0x28, 0xf0, 0x28],
         ChannelName::Group => [0x00, 0xff, 0xff],
-        ChannelName::Tell => [0xbe, 0x28, 0xbe],
+        ChannelName::Tell | ChannelName::TellEcho => [0xbe, 0x28, 0xbe],
         ChannelName::Raid => [0x00, 0xc8, 0xc8],
         ChannelName::Shout => [0xff, 0x00, 0x00],
         ChannelName::Emote => [0x5a, 0x5a, 0xff],
@@ -184,6 +184,12 @@ mod tests {
         assert_eq!(all[0].1.channel, ChannelName::Guild);
         assert_eq!(all.last().unwrap().1.channel, ChannelName::Tell);
         assert_eq!(ChatTab::for_channel(ChannelName::Unknown), ChatTab::System);
+        // The echo of a tell the player sent reads with the tells.
+        assert_eq!(ChatTab::for_channel(ChannelName::TellEcho), ChatTab::Tell);
+        assert_eq!(
+            channel_rgb(ChannelName::TellEcho),
+            channel_rgb(ChannelName::Tell)
+        );
         assert_eq!(ChatTab::for_channel(ChannelName::GuildMotd), ChatTab::Guild);
     }
     #[test]
