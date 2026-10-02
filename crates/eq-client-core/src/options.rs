@@ -29,17 +29,21 @@ pub enum Toggle {
     /// Leaves food and drink with modifiers for the player to eat or drink
     /// by hand; only this client has it.
     SkipModifiedFood,
+    /// Logs the chat, as the official client's `/log` does; it keeps the
+    /// choice in `eqclient.ini`, this client per character.
+    Log,
 }
 
 impl Toggle {
     /// Every toggle, in the order a file lists them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::PetWindowPopup,
         Self::TargetRing,
         Self::ShowHelm,
         Self::InvertY,
         Self::WheelZoom,
         Self::SkipModifiedFood,
+        Self::Log,
     ];
 
     /// The name a file keeps it under.
@@ -52,6 +56,7 @@ impl Toggle {
             Self::InvertY => "invert_y",
             Self::WheelZoom => "wheel_zoom",
             Self::SkipModifiedFood => "skip_modified_food",
+            Self::Log => "log",
         }
     }
 }
@@ -75,12 +80,15 @@ pub struct Options {
     pub wheel_zoom: bool,
     /// See [`Toggle::SkipModifiedFood`].
     pub skip_modified_food: bool,
+    /// See [`Toggle::Log`].
+    pub log: bool,
 }
 
 impl Default for Options {
     /// The client's defaults: the pet's window pops up, the target ring and
     /// the player's helm show, the mouse is not inverted and its wheel
-    /// zooms, and food with modifiers waits for the player.
+    /// zooms, food with modifiers waits for the player, and the chat is
+    /// logged.
     fn default() -> Self {
         Self {
             pet_window_popup: true,
@@ -89,6 +97,7 @@ impl Default for Options {
             invert_y: false,
             wheel_zoom: true,
             skip_modified_food: true,
+            log: true,
         }
     }
 }
@@ -104,6 +113,7 @@ impl Options {
             Toggle::InvertY => self.invert_y,
             Toggle::WheelZoom => self.wheel_zoom,
             Toggle::SkipModifiedFood => self.skip_modified_food,
+            Toggle::Log => self.log,
         }
     }
 
@@ -116,6 +126,7 @@ impl Options {
             Toggle::InvertY => &mut self.invert_y,
             Toggle::WheelZoom => &mut self.wheel_zoom,
             Toggle::SkipModifiedFood => &mut self.skip_modified_food,
+            Toggle::Log => &mut self.log,
         };
         *option = on;
     }

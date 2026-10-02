@@ -1,38 +1,19 @@
 //! The chat, logged as the official client logs it, for parsers and timers
-//! that read its logs: on from login unless the installation's
-//! `eqclient.ini` turns it off, `/log` turns it on and off, and each line
-//! goes to `Logs\eqlog_<character>_<server>.txt` in the installation.
+//! that read its logs: on unless the character's options or else the
+//! installation's `eqclient.ini` turn it off, `/log` turns it on and off and
+//! the character's options keep that, and each line goes to
+//! `Logs\eqlog_<character>_<server>.txt` in the installation.
 use bevy::prelude::*;
 use eq_client_core::logs;
 use std::io::Write as _;
 
-/// Whether the chat is logged, and the file it goes to.
-#[derive(Resource)]
+/// The file the chat goes to, and how far it has gone.
+#[derive(Resource, Default)]
 pub(crate) struct ChatLog {
-    /// Whether new lines are written.
-    on: bool,
     /// The newest chat line written or passed over.
     seen: u64,
     /// The open log, by its file name.
     file: Option<(String, std::fs::File)>,
-}
-
-impl ChatLog {
-    /// A log that starts on or off; the client starts it as `eqclient.ini`
-    /// says, or on.
-    pub(crate) const fn new(on: bool) -> Self {
-        Self {
-            on,
-            seen: 0,
-            file: None,
-        }
-    }
-}
-
-impl Default for ChatLog {
-    fn default() -> Self {
-        Self::new(true)
-    }
 }
 
 /// Turns logging on or off for a `/log`, saying so as the official client
@@ -42,18 +23,23 @@ pub(crate) fn write(
     settings: Res<crate::ViewerSettings>,
     online: Res<crate::online::OnlineState>,
     mut chat: ResMut<crate::chat::ChatState>,
-    mut log: ResMut<ChatLog>,
+    (mut log, mut options): (ResMut<ChatLog>, ResMut<crate::options::OptionsState>),
 ) {
+    let mut writes = options.options.log;
     if chat.log_toggle {
         chat.log_toggle = false;
-        log.on = !log.on;
-        let words = if log.on {
+        let on = !options.options.log;
+        options.options.log = on;
+        let words = if on {
             logs::LOGGING_ON
         } else {
             logs::LOGGING_OFF
         };
         chat.history
             .push(crate::chat::system_line(words.to_owned()));
+        // The official client writes its *OFF* line before it stops, as it
+        // writes its *ON* line as it starts.
+        writes = true;
     }
     let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
     let Some(newest) = lines.last().map(|(id, _)| *id) else {
@@ -66,7 +52,7 @@ pub(crate) fn write(
     // Lines before a character is in the world, or while logging is off,
     // are passed over.
     let (true, Some(directory), Some(player), Some(server)) = (
-        log.on,
+        writes,
         settings.0.eq_directory.as_deref(),
         online.world().player(),
         online.world().world_name(),
@@ -132,7 +118,7 @@ mod tests {
         testing::admit(&mut online, 1, player);
         app.insert_resource(online)
             .init_resource::<crate::chat::ChatState>()
-            .insert_resource(ChatLog::new(true))
+            .init_resource::<ChatLog>()
             .add_systems(Update, write);
         let say = |app: &mut App, text: &str| {
             app.world_mut()
@@ -152,9 +138,18 @@ mod tests {
             .join("eqlog_Examplar_ExampleWorld.txt");
         let written = std::fs::read_to_string(&file).unwrap();
         let lines: Vec<&str> = written.lines().collect();
-        assert_eq!(lines.len(), 1, "{written}");
+        assert_eq!(lines.len(), 2, "{written}");
         assert!(lines[0].starts_with('['));
         assert!(lines[0].ends_with("] You have entered The Qeynos Hills."));
+        // The official client writes its *OFF* line, then nothing more.
+        assert!(lines[1].ends_with(logs::LOGGING_OFF));
+        // And the character's options keep the choice.
+        assert!(
+            !app.world()
+                .resource::<crate::options::OptionsState>()
+                .options
+                .log
+        );
         // The chat says logging went off.
         let chat = app.world().resource::<crate::chat::ChatState>();
         assert!(
