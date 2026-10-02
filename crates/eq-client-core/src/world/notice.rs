@@ -101,6 +101,9 @@ pub enum Notice {
     ResurrectionRefused(String),
     /// A request to read was not sent, and why.
     ReadRefused(String),
+    /// The world container the player asked to open is in use by someone
+    /// else.
+    ContainerInUse,
     /// A combine was not sent, and why: in the official client's own words
     /// where the session names its string, else in the session's.
     CombineRefused {

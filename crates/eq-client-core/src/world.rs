@@ -227,6 +227,19 @@ impl ClientWorld {
         self.reading = None;
     }
 
+    /// The player asked to open a world container; the server's answer opens
+    /// it.
+    pub fn ask_container(&mut self, drop_id: u32) {
+        self.zone.asked_container = Some(drop_id);
+    }
+
+    /// The player closed the world container open for them; the server puts
+    /// what it still held back in the inventory.
+    pub fn close_container(&mut self) {
+        self.zone.asked_container = None;
+        self.zone.container = None;
+    }
+
     /// The player asked a merchant to trade; the server's word on it arrives
     /// as news.
     pub fn open_shop(&mut self, merchant_id: u16) {
@@ -395,7 +408,7 @@ impl ClientWorld {
                 door_id,
                 error,
             } => self.door_used((*session_id, *door_id), error.as_ref(), news),
-            WorldEvent::Objects(update) => self.zone.objects.apply(update),
+            WorldEvent::Objects(update) => self.objects_news(update, news),
             WorldEvent::ObjectAction {
                 session_id, error, ..
             } => self.object_refused(*session_id, error.as_ref(), news),

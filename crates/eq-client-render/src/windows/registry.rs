@@ -65,6 +65,9 @@ pub(crate) enum WindowId {
     Note,
     /// The skin's book window: a book being read, two pages at a time.
     Book,
+    /// The skin's container window for the world container open for the
+    /// player, such as a forge.
+    WorldContainer,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -242,7 +245,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 25] = [
+    pub(crate) const ALL: [Self; 26] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -266,6 +269,7 @@ impl WindowId {
         Self::Confirmation,
         Self::Note,
         Self::Book,
+        Self::WorldContainer,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -290,7 +294,7 @@ impl WindowId {
             Self::Chat => Some("ChatWindow"),
             Self::Inventory => Some("InventoryWindow"),
             Self::Bank => Some("BankWnd"),
-            Self::Bag(_) => Some("ContainerWindow"),
+            Self::Bag(_) | Self::WorldContainer => Some("ContainerWindow"),
             Self::Spellbook => Some("SpellBookWnd"),
             Self::Item => Some("ItemDisplayWindow"),
             Self::Loot => Some("LootWnd"),
@@ -314,7 +318,8 @@ impl WindowId {
         match self {
             Self::Bag(slot @ 22..=29) => Some(Cow::Owned(format!("BagInv{}", slot - 21))),
             Self::Bag(slot @ 2000..=2015) => Some(Cow::Owned(format!("BagBank{}", slot - 1999))),
-            Self::Bag(_) => None,
+            // The bags' window; a world container keeps a place of its own.
+            Self::Bag(_) | Self::WorldContainer => None,
             _ => self.official().map(Cow::Borrowed),
         }
     }
@@ -346,6 +351,7 @@ impl WindowId {
             Self::Confirmation => "confirmation",
             Self::Note => "note",
             Self::Book => "book",
+            Self::WorldContainer => "world-container",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -467,6 +473,8 @@ impl WindowId {
             // Where the skin places them; they open with a text to read.
             Self::Note => floating("", Placement::TopLeft(100.0, 80.0), false, &[]),
             Self::Book => floating("", Placement::TopLeft(120.0, 20.0), false, &[]),
+            // Beside the inventory, where the first bag would open.
+            Self::WorldContainer => floating("", Placement::TopLeft(484.0, 120.0), false, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(

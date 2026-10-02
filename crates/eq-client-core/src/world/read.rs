@@ -134,6 +134,12 @@ impl ClientWorld {
         self.reading.as_ref()
     }
 
+    /// The world container open for the player, such as a forge.
+    #[must_use]
+    pub fn container(&self) -> Option<&crate::ground::ContainerView> {
+        self.zone.container.as_ref()
+    }
+
     /// The tradeskill container whose combine waits for the server.
     #[must_use]
     pub const fn combining(&self) -> Option<crate::inventory::InventorySlot> {

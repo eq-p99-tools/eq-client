@@ -36,7 +36,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Spells => "EQUI_CastSpellWnd.xml",
         WindowId::Inventory => "EQUI_Inventory.xml",
         WindowId::Bank => "EQUI_BankWnd.xml",
-        WindowId::Bag(_) => "EQUI_Container.xml",
+        WindowId::Bag(_) | WindowId::WorldContainer => "EQUI_Container.xml",
         WindowId::Give => "EQUI_GiveWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
@@ -859,11 +859,16 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
         "AMP_SitButton" => Does::Slash("/sit"),
         "AMP_StandButton" => Does::Slash("/stand"),
         "AMP_CampButton" => Does::Slash("/camp"),
-        "Container_Icon" if matches!(owner, WindowId::Bag(_)) => Does::BagIcon,
+        "Container_Icon" if matches!(owner, WindowId::Bag(_) | WindowId::WorldContainer) => {
+            Does::BagIcon
+        }
         // Shown only while the bag is a tradeskill container; see
         // `tradeskills::show`.
         "Container_Combine" => match owner {
             WindowId::Bag(bag) => Does::Combines(InventorySlot(bag)),
+            WindowId::WorldContainer => {
+                Does::Combines(eq_client_core::tradeskills::WORLD_CONTAINER)
+            }
             _ => return None,
         },
         _ => Does::Nothing,
@@ -1136,9 +1141,14 @@ fn caption(
             (Shows::Coins(place, coin), theme::text("", Size::Body, ink)),
         ),
         Does::BagIcon => {
-            if let WindowId::Bag(bag) = owner {
+            let part = match owner {
+                WindowId::Bag(bag) => Some(items::BagPart::Icon(InventorySlot(bag))),
+                WindowId::WorldContainer => Some(items::BagPart::WorldIcon),
+                _ => None,
+            };
+            if let Some(part) = part {
                 inner.spawn((
-                    items::BagPart::Icon(eq_client_core::inventory::InventorySlot(bag)),
+                    part,
                     ImageNode::default(),
                     at(0.0, 0.0, area.width, area.height),
                 ));
@@ -1434,8 +1444,9 @@ fn label(
     let area = label.area;
     let bag = match owner {
         WindowId::Bag(bag) if name == "Container_Label" => {
-            Some(eq_client_core::inventory::InventorySlot(bag))
+            Some(items::BagPart::Name(InventorySlot(bag)))
         }
+        WindowId::WorldContainer if name == "Container_Label" => Some(items::BagPart::WorldName),
         _ => None,
     };
     let banker = owner == WindowId::Bank && name == "BW_BankerName";
@@ -1476,7 +1487,7 @@ fn label(
     );
     match (label.eq_type, bag) {
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
-        (None, Some(bag)) => aligned(window, node, label.align, (text, items::BagPart::Name(bag))),
+        (None, Some(bag)) => aligned(window, node, label.align, (text, bag)),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
         (None, None) if let Some(side) = page_number => {
             aligned(

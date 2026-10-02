@@ -511,6 +511,7 @@ fn schedule(app: &mut App) {
                     training::window,
                     resurrection::window,
                     reading::window,
+                    tradeskills::world_window,
                 ),
             )
                 .chain(),
@@ -1237,7 +1238,9 @@ fn update_hud(
     let nearest = interact::nearest(&online);
     lines.push(match nearest {
         Some(interact::Use::Door(..)) => map.help(&[(keys::Act::Use, "use the door")]),
-        Some(interact::Use::Item(_)) => map.help(&[(keys::Act::Use, "pick up the item here")]),
+        Some(interact::Use::Object(_)) => {
+            map.help(&[(keys::Act::Use, "pick up or open what is here")])
+        }
         None => String::new(),
     });
     lines.push(notices.door.text(now).to_owned());

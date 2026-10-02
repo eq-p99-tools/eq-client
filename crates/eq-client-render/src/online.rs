@@ -89,6 +89,16 @@ impl OnlineState {
         self.world.close_reading();
     }
 
+    /// The player asked to open a world container.
+    pub(super) fn ask_container(&mut self, drop_id: u32) {
+        self.world.ask_container(drop_id);
+    }
+
+    /// The player closed the world container open for them.
+    pub(super) fn close_container(&mut self) {
+        self.world.close_container();
+    }
+
     /// The player closed the merchant window.
     pub(super) fn close_shop(&mut self) {
         self.world.close_shop();
