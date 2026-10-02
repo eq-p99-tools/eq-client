@@ -24,6 +24,7 @@ mod inventory;
 mod item_models;
 mod items;
 mod keys;
+mod logs;
 mod motion;
 mod navigation;
 mod notices;
@@ -208,6 +209,12 @@ pub fn run(
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
     let frame_rate_cap = config.frame_rate_cap;
+    // The official client's `/log` setting, or on.
+    let logging = config
+        .eq_directory
+        .as_deref()
+        .and_then(eq_client_assets::ui::logging)
+        .unwrap_or(true);
     let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
     let window = primary_window(online, screenshot.is_none(), config.window_position);
@@ -229,6 +236,7 @@ pub fn run(
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
     .insert_resource(outbox::Outbox::new(commands));
     init_presentation(&mut app);
+    app.insert_resource(logs::ChatLog::new(logging));
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(window),
         ..default()
@@ -254,7 +262,8 @@ pub fn run(
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 fn init_presentation(app: &mut App) {
-    app.init_resource::<hud::HudState>()
+    app.init_resource::<logs::ChatLog>()
+        .init_resource::<hud::HudState>()
         .init_resource::<hud::action_bar::ActionRequests>()
         .init_resource::<combat::CombatState>()
         .init_resource::<trade::TradeState>()
@@ -438,7 +447,7 @@ fn schedule(app: &mut App) {
                 spellbook::scribe_presentation,
                 buffs::update,
                 buffs::hover,
-                spell_icons::update,
+                (spell_icons::update, logs::write),
                 outbox::show,
                 hud::action_bar::update,
                 skinned::frames,
