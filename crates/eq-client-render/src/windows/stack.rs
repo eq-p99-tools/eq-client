@@ -199,7 +199,9 @@ pub(crate) fn toggle(
 }
 
 /// Builds the selector: one button for each window the player opens and
-/// closes, named as the official client names it, with its key.
+/// closes, named as the official client names it, with its key. It is a
+/// frame without chrome of its own, so the skin draws it where the skin is
+/// installed.
 pub(crate) fn spawn_selector(commands: &mut Commands) {
     let id = WindowId::Selector;
     let mut node = Node {
@@ -212,6 +214,9 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
             crate::hud::HudRoot,
             id,
             node,
+            BackgroundColor(Color::NONE),
+            BorderColor::all(Color::NONE),
+            super::Frame::default(),
             GlobalZIndex(id.describe().layer.base()),
         ))
         .with_children(|row| {

@@ -340,6 +340,7 @@ impl WindowId {
             Self::Note => Some("NoteWindow"),
             Self::Book => Some("BookWindow"),
             Self::Map => Some("MapViewWnd"),
+            Self::Selector => Some("SelectorWindow"),
             _ => None,
         }
     }
