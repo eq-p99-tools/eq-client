@@ -141,21 +141,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
                     Slot(index),
                     crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
                 ))
-                .with_child(crate::spell_icons::artwork(
-                    crate::spell_icons::Source::Action(index),
-                    30.0,
-                ))
-                .with_child(item_art::artwork(index));
-            let caption = super::label(commands, button, "", Size::Caption, theme::INK);
-            commands.entity(caption).insert((
-                Caption(index),
-                Node {
-                    position_type: PositionType::Absolute,
-                    bottom: px(1),
-                    right: px(2),
-                    ..default()
-                },
-            ));
+                .with_children(|button| contents(button, index));
         }
     }
     let hint = super::label(commands, frame, "", Size::Caption, theme::INK);
@@ -166,6 +152,28 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
             overflow: Overflow::clip(),
             ..default()
         },
+    ));
+}
+
+/// What a slot's button shows of what it holds: the spell's icon, the
+/// item's picture and a caption, in the client's own window and in the
+/// skin's Hot Button window alike.
+pub(crate) fn contents(button: &mut ChildSpawnerCommands, index: usize) {
+    button.spawn(crate::spell_icons::artwork(
+        crate::spell_icons::Source::Action(index),
+        30.0,
+    ));
+    button.spawn(item_art::artwork(index));
+    button.spawn((
+        Caption(index),
+        theme::text("", Size::Caption, theme::INK),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(1),
+            right: px(2),
+            ..default()
+        },
+        bevy::ui::FocusPolicy::Pass,
     ));
 }
 
@@ -245,23 +253,39 @@ pub(crate) fn update(
     }
 }
 
+/// A slot's button, as the client draws it or as the skin does: the
+/// client's own shows readiness in its fill, the skin's in its disabled
+/// look.
+type SlotButtons<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static Interaction,
+        &'static Slot,
+        Option<&'static mut BackgroundColor>,
+        Has<crate::skinned::SkinButton>,
+        Has<crate::skinned::Greyed>,
+    ),
+>;
+
 /// Presents current bindings, spell identity and cooldowns independently of keyboard focus.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn presentation(
+    mut commands: Commands,
     bindings: Res<Bindings>,
     online: Res<crate::online::OnlineState>,
-    names: Res<crate::spellbook::SpellNames>,
-    map: Res<crate::keys::KeyMap>,
-    mut slots: Query<(&Interaction, &Slot, &mut BackgroundColor)>,
+    (names, map): (Res<crate::spellbook::SpellNames>, Res<crate::keys::KeyMap>),
+    mut slots: SlotButtons,
     mut labels: Query<(&mut Text, Option<&Caption>, Option<&Hint>)>,
 ) {
     let now = std::time::Instant::now();
     let inventory = online.world().inventory();
     let hovered = slots
         .iter()
-        .find(|(interaction, ..)| **interaction != Interaction::None)
-        .map(|(_, slot, ..)| slot.0);
-    for (interaction, slot, mut color) in &mut slots {
+        .find(|(_, interaction, ..)| **interaction != Interaction::None)
+        .map(|(_, _, slot, ..)| slot.0);
+    for (entity, interaction, slot, color, skinned, greyed) in &mut slots {
         let spell = bindings.gem(slot.0).and_then(|gem| online.world().gem(gem));
         let missing_item = match bindings.0[slot.0] {
             Some(Action::Item { slot, id }) => bound_item(inventory, slot, id).is_none(),
@@ -285,7 +309,17 @@ pub(crate) fn presentation(
                         .remaining(id, now)
                         .is_zero()
             });
-        color.0 = theme::readiness(*interaction != Interaction::None, empty, waiting);
+        if skinned {
+            // The skin's button lights itself under the pointer; it shows a
+            // running timer in its disabled look.
+            if waiting && !greyed {
+                commands.entity(entity).insert(crate::skinned::Greyed);
+            } else if !waiting && greyed {
+                commands.entity(entity).remove::<crate::skinned::Greyed>();
+            }
+        } else if let Some(mut color) = color {
+            color.0 = theme::readiness(*interaction != Interaction::None, empty, waiting);
+        }
     }
     for (mut text, caption, hint) in &mut labels {
         if let Some(caption) = caption {

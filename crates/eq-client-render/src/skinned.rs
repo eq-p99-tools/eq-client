@@ -47,6 +47,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Note => "EQUI_NoteWindow.xml",
         WindowId::Book => "EQUI_BookWindow.xml",
         WindowId::Map => "EQUI_MapViewWnd.xml",
+        WindowId::Actions => "EQUI_HotButtonWnd.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -243,7 +244,10 @@ fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
     node.padding = UiRect::ZERO;
     node.border = UiRect::ZERO;
     node.row_gap = Val::ZERO;
-    if !placed && id.describe().layer == super::windows::Layer::Hud {
+    // The skin puts its Hot Button window over the lower part of its spell
+    // gems (the default skin's at 0, 230 under gems reaching 315), so the
+    // action bar keeps the client's dock until the player moves it.
+    if !placed && id.describe().layer == super::windows::Layer::Hud && id != WindowId::Actions {
         node.position_type = PositionType::Absolute;
         node.left = px(screen.area.x);
         node.top = px(screen.area.y);
@@ -824,6 +828,8 @@ enum Does {
     Combines(InventorySlot),
     /// Zooms, pans or toggles the map.
     Maps(super::map::MapButton),
+    /// Uses the action bound to this slot of the action bar, and shows it.
+    HotButton(usize),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -850,6 +856,10 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if owner == WindowId::Map {
         return Some(super::map::MapButton::for_screen(id).map_or(Does::Nothing, Does::Maps));
+    }
+    // The action bar's ten buttons; its pages wait for a second page.
+    if owner == WindowId::Actions {
+        return Some(hot_button(id).map_or(Does::Nothing, Does::HotButton));
     }
     if owner == WindowId::Book {
         match id {
@@ -901,6 +911,16 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
         },
         _ => Does::Nothing,
     })
+}
+
+/// The action bar slot a Hot Button window button holds, from
+/// `HB_Button1` to `HB_Button10`.
+fn hot_button(id: &str) -> Option<usize> {
+    id.strip_prefix("HB_Button")?
+        .parse::<usize>()
+        .ok()
+        .filter(|number| (1..=10).contains(number))
+        .map(|number| number - 1)
 }
 
 /// The Options window's checkboxes for the options this client keeps, by
@@ -1130,6 +1150,12 @@ fn behave(
             crate::outbox::Needs::Capability(Capability::Tradeskills),
         )),
         Does::Maps(action) => drawn.insert((Button, action, skin())),
+        Does::HotButton(index) => drawn.insert((
+            Button,
+            super::hud::hotbar::Slot(index),
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Casting),
+        )),
         Does::BagIcon | Does::Nothing => drawn,
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
@@ -1186,6 +1212,7 @@ fn caption(
         Does::Ability(place) => {
             inner.spawn((super::abilities::AbilityLabel(place), words("")));
         }
+        Does::HotButton(index) => super::hud::hotbar::contents(inner, index),
         Does::PetBuff(slot) => {
             inner.spawn(super::spell_icons::artwork(
                 super::spell_icons::Source::PetBuff(slot),
@@ -1824,6 +1851,30 @@ fn target_health(world: &eq_client_core::world::ClientWorld) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hot_button_windows_buttons_hold_the_action_bars_slots() {
+        assert!(matches!(
+            does("HB_Button1", WindowId::Actions),
+            Some(Does::HotButton(0))
+        ));
+        assert!(matches!(
+            does("HB_Button10", WindowId::Actions),
+            Some(Does::HotButton(9))
+        ));
+        // One page so far: the page buttons are greyed out.
+        for id in [
+            "HB_PageLeftButton",
+            "HB_PageRightButton",
+            "HB_Button11",
+            "HB_Button0",
+        ] {
+            assert!(
+                matches!(does(id, WindowId::Actions), Some(Does::Nothing)),
+                "{id}"
+            );
+        }
+    }
 
     #[test]
     fn the_options_window_checkboxes_turn_its_options_on_and_off() {
