@@ -50,6 +50,7 @@ mod target;
 mod theme;
 mod tooltip;
 mod trade;
+mod training;
 mod who;
 mod windows;
 mod zone;
@@ -328,7 +329,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<windows::Shown>()
         .init_resource::<windows::Stack>()
         .init_resource::<keys::KeyMap>()
-        .init_resource::<keys::Typing>();
+        .init_resource::<keys::Typing>()
+        .init_resource::<training::Chosen>();
 }
 
 /// What the tests of the windows start from.
@@ -458,7 +460,7 @@ fn schedule(app: &mut App) {
             (who::zone_list, pet::window),
             combat::input,
             trade::input,
-            give::buttons,
+            (give::buttons, training::buttons),
             (abilities::input, skinned::slash),
             hud::actions,
             (hud::hotbar::update, hud::hotbar::persist).chain(),
@@ -491,8 +493,9 @@ fn schedule(app: &mut App) {
                 motion::interpolate,
                 orbit_camera,
                 update_hud,
-                // Opens the give window before its frame is drawn.
-                give::window,
+                // Opens the give and training windows before their frames
+                // are drawn.
+                (give::window, training::window),
             )
                 .chain(),
             (
@@ -528,6 +531,7 @@ fn schedule(app: &mut App) {
                         skinned::show_levels,
                         skinned::show_choices,
                         skinned::fill_lists,
+                        training::fill,
                     ),
                 ),
                 skinned::close,

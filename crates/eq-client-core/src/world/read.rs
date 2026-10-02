@@ -122,6 +122,13 @@ impl ClientWorld {
             .find(|spawn| spawn.state.pet_owner == Some(owner))
     }
 
+    /// The guildmaster the player is training with, and how far they train
+    /// each skill.
+    #[must_use]
+    pub fn training(&self) -> Option<&crate::training::TrainingOffer> {
+        self.zone.training.as_ref()
+    }
+
     /// The pet's buffs, in their slots, once the server has said.
     #[must_use]
     pub fn pet_buffs(&self) -> Option<&crate::pets::PetBuffs> {

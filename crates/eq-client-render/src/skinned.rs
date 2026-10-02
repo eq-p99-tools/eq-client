@@ -12,7 +12,7 @@ pub(crate) use controls::{
     light_choices, scroll_lists, show_choices, show_levels, slide,
 };
 
-pub(crate) use items::{close, contents, frames, picker, toggle_bag};
+pub(crate) use items::{Closes, close, contents, frames, picker, toggle_bag};
 
 use super::windows::WindowId;
 use crate::theme::{self, Size};
@@ -38,6 +38,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
+        WindowId::Training => "EQUI_TrainWindow.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -73,6 +74,8 @@ pub(crate) enum Shows {
     /// slots 15 to 29 over slots 0 to 14, so an empty slot would hide the
     /// buff under it.
     PetBuff(usize),
+    /// The player's practice points, which the Training window counts.
+    PracticePoints,
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -717,6 +720,8 @@ enum Does {
     PetBuff(usize),
     /// Turns an option on or off, and shows which.
     Option(eq_client_core::options::Toggle),
+    /// Practices the skill chosen in the Training window.
+    Trains,
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -737,6 +742,9 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if owner == WindowId::PetInfo {
         return Some(pet_button(id));
+    }
+    if owner == WindowId::Training && id == "TrainButton" {
+        return Some(Does::Trains);
     }
     // The skin keeps Switch to Windowed under Switch to Fullscreen; the
     // client runs in a window.
@@ -969,6 +977,12 @@ fn behave(
         Does::Option(toggle) => {
             drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()))
         }
+        Does::Trains => drawn.insert((
+            Button,
+            super::training::TrainButton,
+            skin(),
+            crate::outbox::Needs(Capability::Training),
+        )),
         Does::BagIcon | Does::Nothing => drawn,
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
@@ -1036,6 +1050,7 @@ fn caption(
         | Does::Attack
         | Does::Slash(_)
         | Does::Option(_)
+        | Does::Trains
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 {
@@ -1304,11 +1319,22 @@ fn label(
     };
     let banker = owner == WindowId::Bank && name == "BW_BankerName";
     let partner = owner == WindowId::Give && name == "GVW_NPCName";
-    let words = if label.eq_type.is_some() || bag.is_some() || banker || partner {
-        ""
-    } else {
-        label.text.as_str()
+    // The Training window's practice points and the coins the player carries.
+    let counted = match name {
+        "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
+        _ if owner == WindowId::Training => name
+            .strip_prefix("TRNW_CoinCount")
+            .and_then(|index| index.parse::<usize>().ok())
+            .and_then(|index| Coin::ALL.get(index))
+            .map(|coin| Shows::Coins(CoinPlace::Purse, *coin)),
+        _ => None,
     };
+    let words =
+        if label.eq_type.is_some() || bag.is_some() || banker || partner || counted.is_some() {
+            ""
+        } else {
+            label.text.as_str()
+        };
     let text = theme::text(
         words,
         font(label.font),
@@ -1324,6 +1350,9 @@ fn label(
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
         (None, Some(bag)) => aligned(window, node, label.align, (text, items::BagPart::Name(bag))),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
+        (None, None) if let Some(shows) = counted => {
+            aligned(window, node, label.align, (text, shows));
+        }
         (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
         (None, None) => match controls::value_label(name, owner) {
             Some(controls::ValueLabel::Shows(level)) => aligned(
@@ -1455,6 +1484,7 @@ pub(crate) fn show(
             ),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Banker => (inventory.banker().to_owned(), None),
+            Shows::PracticePoints => (super::training::practice_points(world), None),
             Shows::Partner => (super::give::partner(world), None),
             Shows::Fill(_) | Shows::Attacking | Shows::WhilePetSits(_) | Shows::PetBuff(_) => {
                 continue;

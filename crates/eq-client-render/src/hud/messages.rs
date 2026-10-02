@@ -44,7 +44,7 @@ impl Messages {
     }
 
     /// Returns a local argument-free message, or the fallback when unavailable.
-    pub(super) fn text(&self, id: u32, fallback: &str) -> String {
+    pub(crate) fn text(&self, id: u32, fallback: &str) -> String {
         self.0
             .argument_free(id)
             .map_or_else(|| fallback.into(), str::to_owned)

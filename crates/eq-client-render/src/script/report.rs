@@ -108,6 +108,12 @@ pub(super) fn state(
         game_time = ?online.world().game_time(std::time::Instant::now()),
         sky = ?online.world().sky(),
         ?pet,
+        training = ?online.world().training().map(|offer| (
+            offer.trainer,
+            offer.caps.iter().filter(|cap| **cap > 0).count()
+        )),
+        practice_points = ?online.world().player().and_then(|player| player.practice_points),
+        purse = ?online.world().coins(),
         cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
         bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
         gear = ?online.world().player().map(|player| player.appearance.materials),
@@ -148,6 +154,9 @@ type NearbyModel = (u16, u32, u32, Option<&'static str>);
 type NearbyDoor = (u8, u8, Option<u8>, i32, [i32; 3]);
 type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
 
+/// A guildmaster in view: spawn, name, class, distance and position.
+type NearbyGuildmaster = (u16, String, Option<u8>, i32, [i32; 3]);
+
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
 pub(super) fn surroundings(
     online: &crate::online::OnlineState,
@@ -187,6 +196,13 @@ pub(super) fn surroundings(
         })
         .collect();
     nearby.sort_by_key(|entry| entry.4);
+    // Guildmasters anywhere in reach of the view, for training checks.
+    let guildmasters: Vec<NearbyGuildmaster> = nearby
+        .iter()
+        .filter(|entry| crate::training::is_guildmaster(entry.3))
+        .take(10)
+        .map(|(id, name, _, class, distance, at)| (*id, name.clone(), *class, *distance, *at))
+        .collect();
     let creatures: Vec<(u16, String, String, i32, [i32; 3])> = nearby
         .iter()
         .filter(|entry| entry.1.starts_with(|c: char| c.is_ascii_lowercase()))
@@ -235,6 +251,7 @@ pub(super) fn surroundings(
     info!(
         ?nearby,
         ?creatures,
+        ?guildmasters,
         ?doors,
         ?ground,
         ?gear,

@@ -92,7 +92,8 @@ pub struct Changes {
     pub motion: bool,
     /// The session sent the player's own move, or refused it.
     pub moved: Option<Moved>,
-    /// The corpse being looted, the merchant's stock or the coins changed.
+    /// The corpse being looted, the merchant's stock, the coins, or the
+    /// training at a guildmaster changed.
     pub trade: bool,
     /// What the news tells the player.
     pub notices: Vec<Notice>,

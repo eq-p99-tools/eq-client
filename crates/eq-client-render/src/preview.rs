@@ -136,6 +136,7 @@ pub(crate) fn player(
         mana: 0,
         endurance: Some(0),
         skills: None,
+        practice_points: None,
         spell_refresh_ms: None,
         memorized_spells: gems,
         size: 0.0,

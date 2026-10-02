@@ -9,7 +9,7 @@
 mod parse;
 mod report;
 
-pub use parse::{AbilityPage, ClickTarget, PickButton, Step, TradeClick, parse};
+pub use parse::{AbilityPage, ClickTarget, PickButton, Step, TradeClick, TrainingClick, parse};
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -206,6 +206,11 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::skinned::LevelSlider>,
             Option<&'static super::skinned::DropDown>,
             Option<&'static super::skinned::DropDownChoice>,
+            (
+                Option<&'static super::training::SkillRow>,
+                Has<super::training::TrainButton>,
+                Option<&'static super::skinned::Closes>,
+            ),
         ),
     ),
 >;
@@ -643,7 +648,7 @@ fn click(
         give,
         (coins, pick),
         (selector, tab, ability, attack, slash, checkbox),
-        (slider, drop_down, choice),
+        (slider, drop_down, choice, (skill_row, train, closes)),
     ) in buttons.iter_mut()
     {
         let matches = match target {
@@ -668,6 +673,13 @@ fn click(
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
             ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
+            ClickTarget::Training(click) => match click {
+                TrainingClick::Row(index) => skill_row.is_some_and(|row| row.index == index),
+                TrainingClick::Train => train,
+                TrainingClick::Done => {
+                    closes.is_some_and(|closes| closes.0 == super::windows::WindowId::Training)
+                }
+            },
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,

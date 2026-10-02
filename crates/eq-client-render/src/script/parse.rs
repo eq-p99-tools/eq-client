@@ -146,6 +146,20 @@ pub enum ClickTarget {
     KeyFilter,
     /// A choice in the open drop-down's list, from zero.
     Choice(usize),
+    /// A row of the Training window's list, its Train button or its Done
+    /// button.
+    Training(TrainingClick),
+}
+
+/// The Training window's controls.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrainingClick {
+    /// A row of the list, from zero.
+    Row(usize),
+    /// Train.
+    Train,
+    /// Done.
+    Done,
 }
 
 /// The Actions window's pages that hold ability buttons.
@@ -346,6 +360,9 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                 .ok_or("expected an option, by its name in a file")?,
         ),
         ["attack"] => ClickTarget::Attack,
+        ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
+        ["train"] => ClickTarget::Training(TrainingClick::Train),
+        ["training_done"] => ClickTarget::Training(TrainingClick::Done),
         ["slider", name, percent] => ClickTarget::Slider(
             eq_client_core::options::Level::ALL
                 .into_iter()

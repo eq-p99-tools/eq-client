@@ -516,6 +516,21 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // Training at a guildmaster, and the practice points it spends.
+            WorldEvent::Training(update) => self.training_news(update, news),
+            WorldEvent::TrainingRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::TrainingRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::PracticePoints(points) => {
+                if let Some(player) = self.player.as_mut() {
+                    player.practice_points = Some(*points);
+                    news.trade = true;
+                }
+            }
 
             // The player's spells.
             WorldEvent::Spell(update) => news.cast = self.spell(update, now),
