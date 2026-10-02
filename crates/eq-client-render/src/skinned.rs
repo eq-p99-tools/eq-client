@@ -42,6 +42,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Trade => "EQUI_TradeWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
+        WindowId::Selector => "EQUI_SelectorWnd.xml",
         WindowId::Effects => "EQUI_BuffWindow.xml",
         WindowId::ShortEffects => "EQUI_ShortDurationBuffWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
@@ -897,6 +898,9 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     if owner == WindowId::PetInfo {
         return Some(pet_button(id));
     }
+    if owner == WindowId::Selector {
+        return Some(selector_button(id).map_or(Does::Nothing, Does::Toggles));
+    }
     // An effects window's buttons, `Buff0` on, are its slots in order.
     if let Some(window) = effect_window(owner) {
         return Some(
@@ -1066,6 +1070,21 @@ pub(crate) const PET_COMMANDS: [(&str, &str); 8] = [
     ("LostButton", "/pet get lost"),
 ];
 
+/// The window an official selector button opens and closes, of those the
+/// player opens and closes here. The others, for the hotbar, the spell
+/// gems, the pet and the songs, which open no other way here yet, and for
+/// windows this client does not have, do nothing.
+fn selector_button(id: &str) -> Option<WindowId> {
+    Some(match id {
+        "SELW_ActionsToggleButton" => WindowId::ActionsWindow,
+        "SELW_InventoryToggleButton" => WindowId::Inventory,
+        "SELW_OptionsToggleButton" => WindowId::Options,
+        "SELW_BuffToggleButton" => WindowId::Effects,
+        "SELW_MapToggleButton" => WindowId::Map,
+        _ => return None,
+    })
+}
+
 /// The effects window a window is, if it is one.
 const fn effect_window(id: WindowId) -> Option<EffectWindow> {
     match id {
@@ -1219,7 +1238,12 @@ fn behave(
     let skin = || SkinButton(button.look.clone());
     match does {
         Does::Toggles(toggles) => {
-            drawn.insert((Button, super::windows::SelectorButton(toggles), skin()))
+            drawn.insert((Button, super::windows::SelectorButton(toggles), skin()));
+            // Greyed where the session does not offer the window.
+            match toggles.needs() {
+                Some(needs) => drawn.insert(crate::outbox::Needs::Capability(needs)),
+                None => drawn,
+            }
         }
         Does::Closes => drawn.insert((Button, items::Closes(owner))),
         Does::Gives => drawn.insert((Button, super::give::GiveButton)),
@@ -2246,6 +2270,36 @@ mod tests {
         // Fifteen rows fill the window; the sixteenth starts a column.
         assert_eq!(place(14), (0.0, 350.0));
         assert_eq!(place(15), (25.0, 0.0));
+    }
+
+    #[test]
+    fn the_skins_selector_toggles_the_windows_the_player_opens_and_closes() {
+        assert!(matches!(
+            does("SELW_InventoryToggleButton", WindowId::Selector),
+            Some(Does::Toggles(WindowId::Inventory))
+        ));
+        assert!(matches!(
+            does("SELW_MapToggleButton", WindowId::Selector),
+            Some(Does::Toggles(WindowId::Map))
+        ));
+        // A window this client does not have, or opens no other way.
+        assert!(matches!(
+            does("SELW_FriendsToggleButton", WindowId::Selector),
+            Some(Does::Nothing)
+        ));
+        // Each button it maps opens a window the player toggles.
+        for button in [
+            "SELW_ActionsToggleButton",
+            "SELW_InventoryToggleButton",
+            "SELW_OptionsToggleButton",
+            "SELW_BuffToggleButton",
+            "SELW_MapToggleButton",
+        ] {
+            assert!(
+                selector_button(button).unwrap().describe().toggled,
+                "{button}"
+            );
+        }
     }
 
     #[test]
