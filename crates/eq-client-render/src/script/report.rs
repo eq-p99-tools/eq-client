@@ -90,6 +90,12 @@ pub(super) fn state(
         cursor_queued = online.world().inventory().queued().count(),
         exchange = ?online.world().exchange(),
         abilities = ?online.world().abilities(),
+        abilities_not_offered = ?online
+            .world()
+            .abilities()
+            .into_iter()
+            .filter(|ability| !online.world().ability_offered(*ability))
+            .collect::<Vec<_>>(),
         nourishment = ?online.world().nourishment(),
         game_time = ?online.world().game_time(std::time::Instant::now()),
         sky = ?online.world().sky(),

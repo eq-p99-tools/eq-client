@@ -1788,3 +1788,19 @@ fn a_world_container_opens_only_when_asked_and_closes_with_the_player() {
     game(&mut world, entered(2));
     assert!(world.container().is_none());
 }
+
+#[test]
+fn abilities_the_server_does_not_offer_are_told_apart() {
+    use crate::abilities::Ability;
+    let mut world = admitted();
+    // Before the session says, every ability counts as offered.
+    assert!(world.ability_offered(Ability::Fishing));
+    game(
+        &mut world,
+        WorldEvent::AbilitiesOffered(vec![Ability::Kick, Ability::Bash]),
+    );
+    assert!(world.ability_offered(Ability::Kick));
+    assert!(!world.ability_offered(Ability::Fishing));
+    // The player still has fishing; it shows greyed rather than missing.
+    assert!(world.abilities().contains(&Ability::Fishing));
+}

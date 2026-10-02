@@ -30,6 +30,15 @@ impl ClientWorld {
             .collect()
     }
 
+    /// Whether the server type offers the ability; one it does not is shown
+    /// greyed, and the session refuses it. Before the session says, all are.
+    #[must_use]
+    pub fn ability_offered(&self, ability: Ability) -> bool {
+        self.offered_abilities
+            .as_ref()
+            .is_none_or(|offered| offered.contains(&ability))
+    }
+
     /// How long until the ability's recovery timer runs out, while it runs.
     #[must_use]
     pub fn ability_wait(&self, ability: Ability, now: Instant) -> Option<Duration> {
