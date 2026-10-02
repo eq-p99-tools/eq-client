@@ -32,6 +32,12 @@ pub(super) fn register_layout(app: &mut App) {
             .after(super::escape::route)
             .in_set(super::Stage::Route),
     );
+    app.init_resource::<Moves>().add_systems(
+        Update,
+        scripted_moves
+            .after(super::Stage::Route)
+            .before(super::Stage::Present),
+    );
     app.add_systems(Update, store::persist.in_set(super::Stage::Present));
     app.add_systems(PostUpdate, block_clicks);
     app.add_systems(
@@ -120,9 +126,55 @@ impl Frame {
 }
 
 /// Lets the player move a window by dragging anywhere on it that is not a
-/// control, as the official client's windows move.
-pub(crate) fn drag_anywhere(commands: &mut Commands, frame: Entity) {
-    commands.entity(frame).insert((Button, DragHandle(frame)));
+/// control, as the official client's windows move. The frame keys its own
+/// placement, as its title bar did, so where it is dragged is kept.
+pub(crate) fn drag_anywhere(commands: &mut Commands, frame: Entity, id: WindowId) {
+    commands
+        .entity(frame)
+        .insert((Button, DragHandle(frame), LayoutKey(id)));
+}
+
+/// Windows a script moves as a drag moves them, each with where its top
+/// left corner goes, in logical pixels.
+#[derive(Resource, Default)]
+pub(crate) struct Moves(pub(crate) Vec<(WindowId, Vec2)>);
+
+/// Puts a frame at a place on screen, in logical pixels, kept within the
+/// room the screen leaves it, as a drag leaves it: the player has placed it.
+fn put(node: &mut Node, frame: &mut Frame, position: Vec2, room: Vec2) {
+    let position = position.clamp(Vec2::ZERO, room.max(Vec2::ZERO));
+    node.position_type = PositionType::Absolute;
+    node.left = px(position.x);
+    node.top = px(position.y);
+    node.right = Val::Auto;
+    node.bottom = Val::Auto;
+    node.margin = UiRect::ZERO;
+    frame.placed = true;
+}
+
+/// Moves the windows a script names, as a drag moves them, so that their
+/// places are kept as a dragged window's are.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+fn scripted_moves(
+    mut moves: ResMut<Moves>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut frames: Query<(&WindowId, &mut Node, &ComputedNode, &mut Frame)>,
+) {
+    if moves.0.is_empty() {
+        return;
+    }
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    for (id, to) in std::mem::take(&mut moves.0) {
+        for (_, mut node, computed, mut frame) in
+            frames.iter_mut().filter(|(frame, ..)| **frame == id)
+        {
+            let room = (window.physical_size().as_vec2() - computed.size())
+                * computed.inverse_scale_factor();
+            put(&mut node, &mut frame, to, room);
+        }
+    }
 }
 
 #[derive(Component)]
@@ -282,16 +334,8 @@ pub(super) fn input(
             return;
         }
         let position = active.origin + cursor * active.inverse_scale - active.cursor;
-        let maximum = ((window.physical_size().as_vec2() - computed.size()) * active.inverse_scale)
-            .max(Vec2::ZERO);
-        let position = position.clamp(Vec2::ZERO, maximum);
-        node.position_type = PositionType::Absolute;
-        node.left = px(position.x);
-        node.top = px(position.y);
-        node.right = Val::Auto;
-        node.bottom = Val::Auto;
-        node.margin = UiRect::ZERO;
-        frame.placed = true;
+        let room = (window.physical_size().as_vec2() - computed.size()) * active.inverse_scale;
+        put(&mut node, &mut frame, position, room);
     }
 }
 
@@ -357,6 +401,50 @@ fn collapse(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scripted_move_places_a_window_and_its_place_is_kept() {
+        let mut app = App::new();
+        app.init_resource::<Moves>()
+            .init_resource::<Layouts>()
+            .add_systems(Update, (scripted_moves, layout::remember).chain());
+        app.world_mut().spawn((
+            Window {
+                resolution: bevy::window::WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        let frame = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(100.0, 50.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                Frame::default(),
+                WindowId::Chat,
+            ))
+            .id();
+        // A window drawn from the skin is dragged by its body, which keys
+        // its placement as a title bar does.
+        drag_anywhere(&mut app.world_mut().commands(), frame, WindowId::Chat);
+        app.world_mut().flush();
+        app.world_mut()
+            .resource_mut::<Moves>()
+            .0
+            .push((WindowId::Chat, Vec2::new(900.0, 40.0)));
+        app.update();
+        // Kept on screen, as a drag keeps it.
+        let node = app.world().get::<Node>(frame).unwrap();
+        assert_eq!((node.left, node.top), (px(700.0), px(40.0)));
+        assert!(app.world().get::<Frame>(frame).unwrap().placed);
+        let saved = app.world().resource::<Layouts>().0[&WindowId::Chat];
+        assert!(saved.placed);
+        assert_eq!(saved.edges[..2], [px(700.0), px(40.0)]);
+    }
 
     #[test]
     fn scaled_drag_preserves_offset_clamps_to_viewport_and_cancels_on_focus_loss() {
