@@ -24,26 +24,28 @@ pub fn line(time: chrono::NaiveDateTime, words: &str) -> String {
 }
 
 /// What a chat line says in the official client's words: a player's speech
-/// with who spoke and where (eqstr 1410 to 1422 and 5112), anything else as
-/// it reads.
+/// with who spoke and where, as the installed client's string table words
+/// it with the common tongue (1410, 1414 to 1416, 1420 to 1422 and 5112),
+/// anything else as it reads.
 #[must_use]
 pub fn words(line: &ChatLine) -> String {
     let text = &line.message.text;
     let Some(sender) = line.sender.as_deref().filter(|sender| !sender.is_empty()) else {
         return text.clone();
     };
-    let said = match line.channel {
-        ChannelName::Say => "says,",
-        ChannelName::Tell => "tells you,",
-        ChannelName::Group => "tells the group,",
-        ChannelName::Guild => "tells the guild,",
-        ChannelName::Ooc => "says out of character,",
-        ChannelName::Shout => "shouts,",
-        ChannelName::Auction => "auctions,",
-        ChannelName::Raid => "tells the raid,",
-        _ => return text.clone(),
-    };
-    format!("{sender} {said} '{text}'")
+    match line.channel {
+        ChannelName::Say => format!("{sender} says, '{text}'"),
+        ChannelName::Tell => format!("{sender} tells you, '{text}'"),
+        ChannelName::Group => format!("{sender} tells the group, '{text}'"),
+        ChannelName::Guild => format!("{sender} tells the guild, '{text}'"),
+        ChannelName::Ooc => format!("{sender} says out of character, '{text}'"),
+        ChannelName::Shout => format!("{sender} shouts, '{text}'"),
+        ChannelName::Auction => format!("{sender} auctions, '{text}'"),
+        // 5112 keeps a space before the tongue, which the common one leaves
+        // empty.
+        ChannelName::Raid => format!("{sender} tells the raid,  '{text}'"),
+        _ => text.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +93,8 @@ mod tests {
         assert_eq!(words(&ooc), "Examplar says out of character, 'lfg'");
         let auction = spoken(ChannelName::Auction, Some("Examplar"), "WTS Rusty Dagger");
         assert_eq!(words(&auction), "Examplar auctions, 'WTS Rusty Dagger'");
+        let raid = spoken(ChannelName::Raid, Some("Examplar"), "go");
+        assert_eq!(words(&raid), "Examplar tells the raid,  'go'");
         // The game's own messages read as they are.
         let system = spoken(
             ChannelName::System,
