@@ -153,6 +153,62 @@ mod tests {
     }
 
     #[test]
+    fn a_pets_buff_shows_in_its_slot() {
+        let mut fields = vec!["0"; 145];
+        fields[0] = "73";
+        fields[1] = "Synthetic spell";
+        let mut app = App::new();
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        crate::online::testing::spawn_entry(&mut online, 8, crate::online::testing::pet(8, 1));
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::PetBuffs(
+                eq_client_core::pets::PetBuffs {
+                    pet: 8,
+                    slots: vec![
+                        Some(eq_client_core::pets::PetBuff {
+                            spell_id: 73,
+                            ticks: 5,
+                        }),
+                        None,
+                    ],
+                },
+            )],
+        );
+        app.init_resource::<Assets<Image>>();
+        crate::sheets::testing::blank(&mut app);
+        app.insert_resource(online)
+            .insert_resource(super::super::spellbook::SpellNames::parse(
+                &fields.join("^"),
+            ))
+            .init_resource::<super::super::spellbook::BookView>()
+            .init_resource::<super::super::hud::hotbar::Bindings>()
+            .insert_resource(super::super::ViewerSettings(super::super::ViewerConfig {
+                eq_directory: Some(std::path::PathBuf::from("unused-cached-sheet")),
+                ..default()
+            }))
+            .add_systems(Update, update);
+        let first = app
+            .world_mut()
+            .spawn(artwork(Source::PetBuff(0), 20.0))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn(artwork(Source::PetBuff(1), 20.0))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(first).unwrap().display,
+            Display::Flex
+        );
+        assert_eq!(
+            app.world().get::<Node>(second).unwrap().display,
+            Display::None
+        );
+    }
+
+    #[test]
     fn spell_data_names_the_icon_or_none() {
         let mut fields = vec!["0"; 145];
         fields[0] = "73";

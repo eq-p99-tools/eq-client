@@ -58,6 +58,14 @@ pub(crate) enum Shows {
     Banker,
     /// The character the give window hands items to.
     Partner,
+    /// The pet window's Sit button (false) or its Stand button (true): the
+    /// skin keeps one under the other, and the one that does something
+    /// shows.
+    WhilePetSits(bool),
+    /// A pet buff slot, shown only while it holds a buff: the skin stacks
+    /// slots 15 to 29 over slots 0 to 14, so an empty slot would hide the
+    /// buff under it.
+    PetBuff(usize),
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -328,9 +336,58 @@ fn pieces(
             Element::View(view) if view.name == "IW_CharacterView" => {
                 items::figure(window, view, &inside, context.paperdoll);
             }
+            Element::View(view) if !view.pieces.is_empty() => {
+                self::view(window, art, view, &inside, context);
+            }
             Element::View(_) | Element::Other(_) => (),
         }
     }
+}
+
+/// A window within the window, such as the pet window's buffs: its frame,
+/// then its pieces, clipped to what lies inside its border. It stretches
+/// with the window where the skin anchors it.
+fn view(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    view: &eq_client_assets::sidl::View,
+    inside: &Area,
+    context: &Context,
+) {
+    let area = view.anchors.map_or(view.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
+    window
+        .spawn(at(
+            inside.x + area.x,
+            inside.y + area.y,
+            area.width,
+            area.height,
+        ))
+        .with_children(|frame| {
+            let mut client = Area {
+                x: 0.0,
+                y: 0.0,
+                width: area.width,
+                height: area.height,
+            };
+            if let Some(template) = view.template.as_ref().filter(|_| view.border) {
+                client = border(frame, art, &template.border, (area.width, area.height));
+            }
+            frame
+                .spawn(Node {
+                    overflow: Overflow::clip(),
+                    ..at(client.x, client.y, client.width, client.height)
+                })
+                .with_children(|clipped| {
+                    let origin = Area {
+                        x: 0.0,
+                        y: 0.0,
+                        ..client
+                    };
+                    pieces(clipped, art, &view.pieces, &origin, context);
+                });
+        });
 }
 
 /// Windows whose tab boxes show every page, a tab for each.
@@ -563,6 +620,29 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     })
 }
 
+/// The Pet Info window's command buttons, by screen ID, with the `/pet`
+/// line each gives.
+pub(crate) const PET_COMMANDS: [(&str, &str); 8] = [
+    ("AttackButton", "/pet attack"),
+    ("FollowButton", "/pet follow"),
+    ("TauntButton", "/pet taunt"),
+    ("GuardButton", "/pet guard here"),
+    ("SitButton", "/pet sit down"),
+    ("StandButton", "/pet stand up"),
+    ("BackButton", "/pet back off"),
+    ("LostButton", "/pet get lost"),
+];
+
+/// Whether a pet command's button shows only while the pet sits (Stand) or
+/// while it does not (Sit); the skin keeps the two in one place.
+fn pet_posture_button(command: &str) -> Option<bool> {
+    match command {
+        "/pet stand up" => Some(true),
+        "/pet sit down" => Some(false),
+        _ => None,
+    }
+}
+
 /// The Pet Info window's buttons: each command as `/pet` gives it, and the
 /// pet's buff slots.
 fn pet_button(id: &str) -> Does {
@@ -572,17 +652,10 @@ fn pet_button(id: &str) -> Does {
     {
         return Does::PetBuff(slot);
     }
-    match id {
-        "AttackButton" => Does::Slash("/pet attack"),
-        "FollowButton" => Does::Slash("/pet follow"),
-        "TauntButton" => Does::Slash("/pet taunt"),
-        "GuardButton" => Does::Slash("/pet guard here"),
-        "SitButton" => Does::Slash("/pet sit down"),
-        "StandButton" => Does::Slash("/pet stand up"),
-        "BackButton" => Does::Slash("/pet back off"),
-        "LostButton" => Does::Slash("/pet get lost"),
-        _ => Does::Nothing,
-    }
+    PET_COMMANDS
+        .iter()
+        .find(|(button, _)| *button == id)
+        .map_or(Does::Nothing, |(_, command)| Does::Slash(command))
 }
 
 /// The Actions window's ability buttons: the Combat page's first to fourth
@@ -636,7 +709,10 @@ fn button(
         _ => button.text_color.map_or(theme::INK_BRIGHT, rgb),
     };
     drawn.with_children(|inner| {
-        if let (Some(decal), Some(place)) = (&button.decal, button.decal_area) {
+        // A buff slot's decal is the buff's own icon, which the caption draws.
+        if let (Some(decal), Some(place)) = (&button.decal, button.decal_area)
+            && !matches!(does, Does::PetBuff(_))
+        {
             picture(
                 inner,
                 art,
@@ -677,8 +753,15 @@ fn behave(
             crate::outbox::Needs(Capability::Abilities),
         )),
         Does::Slash(command) => drawn.insert((Button, SlashButton(command), skin())),
-        Does::PetBuff(_) | Does::BagIcon | Does::Nothing => drawn,
+        Does::PetBuff(slot) => drawn.insert((Shows::PetBuff(slot), Visibility::Hidden)),
+        Does::BagIcon | Does::Nothing => drawn,
     };
+    // The skin keeps the pet's Stand under its Sit; one shows at a time.
+    if let Does::Slash(command) = does
+        && let Some(sits) = pet_posture_button(command)
+    {
+        drawn.insert((Shows::WhilePetSits(sits), Visibility::Hidden));
+    }
     if let Some(tooltip) = &button.tooltip
         && !matches!(does, Does::Nothing)
     {
@@ -760,7 +843,7 @@ pub(crate) struct AttackButton;
 
 /// A skin button that runs a game slash command.
 #[derive(Component, Clone, Copy)]
-pub(crate) struct SlashButton(&'static str);
+pub(crate) struct SlashButton(pub(crate) &'static str);
 
 /// Runs a pressed slash button's command, as typing it would; a refusal
 /// shows in chat.
@@ -919,6 +1002,8 @@ fn gauge(
         .map_or(4.0, |piece| to_f32(piece.height))
         .min(area.height - gauge.bar_offset.max(0.0))
         .max(1.0);
+    // The bar runs from where the skin starts it to the gauge's right edge.
+    let bar_width = (area.width - gauge.bar_left).max(0.0);
     let mut root = window.spawn(at(
         inside.x + area.x,
         inside.y + area.y,
@@ -935,10 +1020,10 @@ fn gauge(
                 TextLayout::new(Justify::Left, LineBreak::NoWrap),
             ));
         }
-        root.spawn(at(0.0, gauge.bar_offset, area.width, bar_height))
+        root.spawn(at(gauge.bar_left, gauge.bar_offset, bar_width, bar_height))
             .with_children(|bar| {
                 if let Some(piece) = &look.background {
-                    picture(bar, art, piece, at(0.0, 0.0, area.width, bar_height));
+                    picture(bar, art, piece, at(0.0, 0.0, bar_width, bar_height));
                 }
                 if let Some(piece) = &look.fill {
                     let mut fill = bar.spawn((
@@ -956,12 +1041,12 @@ fn gauge(
                     fill.with_children(|fill| {
                         if let Some(mut image) = art.cut(piece) {
                             image.color = gauge.fill_tint.map_or(Color::WHITE, rgb);
-                            fill.spawn((image, at(0.0, 0.0, area.width, bar_height)));
+                            fill.spawn((image, at(0.0, 0.0, bar_width, bar_height)));
                         }
                     });
                 }
                 if let Some(piece) = &look.lines {
-                    picture(bar, art, piece, at(0.0, 0.0, area.width, bar_height));
+                    picture(bar, art, piece, at(0.0, 0.0, bar_width, bar_height));
                 }
                 if let Some(piece) = &look.cap_left {
                     picture(
@@ -973,7 +1058,7 @@ fn gauge(
                 }
                 if let Some(piece) = &look.cap_right {
                     let cap = to_f32(piece.width);
-                    picture(bar, art, piece, at(area.width - cap, 0.0, cap, bar_height));
+                    picture(bar, art, piece, at(bar_width - cap, 0.0, cap, bar_height));
                 }
             });
     });
@@ -1094,15 +1179,25 @@ pub(crate) fn show(
     mut boxes: Query<(&Shows, &mut Visibility)>,
 ) {
     let world = online.world();
+    let pet_sits = world
+        .pet()
+        .and_then(|pet| world.posture(pet.state.spawn_id))
+        == Some(eq_client_core::PostureState::Sitting);
     for (shows, mut visibility) in &mut boxes {
-        if *shows == Shows::Attacking {
-            let wanted = if combat.auto_attack {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            };
-            visibility.set_if_neq(wanted);
-        }
+        let shown = match *shows {
+            Shows::Attacking => combat.auto_attack,
+            Shows::WhilePetSits(sits) => sits == pet_sits,
+            Shows::PetBuff(slot) => world
+                .pet_buffs()
+                .and_then(|buffs| buffs.slots.get(slot).copied().flatten())
+                .is_some(),
+            _ => continue,
+        };
+        visibility.set_if_neq(if shown {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
     for (shows, mut node) in &mut fills {
         let Shows::Fill(kind) = *shows else {
@@ -1125,7 +1220,9 @@ pub(crate) fn show(
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Banker => (inventory.banker().to_owned(), None),
             Shows::Partner => (super::give::partner(world), None),
-            Shows::Fill(_) | Shows::Attacking => continue,
+            Shows::Fill(_) | Shows::Attacking | Shows::WhilePetSits(_) | Shows::PetBuff(_) => {
+                continue;
+            }
         };
         if text.0 != wanted {
             text.0 = wanted;
@@ -1304,6 +1401,10 @@ mod tests {
             does("AttackButton", WindowId::Player),
             Some(Does::Nothing)
         ));
+        // Stand lies under Sit: each shows only while it does something.
+        assert_eq!(pet_posture_button("/pet sit down"), Some(false));
+        assert_eq!(pet_posture_button("/pet stand up"), Some(true));
+        assert_eq!(pet_posture_button("/pet attack"), None);
     }
     use crate::online::{OnlineState, testing};
     use eq_client_core::WorldEvent;

@@ -48,6 +48,7 @@ fn spawn(spawn_id: u16) -> SpawnState {
         level: 0,
         listing: crate::listing::Listing::default(),
         pet_owner: None,
+        hp_percent: None,
     }
 }
 
@@ -1500,10 +1501,13 @@ fn the_player_has_the_pet_they_own_and_its_buffs() {
         &mut world,
         WorldEvent::Spawns(vec![SpawnState {
             pet_owner: Some(9),
+            hp_percent: Some(100),
             ..spawn(6)
         }]),
     );
     assert_eq!(world.pet().map(|pet| pet.state.spawn_id), Some(6));
+    // Its health is its spawn record's until the server reports a change.
+    assert_eq!(world.health(6), Some(100));
     let buffs = PetBuffs {
         pet: 6,
         slots: vec![

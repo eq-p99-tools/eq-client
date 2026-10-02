@@ -199,6 +199,7 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::skinned::SkinTab>,
             Option<&'static super::abilities::AbilityButton>,
             Has<super::skinned::AttackButton>,
+            Option<&'static super::skinned::SlashButton>,
         ),
     ),
 >;
@@ -633,7 +634,7 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
         tint,
         give,
         (coins, pick),
-        (selector, tab, ability, attack),
+        (selector, tab, ability, attack, slash),
     ) in buttons.iter_mut()
     {
         let matches = match target {
@@ -650,6 +651,7 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
                         }
             }),
             ClickTarget::Attack => attack,
+            ClickTarget::Pet(command) => slash.is_some_and(|button| button.0 == command),
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,

@@ -126,10 +126,23 @@ pub(super) fn figure(
     }
 }
 
-/// Opens and closes the windows that hold items and have no frame of their
-/// own until then: a bag's, while it is open and still a bag, the bank's,
-/// while it is open and a banker is in reach, and the give window while it
-/// is open.
+/// Windows with no frame until they open: built when they open and gone
+/// when they close.
+const fn framed_while_open(id: WindowId) -> bool {
+    matches!(
+        id,
+        WindowId::Bank
+            | WindowId::Bag(_)
+            | WindowId::Give
+            | WindowId::ActionsWindow
+            | WindowId::PetInfo
+    )
+}
+
+/// Opens and closes the windows that have no frame of their own until then:
+/// a bag's, while it is open and still a bag, the bank's, while it is open
+/// and a banker is in reach, and the give, Actions and Pet Info windows
+/// while they are open.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn frames(
     mut commands: Commands,
@@ -160,10 +173,7 @@ pub(crate) fn frames(
     }
     let mut drawn = BTreeSet::new();
     for (frame, id) in &frames {
-        if matches!(
-            id,
-            WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::ActionsWindow
-        ) {
+        if framed_while_open(*id) {
             if shown.is_open(*id) {
                 drawn.insert(*id);
             } else {
@@ -173,12 +183,7 @@ pub(crate) fn frames(
     }
     let wanted: Vec<WindowId> = shown
         .ids()
-        .filter(|id| {
-            matches!(
-                id,
-                WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::ActionsWindow
-            ) && !drawn.contains(id)
-        })
+        .filter(|id| framed_while_open(*id) && !drawn.contains(id))
         .collect();
     // A window just opened comes to the front.
     for id in wanted {
@@ -306,9 +311,8 @@ pub(crate) fn close(
         }
     }
     // Closing the give window cancels the exchange; see `give::window`.
-    if let crate::escape::Escape::Close(
-        id @ (WindowId::Bank | WindowId::Bag(_) | WindowId::Give | WindowId::ActionsWindow),
-    ) = *escape
+    if let crate::escape::Escape::Close(id) = *escape
+        && framed_while_open(id)
     {
         shown.close(id);
     }

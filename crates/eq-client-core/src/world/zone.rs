@@ -41,7 +41,7 @@ impl Zone {
                 spawn.spawn_id,
                 Spawn {
                     state: spawn.clone(),
-                    health: None,
+                    health: spawn.hp_percent,
                     posture: None,
                     revision: *revision,
                 },

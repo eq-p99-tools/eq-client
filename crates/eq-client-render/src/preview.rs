@@ -382,6 +382,7 @@ fn synthetic(id: u16, race: u32, size: f32, position: WorldPosition) -> eq_clien
         level: 0,
         listing: eq_client_core::listing::Listing::default(),
         pet_owner: None,
+        hp_percent: None,
     }
 }
 

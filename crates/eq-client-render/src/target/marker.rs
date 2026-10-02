@@ -115,6 +115,7 @@ mod tests {
                 level: 0,
                 listing: eq_client_core::listing::Listing::default(),
                 pet_owner: None,
+                hp_percent: None,
             },
         );
         let entity = app
