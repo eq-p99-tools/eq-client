@@ -262,7 +262,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         commands.entity(slot).insert((
             Button,
             SpellGem(u8::try_from(number - 1).expect("eight gems")),
-            crate::outbox::Needs(eq_client_core::Capability::Casting),
+            crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
         ));
         let value = label(commands, slot, "", Size::Caption, theme::INK);
         commands.entity(value).insert((

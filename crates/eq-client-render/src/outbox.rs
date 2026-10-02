@@ -210,10 +210,28 @@ pub(crate) fn show(outbox: Res<Outbox>, mut lines: ResMut<super::notices::Lines>
     }
 }
 
-/// A control that needs something of the session: greyed out, with the
-/// reason on hover, while the session does not offer it.
-#[derive(Component, Clone, Copy, Debug)]
-pub(crate) struct Needs(pub Capability);
+/// What a control needs of the session: greyed out under a veil, with the
+/// reason on hover, while the session does not offer it. One veil serves
+/// every control, whatever it needs.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Needs {
+    /// Something the session lets the player do, such as casting.
+    Capability(Capability),
+    /// An ability, which the server type must also list.
+    Ability(eq_client_core::abilities::Ability),
+}
+
+impl Needs {
+    /// Whether the session offers what the control needs.
+    pub(crate) fn offered(self, world: &ClientWorld) -> bool {
+        match self {
+            Self::Capability(capability) => offered(world, capability),
+            Self::Ability(ability) => {
+                offered(world, Capability::Abilities) && world.ability_offered(ability)
+            }
+        }
+    }
+}
 
 /// The veil over a control the session does not offer.
 #[derive(Component)]
@@ -250,8 +268,8 @@ pub(crate) fn grey_out(
     controls: Query<(&Needs, &Children)>,
     mut veils: Query<&mut Node, With<Veil>>,
 ) {
-    for (Needs(capability), children) in &controls {
-        let display = if offered(online.world(), *capability) {
+    for (needs, children) in &controls {
+        let display = if needs.offered(online.world()) {
             Display::None
         } else {
             Display::Flex
@@ -364,7 +382,7 @@ mod tests {
         app.add_systems(Update, (veil, grey_out).chain());
         let control = app
             .world_mut()
-            .spawn((Node::default(), Needs(Capability::Casting)))
+            .spawn((Node::default(), Needs::Capability(Capability::Casting)))
             .id();
         let veil_display = |app: &mut App| {
             let children = app.world().get::<Children>(control).unwrap().to_vec();
@@ -386,6 +404,23 @@ mod tests {
         );
         app.update();
         assert_eq!(veil_display(&mut app), Display::None);
+    }
+
+    #[test]
+    fn an_ability_the_server_does_not_list_is_veiled_like_any_other_need() {
+        use eq_client_core::{WorldEvent, WorldUpdate, abilities::Ability};
+        let mut world = admitted(Capability::ALL.to_vec());
+        assert!(Needs::Ability(Ability::Fishing).offered(&world));
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::AbilitiesOffered(vec![Ability::Kick])),
+            Instant::now(),
+            &eq_client_core::world::NoSpells,
+        );
+        assert!(Needs::Ability(Ability::Kick).offered(&world));
+        assert!(!Needs::Ability(Ability::Fishing).offered(&world));
+        // An ability also needs the abilities capability.
+        let without = admitted(vec![Capability::Talking]);
+        assert!(!Needs::Ability(Ability::Kick).offered(&without));
     }
 }
 

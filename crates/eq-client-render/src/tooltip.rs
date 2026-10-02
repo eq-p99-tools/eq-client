@@ -56,9 +56,7 @@ pub(crate) fn show(
         .iter()
         .filter(|(interaction, ..)| **interaction != Interaction::None)
         .find_map(|(_, tooltip, needs)| match needs {
-            Some(super::outbox::Needs(capability))
-                if !super::outbox::offered(online.world(), *capability) =>
-            {
+            Some(needs) if !needs.offered(online.world()) => {
                 Some(super::outbox::UNAVAILABLE.to_owned())
             }
             _ => tooltip.map(|tooltip| tooltip.0.clone()),

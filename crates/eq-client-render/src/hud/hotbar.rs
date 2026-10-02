@@ -139,7 +139,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
                 .insert((
                     Button,
                     Slot(index),
-                    crate::outbox::Needs(eq_client_core::Capability::Casting),
+                    crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
                 ))
                 .with_child(crate::spell_icons::artwork(
                     crate::spell_icons::Source::Action(index),
@@ -271,10 +271,7 @@ pub(crate) fn presentation(
             || bindings.0[slot.0].is_none()
             || (bindings.gem(slot.0).is_some() && spell.is_none());
         let ability_waits = match bindings.0[slot.0] {
-            Some(Action::Ability(ability)) => {
-                online.world().ability_wait(ability, now).is_some()
-                    || !online.world().ability_offered(ability)
-            }
+            Some(Action::Ability(ability)) => online.world().ability_wait(ability, now).is_some(),
             _ => false,
         };
         let waiting = ability_waits
@@ -384,17 +381,20 @@ fn bound_item(
 }
 
 /// Keeps what each slot needs of the session in step with its binding:
-/// sitting and standing are moves, a gem or an item's effect is a cast.
+/// sitting and standing are moves, an ability is one the server type lists,
+/// a gem or an item's effect is a cast.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate::outbox::Needs)>) {
+    use crate::outbox::Needs;
+    use eq_client_core::Capability;
     for (slot, mut needs) in &mut slots {
         let wanted = match bindings.0[slot.0] {
-            Some(Action::Sit | Action::Stand) => eq_client_core::Capability::Moving,
-            Some(Action::Ability(_)) => eq_client_core::Capability::Abilities,
-            _ => eq_client_core::Capability::Casting,
+            Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Moving),
+            Some(Action::Ability(ability)) => Needs::Ability(ability),
+            _ => Needs::Capability(Capability::Casting),
         };
-        if needs.0 != wanted {
-            needs.0 = wanted;
+        if *needs != wanted {
+            *needs = wanted;
         }
     }
 }
