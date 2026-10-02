@@ -140,13 +140,16 @@ const fn framed_while_open(id: WindowId) -> bool {
             | WindowId::Training
             | WindowId::Skills
             | WindowId::Confirmation
+            | WindowId::Note
+            | WindowId::Book
     )
 }
 
 /// Opens and closes the windows that have no frame of their own until then:
 /// a bag's, while it is open and still a bag, the bank's, while it is open
 /// and a banker is in reach, and the give, Actions, Pet Info, Options,
-/// Training, Skills and confirmation windows while they are open.
+/// Training, Skills, confirmation, note and book windows while they are
+/// open.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn frames(
     mut commands: Commands,

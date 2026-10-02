@@ -99,6 +99,8 @@ pub enum Notice {
     TrainingRefused(String),
     /// An answer to a resurrection was not sent, and why.
     ResurrectionRefused(String),
+    /// A request to read was not sent, and why.
+    ReadRefused(String),
     /// A consent to drag a player's corpses was given or taken back.
     Consent {
         /// What the server said.

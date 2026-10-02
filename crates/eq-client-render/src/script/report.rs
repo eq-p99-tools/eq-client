@@ -111,6 +111,7 @@ pub(super) fn state(
         training = ?training(online),
         practice_points = ?online.world().player().and_then(|player| player.practice_points),
         resurrection = ?resurrection(online),
+        readable = ?readable(online),
         purse = ?online.world().coins(),
         cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
         bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
@@ -129,6 +130,20 @@ fn training(online: &crate::online::OnlineState) -> Option<(u16, usize)> {
         offer.trainer,
         offer.caps.iter().filter(|cap| **cap > 0).count(),
     ))
+}
+
+/// The carried books and notes: slot, item, window kind and text name.
+fn readable(online: &crate::online::OnlineState) -> Vec<(i32, u32, u8, String)> {
+    online
+        .world()
+        .inventory()
+        .items()
+        .values()
+        .filter_map(|item| {
+            let book = item.book.as_ref()?;
+            Some((item.slot.0, item.details.id, book.kind, book.file.clone()))
+        })
+        .collect()
 }
 
 /// The resurrection waiting for an answer: its caster, corpse and spell.

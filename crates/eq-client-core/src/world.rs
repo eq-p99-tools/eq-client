@@ -116,6 +116,8 @@ pub struct ClientWorld {
     pending_transfer: Option<ZoneOffer>,
     /// The resurrection offered and not yet answered.
     resurrection: Option<crate::resurrection::ResurrectionOffer>,
+    /// The book or note open to read.
+    reading: Option<crate::books::BookText>,
     /// Item definitions the server sent for inspection.
     items: ItemCache,
     // Until any reset: the target, the motion granted and camping.
@@ -216,6 +218,11 @@ impl ClientWorld {
     /// arrives as news.
     pub fn answer_resurrection(&mut self) {
         self.resurrection = None;
+    }
+
+    /// The player closed the book or note they were reading.
+    pub fn close_reading(&mut self) {
+        self.reading = None;
     }
 
     /// The player asked a merchant to trade; the server's word on it arrives
@@ -524,6 +531,15 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // A book or note to read, and a request the session would not send.
+            WorldEvent::BookText(text) => self.reading = Some(text.clone()),
+            WorldEvent::ReadRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ReadRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
             // A resurrection to answer, and an answer the session would not send.
             WorldEvent::Resurrection(offer) => self.resurrection = Some(offer.clone()),
             WorldEvent::ResurrectionRefused { session_id, reason } => {
@@ -670,6 +686,7 @@ impl ClientWorld {
         self.items = ItemCache::default();
         self.pending_transfer = None;
         self.resurrection = None;
+        self.reading = None;
         self.death = None;
         self.forget_zone();
     }
