@@ -53,6 +53,8 @@ pub(super) struct ChatState {
     pub zone_who: Option<eq_client_core::who::WhoFilter>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
+    /// A `/shownames`, waiting to set how much of players' names shows.
+    pub show_names: Option<eq_client_core::names::ShowNames>,
     draft: String,
     status: String,
 }
@@ -595,8 +597,8 @@ fn location(input: &str, online: &super::online::OnlineState) -> Option<Result<S
 }
 
 /// A slash command the client answers itself, noted for the system that
-/// answers it: `/target Name`, a plain `/who`, or `/log`. None for any
-/// other line.
+/// answers it: `/target Name`, a plain `/who`, `/log` or `/shownames`. None
+/// for any other line.
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
     if let Some(request) = target_request(input) {
         return Some(request.map(|name| state.requested_target = Some(name)));
@@ -607,6 +609,17 @@ pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Resul
     if input.eq_ignore_ascii_case("/log") {
         state.log_toggle = true;
         return Some(Ok(()));
+    }
+    let (command, word) = input.split_once(' ').unwrap_or((input, ""));
+    if command.eq_ignore_ascii_case("/shownames") {
+        use eq_client_core::names::{SHOW_NAMES_FORMAT, ShowNames};
+        return Some(match ShowNames::parse(word) {
+            Some(level) => {
+                state.show_names = Some(level);
+                Ok(())
+            }
+            None => Err(SHOW_NAMES_FORMAT.to_owned()),
+        });
     }
     None
 }
@@ -962,6 +975,7 @@ mod tests {
                 hp_percent: Some(100),
                 appearance: eq_client_core::outfit::Appearance::default(),
                 listing: eq_client_core::listing::Listing::default(),
+                name_parts: eq_client_core::names::NameParts::default(),
             },
         );
         let commands = game_commands("/CAMP", &online, &outbox).unwrap().unwrap();

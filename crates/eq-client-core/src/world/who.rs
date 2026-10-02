@@ -63,6 +63,17 @@ pub(super) fn relist(change: ListingChange, level: &mut u8, listing: &mut Listin
 }
 
 impl ClientWorld {
+    /// Gives a character, by the name they spawned with, a new last name.
+    pub(super) fn last_name(&mut self, name: &str, last_name: &str) {
+        let spawns = self.zone.spawns.values_mut().map(|spawn| &mut spawn.state);
+        for state in spawns.filter(|state| state.name == name) {
+            last_name.clone_into(&mut state.name_parts.last_name);
+        }
+        if let Some(player) = self.player.as_mut().filter(|player| player.name == name) {
+            last_name.clone_into(&mut player.name_parts.last_name);
+        }
+    }
+
     /// A guild's name, by its number in the world's guild list.
     #[must_use]
     pub fn guild_name(&self, number: u32) -> Option<&str> {

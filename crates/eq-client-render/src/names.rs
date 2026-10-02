@@ -1,9 +1,10 @@
-//! Names over heads: each character's name above them and a player's guild
-//! under it, while the Options window's Show PC Names and Show NPC Names
-//! allow them. They follow the models through the frame and draw under
-//! every window.
+//! Names over heads: each character's name above them, worded by
+//! `eq_client_core::names::label`, while the Options window's Show PC Names
+//! and Show NPC Names allow them. They follow the models through the frame
+//! and draw under every window; one whose head leaves the view is clipped
+//! at the window's edge.
 use bevy::prelude::*;
-use eq_client_core::SpawnKind;
+use eq_client_core::names::{ShowNames, is_pc, label};
 use std::collections::BTreeMap;
 
 /// How far above the head a name sits, in world units.
@@ -22,13 +23,17 @@ pub(crate) struct NameTag;
 #[derive(Resource, Default)]
 pub(crate) struct NameTags(BTreeMap<Entity, Entity>);
 
-/// What a name over a root says.
-#[derive(Debug, PartialEq, Eq)]
-struct Label {
-    /// The name, then the guild's line when there is one.
-    words: String,
-    /// Whether Show PC Names governs it; Show NPC Names governs the rest.
-    pc: bool,
+/// Sets how much of players' names shows, as a `/shownames` asked, and says
+/// so as the official client does.
+pub(crate) fn request(
+    mut chat: ResMut<crate::chat::ChatState>,
+    mut options: ResMut<crate::options::OptionsState>,
+) {
+    if let Some(level) = chat.show_names.take() {
+        options.options.show_names = level;
+        chat.history
+            .push(crate::chat::system_line(level.announcement().to_owned()));
+    }
 }
 
 /// Draws a name over the player's head and every drawn spawn's, and takes
@@ -49,22 +54,36 @@ pub(crate) fn update(
     mut tags: Query<(&mut Node, &mut Text, &mut Visibility), With<NameTag>>,
 ) {
     let world = online.world();
+    let options = options.options;
+    let shown = |kind| {
+        if is_pc(kind) {
+            options.pc_names && options.show_names != ShowNames::Off
+        } else {
+            options.npc_names
+        }
+    };
+    let words = |name: &str, kind, parts, listing: &eq_client_core::listing::Listing| {
+        let guild = listing.guild.and_then(|guild| world.guild_name(guild));
+        label(name, kind, (parts, listing), guild, options.show_names)
+    };
     let mut wanted = BTreeMap::new();
-    if let (Ok(root), Some(me)) = (player.single(), world.player()) {
-        wanted.insert(root, label(&me.name, SpawnKind::Player, &me.listing, world));
+    let me = eq_client_core::SpawnKind::Player;
+    if let (Ok(root), Some(player)) = (player.single(), world.player())
+        && shown(me)
+    {
+        let said = words(&player.name, me, &player.name_parts, &player.listing);
+        wanted.insert(root, said);
     }
     for (id, root) in &nearby.rendered {
-        if let Some(spawn) = world.spawn(*id).map(|spawn| &spawn.state) {
-            wanted.insert(*root, label(&spawn.name, spawn.kind, &spawn.listing, world));
+        if let Some(spawn) = world
+            .spawn(*id)
+            .map(|spawn| &spawn.state)
+            .filter(|spawn| shown(spawn.kind))
+        {
+            let said = words(&spawn.name, spawn.kind, &spawn.name_parts, &spawn.listing);
+            wanted.insert(*root, said);
         }
     }
-    wanted.retain(|_, label| {
-        if label.pc {
-            options.options.pc_names
-        } else {
-            options.options.npc_names
-        }
-    });
     drawn.0.retain(|root, tag| {
         let keep = wanted.contains_key(root);
         if !keep {
@@ -77,9 +96,9 @@ pub(crate) fn update(
     // them: reading those rather than the propagated ones keeps the names in
     // step with this frame's moves.
     let camera = cameras.single().ok();
-    for (root, label) in wanted {
+    for (root, words) in wanted {
         // Where the head's top shows, in the UI's pixels from the window's
-        // left and bottom edges; none behind the camera or off the view.
+        // left and bottom edges; none behind the camera.
         let place = camera.and_then(|(camera, view)| {
             let (transform, Overhead(top)) = roots.get(root).ok()?;
             let above = transform.transform_point(Vec3::Y * *top) + Vec3::Y * ABOVE_HEAD;
@@ -87,18 +106,17 @@ pub(crate) fn update(
                 .world_to_viewport(&GlobalTransform::from(*view), above)
                 .ok()?;
             let size = camera.logical_viewport_size()?;
-            (at.cmpge(Vec2::ZERO).all() && at.cmple(size).all())
-                .then(|| Vec2::new(at.x, size.y - at.y) / factor)
+            Some(Vec2::new(at.x, size.y - at.y) / factor)
         });
         let Some(&tag) = drawn.0.get(&root) else {
-            drawn.0.insert(root, spawn_tag(&mut commands, label.words));
+            drawn.0.insert(root, spawn_tag(&mut commands, words));
             continue;
         };
         let Ok((mut node, mut text, mut visibility)) = tags.get_mut(tag) else {
             continue;
         };
-        if text.0 != label.words {
-            text.0 = label.words;
+        if text.0 != words {
+            text.0 = words;
         }
         let Some(at) = place else {
             visibility.set_if_neq(Visibility::Hidden);
@@ -142,34 +160,11 @@ fn spawn_tag(commands: &mut Commands, words: String) -> Entity {
         .id()
 }
 
-/// What the name over a spawn says: its name as the client shows names,
-/// and a player's guild under it in angle brackets. Corpses go with the
-/// players or creatures they were.
-fn label(
-    name: &str,
-    kind: SpawnKind,
-    listing: &eq_client_core::listing::Listing,
-    world: &eq_client_core::world::ClientWorld,
-) -> Label {
-    let name = eq_client_core::entities::display_name(name);
-    let guild = listing
-        .guild
-        .filter(|_| kind == SpawnKind::Player)
-        .and_then(|guild| world.guild_name(guild));
-    Label {
-        words: match guild {
-            Some(guild) => format!("{name}\n<{guild}>"),
-            None => name,
-        },
-        pc: matches!(kind, SpawnKind::Player | SpawnKind::PlayerCorpse),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
-    use eq_client_core::SpawnState;
+    use eq_client_core::{SpawnKind, SpawnState, WorldEvent};
 
     /// A spawn of this kind, named as the server names it, in this guild.
     fn spawn(spawn_id: u16, name: &str, kind: SpawnKind, guild: Option<u32>) -> SpawnState {
@@ -193,8 +188,9 @@ mod tests {
         words
     }
 
-    #[test]
-    fn names_follow_the_drawn_spawns_and_the_options() {
+    /// An app drawing the player, a guildmate, a gnoll, the guildmate's
+    /// corpse and a gnoll pup, none of them placed yet.
+    fn app() -> App {
         let mut app = crate::testing::app();
         {
             let mut online = app.world_mut().resource_mut::<OnlineState>();
@@ -203,10 +199,7 @@ mod tests {
             testing::admit(&mut online, 1, me);
             testing::news(
                 &mut online,
-                [eq_client_core::WorldEvent::GuildNames(vec![(
-                    7,
-                    "Example Guild".into(),
-                )])],
+                [WorldEvent::GuildNames(vec![(7, "Example Guild".into())])],
             );
             testing::spawns(
                 &mut online,
@@ -231,8 +224,14 @@ mod tests {
                 .rendered
                 .insert(id, root);
         }
-        app.add_systems(Update, update);
+        app.add_systems(Update, (request, update).chain());
         app.update();
+        app
+    }
+
+    #[test]
+    fn names_follow_the_drawn_spawns_and_the_options() {
+        let mut app = app();
         let everyone = [
             "Examplar\n<Example Guild>",
             "Examplar's corpse",
@@ -279,6 +278,62 @@ mod tests {
         assert_eq!(
             shown(&mut app),
             [everyone[0], everyone[1], everyone[2], everyone[4]]
+        );
+    }
+
+    #[test]
+    fn show_names_and_new_last_names_reword_players() {
+        let mut app = app();
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::LastName {
+                name: "Examplar".into(),
+                last_name: "Exemplum".into(),
+            }],
+        );
+        app.update();
+        assert_eq!(shown(&mut app)[0], "Examplar Exemplum\n<Example Guild>");
+        let ask = |app: &mut App, input: &str| {
+            let mut chat = app.world_mut().resource_mut::<crate::chat::ChatState>();
+            crate::chat::client_request(input, &mut chat)
+        };
+        assert_eq!(ask(&mut app, "/shownames 1"), Some(Ok(())));
+        app.update();
+        assert_eq!(
+            shown(&mut app),
+            [
+                "Examplar",
+                "Examplar's corpse",
+                "Example",
+                "a gnoll",
+                "a gnoll pup"
+            ]
+        );
+        let options = app.world().resource::<crate::options::OptionsState>();
+        assert_eq!(options.options.show_names, ShowNames::First);
+        // Off hides players and their corpses alone.
+        assert_eq!(ask(&mut app, "/shownames off"), Some(Ok(())));
+        app.update();
+        assert_eq!(shown(&mut app), ["a gnoll", "a gnoll pup"]);
+        // A level the client cannot read gets the official format line.
+        assert_eq!(
+            ask(&mut app, "/shownames 9"),
+            Some(Err(eq_client_core::names::SHOW_NAMES_FORMAT.to_owned()))
+        );
+        let chat = app.world().resource::<crate::chat::ChatState>();
+        let said: Vec<String> = chat
+            .history
+            .lines(eq_client_core::chat::ChatTab::All)
+            .into_iter()
+            .map(|(_, line)| line.message.text.clone())
+            .collect();
+        assert!(
+            said.contains(&"Showing only first names.".to_owned()),
+            "{said:?}"
+        );
+        assert!(
+            said.contains(&"Player names are *off*.".to_owned()),
+            "{said:?}"
         );
     }
 }

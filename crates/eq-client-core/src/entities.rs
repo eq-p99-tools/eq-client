@@ -127,6 +127,7 @@ mod tests {
             appearance: crate::outfit::Appearance::default(),
             level: 0,
             listing: crate::listing::Listing::default(),
+            name_parts: crate::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
         };
@@ -174,6 +175,7 @@ mod tests {
             appearance: crate::outfit::Appearance::default(),
             level: 0,
             listing: crate::listing::Listing::default(),
+            name_parts: crate::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
         }

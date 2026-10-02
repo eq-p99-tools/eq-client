@@ -197,6 +197,9 @@ pub struct OfficialOptions {
     pub pc_names: Option<bool>,
     /// The Display page's Show NPC Names: `NPCNames` in `[Options]`.
     pub npc_names: Option<bool>,
+    /// How much of a player's name `/shownames` shows, 0 for none:
+    /// `ShowNamesLevel` in `[Defaults]`.
+    pub show_names_level: Option<u32>,
 }
 
 /// The options the official client keeps in the installation's
@@ -217,6 +220,8 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         log: flag("Defaults", "Log"),
         pc_names: flag("Options", "PCNames"),
         npc_names: flag("Options", "NPCNames"),
+        show_names_level: ini_value(text, "Defaults", "ShowNamesLevel")
+            .and_then(|level| level.trim().parse().ok()),
     }
 }
 
@@ -520,6 +525,7 @@ NPCNames=0
                 log: None,
                 pc_names: Some(true),
                 npc_names: Some(false),
+                show_names_level: Some(4),
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());

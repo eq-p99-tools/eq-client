@@ -2,10 +2,13 @@
 //! keeps itself, and the ones only this client has. A file keeps them as one
 //! `name = value` line each, so a file from an older client still reads.
 
-use crate::food::AutoEat;
+use crate::{food::AutoEat, names::ShowNames};
 
 /// The first line of an options file.
 pub const HEADER: &str = "# eq-client options v1";
+
+/// The name a file keeps [`Options::show_names`] under.
+const SHOW_NAMES: &str = "show_names";
 
 /// An option the player turns on or off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -96,13 +99,17 @@ pub struct Options {
     pub skip_modified_food: bool,
     /// See [`Toggle::Log`].
     pub log: bool,
+    /// How much of a player's name shows over their head, as `/shownames`
+    /// sets it; the official client keeps it in `eqclient.ini`, this client
+    /// per character.
+    pub show_names: ShowNames,
 }
 
 impl Default for Options {
     /// The client's defaults: the pet's window pops up, the target ring, the
     /// player's helm and everyone's names show, the mouse is not inverted and its wheel
-    /// zooms, food with modifiers waits for the player, and the chat is
-    /// logged.
+    /// zooms, food with modifiers waits for the player, the chat is logged,
+    /// and players' names show in full.
     fn default() -> Self {
         Self {
             pet_window_popup: true,
@@ -114,6 +121,7 @@ impl Default for Options {
             wheel_zoom: true,
             skip_modified_food: true,
             log: true,
+            show_names: ShowNames::Everything,
         }
     }
 }
@@ -170,6 +178,12 @@ impl Options {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
+            if key.trim() == SHOW_NAMES {
+                if let Some(level) = ShowNames::parse(value) {
+                    options.show_names = level;
+                }
+                continue;
+            }
             let on = match value.trim() {
                 "true" => true,
                 "false" => false,
@@ -197,6 +211,9 @@ impl Options {
                 " = false\n"
             });
         }
+        for part in [SHOW_NAMES, " = ", self.show_names.word(), "\n"] {
+            text.push_str(part);
+        }
         text
     }
 }
@@ -210,20 +227,25 @@ mod tests {
         let mut options = Options::default();
         options.set(Toggle::InvertY, true);
         options.set(Toggle::SkipModifiedFood, false);
+        options.show_names = ShowNames::Last;
         let text = options.text();
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
+        assert!(text.contains("show_names = 2\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // Unknown names, bad values and missing options keep the defaults.
         let defaults = Options {
             pet_window_popup: false,
             ..Options::default()
         };
-        let old = "# eq-client options v1\nwheel_zoom = false\nshiny = true\ntarget_ring = maybe\n";
+        let old = "# eq-client options v1\nwheel_zoom = false\nshiny = true\ntarget_ring = maybe\nshow_names = 9\n";
         let read = Options::read(old, defaults);
         assert!(!read.wheel_zoom);
         assert!(read.target_ring);
         assert!(!read.pet_window_popup);
+        assert_eq!(read.show_names, ShowNames::Everything);
+        let off = Options::read("show_names = off\n", defaults);
+        assert_eq!(off.show_names, ShowNames::Off);
     }
 
     #[test]

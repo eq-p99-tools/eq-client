@@ -29,6 +29,7 @@ fn player(spawn_id: u16) -> PlayerState {
         hp_percent: Some(100),
         appearance: Appearance::default(),
         listing: crate::listing::Listing::default(),
+        name_parts: crate::names::NameParts::default(),
     }
 }
 
@@ -47,6 +48,7 @@ fn spawn(spawn_id: u16) -> SpawnState {
         appearance: Appearance::default(),
         level: 0,
         listing: crate::listing::Listing::default(),
+        name_parts: crate::names::NameParts::default(),
         pet_owner: None,
         hp_percent: None,
     }
@@ -1537,4 +1539,42 @@ fn the_player_has_the_pet_they_own_and_its_buffs() {
         },
     );
     assert_eq!(world.pet().map(|pet| pet.state.spawn_id), Some(5));
+}
+
+#[test]
+fn last_names_change_by_the_name_spawned_with() {
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::Spawns(vec![
+            SpawnState {
+                name: "Examplar".into(),
+                kind: SpawnKind::Player,
+                ..spawn(6)
+            },
+            spawn(7),
+        ]),
+    );
+    for (name, last_name) in [("Examplar", "Exemplum"), ("Example", "Sample")] {
+        game(
+            &mut world,
+            WorldEvent::LastName {
+                name: name.into(),
+                last_name: last_name.into(),
+            },
+        );
+    }
+    let last_name = |id| world.spawn(id).unwrap().state.name_parts.last_name.clone();
+    assert_eq!(last_name(6), "Exemplum");
+    assert_eq!(last_name(7), "");
+    assert_eq!(world.player().unwrap().name_parts.last_name, "Sample");
+    // A last name taken away leaves none.
+    game(
+        &mut world,
+        WorldEvent::LastName {
+            name: "Examplar".into(),
+            last_name: String::new(),
+        },
+    );
+    assert_eq!(world.spawn(6).unwrap().state.name_parts.last_name, "");
 }

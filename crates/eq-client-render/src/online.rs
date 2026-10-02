@@ -509,6 +509,7 @@ pub(crate) mod testing {
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
             listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
         }
     }
 
@@ -529,6 +530,7 @@ pub(crate) mod testing {
             appearance: eq_client_core::outfit::Appearance::default(),
             level: 1,
             listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
             pet_owner: Some(owner),
             hp_percent: Some(100),
         }
@@ -719,6 +721,7 @@ mod tests {
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
             listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
         };
         let spawn = eq_client_core::SpawnState {
             class: None,
@@ -734,6 +737,7 @@ mod tests {
             appearance: eq_client_core::outfit::Appearance::default(),
             level: 0,
             listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
         };
@@ -967,6 +971,7 @@ mod tests {
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
             listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
         };
         let admitted = std::time::Instant::now();
         for update in [
