@@ -2,7 +2,7 @@
 //! GINA, `GamParse` and `EQLogParser` read: one file per character and server
 //! in the installation's `Logs` folder, a line per message in the chat's
 //! words, stamped with the local time.
-use crate::chat::{ChannelName, ChatLine};
+use crate::chat::{ChannelName, ChatLine, Source};
 
 /// The official client's line as `/log` turns logging on (`eqstr_us.txt`),
 /// which a front end shows where the installation has it.
@@ -82,8 +82,13 @@ const fn others_speech(channel: ChannelName) -> Option<(u32, bool, &'static str)
 /// tongue, and anything else as it reads. The server repeats the player's
 /// own speech to them under their name, and echoes a tell they sent with
 /// whom they told; a tell is always heard, even one sent to oneself.
+/// A line in this client's own words has none: the official client never
+/// writes it, so its log leaves it out.
 #[must_use]
-pub fn words(line: &ChatLine, player: &str) -> Words {
+pub fn words(line: &ChatLine, player: &str) -> Option<Words> {
+    if line.source == Source::Client {
+        return None;
+    }
     let text = &line.message.text;
     let spoken = line
         .sender
@@ -111,7 +116,7 @@ pub fn words(line: &ChatLine, player: &str) -> Words {
             own_speech(line.channel)
                 .map(|(id, place)| (id, vec![text.clone()], format!("You ({place})")))
         });
-    match spoken {
+    Some(match spoken {
         Some((string_id, arguments, who)) => Words {
             string_id: Some(string_id),
             arguments,
@@ -122,7 +127,7 @@ pub fn words(line: &ChatLine, player: &str) -> Words {
             arguments: Vec::new(),
             text: text.clone(),
         },
-    }
+    })
 }
 
 #[cfg(test)]
@@ -141,6 +146,7 @@ mod tests {
                 text: text.to_owned(),
                 item_links: vec![],
             },
+            source: Source::Server,
         }
     }
 
@@ -179,23 +185,23 @@ mod tests {
     fn speech_names_who_spoke_and_where() {
         let say = spoken(ChannelName::Say, Some("Examplar"), "Hail");
         assert_eq!(
-            words(&say, "Other"),
+            words(&say, "Other").unwrap(),
             heard(1410, &["Examplar", "", "Hail"], "Examplar (say): Hail")
         );
         let tell = spoken(ChannelName::Tell, Some("Examplar"), "inc");
         assert_eq!(
-            words(&tell, "Other"),
+            words(&tell, "Other").unwrap(),
             heard(1416, &["Examplar", "", "inc"], "Examplar (tell): inc")
         );
         // Out-of-character speech has no place for a tongue.
         let ooc = spoken(ChannelName::Ooc, Some("Examplar"), "lfg");
         assert_eq!(
-            words(&ooc, "Other"),
+            words(&ooc, "Other").unwrap(),
             heard(1422, &["Examplar", "lfg"], "Examplar (ooc): lfg")
         );
         let auction = spoken(ChannelName::Auction, Some("Examplar"), "WTS Rusty Dagger");
         assert_eq!(
-            words(&auction, "Other"),
+            words(&auction, "Other").unwrap(),
             heard(
                 1421,
                 &["Examplar", "", "WTS Rusty Dagger"],
@@ -204,16 +210,16 @@ mod tests {
         );
         let raid = spoken(ChannelName::Raid, Some("Examplar"), "go");
         assert_eq!(
-            words(&raid, "Other"),
+            words(&raid, "Other").unwrap(),
             heard(5112, &["Examplar", "", "go"], "Examplar (raid): go")
         );
         // The player's own speech, which the server repeats to them.
         assert_eq!(
-            words(&say, "examplar"),
+            words(&say, "examplar").unwrap(),
             heard(12344, &["Hail"], "You (say): Hail")
         );
         assert_eq!(
-            words(&auction, "Examplar"),
+            words(&auction, "Examplar").unwrap(),
             heard(
                 12350,
                 &["WTS Rusty Dagger"],
@@ -226,7 +232,7 @@ mod tests {
             ..spoken(ChannelName::TellEcho, Some("Examplar"), "inc")
         };
         assert_eq!(
-            words(&told, "Examplar"),
+            words(&told, "Examplar").unwrap(),
             heard(1400, &["Friend", "inc"], "You (tell Friend): inc")
         );
         // A tell the player sent themselves is heard as any tell is.
@@ -235,18 +241,32 @@ mod tests {
             ..spoken(ChannelName::Tell, Some("Examplar"), "inc")
         };
         assert_eq!(
-            words(&to_self, "Examplar"),
+            words(&to_self, "Examplar").unwrap(),
             heard(1416, &["Examplar", "", "inc"], "Examplar (tell): inc")
         );
         // The game's own messages read as they are.
         let system = spoken(ChannelName::System, None, "A rat squeaks from the shadows.");
         assert_eq!(
-            words(&system, "Other"),
+            words(&system, "Other").unwrap(),
             Words {
                 string_id: None,
                 arguments: Vec::new(),
                 text: "A rat squeaks from the shadows.".into(),
             }
         );
+        // So do the official client's own lines, but never this client's.
+        let official = ChatLine {
+            source: Source::Official,
+            ..system.clone()
+        };
+        assert_eq!(
+            words(&official, "Other").map(|words| words.text),
+            Some(system.message.text.clone())
+        );
+        let own = ChatLine {
+            source: Source::Client,
+            ..system
+        };
+        assert_eq!(words(&own, "Other"), None);
     }
 }

@@ -1,5 +1,6 @@
 //! Words the world's notices: what each says to the player and where it
 //! shows. The server's strings come from the installed client's table.
+use super::chat::Said;
 use super::{
     combat::{consideration_text, damage_text},
     hud::messages::Messages,
@@ -52,9 +53,9 @@ pub(super) enum Place {
 }
 
 /// Sense Heading in the official client's own words, with the point's name.
-fn heading(point: u8, messages: &Messages) -> String {
+fn heading(point: u8, messages: &Messages) -> Said {
     let point = messages.format(12427 + u32::from(point), &[]);
-    messages.format(12435, &[point])
+    messages.said(12435, &[point])
 }
 
 /// What a hungry or thirsty player hears: the official client's words for
@@ -64,7 +65,7 @@ fn nothing_to_eat(
     food: Option<Shortage>,
     water: Option<Shortage>,
     messages: Option<&Messages>,
-) -> Vec<String> {
+) -> Vec<Said> {
     let lacks = |meal: Option<Shortage>, shortage| meal == Some(shortage);
     let official = match (
         lacks(food, Shortage::Nothing),
@@ -95,9 +96,9 @@ fn nothing_to_eat(
     };
     official
         .zip(messages)
-        .map(|(id, messages)| messages.format(id, &[]))
+        .map(|(id, messages)| messages.said(id, &[]))
         .into_iter()
-        .chain(kept.map(String::from))
+        .chain(kept.map(Said::own))
         .collect()
 }
 
@@ -106,7 +107,7 @@ fn nothing_to_eat(
 fn who_lines(
     list: &eq_client_core::who::WhoList,
     messages: Option<&Messages>,
-) -> Vec<(Place, String)> {
+) -> Vec<(Place, Said)> {
     super::who::lines(list, messages.unwrap_or(&Messages::default()))
         .into_iter()
         .map(|line| (Place::Chat, line))
@@ -120,7 +121,7 @@ fn consent_line(
     consent: &eq_client_core::corpses::Consent,
     own: bool,
     messages: Option<&Messages>,
-) -> String {
+) -> Said {
     let (id, who) = match (own, consent.given) {
         (true, true) => (1427, &consent.granted),
         (true, false) => (1428, &consent.granted),
@@ -129,7 +130,7 @@ fn consent_line(
     };
     messages
         .unwrap_or(&Messages::default())
-        .format(id, &[who.clone(), consent.zone.clone()])
+        .said(id, &[who.clone(), consent.zone.clone()])
 }
 
 /// The status line for the connection: dead and waiting, or how the link
@@ -161,7 +162,7 @@ const LOOT_COINS: u32 = 12072;
 
 /// Coins taken from a corpse, in the official client's words where the
 /// installation has them.
-fn loot_coins(coins: eq_client_core::Coins, messages: Option<&Messages>) -> String {
+fn loot_coins(coins: eq_client_core::Coins, messages: Option<&Messages>) -> Said {
     let coins = coin_text(coins.total_copper());
     official(
         Some(LOOT_COINS),
@@ -173,7 +174,7 @@ fn loot_coins(coins: eq_client_core::Coins, messages: Option<&Messages>) -> Stri
 
 /// Why a corpse could not be looted, in the official client's words where
 /// it has its own and the installation has them.
-fn loot_line(response: LootResponse, messages: Option<&Messages>) -> String {
+fn loot_line(response: LootResponse, messages: Option<&Messages>) -> Said {
     let (reason, string_id) = loot_refusal(response);
     official(string_id, &[], reason, messages)
 }
@@ -186,16 +187,16 @@ fn official(
     arguments: &[String],
     reason: &str,
     messages: Option<&Messages>,
-) -> String {
+) -> Said {
     match (string_id, messages) {
-        (Some(id), Some(messages)) => messages.official(id, arguments, reason),
-        _ => reason.to_owned(),
+        (Some(id), Some(messages)) => messages.said_or(id, arguments, reason),
+        _ => Said::own(reason),
     }
 }
 
 /// What a bandaging's start or end says: the official client's words where
 /// the installation has them.
-fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<String> {
+fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<Said> {
     Some(match update {
         BindWoundUpdate::Started { target: None } => official(
             Some(strings::STARTED_ON_SELF),
@@ -215,13 +216,14 @@ fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<S
 }
 
 /// How a notice reads, and where each part shows.
-pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
-    let chat = |text: String| vec![(Place::Chat, text)];
+pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, Said)> {
+    let chat = |said: Said| vec![(Place::Chat, said)];
+    let status = |text: String| vec![(Place::Status, Said::own(text))];
     match notice {
-        Notice::Connection { link, dead } => vec![(Place::Status, connection_text(*link, *dead))],
+        Notice::Connection { link, dead } => status(connection_text(*link, *dead)),
         Notice::ServerString { id, arguments } => chat(messages.map_or_else(
-            || format!("Server message {id}"),
-            |messages| messages.format(*id, arguments),
+            || Said::own(format!("Server message {id}")),
+            |messages| messages.said(*id, arguments),
         )),
         Notice::Consideration {
             consideration,
@@ -256,12 +258,12 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::Heading(point) => messages
             .map(|messages| heading(*point, messages))
             .map_or_else(Vec::new, chat),
-        Notice::Camp(status) => match status {
-            CampStatus::Preparing => messages.map(|messages| messages.format(12293, &[])),
-            CampStatus::Abandoned => messages.map(|messages| messages.format(12290, &[])),
+        Notice::Camp(camp) => match camp {
+            CampStatus::Preparing => messages.map(|messages| messages.said(12293, &[])),
+            CampStatus::Abandoned => messages.map(|messages| messages.said(12290, &[])),
             CampStatus::LoggingOut => Some("Logging out...".into()),
             CampStatus::Camped => None,
-            CampStatus::Rejected(reason) => Some(reason.clone()),
+            CampStatus::Rejected(reason) => Some(reason.as_str().into()),
         }
         .map_or_else(Vec::new, chat),
         Notice::LootCoins(coins) => chat(loot_coins(*coins, messages)),
@@ -283,7 +285,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::TradeRefused(reason)
         | Notice::TrainingRefused(reason)
         | Notice::ResurrectionRefused(reason)
-        | Notice::ReadRefused(reason) => chat(reason.clone()),
+        | Notice::ReadRefused(reason) => chat(reason.as_str().into()),
         // eqstr 1406, where the installation has it.
         Notice::ContainerInUse => chat(official(Some(1406), &[], "That is in use.", messages)),
         Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),
@@ -295,21 +297,24 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             .collect(),
         // "You are too far away to trade."
         Notice::GiveRefused(reason) | Notice::GroundRefused(reason) => {
-            chat(super::ground::refusal(reason))
+            chat(super::ground::refusal(reason).into())
         }
         // A click sent says nothing, as in the official client; a refused
         // one says why.
-        Notice::Door { error, .. } => error.clone().map_or_else(Vec::new, chat),
+        Notice::Door { error, .. } => error
+            .as_deref()
+            .map_or_else(Vec::new, |error| chat(error.into())),
         // The player stays in the zone, so the status line no longer says
         // they are zoning.
-        Notice::TransferRefused(reason) => vec![
-            (Place::Status, connection_text(Link::Connected, false)),
-            (Place::Chat, reason.to_string()),
-        ],
-        Notice::ZoneLineRefused(reason) => chat(format!("Cannot cross zone line: {reason}")),
-        Notice::TargetRefused(reason) => chat(format!("Target rejected: {reason}")),
+        Notice::TransferRefused(reason) => [
+            status(connection_text(Link::Connected, false)),
+            chat(reason.to_string().into()),
+        ]
+        .concat(),
+        Notice::ZoneLineRefused(reason) => chat(format!("Cannot cross zone line: {reason}").into()),
+        Notice::TargetRefused(reason) => chat(format!("Target rejected: {reason}").into()),
         Notice::CastRefused { spell_id, reason } => {
-            chat(format!("Cast rejected (spell {spell_id}): {reason}"))
+            chat(format!("Cast rejected (spell {spell_id}): {reason}").into())
         }
     }
 }
@@ -317,15 +322,15 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
 /// The line as a skill rises: the official client's (eqstr 12091), with its
 /// own name for the skill where its string table has one, or this client's
 /// words without the table.
-fn skill_up(skill: u32, value: u32, messages: Option<&Messages>) -> String {
+fn skill_up(skill: u32, value: u32, messages: Option<&Messages>) -> Said {
     use eq_client_core::skills;
     let fallback = skills::name(skill).map_or_else(|| format!("Skill {skill}"), str::to_owned);
     let Some(messages) = messages else {
-        return format!("Your {fallback} skill rises to {value}.");
+        return Said::own(format!("Your {fallback} skill rises to {value}."));
     };
     let name = skills::name_string(skill)
         .map_or_else(|| fallback.clone(), |id| messages.text(id, &fallback));
-    messages.format(skills::BETTER_AT, &[name, value.to_string()])
+    messages.said(skills::BETTER_AT, &[name, value.to_string()])
 }
 
 /// The status line for where the connection stands; nothing while the
@@ -362,7 +367,7 @@ mod tests {
         let messages = Messages::parse("EQST0002\n0 1\n12072 Took %1.\n");
         assert_eq!(
             wording(&Notice::LootCoins(coins), Some(&messages)),
-            [(Place::Chat, "Took 1g 2c.".into())]
+            [(Place::Chat, Said::official("Took 1g 2c."))]
         );
         assert_eq!(
             line(Notice::ItemRefused),
@@ -394,7 +399,7 @@ mod tests {
         });
         assert_eq!(
             wording(&started, Some(&messages)),
-            [(Place::Chat, "Wrapping Firiona.".into())]
+            [(Place::Chat, Said::official("Wrapping Firiona."))]
         );
         assert_eq!(
             wording(&started, None),
@@ -403,7 +408,7 @@ mod tests {
         let ended = Notice::BindWound(BindWoundUpdate::Ended(BindWoundEnd::YouMoved));
         assert_eq!(
             wording(&ended, Some(&messages)),
-            [(Place::Chat, "Moved, failed.".into())]
+            [(Place::Chat, Said::official("Moved, failed."))]
         );
         // A string the installation lacks falls back to the session's words.
         let complete = Notice::BindWound(BindWoundUpdate::Ended(BindWoundEnd::Complete));
@@ -425,7 +430,7 @@ mod tests {
         };
         assert_eq!(
             wording(&far, Some(&messages)),
-            [(Place::Chat, "Closer to Firiona, please.".into())]
+            [(Place::Chat, Said::official("Closer to Firiona, please."))]
         );
     }
 
@@ -443,7 +448,7 @@ mod tests {
         );
         assert_eq!(
             wording(&notice, Some(&messages)),
-            [(Place::Chat, "Hands full.".into())]
+            [(Place::Chat, Said::official("Hands full."))]
         );
         assert_eq!(
             wording(&notice, None),
@@ -466,7 +471,7 @@ mod tests {
                 .into_iter()
                 .map(|(place, line)| {
                     assert_eq!(place, Place::Chat);
-                    line
+                    line.text
                 })
                 .collect()
         };
@@ -527,7 +532,7 @@ mod tests {
                 Some(&messages),
             )
         };
-        let chat = |text: &str| vec![(Place::Chat, text.to_owned())];
+        let chat = |text: &str| vec![(Place::Chat, Said::official(text))];
         assert_eq!(
             line(true, true),
             chat("Helper may now drag your corpse in The Qeynos Hills.")
@@ -571,10 +576,10 @@ mod tests {
         assert_eq!(
             transfer,
             [
-                (Place::Status, String::new()),
+                (Place::Status, "".into()),
                 (
                     Place::Chat,
-                    eq_client_core::ZoneRejection::Cancelled.to_string()
+                    eq_client_core::ZoneRejection::Cancelled.to_string().into()
                 )
             ]
         );

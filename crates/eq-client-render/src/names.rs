@@ -34,8 +34,8 @@ pub(crate) fn request(
 ) {
     let say = |(id, fallback): (u32, &str)| {
         messages.as_deref().map_or_else(
-            || fallback.to_owned(),
-            |messages| messages.text(id, fallback),
+            || crate::chat::Said::own(fallback),
+            |messages| messages.said_text(id, fallback),
         )
     };
     if let Some(level) = chat.show_names.take() {

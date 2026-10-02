@@ -535,7 +535,7 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
     };
     assert_eq!(
         check(&with_mana(Some(9)), &request),
-        Err("Synthetic short mana".into())
+        Err(crate::chat::Said::official("Synthetic short mana"))
     );
     request.forgetting = true;
     assert_eq!(check(&with_mana(Some(9)), &request), Ok(73));

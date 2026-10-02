@@ -220,9 +220,8 @@ pub(super) fn input(
                 trade.changed();
             }
         } else {
-            chat.history.push(super::chat::system_line(
-                "Target a corpse to loot it.".into(),
-            ));
+            chat.history
+                .push(super::chat::system_line("Target a corpse to loot it."));
         }
     }
     if keys.pressed(super::keys::Act::Trade) {
@@ -273,7 +272,7 @@ pub(super) fn input(
             shown.open(windows::WindowId::Bank);
         } else {
             chat.history.push(super::chat::system_line(
-                "Target a merchant to trade with it.".into(),
+                "Target a merchant to trade with it.",
             ));
         }
     }
@@ -353,7 +352,7 @@ pub(super) fn input(
                 };
                 if no_drop(item) {
                     chat.history.push(super::chat::system_line(
-                        "The merchant will not buy NO DROP items.".into(),
+                        "The merchant will not buy NO DROP items.",
                     ));
                     continue;
                 }

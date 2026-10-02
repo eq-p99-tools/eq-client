@@ -2,6 +2,20 @@
 pub use eq_network_game::chat::{ChannelName, Message};
 use std::collections::{BTreeMap, VecDeque};
 
+/// Whose words a chat line holds, which decides whether the official
+/// client's log takes it: the server's and the official client's go in, this
+/// client's own never do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// The server's words.
+    Server,
+    /// The official client's words: its string by id, or a line it writes
+    /// itself, such as the rule under a `/who` list.
+    Official,
+    /// This client's own words, such as one of its refusals.
+    Client,
+}
+
 /// A received message retaining its structured item links and channel metadata.
 #[derive(Clone, Debug)]
 pub struct ChatLine {
@@ -13,6 +27,8 @@ pub struct ChatLine {
     pub target: Option<String>,
     /// Decoded text and original item-link data.
     pub message: Message,
+    /// Whose words these are.
+    pub source: Source,
 }
 
 /// Channel groups presented by the chat window.
@@ -167,6 +183,7 @@ mod tests {
                 text: "Synthetic message".into(),
                 item_links: vec![],
             },
+            source: Source::Server,
         }
     }
     #[test]

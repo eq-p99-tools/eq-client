@@ -68,13 +68,13 @@ pub(super) fn input(
         combat.attack_target = None;
         if online.world().connected() && outbox.post(world, attack(false)).is_ok() {
             chat.history
-                .push(super::chat::system_line(messages.format(1466, &[])));
+                .push(super::chat::system_line(messages.said(1466, &[])));
         }
     }
     if !online.world().connected() || online.world().death().is_some() || !keys.focused() {
         return;
     }
-    let mut feedback = |text: String| chat.refuse(text);
+    let mut feedback = |said: super::chat::Said| chat.refuse(said);
     // The outbox shows why a request did not leave.
     if keys.pressed(Act::Consider) {
         match spawn {
@@ -86,7 +86,7 @@ pub(super) fn input(
                     created: stamp.created,
                 });
             }
-            None => feedback(messages.format(12240, &[])),
+            None => feedback(messages.said(12240, &[])),
         }
     }
     if keys.pressed(Act::Hail) {
@@ -114,7 +114,7 @@ pub(super) fn input(
         feedback(if enable {
             "Auto attack is on.".into()
         } else {
-            messages.format(1466, &[])
+            messages.said(1466, &[])
         });
     }
 }
@@ -145,7 +145,7 @@ pub(super) fn consideration_text(
     messages: &Messages,
     name: &str,
     consideration: &Consideration,
-) -> String {
+) -> super::chat::Said {
     let standing = match consideration.faction {
         1..=5 => 12211 + consideration.faction,
         6 => 12220,
@@ -162,7 +162,7 @@ pub(super) fn consideration_text(
         ConColor::Yellow => 12231,
         ConColor::Red => 12225,
     };
-    messages.format(
+    messages.said(
         12239,
         &[
             capitalized(name),
@@ -178,13 +178,13 @@ pub(super) fn damage_text(
     own_id: u16,
     names: impl Fn(u16) -> String,
     damage: &Damage,
-) -> Option<String> {
+) -> Option<super::chat::Said> {
     let own_attack = damage.source_id == own_id;
     let own_defense = damage.target_id == own_id;
     if damage.kind == SPELL_DAMAGE_KIND {
         return match damage.outcome {
             DamageOutcome::Hit(points) if !own_defense && damage.source_id == own_id => {
-                Some(messages.format(
+                Some(messages.said(
                     434,
                     &[capitalized(&names(damage.target_id)), points.to_string()],
                 ))
@@ -220,7 +220,7 @@ pub(super) fn damage_text(
                 if points == 1 { 12161 } else { 12160 },
                 &[points.to_string()],
             );
-            return Some(messages.format(
+            return Some(messages.said(
                 12162,
                 &[attacker, messages.format(verb, &[]), defender, amount],
             ));
@@ -240,7 +240,7 @@ pub(super) fn damage_text(
         }
         DamageOutcome::Other(_) => return None,
     };
-    Some(messages.format(
+    Some(messages.said(
         if own_attack { 12158 } else { 12159 },
         &[attacker, messages.format(base, &[]), defender, reason],
     ))
@@ -296,7 +296,7 @@ mod tests {
                 "someone".into()
             }
         };
-        let text = |damage: Damage| damage_text(&messages, 7, names, &damage);
+        let text = |damage: Damage| damage_text(&messages, 7, names, &damage).map(|said| said.text);
         assert_eq!(
             text(hit(7, 9, 1, DamageOutcome::Hit(5))).unwrap(),
             "Thou cut a rat, dealing 5 damage."
@@ -338,6 +338,9 @@ mod tests {
                 hit_points: None,
             },
         );
-        assert_eq!(text, "A rat glares, set to fight; seems a fair match.");
+        assert_eq!(
+            text,
+            super::super::chat::Said::official("A rat glares, set to fight; seems a fair match.")
+        );
     }
 }

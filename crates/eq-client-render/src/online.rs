@@ -242,10 +242,10 @@ impl Panels<'_> {
         chat: &mut super::chat::ChatState,
     ) {
         use super::notices::Place;
-        for (place, text) in super::notices::wording(notice, messages) {
+        for (place, said) in super::notices::wording(notice, messages) {
             match place {
-                Place::Chat => chat.history.push(super::chat::system_line(text)),
-                Place::Status => self.lines.status.set(text),
+                Place::Chat => chat.history.push(super::chat::system_line(said)),
+                Place::Status => self.lines.status.set(said.text),
             }
         }
     }

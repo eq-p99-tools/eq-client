@@ -23,7 +23,7 @@ pub(super) fn check(
     request: &Request,
     (messages, map): (&super::messages::Messages, &crate::keys::KeyMap),
     now: Instant,
-) -> Result<u32, String> {
+) -> Result<u32, crate::chat::Said> {
     let Request {
         gem,
         forgetting,
@@ -35,12 +35,13 @@ pub(super) fn check(
         .get(usize::from(gem))
         .copied()
         .flatten()
-        .ok_or_else(|| super::empty_gem(gem, map))?;
+        .ok_or_else(|| crate::chat::Said::own(super::empty_gem(gem, map)))?;
     if world.casting().cast.is_some() {
         return Err(format!(
             "Already casting: {} to interrupt",
             map.named(crate::keys::Act::Duck, "duck")
-        ));
+        )
+        .into());
     }
     if world.casting().pending.is_some() {
         return Err("Waiting for the server to acknowledge the cast".into());
@@ -52,14 +53,11 @@ pub(super) fn check(
         .zip(world.vitals().mana)
         .is_some_and(|(cost, mana)| cost > mana)
     {
-        return Err(messages.text(199, "Not enough mana for that spell"));
+        return Err(messages.said_text(199, "Not enough mana for that spell"));
     }
     let remaining = world.casting().cooldowns.remaining(spell_id, now);
     if !remaining.is_zero() {
-        return Err(format!(
-            "Spell available in {:.1}s",
-            remaining.as_secs_f32()
-        ));
+        return Err(format!("Spell available in {:.1}s", remaining.as_secs_f32()).into());
     }
     Ok(spell_id)
 }
