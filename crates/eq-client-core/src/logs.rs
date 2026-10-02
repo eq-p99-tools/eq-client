@@ -80,7 +80,8 @@ const fn others_speech(channel: ChannelName) -> Option<(u32, bool, &'static str)
 /// What a chat line says in the official client's words: a player's speech
 /// by the installed client's string for who spoke and where, in the common
 /// tongue, and anything else as it reads. The server repeats the player's
-/// own speech to them under their name.
+/// own speech to them under their name, and echoes a tell they sent with
+/// whom they told; a tell is always heard, even one sent to oneself.
 #[must_use]
 pub fn words(line: &ChatLine, player: &str) -> Words {
     let text = &line.message.text;
@@ -89,7 +90,15 @@ pub fn words(line: &ChatLine, player: &str) -> Words {
         .as_deref()
         .filter(|sender| !sender.is_empty())
         .and_then(|sender| {
-            if !sender.eq_ignore_ascii_case(player) {
+            if line.channel == ChannelName::TellEcho {
+                let target = line.target.as_deref()?;
+                return Some((
+                    1400,
+                    vec![target.to_owned(), text.clone()],
+                    format!("You (tell {target})"),
+                ));
+            }
+            if line.channel == ChannelName::Tell || !sender.eq_ignore_ascii_case(player) {
                 return others_speech(line.channel).map(|(id, tongue, place)| {
                     let arguments = if tongue {
                         vec![sender.to_owned(), String::new(), text.clone()]
@@ -98,13 +107,6 @@ pub fn words(line: &ChatLine, player: &str) -> Words {
                     };
                     (id, arguments, format!("{sender} ({place})"))
                 });
-            }
-            if let (ChannelName::Tell, Some(target)) = (line.channel, line.target.as_deref()) {
-                return Some((
-                    1400,
-                    vec![target.to_owned(), text.clone()],
-                    format!("You (tell {target})"),
-                ));
             }
             own_speech(line.channel)
                 .map(|(id, place)| (id, vec![text.clone()], format!("You ({place})")))
@@ -218,13 +220,23 @@ mod tests {
                 "You (auction): WTS Rusty Dagger"
             )
         );
+        // The echo of a tell the player sent names whom they told.
         let told = ChatLine {
             target: Some("Friend".into()),
-            ..spoken(ChannelName::Tell, Some("Examplar"), "inc")
+            ..spoken(ChannelName::TellEcho, Some("Examplar"), "inc")
         };
         assert_eq!(
             words(&told, "Examplar"),
             heard(1400, &["Friend", "inc"], "You (tell Friend): inc")
+        );
+        // A tell the player sent themselves is heard as any tell is.
+        let to_self = ChatLine {
+            target: Some("Examplar".into()),
+            ..spoken(ChannelName::Tell, Some("Examplar"), "inc")
+        };
+        assert_eq!(
+            words(&to_self, "Examplar"),
+            heard(1416, &["Examplar", "", "inc"], "Examplar (tell): inc")
         );
         // The game's own messages read as they are.
         let system = spoken(ChannelName::System, None, "A rat squeaks from the shadows.");
