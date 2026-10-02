@@ -1,8 +1,8 @@
 //! The in-game map, in the skin's Map window: the zone's lines from the
 //! installation's map files, its labels while they are on, and the player as
-//! a dot, with the skin's toolbar to zoom, pan, reset the view and show or
-//! hide the labels and layers. The map opens only where the server type
-//! offers it.
+//! an arrow pointing the way they face, with the skin's toolbar to zoom, pan,
+//! reset the view and show or hide the labels and layers. The map opens only
+//! where the server type offers it.
 use crate::{
     online::OnlineState,
     windows::{Shown, WindowId},
@@ -19,9 +19,22 @@ use eq_client_core::Capability;
 #[derive(Component)]
 pub(crate) struct MapCanvas;
 
-/// The dot that shows where the player is.
+/// The arrow that shows where the player is and the way they face.
 #[derive(Component)]
-pub(crate) struct PlayerDot;
+pub(crate) struct PlayerArrow;
+
+/// How wide and tall the player's arrow is, in pixels.
+const ARROW: u32 = 17;
+/// Half the arrow's size, where its middle is.
+const HALF_ARROW: f32 = 8.5;
+/// The arrow's corners, pointing up: its point, a wing, the notch at its
+/// back and the other wing. Longer than it is wide and notched at the back,
+/// so the point cannot be mistaken once the arrow turns.
+const DART: [(f32, f32); 4] = [(8.5, 1.0), (13.0, 15.5), (8.5, 12.0), (4.0, 15.5)];
+/// The arrow's colour.
+const ARROW_FILL: [u8; 4] = [220, 25, 25, 255];
+/// The arrow's darker edge, which keeps it clear of the map's lines.
+const ARROW_EDGE: [u8; 4] = [60, 10, 10, 255];
 
 /// A label's words on the map.
 #[derive(Component)]
@@ -216,7 +229,7 @@ pub(crate) fn buttons(
 }
 
 /// Draws the map in its canvas when what it shows changes, its labels with
-/// it, and keeps the player's dot where the player is.
+/// it, and keeps the player's arrow where the player is, facing their way.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn draw(
     mut commands: Commands,
@@ -224,7 +237,7 @@ pub(crate) fn draw(
     mut view: ResMut<MapView>,
     mut images: ResMut<Assets<Image>>,
     mut canvases: Query<(Entity, &ComputedNode, &mut ImageNode), With<MapCanvas>>,
-    mut dots: Query<(&mut Node, &mut Visibility), With<PlayerDot>>,
+    mut arrows: Query<(&mut Node, &mut UiTransform, &mut Visibility), With<PlayerArrow>>,
     labels: Query<Entity, With<LabelText>>,
 ) {
     let Ok((canvas, node, mut image)) = canvases.single_mut() else {
@@ -282,35 +295,97 @@ pub(crate) fn draw(
         }
         view.drawn = Some(wanted);
     }
-    // The player's dot, which only exists once the canvas has its first
+    // The player's arrow, which only exists once the canvas has its first
     // picture.
     let player = online.world().player().map(|player| player.position);
-    if dots.is_empty() {
+    if arrows.is_empty() {
         commands.entity(canvas).with_child((
-            PlayerDot,
+            PlayerArrow,
+            ImageNode::new(images.add(arrow())),
+            // Over the labels, which are drawn again whenever the map is.
+            ZIndex(1),
             Node {
                 position_type: PositionType::Absolute,
-                width: px(6),
-                height: px(6),
+                width: px(ARROW),
+                height: px(ARROW),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.85, 0.1, 0.1)),
+            UiTransform::default(),
             Visibility::Hidden,
         ));
         return;
     }
-    for (mut dot, mut visibility) in &mut dots {
-        let at = player.map(|position| projection.place(map_point(position)));
+    for (mut arrow, mut transform, mut visibility) in &mut arrows {
+        let at = player.map(|position| (projection.place(map_point(position)), position.heading));
         let wanted = match at {
-            Some(at) if at.x >= 0.0 && at.y >= 0.0 && at.x <= size.x && at.y <= size.y => {
-                dot.left = px(at.x - 3.0);
-                dot.top = px(at.y - 3.0);
+            Some((at, heading))
+                if at.x >= 0.0 && at.y >= 0.0 && at.x <= size.x && at.y <= size.y =>
+            {
+                arrow.left = px(at.x - HALF_ARROW);
+                arrow.top = px(at.y - HALF_ARROW);
+                let rotation = facing(heading);
+                if transform.rotation != rotation {
+                    transform.rotation = rotation;
+                }
                 Visibility::Inherited
             }
             _ => Visibility::Hidden,
         };
         visibility.set_if_neq(wanted);
     }
+}
+
+/// How far the arrow, drawn pointing north, turns for a heading. EQ headings
+/// run 0 to 512 from north towards the west; on the map, north is up and
+/// the west to the left, and the UI turns clockwise for a positive angle.
+fn facing(heading: f32) -> Rot2 {
+    Rot2::radians(-heading.rem_euclid(512.0) / 512.0 * std::f32::consts::TAU)
+}
+
+/// Whether a point lies inside the arrow's outline.
+fn in_dart(x: f32, y: f32) -> bool {
+    let mut inside = false;
+    for (index, &(ax, ay)) in DART.iter().enumerate() {
+        let (bx, by) = DART[(index + 1) % DART.len()];
+        if (ay > y) != (by > y) && x < ax + (y - ay) / (by - ay) * (bx - ax) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// The player's arrow: a red dart pointing up, edged dark, on a clear
+/// background.
+#[allow(clippy::cast_precision_loss)] // A few pixels.
+fn arrow() -> Image {
+    let filled = |x: u32, y: u32| in_dart(x as f32 + 0.5, y as f32 + 0.5);
+    let mut pixels = vec![0u8; (ARROW * ARROW * 4) as usize];
+    for y in 0..ARROW {
+        for x in 0..ARROW {
+            let color = if filled(x, y) {
+                ARROW_FILL
+            } else if (y.saturating_sub(1)..=(y + 1).min(ARROW - 1)).any(|near| {
+                (x.saturating_sub(1)..=(x + 1).min(ARROW - 1)).any(|across| filled(across, near))
+            }) {
+                ARROW_EDGE
+            } else {
+                continue;
+            };
+            let at = ((y * ARROW + x) * 4) as usize;
+            pixels[at..at + 4].copy_from_slice(&color);
+        }
+    }
+    Image::new(
+        Extent3d {
+            width: ARROW,
+            height: ARROW,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
 }
 
 /// The map's lines drawn into a picture of the canvas's size, on a clear
@@ -408,6 +483,25 @@ mod tests {
             }),
             Vec2::new(-50.0, 20.0)
         );
+    }
+
+    #[test]
+    fn the_arrow_turns_west_at_a_quarter_heading() {
+        // North points up, unturned; west, a quarter of the way round
+        // anticlockwise, is a quarter turn back for the clockwise UI.
+        assert!((facing(0.0).as_radians()).abs() < 1e-6);
+        assert!((facing(128.0).as_radians() + std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+        assert!((facing(640.0).as_radians() + std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+        // The arrow points up: its point is at the top in the middle, edged
+        // above, and the notch leaves the middle of its back clear.
+        let picture = arrow();
+        let pixels = picture.data.as_ref().unwrap();
+        let at = |x: u32, y: u32| &pixels[((y * ARROW + x) * 4) as usize..][..4];
+        let middle = ARROW / 2;
+        assert_eq!(at(middle, 1), ARROW_FILL);
+        assert_eq!(at(middle, 0), ARROW_EDGE);
+        assert_eq!(at(middle, ARROW - 2)[3], 0);
+        assert_eq!(at(0, 0)[3], 0);
     }
 
     #[test]
