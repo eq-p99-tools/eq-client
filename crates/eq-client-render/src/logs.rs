@@ -76,7 +76,7 @@ pub(crate) fn write(
     let now = chrono::Local::now().naive_local();
     let mut text = String::new();
     for (_, line) in lines.iter().filter(|(id, _)| *id > seen) {
-        text.push_str(&logs::line(now, &logs::words(line)));
+        text.push_str(&logs::line(now, &logs::words(line, &player.name)));
         text.push('\n');
     }
     let name = logs::file_name(&player.name, server);
