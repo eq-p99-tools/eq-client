@@ -1193,7 +1193,7 @@ fn behave(
             Button,
             super::hud::hotbar::Slot(index),
             skin(),
-            crate::outbox::Needs::Capability(Capability::Casting),
+            crate::outbox::Needs::Nothing,
         )),
         Does::BagIcon | Does::Nothing => drawn,
     };

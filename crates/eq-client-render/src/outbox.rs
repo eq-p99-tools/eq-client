@@ -219,6 +219,9 @@ pub(crate) enum Needs {
     Capability(Capability),
     /// An ability, which the server type must also list.
     Ability(eq_client_core::abilities::Ability),
+    /// Nothing of the session, as an empty action bar slot needs: never
+    /// veiled.
+    Nothing,
 }
 
 impl Needs {
@@ -229,6 +232,7 @@ impl Needs {
             Self::Ability(ability) => {
                 offered(world, Capability::Abilities) && world.ability_offered(ability)
             }
+            Self::Nothing => true,
         }
     }
 }
