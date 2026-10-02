@@ -127,6 +127,7 @@ mod tests {
             appearance: crate::outfit::Appearance::default(),
             level: 0,
             listing: crate::listing::Listing::default(),
+            pet_owner: None,
         };
         let at = extrapolate(&spawn, Duration::from_secs(2));
         assert_eq!((at.x, at.y, at.z, at.heading), (18.0, -8.0, 3.0, 128.0));
@@ -172,6 +173,7 @@ mod tests {
             appearance: crate::outfit::Appearance::default(),
             level: 0,
             listing: crate::listing::Listing::default(),
+            pet_owner: None,
         }
     }
     #[test]

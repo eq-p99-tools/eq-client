@@ -493,6 +493,21 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // The player's pet: whose pet a spawn is, its buffs, and the
+            // commands the session would not send.
+            WorldEvent::PetOwner { spawn_id, owner } => {
+                if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
+                    spawn.state.pet_owner = *owner;
+                }
+            }
+            WorldEvent::PetBuffs(buffs) => self.zone.pet_buffs = Some(buffs.clone()),
+            WorldEvent::PetRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::PetRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ConsumeRefused { session_id, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::ConsumeRefused(reason.clone()));

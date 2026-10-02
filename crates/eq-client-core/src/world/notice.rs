@@ -86,6 +86,8 @@ pub enum Notice {
     },
     /// An item was not eaten or drunk, and why.
     ConsumeRefused(String),
+    /// A command to the pet was not sent, and why.
+    PetRefused(String),
     /// A consent to drag a player's corpses was given or taken back.
     Consent {
         /// What the server said.

@@ -47,6 +47,7 @@ fn spawn(spawn_id: u16) -> SpawnState {
         appearance: Appearance::default(),
         level: 0,
         listing: crate::listing::Listing::default(),
+        pet_owner: None,
     }
 }
 

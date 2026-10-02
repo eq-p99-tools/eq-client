@@ -246,7 +246,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::TradeRefused(reason)
         | Notice::AbilityRefused(reason)
         | Notice::ConsumeRefused(reason)
-        | Notice::CorpseRefused(reason) => chat(reason.clone()),
+        | Notice::CorpseRefused(reason)
+        | Notice::PetRefused(reason) => chat(reason.clone()),
         Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
         Notice::WhoList(list) => who_lines(list, messages),
         Notice::NothingToEat { food, water } => nothing_to_eat(*food, *water, messages)

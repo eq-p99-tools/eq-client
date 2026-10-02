@@ -114,6 +114,7 @@ mod tests {
                 appearance: eq_client_core::outfit::Appearance::default(),
                 level: 0,
                 listing: eq_client_core::listing::Listing::default(),
+                pet_owner: None,
             },
         );
         let entity = app

@@ -112,6 +112,26 @@ impl ClientWorld {
         self.gems().get(gem).copied().flatten()
     }
 
+    /// The player's pet: the spawn the player owns.
+    #[must_use]
+    pub fn pet(&self) -> Option<&Spawn> {
+        let owner = self.player.as_ref()?.spawn_id;
+        self.zone
+            .spawns
+            .values()
+            .find(|spawn| spawn.state.pet_owner == Some(owner))
+    }
+
+    /// The pet's buffs, in their slots, once the server has said.
+    #[must_use]
+    pub fn pet_buffs(&self) -> Option<&crate::pets::PetBuffs> {
+        let pet = self.pet()?.state.spawn_id;
+        self.zone
+            .pet_buffs
+            .as_ref()
+            .filter(|buffs| buffs.pet == pet)
+    }
+
     /// The zone's spawns, by spawn ID.
     #[must_use]
     pub const fn spawns(&self) -> &BTreeMap<u16, Spawn> {
