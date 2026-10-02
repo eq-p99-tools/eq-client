@@ -20,7 +20,8 @@ pub(crate) enum WindowId {
     Spells,
     /// The bound action slots.
     Actions,
-    /// The bar that shows a cast or a request under way.
+    /// The bar that shows a cast or a request under way; with the skin, its
+    /// casting window, open while the player casts.
     CastBar,
     /// The player's lasting effects.
     Effects,
