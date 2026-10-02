@@ -56,6 +56,10 @@ pub struct WindowTemplate {
     pub border: Border,
     /// The title bar's left end, its middle, stretched, and its right end.
     pub title: [Option<Piece>; 3],
+    /// The title bar's close box, in each of its states.
+    pub close_box: Option<ButtonLook>,
+    /// The title bar's minimize box, in each of its states.
+    pub minimize_box: Option<ButtonLook>,
 }
 
 /// How a gauge is drawn: its empty bar, its fill, the lines over it and its
@@ -436,6 +440,15 @@ pub struct TextBox {
     pub color: Option<[u8; 3]>,
 }
 
+/// A window's title bar, and the boxes on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TitleBar {
+    /// Whether it has a close box.
+    pub close_box: bool,
+    /// Whether it has a minimize box.
+    pub minimize_box: bool,
+}
+
 /// A window as the skin defines it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Screen {
@@ -453,8 +466,8 @@ pub struct Screen {
     pub area: Area,
     /// How its frame is drawn.
     pub template: Option<WindowTemplate>,
-    /// Whether it has a title bar.
-    pub titlebar: bool,
+    /// Its title bar, where it has one.
+    pub title_bar: Option<TitleBar>,
     /// Whether it has a border.
     pub border: bool,
     /// The tooltip the skin gives it.
@@ -564,7 +577,10 @@ impl Library {
             }),
             template: text_of(*screen, "DrawTemplate")
                 .and_then(|template| local.templates.get(template).cloned()),
-            titlebar: flag(*screen, "Style_Titlebar"),
+            title_bar: flag(*screen, "Style_Titlebar").then(|| TitleBar {
+                close_box: flag(*screen, "Style_Closebox"),
+                minimize_box: flag(*screen, "Style_Minimizebox"),
+            }),
             border: flag(*screen, "Style_Border"),
             tooltip: text_of(*screen, "TooltipReference").map(str::to_owned),
             pieces,
@@ -609,6 +625,8 @@ impl Library {
                 title_piece("Middle"),
                 title_piece("Right"),
             ],
+            close_box: child(node, "CloseBox").map(|look| self.button_look(Some(look))),
+            minimize_box: child(node, "MinimizeBox").map(|look| self.button_look(Some(look))),
         }
     }
 
@@ -1027,6 +1045,7 @@ mod tests {
             <Background>rock.tga</Background>
             <Border><TopLeft>A_Corner</TopLeft><Top>A_Missing</Top></Border>
             <Titlebar><Middle>A_Back</Middle></Titlebar>
+            <CloseBox><Normal>A_Corner</Normal><Pressed>A_Fill</Pressed></CloseBox>
         </WindowDrawTemplate>
         <SliderDrawTemplate item="SDT_Plain">
             <Thumb><Normal>A_Fill</Normal><Disabled>A_Corner</Disabled></Thumb>
@@ -1171,6 +1190,7 @@ mod tests {
             <TooltipReference>Your Current Target</TooltipReference>
             <DrawTemplate>WDT_Plain</DrawTemplate>
             <Style_Titlebar>true</Style_Titlebar><Style_Border>true</Style_Border>
+            <Style_Closebox>true</Style_Closebox>
             <Pieces>Health</Pieces><Pieces>Percent</Pieces><Pieces>BoxPicture</Pieces>
             <Pieces>Gem0</Pieces><Pieces>Book</Pieces>
             <Pieces>Undefined</Pieces>
@@ -1212,7 +1232,7 @@ mod tests {
                 height: 50.0
             }
         );
-        assert!(screen.titlebar && screen.border);
+        assert!(screen.title_bar.is_some() && screen.border);
         assert_eq!(screen.title.as_deref(), Some("Sample title"));
         assert_eq!(
             (screen.title_color, screen.font),
@@ -1227,6 +1247,18 @@ mod tests {
         // A piece the library lacks is simply not drawn.
         assert!(template.border.top.is_none());
         assert_eq!(template.title[1].as_ref().unwrap().y, 7);
+        // Its title bar has a close box, in the template's look, and no
+        // minimize box.
+        assert_eq!(
+            screen.title_bar,
+            Some(TitleBar {
+                close_box: true,
+                minimize_box: false,
+            })
+        );
+        let close = template.close_box.as_ref().unwrap();
+        assert!(close.normal.is_some() && close.pressed.is_some());
+        assert_eq!(template.minimize_box, None);
         let names: Vec<_> = screen
             .pieces
             .iter()

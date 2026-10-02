@@ -146,7 +146,7 @@ pub(super) fn figure(
 
 /// Windows with no frame until they open: built when they open and gone
 /// when they close.
-const fn framed_while_open(id: WindowId) -> bool {
+pub(crate) const fn framed_while_open(id: WindowId) -> bool {
     matches!(
         id,
         WindowId::Bank

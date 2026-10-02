@@ -164,6 +164,13 @@ impl Skinned {
 #[derive(Component, Clone)]
 pub(crate) struct SkinButton(ButtonLook);
 
+/// A box on a skinned window's title bar: its close box, or its minimize box.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct TitleBox {
+    pub(crate) window: WindowId,
+    pub(crate) close: bool,
+}
+
 /// A skin button that cannot be used right now, drawn in its disabled look,
 /// as Combine is while a combine waits for the server.
 #[derive(Component)]
@@ -181,7 +188,7 @@ type Frames<'w, 's> = Query<
         &'static mut BackgroundColor,
         &'static mut BorderColor,
         Option<&'static Drawn>,
-        &'static super::windows::Frame,
+        &'static mut super::windows::Frame,
     ),
 >;
 
@@ -203,7 +210,7 @@ pub(crate) fn apply(
     let Some(directory) = settings.0.eq_directory.as_deref() else {
         return;
     };
-    for (frame, id, mut node, mut background, mut border, drawn, state) in &mut frames {
+    for (frame, id, mut node, mut background, mut border, drawn, mut state) in &mut frames {
         if drawn.is_some_and(|drawn| drawn.0 == skin.0) {
             continue;
         }
@@ -217,14 +224,16 @@ pub(crate) fn apply(
         background.0 = Color::NONE;
         *border = BorderColor::all(Color::NONE);
         commands.entity(frame).despawn_children();
+        let mut title_bottom = None;
         commands.entity(frame).with_children(|window| {
             let context = Context {
                 id: *id,
                 paperdoll: paperdoll.as_deref(),
                 depth: 0,
             };
-            draw(window, screen, &mut art, &context);
+            title_bottom = draw(window, screen, &mut art, &context);
         });
+        state.drawn_from_skin(&mut node, title_bottom);
     }
 }
 
@@ -254,18 +263,19 @@ fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
     }
 }
 
-/// The frame's background, border and title bar, then the pieces inside it.
+/// The frame's background, border and title bar, then the pieces inside it;
+/// the bottom of its title bar, where it has one, to minimize it to.
 fn draw(
     window: &mut ChildSpawnerCommands,
     screen: &Screen,
     art: &mut crate::sheets::Art,
     context: &Context,
-) {
+) -> Option<f32> {
     let (width, height) = (screen.area.width, screen.area.height);
     // A window the skin sizes to nothing, as Velious hides its casting and
     // short effects windows, shows nothing, not even its frame.
     if width <= 0.0 || height <= 0.0 {
-        return;
+        return None;
     }
     let mut inside = Area {
         x: 0.0,
@@ -295,10 +305,17 @@ fn draw(
         if screen.border {
             inside = border(window, art, &template.border, (width, height));
         }
-        if screen.titlebar {
-            title(window, art, screen, &template.title, &mut inside);
+        if let Some(bar) = screen.title_bar {
+            title(
+                window,
+                art,
+                (screen, template, bar),
+                &mut inside,
+                context.id,
+            );
         }
     }
+    let title_bottom = (inside.y > 0.0 && screen.title_bar.is_some()).then_some(inside.y);
     // As in the official client, nothing shows outside the client area: the
     // skin parks pieces there that only some windows use, such as a
     // container's augment labels.
@@ -314,6 +331,7 @@ fn draw(
             ..at(inside.x, inside.y, inside.width, inside.height)
         })
         .with_children(|area| pieces(area, art, &screen.pieces, &client, context));
+    title_bottom
 }
 
 /// Pieces of a window or page, inside this area, in drawing order.
@@ -1535,10 +1553,15 @@ fn border(
 fn title(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
-    screen: &Screen,
-    [left, middle, right]: &[Option<Piece>; 3],
+    (screen, template, bar): (
+        &Screen,
+        &eq_client_assets::sidl::WindowTemplate,
+        eq_client_assets::sidl::TitleBar,
+    ),
     inside: &mut Area,
+    owner: WindowId,
 ) {
+    let [left, middle, right] = &template.title;
     let Some(middle) = middle else {
         return;
     };
@@ -1570,8 +1593,67 @@ fn title(
         let x = inside.x + inside.width - right_width;
         picture(window, art, piece, at(x, inside.y, right_width, tall));
     }
+    title_boxes(window, art, (template, bar), (inside, tall), owner);
     inside.y += tall;
     inside.height -= tall;
+}
+
+/// The title bar's close and minimize boxes, where the skin's window has
+/// them: at the bar's right end, the close box rightmost, each in the
+/// middle of the bar's height. Where the official client puts them is not
+/// checked yet. A close box closes the window as its Done button would;
+/// on a window this client keeps open, it stays greyed.
+fn title_boxes(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    (template, bar): (
+        &eq_client_assets::sidl::WindowTemplate,
+        eq_client_assets::sidl::TitleBar,
+    ),
+    (inside, tall): (&Area, f32),
+    owner: WindowId,
+) {
+    let frame = window.target_entity();
+    let closes = owner.describe().toggled || items::framed_while_open(owner);
+    let mut right = inside.x + inside.width;
+    for (wanted, look, close) in [
+        (bar.close_box, &template.close_box, true),
+        (bar.minimize_box, &template.minimize_box, false),
+    ] {
+        let Some((look, normal)) = look
+            .as_ref()
+            .filter(|_| wanted)
+            .and_then(|look| Some((look, look.normal.as_ref()?)))
+        else {
+            continue;
+        };
+        let (width, height) = (to_f32(normal.width), to_f32(normal.height));
+        right -= width;
+        let node = at(
+            right,
+            inside.y + (tall - height).max(0.0) / 2.0,
+            width,
+            height,
+        );
+        let Some(image) = art.cut(normal) else {
+            continue;
+        };
+        let mut drawn = window.spawn((
+            image,
+            node,
+            Button,
+            SkinButton(look.clone()),
+            TitleBox {
+                window: owner,
+                close,
+            },
+        ));
+        match (close, closes) {
+            (true, true) => drawn.insert(items::Closes(owner)),
+            (true, false) => drawn.insert(Greyed),
+            (false, _) => drawn.insert(super::windows::Minimize(frame)),
+        };
+    }
 }
 
 /// A gauge: its text, then its bar below it, filled as far as its fraction.
@@ -2083,7 +2165,7 @@ mod tests {
             width: 8,
             height: 14,
         };
-        let screen = |titlebar, title: Option<&str>| Screen {
+        let screen = |titlebar: bool, title: Option<&str>| Screen {
             name: "Window".into(),
             title: title.map(str::to_owned),
             title_color: None,
@@ -2098,7 +2180,7 @@ mod tests {
                 title: [None, Some(middle.clone()), None],
                 ..default()
             }),
-            titlebar,
+            title_bar: titlebar.then_some(eq_client_assets::sidl::TitleBar::default()),
             border: false,
             tooltip: None,
             pieces: Vec::new(),
@@ -2118,9 +2200,9 @@ mod tests {
                             paperdoll: None,
                             depth: 0,
                         };
-                        commands
-                            .spawn(Node::default())
-                            .with_children(|window| draw(window, &screen, &mut art, &context));
+                        commands.spawn(Node::default()).with_children(|window| {
+                            draw(window, &screen, &mut art, &context);
+                        });
                     },
                 );
             app.update();
@@ -2161,7 +2243,7 @@ mod tests {
                 height: 150.0,
             },
             template: None,
-            titlebar: false,
+            title_bar: None,
             border: false,
             tooltip: None,
             pieces: Vec::new(),
