@@ -24,15 +24,29 @@ pub(crate) struct NameTag;
 pub(crate) struct NameTags(BTreeMap<Entity, Entity>);
 
 /// Sets how much of players' names shows, as a `/shownames` asked, and says
-/// so as the official client does.
+/// so as the official client does: in its words where the installation has
+/// them.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn request(
     mut chat: ResMut<crate::chat::ChatState>,
     mut options: ResMut<crate::options::OptionsState>,
+    messages: Option<Res<crate::hud::messages::Messages>>,
 ) {
+    let say = |(id, fallback): (u32, &str)| {
+        messages.as_deref().map_or_else(
+            || fallback.to_owned(),
+            |messages| messages.text(id, fallback),
+        )
+    };
     if let Some(level) = chat.show_names.take() {
         options.options.show_names = level;
-        chat.history
-            .push(crate::chat::system_line(level.announcement().to_owned()));
+        let line = say(level.announcement());
+        chat.history.push(crate::chat::system_line(line));
+    }
+    if std::mem::take(&mut chat.show_names_usage) {
+        use eq_client_core::names::{SHOW_NAMES_USAGE, SHOW_NAMES_USAGE_TEXT};
+        let line = say((SHOW_NAMES_USAGE, SHOW_NAMES_USAGE_TEXT));
+        chat.history.push(crate::chat::system_line(line));
     }
 }
 
@@ -315,11 +329,9 @@ mod tests {
         assert_eq!(ask(&mut app, "/shownames off"), Some(Ok(())));
         app.update();
         assert_eq!(shown(&mut app), ["a gnoll", "a gnoll pup"]);
-        // A level the client cannot read gets the official format line.
-        assert_eq!(
-            ask(&mut app, "/shownames 9"),
-            Some(Err(eq_client_core::names::SHOW_NAMES_FORMAT.to_owned()))
-        );
+        // A level the client cannot read gets the usage line.
+        assert_eq!(ask(&mut app, "/shownames 9"), Some(Ok(())));
+        app.update();
         let chat = app.world().resource::<crate::chat::ChatState>();
         let said: Vec<String> = chat
             .history
@@ -327,13 +339,12 @@ mod tests {
             .into_iter()
             .map(|(_, line)| line.message.text.clone())
             .collect();
-        assert!(
-            said.contains(&"Showing only first names.".to_owned()),
-            "{said:?}"
-        );
-        assert!(
-            said.contains(&"Player names are *off*.".to_owned()),
-            "{said:?}"
-        );
+        for line in [
+            ShowNames::First.announcement().1,
+            ShowNames::Off.announcement().1,
+            eq_client_core::names::SHOW_NAMES_USAGE_TEXT,
+        ] {
+            assert!(said.contains(&line.to_owned()), "{said:?}");
+        }
     }
 }

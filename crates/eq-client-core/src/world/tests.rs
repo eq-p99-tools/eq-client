@@ -967,7 +967,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
         &mut world,
         WorldEvent::AbilityRefused {
             session_id: 1,
-            reason: "Your target is too far away, get closer!".into(),
+            reason: "Out of reach in this test".into(),
             string_id: None,
             arguments: Vec::new(),
         },
@@ -975,7 +975,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     assert_eq!(
         changes.notices,
         [Notice::AbilityRefused {
-            reason: "Your target is too far away, get closer!".into(),
+            reason: "Out of reach in this test".into(),
             string_id: None,
             arguments: Vec::new(),
         }]
@@ -1039,13 +1039,15 @@ fn the_player_hears_what_they_could_not_eat_or_drink() {
     let refused = |session_id| WorldEvent::ConsumeRefused {
         session_id,
         reason: "You cannot eat or drink that".into(),
+        string_id: None,
     };
     assert!(game(&mut world, refused(2)).ignored, "another admission's");
     assert_eq!(
         game(&mut world, refused(1)).notices,
-        [Notice::ConsumeRefused(
-            "You cannot eat or drink that".into()
-        )]
+        [Notice::ConsumeRefused {
+            reason: "You cannot eat or drink that".into(),
+            string_id: None,
+        }]
     );
 }
 

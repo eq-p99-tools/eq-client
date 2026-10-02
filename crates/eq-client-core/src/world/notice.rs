@@ -94,10 +94,22 @@ pub enum Notice {
         /// Why a thirsty player went without drink.
         water: Option<crate::food::Shortage>,
     },
-    /// An item was not eaten or drunk, and why.
-    ConsumeRefused(String),
-    /// A command to the pet was not sent, and why.
-    PetRefused(String),
+    /// An item was not eaten or drunk, and why: in the official client's own
+    /// words where the session names its string, else in the session's.
+    ConsumeRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
+    /// A command to the pet was not sent, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    PetRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
     /// One of the player's skills rose, to this value.
     SkillUp {
         /// The skill's number.
@@ -130,8 +142,14 @@ pub enum Notice {
         /// was the one consented.
         own: bool,
     },
-    /// A consent, summon or drag was not sent, and why.
-    CorpseRefused(String),
+    /// A consent, summon or drag was not sent, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    CorpseRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
     /// The world's answer to `/who all`.
     WhoList(crate::who::WhoList),
     /// A cast request was refused, and why.

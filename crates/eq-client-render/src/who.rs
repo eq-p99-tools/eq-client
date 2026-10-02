@@ -13,31 +13,32 @@ use eq_client_core::{
     zones,
 };
 
-/// `%T1[%2 %3] %4 (%5) %6 %7 %8 %9`: level, class, race and zone shown.
+/// A player listed in full: level, class, name, race and zone, with nine
+/// arguments.
 const OPEN: u32 = 5025;
-/// `Players on EverQuest:`, the zone list's heading.
+/// The zone list's heading.
 const ZONE_HEADING: u32 = 12310;
-/// ` AFK `, before an away player's line.
+/// What goes before an away player's line.
 const AWAY: u32 = 12311;
-/// `* GM * `, before a game master's line.
+/// What goes before a game master's line.
 const GAME_MASTER: u32 = 12312;
-/// ` LFG`, after a player looking for a group.
+/// What goes after a player looking for a group.
 const LOOKING: u32 = 12314;
-/// `There are %1 players in %2.`
+/// How many players the zone list counted, and in which zone.
 const ZONE_COUNT: u32 = 12316;
-/// `There are no players in %1 that match those who filters.`
+/// The zone list matching no one, in a zone.
 const ZONE_NONE: u32 = 12317;
-/// `There is 1 player in %1.`
+/// The zone list counting a single player, in a zone.
 const ZONE_ONE: u32 = 12318;
 /// The rule under a heading.
 const RULE_LENGTH: usize = 27;
 
-/// `%T1[ANON (%2 %3)] %4 (%5) %6 %7 %8`: what an anonymous player hides,
-/// shown to a game master.
+/// What an anonymous player hides, shown to a game master: level, class,
+/// name, race and zone.
 const ANONYMOUS_TO_A_GAME_MASTER: u32 = 5022;
-/// `%T1[ANONYMOUS] %2 %3 %4`: a roleplaying player, guild shown.
+/// A roleplaying player: name and guild.
 const ROLEPLAYING: u32 = 5023;
-/// `%T1[ANONYMOUS] %2 %3`: an anonymous player.
+/// An anonymous player: name only.
 const ANONYMOUS: u32 = 5024;
 
 /// The lines a `/who all` answer prints: the heading and the rule under it,
@@ -199,22 +200,22 @@ mod tests {
 1514 Shadow Knight
 1517 Grave Lord
 1546 Wizard
-5001 Players in EverQuest:
-5003 (USER %1: PID %2)
-5006 ZONE: %1
-5015 * GM-Admin *
-5023 %T1[ANONYMOUS] %2 %3 %4
-5024 %T1[ANONYMOUS] %2 %3
-5025 %T1[%2 %3] %4 (%5) %6 %7 %8 %9
-5036 There are %1 players in EverQuest.
-12310 Players on EverQuest:
-12311  AFK 
-12312 * GM * 
-12313  <LINKDEAD>
-12314  LFG
-12316 There are %1 players in %2.
-12317 There are no players in %1 that match those who filters.
-12318 There is 1 player in %1.
+5001 Everyone online:
+5003 (account %1, id %2)
+5006 in %1
+5015 <admin>
+5023 %T1{hidden} %2 %3 %4
+5024 %T1{hidden} %2 %3
+5025 %T1{%2 %3} %4 /%5/ %6 %7 %8 %9
+5036 %1 online in all.
+12310 Everyone here:
+12311 (away) 
+12312 <gm> 
+12313  (lost)
+12314  (group?)
+12316 %1 here in %2.
+12317 Nobody in %1 matches.
+12318 Just one here in %1.
 ",
         )
     }
@@ -270,17 +271,17 @@ mod tests {
         assert_eq!(
             lines(&list, &messages()),
             [
-                "Players in EverQuest:".to_owned(),
+                "Everyone online:".to_owned(),
                 "-".repeat(27),
-                "[60 Grave Lord] Tester (Dark Elf) <Seekers> ZONE: qeytoqrg".into(),
+                "{60 Grave Lord} Tester /Dark Elf/ <Seekers> in qeytoqrg".into(),
                 concat!(
-                    "* GM-Admin *[20 Wizard] Guide (Gnome)  ZONE: poknowledge  <LINKDEAD> ",
-                    "(USER guide: PID 100)"
+                    "<admin>{20 Wizard} Guide /Gnome/  in poknowledge  (lost) ",
+                    "(account guide, id 100)"
                 )
                 .into(),
-                "[ANONYMOUS] Bard <Seekers>".into(),
-                "[ANONYMOUS] Hidden".into(),
-                "There are 4 players in EverQuest.".into(),
+                "{hidden} Bard <Seekers>".into(),
+                "{hidden} Hidden".into(),
+                "4 online in all.".into(),
             ]
         );
     }
@@ -324,21 +325,21 @@ mod tests {
         assert_eq!(
             zone_lines(&players, "The Qeynos Hills", &messages()),
             [
-                "Players on EverQuest:".to_owned(),
+                "Everyone here:".to_owned(),
                 "-".repeat(27),
-                " AFK [60 Grave Lord] Ann (Dark Elf) <Seekers>   LFG".into(),
-                "* GM * [ANONYMOUS] Bea <Seekers>".into(),
-                "[ANONYMOUS] Cid".into(),
-                "There are 3 players in The Qeynos Hills.".into(),
+                "(away) {60 Grave Lord} Ann /Dark Elf/ <Seekers>   (group?)".into(),
+                "<gm> {hidden} Bea <Seekers>".into(),
+                "{hidden} Cid".into(),
+                "3 here in The Qeynos Hills.".into(),
             ]
         );
         assert_eq!(
             zone_lines(&players[..1], "The Qeynos Hills", &messages()).last(),
-            Some(&"There is 1 player in The Qeynos Hills.".to_owned())
+            Some(&"Just one here in The Qeynos Hills.".to_owned())
         );
         assert_eq!(
             zone_lines(&[], "The Qeynos Hills", &messages()),
-            ["There are no players in The Qeynos Hills that match those who filters."]
+            ["Nobody in The Qeynos Hills matches."]
         );
     }
 }

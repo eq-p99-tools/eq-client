@@ -4,10 +4,15 @@
 //! words, stamped with the local time.
 use crate::chat::{ChannelName, ChatLine};
 
-/// What the official client says as `/log` turns logging on (eqstr 13221).
-pub const LOGGING_ON: &str = "Logging to 'eqlog.txt' is now *ON*.";
-/// What it says as `/log` turns logging off (eqstr 13222).
-pub const LOGGING_OFF: &str = "Logging to 'eqlog.txt' is now *OFF*.";
+/// The official client's line as `/log` turns logging on (`eqstr_us.txt`),
+/// which a front end shows where the installation has it.
+pub const LOGGING_ON: u32 = 13221;
+/// Its line as `/log` turns logging off.
+pub const LOGGING_OFF: u32 = 13222;
+/// Logging turning on, in this client's words.
+pub const LOGGING_ON_TEXT: &str = "Your chat log is on.";
+/// Logging turning off, in this client's words.
+pub const LOGGING_OFF_TEXT: &str = "Your chat log is off.";
 
 /// The log file's name for a character on a server, by the server's short
 /// name: `eqlog_<character>_<server>.txt`.
@@ -23,43 +28,96 @@ pub fn line(time: chrono::NaiveDateTime, words: &str) -> String {
     format!("[{}] {words}", time.format("%a %b %d %H:%M:%S %Y"))
 }
 
+/// What a chat line says in a log: the installed client's string for it,
+/// with what the string names, and the line in this client's words for an
+/// installation without the string table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Words {
+    /// The installed client's string for a player's speech; None for a line
+    /// logged as it reads.
+    pub string_id: Option<u32>,
+    /// What the string names, in its placeholders' order.
+    pub arguments: Vec<String>,
+    /// The line in this client's words, or as it reads.
+    pub text: String,
+}
+
+/// The installed client's string for the player's own speech in a channel,
+/// which names the text, and the channel in this client's words.
+const fn own_speech(channel: ChannelName) -> Option<(u32, &'static str)> {
+    Some(match channel {
+        ChannelName::Say => (12344, "say"),
+        ChannelName::Group => (12346, "group"),
+        ChannelName::Guild => (12263, "guild"),
+        ChannelName::Ooc => (12352, "ooc"),
+        ChannelName::Shout => (12348, "shout"),
+        ChannelName::Auction => (12350, "auction"),
+        ChannelName::Raid => (5109, "raid"),
+        _ => return None,
+    })
+}
+
+/// The installed client's string for another player's speech in a channel,
+/// which names the speaker, then the tongue where it has a place for one
+/// (true; empty for the common tongue), then the text; and the channel in
+/// this client's words.
+const fn others_speech(channel: ChannelName) -> Option<(u32, bool, &'static str)> {
+    Some(match channel {
+        ChannelName::Say => (1410, true, "say"),
+        ChannelName::Group => (1414, true, "group"),
+        ChannelName::Guild => (1415, true, "guild"),
+        ChannelName::Tell => (1416, true, "tell"),
+        ChannelName::Shout => (1420, true, "shout"),
+        ChannelName::Auction => (1421, true, "auction"),
+        ChannelName::Ooc => (1422, false, "ooc"),
+        ChannelName::Raid => (5112, true, "raid"),
+        _ => return None,
+    })
+}
+
 /// What a chat line says in the official client's words: a player's speech
-/// with who spoke and where, as the installed client's string table words
-/// it with the common tongue (1410, 1414 to 1416, 1420 to 1422 and 5112),
-/// the player's own as the official client words it (1400 and 5109 are in
-/// the table; the rest are its own words), and anything else as it reads.
-/// The server repeats the player's own speech to them under their name.
+/// by the installed client's string for who spoke and where, in the common
+/// tongue, and anything else as it reads. The server repeats the player's
+/// own speech to them under their name.
 #[must_use]
-pub fn words(line: &ChatLine, player: &str) -> String {
+pub fn words(line: &ChatLine, player: &str) -> Words {
     let text = &line.message.text;
-    let Some(sender) = line.sender.as_deref().filter(|sender| !sender.is_empty()) else {
-        return text.clone();
-    };
-    if sender.eq_ignore_ascii_case(player) {
-        return match (line.channel, line.target.as_deref()) {
-            (ChannelName::Say, _) => format!("You say, '{text}'"),
-            (ChannelName::Tell, Some(target)) => format!("You told {target}, '{text}'"),
-            (ChannelName::Group, _) => format!("You tell your party, '{text}'"),
-            (ChannelName::Guild, _) => format!("You say to your guild, '{text}'"),
-            (ChannelName::Ooc, _) => format!("You say out of character, '{text}'"),
-            (ChannelName::Shout, _) => format!("You shout, '{text}'"),
-            (ChannelName::Auction, _) => format!("You auction, '{text}'"),
-            (ChannelName::Raid, _) => format!("You tell your raid, '{text}'"),
-            _ => text.clone(),
-        };
-    }
-    match line.channel {
-        ChannelName::Say => format!("{sender} says, '{text}'"),
-        ChannelName::Tell => format!("{sender} tells you, '{text}'"),
-        ChannelName::Group => format!("{sender} tells the group, '{text}'"),
-        ChannelName::Guild => format!("{sender} tells the guild, '{text}'"),
-        ChannelName::Ooc => format!("{sender} says out of character, '{text}'"),
-        ChannelName::Shout => format!("{sender} shouts, '{text}'"),
-        ChannelName::Auction => format!("{sender} auctions, '{text}'"),
-        // 5112 keeps a space before the tongue, which the common one leaves
-        // empty.
-        ChannelName::Raid => format!("{sender} tells the raid,  '{text}'"),
-        _ => text.clone(),
+    let spoken = line
+        .sender
+        .as_deref()
+        .filter(|sender| !sender.is_empty())
+        .and_then(|sender| {
+            if !sender.eq_ignore_ascii_case(player) {
+                return others_speech(line.channel).map(|(id, tongue, place)| {
+                    let arguments = if tongue {
+                        vec![sender.to_owned(), String::new(), text.clone()]
+                    } else {
+                        vec![sender.to_owned(), text.clone()]
+                    };
+                    (id, arguments, format!("{sender} ({place})"))
+                });
+            }
+            if let (ChannelName::Tell, Some(target)) = (line.channel, line.target.as_deref()) {
+                return Some((
+                    1400,
+                    vec![target.to_owned(), text.clone()],
+                    format!("You (tell {target})"),
+                ));
+            }
+            own_speech(line.channel)
+                .map(|(id, place)| (id, vec![text.clone()], format!("You ({place})")))
+        });
+    match spoken {
+        Some((string_id, arguments, who)) => Words {
+            string_id: Some(string_id),
+            arguments,
+            text: format!("{who}: {text}"),
+        },
+        None => Words {
+            string_id: None,
+            arguments: Vec::new(),
+            text: text.clone(),
+        },
     }
 }
 
@@ -89,8 +147,8 @@ mod tests {
             .and_hms_opt(2, 41, 5)
             .unwrap();
         assert_eq!(
-            line(time, "You have entered The Qeynos Hills."),
-            "[Fri Oct 02 02:41:05 2026] You have entered The Qeynos Hills."
+            line(time, "Arrived in The Qeynos Hills."),
+            "[Fri Oct 02 02:41:05 2026] Arrived in The Qeynos Hills."
         );
         assert_eq!(
             file_name("Examplar", "ExampleWorld"),
@@ -98,39 +156,79 @@ mod tests {
         );
     }
 
+    fn heard(string_id: u32, arguments: &[&str], text: &str) -> Words {
+        Words {
+            string_id: Some(string_id),
+            arguments: arguments
+                .iter()
+                .map(|&argument| argument.to_owned())
+                .collect(),
+            text: text.to_owned(),
+        }
+    }
+
     #[test]
     fn speech_names_who_spoke_and_where() {
         let say = spoken(ChannelName::Say, Some("Examplar"), "Hail");
-        assert_eq!(words(&say, "Other"), "Examplar says, 'Hail'");
+        assert_eq!(
+            words(&say, "Other"),
+            heard(1410, &["Examplar", "", "Hail"], "Examplar (say): Hail")
+        );
         let tell = spoken(ChannelName::Tell, Some("Examplar"), "inc");
-        assert_eq!(words(&tell, "Other"), "Examplar tells you, 'inc'");
+        assert_eq!(
+            words(&tell, "Other"),
+            heard(1416, &["Examplar", "", "inc"], "Examplar (tell): inc")
+        );
+        // Out-of-character speech has no place for a tongue.
         let ooc = spoken(ChannelName::Ooc, Some("Examplar"), "lfg");
         assert_eq!(
             words(&ooc, "Other"),
-            "Examplar says out of character, 'lfg'"
+            heard(1422, &["Examplar", "lfg"], "Examplar (ooc): lfg")
         );
         let auction = spoken(ChannelName::Auction, Some("Examplar"), "WTS Rusty Dagger");
         assert_eq!(
             words(&auction, "Other"),
-            "Examplar auctions, 'WTS Rusty Dagger'"
+            heard(
+                1421,
+                &["Examplar", "", "WTS Rusty Dagger"],
+                "Examplar (auction): WTS Rusty Dagger"
+            )
         );
         let raid = spoken(ChannelName::Raid, Some("Examplar"), "go");
-        assert_eq!(words(&raid, "Other"), "Examplar tells the raid,  'go'");
+        assert_eq!(
+            words(&raid, "Other"),
+            heard(5112, &["Examplar", "", "go"], "Examplar (raid): go")
+        );
         // The player's own speech, which the server repeats to them.
-        assert_eq!(words(&say, "examplar"), "You say, 'Hail'");
+        assert_eq!(
+            words(&say, "examplar"),
+            heard(12344, &["Hail"], "You (say): Hail")
+        );
         assert_eq!(
             words(&auction, "Examplar"),
-            "You auction, 'WTS Rusty Dagger'"
+            heard(
+                12350,
+                &["WTS Rusty Dagger"],
+                "You (auction): WTS Rusty Dagger"
+            )
+        );
+        let told = ChatLine {
+            target: Some("Friend".into()),
+            ..spoken(ChannelName::Tell, Some("Examplar"), "inc")
+        };
+        assert_eq!(
+            words(&told, "Examplar"),
+            heard(1400, &["Friend", "inc"], "You (tell Friend): inc")
         );
         // The game's own messages read as they are.
-        let system = spoken(
-            ChannelName::System,
-            None,
-            "You hit a rat for 5 points of damage.",
-        );
+        let system = spoken(ChannelName::System, None, "A rat squeaks from the shadows.");
         assert_eq!(
             words(&system, "Other"),
-            "You hit a rat for 5 points of damage."
+            Words {
+                string_id: None,
+                arguments: Vec::new(),
+                text: "A rat squeaks from the shadows.".into(),
+            }
         );
     }
 }

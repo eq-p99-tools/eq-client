@@ -3,8 +3,8 @@
 //! for a viewer without one. The numbers and strings follow `EQEmu`'s
 //! `common/skills.h`; Titanium's table has no string for the last three.
 
-/// "You have become better at %1! (%2)": the client's line when a skill
-/// rises, with the skill's name and its new value.
+/// The official client's line as a skill rises, which names the skill and
+/// its new value.
 pub const BETTER_AT: u32 = 12091;
 
 /// Each skill's string and name, by number.

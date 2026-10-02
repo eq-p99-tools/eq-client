@@ -55,6 +55,9 @@ pub(super) struct ChatState {
     pub log_toggle: bool,
     /// A `/shownames`, waiting to set how much of players' names shows.
     pub show_names: Option<eq_client_core::names::ShowNames>,
+    /// A `/shownames` the client could not read, answered with the usage
+    /// line.
+    pub show_names_usage: bool,
     draft: String,
     status: String,
 }
@@ -574,8 +577,8 @@ pub(super) fn submit_game_command(
     Ok(())
 }
 
-/// `/loc`: where the player stands, worded as the official client words it,
-/// north-south first.
+/// `/loc`: where the player stands, in this client's words, north-south
+/// first as the official client orders it.
 fn location(input: &str, online: &super::online::OnlineState) -> Option<Result<String, String>> {
     let name = input.strip_prefix('/')?.trim();
     if !name.eq_ignore_ascii_case("loc") {
@@ -588,7 +591,7 @@ fn location(input: &str, online: &super::online::OnlineState) -> Option<Result<S
             .map(|player| {
                 let position = player.position;
                 format!(
-                    "Your Location is {:.2}, {:.2}, {:.2}",
+                    "You stand at {:.2}, {:.2}, {:.2}.",
                     position.y, position.x, position.z
                 )
             })
@@ -612,14 +615,12 @@ pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Resul
     }
     let (command, word) = input.split_once(' ').unwrap_or((input, ""));
     if command.eq_ignore_ascii_case("/shownames") {
-        use eq_client_core::names::{SHOW_NAMES_FORMAT, ShowNames};
-        return Some(match ShowNames::parse(word) {
-            Some(level) => {
-                state.show_names = Some(level);
-                Ok(())
-            }
-            None => Err(SHOW_NAMES_FORMAT.to_owned()),
-        });
+        use eq_client_core::names::ShowNames;
+        match ShowNames::parse(word) {
+            Some(level) => state.show_names = Some(level),
+            None => state.show_names_usage = true,
+        }
+        return Some(Ok(()));
     }
     None
 }

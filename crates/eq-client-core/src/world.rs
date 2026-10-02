@@ -526,9 +526,16 @@ impl ClientWorld {
                     own,
                 });
             }
-            WorldEvent::CorpseRefused { session_id, reason } => {
+            WorldEvent::CorpseRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
                 if self.session_id == Some(*session_id) {
-                    news.notices.push(Notice::CorpseRefused(reason.clone()));
+                    news.notices.push(Notice::CorpseRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
                 } else {
                     news.ignored = true;
                 }
@@ -541,16 +548,30 @@ impl ClientWorld {
                 }
             }
             WorldEvent::PetBuffs(buffs) => self.zone.pet_buffs = Some(buffs.clone()),
-            WorldEvent::PetRefused { session_id, reason } => {
+            WorldEvent::PetRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
                 if self.session_id == Some(*session_id) {
-                    news.notices.push(Notice::PetRefused(reason.clone()));
+                    news.notices.push(Notice::PetRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
                 } else {
                     news.ignored = true;
                 }
             }
-            WorldEvent::ConsumeRefused { session_id, reason } => {
+            WorldEvent::ConsumeRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
                 if self.session_id == Some(*session_id) {
-                    news.notices.push(Notice::ConsumeRefused(reason.clone()));
+                    news.notices.push(Notice::ConsumeRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
                 } else {
                     news.ignored = true;
                 }

@@ -20,7 +20,10 @@ pub(crate) struct ChatLog {
 /// does, and writes each new chat line to the character's log.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn write(
-    settings: Res<crate::ViewerSettings>,
+    (settings, messages): (
+        Res<crate::ViewerSettings>,
+        Option<Res<crate::hud::messages::Messages>>,
+    ),
     online: Res<crate::online::OnlineState>,
     mut chat: ResMut<crate::chat::ChatState>,
     (mut log, mut options): (ResMut<ChatLog>, ResMut<crate::options::OptionsState>),
@@ -30,13 +33,16 @@ pub(crate) fn write(
         chat.log_toggle = false;
         let on = !options.options.log;
         options.options.log = on;
-        let words = if on {
-            logs::LOGGING_ON
+        let (id, fallback) = if on {
+            (logs::LOGGING_ON, logs::LOGGING_ON_TEXT)
         } else {
-            logs::LOGGING_OFF
+            (logs::LOGGING_OFF, logs::LOGGING_OFF_TEXT)
         };
-        chat.history
-            .push(crate::chat::system_line(words.to_owned()));
+        let words = messages.as_deref().map_or_else(
+            || fallback.to_owned(),
+            |messages| messages.text(id, fallback),
+        );
+        chat.history.push(crate::chat::system_line(words));
         // The official client writes its *OFF* line before it stops, as it
         // writes its *ON* line as it starts.
         writes = true;
@@ -62,7 +68,8 @@ pub(crate) fn write(
     let now = chrono::Local::now().naive_local();
     let mut text = String::new();
     for (_, line) in lines.iter().filter(|(id, _)| *id > seen) {
-        text.push_str(&logs::line(now, &logs::words(line, &player.name)));
+        let words = read(logs::words(line, &player.name), messages.as_deref());
+        text.push_str(&logs::line(now, &words));
         text.push('\n');
     }
     let name = logs::file_name(&player.name, server);
@@ -91,10 +98,43 @@ pub(crate) fn write(
     }
 }
 
+/// A log line's words: the installed client's string where the line has
+/// one and the installation has the table, and this client's words
+/// otherwise.
+fn read(words: logs::Words, messages: Option<&crate::hud::messages::Messages>) -> String {
+    match (words.string_id, messages) {
+        (Some(id), Some(messages)) => messages.official(id, &words.arguments, &words.text),
+        _ => words.text,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
+
+    #[test]
+    fn speech_reads_by_the_installed_string() {
+        let messages = crate::hud::messages::Messages::parse(
+            "EQST0002
+0 1
+1410 %1 speaks%2: %3
+",
+        );
+        let words = || logs::Words {
+            string_id: Some(1410),
+            arguments: vec!["Examplar".into(), String::new(), "Hail".into()],
+            text: "Examplar (say): Hail".into(),
+        };
+        assert_eq!(read(words(), Some(&messages)), "Examplar speaks: Hail");
+        assert_eq!(read(words(), None), "Examplar (say): Hail");
+        // A string the table lacks falls back to this client's words.
+        let missing = logs::Words {
+            string_id: Some(1416),
+            ..words()
+        };
+        assert_eq!(read(missing, Some(&messages)), "Examplar (say): Hail");
+    }
 
     #[test]
     fn the_chat_goes_to_the_characters_log_until_log_turns_it_off() {
@@ -127,7 +167,7 @@ mod tests {
                 .push(crate::chat::system_line(text.to_owned()));
             app.update();
         };
-        say(&mut app, "You have entered The Qeynos Hills.");
+        say(&mut app, "Arrived in The Qeynos Hills.");
         app.world_mut()
             .resource_mut::<crate::chat::ChatState>()
             .log_toggle = true;
@@ -140,9 +180,9 @@ mod tests {
         let lines: Vec<&str> = written.lines().collect();
         assert_eq!(lines.len(), 2, "{written}");
         assert!(lines[0].starts_with('['));
-        assert!(lines[0].ends_with("] You have entered The Qeynos Hills."));
+        assert!(lines[0].ends_with("] Arrived in The Qeynos Hills."));
         // The official client writes its *OFF* line, then nothing more.
-        assert!(lines[1].ends_with(logs::LOGGING_OFF));
+        assert!(lines[1].ends_with(logs::LOGGING_OFF_TEXT));
         // And the character's options keep the choice.
         assert!(
             !app.world()
@@ -156,7 +196,7 @@ mod tests {
             chat.history
                 .lines(eq_client_core::chat::ChatTab::All)
                 .iter()
-                .any(|(_, line)| line.message.text == logs::LOGGING_OFF)
+                .any(|(_, line)| line.message.text == logs::LOGGING_OFF_TEXT)
         );
         let _ = std::fs::remove_dir_all(&directory);
     }
