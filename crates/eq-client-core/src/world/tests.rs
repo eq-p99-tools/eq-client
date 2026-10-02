@@ -1453,3 +1453,38 @@ fn the_zone_who_lists_the_zone_players_as_they_are_listed() {
         assert_eq!(names(&filter), expected, "{text}");
     }
 }
+
+#[test]
+fn the_clock_runs_on_from_the_time_the_server_gave() {
+    use crate::clock::{Fog, GameTime, ZoneSky};
+    let mut world = admitted();
+    let now = Instant::now();
+    assert_eq!(world.game_time(now), None);
+    let noon = GameTime {
+        hour: 12,
+        minute: 0,
+        day: 1,
+        month: 1,
+        year: 3100,
+    };
+    world.apply(
+        &WorldUpdate::Game(WorldEvent::TimeOfDay(noon)),
+        now,
+        &NoSpells,
+    );
+    let later = world
+        .game_time(now + std::time::Duration::from_secs(180))
+        .unwrap();
+    assert_eq!((later.hour, later.minute), (13, 0));
+    let sky = ZoneSky {
+        sky: 1,
+        time_type: 2,
+        fog: [Fog {
+            color: [10, 20, 30],
+            near: 10.0,
+            far: 500.0,
+        }; 4],
+    };
+    game(&mut world, WorldEvent::Sky(sky));
+    assert_eq!(world.sky(), Some(sky));
+}

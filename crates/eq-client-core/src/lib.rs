@@ -3,6 +3,7 @@
 pub mod buffs;
 pub mod chat;
 pub mod classes;
+pub mod daylight;
 pub mod doors;
 pub mod entities;
 pub mod ground;
@@ -16,6 +17,7 @@ pub mod world;
 pub use eq_network_game::abilities;
 pub use eq_network_game::characters::CharacterChoice;
 pub use eq_network_game::chat::OutboundChat;
+pub use eq_network_game::clock;
 pub use eq_network_game::combat;
 pub use eq_network_game::command::GameCommand as ClientCommand;
 pub use eq_network_game::command::Posture;

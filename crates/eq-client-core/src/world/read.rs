@@ -23,6 +23,20 @@ impl ClientWorld {
         self.ended
     }
 
+    /// The time in Norrath now, once the server has given it: the time it
+    /// gave, run on by the real time since.
+    #[must_use]
+    pub fn game_time(&self, now: std::time::Instant) -> Option<crate::clock::GameTime> {
+        self.time
+            .map(|(time, given)| time.after(now.saturating_duration_since(given).as_secs()))
+    }
+
+    /// How the zone's sky and fog look, once the zone has said.
+    #[must_use]
+    pub const fn sky(&self) -> Option<crate::clock::ZoneSky> {
+        self.zone.sky
+    }
+
     /// The world server's short name.
     #[must_use]
     pub fn world_name(&self) -> Option<&str> {
