@@ -281,7 +281,7 @@ fn draw(
             inside = border(window, art, &template.border, (width, height));
         }
         if screen.titlebar {
-            title(window, art, &template.title, &mut inside);
+            title(window, art, screen, &template.title, &mut inside);
         }
     }
     // As in the official client, nothing shows outside the client area: the
@@ -1421,10 +1421,11 @@ fn border(
 }
 
 /// The title bar along the top of what lies inside the border, which then
-/// begins below it.
+/// begins below it, with the window's title on it where the skin gives one.
 fn title(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
+    screen: &Screen,
     [left, middle, right]: &[Option<Piece>; 3],
     inside: &mut Area,
 ) {
@@ -1444,6 +1445,17 @@ fn title(
         middle,
         at(inside.x + left_width, inside.y, middle_width, tall),
     );
+    // Where the official client writes it on the bar is not checked yet:
+    // after the bar's left end, in the middle of its height.
+    if let Some(words) = &screen.title {
+        let node = Node {
+            align_items: AlignItems::Center,
+            ..at(inside.x + left_width, inside.y, middle_width, tall)
+        };
+        let ink = screen.title_color.map_or(theme::INK_BRIGHT, rgb);
+        let text = theme::text(words.as_str(), font(screen.font), ink);
+        aligned(window, node, Align::Left, text);
+    }
     if let Some(piece) = right {
         let x = inside.x + inside.width - right_width;
         picture(window, art, piece, at(x, inside.y, right_width, tall));
@@ -1921,9 +1933,74 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_title_bar_shows_the_title_the_skin_gives_its_window() {
+        let middle = Piece {
+            texture: "title.tga".into(),
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 14,
+        };
+        let screen = |titlebar, title: Option<&str>| Screen {
+            name: "Window".into(),
+            title: title.map(str::to_owned),
+            title_color: None,
+            font: Some(3),
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 60.0,
+            },
+            template: Some(eq_client_assets::sidl::WindowTemplate {
+                title: [None, Some(middle.clone()), None],
+                ..default()
+            }),
+            titlebar,
+            border: false,
+            tooltip: None,
+            pieces: Vec::new(),
+        };
+        // The words drawn in a window from this screen.
+        let words = |screen: Screen| {
+            let mut app = App::new();
+            app.init_resource::<crate::sheets::Sheets>()
+                .init_resource::<Assets<Image>>()
+                .init_resource::<super::super::skin::UiSkin>()
+                .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+                .add_systems(
+                    Update,
+                    move |mut commands: Commands, mut art: crate::sheets::Art| {
+                        let context = Context {
+                            id: WindowId::ActionsWindow,
+                            paperdoll: None,
+                            depth: 0,
+                        };
+                        commands
+                            .spawn(Node::default())
+                            .with_children(|window| draw(window, &screen, &mut art, &context));
+                    },
+                );
+            app.update();
+            let mut texts = app.world_mut().query::<&Text>();
+            texts
+                .iter(app.world())
+                .map(|text| text.0.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(words(screen(true, Some("Sample"))), ["Sample"]);
+        // Without a title bar, or words for it, there is no title.
+        assert_eq!(words(screen(false, Some("Sample"))), Vec::<String>::new());
+        assert_eq!(words(screen(true, None)), Vec::<String>::new());
+    }
+
+    #[test]
     fn an_unplaced_window_opens_where_the_skin_puts_it_unless_it_says_otherwise() {
         let screen = Screen {
             name: "Window".into(),
+            title: None,
+            title_color: None,
+            font: None,
             area: Area {
                 x: 120.0,
                 y: 80.0,
