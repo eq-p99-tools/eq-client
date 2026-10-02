@@ -114,6 +114,8 @@ pub struct ClientWorld {
     far_clip: Option<f32>,
     death: Option<Death>,
     pending_transfer: Option<ZoneOffer>,
+    /// The resurrection offered and not yet answered.
+    resurrection: Option<crate::resurrection::ResurrectionOffer>,
     /// Item definitions the server sent for inspection.
     items: ItemCache,
     // Until any reset: the target, the motion granted and camping.
@@ -208,6 +210,12 @@ impl ClientWorld {
     /// The player is done looting.
     pub fn close_loot(&mut self) {
         self.zone.trade.loot = None;
+    }
+
+    /// The player answered the resurrection offered; whatever comes of it
+    /// arrives as news.
+    pub fn answer_resurrection(&mut self) {
+        self.resurrection = None;
     }
 
     /// The player asked a merchant to trade; the server's word on it arrives
@@ -516,6 +524,16 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // A resurrection to answer, and an answer the session would not send.
+            WorldEvent::Resurrection(offer) => self.resurrection = Some(offer.clone()),
+            WorldEvent::ResurrectionRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices
+                        .push(Notice::ResurrectionRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
             // Training at a guildmaster, and the practice points it spends.
             WorldEvent::Training(update) => self.training_news(update, news),
             WorldEvent::TrainingRefused { session_id, reason } => {
@@ -651,6 +669,7 @@ impl ClientWorld {
         self.characters = None;
         self.items = ItemCache::default();
         self.pending_transfer = None;
+        self.resurrection = None;
         self.death = None;
         self.forget_zone();
     }

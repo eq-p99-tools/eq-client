@@ -79,6 +79,11 @@ impl OnlineState {
         self.world.open_shop(merchant_id);
     }
 
+    /// The player answered the resurrection offered.
+    pub(super) fn answer_resurrection(&mut self) {
+        self.world.answer_resurrection();
+    }
+
     /// The player closed the merchant window.
     pub(super) fn close_shop(&mut self) {
         self.world.close_shop();

@@ -58,6 +58,9 @@ pub(crate) enum WindowId {
     /// The skin's Skills window: the player's skills and their values,
     /// opened from the inventory's Skills button.
     Skills,
+    /// The skin's confirmation dialog: a question to answer Yes or No, such
+    /// as a resurrection's.
+    Confirmation,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -235,7 +238,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 22] = [
+    pub(crate) const ALL: [Self; 23] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -256,6 +259,7 @@ impl WindowId {
         Self::Options,
         Self::Training,
         Self::Skills,
+        Self::Confirmation,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -291,6 +295,7 @@ impl WindowId {
             Self::Options => Some("OptionsWindow"),
             Self::Training => Some("TrainWindow"),
             Self::Skills => Some("SkillsWindow"),
+            Self::Confirmation => Some("ConfirmationDialogBox"),
             _ => None,
         }
     }
@@ -330,6 +335,7 @@ impl WindowId {
             Self::Options => "options",
             Self::Training => "training",
             Self::Skills => "skills",
+            Self::Confirmation => "confirmation",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -440,6 +446,14 @@ impl WindowId {
             // Where the skin places it, over the chat; the inventory's
             // Skills button opens it too.
             Self::Skills => floating("SKILLS", Placement::TopLeft(120.0, 445.0), true, &[]),
+            // Where the skin places it, above the other windows until it is
+            // answered; Escape leaves the question open.
+            Self::Confirmation => Description {
+                layer: Layer::Popup,
+                closes_on_escape: false,
+                persists: false,
+                ..floating("", Placement::TopLeft(550.0, 350.0), false, &[])
+            },
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(

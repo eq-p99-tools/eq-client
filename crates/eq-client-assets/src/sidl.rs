@@ -406,8 +406,25 @@ pub enum Element {
     Tabs(TabBox),
     /// A window inside the window.
     View(Box<View>),
+    /// A box of text the client fills, such as a confirmation's question
+    /// (`STMLbox`).
+    TextBox(TextBox),
     /// An element this reader does not draw yet, by its kind.
     Other(String),
+}
+
+/// A box of text the client fills.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBox {
+    /// What the window calls it (`ScreenID`), such as `TextOutput`.
+    pub id: Option<String>,
+    /// Where it sits in its window, when the skin places it.
+    pub area: Area,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`).
+    pub anchors: Option<Anchors>,
+    /// How its frame is drawn.
+    pub template: Option<WindowTemplate>,
 }
 
 /// A window as the skin defines it.
@@ -812,6 +829,13 @@ impl Library {
                 background: self.piece(text_of(node, "Background")),
             }),
             "Slider" | "Combobox" | "Listbox" => self.control(node),
+            "STMLbox" => Element::TextBox(TextBox {
+                id: text_of(node, "ScreenID").map(str::to_owned),
+                area: at(),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
+                template: text_of(node, "DrawTemplate")
+                    .and_then(|template| self.templates.get(template).cloned()),
+            }),
             // Pages and windows within windows nest; skins go a few deep.
             "TabBox" if depth < 4 => Element::Tabs(TabBox {
                 name: node.attribute("item").unwrap_or_default().to_owned(),
@@ -1253,6 +1277,38 @@ mod tests {
                 y: 148.0,
                 width: 100.0,
                 height: 24.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_text_box_the_client_fills_keeps_to_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        // The confirmation dialog's question: 2 from three edges, 24 above
+        // the bottom, where the buttons sit.
+        let text = r#"<XML>
+            <STMLbox item="CD_TextOutput"><ScreenID>TextOutput</ScreenID>
+                <AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>2</LeftAnchorOffset><TopAnchorOffset>2</TopAnchorOffset>
+                <RightAnchorOffset>2</RightAnchorOffset><BottomAnchorOffset>24</BottomAnchorOffset>
+                <TopAnchorToTop>true</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+                <LeftAnchorToLeft>true</LeftAnchorToLeft><RightAnchorToLeft>false</RightAnchorToLeft>
+            </STMLbox>
+            <Screen item="ConfirmationDialogBox"><Size><CX>274</CX><CY>200</CY></Size>
+                <Pieces>CD_TextOutput</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "ConfirmationDialogBox").unwrap();
+        let Element::TextBox(question) = &screen.pieces[0].1 else {
+            panic!("a text box")
+        };
+        assert_eq!(question.id.as_deref(), Some("TextOutput"));
+        assert_eq!(
+            question.anchors.unwrap().within(264.0, 170.0),
+            Area {
+                x: 2.0,
+                y: 2.0,
+                width: 260.0,
+                height: 144.0
             }
         );
     }

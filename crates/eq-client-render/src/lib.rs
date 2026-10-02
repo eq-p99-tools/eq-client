@@ -40,6 +40,7 @@ mod preview;
 mod probes;
 mod profile_files;
 mod resources;
+mod resurrection;
 pub mod script;
 mod sheets;
 mod skills;
@@ -461,7 +462,7 @@ fn schedule(app: &mut App) {
             (who::zone_list, pet::window),
             combat::input,
             trade::input,
-            (give::buttons, training::buttons),
+            (give::buttons, training::buttons, resurrection::buttons),
             (abilities::input, skinned::slash),
             hud::actions,
             (hud::hotbar::update, hud::hotbar::persist).chain(),
@@ -496,7 +497,7 @@ fn schedule(app: &mut App) {
                 update_hud,
                 // Opens the give and training windows before their frames
                 // are drawn.
-                (give::window, training::window),
+                (give::window, training::window, resurrection::window),
             )
                 .chain(),
             (
@@ -534,6 +535,7 @@ fn schedule(app: &mut App) {
                         skinned::fill_lists,
                         training::fill,
                         skills::fill,
+                        resurrection::show,
                     ),
                 ),
                 skinned::close,
