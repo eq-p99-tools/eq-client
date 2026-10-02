@@ -101,8 +101,14 @@ pub enum Notice {
     ResurrectionRefused(String),
     /// A request to read was not sent, and why.
     ReadRefused(String),
-    /// A combine was not sent, and why.
-    CombineRefused(String),
+    /// A combine was not sent, and why: in the official client's own words
+    /// where the session names its string, else in the session's.
+    CombineRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
     /// A consent to drag a player's corpses was given or taken back.
     Consent {
         /// What the server said.

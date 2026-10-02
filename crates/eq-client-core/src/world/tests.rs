@@ -1722,13 +1722,20 @@ fn a_combine_is_under_way_until_the_server_answers() {
     );
     game(&mut world, entered(2));
     assert_eq!(world.combining(), None);
-    let reason = "That is not a tradeskill container.";
+    let reason = "Your cursor must be empty to combine.";
     let changes = game(
         &mut world,
         WorldEvent::CombineRefused {
             session_id: 2,
             reason: reason.into(),
+            string_id: Some(crate::tradeskills::HANDS_FULL),
         },
     );
-    assert_eq!(changes.notices, [Notice::CombineRefused(reason.into())]);
+    assert_eq!(
+        changes.notices,
+        [Notice::CombineRefused {
+            reason: reason.into(),
+            string_id: Some(crate::tradeskills::HANDS_FULL),
+        }]
+    );
 }
