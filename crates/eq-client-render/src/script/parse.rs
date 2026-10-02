@@ -66,6 +66,9 @@ pub enum Step {
     /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
     /// the step stops the script on any other server.
     Gm(String),
+    /// Says a line on a chat channel as a player types it, on a local `EQEmu`
+    /// or TAKP server only, as `gm` steps are.
+    Chat(eq_client_core::OutboundChat),
     /// Presses keys together for one frame, modifiers first.
     Press(Vec<KeyCode>),
     /// Holds keys together for a bounded duration.
@@ -301,6 +304,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
                 .join(" "),
         ),
         ("gm", words) => parse_gm(words)?,
+        ("chat", words) => parse_chat(words)?,
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
         ("wait", [duration]) => Step::Wait(millis(duration, MAX_WAIT)?),
@@ -515,6 +519,49 @@ fn parse_gm(words: &[&str]) -> Result<Step, String> {
         return Err("gm rules takes set <Category:Rule> <value> or reload".into());
     }
     Ok(Step::Gm(words.join(" ")))
+}
+
+/// `chat <say|ooc|shout|auction|group|guild|raid> <words>` or `chat tell
+/// <Name> <words>`: a line as a player types it. The words are printable
+/// ASCII and never a `#` command, which only a `gm` step sends.
+fn parse_chat(words: &[&str]) -> Result<Step, String> {
+    use eq_client_core::OutboundChat;
+    let usage = || {
+        String::from(concat!(
+            "chat takes say, ooc, shout, auction, group, guild or raid and words, ",
+            "or tell, a name and words"
+        ))
+    };
+    let text = |words: &[&str]| {
+        let text = words.join(" ");
+        (!text.is_empty()
+            && !text.starts_with('#')
+            && text.chars().all(|c| c.is_ascii_graphic() || c == ' '))
+        .then_some(text)
+        .ok_or_else(usage)
+    };
+    let [channel, rest @ ..] = words else {
+        return Err(usage());
+    };
+    Ok(Step::Chat(match *channel {
+        "say" => OutboundChat::Say(text(rest)?),
+        "ooc" => OutboundChat::Ooc(text(rest)?),
+        "shout" => OutboundChat::Shout(text(rest)?),
+        "auction" => OutboundChat::Auction(text(rest)?),
+        "group" => OutboundChat::Group(text(rest)?),
+        "guild" => OutboundChat::Guild(text(rest)?),
+        "raid" => OutboundChat::Raid(text(rest)?),
+        "tell" => match rest {
+            [name, words @ ..] if name.chars().all(|c| c.is_ascii_alphabetic()) => {
+                OutboundChat::Tell {
+                    recipient: (*name).to_owned(),
+                    message: text(words)?,
+                }
+            }
+            _ => return Err(usage()),
+        },
+        _ => return Err(usage()),
+    }))
 }
 
 /// `create <Name> <race> <class> <gender> <deity> <start zone> <stat for free points>`.
@@ -772,6 +819,41 @@ mod tests {
             ]
         );
         assert!(parse("slash consent\n", base).is_err());
+    }
+
+    #[test]
+    fn a_script_may_speak_as_a_player_types() {
+        use eq_client_core::OutboundChat;
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "chat say Hail there
+chat ooc lfg
+chat tell Friend inc now
+",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Chat(OutboundChat::Say("Hail there".into())),
+                Step::Chat(OutboundChat::Ooc("lfg".into())),
+                Step::Chat(OutboundChat::Tell {
+                    recipient: "Friend".into(),
+                    message: "inc now".into(),
+                }),
+            ]
+        );
+        // Never an empty line or a `#` command, which only a gm step sends.
+        for bad in [
+            "chat",
+            "chat say",
+            "chat yell hi",
+            "chat tell Friend",
+            "chat tell Fr1end hi",
+            "chat say #summon",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

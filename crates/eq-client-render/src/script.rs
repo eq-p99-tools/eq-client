@@ -5,7 +5,8 @@
 //! Scripted clicks are only injected while the real pointer is outside the window,
 //! so they cannot also press whatever the pointer happens to be over. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
-//! `gm` steps send `#` commands only to a local `EQEmu` server.
+//! `gm` steps send `#` commands only to a local `EQEmu` server, and `chat`
+//! steps speak only there.
 mod parse;
 mod report;
 
@@ -476,12 +477,15 @@ pub(super) fn drive(
             }
             return;
         }
-        Step::Slash(_) | Step::Gm(_) if !online.in_world() => {
+        Step::Slash(_) | Step::Gm(_) | Step::Chat(_) if !online.in_world() => {
             // The worker discards commands while zoning, dead or disconnected.
             script.stop(
                 &mut keys,
                 &mut mouse,
-                "slash and gm steps need a character in the world; wait_online or wait_zone first",
+                concat!(
+                    "slash, gm and chat steps need a character in the world; ",
+                    "wait_online or wait_zone first"
+                ),
             );
             return;
         }
@@ -501,8 +505,13 @@ pub(super) fn drive(
             super::give::offer(target, &mut online, &observed.1);
             return;
         }
-        Step::Gm(command) => {
-            let sent = gm_chat(command, script.local).and_then(|chat| {
+        Step::Gm(_) | Step::Chat(_) => {
+            let line = match &step {
+                Step::Gm(command) => gm_chat(command, script.local),
+                Step::Chat(chat) => local_chat(chat, script.local),
+                _ => return,
+            };
+            let sent = line.and_then(|chat| {
                 observed
                     .1
                     .send(
@@ -630,6 +639,21 @@ fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat,
         );
     }
     Ok(eq_client_core::OutboundChat::Say(format!("#{command}")))
+}
+
+/// A `chat` step's line, refused unless the session is on a local `EQEmu` or
+/// TAKP server, as `gm` steps are.
+fn local_chat(
+    chat: &eq_client_core::OutboundChat,
+    allowed: bool,
+) -> Result<eq_client_core::OutboundChat, String> {
+    if !allowed {
+        return Err(
+            "chat steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)"
+                .into(),
+        );
+    }
+    Ok(chat.clone())
 }
 
 /// Whether a control of the Training window or the confirmation dialog is
@@ -822,6 +846,13 @@ fn face(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_steps_speak_only_on_a_local_server() {
+        let line = eq_client_core::OutboundChat::Say("Hail".into());
+        assert!(local_chat(&line, false).is_err());
+        assert_eq!(local_chat(&line, true), Ok(line));
+    }
 
     #[test]
     fn gm_commands_only_reach_a_local_eqemu_session() {
