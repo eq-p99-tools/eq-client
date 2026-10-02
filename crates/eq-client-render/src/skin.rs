@@ -1,7 +1,7 @@
 //! Which UI skin the windows follow: the one named on the command line, else the
 //! one the character last chose in the official client, else the default skin.
 use bevy::prelude::*;
-use eq_client_assets::ui::{DEFAULT_SKIN, chosen_skin};
+use eq_client_assets::ui::DEFAULT_SKIN;
 
 /// The skin windows read their layouts from.
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
@@ -47,8 +47,8 @@ fn follow(
     }
     *chosen_for = current.map(|(character, world)| (character.to_owned(), world.to_owned()));
     let chosen = current
-        .zip(settings.0.eq_directory.as_deref())
-        .and_then(|((character, world), directory)| chosen_skin(directory, character, world))
+        .zip(settings.0.official_settings())
+        .and_then(|((character, world), official)| official.chosen_skin(character, world))
         .unwrap_or_else(|| DEFAULT_SKIN.into());
     if skin.0 != chosen {
         info!("UI skin: {chosen}");

@@ -72,13 +72,8 @@ pub(crate) fn persist(
         || {
             settings
                 .0
-                .eq_directory
-                .as_deref()
-                .and_then(|directory| {
-                    Hotbar::official(&eq_client_assets::ui::official_hotbuttons(
-                        directory, &character, &world,
-                    ))
-                })
+                .official_settings()
+                .and_then(|official| Hotbar::official(&official.hotbuttons(&character, &world)))
                 .unwrap_or_default()
         },
         |text| Hotbar::read(&text, Hotbar::default()),

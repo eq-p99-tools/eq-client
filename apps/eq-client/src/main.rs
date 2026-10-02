@@ -5,7 +5,7 @@ mod session;
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-use eq_client_assets::ZoneAsset;
+use eq_client_assets::{ZoneAsset, ui::InstalledClient};
 use eq_client_core::WorldPosition;
 use eq_client_render::{
     Preview, ProjectionStyle, Source, ValidationAction, ViewerConfig, script::Step,
@@ -370,6 +370,7 @@ fn viewer_config(
         camera_distance: arguments.camera_distance,
         terrain_only: arguments.terrain_only,
         eq_directory: Some(eq_directory),
+        installed_client: installed_client(protocol),
         entity_distance: Some(arguments.entity_distance),
         option_defaults: eq_client_core::options::Options {
             show_helm: !arguments.hide_own_helm,
@@ -393,6 +394,17 @@ fn viewer_config(
         settings_directory: arguments.settings_dir.or_else(default_settings_directory),
         window_position: arguments.window_position,
         debug_overlay: arguments.debug_overlay,
+    }
+}
+
+/// The official client a server's players install, whose own settings files
+/// the viewer reads by that client's rules. Offline, the installation is
+/// taken to be Titanium's, as the default `--eq-dir` is.
+fn installed_client(protocol: Option<ServerProtocol>) -> InstalledClient {
+    if protocol.is_none_or(ServerProtocol::is_titanium) {
+        InstalledClient::Titanium
+    } else {
+        InstalledClient::EqMac
     }
 }
 
@@ -510,9 +522,24 @@ fn print_summary(zone: &ZoneAsset) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ServerProtocol, Step, check_gm_steps, distance, finite, load_script, local_session,
-        parse_window_position, seconds,
+        InstalledClient, ServerProtocol, Step, check_gm_steps, distance, finite, installed_client,
+        load_script, local_session, parse_window_position, seconds,
     };
+
+    #[test]
+    fn titanium_servers_and_offline_runs_read_a_titanium_installation() {
+        for protocol in [
+            None,
+            Some(ServerProtocol::EqEmu),
+            Some(ServerProtocol::Project1999),
+        ] {
+            assert_eq!(installed_client(protocol), InstalledClient::Titanium);
+        }
+        assert_eq!(
+            installed_client(Some(ServerProtocol::Quarm)),
+            InstalledClient::EqMac
+        );
+    }
 
     #[test]
     fn only_eqemu_scripts_are_local_sessions() {

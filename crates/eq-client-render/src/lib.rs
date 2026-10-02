@@ -123,6 +123,9 @@ pub struct ViewerConfig {
     pub terrain_only: bool,
     /// User-owned installation used to load server-selected zones and models.
     pub eq_directory: Option<PathBuf>,
+    /// Which official client that installation holds, which decides how its
+    /// own settings files are read.
+    pub installed_client: eq_client_assets::ui::InstalledClient,
     /// Nearby-entity radius in EQ units; None uses 200.
     pub entity_distance: Option<f32>,
     /// Optional read-only live validation action.
@@ -149,6 +152,16 @@ pub struct ViewerConfig {
     /// Add the developer's readings to the status box: coordinates, the
     /// movement mode with its keys, and the count of nearby entities.
     pub debug_overlay: bool,
+}
+
+impl ViewerConfig {
+    /// The installed official client's own settings, read by the rules of its
+    /// generation; None without an installation.
+    fn official_settings(&self) -> Option<Box<dyn eq_client_assets::ui::OfficialSettings + '_>> {
+        self.eq_directory
+            .as_deref()
+            .map(|directory| self.installed_client.settings(directory))
+    }
 }
 
 #[derive(Resource)]
@@ -214,9 +227,9 @@ pub fn run(
     let mut option_defaults = config.option_defaults;
     // The official client's own settings, for characters with no choice of
     // their own here; the client's defaults where it says nothing.
-    if let Some(directory) = config.eq_directory.as_deref() {
+    if let Some(settings) = config.official_settings() {
         use eq_client_core::options::Toggle;
-        let official = eq_client_assets::ui::official_options(directory);
+        let official = settings.options();
         for (toggle, setting) in [
             (Toggle::Log, official.log),
             (Toggle::PcNames, official.pc_names),
