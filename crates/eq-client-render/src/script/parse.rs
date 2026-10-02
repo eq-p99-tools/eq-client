@@ -527,9 +527,10 @@ fn parse_gm(words: &[&str]) -> Result<Step, String> {
 fn parse_chat(words: &[&str]) -> Result<Step, String> {
     use eq_client_core::OutboundChat;
     let usage = || {
-        String::from(
-            "chat takes say, ooc, shout, auction, group, guild or raid and words,              or tell, a name and words",
-        )
+        String::from(concat!(
+            "chat takes say, ooc, shout, auction, group, guild or raid and words, ",
+            "or tell, a name and words"
+        ))
     };
     let text = |words: &[&str]| {
         let text = words.join(" ");

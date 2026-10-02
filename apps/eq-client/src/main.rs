@@ -226,14 +226,21 @@ fn online_protocol(online: bool) -> Result<Option<ServerProtocol>, String> {
         .map_err(|error| format!("EQ_PROTOCOL={value:?}: {error}"))
 }
 
-/// Refuses `gm` script steps unless the session is local-only (see
-/// [`local_session`]), so `#` commands can never reach P99, Quarm or a public server.
-fn check_gm_steps(steps: Option<&[Step]>, local: bool) -> Result<(), &'static str> {
-    let gm = steps.is_some_and(|steps| steps.iter().any(|step| matches!(step, Step::Gm(_))));
-    if gm && !local {
-        return Err(
-            "gm script steps need --online with EQ_PROTOCOL=eqemu or takp (a local EQEmu or TAKP server)",
-        );
+/// Refuses a script with local-only steps, `gm` and `chat`, unless the
+/// session is local-only (see [`local_session`]), so `#` commands and a
+/// script's chat can never reach P99, Quarm or a public server. Such a script
+/// fails at launch rather than when it reaches the step.
+fn check_local_steps(steps: Option<&[Step]>, local: bool) -> Result<(), &'static str> {
+    let local_only = steps.is_some_and(|steps| {
+        steps
+            .iter()
+            .any(|step| matches!(step, Step::Gm(_) | Step::Chat(_)))
+    });
+    if local_only && !local {
+        return Err(concat!(
+            "gm and chat script steps need --online with EQ_PROTOCOL=eqemu or takp ",
+            "(a local EQEmu or TAKP server)"
+        ));
     }
     Ok(())
 }
@@ -268,7 +275,7 @@ fn main() {
         std::process::exit(2);
     });
     let local = local_session(script.is_some(), protocol);
-    if let Err(error) = check_gm_steps(script.as_deref(), local) {
+    if let Err(error) = check_local_steps(script.as_deref(), local) {
         eprintln!("error: {error}");
         std::process::exit(2);
     }
@@ -533,8 +540,8 @@ fn print_summary(zone: &ZoneAsset) {
 #[cfg(test)]
 mod tests {
     use super::{
-        InstalledClient, ServerProtocol, Step, check_gm_steps, distance, finite, installed_client,
-        load_script, local_session, parse_window_position, seconds,
+        InstalledClient, ServerProtocol, Step, check_local_steps, distance, finite,
+        installed_client, load_script, local_session, parse_window_position, seconds,
     };
 
     #[test]
@@ -583,12 +590,14 @@ mod tests {
     }
 
     #[test]
-    fn gm_steps_are_refused_outside_a_local_session() {
-        let gm = [Step::Gm("summon".into())];
-        assert!(check_gm_steps(Some(&gm), false).is_err());
-        assert!(check_gm_steps(Some(&gm), true).is_ok());
-        assert!(check_gm_steps(Some(&[Step::Face]), false).is_ok());
-        assert!(check_gm_steps(None, false).is_ok());
+    fn gm_and_chat_steps_are_refused_outside_a_local_session() {
+        let chat = Step::Chat(eq_client_core::OutboundChat::Say("Hail".into()));
+        for steps in [[Step::Gm("summon".into())], [chat]] {
+            assert!(check_local_steps(Some(&steps), false).is_err());
+            assert!(check_local_steps(Some(&steps), true).is_ok());
+        }
+        assert!(check_local_steps(Some(&[Step::Face]), false).is_ok());
+        assert!(check_local_steps(None, false).is_ok());
     }
 
     #[test]

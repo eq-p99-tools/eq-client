@@ -482,7 +482,10 @@ pub(super) fn drive(
             script.stop(
                 &mut keys,
                 &mut mouse,
-                "slash, gm and chat steps need a character in the world; wait_online or                  wait_zone first",
+                concat!(
+                    "slash, gm and chat steps need a character in the world; ",
+                    "wait_online or wait_zone first"
+                ),
             );
             return;
         }
