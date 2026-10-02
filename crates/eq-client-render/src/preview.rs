@@ -136,6 +136,7 @@ pub(crate) fn player(
         mana: 0,
         endurance: Some(0),
         skills: None,
+        practice_points: None,
         spell_refresh_ms: None,
         memorized_spells: gems,
         size: 0.0,
@@ -457,6 +458,7 @@ pub(crate) fn items() -> Vec<InventoryItem> {
         items.push(InventoryItem {
             activation: eq_client_core::inventory::ItemActivation::default(),
             scroll_spell: None,
+            book: None,
             rules: eq_client_core::inventory::ItemPlacement {
                 stack_size: if id == 8 { 100 } else { 20 },
                 size: 1,

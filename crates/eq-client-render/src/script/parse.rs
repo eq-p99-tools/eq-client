@@ -12,7 +12,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 20] = [
+const GM_COMMANDS: [&str; 23] = [
     // GM mode on or off: off, the server lets the player go hungry.
     "gm",
     // A rule changed in this zone only, such as how fast hunger comes, or
@@ -24,6 +24,12 @@ const GM_COMMANDS: [&str; 20] = [
     "makepet",
     "summon",
     "summonitem",
+    // Searches the server's items by name, to find one to summon.
+    "finditem",
+    // Searches the server's tradeskill recipes by name, and lists one's
+    // container and components.
+    "findrecipe",
+    "viewrecipe",
     // A temporary NPC at the GM's feet, and coins or items on the target.
     "spawn",
     "npcloot",
@@ -129,6 +135,9 @@ pub enum ClickTarget {
     Pick(PickButton),
     /// The selector's button for the skin's Actions window.
     ActionsWindow,
+    /// A button that opens and closes a window, by the window's key, such
+    /// as the inventory's Skills button (`skills`).
+    Toggle(&'static str),
     /// A tab of the open tabbed window, from zero.
     Tab(usize),
     /// An ability button of the Actions window: its page and place, from
@@ -140,6 +149,34 @@ pub enum ClickTarget {
     Pet(&'static str),
     /// An Options window checkbox, by the option's name in a file.
     Option(eq_client_core::options::Toggle),
+    /// An Options window slider, pressed this far along it, in percent.
+    Slider(eq_client_core::options::Level, u8),
+    /// The Keyboard page's filter drop-down, which opens or closes its list.
+    KeyFilter,
+    /// A choice in the open drop-down's list, from zero.
+    Choice(usize),
+    /// A row of the Training window's list, its Train button or its Done
+    /// button.
+    Training(TrainingClick),
+    /// The confirmation dialog's Yes (true) or No.
+    Answer(bool),
+    /// The book window's arrow: forward (true) or back.
+    Page(bool),
+    /// Combine on the window of the tradeskill container in this pack slot.
+    Combine(i32),
+    /// A button of the map's toolbar.
+    Map(crate::map::MapButton),
+}
+
+/// The Training window's controls.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrainingClick {
+    /// A row of the list, from zero.
+    Row(usize),
+    /// Train.
+    Train,
+    /// Done.
+    Done,
 }
 
 /// The Actions window's pages that hold ability buttons.
@@ -323,6 +360,15 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
         ["give"] => ClickTarget::Give,
         ["actions"] => ClickTarget::ActionsWindow,
+        ["window", key] => ClickTarget::Toggle(
+            crate::windows::WindowId::ALL
+                .into_iter()
+                .find_map(|id| match id.key() {
+                    std::borrow::Cow::Borrowed(name) if name == *key => Some(name),
+                    _ => None,
+                })
+                .ok_or("expected a window, by its key such as skills")?,
+        ),
         ["pet", words @ ..] => {
             let line = format!("/pet {}", words.join(" "));
             ClickTarget::Pet(
@@ -340,6 +386,28 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                 .ok_or("expected an option, by its name in a file")?,
         ),
         ["attack"] => ClickTarget::Attack,
+        ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
+        ["train"] => ClickTarget::Training(TrainingClick::Train),
+        ["answer", "yes"] => ClickTarget::Answer(true),
+        ["page", "next"] => ClickTarget::Page(true),
+        ["page", "back"] => ClickTarget::Page(false),
+        ["combine", slot] => ClickTarget::Combine(value(slot, "a pack slot number")?),
+        ["map", action] => ClickTarget::Map(map_button(action)?),
+        ["answer", "no"] => ClickTarget::Answer(false),
+        ["training_done"] => ClickTarget::Training(TrainingClick::Done),
+        ["slider", name, percent] => ClickTarget::Slider(
+            eq_client_core::options::Level::ALL
+                .into_iter()
+                .find(|level| level.key() == *name)
+                .ok_or_else(|| String::from("expected clip_plane, max_fps or mouse_sensitivity"))?,
+            percent
+                .parse::<u8>()
+                .ok()
+                .filter(|percent| *percent <= 100)
+                .ok_or_else(|| String::from("expected a percentage from 0 to 100"))?,
+        ),
+        ["dropdown", "key_filter"] => ClickTarget::KeyFilter,
+        ["choice", choice] => ClickTarget::Choice(ordinal(choice, "a choice")?),
         ["tab", tab] => ClickTarget::Tab(ordinal(tab, "a tab")?),
         ["ability", page, place] => ClickTarget::Ability(
             match *page {
@@ -387,6 +455,26 @@ fn coin_place(word: &str) -> Result<eq_client_core::money::CoinPlace, String> {
 }
 
 /// A place counted from one, as a script names it, from zero.
+/// The map toolbar's button a script names.
+fn map_button(action: &str) -> Result<crate::map::MapButton, String> {
+    use crate::map::MapButton;
+    Ok(match action {
+        "zoom_in" => MapButton::ZoomIn,
+        "zoom_out" => MapButton::ZoomOut,
+        "reset" => MapButton::Reset,
+        "labels" => MapButton::Labels,
+        "up" => MapButton::Pan(0, -1),
+        "down" => MapButton::Pan(0, 1),
+        "left" => MapButton::Pan(-1, 0),
+        "right" => MapButton::Pan(1, 0),
+        _ => {
+            return Err(
+                "expected zoom_in, zoom_out, reset, labels, up, down, left or right".into(),
+            );
+        }
+    })
+}
+
 fn ordinal(word: &str, what: &str) -> Result<usize, String> {
     word.parse::<usize>()
         .ok()

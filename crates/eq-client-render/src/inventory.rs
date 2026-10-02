@@ -390,23 +390,8 @@ pub(super) fn input(
                         casting,
                     );
                 }
-            } else if let Some(item) = online.world().inventory().items().get(&slot.0) {
-                // With the skin's bag windows, a bag opens as in the official
-                // client; food and drink are eaten or drunk, and anything else
-                // shows what it is.
-                if item.bag_slots > 0 && skinned.has(super::windows::WindowId::Inventory) {
-                    crate::skinned::toggle_bag(&mut shown, slot.0);
-                } else if eq_client_core::food::Meal::of_item_type(item.rules.item_type).is_some() {
-                    let _ = sender.post(online.world(), |stamp| {
-                        eq_client_core::ClientCommand::Consume {
-                            session_id: stamp.session_id,
-                            slot: slot.0,
-                            created: stamp.created,
-                        }
-                    });
-                } else {
-                    items.open_received(item.details.clone());
-                }
+            } else {
+                right_click(slot.0, &online, &sender, &mut shown, &skinned, &mut items);
             }
         } else if mouse.just_pressed(MouseButton::Left) && *interaction == Interaction::Pressed {
             if keys
@@ -418,6 +403,43 @@ pub(super) fn input(
                 state.click_slot(slot.0, false, &online, &sender);
             }
         }
+    }
+}
+
+/// Right-clicking a carried item: with the skin's bag windows, a bag opens
+/// as in the official client; a book or note asks for its text, food and
+/// drink are eaten or drunk, and anything else shows what it is.
+fn right_click(
+    slot: InventorySlot,
+    online: &super::online::OnlineState,
+    sender: &crate::outbox::Outbox,
+    shown: &mut super::windows::Shown,
+    skinned: &crate::skinned::Skinned,
+    items: &mut super::items::ItemState,
+) {
+    let Some(item) = online.world().inventory().items().get(&slot) else {
+        return;
+    };
+    if item.bag_slots > 0 && skinned.has(super::windows::WindowId::Inventory) {
+        crate::skinned::toggle_bag(shown, slot);
+    } else if item.book.is_some() {
+        // The book or note opens to read when the server sends its text.
+        let _ = sender.post(online.world(), |stamp| {
+            eq_client_core::ClientCommand::ReadItem {
+                session_id: stamp.session_id,
+                slot,
+            }
+        });
+    } else if eq_client_core::food::Meal::of_item_type(item.rules.item_type).is_some() {
+        let _ = sender.post(online.world(), |stamp| {
+            eq_client_core::ClientCommand::Consume {
+                session_id: stamp.session_id,
+                slot,
+                created: stamp.created,
+            }
+        });
+    } else {
+        items.open_received(item.details.clone());
     }
 }
 

@@ -4,9 +4,15 @@
 //! frame and pieces, and what each gauge and label shows follows the
 //! official client's numbering. A skin without the window, or a viewer
 //! without an installation, keeps the client's own chrome.
+mod controls;
 mod items;
 
-pub(crate) use items::{close, contents, frames, picker, toggle_bag};
+pub(crate) use controls::{
+    Choosing, DropDown, DropDownChoice, KeyFilter, LevelSlider, drop_downs, fill_lists,
+    light_choices, scroll_lists, show_choices, show_levels, slide,
+};
+
+pub(crate) use items::{Closes, close, contents, frames, picker, toggle_bag};
 
 use super::windows::WindowId;
 use crate::theme::{self, Size};
@@ -15,7 +21,10 @@ use eq_client_assets::{
     sidl::{Align, ButtonLook, Element, Gauge, Label, Library, Piece, Screen},
     ui::Area,
 };
-use eq_client_core::money::{Coin, CoinPlace};
+use eq_client_core::{
+    inventory::InventorySlot,
+    money::{Coin, CoinPlace},
+};
 use std::collections::HashMap;
 
 /// The skin's file for a window the client draws from the skin, and the
@@ -27,11 +36,17 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Spells => "EQUI_CastSpellWnd.xml",
         WindowId::Inventory => "EQUI_Inventory.xml",
         WindowId::Bank => "EQUI_BankWnd.xml",
-        WindowId::Bag(_) => "EQUI_Container.xml",
+        WindowId::Bag(_) | WindowId::WorldContainer => "EQUI_Container.xml",
         WindowId::Give => "EQUI_GiveWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
+        WindowId::Training => "EQUI_TrainWindow.xml",
+        WindowId::Skills => "EQUI_SkillsWindow.xml",
+        WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
+        WindowId::Note => "EQUI_NoteWindow.xml",
+        WindowId::Book => "EQUI_BookWindow.xml",
+        WindowId::Map => "EQUI_MapViewWnd.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -67,6 +82,8 @@ pub(crate) enum Shows {
     /// slots 15 to 29 over slots 0 to 14, so an empty slot would hide the
     /// buff under it.
     PetBuff(usize),
+    /// The player's practice points, which the Training window counts.
+    PracticePoints,
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -131,6 +148,11 @@ impl Skinned {
 /// A button drawn from the skin, with its piece for each state.
 #[derive(Component, Clone)]
 pub(crate) struct SkinButton(ButtonLook);
+
+/// A skin button that cannot be used right now, drawn in its disabled look,
+/// as Combine is while a combine waits for the server.
+#[derive(Component)]
+pub(crate) struct Greyed;
 
 /// Window frames, with what the skin changes on them and the skin they are
 /// drawn in.
@@ -318,6 +340,12 @@ fn pieces(
             Element::SpellGem(gem) => spell_gem(window, art, gem, &inside),
             Element::Button(button) => self::button(window, art, button, &inside, context.id),
             Element::InvSlot(slot) => items::slot(window, art, slot, &inside, context.id),
+            Element::Slider(slider) => controls::slider(window, art, slider, &inside, context.id),
+            Element::Combobox(combobox) => {
+                controls::combobox(window, art, combobox, &inside, context.id);
+            }
+            Element::Listbox(list) => controls::listbox(window, art, list, &inside, context.id),
+            Element::TextBox(text) => text_box(window, art, text, &inside, context.id),
             Element::Tabs(tabs) if TABBED.contains(&context.id) => {
                 // A tab box the skin places sits there; one it stretches
                 // fills its container.
@@ -327,7 +355,7 @@ fn pieces(
                     width: at.width,
                     height: at.height,
                 });
-                tabbed(window, art, &tabs.pages, &at, context);
+                tabbed(window, art, tabs, &at, context);
             }
             // The first page shows; the client has nothing for the others yet.
             Element::Tabs(tabs) => {
@@ -350,12 +378,92 @@ fn pieces(
             Element::View(view) if view.name == "IW_CharacterView" => {
                 items::figure(window, view, &inside, context.paperdoll);
             }
+            // The map draws in its render area, over the skin's parchment.
+            Element::View(view)
+                if context.id == WindowId::Map && view.name == "MVW_MapRenderArea" =>
+            {
+                let area = view.anchors.map_or(view.area, |anchors| {
+                    anchors.within(inside.width, inside.height)
+                });
+                window.spawn((
+                    super::map::MapCanvas,
+                    ImageNode::default(),
+                    ZIndex(1),
+                    Node {
+                        overflow: Overflow::clip(),
+                        ..at(
+                            inside.x + area.x,
+                            inside.y + area.y,
+                            area.width,
+                            area.height,
+                        )
+                    },
+                ));
+            }
             Element::View(view) if !view.pieces.is_empty() => {
                 self::view(window, art, view, &inside, context);
             }
             Element::View(_) | Element::Other(_) => (),
         }
     }
+}
+
+/// A box of text the client fills: the confirmation dialog's question,
+/// wrapped inside the box's frame.
+fn text_box(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    text: &eq_client_assets::sidl::TextBox,
+    inside: &Area,
+    owner: WindowId,
+) {
+    let area = text.anchors.map_or(text.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
+    window
+        .spawn(at(
+            inside.x + area.x,
+            inside.y + area.y,
+            area.width,
+            area.height,
+        ))
+        .with_children(|frame| {
+            let mut client = Area {
+                x: 0.0,
+                y: 0.0,
+                width: area.width,
+                height: area.height,
+            };
+            if let Some(template) = &text.template {
+                client = border(frame, art, &template.border, (area.width, area.height));
+            }
+            let ink = text.color.map_or(theme::INK_BRIGHT, rgb);
+            let mut words = frame.spawn((
+                theme::text("", Size::Body, ink),
+                TextLayout::new(Justify::Left, LineBreak::WordBoundary),
+                at(
+                    client.x + 4.0,
+                    client.y + 4.0,
+                    (client.width - 8.0).max(0.0),
+                    (client.height - 8.0).max(0.0),
+                ),
+            ));
+            match (owner, text.id.as_deref()) {
+                (WindowId::Confirmation, _) => {
+                    words.insert(super::resurrection::QuestionText);
+                }
+                (WindowId::Note, _) => {
+                    words.insert(super::reading::Text::Note);
+                }
+                (WindowId::Book, Some("Page0")) => {
+                    words.insert(super::reading::Text::Page(0));
+                }
+                (WindowId::Book, Some("Page1")) => {
+                    words.insert(super::reading::Text::Page(1));
+                }
+                _ => (),
+            }
+        });
 }
 
 /// A window within the window, such as the pet window's buffs: its frame,
@@ -404,125 +512,101 @@ fn view(
         });
 }
 
-/// How wide a tab with these words is: the small font's letters are about
-/// six pixels wide.
-fn tab_width(title: &str) -> f32 {
-    let letters = u16::try_from(title.chars().count()).unwrap_or(u16::MAX);
-    f32::from(letters) * 6.0 + 10.0
-}
+/// The height of a tab that shows its page's words.
+const WORD_TAB_HEIGHT: f32 = 18.0;
 
 /// Windows whose tab boxes show every page, a tab for each.
 const TABBED: [WindowId; 2] = [WindowId::ActionsWindow, WindowId::Options];
 
-/// A tab of a skinned window's tab box: the page it shows. A tab box on
-/// another's page has a depth of one.
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
+/// A tab of a skinned window's tab box: the page it shows. Each tab box
+/// keeps its own choice, by the name the skin gives it; one on another's
+/// page has a depth of one.
+#[derive(Component, Clone, PartialEq, Eq)]
 pub(crate) struct SkinTab {
     pub(crate) window: WindowId,
+    /// The tab box's name.
+    pub(crate) tab_box: std::sync::Arc<str>,
     pub(crate) depth: u8,
     pub(crate) index: usize,
 }
 
 /// A page of a skinned window's tab box.
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Clone, PartialEq, Eq)]
 pub(crate) struct SkinPage(SkinTab);
 
 /// One of a tab's two pictures: the active one shows on the page shown.
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone)]
 pub(crate) struct TabFace {
     tab: SkinTab,
     active: bool,
 }
 
-/// The page each tab box of a tabbed window shows: its first until another
-/// is chosen.
+/// A tab's words, in the page's two colours: the first while another page
+/// shows, the second while it does.
+#[derive(Component, Clone)]
+pub(crate) struct TabWords {
+    tab: SkinTab,
+    colors: [Color; 2],
+}
+
+/// The page each tab box of a tabbed window shows, by the tab box's name:
+/// its first until another is chosen.
 #[derive(Resource, Default)]
-pub(crate) struct Tabs(std::collections::BTreeMap<(WindowId, u8), usize>);
+pub(crate) struct Tabs(std::collections::BTreeMap<(WindowId, std::sync::Arc<str>), usize>);
 
 impl Tabs {
-    fn shows(&self, tab: SkinTab) -> bool {
-        self.0.get(&(tab.window, tab.depth)).copied().unwrap_or(0) == tab.index
+    fn shows(&self, tab: &SkinTab) -> bool {
+        self.0
+            .get(&(tab.window, tab.tab_box.clone()))
+            .copied()
+            .unwrap_or(0)
+            == tab.index
     }
 }
 
-/// A tab box with every page: a row of tabs, each with its page's picture,
-/// across the top, and the chosen page below.
+/// A tab box with every page: a row of tabs, each with its page's picture
+/// or its words, across the top, and the chosen page below. A tab of words
+/// is as wide as the font lays them out.
 fn tabbed(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
-    pages: &[eq_client_assets::sidl::Page],
+    tabs: &eq_client_assets::sidl::TabBox,
     inside: &Area,
     context: &Context,
 ) {
-    let pages = with_client_page(pages, context.id);
+    let pages = with_client_page(&tabs.pages, context.id);
     let pages = pages.as_ref();
-    // A tab shows its page's picture, or else its words.
-    let size = |page: &eq_client_assets::sidl::Page| match (&page.icon[0], &page.title) {
-        (Some(piece), _) => (to_f32(piece.width), to_f32(piece.height)),
-        (None, Some(title)) => (tab_width(title), 18.0),
-        (None, None) => (24.0, 24.0),
+    let tab_box: std::sync::Arc<str> = tabs.name.as_str().into();
+    let tab = |index| SkinTab {
+        window: context.id,
+        tab_box: tab_box.clone(),
+        depth: context.depth,
+        index,
     };
-    let strip = pages.iter().map(|page| size(page).1).fold(0.0, f32::max) + 2.0;
-    let mut x = inside.x + 2.0;
-    for (index, page) in pages.iter().enumerate() {
-        let tab = SkinTab {
-            window: context.id,
-            depth: context.depth,
-            index,
-        };
-        let (width, height) = size(page);
-        let mut cell = window.spawn((Button, tab, at(x, inside.y + 1.0, width, height)));
-        if let Some(tooltip) = &page.tooltip {
-            cell.insert(crate::tooltip::Tooltip(tooltip.clone()));
-        }
-        let words = page.title.as_deref().filter(|_| page.icon[0].is_none());
-        if words.is_some() {
-            cell.insert((
-                BackgroundColor(theme::INSET),
-                BorderColor::all(theme::EDGE),
-                Node {
-                    border: UiRect::all(px(1)),
-                    ..at(x, inside.y + 1.0, width, height)
-                },
-            ));
-        }
-        cell.with_children(|cell| {
-            for (face, piece) in page.icon.iter().enumerate() {
-                if let Some(image) = piece.as_ref().and_then(|piece| art.cut(piece)) {
-                    cell.spawn((
-                        image,
-                        TabFace {
-                            tab,
-                            active: face == 1,
-                        },
-                        at(0.0, 0.0, width, height),
-                    ));
-                }
-            }
-            // The words in the page's colours: one while another page
-            // shows, the other while it does.
-            for (face, color) in page.title_colors.iter().enumerate() {
-                let Some(words) = words else {
-                    break;
-                };
-                let fallback = if face == 1 {
-                    theme::INK_BRIGHT
-                } else {
-                    theme::INK
-                };
-                cell.spawn((
-                    TabFace {
-                        tab,
-                        active: face == 1,
-                    },
-                    theme::text(words, Size::Small, color.map_or(fallback, rgb)),
-                    TextLayout::new(Justify::Center, LineBreak::NoWrap),
-                    at(0.0, 1.0, width - 2.0, height - 2.0),
-                ));
+    // A tab shows its page's picture, or else its words.
+    let height = |page: &eq_client_assets::sidl::Page| match (&page.icon[0], &page.title) {
+        (Some(piece), _) => to_f32(piece.height),
+        (None, Some(_)) => WORD_TAB_HEIGHT,
+        (None, None) => 24.0,
+    };
+    let strip = pages.iter().map(height).fold(0.0, f32::max) + 2.0;
+    window
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::FlexStart,
+            column_gap: px(2),
+            ..at(
+                inside.x + 2.0,
+                inside.y + 1.0,
+                inside.width - 4.0,
+                strip - 1.0,
+            )
+        })
+        .with_children(|row| {
+            for (index, page) in pages.iter().enumerate() {
+                tab_cell(row, art, page, tab(index));
             }
         });
-        x += width + 2.0;
-    }
     let area = Area {
         x: 0.0,
         y: 0.0,
@@ -534,14 +618,9 @@ fn tabbed(
         ..*context
     };
     for (index, page) in pages.iter().enumerate() {
-        let tab = SkinTab {
-            window: context.id,
-            depth: context.depth,
-            index,
-        };
         window
             .spawn((
-                SkinPage(tab),
+                SkinPage(tab(index)),
                 Node {
                     display: Display::None,
                     overflow: Overflow::clip(),
@@ -552,31 +631,111 @@ fn tabbed(
     }
 }
 
-/// Shows the page each tabbed window has chosen, and its tab's picture lit;
-/// a clicked tab chooses its page.
+/// One tab in a tab box's row: its page's picture, or its words in a box
+/// as wide as they lay out.
+fn tab_cell(
+    row: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    page: &eq_client_assets::sidl::Page,
+    tab: SkinTab,
+) {
+    let mut cell = row.spawn((Button, tab.clone()));
+    if let Some(tooltip) = &page.tooltip {
+        cell.insert(crate::tooltip::Tooltip(tooltip.clone()));
+    }
+    match (&page.icon[0], &page.title) {
+        (Some(piece), _) => {
+            let (width, height) = (to_f32(piece.width), to_f32(piece.height));
+            cell.insert(Node {
+                width: px(width),
+                height: px(height),
+                flex_shrink: 0.0,
+                ..default()
+            });
+            cell.with_children(|cell| {
+                for (face, piece) in page.icon.iter().enumerate() {
+                    if let Some(image) = piece.as_ref().and_then(|piece| art.cut(piece)) {
+                        cell.spawn((
+                            image,
+                            TabFace {
+                                tab: tab.clone(),
+                                active: face == 1,
+                            },
+                            at(0.0, 0.0, width, height),
+                        ));
+                    }
+                }
+            });
+        }
+        (None, Some(words)) => {
+            let [rest, chosen] = page.title_colors;
+            let colors = [
+                rest.map_or(theme::INK, rgb),
+                chosen.map_or(theme::INK_BRIGHT, rgb),
+            ];
+            cell.insert((
+                BackgroundColor(theme::INSET),
+                BorderColor::all(theme::EDGE),
+                Node {
+                    height: px(WORD_TAB_HEIGHT),
+                    padding: UiRect::horizontal(px(5)),
+                    border: UiRect::all(px(1)),
+                    align_items: AlignItems::Center,
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+            ));
+            cell.with_child((
+                TabWords { tab, colors },
+                theme::text(words.as_str(), Size::Small, colors[0]),
+                TextLayout::new(Justify::Center, LineBreak::NoWrap),
+            ));
+        }
+        (None, None) => {
+            cell.insert(Node {
+                width: px(24),
+                height: px(24),
+                flex_shrink: 0.0,
+                ..default()
+            });
+        }
+    }
+}
+
+/// Shows the page each tabbed window has chosen, and its tab lit; a clicked
+/// tab chooses its page.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn tabs(
     mut chosen: ResMut<Tabs>,
     clicks: Query<(&Interaction, &SkinTab), Changed<Interaction>>,
     mut pages: Query<(&SkinPage, &mut Node), Without<TabFace>>,
     mut faces: Query<(&TabFace, &mut Node), Without<SkinPage>>,
+    mut words: Query<(&TabWords, &mut TextColor)>,
 ) {
     for (interaction, tab) in &clicks {
         if *interaction == Interaction::Pressed {
-            chosen.0.insert((tab.window, tab.depth), tab.index);
+            chosen
+                .0
+                .insert((tab.window, tab.tab_box.clone()), tab.index);
         }
     }
     let display = |shown: bool| if shown { Display::Flex } else { Display::None };
     for (SkinPage(tab), mut node) in &mut pages {
-        let wanted = display(chosen.shows(*tab));
+        let wanted = display(chosen.shows(tab));
         if node.display != wanted {
             node.display = wanted;
         }
     }
     for (face, mut node) in &mut faces {
-        let wanted = display(chosen.shows(face.tab) == face.active);
+        let wanted = display(chosen.shows(&face.tab) == face.active);
         if node.display != wanted {
             node.display = wanted;
+        }
+    }
+    for (tab, mut color) in &mut words {
+        let wanted = tab.colors[usize::from(chosen.shows(&tab.tab))];
+        if color.0 != wanted {
+            color.0 = wanted;
         }
     }
 }
@@ -612,7 +771,7 @@ fn spell_gem(
         .spawn((
             Button,
             super::hud::SpellGem(index),
-            crate::outbox::Needs(eq_client_core::Capability::Casting),
+            crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
             BackgroundColor(Color::NONE),
             node,
         ))
@@ -655,6 +814,16 @@ enum Does {
     PetBuff(usize),
     /// Turns an option on or off, and shows which.
     Option(eq_client_core::options::Toggle),
+    /// Practices the skill chosen in the Training window.
+    Trains,
+    /// Answers the confirmation dialog's question: Yes (true) or No.
+    Answers(bool),
+    /// Turns a book's pages forward (true) or back.
+    TurnsPage(bool),
+    /// Combines what the tradeskill container in this pack slot holds.
+    Combines(InventorySlot),
+    /// Zooms, pans or toggles the map.
+    Maps(super::map::MapButton),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -668,8 +837,34 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     if let Some(button) = ability_button(id) {
         return Some(Does::Ability(button));
     }
+    // A window's Done button, or the give window's Cancel, closes it; even
+    // in a window whose other buttons do nothing yet.
+    if matches!(id, "DoneButton" | "GVW_Cancel_Button") {
+        return Some(Does::Closes);
+    }
     if owner == WindowId::PetInfo {
         return Some(pet_button(id));
+    }
+    if owner == WindowId::Training && id == "TrainButton" {
+        return Some(Does::Trains);
+    }
+    if owner == WindowId::Map {
+        return Some(super::map::MapButton::for_screen(id).map_or(Does::Nothing, Does::Maps));
+    }
+    if owner == WindowId::Book {
+        match id {
+            "LeftButton" => return Some(Does::TurnsPage(false)),
+            "RightButton" => return Some(Does::TurnsPage(true)),
+            _ => (),
+        }
+    }
+    // The dialog asks only Yes-or-No questions so far; its OK stays hidden.
+    if owner == WindowId::Confirmation {
+        return match id {
+            "Yes_Button" => Some(Does::Answers(true)),
+            "No_Button" => Some(Does::Answers(false)),
+            _ => None,
+        };
     }
     // The skin keeps Switch to Windowed under Switch to Fullscreen; the
     // client runs in a window.
@@ -686,16 +881,24 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     Some(match id {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
-        "DoneButton" | "GVW_Cancel_Button" => Does::Closes,
+        "IW_Skills" => Does::Toggles(WindowId::Skills),
         "GVW_Give_Button" => Does::Gives,
         "ACP_MeleeAttackButton" => Does::Attack,
         "AMP_SitButton" => Does::Slash("/sit"),
         "AMP_StandButton" => Does::Slash("/stand"),
         "AMP_CampButton" => Does::Slash("/camp"),
-        "Container_Icon" if matches!(owner, WindowId::Bag(_)) => Does::BagIcon,
-        // The official client shows Combine only on a tradeskill container,
-        // and this client combines nothing.
-        "Container_Combine" => return None,
+        "Container_Icon" if matches!(owner, WindowId::Bag(_) | WindowId::WorldContainer) => {
+            Does::BagIcon
+        }
+        // Shown only while the bag is a tradeskill container; see
+        // `tradeskills::show`.
+        "Container_Combine" => match owner {
+            WindowId::Bag(bag) => Does::Combines(InventorySlot(bag)),
+            WindowId::WorldContainer => {
+                Does::Combines(eq_client_core::tradeskills::WORLD_CONTAINER)
+            }
+            _ => return None,
+        },
         _ => Does::Nothing,
     })
 }
@@ -830,7 +1033,9 @@ fn button(
     let Some(does) = does(button.id.as_deref().unwrap_or_default(), owner) else {
         return;
     };
-    let area = button.area;
+    let area = button.anchors.map_or(button.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
     let node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -890,19 +1095,41 @@ fn behave(
             Button,
             AttackButton,
             skin(),
-            crate::outbox::Needs(Capability::Combat),
+            crate::outbox::Needs::Capability(Capability::Combat),
         )),
         Does::Ability(place) => drawn.insert((
             Button,
             place,
             skin(),
-            crate::outbox::Needs(Capability::Abilities),
+            crate::outbox::Needs::Capability(Capability::Abilities),
         )),
         Does::Slash(command) => drawn.insert((Button, SlashButton(command), skin())),
         Does::PetBuff(slot) => drawn.insert((Shows::PetBuff(slot), Visibility::Hidden)),
         Does::Option(toggle) => {
             drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()))
         }
+        Does::Trains => drawn.insert((
+            Button,
+            super::training::TrainButton,
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Training),
+        )),
+        Does::Answers(accept) => drawn.insert((
+            Button,
+            super::resurrection::AnswerButton(accept),
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Resurrection),
+        )),
+        Does::TurnsPage(forward) => {
+            drawn.insert((Button, super::reading::PageButton(forward), skin()))
+        }
+        Does::Combines(container) => drawn.insert((
+            Button,
+            super::tradeskills::CombineButton(container),
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Tradeskills),
+        )),
+        Does::Maps(action) => drawn.insert((Button, action, skin())),
         Does::BagIcon | Does::Nothing => drawn,
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
@@ -943,9 +1170,14 @@ fn caption(
             (Shows::Coins(place, coin), theme::text("", Size::Body, ink)),
         ),
         Does::BagIcon => {
-            if let WindowId::Bag(bag) = owner {
+            let part = match owner {
+                WindowId::Bag(bag) => Some(items::BagPart::Icon(InventorySlot(bag))),
+                WindowId::WorldContainer => Some(items::BagPart::WorldIcon),
+                _ => None,
+            };
+            if let Some(part) = part {
                 inner.spawn((
-                    items::BagPart::Icon(eq_client_core::inventory::InventorySlot(bag)),
+                    part,
                     ImageNode::default(),
                     at(0.0, 0.0, area.width, area.height),
                 ));
@@ -970,6 +1202,11 @@ fn caption(
         | Does::Attack
         | Does::Slash(_)
         | Does::Option(_)
+        | Does::Trains
+        | Does::Answers(_)
+        | Does::TurnsPage(_)
+        | Does::Combines(_)
+        | Does::Maps(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 {
@@ -1022,13 +1259,15 @@ type Stateful<'w, 's> = Query<
         Option<&'static super::windows::SelectorButton>,
         Has<AttackButton>,
         Option<&'static super::options::OptionCheckbox>,
+        Has<Greyed>,
         &'static Interaction,
         &'static mut ImageNode,
     ),
 >;
 
 /// Draws each skin button in its state: on while its window is open, the
-/// player attacks or its option is on, lit under the pointer.
+/// player attacks or its option is on, lit under the pointer, and in its
+/// disabled look while greyed.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
     (shown, options): (
@@ -1039,18 +1278,21 @@ pub(crate) fn buttons(
     mut art: crate::sheets::Art,
     mut buttons: Stateful,
 ) {
-    for (SkinButton(look), selector, attack, checkbox, interaction, mut image) in &mut buttons {
+    for (SkinButton(look), selector, attack, checkbox, greyed, interaction, mut image) in
+        &mut buttons
+    {
         let on = match (selector, checkbox) {
             (Some(selector), _) => shown.is_open(selector.0),
             (None, Some(checkbox)) => options.on(checkbox.0),
             (None, None) => attack && combat.auto_attack,
         };
         let hovered = *interaction != Interaction::None;
-        let piece = match (on, hovered) {
-            (true, true) => look.pressed_flyby.as_ref().or(look.pressed.as_ref()),
-            (true, false) => look.pressed.as_ref(),
-            (false, true) => look.flyby.as_ref(),
-            (false, false) => None,
+        let piece = match (greyed, on, hovered) {
+            (true, _, _) => look.disabled.as_ref(),
+            (false, true, true) => look.pressed_flyby.as_ref().or(look.pressed.as_ref()),
+            (false, true, false) => look.pressed.as_ref(),
+            (false, false, true) => look.flyby.as_ref(),
+            (false, false, false) => None,
         }
         .or(look.normal.as_ref());
         if let Some(wanted) = piece.and_then(|piece| art.cut(piece))
@@ -1232,17 +1474,36 @@ fn label(
     let area = label.area;
     let bag = match owner {
         WindowId::Bag(bag) if name == "Container_Label" => {
-            Some(eq_client_core::inventory::InventorySlot(bag))
+            Some(items::BagPart::Name(InventorySlot(bag)))
         }
+        WindowId::WorldContainer if name == "Container_Label" => Some(items::BagPart::WorldName),
         _ => None,
     };
     let banker = owner == WindowId::Bank && name == "BW_BankerName";
     let partner = owner == WindowId::Give && name == "GVW_NPCName";
-    let words = if label.eq_type.is_some() || bag.is_some() || banker || partner {
-        ""
-    } else {
-        label.text.as_str()
+    // The Training window's practice points and the coins the player carries.
+    let counted = match name {
+        "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
+        _ if owner == WindowId::Training => name
+            .strip_prefix("TRNW_CoinCount")
+            .and_then(|index| index.parse::<usize>().ok())
+            .and_then(|index| Coin::ALL.get(index))
+            .map(|coin| Shows::Coins(CoinPlace::Purse, *coin)),
+        _ => None,
     };
+    // The book window's page numbers.
+    let page_number = match (owner, name) {
+        (WindowId::Book, "BOOK_Page0Number") => Some(0),
+        (WindowId::Book, "BOOK_Page1Number") => Some(1),
+        _ => None,
+    };
+    let filled = label.eq_type.is_some()
+        || bag.is_some()
+        || banker
+        || partner
+        || counted.is_some()
+        || page_number.is_some();
+    let words = if filled { "" } else { label.text.as_str() };
     let text = theme::text(
         words,
         font(label.font),
@@ -1256,10 +1517,35 @@ fn label(
     );
     match (label.eq_type, bag) {
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
-        (None, Some(bag)) => aligned(window, node, label.align, (text, items::BagPart::Name(bag))),
+        (None, Some(bag)) => aligned(window, node, label.align, (text, bag)),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
+        (None, None) if let Some(side) = page_number => {
+            aligned(
+                window,
+                node,
+                label.align,
+                (text, super::reading::Text::Number(side)),
+            );
+        }
+        (None, None) if let Some(shows) = counted => {
+            aligned(window, node, label.align, (text, shows));
+        }
         (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
-        (None, None) => aligned(window, node, label.align, text),
+        (None, None) => match controls::value_label(name, owner) {
+            Some(controls::ValueLabel::Shows(level)) => aligned(
+                window,
+                node,
+                label.align,
+                (text, controls::LevelValue(level)),
+            ),
+            Some(controls::ValueLabel::Blank) => aligned(
+                window,
+                node,
+                label.align,
+                theme::text("", font(label.font), theme::INK_DIM),
+            ),
+            None => aligned(window, node, label.align, text),
+        },
     }
 }
 
@@ -1375,6 +1661,7 @@ pub(crate) fn show(
             ),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Banker => (inventory.banker().to_owned(), None),
+            Shows::PracticePoints => (super::training::practice_points(world), None),
             Shows::Partner => (super::give::partner(world), None),
             Shows::Fill(_) | Shows::Attacking | Shows::WhilePetSits(_) | Shows::PetBuff(_) => {
                 continue;
@@ -1566,6 +1853,7 @@ mod tests {
                 width: 150.0,
                 height: 20.0,
             },
+            anchors: None,
             look: ButtonLook::default(),
             checkbox: true,
             text: Some("Pet Window Popup".into()),

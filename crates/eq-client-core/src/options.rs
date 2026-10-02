@@ -74,6 +74,108 @@ impl Toggle {
     }
 }
 
+/// An option the player sets along one of the Options window's sliders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Level {
+    /// How far away spawns are drawn, as a percentage of the farthest the
+    /// zone and the client allow (the Display page's Far Clip Plane).
+    ClipPlane,
+    /// The most frames drawn each second, or 0 to leave the rate to the
+    /// display (the Display page's Max. Frames Per Second).
+    MaxFps,
+    /// How fast the camera turns as the mouse drags it, as a percentage
+    /// where 50 is the client's own speed (the Mouse page's Mouselook
+    /// Sensitivity).
+    MouseSensitivity,
+}
+
+/// The fewest frames a second the Max FPS slider offers.
+const MIN_FPS: u16 = 10;
+/// The most frames a second the Max FPS slider offers below its far right,
+/// which leaves the rate to the display.
+const MAX_FPS: u16 = 200;
+/// The steps between the Max FPS slider's rates.
+const FPS_STEP: usize = 5;
+
+impl Level {
+    /// Every level, in the order a file lists them.
+    pub const ALL: [Self; 3] = [Self::ClipPlane, Self::MaxFps, Self::MouseSensitivity];
+
+    /// The name a file keeps it under.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::ClipPlane => "clip_plane",
+            Self::MaxFps => "max_fps",
+            Self::MouseSensitivity => "mouse_sensitivity",
+        }
+    }
+
+    /// The values its slider stops at, from its left.
+    fn stops(self) -> Vec<u16> {
+        match self {
+            Self::ClipPlane | Self::MouseSensitivity => (0..=100).collect(),
+            Self::MaxFps => (MIN_FPS..=MAX_FPS)
+                .step_by(FPS_STEP)
+                .chain(std::iter::once(0))
+                .collect(),
+        }
+    }
+
+    /// Where along its slider a value sits, from 0 at its left to 1 at its
+    /// right.
+    #[must_use]
+    pub fn fraction(self, value: u16) -> f32 {
+        match self {
+            Self::ClipPlane | Self::MouseSensitivity => f32::from(value.min(100)) / 100.0,
+            Self::MaxFps if value == 0 => 1.0,
+            Self::MaxFps => {
+                let span = f32::from(MAX_FPS - MIN_FPS);
+                // The far right is the display's rate, so a rate the slider
+                // does not offer stops just short of it.
+                (f32::from(value.clamp(MIN_FPS, MAX_FPS) - MIN_FPS) / span) * 0.975
+            }
+        }
+    }
+
+    /// The value at a point along its slider, from 0 at its left to 1 at
+    /// its right: the stop nearest it.
+    #[must_use]
+    pub fn at(self, fraction: f32) -> u16 {
+        let fraction = if fraction.is_finite() {
+            fraction.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.stops()
+            .into_iter()
+            .min_by(|a, b| {
+                (self.fraction(*a) - fraction)
+                    .abs()
+                    .total_cmp(&(self.fraction(*b) - fraction).abs())
+            })
+            .unwrap_or_default()
+    }
+
+    /// The value as the slider's label shows it.
+    #[must_use]
+    pub fn words(self, value: u16) -> String {
+        match self {
+            Self::ClipPlane | Self::MouseSensitivity => format!("{value} %"),
+            Self::MaxFps if value == 0 => "Display".to_owned(),
+            Self::MaxFps => value.to_string(),
+        }
+    }
+
+    /// Whether a file's value is one the option takes.
+    fn takes(self, value: u16) -> bool {
+        match self {
+            Self::ClipPlane | Self::MouseSensitivity => value <= 100,
+            Self::MaxFps => value == 0 || (1..=1000).contains(&value),
+        }
+    }
+}
+
 /// Every option the client keeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(
@@ -103,13 +205,21 @@ pub struct Options {
     /// sets it; the official client keeps it in `eqclient.ini`, this client
     /// per character.
     pub show_names: ShowNames,
+    /// See [`Level::ClipPlane`].
+    pub clip_plane: u16,
+    /// See [`Level::MaxFps`].
+    pub max_fps: u16,
+    /// See [`Level::MouseSensitivity`].
+    pub mouse_sensitivity: u16,
 }
 
 impl Default for Options {
     /// The client's defaults: the pet's window pops up, the target ring, the
     /// player's helm and everyone's names show, the mouse is not inverted and its wheel
     /// zooms, food with modifiers waits for the player, the chat is logged,
-    /// and players' names show in full.
+    /// players' names show in full, spawns draw as far as the zone allows,
+    /// at most 60 frames a second, and the camera turns at the client's own
+    /// speed.
     fn default() -> Self {
         Self {
             pet_window_popup: true,
@@ -122,6 +232,9 @@ impl Default for Options {
             skip_modified_food: true,
             log: true,
             show_names: ShowNames::Everything,
+            clip_plane: 100,
+            max_fps: 60,
+            mouse_sensitivity: 50,
         }
     }
 }
@@ -159,6 +272,57 @@ impl Options {
         *option = on;
     }
 
+    /// A slider's value.
+    #[must_use]
+    pub const fn level(&self, level: Level) -> u16 {
+        match level {
+            Level::ClipPlane => self.clip_plane,
+            Level::MaxFps => self.max_fps,
+            Level::MouseSensitivity => self.mouse_sensitivity,
+        }
+    }
+
+    /// Sets a slider's value.
+    pub const fn set_level(&mut self, level: Level, value: u16) {
+        let option = match level {
+            Level::ClipPlane => &mut self.clip_plane,
+            Level::MaxFps => &mut self.max_fps,
+            Level::MouseSensitivity => &mut self.mouse_sensitivity,
+        };
+        *option = value;
+    }
+
+    /// The share of the farthest drawing distance the scene is drawn within:
+    /// the clip plane, never below a twentieth.
+    #[must_use]
+    pub fn clip_share(&self) -> f32 {
+        (f32::from(self.clip_plane.min(100)) / 100.0).max(0.05)
+    }
+
+    /// How far the scene is drawn, terrain, objects and spawns alike, in a
+    /// zone with this far clip: the clip plane's share of it, but never
+    /// nearer than 100 units. Provisional: the official slider's mapping is
+    /// unverified. None where the zone gives no far clip.
+    #[must_use]
+    pub fn clip_distance(&self, far_clip: Option<f32>) -> Option<f32> {
+        let far_clip = far_clip.filter(|far| far.is_finite() && *far > 0.0)?;
+        Some((far_clip * self.clip_share()).max(far_clip.min(100.0)))
+    }
+
+    /// The most frames a second, if the client holds the rate down at all.
+    #[must_use]
+    pub fn frame_cap(&self) -> Option<u32> {
+        (self.max_fps > 0).then(|| u32::from(self.max_fps))
+    }
+
+    /// How far the camera turns, in radians, for each pixel the mouse drags
+    /// it: the client's own 0.005 at a sensitivity of 50, doubling with
+    /// every 25 above and halving with every 25 below.
+    #[must_use]
+    pub fn turn_per_pixel(&self) -> f32 {
+        0.005 * ((f32::from(self.mouse_sensitivity.min(100)) - 50.0) / 25.0).exp2()
+    }
+
     /// What the session may eat and drink on its own.
     #[must_use]
     pub const fn auto_eat(&self) -> AutoEat {
@@ -181,6 +345,15 @@ impl Options {
             if key.trim() == SHOW_NAMES {
                 if let Some(level) = ShowNames::parse(value) {
                     options.show_names = level;
+                }
+                continue;
+            }
+            if let Some(level) = Level::ALL
+                .into_iter()
+                .find(|level| level.key() == key.trim())
+            {
+                if let Some(number) = value.trim().parse().ok().filter(|n| level.takes(*n)) {
+                    options.set_level(level, number);
                 }
                 continue;
             }
@@ -214,6 +387,11 @@ impl Options {
         for part in [SHOW_NAMES, " = ", self.show_names.word(), "\n"] {
             text.push_str(part);
         }
+        for level in Level::ALL {
+            for part in [level.key(), " = ", &self.level(level).to_string(), "\n"] {
+                text.push_str(part);
+            }
+        }
         text
     }
 }
@@ -246,6 +424,46 @@ mod tests {
         assert_eq!(read.show_names, ShowNames::Everything);
         let off = Options::read("show_names = off\n", defaults);
         assert_eq!(off.show_names, ShowNames::Off);
+    }
+
+    #[test]
+    fn sliders_keep_their_values_and_stop_where_their_labels_say() {
+        let mut options = Options::default();
+        options.set_level(Level::ClipPlane, 40);
+        options.set_level(Level::MaxFps, 0);
+        let text = options.text();
+        assert!(text.contains("clip_plane = 40\n") && text.contains("max_fps = 0\n"));
+        assert_eq!(Options::read(&text, Options::default()), options);
+        // Values a slider cannot hold keep the default.
+        let read = Options::read(
+            "clip_plane = 300\nmouse_sensitivity = x\n",
+            Options::default(),
+        );
+        assert_eq!((read.clip_plane, read.mouse_sensitivity), (100, 50));
+        // The far right of Max FPS leaves the rate to the display.
+        assert_eq!(Level::MaxFps.at(1.0), 0);
+        assert_eq!(Level::MaxFps.at(0.0), 10);
+        assert_eq!(Level::MaxFps.words(0), "Display");
+        assert_eq!(Level::MaxFps.at(Level::MaxFps.fraction(60)), 60);
+        assert_eq!(Level::ClipPlane.at(0.404), 40);
+        assert_eq!(Level::ClipPlane.words(40), "40 %");
+        assert_eq!(Options::default().frame_cap(), Some(60));
+        assert_eq!(options.frame_cap(), None);
+        // Sensitivity 50 is the client's own speed; 75 doubles it.
+        let mut quick = Options::default();
+        assert!((quick.turn_per_pixel() - 0.005).abs() < 1e-6);
+        quick.set_level(Level::MouseSensitivity, 75);
+        assert!((quick.turn_per_pixel() - 0.01).abs() < 1e-6);
+        // The scene always draws within a twentieth of the distance, and no
+        // nearer than 100 units.
+        options.set_level(Level::ClipPlane, 0);
+        assert!((options.clip_share() - 0.05).abs() < f32::EPSILON);
+        assert_eq!(options.clip_distance(Some(2400.0)), Some(120.0));
+        assert_eq!(options.clip_distance(Some(1000.0)), Some(100.0));
+        assert_eq!(options.clip_distance(Some(80.0)), Some(80.0));
+        options.set_level(Level::ClipPlane, 50);
+        assert_eq!(options.clip_distance(Some(2400.0)), Some(1200.0));
+        assert_eq!(options.clip_distance(None), None);
     }
 
     #[test]

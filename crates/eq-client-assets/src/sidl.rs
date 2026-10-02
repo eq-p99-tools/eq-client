@@ -122,6 +122,9 @@ pub struct Button {
     pub id: Option<String>,
     /// Where it sits in its window.
     pub area: Area,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`), such as a Done button kept to the bottom corner.
+    pub anchors: Option<Anchors>,
     /// How it is drawn.
     pub look: ButtonLook,
     /// Whether it stays on once pressed, as a window's toggle does.
@@ -271,6 +274,75 @@ pub struct SpellGem {
     pub highlight: Option<Piece>,
 }
 
+/// How a slider is drawn: its track between two end caps, and its thumb
+/// in each state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SliderLook {
+    /// The track, stretched between the end caps.
+    pub background: Option<Piece>,
+    /// The track's left end.
+    pub cap_left: Option<Piece>,
+    /// The track's right end.
+    pub cap_right: Option<Piece>,
+    /// The thumb the player drags.
+    pub thumb: ButtonLook,
+}
+
+/// A slider: a thumb the player drags along a track to set a value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slider {
+    /// What the window calls it, such as `ODP_ClipPlaneSlider`.
+    pub id: Option<String>,
+    /// Where it sits in its window.
+    pub area: Area,
+    /// How it is drawn.
+    pub look: SliderLook,
+}
+
+/// A drop-down: the choice made, and a button that opens the list of
+/// choices.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Combobox {
+    /// What the window calls it, such as `ODP_SkyCombobox`.
+    pub id: Option<String>,
+    /// Where it sits in its window.
+    pub area: Area,
+    /// How its frame is drawn.
+    pub template: Option<WindowTemplate>,
+    /// The button that opens the list.
+    pub button: ButtonLook,
+    /// What may be chosen, in order.
+    pub choices: Vec<String>,
+    /// How tall the open list is.
+    pub list_height: f32,
+}
+
+/// One column of a list: its heading and width.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Column {
+    /// The column's heading.
+    pub heading: String,
+    /// The column's width.
+    pub width: f32,
+}
+
+/// A list of rows in columns under headings, such as the Options window's
+/// key assignments.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listbox {
+    /// What the window calls it, such as `OKP_KeyboardAssignmentList`.
+    pub id: Option<String>,
+    /// Where it sits in its window, when the skin places it.
+    pub area: Option<Area>,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`).
+    pub anchors: Option<Anchors>,
+    /// How its frame is drawn.
+    pub template: Option<WindowTemplate>,
+    /// Its columns, from the left.
+    pub columns: Vec<Column>,
+}
+
 /// Where a label's text sits in its box.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Align {
@@ -324,12 +396,38 @@ pub enum Element {
     SpellGem(SpellGem),
     /// An item slot.
     InvSlot(InvSlot),
+    /// A slider.
+    Slider(Slider),
+    /// A drop-down.
+    Combobox(Combobox),
+    /// A list in columns.
+    Listbox(Listbox),
     /// Pages behind tabs; the first is shown.
     Tabs(TabBox),
     /// A window inside the window.
     View(Box<View>),
+    /// A box of text the client fills, such as a confirmation's question
+    /// (`STMLbox`).
+    TextBox(TextBox),
     /// An element this reader does not draw yet, by its kind.
     Other(String),
+}
+
+/// A box of text the client fills.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBox {
+    /// What the window calls it (`ScreenID`), such as `TextOutput`.
+    pub id: Option<String>,
+    /// Where it sits in its window, when the skin places it.
+    pub area: Area,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`).
+    pub anchors: Option<Anchors>,
+    /// How its frame is drawn; None for a box without one, such as a page
+    /// of a book, drawn on the window's own art.
+    pub template: Option<WindowTemplate>,
+    /// The colour of its text, where the skin sets one.
+    pub color: Option<[u8; 3]>,
 }
 
 /// A window as the skin defines it.
@@ -357,6 +455,8 @@ pub struct Screen {
 pub struct Library {
     pieces: HashMap<String, Piece>,
     templates: HashMap<String, WindowTemplate>,
+    sliders: HashMap<String, SliderLook>,
+    buttons: HashMap<String, ButtonLook>,
 }
 
 impl Library {
@@ -381,11 +481,23 @@ impl Library {
         let document = roxmltree::Document::parse(templates)?;
         library.add_pieces(&document);
         for node in document.root_element().children() {
-            if node.has_tag_name("WindowDrawTemplate")
-                && let Some(name) = node.attribute("item")
-            {
-                let template = library.template(node);
-                library.templates.insert(name.to_owned(), template);
+            let Some(name) = node.attribute("item") else {
+                continue;
+            };
+            match node.tag_name().name() {
+                "WindowDrawTemplate" => {
+                    let template = library.template(node);
+                    library.templates.insert(name.to_owned(), template);
+                }
+                "SliderDrawTemplate" => {
+                    let look = library.slider_look(node);
+                    library.sliders.insert(name.to_owned(), look);
+                }
+                "ButtonDrawTemplate" => {
+                    let look = library.button_look(Some(node));
+                    library.buttons.insert(name.to_owned(), look);
+                }
+                _ => (),
             }
         }
         Ok(library)
@@ -504,6 +616,29 @@ impl Library {
             .collect()
     }
 
+    /// A button's pictures in each state, from a `ButtonDrawTemplate` or a
+    /// slider's `Thumb`.
+    fn button_look(&self, look: Option<roxmltree::Node<'_, '_>>) -> ButtonLook {
+        let state = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
+        ButtonLook {
+            normal: state("Normal"),
+            pressed: state("Pressed"),
+            flyby: state("Flyby"),
+            disabled: state("Disabled"),
+            pressed_flyby: state("PressedFlyby"),
+        }
+    }
+
+    /// A slider's pictures, from a `SliderDrawTemplate`.
+    fn slider_look(&self, node: roxmltree::Node<'_, '_>) -> SliderLook {
+        SliderLook {
+            background: self.piece(text_of(node, "Background")),
+            cap_left: self.piece(text_of(node, "EndCapLeft")),
+            cap_right: self.piece(text_of(node, "EndCapRight")),
+            thumb: self.button_look(child(node, "Thumb")),
+        }
+    }
+
     fn button(&self, node: roxmltree::Node<'_, '_>) -> Element {
         let at = || {
             area(node).unwrap_or(Area {
@@ -518,13 +653,8 @@ impl Library {
         Element::Button(Button {
             id: text_of(node, "ScreenID").map(str::to_owned),
             area: at(),
-            look: ButtonLook {
-                normal: state("Normal"),
-                pressed: state("Pressed"),
-                flyby: state("Flyby"),
-                disabled: state("Disabled"),
-                pressed_flyby: state("PressedFlyby"),
-            },
+            anchors: flag(node, "AutoStretch").then(|| anchors(node)),
+            look: self.button_look(look),
             checkbox: flag(node, "Style_Checkbox"),
             text: text_of(node, "Text").map(str::to_owned),
             text_color: color(node, "TextColor"),
@@ -576,6 +706,94 @@ impl Library {
             .collect()
     }
 
+    /// A gauge: a bar showing a fraction, with its text.
+    fn gauge(&self, node: roxmltree::Node<'_, '_>) -> Element {
+        let at = || {
+            area(node).unwrap_or(Area {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            })
+        };
+        let look = child(node, "GaugeDrawTemplate");
+        let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
+        Element::Gauge(Gauge {
+            area: at(),
+            eq_type: number(node, "EQType"),
+            look: GaugeLook {
+                background: part("Background"),
+                fill: part("Fill"),
+                lines: part("Lines"),
+                cap_left: part("EndCapLeft"),
+                cap_right: part("EndCapRight"),
+            },
+            fill_tint: color(node, "FillTint"),
+            text_color: color(node, "TextColor"),
+            text_offset: (
+                number(node, "TextOffsetX").unwrap_or(0.0),
+                number(node, "TextOffsetY").unwrap_or(0.0),
+            ),
+            bar_offset: number(node, "GaugeOffsetY").unwrap_or(0.0),
+            bar_left: number(node, "GaugeOffsetX").unwrap_or(0.0),
+        })
+    }
+
+    /// A slider, a drop-down or a list.
+    fn control(&self, node: roxmltree::Node<'_, '_>) -> Element {
+        let at = || {
+            area(node).unwrap_or(Area {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            })
+        };
+        let id = || text_of(node, "ScreenID").map(str::to_owned);
+        let template = || {
+            text_of(node, "DrawTemplate").and_then(|template| self.templates.get(template).cloned())
+        };
+        match node.tag_name().name() {
+            "Slider" => Element::Slider(Slider {
+                id: id(),
+                area: at(),
+                look: text_of(node, "SliderArt")
+                    .and_then(|art| self.sliders.get(art).cloned())
+                    .unwrap_or_default(),
+            }),
+            "Combobox" => Element::Combobox(Combobox {
+                id: id(),
+                area: at(),
+                template: template(),
+                button: text_of(node, "Button")
+                    .and_then(|button| self.buttons.get(button).cloned())
+                    .unwrap_or_default(),
+                choices: node
+                    .children()
+                    .filter(|child| child.has_tag_name("Choices"))
+                    .filter_map(|child| child.text())
+                    .map(|choice| choice.trim().to_owned())
+                    .collect(),
+                list_height: number(node, "ListHeight").unwrap_or(100.0),
+            }),
+            "Listbox" => Element::Listbox(Listbox {
+                id: id(),
+                area: area(node),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
+                template: template(),
+                columns: node
+                    .children()
+                    .filter(|child| child.has_tag_name("Columns"))
+                    .map(|column| Column {
+                        heading: text_of(column, "Heading").unwrap_or_default().to_owned(),
+                        width: number(column, "Width").unwrap_or(80.0),
+                    })
+                    .collect(),
+            }),
+            other => Element::Other(other.to_owned()),
+        }
+    }
+
     fn element(
         &self,
         node: roxmltree::Node<'_, '_>,
@@ -591,30 +809,10 @@ impl Library {
             })
         };
         match node.tag_name().name() {
-            "Gauge" => {
-                let look = child(node, "GaugeDrawTemplate");
-                let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
-                Element::Gauge(Gauge {
-                    area: at(),
-                    eq_type: number(node, "EQType"),
-                    look: GaugeLook {
-                        background: part("Background"),
-                        fill: part("Fill"),
-                        lines: part("Lines"),
-                        cap_left: part("EndCapLeft"),
-                        cap_right: part("EndCapRight"),
-                    },
-                    fill_tint: color(node, "FillTint"),
-                    text_color: color(node, "TextColor"),
-                    text_offset: (
-                        number(node, "TextOffsetX").unwrap_or(0.0),
-                        number(node, "TextOffsetY").unwrap_or(0.0),
-                    ),
-                    bar_offset: number(node, "GaugeOffsetY").unwrap_or(0.0),
-                    bar_left: number(node, "GaugeOffsetX").unwrap_or(0.0),
-                })
-            }
-            "Label" => Element::Label(Label {
+            "Gauge" => self.gauge(node),
+            // Words the skin writes, or the client fills: StaticText is how
+            // the skin writes a book's page numbers.
+            "Label" | "StaticText" => Element::Label(Label {
                 area: at(),
                 eq_type: number(node, "EQType"),
                 text: text_of(node, "Text").unwrap_or_default().to_owned(),
@@ -634,6 +832,21 @@ impl Library {
                 area: at(),
                 slot: number(node, "EQType"),
                 background: self.piece(text_of(node, "Background")),
+            }),
+            "Slider" | "Combobox" | "Listbox" => self.control(node),
+            // A box of text, or a field the client fills with text, as a
+            // book's pages are.
+            "STMLbox" | "Editbox" => Element::TextBox(TextBox {
+                id: text_of(node, "ScreenID").map(str::to_owned),
+                area: at(),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
+                template: text_of(node, "DrawTemplate")
+                    .filter(|_| {
+                        !flag(node, "Style_Transparent")
+                            && text_of(node, "Style_Border") != Some("false")
+                    })
+                    .and_then(|template| self.templates.get(template).cloned()),
+                color: color(node, "TextColor"),
             }),
             // Pages and windows within windows nest; skins go a few deep.
             "TabBox" if depth < 4 => Element::Tabs(TabBox {
@@ -797,7 +1010,83 @@ mod tests {
             <Border><TopLeft>A_Corner</TopLeft><Top>A_Missing</Top></Border>
             <Titlebar><Middle>A_Back</Middle></Titlebar>
         </WindowDrawTemplate>
+        <SliderDrawTemplate item="SDT_Plain">
+            <Thumb><Normal>A_Fill</Normal><Disabled>A_Corner</Disabled></Thumb>
+            <Background>A_Back</Background>
+            <EndCapLeft>A_Corner</EndCapLeft><EndCapRight>A_Corner</EndCapRight>
+        </SliderDrawTemplate>
+        <ButtonDrawTemplate item="BDT_Down">
+            <Normal>A_Corner</Normal><Pressed>A_Fill</Pressed>
+        </ButtonDrawTemplate>
     </XML>"#;
+
+    const CONTROLS: &str = r#"<XML>
+        <Slider item="Clip"><ScreenID>ODP_ClipPlaneSlider</ScreenID>
+            <Location><X>200</X><Y>129</Y></Location><Size><CX>100</CX><CY>16</CY></Size>
+            <SliderArt>SDT_Plain</SliderArt>
+        </Slider>
+        <Combobox item="Sky"><ScreenID>ODP_SkyCombobox</ScreenID>
+            <DrawTemplate>WDT_Plain</DrawTemplate>
+            <Location><X>272</X><Y>35</Y></Location><Size><CX>105</CX><CY>24</CY></Size>
+            <ListHeight>60</ListHeight><Button>BDT_Down</Button>
+            <Choices>Off</Choices><Choices> Simple </Choices><Choices>Complex</Choices>
+        </Combobox>
+        <Listbox item="Keys"><ScreenID>OKP_KeyboardAssignmentList</ScreenID>
+            <DrawTemplate>WDT_Plain</DrawTemplate><AutoStretch>true</AutoStretch>
+            <TopAnchorOffset>60</TopAnchorOffset><LeftAnchorOffset>5</LeftAnchorOffset>
+            <RightAnchorToLeft>false</RightAnchorToLeft><RightAnchorOffset>5</RightAnchorOffset>
+            <BottomAnchorToTop>false</BottomAnchorToTop><BottomAnchorOffset>5</BottomAnchorOffset>
+            <Columns><Width>180</Width><Heading>Command</Heading></Columns>
+            <Columns><Width>75</Width><Heading>Keypress</Heading></Columns>
+        </Listbox>
+        <Screen item="Options"><Size><CX>400</CX><CY>300</CY></Size>
+            <Pieces>Clip</Pieces><Pieces>Sky</Pieces><Pieces>Keys</Pieces>
+        </Screen>
+    </XML>"#;
+
+    #[test]
+    fn sliders_drop_downs_and_lists_carry_their_art_choices_and_columns() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let screen = library.screen(CONTROLS, "Options").unwrap();
+        let [
+            (_, Element::Slider(slider)),
+            (_, Element::Combobox(sky)),
+            (_, Element::Listbox(keys)),
+        ] = &screen.pieces[..]
+        else {
+            panic!(
+                "expected a slider, a drop-down and a list: {:?}",
+                screen.pieces
+            );
+        };
+        assert_eq!(slider.id.as_deref(), Some("ODP_ClipPlaneSlider"));
+        assert_eq!((slider.area.x, slider.area.width), (200.0, 100.0));
+        assert_eq!(slider.look.background.as_ref().unwrap().y, 7);
+        assert_eq!(slider.look.thumb.normal.as_ref().unwrap().y, 18);
+        assert!(slider.look.thumb.disabled.is_some() && slider.look.cap_left.is_some());
+        assert_eq!(sky.choices, ["Off", "Simple", "Complex"]);
+        assert!((sky.list_height - 60.0).abs() < f32::EPSILON);
+        assert!(sky.button.pressed.is_some() && sky.template.is_some());
+        assert_eq!(keys.area, None);
+        let inside = keys.anchors.unwrap().within(400.0, 300.0);
+        assert_eq!(
+            (inside.x, inside.y, inside.width, inside.height),
+            (5.0, 60.0, 390.0, 235.0)
+        );
+        assert_eq!(
+            keys.columns,
+            [
+                Column {
+                    heading: "Command".into(),
+                    width: 180.0
+                },
+                Column {
+                    heading: "Keypress".into(),
+                    width: 75.0
+                }
+            ]
+        );
+    }
 
     const WINDOW: &str = r#"<?xml version="1.0" encoding="us-ascii"?>
     <XML ID="EQInterfaceDefinitionLanguage">
@@ -969,6 +1258,69 @@ mod tests {
                 y: 4.0,
                 width: 30.0,
                 height: 112.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_button_that_stretches_keeps_to_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        // The Skills window's Done button: 102 from the right, 22 above the
+        // bottom, to 2 from the right and 2 below the bottom.
+        let text = r#"<XML>
+            <Button item="SKLW_DoneButton"><ScreenID>DoneButton</ScreenID>
+                <AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>102</LeftAnchorOffset><TopAnchorOffset>22</TopAnchorOffset>
+                <RightAnchorOffset>2</RightAnchorOffset><BottomAnchorOffset>-2</BottomAnchorOffset>
+                <TopAnchorToTop>false</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+                <RightAnchorToLeft>false</RightAnchorToLeft><LeftAnchorToLeft>false</LeftAnchorToLeft>
+                <Text>Done</Text></Button>
+            <Screen item="SkillsWindow"><Size><CX>300</CX><CY>200</CY></Size>
+                <Pieces>SKLW_DoneButton</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "SkillsWindow").unwrap();
+        let Element::Button(done) = &screen.pieces[0].1 else {
+            panic!("a button")
+        };
+        assert_eq!(
+            done.anchors.unwrap().within(290.0, 170.0),
+            Area {
+                x: 188.0,
+                y: 148.0,
+                width: 100.0,
+                height: 24.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_text_box_the_client_fills_keeps_to_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        // The confirmation dialog's question: 2 from three edges, 24 above
+        // the bottom, where the buttons sit.
+        let text = r#"<XML>
+            <STMLbox item="CD_TextOutput"><ScreenID>TextOutput</ScreenID>
+                <AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>2</LeftAnchorOffset><TopAnchorOffset>2</TopAnchorOffset>
+                <RightAnchorOffset>2</RightAnchorOffset><BottomAnchorOffset>24</BottomAnchorOffset>
+                <TopAnchorToTop>true</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+                <LeftAnchorToLeft>true</LeftAnchorToLeft><RightAnchorToLeft>false</RightAnchorToLeft>
+            </STMLbox>
+            <Screen item="ConfirmationDialogBox"><Size><CX>274</CX><CY>200</CY></Size>
+                <Pieces>CD_TextOutput</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "ConfirmationDialogBox").unwrap();
+        let Element::TextBox(question) = &screen.pieces[0].1 else {
+            panic!("a text box")
+        };
+        assert_eq!(question.id.as_deref(), Some("TextOutput"));
+        assert_eq!(
+            question.anchors.unwrap().within(264.0, 170.0),
+            Area {
+                x: 2.0,
+                y: 2.0,
+                width: 260.0,
+                height: 144.0
             }
         );
     }

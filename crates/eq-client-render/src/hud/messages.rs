@@ -43,8 +43,16 @@ impl Messages {
         })
     }
 
+    /// The official words for a string with what it names, or the fallback
+    /// when the installation lacks the string.
+    pub(crate) fn official(&self, id: u32, arguments: &[String], fallback: &str) -> String {
+        self.0
+            .format(id, arguments)
+            .unwrap_or_else(|| fallback.to_owned())
+    }
+
     /// Returns a local argument-free message, or the fallback when unavailable.
-    pub(super) fn text(&self, id: u32, fallback: &str) -> String {
+    pub(crate) fn text(&self, id: u32, fallback: &str) -> String {
         self.0
             .argument_free(id)
             .map_or_else(|| fallback.into(), str::to_owned)

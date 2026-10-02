@@ -52,6 +52,25 @@ pub(crate) enum WindowId {
     /// The skin's Options window: the options the player sets, on its pages,
     /// and a page of the options only this client has.
     Options,
+    /// The skin's Training window: the skills a guildmaster teaches, open
+    /// while the player trains.
+    Training,
+    /// The skin's Skills window: the player's skills and their values,
+    /// opened from the inventory's Skills button.
+    Skills,
+    /// The skin's confirmation dialog: a question to answer Yes or No, such
+    /// as a resurrection's.
+    Confirmation,
+    /// The skin's note window: a note or scroll being read.
+    Note,
+    /// The skin's book window: a book being read, two pages at a time.
+    Book,
+    /// The skin's container window for the world container open for the
+    /// player, such as a forge.
+    WorldContainer,
+    /// The skin's Map window: the zone's map and the player on it, where the
+    /// server type offers the map.
+    Map,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -229,7 +248,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 20] = [
+    pub(crate) const ALL: [Self; 27] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -248,6 +267,13 @@ impl WindowId {
         Self::ActionsWindow,
         Self::PetInfo,
         Self::Options,
+        Self::Training,
+        Self::Skills,
+        Self::Confirmation,
+        Self::Note,
+        Self::Book,
+        Self::WorldContainer,
+        Self::Map,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -272,7 +298,7 @@ impl WindowId {
             Self::Chat => Some("ChatWindow"),
             Self::Inventory => Some("InventoryWindow"),
             Self::Bank => Some("BankWnd"),
-            Self::Bag(_) => Some("ContainerWindow"),
+            Self::Bag(_) | Self::WorldContainer => Some("ContainerWindow"),
             Self::Spellbook => Some("SpellBookWnd"),
             Self::Item => Some("ItemDisplayWindow"),
             Self::Loot => Some("LootWnd"),
@@ -281,6 +307,12 @@ impl WindowId {
             Self::ActionsWindow => Some("ActionsWindow"),
             Self::PetInfo => Some("PetInfoWindow"),
             Self::Options => Some("OptionsWindow"),
+            Self::Training => Some("TrainWindow"),
+            Self::Skills => Some("SkillsWindow"),
+            Self::Confirmation => Some("ConfirmationDialogBox"),
+            Self::Note => Some("NoteWindow"),
+            Self::Book => Some("BookWindow"),
+            Self::Map => Some("MapViewWnd"),
             _ => None,
         }
     }
@@ -291,7 +323,8 @@ impl WindowId {
         match self {
             Self::Bag(slot @ 22..=29) => Some(Cow::Owned(format!("BagInv{}", slot - 21))),
             Self::Bag(slot @ 2000..=2015) => Some(Cow::Owned(format!("BagBank{}", slot - 1999))),
-            Self::Bag(_) => None,
+            // The bags' window; a world container keeps a place of its own.
+            Self::Bag(_) | Self::WorldContainer => None,
             _ => self.official().map(Cow::Borrowed),
         }
     }
@@ -318,9 +351,25 @@ impl WindowId {
             Self::ActionsWindow => "actions-window",
             Self::PetInfo => "pet-info",
             Self::Options => "options",
+            Self::Training => "training",
+            Self::Skills => "skills",
+            Self::Confirmation => "confirmation",
+            Self::Note => "note",
+            Self::Book => "book",
+            Self::WorldContainer => "world-container",
+            Self::Map => "map",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
+    }
+
+    /// What the session must offer for the window to open, if anything: the
+    /// map opens only where the server type offers it.
+    pub(crate) const fn needs(self) -> Option<eq_client_core::Capability> {
+        match self {
+            Self::Map => Some(eq_client_core::Capability::Map),
+            _ => None,
+        }
     }
 
     /// The window whose placement is saved under this name, now or before
@@ -422,6 +471,27 @@ impl WindowId {
             // Where the skin places it; Alt+O opens and closes it, as in the
             // official client.
             Self::Options => floating("OPTIONS", Placement::TopLeft(90.0, 47.0), true, &[]),
+            // Where the skin places it; it opens with a guildmaster's answer
+            // and closes when training ends.
+            Self::Training => floating("TRAINING", Placement::TopLeft(120.0, 20.0), false, &[]),
+            // Where the skin places it, over the chat; the inventory's
+            // Skills button opens it too.
+            Self::Skills => floating("SKILLS", Placement::TopLeft(120.0, 445.0), true, &[]),
+            // Where the skin places it, above the other windows until it is
+            // answered; Escape leaves the question open.
+            Self::Confirmation => Description {
+                layer: Layer::Popup,
+                closes_on_escape: false,
+                persists: false,
+                ..floating("", Placement::TopLeft(550.0, 350.0), false, &[])
+            },
+            // Where the skin places them; they open with a text to read.
+            Self::Note => floating("", Placement::TopLeft(100.0, 80.0), false, &[]),
+            Self::Book => floating("", Placement::TopLeft(120.0, 20.0), false, &[]),
+            // Where the skin places it (EQUI_MapViewWnd.xml).
+            Self::Map => floating("MAP", Placement::TopLeft(100.0, 80.0), true, &["MAP"]),
+            // Where the skin places its container window (EQUI_Container.xml).
+            Self::WorldContainer => floating("", Placement::TopLeft(350.0, 100.0), false, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(

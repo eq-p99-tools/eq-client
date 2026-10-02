@@ -1,36 +1,108 @@
-//! Session-local action bindings; activating a binding uses the normal command validators.
+//! The hotbar's bindings, kept per character; activating a binding uses the
+//! normal command validators.
 use crate::theme::{self, Size};
 use bevy::prelude::*;
+use eq_client_core::hotbar::Hotbar;
+use std::path::PathBuf;
 mod item_art;
 #[cfg(test)]
 mod item_tests;
+pub(super) use eq_client_core::hotbar::Binding as Action;
 pub(crate) use item_art::update as item_artwork;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Action {
-    Gem(u8),
-    Item {
-        slot: eq_client_core::inventory::InventorySlot,
-        id: u32,
-    },
-    Sit,
-    Stand,
-    Ability(eq_client_core::abilities::Ability),
-}
 
 #[derive(Resource)]
 pub(crate) struct Bindings(pub(super) [Option<Action>; 10]);
 
 impl Default for Bindings {
     fn default() -> Self {
-        Self(std::array::from_fn(|index| {
-            Some(match index {
-                8 => Action::Sit,
-                9 => Action::Stand,
-                _ => Action::Gem(u8::try_from(index).expect("ten slots")),
-            })
-        }))
+        Self(Hotbar::default().0)
     }
+}
+
+/// What the hotbar's saving knows between frames.
+#[derive(Default)]
+pub(crate) struct Store {
+    /// Whether the settings directory was taken yet.
+    loaded: bool,
+    directory: Option<PathBuf>,
+    /// The world and character whose hotbar is in use; None before one enters.
+    profile: Option<(String, String)>,
+    /// The text last read or written for this profile, to skip unchanged writes.
+    written: String,
+}
+
+/// Loads the hotbar of whoever is playing, and saves a change to their own
+/// file. A character with no file of their own starts from the official
+/// client's hotbuttons, read from their ini in the installation, or from
+/// the defaults; before a character enters, the defaults stand.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn persist(
+    settings: Res<crate::ViewerSettings>,
+    online: Res<crate::online::OnlineState>,
+    mut bindings: ResMut<Bindings>,
+    mut store: Local<Store>,
+) {
+    let current = online
+        .world()
+        .player()
+        .zip(online.world().world_name())
+        .map(|(player, world)| (world.to_owned(), player.name.clone()));
+    if store.loaded && store.profile == current {
+        if bindings.is_changed() {
+            save(&mut store, &bindings);
+        }
+        return;
+    }
+    if store.loaded {
+        save(&mut store, &bindings);
+    } else {
+        store.directory.clone_from(&settings.0.settings_directory);
+        store.loaded = true;
+    }
+    store.profile = current;
+    let Some((world, character)) = store.profile.clone() else {
+        bindings.0 = Hotbar::default().0;
+        store.written.clear();
+        return;
+    };
+    let saved = store.directory.as_ref().and_then(|directory| {
+        std::fs::read_to_string(directory.join(file_name(&world, &character))).ok()
+    });
+    let hotbar = saved.map_or_else(
+        || {
+            settings
+                .0
+                .official_settings()
+                .and_then(|official| Hotbar::official(&official.hotbuttons(&character, &world)))
+                .unwrap_or_default()
+        },
+        |text| Hotbar::read(&text, Hotbar::default()),
+    );
+    bindings.0 = hotbar.0;
+    store.written = hotbar.text();
+}
+
+/// Writes the hotbar to the profile's file when it changed since last time.
+fn save(store: &mut Store, bindings: &Bindings) {
+    let (Some(directory), Some((world, character))) = (&store.directory, &store.profile) else {
+        return;
+    };
+    let text = Hotbar(bindings.0).text();
+    if text == store.written {
+        return;
+    }
+    let path = directory.join(file_name(world, character));
+    if let Err(error) = crate::profile_files::write(directory, &path, &text) {
+        warn!("Could not save the hotbar to {}: {error}", path.display());
+    }
+    // A failed write waits for the next change rather than retrying each frame.
+    store.written = text;
+}
+
+/// The character's own hotbar file.
+fn file_name(world: &str, character: &str) -> String {
+    let profile = (world.to_owned(), character.to_owned());
+    crate::profile_files::name("hotbar", "hotbar.txt", Some(&profile))
 }
 
 impl Bindings {
@@ -67,7 +139,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
                 .insert((
                     Button,
                     Slot(index),
-                    crate::outbox::Needs(eq_client_core::Capability::Casting),
+                    crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
                 ))
                 .with_child(crate::spell_icons::artwork(
                     crate::spell_icons::Source::Action(index),
@@ -309,17 +381,20 @@ fn bound_item(
 }
 
 /// Keeps what each slot needs of the session in step with its binding:
-/// sitting and standing are moves, a gem or an item's effect is a cast.
+/// sitting and standing are moves, an ability is one the server type lists,
+/// a gem or an item's effect is a cast.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate::outbox::Needs)>) {
+    use crate::outbox::Needs;
+    use eq_client_core::Capability;
     for (slot, mut needs) in &mut slots {
         let wanted = match bindings.0[slot.0] {
-            Some(Action::Sit | Action::Stand) => eq_client_core::Capability::Moving,
-            Some(Action::Ability(_)) => eq_client_core::Capability::Abilities,
-            _ => eq_client_core::Capability::Casting,
+            Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Moving),
+            Some(Action::Ability(ability)) => Needs::Ability(ability),
+            _ => Needs::Capability(Capability::Casting),
         };
-        if needs.0 != wanted {
-            needs.0 = wanted;
+        if *needs != wanted {
+            *needs = wanted;
         }
     }
 }
@@ -483,5 +558,62 @@ mod tests {
         app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
         app.update();
         assert_eq!(app.world().resource::<Bindings>().0[0], None);
+    }
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+    use crate::online::{OnlineState, testing};
+
+    fn enter(app: &mut App, name: &str) {
+        let mut online = OnlineState::new(true);
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::WorldName {
+                short_name: "ExampleWorld".into(),
+            }],
+        );
+        let mut player = testing::player(7);
+        player.name = name.into();
+        testing::admit(&mut online, 1, player);
+        app.insert_resource(online);
+    }
+
+    #[test]
+    fn each_character_keeps_their_own_hotbar() {
+        let directory = std::env::temp_dir().join(format!(
+            "eq-client-hotbar-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        let mut app = crate::testing::app();
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .settings_directory = Some(directory.clone());
+        app.init_resource::<Bindings>().add_systems(Update, persist);
+        enter(&mut app, "Example");
+        app.update();
+        // Nothing is written until the player changes something.
+        assert!(std::fs::read_dir(&directory).is_err());
+        app.world_mut().resource_mut::<Bindings>().0[2] = None;
+        app.update();
+        let file = directory.join("hotbar-ExampleWorld-Example.txt");
+        assert!(
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .contains("slot_3 = none")
+        );
+        // Another character starts from the defaults, and the first comes
+        // back as they left it.
+        enter(&mut app, "Another");
+        app.update();
+        assert_eq!(app.world().resource::<Bindings>().0, Hotbar::default().0);
+        enter(&mut app, "Example");
+        app.update();
+        assert_eq!(app.world().resource::<Bindings>().0[2], None);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

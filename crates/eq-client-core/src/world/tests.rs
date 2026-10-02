@@ -21,6 +21,7 @@ fn player(spawn_id: u16) -> PlayerState {
         mana: 0,
         endurance: Some(0),
         skills: None,
+        practice_points: None,
         spell_refresh_ms: None,
         memorized_spells: [None; 8],
         size: 0.0,
@@ -576,6 +577,7 @@ fn chest() -> crate::inventory::InventoryItem {
     InventoryItem {
         activation: ItemActivation::default(),
         scroll_spell: None,
+        book: None,
         rules: ItemPlacement {
             item_type: 10,
             ..ItemPlacement::default()
@@ -893,7 +895,8 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     use crate::abilities::Ability;
     use std::time::Duration;
     let mut world = admitted();
-    assert!(world.abilities().is_empty(), "no skills, no abilities");
+    // Without skills, only binding wounds and fishing, which anyone can try.
+    assert_eq!(world.abilities(), [Ability::BindWound, Ability::Fishing]);
     let mut skills = vec![0; 100];
     skills[30] = 12;
     skills[29] = 3;
@@ -914,7 +917,13 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     // An Ogre slams without the bash skill.
     assert_eq!(
         world.abilities(),
-        [Ability::Kick, Ability::Bash, Ability::Hide]
+        [
+            Ability::Kick,
+            Ability::Bash,
+            Ability::Hide,
+            Ability::BindWound,
+            Ability::Fishing
+        ]
     );
     let now = Instant::now();
     let used = |session_id| WorldEvent::AbilityUsed {
@@ -959,14 +968,48 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
         WorldEvent::AbilityRefused {
             session_id: 1,
             reason: "Your target is too far away, get closer!".into(),
+            string_id: None,
+            arguments: Vec::new(),
         },
     );
     assert_eq!(
         changes.notices,
-        [Notice::AbilityRefused(
-            "Your target is too far away, get closer!".into()
-        )]
+        [Notice::AbilityRefused {
+            reason: "Your target is too far away, get closer!".into(),
+            string_id: None,
+            arguments: Vec::new(),
+        }]
     );
+}
+
+#[test]
+fn a_bandaging_that_ends_frees_bind_wound_and_the_player_hears_how_it_went() {
+    use crate::{
+        abilities::Ability,
+        bind_wound::{BindWoundEnd, BindWoundUpdate},
+    };
+    use std::time::Duration;
+    let mut world = admitted();
+    let now = Instant::now();
+    game(
+        &mut world,
+        WorldEvent::AbilityUsed {
+            session_id: 1,
+            ability: Ability::BindWound,
+            ready_in: Duration::from_secs(10),
+        },
+    );
+    assert!(world.ability_wait(Ability::BindWound, now).is_some());
+    let started = BindWoundUpdate::Started { target: None };
+    let changes = game(&mut world, WorldEvent::BindWound(started.clone()));
+    assert_eq!(changes.notices, [Notice::BindWound(started)]);
+    // The server's unlock as it starts says nothing.
+    let changes = game(&mut world, WorldEvent::BindWound(BindWoundUpdate::Unlocked));
+    assert_eq!(changes.notices, []);
+    let ended = BindWoundUpdate::Ended(BindWoundEnd::Complete);
+    let changes = game(&mut world, WorldEvent::BindWound(ended.clone()));
+    assert_eq!(changes.notices, [Notice::BindWound(ended)]);
+    assert_eq!(world.ability_wait(Ability::BindWound, now), None);
 }
 
 #[test]
@@ -1577,4 +1620,222 @@ fn last_names_change_by_the_name_spawned_with() {
         },
     );
     assert_eq!(world.spawn(6).unwrap().state.name_parts.last_name, "");
+}
+
+#[test]
+fn training_opens_raises_skills_with_a_line_and_closes() {
+    use crate::training::{TrainingOffer, TrainingUpdate};
+    let mut world = ClientWorld::default();
+    let mut trainee = player(9);
+    trainee.skills = Some(vec![0; 100]);
+    trainee.practice_points = Some(5);
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities: Vec::new(),
+            session_id: 1,
+            zone: "qeynos".into(),
+            player: Box::new(trainee),
+            far_clip: None,
+        },
+    );
+    connection(&mut world, true, false);
+    let mut caps = vec![0; 100];
+    caps[30] = 200;
+    game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Offered(TrainingOffer { trainer: 42, caps })),
+    );
+    assert_eq!(world.training().map(|offer| offer.trainer), Some(42));
+    let changes = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Trained {
+            skill: 30,
+            value: 1,
+            cost: 0,
+        }),
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::SkillUp {
+            skill: 30,
+            value: 1
+        }]
+    );
+    game(&mut world, WorldEvent::PracticePoints(4));
+    assert_eq!(
+        world.player().and_then(|player| player.practice_points),
+        Some(4)
+    );
+    // A value that does not rise says nothing.
+    let changes = game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 1,
+        },
+    );
+    assert_eq!(changes.notices.len(), 0);
+    game(&mut world, WorldEvent::Training(TrainingUpdate::Ended));
+    assert!(world.training().is_none());
+    let changes = game(
+        &mut world,
+        WorldEvent::TrainingRefused {
+            session_id: 1,
+            reason: "No practice points".into(),
+        },
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::TrainingRefused("No practice points".into())]
+    );
+}
+
+#[test]
+fn a_resurrection_offer_is_forgotten_when_the_player_enters_a_zone() {
+    let mut world = admitted();
+    // An offer from Tester to Example's corpse: the caster's name at 92 and
+    // the corpse's at 160 of the 228 bytes.
+    let mut body = vec![0; 228];
+    body[92..98].copy_from_slice(b"Tester");
+    body[160..177].copy_from_slice(b"Example's corpse0");
+    let offer = crate::resurrection::titanium_offer(&body).unwrap();
+    game(&mut world, WorldEvent::Resurrection(offer));
+    assert!(world.resurrection().is_some());
+    // The session that held the offer ends with the zone; the next zone's
+    // knows nothing of it, so neither does the world.
+    game(&mut world, entered(2));
+    assert!(world.resurrection().is_none());
+}
+
+#[test]
+fn a_text_is_read_until_put_away_or_the_player_enters_a_zone() {
+    let mut world = admitted();
+    let book = || {
+        WorldEvent::BookText(crate::books::BookText {
+            kind: 1,
+            text: "Chapter one".into(),
+        })
+    };
+    game(&mut world, book());
+    assert_eq!(world.reading().map(|text| text.kind), Some(1));
+    world.close_reading();
+    assert!(world.reading().is_none());
+    game(&mut world, book());
+    game(&mut world, entered(2));
+    assert!(world.reading().is_none());
+    // A request this session would not send says why; another session's
+    // refusal is not this player's news.
+    let reason = "That is not something you can read.";
+    let changes = game(
+        &mut world,
+        WorldEvent::ReadRefused {
+            session_id: 2,
+            reason: reason.into(),
+        },
+    );
+    assert_eq!(changes.notices, [Notice::ReadRefused(reason.into())]);
+    let changes = game(
+        &mut world,
+        WorldEvent::ReadRefused {
+            session_id: 1,
+            reason: reason.into(),
+        },
+    );
+    assert_eq!(changes.notices.len(), 0);
+}
+
+#[test]
+fn a_combine_is_under_way_until_the_server_answers() {
+    use crate::{inventory::InventorySlot, tradeskills::CombineUpdate};
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::Combine(CombineUpdate::Started(InventorySlot(25))),
+    );
+    assert_eq!(world.combining(), Some(InventorySlot(25)));
+    game(&mut world, WorldEvent::Combine(CombineUpdate::Answered));
+    assert_eq!(world.combining(), None);
+    // Zoning forgets a combine the old zone never answered.
+    game(
+        &mut world,
+        WorldEvent::Combine(CombineUpdate::Started(InventorySlot(25))),
+    );
+    game(&mut world, entered(2));
+    assert_eq!(world.combining(), None);
+    let reason = "Your cursor must be empty to combine.";
+    let changes = game(
+        &mut world,
+        WorldEvent::CombineRefused {
+            session_id: 2,
+            reason: reason.into(),
+            string_id: Some(crate::tradeskills::HANDS_FULL),
+        },
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::CombineRefused {
+            reason: reason.into(),
+            string_id: Some(crate::tradeskills::HANDS_FULL),
+        }]
+    );
+}
+
+#[test]
+fn a_world_container_opens_only_when_asked_and_closes_with_the_player() {
+    use crate::ground::{ContainerView, ObjectUpdate};
+    let mut world = admitted();
+    let view = |open| ContainerView {
+        player_id: 9,
+        drop_id: 40,
+        open,
+        object_type: 15,
+        icon: 0,
+        name: String::new(),
+    };
+    // A container the player did not ask for never shows.
+    game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Container(view(true))),
+    );
+    assert!(world.container().is_none());
+    world.ask_container(40);
+    let changes = game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Container(view(false))),
+    );
+    assert_eq!(changes.notices, [Notice::ContainerInUse]);
+    assert!(world.container().is_none());
+    world.ask_container(40);
+    game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Container(view(true))),
+    );
+    assert_eq!(world.container().map(|view| view.drop_id), Some(40));
+    world.close_container();
+    assert!(world.container().is_none());
+    // Zoning forgets an open container.
+    world.ask_container(40);
+    game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Container(view(true))),
+    );
+    game(&mut world, entered(2));
+    assert!(world.container().is_none());
+}
+
+#[test]
+fn abilities_the_server_does_not_offer_are_told_apart() {
+    use crate::abilities::Ability;
+    let mut world = admitted();
+    // Before the session says, every ability counts as offered.
+    assert!(world.ability_offered(Ability::Fishing));
+    game(
+        &mut world,
+        WorldEvent::AbilitiesOffered(vec![Ability::Kick, Ability::Bash]),
+    );
+    assert!(world.ability_offered(Ability::Kick));
+    assert!(!world.ability_offered(Ability::Fishing));
+    // The player still has fishing; it shows greyed rather than missing.
+    assert!(world.abilities().contains(&Ability::Fishing));
 }

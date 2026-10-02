@@ -7,6 +7,7 @@ use super::{
 };
 use eq_client_core::{
     CampStatus,
+    bind_wound::{BindWoundUpdate, strings},
     entities::display_name,
     food::Shortage,
     loot::LootResponse,
@@ -180,6 +181,53 @@ fn connection_text(link: Link, dead: bool) -> String {
     }
 }
 
+/// Why a corpse could not be looted.
+const fn loot_refusal(response: LootResponse) -> &'static str {
+    match response {
+        LootResponse::SomeoneElse => "Someone else is looting that corpse.",
+        LootResponse::NotAtThisTime => "You cannot loot that corpse at this time.",
+        LootResponse::Hostiles => "You cannot loot while a hostile is nearby.",
+        LootResponse::TooFar => "You are too far away to loot that corpse.",
+        LootResponse::Normal | LootResponse::Other(_) => "You cannot loot that corpse.",
+    }
+}
+
+/// The official client's own words for a refusal or other notice, with
+/// what they name, where the session names its string and the installation
+/// has it; the session's words otherwise.
+fn official(
+    string_id: Option<u32>,
+    arguments: &[String],
+    reason: &str,
+    messages: Option<&Messages>,
+) -> String {
+    match (string_id, messages) {
+        (Some(id), Some(messages)) => messages.official(id, arguments, reason),
+        _ => reason.to_owned(),
+    }
+}
+
+/// What a bandaging's start or end says: the official client's words where
+/// the installation has them.
+fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<String> {
+    Some(match update {
+        BindWoundUpdate::Started { target: None } => official(
+            Some(strings::STARTED_ON_SELF),
+            &[],
+            "You start bandaging yourself.",
+            messages,
+        ),
+        BindWoundUpdate::Started { target: Some(name) } => official(
+            Some(strings::STARTED_ON_OTHER),
+            std::slice::from_ref(name),
+            &format!("You start bandaging {name}."),
+            messages,
+        ),
+        BindWoundUpdate::Ended(end) => official(Some(end.string_id()), &[], end.text(), messages),
+        BindWoundUpdate::Unlocked => return None,
+    })
+}
+
 /// How a notice reads, and where each part shows.
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
     let chat = |text: String| vec![(Place::Chat, text)];
@@ -234,23 +282,28 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             "You receive {} from the corpse.",
             coin_text(coins.total_copper())
         )),
-        Notice::LootRefused(response) => chat(
-            match response {
-                LootResponse::SomeoneElse => "Someone else is looting that corpse.",
-                LootResponse::NotAtThisTime => "You cannot loot that corpse at this time.",
-                LootResponse::Hostiles => "You cannot loot while a hostile is nearby.",
-                LootResponse::TooFar => "You are too far away to loot that corpse.",
-                LootResponse::Normal | LootResponse::Other(_) => "You cannot loot that corpse.",
-            }
-            .into(),
-        ),
+        Notice::LootRefused(response) => chat(loot_refusal(*response).into()),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
+        Notice::AbilityRefused {
+            reason,
+            string_id,
+            arguments,
+        } => chat(official(*string_id, arguments, reason, messages)),
+        Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
         Notice::TradeRefused(reason)
-        | Notice::AbilityRefused(reason)
         | Notice::ConsumeRefused(reason)
         | Notice::CorpseRefused(reason)
-        | Notice::PetRefused(reason) => chat(reason.clone()),
+        | Notice::PetRefused(reason)
+        | Notice::TrainingRefused(reason)
+        | Notice::ResurrectionRefused(reason)
+        | Notice::ReadRefused(reason) => chat(reason.clone()),
+        // eqstr 1406, where the installation has it.
+        Notice::ContainerInUse => chat(official(Some(1406), &[], "That is in use.", messages)),
+        Notice::CombineRefused { reason, string_id } => {
+            chat(official(*string_id, &[], reason, messages))
+        }
+        Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),
         Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
         Notice::WhoList(list) => who_lines(list, messages),
         Notice::NothingToEat { food, water } => nothing_to_eat(*food, *water, messages)
@@ -279,6 +332,19 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             format!("Cast rejected (spell {spell_id}): {reason}"),
         )],
     }
+}
+
+/// "You have become better at Kick! (21)": the client's line when a skill
+/// rises, with its own name for the skill where its string table has one.
+fn skill_up(skill: u32, value: u32, messages: Option<&Messages>) -> String {
+    use eq_client_core::skills;
+    let fallback = skills::name(skill).map_or_else(|| format!("Skill {skill}"), str::to_owned);
+    let Some(messages) = messages else {
+        return format!("You have become better at {fallback}! ({value})");
+    };
+    let name = skills::name_string(skill)
+        .map_or_else(|| fallback.clone(), |id| messages.text(id, &fallback));
+    messages.format(skills::BETTER_AT, &[name, value.to_string()])
 }
 
 /// The status line for where the connection stands; nothing while the
@@ -338,6 +404,79 @@ mod tests {
         assert_eq!(
             line(Notice::ShopRefused),
             [(Place::Chat, "That merchant will not trade with you.".into())]
+        );
+    }
+
+    #[test]
+    fn bandaging_speaks_in_the_installed_words_with_whom_it_names() {
+        use eq_client_core::bind_wound::{BindWoundEnd, BindWoundUpdate};
+        let messages = Messages::parse(
+            "EQST0002
+0 3
+420 Closer to %1, please.
+1436 Moved, failed.
+12437 Wrapping %1.
+",
+        );
+        let started = Notice::BindWound(BindWoundUpdate::Started {
+            target: Some("Firiona".into()),
+        });
+        assert_eq!(
+            wording(&started, Some(&messages)),
+            [(Place::Chat, "Wrapping Firiona.".into())]
+        );
+        assert_eq!(
+            wording(&started, None),
+            [(Place::Chat, "You start bandaging Firiona.".into())]
+        );
+        let ended = Notice::BindWound(BindWoundUpdate::Ended(BindWoundEnd::YouMoved));
+        assert_eq!(
+            wording(&ended, Some(&messages)),
+            [(Place::Chat, "Moved, failed.".into())]
+        );
+        // A string the installation lacks falls back to the session's words.
+        let complete = Notice::BindWound(BindWoundUpdate::Ended(BindWoundEnd::Complete));
+        assert_eq!(
+            wording(&complete, Some(&messages)),
+            [(Place::Chat, BindWoundEnd::Complete.text().into())]
+        );
+        assert_eq!(
+            wording(
+                &Notice::BindWound(BindWoundUpdate::Unlocked),
+                Some(&messages)
+            ),
+            []
+        );
+        let far = Notice::AbilityRefused {
+            reason: "Firiona is too far away to bandage".into(),
+            string_id: Some(420),
+            arguments: vec!["Firiona".into()],
+        };
+        assert_eq!(
+            wording(&far, Some(&messages)),
+            [(Place::Chat, "Closer to Firiona, please.".into())]
+        );
+    }
+
+    #[test]
+    fn a_refused_combine_speaks_in_the_installed_words_when_it_can() {
+        let notice = Notice::CombineRefused {
+            reason: "Empty the cursor first.".into(),
+            string_id: Some(12024),
+        };
+        let messages = Messages::parse(
+            "EQST0002
+0 1
+12024 Hands full.
+",
+        );
+        assert_eq!(
+            wording(&notice, Some(&messages)),
+            [(Place::Chat, "Hands full.".into())]
+        );
+        assert_eq!(
+            wording(&notice, None),
+            [(Place::Chat, "Empty the cursor first.".into())]
         );
     }
 

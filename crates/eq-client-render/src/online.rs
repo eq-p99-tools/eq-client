@@ -79,6 +79,26 @@ impl OnlineState {
         self.world.open_shop(merchant_id);
     }
 
+    /// The player answered the resurrection offered.
+    pub(super) fn answer_resurrection(&mut self) {
+        self.world.answer_resurrection();
+    }
+
+    /// The player closed the book or note they were reading.
+    pub(super) fn close_reading(&mut self) {
+        self.world.close_reading();
+    }
+
+    /// The player asked to open a world container.
+    pub(super) fn ask_container(&mut self, drop_id: u32) {
+        self.world.ask_container(drop_id);
+    }
+
+    /// The player closed the world container open for them.
+    pub(super) fn close_container(&mut self) {
+        self.world.close_container();
+    }
+
     /// The player closed the merchant window.
     pub(super) fn close_shop(&mut self) {
         self.world.close_shop();
@@ -351,6 +371,9 @@ pub(super) fn receive(
     // the session here, instead of leaving it looking connected.
     let lost = (ended && !state.world.ended())
         .then_some(WorldUpdate::Connection(eq_client_core::world::Link::Ended));
+    if lost.is_some() {
+        warn!("The session stopped without saying why");
+    }
     // The player entity spawned by zone entry in this batch, not yet in the world.
     let mut entered = None;
     for update in batch.into_iter().chain(lost) {
@@ -404,8 +427,15 @@ pub(super) fn receive(
 
 /// Logs what diagnosing a session needs from its news.
 fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: &ClientWorld) {
-    let WorldUpdate::Game(event) = update else {
-        return;
+    let event = match update {
+        WorldUpdate::Game(event) => event,
+        // Every change of connection is logged, so a session that ends
+        // leaves its reason behind.
+        WorldUpdate::Connection(link) => {
+            info!(?link, dead = world.ended(), "Session connection changed");
+            return;
+        }
+        _ => return,
     };
     match event {
         WorldEvent::ItemDetails(item) => debug!("Item definition received: ID {}", item.id),
@@ -501,6 +531,7 @@ pub(crate) mod testing {
             mana: 0,
             endurance: Some(0),
             skills: None,
+            practice_points: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 6.0,
@@ -713,6 +744,7 @@ mod tests {
             mana: 0,
             endurance: Some(0),
             skills: None,
+            practice_points: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,
@@ -963,6 +995,7 @@ mod tests {
             mana: 0,
             endurance: Some(0),
             skills: Some(vec![0; 100]),
+            practice_points: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,

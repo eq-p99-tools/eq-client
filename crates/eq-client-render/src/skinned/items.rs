@@ -29,11 +29,14 @@ pub(crate) struct SkinSlot {
 #[derive(Component)]
 pub(crate) struct Content;
 
-/// A bag window's name and picture, the bag's own.
+/// A bag window's name and picture, the bag's own, or those of the world
+/// container open for the player.
 #[derive(Component, Clone, Copy)]
 pub(crate) enum BagPart {
     Name(InventorySlot),
     Icon(InventorySlot),
+    WorldName,
+    WorldIcon,
 }
 
 /// A button that closes its window, as each window's Done button does.
@@ -49,6 +52,11 @@ fn slot_of(window: WindowId, number: u32) -> Option<(InventorySlot, Option<(Inve
             let index = u8::try_from(number.checked_sub(30)?).ok()?;
             let bag = InventorySlot(bag);
             Some((bag.child(index)?, Some((bag, index))))
+        }
+        // A world container's ten places are 4000 to 4009.
+        WindowId::WorldContainer => {
+            let index = number.checked_sub(30).filter(|index| *index < 10)?;
+            Some((InventorySlot(4000 + index), None))
         }
         _ => Some((InventorySlot(number), None)),
     }
@@ -137,13 +145,21 @@ const fn framed_while_open(id: WindowId) -> bool {
             | WindowId::ActionsWindow
             | WindowId::PetInfo
             | WindowId::Options
+            | WindowId::Training
+            | WindowId::Skills
+            | WindowId::Confirmation
+            | WindowId::Note
+            | WindowId::Book
+            | WindowId::WorldContainer
+            | WindowId::Map
     )
 }
 
 /// Opens and closes the windows that have no frame of their own until then:
 /// a bag's, while it is open and still a bag, the bank's, while it is open
-/// and a banker is in reach, and the give, Actions, Pet Info and Options
-/// windows while they are open.
+/// and a banker is in reach, and the give, Actions, Pet Info, Options,
+/// Training, Skills, confirmation, note and book windows while they are
+/// open.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn frames(
     mut commands: Commands,
@@ -210,7 +226,10 @@ pub(crate) fn toggle_bag(shown: &mut Shown, slot: InventorySlot) {
 #[allow(clippy::needless_pass_by_value, clippy::type_complexity)] // Bevy system parameters.
 pub(crate) fn contents(
     mut commands: Commands,
-    online: Res<crate::online::OnlineState>,
+    (online, messages): (
+        Res<crate::online::OnlineState>,
+        Option<Res<crate::hud::messages::Messages>>,
+    ),
     mut art: Art,
     (mut last, added): (Local<Option<u64>>, Query<(), Added<SkinSlot>>),
     mut slots: Query<(Entity, &SlotButton, &SkinSlot, &mut Node, Option<&Children>)>,
@@ -279,23 +298,48 @@ pub(crate) fn contents(
             }
         });
     }
+    let container = online.world().container();
     for (part, mut text) in &mut names {
-        if let BagPart::Name(bag) = part {
-            let name = items
+        let name = match part {
+            BagPart::Name(bag) => items
                 .get(bag)
-                .map_or_else(String::new, |bag| bag.details.name.clone());
-            if text.0 != name {
-                text.0 = name;
+                .map_or_else(String::new, |bag| bag.details.name.clone()),
+            BagPart::WorldName => {
+                container.map_or_else(String::new, |view| world_name(view, messages.as_deref()))
             }
+            BagPart::Icon(_) | BagPart::WorldIcon => continue,
+        };
+        if text.0 != name {
+            text.0 = name;
         }
     }
     for (part, mut image) in &mut icons {
-        if let BagPart::Icon(bag) = part
-            && let Some(icon) = items.get(bag).and_then(|bag| art.item(bag.icon))
-        {
+        let icon = match part {
+            BagPart::Icon(bag) => items.get(bag).map(|bag| bag.icon),
+            // Servers may send no icon (0) for a world container.
+            BagPart::WorldIcon => container.map(|view| view.icon).filter(|icon| *icon != 0),
+            BagPart::Name(_) | BagPart::WorldName => None,
+        };
+        if let Some(icon) = icon.and_then(|icon| art.item(icon)) {
             *image = icon;
         }
     }
+}
+
+/// What a world container's window calls it: the name the server sends,
+/// or, without one, its type's name in the installed client's strings.
+fn world_name(
+    view: &eq_client_core::ground::ContainerView,
+    messages: Option<&crate::hud::messages::Messages>,
+) -> String {
+    if !view.name.is_empty() {
+        return view.name.clone();
+    }
+    u8::try_from(view.object_type)
+        .ok()
+        .and_then(eq_client_core::tradeskills::type_name)
+        .zip(messages)
+        .map_or_else(String::new, |(id, messages)| messages.text(id, ""))
 }
 
 /// Closes a window when its Done button is pressed, and a bag or the bank

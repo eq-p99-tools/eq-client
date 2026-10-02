@@ -122,6 +122,37 @@ impl ClientWorld {
             .find(|spawn| spawn.state.pet_owner == Some(owner))
     }
 
+    /// The resurrection offered and not yet answered.
+    #[must_use]
+    pub fn resurrection(&self) -> Option<&crate::resurrection::ResurrectionOffer> {
+        self.resurrection.as_ref()
+    }
+
+    /// The book or note open to read.
+    #[must_use]
+    pub fn reading(&self) -> Option<&crate::books::BookText> {
+        self.reading.as_ref()
+    }
+
+    /// The world container open for the player, such as a forge.
+    #[must_use]
+    pub fn container(&self) -> Option<&crate::ground::ContainerView> {
+        self.zone.container.as_ref()
+    }
+
+    /// The tradeskill container whose combine waits for the server.
+    #[must_use]
+    pub const fn combining(&self) -> Option<crate::inventory::InventorySlot> {
+        self.combining
+    }
+
+    /// The guildmaster the player is training with, and how far they train
+    /// each skill.
+    #[must_use]
+    pub fn training(&self) -> Option<&crate::training::TrainingOffer> {
+        self.zone.training.as_ref()
+    }
+
     /// The pet's buffs, in their slots, once the server has said.
     #[must_use]
     pub fn pet_buffs(&self) -> Option<&crate::pets::PetBuffs> {

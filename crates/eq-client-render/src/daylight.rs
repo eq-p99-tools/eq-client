@@ -104,6 +104,26 @@ pub(super) fn lighting(sky: &ZoneSky, time: Option<GameTime>) -> Lighting {
     }
 }
 
+/// The fog, closed in so the scene fades out before the Far Clip Plane cuts
+/// it: the zone's own fog ends no farther than the clip, and a zone with no
+/// fog gets one in the sky's colour over the last fifth once the clip is
+/// nearer than the zone's far clip.
+fn closed_in(
+    fog: Option<([f32; 3], f32, f32)>,
+    clip: Option<f32>,
+    far_clip: Option<f32>,
+    sky: [f32; 3],
+) -> Option<([f32; 3], f32, f32)> {
+    let Some(clip) = clip else {
+        return fog;
+    };
+    match fog {
+        Some((tint, start, end)) => Some((tint, start.min(clip * 0.8), end.min(clip))),
+        None if far_clip.is_some_and(|far| clip < far) => Some((sky, clip * 0.8, clip)),
+        None => None,
+    }
+}
+
 /// The scene's camera, with the fog and grading the time of day sets.
 type Cameras<'w, 's> = Query<
     'w,
@@ -121,6 +141,7 @@ type Cameras<'w, 's> = Query<
 pub(super) fn update(
     mut commands: Commands,
     online: Res<super::online::OnlineState>,
+    options: Res<super::options::OptionsState>,
     mut ambient: ResMut<GlobalAmbientLight>,
     clear: Option<ResMut<ClearColor>>,
     mut suns: Query<&mut DirectionalLight, With<Sun>>,
@@ -131,7 +152,13 @@ pub(super) fn update(
     let Some(sky) = world.sky() else {
         return;
     };
-    let lit = lighting(&sky, world.game_time(std::time::Instant::now()));
+    let mut lit = lighting(&sky, world.game_time(std::time::Instant::now()));
+    lit.fog = closed_in(
+        lit.fog,
+        options.options.clip_distance(world.far_clip()),
+        world.far_clip(),
+        lit.sky,
+    );
     for mut sun in &mut suns {
         sun.illuminance = lit.sun.0;
         sun.color = color(lit.sun.1);
@@ -178,6 +205,29 @@ pub(super) fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fog_closes_in_with_the_clip_plane() {
+        let zone_fog = Some(([0.5; 3], 300.0, 900.0));
+        // At the zone's own clip, its fog stays as it is.
+        assert_eq!(
+            closed_in(zone_fog, Some(2400.0), Some(2400.0), [0.0; 3]),
+            zone_fog
+        );
+        // Nearer, it ends at the clip.
+        assert_eq!(
+            closed_in(zone_fog, Some(600.0), Some(2400.0), [0.0; 3]),
+            Some(([0.5; 3], 300.0, 600.0))
+        );
+        // A zone without fog gets the sky's once the clip comes in.
+        assert_eq!(closed_in(None, Some(2400.0), Some(2400.0), [0.2; 3]), None);
+        assert_eq!(
+            closed_in(None, Some(1000.0), Some(2400.0), [0.2; 3]),
+            Some(([0.2; 3], 800.0, 1000.0))
+        );
+        // Without a clip, nothing changes.
+        assert_eq!(closed_in(zone_fog, None, None, [0.0; 3]), zone_fog);
+    }
     use eq_client_core::clock::Fog;
 
     fn zone(sky: u8, fog: [u8; 3]) -> ZoneSky {

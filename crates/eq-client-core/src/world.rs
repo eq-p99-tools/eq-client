@@ -114,6 +114,12 @@ pub struct ClientWorld {
     far_clip: Option<f32>,
     death: Option<Death>,
     pending_transfer: Option<ZoneOffer>,
+    /// The resurrection offered and not yet answered.
+    resurrection: Option<crate::resurrection::ResurrectionOffer>,
+    /// The book or note open to read.
+    reading: Option<crate::books::BookText>,
+    /// The tradeskill container whose combine waits for the server.
+    combining: Option<crate::inventory::InventorySlot>,
     /// Item definitions the server sent for inspection.
     items: ItemCache,
     // Until any reset: the target, the motion granted and camping.
@@ -137,6 +143,8 @@ pub struct ClientWorld {
     /// When each ability timer the session started runs out; servers keep
     /// them across zones.
     ability_timers: std::collections::BTreeMap<crate::abilities::Recovery, Instant>,
+    /// The abilities the server type offers, once the session says.
+    offered_abilities: Option<Vec<crate::abilities::Ability>>,
 
     // The zone's contents, the corpse and merchant among them.
     zone: zone::Zone,
@@ -208,6 +216,30 @@ impl ClientWorld {
     /// The player is done looting.
     pub fn close_loot(&mut self) {
         self.zone.trade.loot = None;
+    }
+
+    /// The player answered the resurrection offered; whatever comes of it
+    /// arrives as news.
+    pub fn answer_resurrection(&mut self) {
+        self.resurrection = None;
+    }
+
+    /// The player closed the book or note they were reading.
+    pub fn close_reading(&mut self) {
+        self.reading = None;
+    }
+
+    /// The player asked to open a world container; the server's answer opens
+    /// it.
+    pub fn ask_container(&mut self, drop_id: u32) {
+        self.zone.asked_container = Some(drop_id);
+    }
+
+    /// The player closed the world container open for them; the server puts
+    /// what it still held back in the inventory.
+    pub fn close_container(&mut self) {
+        self.zone.asked_container = None;
+        self.zone.container = None;
     }
 
     /// The player asked a merchant to trade; the server's word on it arrives
@@ -378,7 +410,7 @@ impl ClientWorld {
                 door_id,
                 error,
             } => self.door_used((*session_id, *door_id), error.as_ref(), news),
-            WorldEvent::Objects(update) => self.zone.objects.apply(update),
+            WorldEvent::Objects(update) => self.objects_news(update, news),
             WorldEvent::ObjectAction {
                 session_id, error, ..
             } => self.object_refused(*session_id, error.as_ref(), news),
@@ -459,14 +491,21 @@ impl ClientWorld {
             }
 
             // The player's abilities.
+            WorldEvent::AbilitiesOffered(offered) => {
+                self.offered_abilities = Some(offered.clone());
+            }
             WorldEvent::AbilityUsed {
                 session_id,
                 ability,
                 ready_in,
             } => self.ability_used((*session_id, *ability, *ready_in), now, news),
-            WorldEvent::AbilityRefused { session_id, reason } => {
-                self.ability_refused(*session_id, reason, news);
-            }
+            WorldEvent::AbilityRefused {
+                session_id,
+                reason,
+                string_id,
+                arguments,
+            } => self.ability_refused(*session_id, (reason, *string_id, arguments), news),
+            WorldEvent::BindWound(update) => self.bind_wound(update, news),
             WorldEvent::WhoList(list) => news.notices.push(Notice::WhoList(list.clone())),
 
             // Food and drink: the session eats and drinks for the player.
@@ -514,6 +553,61 @@ impl ClientWorld {
                     news.notices.push(Notice::ConsumeRefused(reason.clone()));
                 } else {
                     news.ignored = true;
+                }
+            }
+            // A book or note to read, and a request the session would not send.
+            WorldEvent::BookText(text) => self.reading = Some(text.clone()),
+            WorldEvent::ReadRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ReadRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // A combine under way or judged, and one the session would not send.
+            WorldEvent::Combine(update) => {
+                self.combining = match update {
+                    crate::tradeskills::CombineUpdate::Started(container) => Some(*container),
+                    crate::tradeskills::CombineUpdate::Answered => None,
+                };
+            }
+            WorldEvent::CombineRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::CombineRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // A resurrection to answer, and an answer the session would not send.
+            WorldEvent::Resurrection(offer) => self.resurrection = Some(offer.clone()),
+            WorldEvent::ResurrectionRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices
+                        .push(Notice::ResurrectionRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // Training at a guildmaster, and the practice points it spends.
+            WorldEvent::Training(update) => self.training_news(update, news),
+            WorldEvent::TrainingRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::TrainingRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::PracticePoints(points) => {
+                if let Some(player) = self.player.as_mut() {
+                    player.practice_points = Some(*points);
+                    news.trade = true;
                 }
             }
 
@@ -585,6 +679,7 @@ impl ClientWorld {
                 self.inventory = Inventory::default();
                 self.wallet = crate::money::Wallet::default();
                 self.ability_timers.clear();
+                self.offered_abilities = None;
                 self.nourishment = None;
                 self.spell_book = None;
                 self.buffs.clear();
@@ -636,6 +731,9 @@ impl ClientWorld {
         self.characters = None;
         self.items = ItemCache::default();
         self.pending_transfer = None;
+        self.resurrection = None;
+        self.reading = None;
+        self.combining = None;
         self.death = None;
         self.forget_zone();
     }

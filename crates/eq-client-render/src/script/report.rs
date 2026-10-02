@@ -33,21 +33,7 @@ pub(super) fn state(
         .world()
         .player()
         .and_then(|player| online.world().posture(player.spawn_id));
-    let items: Vec<ReportedItem> = online
-        .world()
-        .inventory()
-        .items()
-        .values()
-        .map(|item| {
-            (
-                item.slot.0,
-                item.details.id,
-                item.stack_count,
-                item.scroll_spell,
-                item.details.flags.iter().any(|flag| flag == "NO DROP"),
-            )
-        })
-        .collect();
+    let items = items(online);
     let book: Vec<(usize, u32)> = online
         .world()
         .spell_book()
@@ -104,10 +90,23 @@ pub(super) fn state(
         cursor_queued = online.world().inventory().queued().count(),
         exchange = ?online.world().exchange(),
         abilities = ?online.world().abilities(),
+        abilities_not_offered = ?online
+            .world()
+            .abilities()
+            .into_iter()
+            .filter(|ability| !online.world().ability_offered(*ability))
+            .collect::<Vec<_>>(),
         nourishment = ?online.world().nourishment(),
         game_time = ?online.world().game_time(std::time::Instant::now()),
         sky = ?online.world().sky(),
         ?pet,
+        training = ?training(online),
+        practice_points = ?online.world().player().and_then(|player| player.practice_points),
+        resurrection = ?resurrection(online),
+        readable = ?readable(online),
+        containers = ?containers(online),
+        combining = ?online.world().combining(),
+        purse = ?online.world().coins(),
         cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
         bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
         gear = ?online.world().player().map(|player| player.appearance.materials),
@@ -116,6 +115,66 @@ pub(super) fn state(
         show_helm = ?online.world().player().map(|player| player.appearance.show_helm),
         "Script report"
     );
+}
+
+/// Every item the player has, where it is and what it is.
+fn items(online: &crate::online::OnlineState) -> Vec<ReportedItem> {
+    online
+        .world()
+        .inventory()
+        .items()
+        .values()
+        .map(|item| {
+            (
+                item.slot.0,
+                item.details.id,
+                item.stack_count,
+                item.scroll_spell,
+                item.details.flags.iter().any(|flag| flag == "NO DROP"),
+            )
+        })
+        .collect()
+}
+
+/// The guildmaster training the player, and how many skills they teach.
+fn training(online: &crate::online::OnlineState) -> Option<(u16, usize)> {
+    let offer = online.world().training()?;
+    Some((
+        offer.trainer,
+        offer.caps.iter().filter(|cap| **cap > 0).count(),
+    ))
+}
+
+/// The carried books and notes: slot, item, window kind and text name.
+fn readable(online: &crate::online::OnlineState) -> Vec<(i32, u32, u8, String)> {
+    online
+        .world()
+        .inventory()
+        .items()
+        .values()
+        .filter_map(|item| {
+            let book = item.book.as_ref()?;
+            Some((item.slot.0, item.details.id, book.kind, book.file.clone()))
+        })
+        .collect()
+}
+
+/// The carried tradeskill containers: slot, item and bag type.
+fn containers(online: &crate::online::OnlineState) -> Vec<(i32, u32, u8)> {
+    online
+        .world()
+        .inventory()
+        .items()
+        .values()
+        .filter(|item| eq_client_core::tradeskills::can_combine_in(item))
+        .map(|item| (item.slot.0, item.details.id, item.rules.bag_type))
+        .collect()
+}
+
+/// The resurrection waiting for an answer: its caster, corpse and spell.
+fn resurrection(online: &crate::online::OnlineState) -> Option<(String, String, u32)> {
+    let offer = online.world().resurrection()?;
+    Some((offer.caster.clone(), offer.corpse.clone(), offer.spell_id))
 }
 
 /// The pet's spawn, health, posture and buffs.
@@ -147,6 +206,61 @@ type NearbyModel = (u16, u32, u32, Option<&'static str>);
 /// Door id, open type, latest action, distance and EQ position.
 type NearbyDoor = (u8, u8, Option<u8>, i32, [i32; 3]);
 type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
+
+/// A guildmaster in view: spawn, name, class, distance and position.
+type NearbyGuildmaster = (u16, String, Option<u8>, i32, [i32; 3]);
+
+/// An object near the player: id, model, kind or type, distance and
+/// position.
+type NearbyObject<T> = (u32, String, T, i32, [i32; 3]);
+
+/// The objects on the ground nearest the player, and the zone's world
+/// containers (such as forges and ovens) nearest first.
+fn objects(
+    online: &crate::online::OnlineState,
+    origin: Option<Vec3>,
+) -> (Vec<NearbyObject<String>>, Vec<NearbyObject<u32>>) {
+    // Objects on the ground: id, model, kind, distance and position.
+    let mut ground: Vec<NearbyObject<String>> = online
+        .world()
+        .objects()
+        .entries()
+        .values()
+        .map(|object| {
+            let position = Vec3::from_array(eq_client_core::render_position(object.position));
+            #[allow(clippy::cast_possible_truncation)] // Rounded report values.
+            let (distance, at) = (
+                origin.map_or(-1, |origin| position.distance(origin).round() as i32),
+                [object.position.x, object.position.y, object.position.z].map(|v| v.round() as i32),
+            );
+            let kind = format!("{:?}", object.kind());
+            (object.drop_id, object.model.clone(), kind, distance, at)
+        })
+        .collect();
+    ground.sort_by_key(|object| object.3);
+    // The zone's world containers, such as forges and ovens, nearest first.
+    let mut stations: Vec<NearbyObject<u32>> = online
+        .world()
+        .objects()
+        .entries()
+        .values()
+        .filter(|object| object.is_tradeskill_container())
+        .filter_map(|object| {
+            let at = ground.iter().find(|entry| entry.0 == object.drop_id)?;
+            Some((
+                object.drop_id,
+                object.model.clone(),
+                object.object_type,
+                at.3,
+                at.4,
+            ))
+        })
+        .collect();
+    stations.sort_by_key(|station| station.3);
+    stations.truncate(8);
+    ground.truncate(5);
+    (ground, stations)
+}
 
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
 pub(super) fn surroundings(
@@ -187,6 +301,13 @@ pub(super) fn surroundings(
         })
         .collect();
     nearby.sort_by_key(|entry| entry.4);
+    // Guildmasters anywhere in reach of the view, for training checks.
+    let guildmasters: Vec<NearbyGuildmaster> = nearby
+        .iter()
+        .filter(|entry| crate::training::is_guildmaster(entry.3))
+        .take(10)
+        .map(|(id, name, _, class, distance, at)| (*id, name.clone(), *class, *distance, *at))
+        .collect();
     let creatures: Vec<(u16, String, String, i32, [i32; 3])> = nearby
         .iter()
         .filter(|entry| entry.1.starts_with(|c: char| c.is_ascii_lowercase()))
@@ -212,31 +333,19 @@ pub(super) fn surroundings(
         .collect();
     doors.sort_by_key(|door| door.3);
     doors.truncate(3);
-    // Objects on the ground: id, model, kind, distance and position.
-    let mut ground: Vec<(u32, String, String, i32, [i32; 3])> = online
-        .world()
-        .objects()
-        .entries()
-        .values()
-        .map(|object| {
-            let position = Vec3::from_array(eq_client_core::render_position(object.position));
-            #[allow(clippy::cast_possible_truncation)] // Rounded report values.
-            let (distance, at) = (
-                origin.map_or(-1, |origin| position.distance(origin).round() as i32),
-                [object.position.x, object.position.y, object.position.z].map(|v| v.round() as i32),
-            );
-            let kind = format!("{:?}", object.kind());
-            (object.drop_id, object.model.clone(), kind, distance, at)
-        })
-        .collect();
-    ground.sort_by_key(|object| object.3);
-    ground.truncate(5);
+    let (ground, stations) = objects(online, origin);
     let (models, gear) = looks(online, &nearby);
     info!(
         ?nearby,
         ?creatures,
+        ?guildmasters,
         ?doors,
         ?ground,
+        ?stations,
+        container = ?online
+            .world()
+            .container()
+            .map(|view| (view.drop_id, view.name.clone(), view.object_type, view.icon)),
         ?gear,
         ?models,
         door_status = lines.door.text(std::time::Instant::now()),
@@ -281,7 +390,14 @@ fn looks(
 pub(super) fn game_messages(seen: &mut u64, chat: &crate::chat::ChatState) {
     for (id, line) in chat.history.lines(eq_client_core::chat::ChatTab::All) {
         if id > *seen && line.sender.as_deref().is_none_or(str::is_empty) {
-            info!(text = line.message.text, "Script game message");
+            // The items a line links to, such as a recipe's components.
+            let links: Vec<(&str, u32)> = line
+                .message
+                .item_links
+                .iter()
+                .map(|link| (link.text.as_str(), link.item_id))
+                .collect();
+            info!(text = line.message.text, ?links, "Script game message");
         }
         *seen = (*seen).max(id);
     }

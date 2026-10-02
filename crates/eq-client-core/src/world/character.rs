@@ -15,12 +15,48 @@ impl ClientWorld {
         }
     }
 
-    /// One of the player's skills.
+    /// One of the player's skills; a rise is told, as the official client
+    /// tells it.
     pub(super) fn skill_news(&mut self, skill_id: u32, value: u32, changes: &mut Changes) {
         match self.player.as_mut() {
-            Some(player) if self.connected => player.apply_skill(skill_id, value),
+            Some(player) if self.connected => {
+                let before = player
+                    .skills
+                    .as_ref()
+                    .and_then(|skills| skills.get(usize::try_from(skill_id).ok()?))
+                    .copied();
+                player.apply_skill(skill_id, value);
+                if before.is_some_and(|before| value > before) {
+                    changes.notices.push(super::Notice::SkillUp {
+                        skill: skill_id,
+                        value,
+                    });
+                }
+            }
             _ => changes.ignored = true,
         }
+    }
+
+    /// Training at a guildmaster: the guildmaster's answer opens it, a
+    /// practice raises a skill, and leaving closes it.
+    pub(super) fn training_news(
+        &mut self,
+        update: &crate::training::TrainingUpdate,
+        changes: &mut Changes,
+    ) {
+        use crate::training::TrainingUpdate;
+        if !self.connected {
+            changes.ignored = true;
+            return;
+        }
+        match update {
+            TrainingUpdate::Offered(offer) => self.zone.training = Some(offer.clone()),
+            TrainingUpdate::Trained { skill, value, .. } => {
+                self.skill_news(*skill, *value, changes);
+            }
+            TrainingUpdate::Ended => self.zone.training = None,
+        }
+        changes.trade = true;
     }
 
     /// The player's hit points, as the server reported them.

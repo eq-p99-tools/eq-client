@@ -71,8 +71,18 @@ pub enum Notice {
     ZoneLineRefused(String),
     /// A target request was refused, and why.
     TargetRefused(String),
-    /// An ability was not used, and why.
-    AbilityRefused(String),
+    /// An ability was not used, and why: in the official client's own words
+    /// where the session names its string, else in the session's.
+    AbilityRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+        /// What the official string names, in order.
+        arguments: Vec<String>,
+    },
+    /// A bandaging started or ended.
+    BindWound(crate::bind_wound::BindWoundUpdate),
     /// Sense Heading: the compass point the player faces, clockwise from
     /// north (0) to north-west (7).
     Heading(u8),
@@ -88,6 +98,30 @@ pub enum Notice {
     ConsumeRefused(String),
     /// A command to the pet was not sent, and why.
     PetRefused(String),
+    /// One of the player's skills rose, to this value.
+    SkillUp {
+        /// The skill's number.
+        skill: u32,
+        /// Its value now.
+        value: u32,
+    },
+    /// A training request was not sent, and why.
+    TrainingRefused(String),
+    /// An answer to a resurrection was not sent, and why.
+    ResurrectionRefused(String),
+    /// A request to read was not sent, and why.
+    ReadRefused(String),
+    /// The world container the player asked to open is in use by someone
+    /// else.
+    ContainerInUse,
+    /// A combine was not sent, and why: in the official client's own words
+    /// where the session names its string, else in the session's.
+    CombineRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
     /// A consent to drag a player's corpses was given or taken back.
     Consent {
         /// What the server said.

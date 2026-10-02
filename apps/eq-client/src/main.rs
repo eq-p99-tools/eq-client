@@ -5,7 +5,7 @@ mod session;
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-use eq_client_assets::ZoneAsset;
+use eq_client_assets::{ZoneAsset, ui::InstalledClient};
 use eq_client_core::WorldPosition;
 use eq_client_render::{
     Preview, ProjectionStyle, Source, ValidationAction, ViewerConfig, script::Step,
@@ -74,9 +74,11 @@ struct Arguments {
     hide_own_helm: bool,
 
     /// The most frames a second the client draws; 0 leaves it to vsync, which
-    /// is the monitor's refresh rate.
-    #[arg(long, default_value = "60")]
-    max_fps: u32,
+    /// is the monitor's refresh rate. Wins over `eqclient.ini`'s `MaxFPS`;
+    /// the Options window's Max FPS wins over both once the character sets
+    /// it. Without either, 60.
+    #[arg(long)]
+    max_fps: Option<u32>,
 
     /// Add coordinates, the movement mode and the nearby-entity count to the
     /// status box, for development and live checks.
@@ -247,6 +249,13 @@ fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
 /// Startup problems print to stderr before the viewer exists; once it
 /// runs, the session logs through `tracing` like the viewer.
 fn main() {
+    // A panic reaches the log, and with it the log file, as well as the
+    // standard error stream.
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        tracing::error!("The client panicked: {panic}");
+        report(panic);
+    }));
     let mut arguments = Arguments::parse();
     let calibration = arguments
         .movement_calibration
@@ -337,6 +346,7 @@ fn main() {
         local,
     );
     let exit = eq_client_render::run(zone, character, config, source);
+    tracing::info!("The client ends with status {exit}");
     // Close the session before exiting with the viewer's status.
     drop(worker);
     std::process::exit(exit);
@@ -371,13 +381,16 @@ fn viewer_config(
         camera_distance: arguments.camera_distance,
         terrain_only: arguments.terrain_only,
         eq_directory: Some(eq_directory),
+        installed_client: installed_client(protocol),
         entity_distance: Some(arguments.entity_distance),
         option_defaults: eq_client_core::options::Options {
             show_helm: !arguments.hide_own_helm,
             skip_modified_food: !arguments.auto_eat_anything,
             ..eq_client_core::options::Options::default()
         },
-        frame_rate_cap: (arguments.max_fps > 0).then_some(arguments.max_fps),
+        max_fps: arguments
+            .max_fps
+            .map(|cap| u16::try_from(cap.min(1000)).unwrap_or(1000)),
         validation: if arguments.target_nearest_player_once {
             Some(ValidationAction::TargetNearestPlayer)
         } else if arguments.inspect_first_chat_item_once {
@@ -392,6 +405,17 @@ fn viewer_config(
         settings_directory: arguments.settings_dir.or_else(default_settings_directory),
         window_position: arguments.window_position,
         debug_overlay: arguments.debug_overlay,
+    }
+}
+
+/// The official client a server's players install, whose own settings files
+/// the viewer reads by that client's rules. Offline, the installation is
+/// taken to be Titanium's, as the default `--eq-dir` is.
+fn installed_client(protocol: Option<ServerProtocol>) -> InstalledClient {
+    if protocol.is_none_or(ServerProtocol::is_titanium) {
+        InstalledClient::Titanium
+    } else {
+        InstalledClient::EqMac
     }
 }
 
@@ -509,9 +533,23 @@ fn print_summary(zone: &ZoneAsset) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ServerProtocol, Step, check_gm_steps, distance, finite, load_script, local_session,
-        parse_window_position, seconds,
+        InstalledClient, ServerProtocol, Step, check_gm_steps, distance, finite, installed_client,
+        load_script, local_session, parse_window_position, seconds,
     };
+
+    #[test]
+    fn titanium_servers_and_offline_runs_read_a_titanium_installation() {
+        for protocol in [
+            None,
+            Some(ServerProtocol::EqEmu),
+            Some(ServerProtocol::Project1999),
+        ] {
+            assert_eq!(installed_client(protocol), InstalledClient::Titanium);
+        }
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+            assert_eq!(installed_client(Some(protocol)), InstalledClient::EqMac);
+        }
+    }
 
     #[test]
     fn only_scripts_on_stock_servers_are_local_sessions() {

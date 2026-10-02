@@ -15,6 +15,7 @@ mod daylight;
 mod doors;
 mod entities;
 mod escape;
+mod exit_log;
 mod frame_limit;
 mod give;
 mod ground;
@@ -25,6 +26,7 @@ mod item_models;
 mod items;
 mod keys;
 mod logs;
+mod map;
 mod motion;
 mod names;
 mod navigation;
@@ -39,9 +41,12 @@ mod preview;
 #[cfg(test)]
 mod probes;
 mod profile_files;
+mod reading;
 mod resources;
+mod resurrection;
 pub mod script;
 mod sheets;
+mod skills;
 mod skin;
 mod skinned;
 mod spell_icons;
@@ -50,6 +55,8 @@ mod target;
 mod theme;
 mod tooltip;
 mod trade;
+mod tradeskills;
+mod training;
 mod who;
 mod windows;
 mod zone;
@@ -123,6 +130,9 @@ pub struct ViewerConfig {
     pub terrain_only: bool,
     /// User-owned installation used to load server-selected zones and models.
     pub eq_directory: Option<PathBuf>,
+    /// Which official client that installation holds, which decides how its
+    /// own settings files are read.
+    pub installed_client: eq_client_assets::ui::InstalledClient,
     /// Nearby-entity radius in EQ units; None uses 200.
     pub entity_distance: Option<f32>,
     /// Optional read-only live validation action.
@@ -136,11 +146,12 @@ pub struct ViewerConfig {
     pub local_session: bool,
     /// UI skin to use instead of the one the character chose in the official client.
     pub ui_skin: Option<String>,
-    /// What a character with no options of their own starts with.
+    /// What a character with no options of their own starts with, the
+    /// frame rate cap among them.
     pub option_defaults: eq_client_core::options::Options,
-    /// The most frames the client draws a second; None leaves it to vsync,
-    /// which is the monitor's refresh rate.
-    pub frame_rate_cap: Option<u32>,
+    /// The frame rate cap the command line sets, which wins over
+    /// `eqclient.ini`'s for a character with no choice of their own.
+    pub max_fps: Option<u16>,
     /// Where this client keeps its own settings; None keeps nothing between runs.
     pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
@@ -148,6 +159,16 @@ pub struct ViewerConfig {
     /// Add the developer's readings to the status box: coordinates, the
     /// movement mode with its keys, and the count of nearby entities.
     pub debug_overlay: bool,
+}
+
+impl ViewerConfig {
+    /// The installed official client's own settings, read by the rules of its
+    /// generation; None without an installation.
+    fn official_settings(&self) -> Option<Box<dyn eq_client_assets::ui::OfficialSettings + '_>> {
+        self.eq_directory
+            .as_deref()
+            .map(|directory| self.installed_client.settings(directory))
+    }
 }
 
 #[derive(Resource)]
@@ -210,13 +231,12 @@ pub fn run(
     let steps = config.script.clone();
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
-    let frame_rate_cap = config.frame_rate_cap;
     let mut option_defaults = config.option_defaults;
     // The official client's own settings, for characters with no choice of
     // their own here; the client's defaults where it says nothing.
-    if let Some(directory) = config.eq_directory.as_deref() {
+    if let Some(settings) = config.official_settings() {
         use eq_client_core::options::Toggle;
-        let official = eq_client_assets::ui::official_options(directory);
+        let official = settings.options();
         for (toggle, setting) in [
             (Toggle::Log, official.log),
             (Toggle::PcNames, official.pc_names),
@@ -232,6 +252,10 @@ pub fn run(
         {
             option_defaults.show_names = level;
         }
+        seed_levels(&mut option_defaults, &official);
+    }
+    if let Some(cap) = config.max_fps {
+        option_defaults.max_fps = cap;
     }
     let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
@@ -255,14 +279,24 @@ pub fn run(
     .insert_resource(outbox::Outbox::new(commands));
     init_presentation(&mut app);
     app.insert_resource(options::OptionsState::new(option_defaults));
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(window),
-        ..default()
-    }))
-    .add_systems(Startup, setup_scene);
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(window),
+                ..default()
+            })
+            // What the client logs also goes to a file in the settings
+            // folder, so an ending leaves its reason behind.
+            .set(bevy::log::LogPlugin {
+                custom_layer: exit_log::file_layer,
+                ..default()
+            }),
+    )
+    .add_systems(Startup, setup_scene)
+    .add_systems(Update, exit_log::close_requests);
     schedule(&mut app);
     navigation::install(&mut app);
-    frame_limit::install(&mut app, frame_rate_cap);
+    frame_limit::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
         install_script(&mut app, steps, follow, (local_session, online));
@@ -296,6 +330,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<skinned::Screens>()
         .init_resource::<skinned::Skinned>()
         .init_resource::<skinned::Tabs>()
+        .init_resource::<skinned::KeyFilter>()
         .init_resource::<chat::ChatState>()
         .init_resource::<notices::Lines>()
         .init_resource::<items::ItemState>()
@@ -310,7 +345,10 @@ fn init_presentation(app: &mut App) {
         .init_resource::<windows::Shown>()
         .init_resource::<windows::Stack>()
         .init_resource::<keys::KeyMap>()
-        .init_resource::<keys::Typing>();
+        .init_resource::<keys::Typing>()
+        .init_resource::<training::Chosen>()
+        .init_resource::<reading::Page>()
+        .init_resource::<map::MapView>();
 }
 
 /// What the tests of the windows start from.
@@ -341,6 +379,26 @@ pub(crate) mod testing {
             bevy::window::PrimaryWindow,
         ));
         app
+    }
+}
+
+/// The sliders' settings from `eqclient.ini`, on the scales assumed until a
+/// recording of the official client says otherwise: `ClipPlane` 0 to 20 and
+/// `MouseSensitivity` 0 to 10 as fractions of the slider, `MaxFPS` in frames.
+fn seed_levels(
+    options: &mut eq_client_core::options::Options,
+    official: &eq_client_assets::ui::OfficialOptions,
+) {
+    use eq_client_core::options::Level;
+    let share = |value: u32, top: u32| u16::try_from(value.min(top) * 100 / top).unwrap_or(100);
+    if let Some(clip) = official.clip_plane {
+        options.set_level(Level::ClipPlane, share(clip, 20));
+    }
+    if let Some(fps) = official.max_fps {
+        options.set_level(Level::MaxFps, u16::try_from(fps.min(1000)).unwrap_or(1000));
+    }
+    if let Some(sensitivity) = official.mouse_sensitivity {
+        options.set_level(Level::MouseSensitivity, share(sensitivity, 10));
     }
 }
 
@@ -420,10 +478,17 @@ fn schedule(app: &mut App) {
             (who::zone_list, pet::window),
             combat::input,
             trade::input,
-            give::buttons,
+            (
+                give::buttons,
+                training::buttons,
+                resurrection::buttons,
+                reading::buttons,
+                tradeskills::buttons,
+                map::buttons,
+            ),
             (abilities::input, skinned::slash),
             hud::actions,
-            hud::hotbar::update,
+            (hud::hotbar::update, hud::hotbar::persist).chain(),
             hud::hotbar::item_actions,
             spellbook::update,
             character_select::update,
@@ -449,11 +514,20 @@ fn schedule(app: &mut App) {
                 combat::target_color,
                 trade::present,
                 trade::scroll,
+                skinned::scroll_lists,
                 motion::interpolate,
                 orbit_camera,
                 update_hud,
-                // Opens the give window before its frame is drawn.
-                give::window,
+                // Opens the give and training windows before their frames
+                // are drawn.
+                (
+                    give::window,
+                    training::window,
+                    resurrection::window,
+                    reading::window,
+                    tradeskills::world_window,
+                    map::load,
+                ),
             )
                 .chain(),
             (
@@ -478,13 +552,32 @@ fn schedule(app: &mut App) {
                 skinned::apply,
                 skinned::show,
                 skinned::buttons,
-                (skinned::contents, skinned::tabs, abilities::present),
+                (
+                    skinned::contents,
+                    skinned::tabs,
+                    abilities::present,
+                    (
+                        skinned::slide,
+                        skinned::drop_downs,
+                        skinned::light_choices,
+                        skinned::show_levels,
+                        skinned::show_choices,
+                        skinned::fill_lists,
+                        training::fill,
+                        skills::fill,
+                        resurrection::show,
+                        reading::show,
+                        tradeskills::show,
+                        map::draw,
+                    ),
+                ),
                 skinned::close,
                 skinned::picker,
             )
                 .chain(),
             (
                 hud::hotbar::needs,
+                abilities::needs,
                 outbox::veil,
                 outbox::grey_out,
                 tooltip::show,
@@ -768,7 +861,7 @@ fn spawn_camera(
             Projection::Orthographic(OrthographicProjection::default_3d())
         }
     };
-    fit_projection(&mut projection, radius);
+    fit_projection(&mut projection, radius, None);
     commands.spawn((
         Camera3d::default(),
         projection,
@@ -812,10 +905,12 @@ fn exit_after_screenshot(
     settings: Res<ViewerSettings>,
 ) {
     if online.world().ended() && settings.0.screenshot.is_some() {
+        info!("The session ended before the screenshot, so the client is ending");
         app_exit.write(AppExit::error());
     }
     // Scripted screenshots keep the session running; only `--screenshot` is one-shot.
     if !captured.is_empty() && settings.0.screenshot.is_some() {
+        info!("The screenshot is taken, so the client is ending");
         app_exit.write(AppExit::Success);
     }
 }
@@ -1162,7 +1257,9 @@ fn update_hud(
     let nearest = interact::nearest(&online);
     lines.push(match nearest {
         Some(interact::Use::Door(..)) => map.help(&[(keys::Act::Use, "use the door")]),
-        Some(interact::Use::Item(_)) => map.help(&[(keys::Act::Use, "pick up the item here")]),
+        Some(interact::Use::Object(_)) => {
+            map.help(&[(keys::Act::Use, "pick up or open what is here")])
+        }
         None => String::new(),
     });
     lines.push(notices.door.text(now).to_owned());
@@ -1232,6 +1329,7 @@ fn orbit_camera(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut motion: MessageReader<MouseMotion>,
     (wheel, options): (Res<windows::pointer::Wheel>, Res<options::OptionsState>),
+    online: Res<online::OnlineState>,
     mut cameras: Query<(&mut OrbitCamera, &mut Transform, Option<&mut Projection>)>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
@@ -1268,15 +1366,17 @@ fn orbit_camera(
     };
 
     let rise = if options.options.invert_y { -1.0 } else { 1.0 };
+    let clip = options.options.clip_distance(online.world().far_clip());
     for (mut camera, mut transform, projection) in &mut cameras {
-        camera.yaw -= drag.x * 0.005;
-        camera.pitch = (camera.pitch - drag.y * 0.005 * rise).clamp(-1.45, -0.15);
+        let turn = options.options.turn_per_pixel();
+        camera.yaw -= drag.x * turn;
+        camera.pitch = (camera.pitch - drag.y * turn * rise).clamp(-1.45, -0.15);
         let radius = (camera.radius * (-scroll * 0.12).exp()).clamp(20.0, 20_000.0);
-        if radius.to_bits() != camera.radius.to_bits() {
-            camera.radius = radius;
-            if let Some(mut projection) = projection {
-                fit_projection(&mut projection, radius);
-            }
+        camera.radius = radius;
+        if let Some(mut projection) = projection
+            && !fitted(&projection, radius, clip)
+        {
+            fit_projection(&mut projection, radius, clip);
         }
         *transform = unobstructed_orbit(
             &camera,
@@ -1285,13 +1385,34 @@ fn orbit_camera(
     }
 }
 
-/// Keeps the view's depth, and an orthographic view's scale, in step with the
-/// orbit distance, so zooming out never pushes the scene past the far plane.
-fn fit_projection(projection: &mut Projection, radius: f32) {
-    let far = radius * 10.0;
+/// How far the view reaches: the clip distance past the player the camera
+/// orbits, or, where the zone gives no clip, ten times the orbit distance,
+/// so zooming out never pushes the scene past the far plane.
+fn far_plane(radius: f32, clip: Option<f32>) -> f32 {
+    clip.map_or(radius * 10.0, |clip| clip + radius)
+}
+
+/// Whether the view already reaches as far as it should; an orthographic
+/// view, which looks down on the whole scene, follows only the orbit.
+fn fitted(projection: &Projection, radius: f32, clip: Option<f32>) -> bool {
     match projection {
-        Projection::Perspective(perspective) => perspective.far = far,
+        Projection::Perspective(perspective) => {
+            perspective.far.to_bits() == far_plane(radius, clip).to_bits()
+        }
         Projection::Orthographic(orthographic) => {
+            orthographic.scale.to_bits() == (radius / 400.0).to_bits()
+        }
+        Projection::Custom(_) => true,
+    }
+}
+
+/// Keeps the view's depth, and an orthographic view's scale, in step with the
+/// orbit distance and the clip distance.
+fn fit_projection(projection: &mut Projection, radius: f32, clip: Option<f32>) {
+    match projection {
+        Projection::Perspective(perspective) => perspective.far = far_plane(radius, clip),
+        Projection::Orthographic(orthographic) => {
+            let far = far_plane(radius, None);
             orthographic.scale = radius / 400.0;
             orthographic.near = -far;
             orthographic.far = far;
@@ -1390,6 +1511,7 @@ mod tests {
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()
             .init_resource::<options::OptionsState>()
+            .insert_resource(online::OnlineState::new(false))
             .add_systems(Update, (windows::pointer::wheel, orbit_camera).chain());
         let mut window = Window {
             focused: true,

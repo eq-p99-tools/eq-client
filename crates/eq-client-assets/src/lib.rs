@@ -2,6 +2,7 @@
 
 pub mod characters;
 pub mod items;
+pub mod maps;
 pub mod regions;
 pub mod sidl;
 pub mod spells;
