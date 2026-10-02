@@ -187,6 +187,16 @@ pub enum InstalledClient {
 }
 
 impl InstalledClient {
+    /// The face this client writes its windows in, by its file among
+    /// Windows' fonts; None until it is checked for this client.
+    #[must_use]
+    pub const fn font_file(self) -> Option<&'static str> {
+        match self {
+            Self::Titanium => Some("arial.ttf"),
+            Self::EqMac => None,
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {

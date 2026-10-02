@@ -6,9 +6,9 @@
 //! the scene, and colours that come from the game's data (chat channels,
 //! dyes) stay data.
 //!
-//! Every text is in Arial, as the official client writes, read from
-//! Windows' own fonts at run time and never bundled; without it, Bevy's
-//! built-in face stays.
+//! Every text is in the face the official client writes in (Arial, for
+//! Titanium), read from Windows' own fonts at run time and never bundled;
+//! without it, Bevy's built-in face stays.
 use bevy::{asset::AssetId, ecs::system::EntityCommands, prelude::*};
 use eq_client_core::combat::ConColor;
 use std::path::{Path, PathBuf};
@@ -175,19 +175,25 @@ impl Size {
     }
 }
 
-/// Where Windows keeps Arial, under the system root the environment names
+/// Where Windows keeps a font, under the system root the environment names
 /// (`SystemRoot`, else `windir`).
-fn arial_file(system_root: Option<&Path>) -> Option<PathBuf> {
-    Some(system_root?.join("Fonts").join("arial.ttf"))
+fn font_path(system_root: Option<&Path>, file: &str) -> Option<PathBuf> {
+    Some(system_root?.join("Fonts").join(file))
 }
 
-/// Makes Arial the face of every text that names none of its own, as the
-/// official client writes, where Windows has it. It replaces Bevy's
-/// built-in face, so it runs after the text plugin is added and before any
-/// text is laid out.
-pub(crate) fn install_font(app: &mut App) {
+/// Makes the face the installed official client writes in the face of
+/// every text that names none of its own, where Windows has it. It replaces
+/// Bevy's built-in face, so it runs after the text plugin is added and
+/// before any text is laid out.
+pub(crate) fn install_font(app: &mut App, client: eq_client_assets::ui::InstalledClient) {
+    let Some(face) = client.font_file() else {
+        info!(
+            "The face the {client:?} client writes in is unchecked: text keeps the built-in face"
+        );
+        return;
+    };
     let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"));
-    let Some(file) = arial_file(root.as_deref().map(Path::new)) else {
+    let Some(file) = font_path(root.as_deref().map(Path::new), face) else {
         info!("Not on Windows: text keeps the built-in face");
         return;
     };
@@ -199,7 +205,7 @@ pub(crate) fn install_font(app: &mut App) {
             }
         }
         Err(error) => info!(
-            "No Arial at {}: {error}; text keeps the built-in face",
+            "No {face} at {}: {error}; text keeps the built-in face",
             file.display()
         ),
     }
@@ -261,12 +267,16 @@ mod tests {
     }
 
     #[test]
-    fn arial_is_read_from_the_windows_fonts() {
+    fn the_face_is_read_from_the_windows_fonts_for_a_checked_client() {
+        use eq_client_assets::ui::InstalledClient;
+        let face = InstalledClient::Titanium.font_file().unwrap();
         assert_eq!(
-            arial_file(Some(Path::new("C:/Windows"))),
+            font_path(Some(Path::new("C:/Windows")), face),
             Some(Path::new("C:/Windows").join("Fonts").join("arial.ttf"))
         );
-        assert_eq!(arial_file(None), None);
+        assert_eq!(font_path(None, face), None);
+        // The Mac-era client's face is not checked yet.
+        assert_eq!(InstalledClient::EqMac.font_file(), None);
     }
 
     #[test]
