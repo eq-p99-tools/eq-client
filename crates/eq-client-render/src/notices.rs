@@ -180,6 +180,26 @@ fn connection_text(link: Link, dead: bool) -> String {
     }
 }
 
+/// Why a corpse could not be looted.
+const fn loot_refusal(response: LootResponse) -> &'static str {
+    match response {
+        LootResponse::SomeoneElse => "Someone else is looting that corpse.",
+        LootResponse::NotAtThisTime => "You cannot loot that corpse at this time.",
+        LootResponse::Hostiles => "You cannot loot while a hostile is nearby.",
+        LootResponse::TooFar => "You are too far away to loot that corpse.",
+        LootResponse::Normal | LootResponse::Other(_) => "You cannot loot that corpse.",
+    }
+}
+
+/// The official client's own words for a refusal, where the session names
+/// its string and the installation has it; the session's words otherwise.
+fn official(string_id: Option<u32>, reason: &str, messages: Option<&Messages>) -> String {
+    match (string_id, messages) {
+        (Some(id), Some(messages)) => messages.text(id, reason),
+        _ => reason.to_owned(),
+    }
+}
+
 /// How a notice reads, and where each part shows.
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
     let chat = |text: String| vec![(Place::Chat, text)];
@@ -234,16 +254,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             "You receive {} from the corpse.",
             coin_text(coins.total_copper())
         )),
-        Notice::LootRefused(response) => chat(
-            match response {
-                LootResponse::SomeoneElse => "Someone else is looting that corpse.",
-                LootResponse::NotAtThisTime => "You cannot loot that corpse at this time.",
-                LootResponse::Hostiles => "You cannot loot while a hostile is nearby.",
-                LootResponse::TooFar => "You are too far away to loot that corpse.",
-                LootResponse::Normal | LootResponse::Other(_) => "You cannot loot that corpse.",
-            }
-            .into(),
-        ),
+        Notice::LootRefused(response) => chat(loot_refusal(*response).into()),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
         Notice::TradeRefused(reason)
@@ -253,8 +264,10 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::PetRefused(reason)
         | Notice::TrainingRefused(reason)
         | Notice::ResurrectionRefused(reason)
-        | Notice::ReadRefused(reason)
-        | Notice::CombineRefused(reason) => chat(reason.clone()),
+        | Notice::ReadRefused(reason) => chat(reason.clone()),
+        Notice::CombineRefused { reason, string_id } => {
+            chat(official(*string_id, reason, messages))
+        }
         Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),
         Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
         Notice::WhoList(list) => who_lines(list, messages),
@@ -356,6 +369,28 @@ mod tests {
         assert_eq!(
             line(Notice::ShopRefused),
             [(Place::Chat, "That merchant will not trade with you.".into())]
+        );
+    }
+
+    #[test]
+    fn a_refused_combine_speaks_in_the_installed_words_when_it_can() {
+        let notice = Notice::CombineRefused {
+            reason: "Empty the cursor first.".into(),
+            string_id: Some(12024),
+        };
+        let messages = Messages::parse(
+            "EQST0002
+0 1
+12024 Hands full.
+",
+        );
+        assert_eq!(
+            wording(&notice, Some(&messages)),
+            [(Place::Chat, "Hands full.".into())]
+        );
+        assert_eq!(
+            wording(&notice, None),
+            [(Place::Chat, "Empty the cursor first.".into())]
         );
     }
 

@@ -549,9 +549,16 @@ impl ClientWorld {
                     crate::tradeskills::CombineUpdate::Answered => None,
                 };
             }
-            WorldEvent::CombineRefused { session_id, reason } => {
+            WorldEvent::CombineRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
                 if self.session_id == Some(*session_id) {
-                    news.notices.push(Notice::CombineRefused(reason.clone()));
+                    news.notices.push(Notice::CombineRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
                 } else {
                     news.ignored = true;
                 }
