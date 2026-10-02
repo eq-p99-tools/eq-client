@@ -131,9 +131,9 @@ pub(crate) fn cast_spell(world: &eq_client_core::world::ClientWorld) -> Option<u
 }
 
 /// Whether the skin's casting window shows casts: wherever the skin is
-/// installed.
+/// installed, for a client generation known to have that window.
 pub(crate) fn skin_shows_casts(settings: &crate::ViewerSettings) -> bool {
-    settings.0.eq_directory.is_some()
+    settings.0.eq_directory.is_some() && settings.0.installed_client.casting_window()
 }
 
 /// Chooses the most specific action in progress, then a cast just
@@ -287,6 +287,24 @@ mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
     use eq_client_core::SpellUpdate;
+
+    #[test]
+    fn the_skin_shows_casts_only_for_a_client_known_to_have_the_window() {
+        use eq_client_assets::ui::InstalledClient;
+        let settings = |directory: bool, client| {
+            crate::ViewerSettings(crate::ViewerConfig {
+                eq_directory: directory.then(|| "C:/EverQuest".into()),
+                installed_client: client,
+                ..crate::ViewerConfig::default()
+            })
+        };
+        assert!(skin_shows_casts(&settings(true, InstalledClient::Titanium)));
+        assert!(!skin_shows_casts(&settings(true, InstalledClient::EqMac)));
+        assert!(!skin_shows_casts(&settings(
+            false,
+            InstalledClient::Titanium
+        )));
+    }
 
     #[test]
     fn with_the_skin_showing_casts_only_the_books_changes_stay() {
