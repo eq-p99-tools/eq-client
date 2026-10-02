@@ -2293,7 +2293,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftakp-server#f90302ce3d982b690515e029acc8f7da8d85c5dd"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#fae64fcfdc5413c50cf83d3a0d1a6f6b79d4c48a"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2312,7 +2312,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftakp-server#f90302ce3d982b690515e029acc8f7da8d85c5dd"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#fae64fcfdc5413c50cf83d3a0d1a6f6b79d4c48a"
 dependencies = [
  "anyhow",
  "hex",
@@ -2327,7 +2327,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftakp-server#f90302ce3d982b690515e029acc8f7da8d85c5dd"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#fae64fcfdc5413c50cf83d3a0d1a6f6b79d4c48a"
 dependencies = [
  "cbc",
  "cipher",
@@ -2340,7 +2340,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftakp-server#f90302ce3d982b690515e029acc8f7da8d85c5dd"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#fae64fcfdc5413c50cf83d3a0d1a6f6b79d4c48a"
 dependencies = [
  "anyhow",
  "crc32fast",
