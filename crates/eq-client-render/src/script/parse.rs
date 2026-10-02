@@ -164,6 +164,8 @@ pub enum ClickTarget {
     Page(bool),
     /// Combine on the window of the tradeskill container in this pack slot.
     Combine(i32),
+    /// A button of the map's toolbar.
+    Map(crate::map::MapButton),
 }
 
 /// The Training window's controls.
@@ -390,6 +392,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["page", "next"] => ClickTarget::Page(true),
         ["page", "back"] => ClickTarget::Page(false),
         ["combine", slot] => ClickTarget::Combine(value(slot, "a pack slot number")?),
+        ["map", action] => ClickTarget::Map(map_button(action)?),
         ["answer", "no"] => ClickTarget::Answer(false),
         ["training_done"] => ClickTarget::Training(TrainingClick::Done),
         ["slider", name, percent] => ClickTarget::Slider(
@@ -452,6 +455,26 @@ fn coin_place(word: &str) -> Result<eq_client_core::money::CoinPlace, String> {
 }
 
 /// A place counted from one, as a script names it, from zero.
+/// The map toolbar's button a script names.
+fn map_button(action: &str) -> Result<crate::map::MapButton, String> {
+    use crate::map::MapButton;
+    Ok(match action {
+        "zoom_in" => MapButton::ZoomIn,
+        "zoom_out" => MapButton::ZoomOut,
+        "reset" => MapButton::Reset,
+        "labels" => MapButton::Labels,
+        "up" => MapButton::Pan(0, -1),
+        "down" => MapButton::Pan(0, 1),
+        "left" => MapButton::Pan(-1, 0),
+        "right" => MapButton::Pan(1, 0),
+        _ => {
+            return Err(
+                "expected zoom_in, zoom_out, reset, labels, up, down, left or right".into(),
+            );
+        }
+    })
+}
+
 fn ordinal(word: &str, what: &str) -> Result<usize, String> {
     word.parse::<usize>()
         .ok()
