@@ -129,6 +129,9 @@ pub enum ClickTarget {
     Pick(PickButton),
     /// The selector's button for the skin's Actions window.
     ActionsWindow,
+    /// A button that opens and closes a window, by the window's key, such
+    /// as the inventory's Skills button (`skills`).
+    Toggle(&'static str),
     /// A tab of the open tabbed window, from zero.
     Tab(usize),
     /// An ability button of the Actions window: its page and place, from
@@ -343,6 +346,15 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
         ["give"] => ClickTarget::Give,
         ["actions"] => ClickTarget::ActionsWindow,
+        ["window", key] => ClickTarget::Toggle(
+            crate::windows::WindowId::ALL
+                .into_iter()
+                .find_map(|id| match id.key() {
+                    std::borrow::Cow::Borrowed(name) if name == *key => Some(name),
+                    _ => None,
+                })
+                .ok_or("expected a window, by its key such as skills")?,
+        ),
         ["pet", words @ ..] => {
             let line = format!("/pet {}", words.join(" "));
             ClickTarget::Pet(
