@@ -79,6 +79,10 @@ pub(crate) fn window_line(error: &anyhow::Error) -> String {
 /// The reason a control is greyed out, and the line a refused key shows.
 pub(crate) const UNAVAILABLE: &str = "Not available on this server";
 
+/// The reason a skin's control this client does not have yet is greyed out,
+/// in the client's own words.
+pub(crate) const MISSING: &str = "Not in this client yet";
+
 /// The session's command queue, and the refusals not yet shown.
 #[derive(Resource)]
 pub(crate) struct Outbox {
@@ -221,6 +225,10 @@ pub(crate) enum Needs {
     /// Nothing of the session, as an empty action bar slot needs: never
     /// veiled.
     Nothing,
+    /// What this client does not have yet, as a skin's button for a window
+    /// it lacks: never offered, and drawn in the skin's own disabled look
+    /// rather than under a veil.
+    Missing,
 }
 
 impl Needs {
@@ -232,6 +240,15 @@ impl Needs {
                 offered(world, Capability::Abilities) && world.ability_offered(ability)
             }
             Self::Nothing => true,
+            Self::Missing => false,
+        }
+    }
+
+    /// Why the control is greyed out while it is not offered: shown on hover.
+    pub(crate) const fn reason(self) -> &'static str {
+        match self {
+            Self::Missing => MISSING,
+            Self::Capability(_) | Self::Ability(_) | Self::Nothing => UNAVAILABLE,
         }
     }
 }
@@ -241,9 +258,13 @@ impl Needs {
 pub(crate) struct Veil;
 
 /// Puts a veil over each new control that needs something, shown only while
-/// the session does not offer it.
-pub(crate) fn veil(mut commands: Commands, added: Query<Entity, Added<Needs>>) {
-    for control in &added {
+/// the session does not offer it. A control the client does not have yet
+/// is already drawn disabled, so it gets none.
+pub(crate) fn veil(mut commands: Commands, added: Query<(Entity, &Needs), Added<Needs>>) {
+    for (control, needs) in &added {
+        if *needs == Needs::Missing {
+            continue;
+        }
         commands.entity(control).with_child((
             Veil,
             Node {
@@ -424,6 +445,25 @@ mod tests {
         // An ability also needs the abilities capability.
         let without = admitted(vec![Capability::Talking]);
         assert!(!Needs::Ability(Ability::Kick).offered(&without));
+    }
+
+    #[test]
+    fn a_control_the_client_lacks_keeps_the_skins_look_and_its_own_reason() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, (veil, grey_out).chain());
+        let control = app
+            .world_mut()
+            .spawn((Node::default(), Needs::Missing))
+            .id();
+        app.update();
+        app.update();
+        // The skin draws it disabled, so it wears no veil.
+        assert!(app.world().get::<Children>(control).is_none());
+        // No session offers it, nor the preview offline.
+        assert!(!Needs::Missing.offered(&ClientWorld::default()));
+        assert!(!Needs::Missing.offered(&admitted(Capability::ALL.to_vec())));
+        assert_eq!(Needs::Missing.reason(), MISSING);
+        assert_eq!(Needs::Capability(Capability::Casting).reason(), UNAVAILABLE);
     }
 }
 

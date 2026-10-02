@@ -150,6 +150,8 @@ pub(super) fn slider(
             },
             RelativeCursorPosition::default(),
         ));
+    } else {
+        node.insert(super::missing());
     }
     node.with_children(|track| {
         let (left, left_height) = size(look.cap_left.as_ref());
@@ -308,7 +310,7 @@ pub(super) fn combobox(
             },
         ));
     } else {
-        node.insert(BackgroundColor(theme::INSET));
+        node.insert((BackgroundColor(theme::INSET), super::missing()));
     }
     node.with_children(|frame| {
         let mut client = Area {
@@ -533,81 +535,83 @@ pub(super) fn listbox(
             height: inside.height,
         });
     let listing = listing(list.id.as_deref(), owner);
-    window
-        .spawn((
-            at(
-                inside.x + area.x,
-                inside.y + area.y,
-                area.width,
-                area.height,
-            ),
-            BackgroundColor(theme::INSET),
-        ))
-        .with_children(|frame| {
-            let mut client = Area {
-                x: 0.0,
-                y: 0.0,
-                width: area.width,
-                height: area.height,
-            };
-            if let Some(template) = &list.template {
-                client = border(frame, art, &template.border, (area.width, area.height));
-            }
-            let ink = if listing.is_some() {
-                theme::INK_BRIGHT
-            } else {
-                theme::INK_DIM
-            };
-            let mut x = client.x + 2.0;
-            for column in &list.columns {
-                frame.spawn((
-                    theme::text(column.heading.as_str(), Size::Small, ink),
-                    TextLayout::new(Justify::Left, LineBreak::NoWrap),
-                    at(x, client.y + 1.0, column.width, ROW_HEIGHT),
-                ));
-                x += column.width;
-            }
-            let mut rows = frame.spawn((
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    overflow: Overflow::scroll_y(),
-                    ..at(
-                        client.x + 2.0,
-                        client.y + ROW_HEIGHT + 2.0,
-                        (client.width - 4.0).max(0.0),
-                        (client.height - ROW_HEIGHT - 4.0).max(0.0),
-                    )
-                },
-                ScrollPosition::default(),
+    let mut drawn = window.spawn((
+        at(
+            inside.x + area.x,
+            inside.y + area.y,
+            area.width,
+            area.height,
+        ),
+        BackgroundColor(theme::INSET),
+    ));
+    if listing.is_none() {
+        drawn.insert(super::missing());
+    }
+    drawn.with_children(|frame| {
+        let mut client = Area {
+            x: 0.0,
+            y: 0.0,
+            width: area.width,
+            height: area.height,
+        };
+        if let Some(template) = &list.template {
+            client = border(frame, art, &template.border, (area.width, area.height));
+        }
+        let ink = if listing.is_some() {
+            theme::INK_BRIGHT
+        } else {
+            theme::INK_DIM
+        };
+        let mut x = client.x + 2.0;
+        for column in &list.columns {
+            frame.spawn((
+                theme::text(column.heading.as_str(), Size::Small, ink),
+                TextLayout::new(Justify::Left, LineBreak::NoWrap),
+                at(x, client.y + 1.0, column.width, ROW_HEIGHT),
             ));
-            let columns = list.columns.iter().map(|column| column.width).collect();
-            match listing {
-                Some(Listing::Keys) => {
-                    rows.insert((
-                        ListRows {
-                            listing: Listing::Keys,
-                            columns,
-                            filled: false,
-                            filter: None,
-                        },
-                        crate::windows::pointer::TakesWheel,
-                    ));
-                }
-                Some(Listing::Training) => {
-                    rows.insert((
-                        crate::training::SkillRows::new(columns),
-                        crate::windows::pointer::TakesWheel,
-                    ));
-                }
-                Some(Listing::Skills) => {
-                    rows.insert((
-                        crate::skills::SkillsList::new(columns),
-                        crate::windows::pointer::TakesWheel,
-                    ));
-                }
-                None => (),
+            x += column.width;
+        }
+        let mut rows = frame.spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow::scroll_y(),
+                ..at(
+                    client.x + 2.0,
+                    client.y + ROW_HEIGHT + 2.0,
+                    (client.width - 4.0).max(0.0),
+                    (client.height - ROW_HEIGHT - 4.0).max(0.0),
+                )
+            },
+            ScrollPosition::default(),
+        ));
+        let columns = list.columns.iter().map(|column| column.width).collect();
+        match listing {
+            Some(Listing::Keys) => {
+                rows.insert((
+                    ListRows {
+                        listing: Listing::Keys,
+                        columns,
+                        filled: false,
+                        filter: None,
+                    },
+                    crate::windows::pointer::TakesWheel,
+                ));
             }
-        });
+            Some(Listing::Training) => {
+                rows.insert((
+                    crate::training::SkillRows::new(columns),
+                    crate::windows::pointer::TakesWheel,
+                ));
+            }
+            Some(Listing::Skills) => {
+                rows.insert((
+                    crate::skills::SkillsList::new(columns),
+                    crate::windows::pointer::TakesWheel,
+                ));
+            }
+            None => (),
+        }
+    });
 }
 
 /// Fills each list the client fills, again whenever what it shows changes:
