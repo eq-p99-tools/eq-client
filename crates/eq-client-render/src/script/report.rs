@@ -108,11 +108,9 @@ pub(super) fn state(
         game_time = ?online.world().game_time(std::time::Instant::now()),
         sky = ?online.world().sky(),
         ?pet,
-        training = ?online.world().training().map(|offer| (
-            offer.trainer,
-            offer.caps.iter().filter(|cap| **cap > 0).count()
-        )),
+        training = ?training(online),
         practice_points = ?online.world().player().and_then(|player| player.practice_points),
+        resurrection = ?resurrection(online),
         purse = ?online.world().coins(),
         cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
         bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
@@ -122,6 +120,21 @@ pub(super) fn state(
         show_helm = ?online.world().player().map(|player| player.appearance.show_helm),
         "Script report"
     );
+}
+
+/// The guildmaster training the player, and how many skills they teach.
+fn training(online: &crate::online::OnlineState) -> Option<(u16, usize)> {
+    let offer = online.world().training()?;
+    Some((
+        offer.trainer,
+        offer.caps.iter().filter(|cap| **cap > 0).count(),
+    ))
+}
+
+/// The resurrection waiting for an answer: its caster, corpse and spell.
+fn resurrection(online: &crate::online::OnlineState) -> Option<(String, String, u32)> {
+    let offer = online.world().resurrection()?;
+    Some((offer.caster.clone(), offer.corpse.clone(), offer.spell_id))
 }
 
 /// The pet's spawn, health, posture and buffs.

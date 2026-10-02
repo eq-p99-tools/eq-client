@@ -152,6 +152,8 @@ pub enum ClickTarget {
     /// A row of the Training window's list, its Train button or its Done
     /// button.
     Training(TrainingClick),
+    /// The confirmation dialog's Yes (true) or No.
+    Answer(bool),
 }
 
 /// The Training window's controls.
@@ -374,6 +376,8 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["attack"] => ClickTarget::Attack,
         ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
         ["train"] => ClickTarget::Training(TrainingClick::Train),
+        ["answer", "yes"] => ClickTarget::Answer(true),
+        ["answer", "no"] => ClickTarget::Answer(false),
         ["training_done"] => ClickTarget::Training(TrainingClick::Done),
         ["slider", name, percent] => ClickTarget::Slider(
             eq_client_core::options::Level::ALL

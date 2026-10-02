@@ -40,6 +40,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Options => "EQUI_OptionsWindow.xml",
         WindowId::Training => "EQUI_TrainWindow.xml",
         WindowId::Skills => "EQUI_SkillsWindow.xml",
+        WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -333,6 +334,7 @@ fn pieces(
                 controls::combobox(window, art, combobox, &inside, context.id);
             }
             Element::Listbox(list) => controls::listbox(window, art, list, &inside, context.id),
+            Element::TextBox(text) => text_box(window, art, text, &inside, context.id),
             Element::Tabs(tabs) if TABBED.contains(&context.id) => {
                 // A tab box the skin places sits there; one it stretches
                 // fills its container.
@@ -371,6 +373,51 @@ fn pieces(
             Element::View(_) | Element::Other(_) => (),
         }
     }
+}
+
+/// A box of text the client fills: the confirmation dialog's question,
+/// wrapped inside the box's frame.
+fn text_box(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    text: &eq_client_assets::sidl::TextBox,
+    inside: &Area,
+    owner: WindowId,
+) {
+    let area = text.anchors.map_or(text.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
+    window
+        .spawn(at(
+            inside.x + area.x,
+            inside.y + area.y,
+            area.width,
+            area.height,
+        ))
+        .with_children(|frame| {
+            let mut client = Area {
+                x: 0.0,
+                y: 0.0,
+                width: area.width,
+                height: area.height,
+            };
+            if let Some(template) = &text.template {
+                client = border(frame, art, &template.border, (area.width, area.height));
+            }
+            let mut words = frame.spawn((
+                theme::text("", Size::Body, theme::INK_BRIGHT),
+                TextLayout::new(Justify::Left, LineBreak::WordBoundary),
+                at(
+                    client.x + 4.0,
+                    client.y + 4.0,
+                    (client.width - 8.0).max(0.0),
+                    (client.height - 8.0).max(0.0),
+                ),
+            ));
+            if owner == WindowId::Confirmation {
+                words.insert(super::resurrection::QuestionText);
+            }
+        });
 }
 
 /// A window within the window, such as the pet window's buffs: its frame,
@@ -723,6 +770,8 @@ enum Does {
     Option(eq_client_core::options::Toggle),
     /// Practices the skill chosen in the Training window.
     Trains,
+    /// Answers the confirmation dialog's question: Yes (true) or No.
+    Answers(bool),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -746,6 +795,14 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if owner == WindowId::Training && id == "TrainButton" {
         return Some(Does::Trains);
+    }
+    // The dialog asks only Yes-or-No questions so far; its OK stays hidden.
+    if owner == WindowId::Confirmation {
+        return match id {
+            "Yes_Button" => Some(Does::Answers(true)),
+            "No_Button" => Some(Does::Answers(false)),
+            _ => None,
+        };
     }
     // The skin keeps Switch to Windowed under Switch to Fullscreen; the
     // client runs in a window.
@@ -987,6 +1044,12 @@ fn behave(
             skin(),
             crate::outbox::Needs(Capability::Training),
         )),
+        Does::Answers(accept) => drawn.insert((
+            Button,
+            super::resurrection::AnswerButton(accept),
+            skin(),
+            crate::outbox::Needs(Capability::Resurrection),
+        )),
         Does::BagIcon | Does::Nothing => drawn,
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
@@ -1055,6 +1118,7 @@ fn caption(
         | Does::Slash(_)
         | Does::Option(_)
         | Does::Trains
+        | Does::Answers(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 {

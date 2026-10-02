@@ -251,7 +251,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::ConsumeRefused(reason)
         | Notice::CorpseRefused(reason)
         | Notice::PetRefused(reason)
-        | Notice::TrainingRefused(reason) => chat(reason.clone()),
+        | Notice::TrainingRefused(reason)
+        | Notice::ResurrectionRefused(reason) => chat(reason.clone()),
         Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),
         Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
         Notice::WhoList(list) => who_lines(list, messages),

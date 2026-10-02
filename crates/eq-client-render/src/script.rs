@@ -210,6 +210,7 @@ type Buttons<'w, 's> = Query<
                 Option<&'static super::training::SkillRow>,
                 Has<super::training::TrainButton>,
                 Option<&'static super::skinned::Closes>,
+                Option<&'static super::resurrection::AnswerButton>,
             ),
         ),
     ),
@@ -626,6 +627,30 @@ fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat,
     Ok(eq_client_core::OutboundChat::Say(format!("#{command}")))
 }
 
+/// Whether a control of the Training window or the confirmation dialog is
+/// the one a click names.
+fn dialog_control(
+    target: ClickTarget,
+    (skill_row, train, closes, answer): (
+        Option<&super::training::SkillRow>,
+        bool,
+        Option<&super::skinned::Closes>,
+        Option<&super::resurrection::AnswerButton>,
+    ),
+) -> bool {
+    match target {
+        ClickTarget::Answer(yes) => answer.is_some_and(|answer| answer.0 == yes),
+        ClickTarget::Training(TrainingClick::Row(index)) => {
+            skill_row.is_some_and(|row| row.index == index)
+        }
+        ClickTarget::Training(TrainingClick::Train) => train,
+        ClickTarget::Training(TrainingClick::Done) => {
+            closes.is_some_and(|closes| closes.0 == super::windows::WindowId::Training)
+        }
+        _ => false,
+    }
+}
+
 /// Marks the first visible matching control in an open window pressed; the
 /// focus system clears it next frame.
 fn click(
@@ -648,7 +673,7 @@ fn click(
         give,
         (coins, pick),
         (selector, tab, ability, attack, slash, checkbox),
-        (slider, drop_down, choice, (skill_row, train, closes)),
+        (slider, drop_down, choice, (skill_row, train, closes, answer)),
     ) in buttons.iter_mut()
     {
         let matches = match target {
@@ -674,13 +699,9 @@ fn click(
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
             ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
-            ClickTarget::Training(click) => match click {
-                TrainingClick::Row(index) => skill_row.is_some_and(|row| row.index == index),
-                TrainingClick::Train => train,
-                TrainingClick::Done => {
-                    closes.is_some_and(|closes| closes.0 == super::windows::WindowId::Training)
-                }
-            },
+            ClickTarget::Answer(_) | ClickTarget::Training(_) => {
+                dialog_control(target, (skill_row, train, closes, answer))
+            }
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
