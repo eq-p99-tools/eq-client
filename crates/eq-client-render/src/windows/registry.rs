@@ -321,6 +321,9 @@ impl WindowId {
     /// `BagInv1` to `BagInv8` carried and `BagBank1` on in the bank.
     pub(crate) fn section(self) -> Option<Cow<'static, str>> {
         match self {
+            // The chat manager keeps the main chat window's place under its
+            // own name; `ChatWindow` is the skin's name for every chat window.
+            Self::Chat => Some(Cow::Borrowed("MainChat")),
             Self::Bag(slot @ 22..=29) => Some(Cow::Owned(format!("BagInv{}", slot - 21))),
             Self::Bag(slot @ 2000..=2015) => Some(Cow::Owned(format!("BagBank{}", slot - 1999))),
             // The bags' window; a world container keeps a place of its own.
@@ -556,5 +559,11 @@ mod tests {
             WindowId::Inventory.section().as_deref(),
             Some("InventoryWindow")
         );
+    }
+
+    #[test]
+    fn the_main_chat_keeps_the_chat_managers_place_and_the_skins_name() {
+        assert_eq!(WindowId::Chat.section().as_deref(), Some("MainChat"));
+        assert_eq!(WindowId::Chat.official(), Some("ChatWindow"));
     }
 }

@@ -48,6 +48,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Book => "EQUI_BookWindow.xml",
         WindowId::Map => "EQUI_MapViewWnd.xml",
         WindowId::Actions => "EQUI_HotButtonWnd.xml",
+        WindowId::Chat => "EQUI_ChatWindow.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -346,6 +347,9 @@ fn pieces(
                 controls::combobox(window, art, combobox, &inside, context.id);
             }
             Element::Listbox(list) => controls::listbox(window, art, list, &inside, context.id),
+            Element::TextBox(text) if context.id == WindowId::Chat => {
+                chat_box(window, art, text, &inside);
+            }
             Element::TextBox(text) => text_box(window, art, text, &inside, context.id),
             Element::Tabs(tabs) if TABBED.contains(&context.id) => {
                 // A tab box the skin places sits there; one it stretches
@@ -462,6 +466,44 @@ fn text_box(
                 (WindowId::Book, Some("Page1")) => {
                     words.insert(super::reading::Text::Page(1));
                 }
+                _ => (),
+            }
+        });
+}
+
+/// One of the chat window's boxes, filled with the client's chat: its tabs
+/// and lines in the output box, and the line the player types in the input
+/// box.
+fn chat_box(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    text: &eq_client_assets::sidl::TextBox,
+    inside: &Area,
+) {
+    let area = text.anchors.map_or(text.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
+    window
+        .spawn(at(
+            inside.x + area.x,
+            inside.y + area.y,
+            area.width,
+            area.height,
+        ))
+        .with_children(|frame| {
+            let client = text.template.as_ref().map_or(
+                Area {
+                    x: 0.0,
+                    y: 0.0,
+                    width: area.width,
+                    height: area.height,
+                },
+                |template| border(frame, art, &template.border, (area.width, area.height)),
+            );
+            let node = at(client.x, client.y, client.width, client.height);
+            match text.id.as_deref() {
+                Some("CWChatOutput") => super::chat::skinned_output(frame, node),
+                Some("CWChatInput") => super::chat::skinned_input(frame, node),
                 _ => (),
             }
         });

@@ -311,7 +311,7 @@ mod tests {
                 at("PlayerWindow", (2560, 1600), 2000, 400),
                 at("TargetWindow", (2560, 1600), 1200, 20),
                 at("TargetWindow", (1280, 800), 500, 16),
-                at("ChatWindow", (1280, 800), 9, 9),
+                at("MainChat", (1280, 800), 9, 9),
                 at("CastingWindow", (1280, 800), 9, 9),
             ],
             Vec2::new(1280.0, 800.0),
@@ -326,6 +326,27 @@ mod tests {
         assert_eq!(layouts[&WindowId::Chat], chat);
         // Windows whose placement is never kept are left where they open.
         assert!(!layouts.contains_key(&WindowId::CastBar));
+    }
+
+    #[test]
+    fn the_main_chat_starts_where_the_chat_manager_put_it() {
+        use super::super::WindowId;
+        use eq_client_assets::ui::WindowPosition;
+        let at = |window: &str, x, y| WindowPosition {
+            window: window.into(),
+            screen: (1280, 800),
+            x,
+            y,
+        };
+        let mut layouts = BTreeMap::new();
+        // The main chat's place is the chat manager's, not the section named
+        // after the skin's chat window.
+        seed(
+            &mut layouts,
+            &[at("ChatWindow", 9, 9), at("MainChat", 640, 600)],
+            Vec2::new(1280.0, 800.0),
+        );
+        assert_eq!(layouts[&WindowId::Chat].edges[..2], [px(640), px(600)]);
     }
 
     fn saved(left: Val, minimized: bool) -> Saved {
