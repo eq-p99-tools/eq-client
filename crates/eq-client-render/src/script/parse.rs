@@ -12,7 +12,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 21] = [
+const GM_COMMANDS: [&str; 23] = [
     // GM mode on or off: off, the server lets the player go hungry.
     "gm",
     // A rule changed in this zone only, such as how fast hunger comes, or
@@ -26,6 +26,10 @@ const GM_COMMANDS: [&str; 21] = [
     "summonitem",
     // Searches the server's items by name, to find one to summon.
     "finditem",
+    // Searches the server's tradeskill recipes by name, and lists one's
+    // container and components.
+    "findrecipe",
+    "viewrecipe",
     // A temporary NPC at the GM's feet, and coins or items on the target.
     "spawn",
     "npcloot",
@@ -158,6 +162,8 @@ pub enum ClickTarget {
     Answer(bool),
     /// The book window's arrow: forward (true) or back.
     Page(bool),
+    /// Combine on the window of the tradeskill container in this pack slot.
+    Combine(i32),
 }
 
 /// The Training window's controls.
@@ -383,6 +389,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["answer", "yes"] => ClickTarget::Answer(true),
         ["page", "next"] => ClickTarget::Page(true),
         ["page", "back"] => ClickTarget::Page(false),
+        ["combine", slot] => ClickTarget::Combine(value(slot, "a pack slot number")?),
         ["answer", "no"] => ClickTarget::Answer(false),
         ["training_done"] => ClickTarget::Training(TrainingClick::Done),
         ["slider", name, percent] => ClickTarget::Slider(

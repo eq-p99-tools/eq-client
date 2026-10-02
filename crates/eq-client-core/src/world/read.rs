@@ -134,6 +134,12 @@ impl ClientWorld {
         self.reading.as_ref()
     }
 
+    /// The tradeskill container whose combine waits for the server.
+    #[must_use]
+    pub const fn combining(&self) -> Option<crate::inventory::InventorySlot> {
+        self.combining
+    }
+
     /// The guildmaster the player is training with, and how far they train
     /// each skill.
     #[must_use]

@@ -118,6 +118,8 @@ pub struct ClientWorld {
     resurrection: Option<crate::resurrection::ResurrectionOffer>,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
+    /// The tradeskill container whose combine waits for the server.
+    combining: Option<crate::inventory::InventorySlot>,
     /// Item definitions the server sent for inspection.
     items: ItemCache,
     // Until any reset: the target, the motion granted and camping.
@@ -540,6 +542,20 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // A combine under way or judged, and one the session would not send.
+            WorldEvent::Combine(update) => {
+                self.combining = match update {
+                    crate::tradeskills::CombineUpdate::Started(container) => Some(*container),
+                    crate::tradeskills::CombineUpdate::Answered => None,
+                };
+            }
+            WorldEvent::CombineRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::CombineRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
             // A resurrection to answer, and an answer the session would not send.
             WorldEvent::Resurrection(offer) => self.resurrection = Some(offer.clone()),
             WorldEvent::ResurrectionRefused { session_id, reason } => {
@@ -687,6 +703,7 @@ impl ClientWorld {
         self.pending_transfer = None;
         self.resurrection = None;
         self.reading = None;
+        self.combining = None;
         self.death = None;
         self.forget_zone();
     }

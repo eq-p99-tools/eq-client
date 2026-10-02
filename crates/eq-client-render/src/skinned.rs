@@ -21,7 +21,10 @@ use eq_client_assets::{
     sidl::{Align, ButtonLook, Element, Gauge, Label, Library, Piece, Screen},
     ui::Area,
 };
-use eq_client_core::money::{Coin, CoinPlace};
+use eq_client_core::{
+    inventory::InventorySlot,
+    money::{Coin, CoinPlace},
+};
 use std::collections::HashMap;
 
 /// The skin's file for a window the client draws from the skin, and the
@@ -144,6 +147,11 @@ impl Skinned {
 /// A button drawn from the skin, with its piece for each state.
 #[derive(Component, Clone)]
 pub(crate) struct SkinButton(ButtonLook);
+
+/// A skin button that cannot be used right now, drawn in its disabled look,
+/// as Combine is while a combine waits for the server.
+#[derive(Component)]
+pub(crate) struct Greyed;
 
 /// Window frames, with what the skin changes on them and the skin they are
 /// drawn in.
@@ -789,6 +797,8 @@ enum Does {
     Answers(bool),
     /// Turns a book's pages forward (true) or back.
     TurnsPage(bool),
+    /// Combines what the tradeskill container in this pack slot holds.
+    Combines(InventorySlot),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -850,9 +860,12 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
         "AMP_StandButton" => Does::Slash("/stand"),
         "AMP_CampButton" => Does::Slash("/camp"),
         "Container_Icon" if matches!(owner, WindowId::Bag(_)) => Does::BagIcon,
-        // The official client shows Combine only on a tradeskill container,
-        // and this client combines nothing.
-        "Container_Combine" => return None,
+        // Shown only while the bag is a tradeskill container; see
+        // `tradeskills::show`.
+        "Container_Combine" => match owner {
+            WindowId::Bag(bag) => Does::Combines(InventorySlot(bag)),
+            _ => return None,
+        },
         _ => Does::Nothing,
     })
 }
@@ -1077,6 +1090,12 @@ fn behave(
         Does::TurnsPage(forward) => {
             drawn.insert((Button, super::reading::PageButton(forward), skin()))
         }
+        Does::Combines(container) => drawn.insert((
+            Button,
+            super::tradeskills::CombineButton(container),
+            skin(),
+            crate::outbox::Needs(Capability::Tradeskills),
+        )),
         Does::BagIcon | Does::Nothing => drawn,
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
@@ -1147,6 +1166,7 @@ fn caption(
         | Does::Trains
         | Does::Answers(_)
         | Does::TurnsPage(_)
+        | Does::Combines(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 {
@@ -1199,13 +1219,15 @@ type Stateful<'w, 's> = Query<
         Option<&'static super::windows::SelectorButton>,
         Has<AttackButton>,
         Option<&'static super::options::OptionCheckbox>,
+        Has<Greyed>,
         &'static Interaction,
         &'static mut ImageNode,
     ),
 >;
 
 /// Draws each skin button in its state: on while its window is open, the
-/// player attacks or its option is on, lit under the pointer.
+/// player attacks or its option is on, lit under the pointer, and in its
+/// disabled look while greyed.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
     (shown, options): (
@@ -1216,18 +1238,21 @@ pub(crate) fn buttons(
     mut art: crate::sheets::Art,
     mut buttons: Stateful,
 ) {
-    for (SkinButton(look), selector, attack, checkbox, interaction, mut image) in &mut buttons {
+    for (SkinButton(look), selector, attack, checkbox, greyed, interaction, mut image) in
+        &mut buttons
+    {
         let on = match (selector, checkbox) {
             (Some(selector), _) => shown.is_open(selector.0),
             (None, Some(checkbox)) => options.on(checkbox.0),
             (None, None) => attack && combat.auto_attack,
         };
         let hovered = *interaction != Interaction::None;
-        let piece = match (on, hovered) {
-            (true, true) => look.pressed_flyby.as_ref().or(look.pressed.as_ref()),
-            (true, false) => look.pressed.as_ref(),
-            (false, true) => look.flyby.as_ref(),
-            (false, false) => None,
+        let piece = match (greyed, on, hovered) {
+            (true, _, _) => look.disabled.as_ref(),
+            (false, true, true) => look.pressed_flyby.as_ref().or(look.pressed.as_ref()),
+            (false, true, false) => look.pressed.as_ref(),
+            (false, false, true) => look.flyby.as_ref(),
+            (false, false, false) => None,
         }
         .or(look.normal.as_ref());
         if let Some(wanted) = piece.and_then(|piece| art.cut(piece))

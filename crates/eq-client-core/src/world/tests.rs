@@ -1703,3 +1703,32 @@ fn a_text_is_read_until_put_away_or_the_player_enters_a_zone() {
     );
     assert_eq!(changes.notices.len(), 0);
 }
+
+#[test]
+fn a_combine_is_under_way_until_the_server_answers() {
+    use crate::{inventory::InventorySlot, tradeskills::CombineUpdate};
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::Combine(CombineUpdate::Started(InventorySlot(25))),
+    );
+    assert_eq!(world.combining(), Some(InventorySlot(25)));
+    game(&mut world, WorldEvent::Combine(CombineUpdate::Answered));
+    assert_eq!(world.combining(), None);
+    // Zoning forgets a combine the old zone never answered.
+    game(
+        &mut world,
+        WorldEvent::Combine(CombineUpdate::Started(InventorySlot(25))),
+    );
+    game(&mut world, entered(2));
+    assert_eq!(world.combining(), None);
+    let reason = "That is not a tradeskill container.";
+    let changes = game(
+        &mut world,
+        WorldEvent::CombineRefused {
+            session_id: 2,
+            reason: reason.into(),
+        },
+    );
+    assert_eq!(changes.notices, [Notice::CombineRefused(reason.into())]);
+}
