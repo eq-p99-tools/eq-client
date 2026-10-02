@@ -170,18 +170,21 @@ fn consent_line(
         .format(id, &[who.clone(), consent.zone.clone()])
 }
 
+/// The status line for the connection: dead and waiting, or how the link
+/// stands.
+fn connection_text(link: Link, dead: bool) -> String {
+    if dead {
+        "Dead - awaiting respawn".into()
+    } else {
+        link_text(link).into()
+    }
+}
+
 /// How a notice reads, and where each part shows.
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, String)> {
     let chat = |text: String| vec![(Place::Chat, text)];
     match notice {
-        Notice::Connection { link, dead } => vec![(
-            Place::Status,
-            if *dead {
-                "Dead - awaiting respawn".into()
-            } else {
-                link_text(*link).into()
-            },
-        )],
+        Notice::Connection { link, dead } => vec![(Place::Status, connection_text(*link, *dead))],
         Notice::ServerString { id, arguments } => chat(messages.map_or_else(
             || format!("Server message {id}"),
             |messages| messages.format(*id, arguments),
@@ -246,7 +249,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::TradeRefused(reason)
         | Notice::AbilityRefused(reason)
         | Notice::ConsumeRefused(reason)
-        | Notice::CorpseRefused(reason) => chat(reason.clone()),
+        | Notice::CorpseRefused(reason)
+        | Notice::PetRefused(reason) => chat(reason.clone()),
         Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
         Notice::WhoList(list) => who_lines(list, messages),
         Notice::NothingToEat { food, water } => nothing_to_eat(*food, *water, messages)

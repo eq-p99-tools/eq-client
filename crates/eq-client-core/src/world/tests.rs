@@ -47,6 +47,8 @@ fn spawn(spawn_id: u16) -> SpawnState {
         appearance: Appearance::default(),
         level: 0,
         listing: crate::listing::Listing::default(),
+        pet_owner: None,
+        hp_percent: None,
     }
 }
 
@@ -1487,4 +1489,52 @@ fn the_clock_runs_on_from_the_time_the_server_gave() {
     };
     game(&mut world, WorldEvent::Sky(sky));
     assert_eq!(world.sky(), Some(sky));
+}
+
+#[test]
+fn the_player_has_the_pet_they_own_and_its_buffs() {
+    use crate::pets::{PetBuff, PetBuffs};
+    let mut world = admitted();
+    assert!(world.pet().is_none());
+    // A pet the player summoned, and one a charm hands over.
+    game(
+        &mut world,
+        WorldEvent::Spawns(vec![SpawnState {
+            pet_owner: Some(9),
+            hp_percent: Some(100),
+            ..spawn(6)
+        }]),
+    );
+    assert_eq!(world.pet().map(|pet| pet.state.spawn_id), Some(6));
+    // Its health is its spawn record's until the server reports a change.
+    assert_eq!(world.health(6), Some(100));
+    let buffs = PetBuffs {
+        pet: 6,
+        slots: vec![
+            Some(PetBuff {
+                spell_id: 312,
+                ticks: 10,
+            }),
+            None,
+        ],
+    };
+    game(&mut world, WorldEvent::PetBuffs(buffs.clone()));
+    assert_eq!(world.pet_buffs(), Some(&buffs));
+    game(
+        &mut world,
+        WorldEvent::PetOwner {
+            spawn_id: 6,
+            owner: None,
+        },
+    );
+    assert!(world.pet().is_none());
+    assert_eq!(world.pet_buffs(), None);
+    game(
+        &mut world,
+        WorldEvent::PetOwner {
+            spawn_id: 5,
+            owner: Some(9),
+        },
+    );
+    assert_eq!(world.pet().map(|pet| pet.state.spawn_id), Some(5));
 }

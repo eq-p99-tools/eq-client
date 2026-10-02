@@ -512,6 +512,28 @@ pub(crate) mod testing {
         }
     }
 
+    /// The player's pet: a level 1 earth elemental with this spawn ID, at
+    /// the origin, owned by this spawn.
+    pub(crate) fn pet(spawn_id: u16, owner: u16) -> SpawnState {
+        SpawnState {
+            class: Some(1),
+            spawn_id,
+            name: "Gabober000".into(),
+            kind: eq_client_core::SpawnKind::Npc,
+            race: 75,
+            gender: 2,
+            position: WorldPosition::default(),
+            velocity: [0.0; 3],
+            size: 0.0,
+            invisible: false,
+            appearance: eq_client_core::outfit::Appearance::default(),
+            level: 1,
+            listing: eq_client_core::listing::Listing::default(),
+            pet_owner: Some(owner),
+            hp_percent: Some(100),
+        }
+    }
+
     /// Connects or disconnects the session without ending it.
     pub(crate) fn connect(state: &mut OnlineState, connected: bool) {
         state.world.apply(
@@ -712,6 +734,8 @@ mod tests {
             appearance: eq_client_core::outfit::Appearance::default(),
             level: 0,
             listing: eq_client_core::listing::Listing::default(),
+            pet_owner: None,
+            hp_percent: None,
         };
         let door = Door {
             id: 3,

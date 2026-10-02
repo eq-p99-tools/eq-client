@@ -12,7 +12,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 19] = [
+const GM_COMMANDS: [&str; 20] = [
     // GM mode on or off: off, the server lets the player go hungry.
     "gm",
     // A rule changed in this zone only, such as how fast hunger comes, or
@@ -20,6 +20,8 @@ const GM_COMMANDS: [&str; 19] = [
     "rules",
     // The time of day, for every zone.
     "time",
+    // A pet of a kind the server knows, such as an earth elemental.
+    "makepet",
     "summon",
     "summonitem",
     // A temporary NPC at the GM's feet, and coins or items on the target.
@@ -134,6 +136,8 @@ pub enum ClickTarget {
     Ability(AbilityPage, usize),
     /// The Actions window's melee attack button.
     Attack,
+    /// A Pet Info window button, by the `/pet` line it gives.
+    Pet(&'static str),
 }
 
 /// The Actions window's pages that hold ability buttons.
@@ -242,6 +246,10 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("slash", [command @ ("corpse" | "corpsedrag" | "corpsedrop")]) => {
             Step::Slash(format!("/{command}"))
         }
+        // A command to the pet, as typed.
+        ("slash", ["pet", words @ ..]) if !words.is_empty() => {
+            Step::Slash(format!("/pet {}", words.join(" ")))
+        }
         // Asking who is online changes nothing.
         ("slash", ["who", words @ ..]) => Step::Slash(
             ["/who"]
@@ -311,6 +319,16 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
         ["give"] => ClickTarget::Give,
         ["actions"] => ClickTarget::ActionsWindow,
+        ["pet", words @ ..] => {
+            let line = format!("/pet {}", words.join(" "));
+            ClickTarget::Pet(
+                crate::skinned::PET_COMMANDS
+                    .iter()
+                    .map(|(_, command)| *command)
+                    .find(|command| *command == line)
+                    .ok_or("expected a Pet Info window button, by its /pet words")?,
+            )
+        }
         ["attack"] => ClickTarget::Attack,
         ["tab", tab] => ClickTarget::Tab(ordinal(tab, "a tab")?),
         ["ability", page, place] => ClickTarget::Ability(
@@ -656,6 +674,26 @@ mod tests {
             ]
         );
         assert!(parse("slash consent\n", base).is_err());
+    }
+
+    #[test]
+    fn a_script_may_make_and_command_a_pet() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "gm makepet SumEarthR2\nslash pet back off\nclick pet sit down\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Gm("makepet SumEarthR2".into()),
+                Step::Slash("/pet back off".into()),
+                Step::Click(ClickTarget::Pet("/pet sit down")),
+            ]
+        );
+        for bad in ["slash pet", "click pet", "click pet dance"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

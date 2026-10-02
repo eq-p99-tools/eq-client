@@ -93,6 +93,11 @@ pub struct Gauge {
     pub text_offset: (f32, f32),
     /// How far down the gauge the bar sits.
     pub bar_offset: f32,
+    /// Where the bar starts from the gauge's left (`GaugeOffsetX`); it runs
+    /// to the gauge's right edge, and its fill grows from here. Skins set it
+    /// below zero to show only part of a bar, as the Velious skin's hit
+    /// point bars change colour with each fifth.
+    pub bar_left: f32,
 }
 
 /// How a button is drawn in each of its states.
@@ -167,19 +172,74 @@ pub struct Page {
     pub tooltip: Option<String>,
 }
 
-/// A window inside a window, such as the inventory's character view.
+/// A window inside a window, such as the inventory's character view or the
+/// pet window's buffs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct View {
     /// What the window calls it, such as `IW_CharacterView`.
     pub name: String,
     /// Where it sits in its window.
     pub area: Area,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`).
+    pub anchors: Option<Anchors>,
     /// How its frame is drawn.
     pub template: Option<WindowTemplate>,
     /// Whether it has a border.
     pub border: bool,
     /// The tooltip the skin gives it.
     pub tooltip: Option<String>,
+    /// What it shows, in drawing order, by element name.
+    pub pieces: Vec<(String, Element)>,
+}
+
+/// Where an element that stretches with its container sits: each edge's
+/// distance from the container's edge it keeps to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Anchors {
+    /// The left edge.
+    pub left: Anchor,
+    /// The top edge.
+    pub top: Anchor,
+    /// The right edge.
+    pub right: Anchor,
+    /// The bottom edge.
+    pub bottom: Anchor,
+}
+
+/// One edge of a stretching element.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Anchor {
+    /// This far from the container's left or top.
+    Start(f32),
+    /// This far from the container's right or bottom.
+    End(f32),
+}
+
+impl Anchor {
+    /// Where the edge lies along a container of this length.
+    #[must_use]
+    pub const fn along(self, length: f32) -> f32 {
+        match self {
+            Self::Start(offset) => offset,
+            Self::End(offset) => length - offset,
+        }
+    }
+}
+
+impl Anchors {
+    /// The area these anchors give inside a container of this size.
+    #[must_use]
+    pub fn within(&self, width: f32, height: f32) -> Area {
+        let (left, right) = (self.left.along(width), self.right.along(width));
+        let (top, bottom) = (self.top.along(height), self.bottom.along(height));
+        Area {
+            x: left,
+            y: top,
+            width: (right - left).max(0.0),
+            height: (bottom - top).max(0.0),
+        }
+    }
 }
 
 /// One of the gems that hold the player's memorized spells.
@@ -253,7 +313,7 @@ pub enum Element {
     /// Pages behind tabs; the first is shown.
     Tabs(Vec<Page>),
     /// A window inside the window.
-    View(View),
+    View(Box<View>),
     /// An element this reader does not draw yet, by its kind.
     Other(String),
 }
@@ -533,6 +593,7 @@ impl Library {
                         number(node, "TextOffsetY").unwrap_or(0.0),
                     ),
                     bar_offset: number(node, "GaugeOffsetY").unwrap_or(0.0),
+                    bar_left: number(node, "GaugeOffsetX").unwrap_or(0.0),
                 })
             }
             "Label" => Element::Label(Label {
@@ -558,14 +619,20 @@ impl Library {
             }),
             // Pages and windows within windows nest; skins go a few deep.
             "TabBox" if depth < 4 => Element::Tabs(self.pages(node, elements, depth)),
-            "Screen" => Element::View(View {
+            "Screen" => Element::View(Box::new(View {
                 name: node.attribute("item").unwrap_or_default().to_owned(),
                 area: at(),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
                 template: text_of(node, "DrawTemplate")
                     .and_then(|template| self.templates.get(template).cloned()),
                 border: flag(node, "Style_Border"),
                 tooltip: text_of(node, "TooltipReference").map(str::to_owned),
-            }),
+                pieces: if depth < 4 {
+                    self.pieces(node, elements, depth + 1)
+                } else {
+                    Vec::new()
+                },
+            })),
             "SpellGem" => {
                 let look = child(node, "SpellGemDrawTemplate");
                 let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
@@ -637,6 +704,25 @@ fn color(node: roxmltree::Node<'_, '_>, name: &str) -> Option<[u8; 3]> {
     ])
 }
 
+/// A stretching element's anchors; an edge keeps to the container's top or
+/// left unless the skin says otherwise.
+fn anchors(node: roxmltree::Node<'_, '_>) -> Anchors {
+    let edge = |offset: &str, to_start: &str| {
+        let offset = number(node, offset).unwrap_or(0.0);
+        if text_of(node, to_start).is_none_or(|text| text.eq_ignore_ascii_case("true")) {
+            Anchor::Start(offset)
+        } else {
+            Anchor::End(offset)
+        }
+    };
+    Anchors {
+        left: edge("LeftAnchorOffset", "LeftAnchorToLeft"),
+        top: edge("TopAnchorOffset", "TopAnchorToTop"),
+        right: edge("RightAnchorOffset", "RightAnchorToLeft"),
+        bottom: edge("BottomAnchorOffset", "BottomAnchorToTop"),
+    }
+}
+
 /// An element's place and size, in its container's pixels.
 fn area(node: roxmltree::Node<'_, '_>) -> Option<Area> {
     let location = child(node, "Location");
@@ -699,7 +785,7 @@ mod tests {
         <StaticAnimation item="BoxPicture"><Animation>A_Box</Animation></StaticAnimation>
         <Gauge item="Health">
             <Location><X>5</X><Y>2</Y></Location><Size><CX>108</CX><CY>27</CY></Size>
-            <TextOffsetX>8</TextOffsetX><GaugeOffsetY>16</GaugeOffsetY>
+            <TextOffsetX>8</TextOffsetX><GaugeOffsetY>16</GaugeOffsetY><GaugeOffsetX>20</GaugeOffsetX>
             <FillTint><R>240</R><G>0</G><B>0</B></FillTint>
             <EQType>6</EQType>
             <GaugeDrawTemplate><Background>A_Back</Background><Fill>A_Fill</Fill></GaugeDrawTemplate>
@@ -786,7 +872,10 @@ mod tests {
         assert_eq!(gauge.eq_type, Some(6));
         assert_eq!(gauge.fill_tint, Some([240, 0, 0]));
         assert_eq!(gauge.look.fill.as_ref().unwrap().y, 18);
-        assert_eq!((gauge.text_offset, gauge.bar_offset), ((8.0, 0.0), 16.0));
+        assert_eq!(
+            (gauge.text_offset, gauge.bar_offset, gauge.bar_left),
+            ((8.0, 0.0), 16.0, 20.0)
+        );
         let Element::Label(label) = &screen.pieces[1].1 else {
             panic!("a label")
         };
@@ -822,6 +911,42 @@ mod tests {
         assert_eq!(
             button.tooltip.as_deref(),
             Some("Opens and closes Your Spellbook")
+        );
+    }
+
+    #[test]
+    fn a_window_within_a_window_stretches_with_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let text = r#"<XML>
+            <Button item="Slot0"><ScreenID>PetBuff0</ScreenID>
+                <Location><X>3</X><Y>3</Y></Location><Size><CX>24</CX><CY>24</CY></Size></Button>
+            <Screen item="Buffs"><AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>112</LeftAnchorOffset><TopAnchorOffset>4</TopAnchorOffset>
+                <RightAnchorOffset>4</RightAnchorOffset><BottomAnchorOffset>4</BottomAnchorOffset>
+                <TopAnchorToTop>true</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+                <RightAnchorToLeft>false</RightAnchorToLeft><LeftAnchorToLeft>true</LeftAnchorToLeft>
+                <Pieces>Slot0</Pieces></Screen>
+            <Screen item="PetInfoWindow"><Size><CX>154</CX><CY>142</CY></Size>
+                <Pieces>Buffs</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "PetInfoWindow").unwrap();
+        let Element::View(view) = &screen.pieces[0].1 else {
+            panic!("a view")
+        };
+        let Element::Button(slot) = &view.pieces[0].1 else {
+            panic!("a button")
+        };
+        assert_eq!(slot.id.as_deref(), Some("PetBuff0"));
+        // Inside a container 146 wide and 120 high, it keeps 112 from the
+        // left and 4 from the other edges.
+        assert_eq!(
+            view.anchors.unwrap().within(146.0, 120.0),
+            Area {
+                x: 112.0,
+                y: 4.0,
+                width: 30.0,
+                height: 112.0
+            }
         );
     }
 

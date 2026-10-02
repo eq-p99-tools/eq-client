@@ -59,6 +59,7 @@ pub(super) fn state(
                 .collect()
         })
         .unwrap_or_default();
+    let pet = pet(online);
     let gems = online.world().gems();
     // Milliseconds until each memorized gem can be cast again.
     let now = std::time::Instant::now();
@@ -106,6 +107,7 @@ pub(super) fn state(
         nourishment = ?online.world().nourishment(),
         game_time = ?online.world().game_time(std::time::Instant::now()),
         sky = ?online.world().sky(),
+        ?pet,
         cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
         bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
         gear = ?online.world().player().map(|player| player.appearance.materials),
@@ -114,6 +116,24 @@ pub(super) fn state(
         show_helm = ?online.world().player().map(|player| player.appearance.show_helm),
         "Script report"
     );
+}
+
+/// The pet's spawn, health, posture and buffs.
+fn pet(online: &crate::online::OnlineState) -> Option<impl std::fmt::Debug> {
+    let id = online.world().pet()?.state.spawn_id;
+    Some((
+        id,
+        online.world().health(id),
+        online.world().posture(id),
+        online.world().pet_buffs().map(|buffs| {
+            buffs
+                .slots
+                .iter()
+                .flatten()
+                .map(|buff| buff.spell_id)
+                .collect::<Vec<_>>()
+        }),
+    ))
 }
 
 /// A nearby spawn's gear: its id, materials per texture slot, the chest's

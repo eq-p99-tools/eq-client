@@ -688,6 +688,16 @@ fn game_commands(
                 given: name == "consent",
             }]
         }),
+        // A command to the player's pet, aimed at the target where it takes one.
+        "pet" => eq_client_core::pet::command(words)
+            .ok_or_else(|| format!("Unknown pet command: {words}"))
+            .and_then(|command| {
+                Ok(vec![ClientCommand::Pet {
+                    session_id: stamp()?.session_id,
+                    command,
+                    target: online.world().target().selected,
+                }])
+            }),
         // The rest take no words; with words, they are chat.
         _ if !words.is_empty() => return None,
         // A player's corpse the player targets, pulled close or dragged.
@@ -964,6 +974,14 @@ mod tests {
         ));
         // Words after a command that takes none make it chat.
         assert!(game_commands("/sit down", &online, &outbox).is_none());
+    }
+
+    #[test]
+    fn who_consent_corpse_and_pet_commands_reach_the_game() {
+        let mut online = super::super::online::OnlineState::new(true);
+        let (queue, _received) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
         assert!(matches!(
             game_commands("/who all wiz 50 60", &online, &outbox)
                 .unwrap()
@@ -998,6 +1016,21 @@ mod tests {
         assert_eq!(
             game_commands("/corpsedrag", &online, &outbox).unwrap(),
             Err("You must first target a corpse.".into())
+        );
+        // A pet command aims at the target; unknown words say so.
+        assert!(matches!(
+            game_commands("/pet back off", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::Pet {
+                command: eq_client_core::pets::PetCommand::BackOff,
+                ..
+            }]
+        ));
+        assert_eq!(
+            game_commands("/pet dance", &online, &outbox).unwrap(),
+            Err("Unknown pet command: dance".into())
         );
         assert!(matches!(
             game_commands("/corpsedrop", &online, &outbox)

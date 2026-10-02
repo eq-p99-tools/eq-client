@@ -26,6 +26,8 @@ pub(super) struct Zone {
     pub(super) trade: Trade,
     /// How the zone's sky and fog look, once the zone says.
     pub(super) sky: Option<crate::clock::ZoneSky>,
+    /// The player's pet's buffs, as the server last said.
+    pub(super) pet_buffs: Option<crate::pets::PetBuffs>,
 }
 
 impl Zone {
@@ -39,7 +41,7 @@ impl Zone {
                 spawn.spawn_id,
                 Spawn {
                     state: spawn.clone(),
-                    health: None,
+                    health: spawn.hp_percent,
                     posture: None,
                     revision: *revision,
                 },

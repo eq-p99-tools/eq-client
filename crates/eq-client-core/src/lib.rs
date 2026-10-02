@@ -9,6 +9,7 @@ pub mod entities;
 pub mod ground;
 pub mod movement;
 pub mod outfit;
+pub mod pet;
 pub mod races;
 pub mod resources;
 pub mod targeting;
@@ -34,6 +35,7 @@ pub use eq_network_game::movement::{
     BackwardCalibration, MotionCalibration, MovementMode, MovementRequest, StrafeCalibration,
     WalkCalibration,
 };
+pub use eq_network_game::pets;
 pub use eq_network_game::spells::BookActionStatus;
 pub use eq_network_game::spells::SpellBook;
 pub use eq_network_game::spells::SpellUpdate;

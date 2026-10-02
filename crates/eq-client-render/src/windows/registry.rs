@@ -46,6 +46,9 @@ pub(crate) enum WindowId {
     /// The skin's Actions window: its Main page's sit, stand and camp, and
     /// the abilities on its Combat and Abilities pages.
     ActionsWindow,
+    /// The skin's Pet Info window: the pet's health, its commands and its
+    /// buffs, open while the player has a pet.
+    PetInfo,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -223,7 +226,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 18] = [
+    pub(crate) const ALL: [Self; 19] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -240,6 +243,7 @@ impl WindowId {
         Self::Merchant,
         Self::Give,
         Self::ActionsWindow,
+        Self::PetInfo,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -271,6 +275,7 @@ impl WindowId {
             Self::Merchant => Some("MerchantWnd"),
             Self::Give => Some("GiveWnd"),
             Self::ActionsWindow => Some("ActionsWindow"),
+            Self::PetInfo => Some("PetInfoWindow"),
             _ => None,
         }
     }
@@ -306,6 +311,7 @@ impl WindowId {
             Self::Merchant => "merchant",
             Self::Give => "give",
             Self::ActionsWindow => "actions-window",
+            Self::PetInfo => "pet-info",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -404,6 +410,9 @@ impl WindowId {
             Self::Give => floating("GIVE", Placement::TopRight(220.0, 100.0), false, &[]),
             // Where the skin places it, right of the player and target windows.
             Self::ActionsWindow => floating("ACTIONS", Placement::TopLeft(516.0, 292.0), true, &[]),
+            // Where the skin places it, right of the hotbar; it opens with a
+            // pet and closes when the pet is gone.
+            Self::PetInfo => floating("PET", Placement::TopLeft(56.0, 160.0), false, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(
