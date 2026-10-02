@@ -246,6 +246,13 @@ fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
 /// Startup problems print to stderr before the viewer exists; once it
 /// runs, the session logs through `tracing` like the viewer.
 fn main() {
+    // A panic reaches the log, and with it the log file, as well as the
+    // standard error stream.
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        tracing::error!("The client panicked: {panic}");
+        report(panic);
+    }));
     let mut arguments = Arguments::parse();
     let calibration = arguments
         .movement_calibration
@@ -336,6 +343,7 @@ fn main() {
         local,
     );
     let exit = eq_client_render::run(zone, character, config, source);
+    tracing::info!("The client ends with status {exit}");
     // Close the session before exiting with the viewer's status.
     drop(worker);
     std::process::exit(exit);

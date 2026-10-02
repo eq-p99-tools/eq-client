@@ -15,6 +15,7 @@ mod daylight;
 mod doors;
 mod entities;
 mod escape;
+mod exit_log;
 mod frame_limit;
 mod give;
 mod ground;
@@ -278,11 +279,21 @@ pub fn run(
     .insert_resource(outbox::Outbox::new(commands));
     init_presentation(&mut app);
     app.insert_resource(options::OptionsState::new(option_defaults));
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(window),
-        ..default()
-    }))
-    .add_systems(Startup, setup_scene);
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(window),
+                ..default()
+            })
+            // What the client logs also goes to a file in the settings
+            // folder, so an ending leaves its reason behind.
+            .set(bevy::log::LogPlugin {
+                custom_layer: exit_log::file_layer,
+                ..default()
+            }),
+    )
+    .add_systems(Startup, setup_scene)
+    .add_systems(Update, exit_log::close_requests);
     schedule(&mut app);
     navigation::install(&mut app);
     frame_limit::install(&mut app);
@@ -894,10 +905,12 @@ fn exit_after_screenshot(
     settings: Res<ViewerSettings>,
 ) {
     if online.world().ended() && settings.0.screenshot.is_some() {
+        info!("The session ended before the screenshot, so the client is ending");
         app_exit.write(AppExit::error());
     }
     // Scripted screenshots keep the session running; only `--screenshot` is one-shot.
     if !captured.is_empty() && settings.0.screenshot.is_some() {
+        info!("The screenshot is taken, so the client is ending");
         app_exit.write(AppExit::Success);
     }
 }
