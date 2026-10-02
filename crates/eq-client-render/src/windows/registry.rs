@@ -473,8 +473,8 @@ impl WindowId {
             // Where the skin places them; they open with a text to read.
             Self::Note => floating("", Placement::TopLeft(100.0, 80.0), false, &[]),
             Self::Book => floating("", Placement::TopLeft(120.0, 20.0), false, &[]),
-            // Beside the inventory, where the first bag would open.
-            Self::WorldContainer => floating("", Placement::TopLeft(484.0, 120.0), false, &[]),
+            // Where the skin places its container window (EQUI_Container.xml).
+            Self::WorldContainer => floating("", Placement::TopLeft(350.0, 100.0), false, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(
