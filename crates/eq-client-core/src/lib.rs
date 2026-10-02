@@ -7,6 +7,7 @@ pub mod daylight;
 pub mod doors;
 pub mod entities;
 pub mod ground;
+pub mod logs;
 pub mod movement;
 pub mod options;
 pub mod outfit;

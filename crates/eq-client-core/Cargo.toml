@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+chrono.workspace = true
 parry3d.workspace = true
 eq-client-axes.workspace = true
 glam.workspace = true

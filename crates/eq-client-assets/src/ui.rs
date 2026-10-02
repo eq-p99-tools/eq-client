@@ -185,6 +185,25 @@ pub fn chosen_skin(eq_directory: &Path, character: &str, world: &str) -> Option<
     ini_value(&String::from_utf8_lossy(&bytes), "Main", "UISkin").filter(|skin| valid_skin(skin))
 }
 
+/// Whether the official client logs the chat from login: `Log` in the
+/// `[Defaults]` section of `eqclient.ini`, which its `/log` saves. None when
+/// the file or setting is missing or says neither.
+pub fn logging(eq_directory: &Path) -> Option<bool> {
+    let bytes = std::fs::read(eq_directory.join("eqclient.ini")).ok()?;
+    logging_from_ini(&String::from_utf8_lossy(&bytes))
+}
+
+fn logging_from_ini(text: &str) -> Option<bool> {
+    match ini_value(text, "Defaults", "Log")?
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "TRUE" | "1" => Some(true),
+        "FALSE" | "0" => Some(false),
+        _ => None,
+    }
+}
+
 /// Where the official client last put one of a character's windows, at one
 /// screen size: a section of `UI_<character>_<world>.ini`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,6 +457,44 @@ fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eqclient_ini_says_whether_the_chat_is_logged() {
+        assert_eq!(
+            logging_from_ini(
+                "[Defaults]
+Sound=TRUE
+Log=TRUE
+"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            logging_from_ini(
+                "[defaults]
+log = false
+"
+            ),
+            Some(false)
+        );
+        // Another section's Log, or none at all, says nothing.
+        assert_eq!(
+            logging_from_ini(
+                "[Other]
+Log=TRUE
+"
+            ),
+            None
+        );
+        assert_eq!(
+            logging_from_ini(
+                "[Defaults]
+Log=maybe
+"
+            ),
+            None
+        );
+    }
 
     #[test]
     fn window_positions_pair_left_and_top_edges_by_screen_size() {

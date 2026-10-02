@@ -51,6 +51,8 @@ pub(super) struct ChatState {
     pub requested_target: Option<String>,
     /// A plain `/who`, waiting to list the zone's players.
     pub zone_who: Option<eq_client_core::who::WhoFilter>,
+    /// A `/log`, waiting to turn the chat log on or off.
+    pub log_toggle: bool,
     draft: String,
     status: String,
 }
@@ -522,13 +524,9 @@ fn submit_draft(
     outbox: &crate::outbox::Outbox,
 ) {
     let result = (|| -> Result<(), Unsent> {
-        if let Some(request) = target_request(state.draft.trim()) {
-            state.requested_target = Some(request?);
-            return Ok(());
-        }
-        if let Some(request) = zone_who_request(state.draft.trim()) {
-            state.zone_who = Some(request?);
-            return Ok(());
+        let draft = state.draft.trim().to_owned();
+        if let Some(request) = client_request(&draft, state) {
+            return Ok(request?);
         }
         if let Some(line) = location(state.draft.trim(), online) {
             state.history.push(system_line(line?));
@@ -594,6 +592,23 @@ fn location(input: &str, online: &super::online::OnlineState) -> Option<Result<S
             })
             .ok_or_else(|| "Enter the world first".to_owned()),
     )
+}
+
+/// A slash command the client answers itself, noted for the system that
+/// answers it: `/target Name`, a plain `/who`, or `/log`. None for any
+/// other line.
+pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
+    if let Some(request) = target_request(input) {
+        return Some(request.map(|name| state.requested_target = Some(name)));
+    }
+    if let Some(request) = zone_who_request(input) {
+        return Some(request.map(|filter| state.zone_who = Some(filter)));
+    }
+    if input.eq_ignore_ascii_case("/log") {
+        state.log_toggle = true;
+        return Some(Ok(()));
+    }
+    None
 }
 
 /// The name in a `/target Name` command; underscores match spaces as in spawn names.
