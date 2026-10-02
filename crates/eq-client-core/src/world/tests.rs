@@ -577,6 +577,7 @@ fn chest() -> crate::inventory::InventoryItem {
     InventoryItem {
         activation: ItemActivation::default(),
         scroll_spell: None,
+        book: None,
         rules: ItemPlacement {
             item_type: 10,
             ..ItemPlacement::default()
@@ -1664,4 +1665,41 @@ fn a_resurrection_offer_is_forgotten_when_the_player_enters_a_zone() {
     // knows nothing of it, so neither does the world.
     game(&mut world, entered(2));
     assert!(world.resurrection().is_none());
+}
+
+#[test]
+fn a_text_is_read_until_put_away_or_the_player_enters_a_zone() {
+    let mut world = admitted();
+    let book = || {
+        WorldEvent::BookText(crate::books::BookText {
+            kind: 1,
+            text: "Chapter one".into(),
+        })
+    };
+    game(&mut world, book());
+    assert_eq!(world.reading().map(|text| text.kind), Some(1));
+    world.close_reading();
+    assert!(world.reading().is_none());
+    game(&mut world, book());
+    game(&mut world, entered(2));
+    assert!(world.reading().is_none());
+    // A request this session would not send says why; another session's
+    // refusal is not this player's news.
+    let reason = "That is not something you can read.";
+    let changes = game(
+        &mut world,
+        WorldEvent::ReadRefused {
+            session_id: 2,
+            reason: reason.into(),
+        },
+    );
+    assert_eq!(changes.notices, [Notice::ReadRefused(reason.into())]);
+    let changes = game(
+        &mut world,
+        WorldEvent::ReadRefused {
+            session_id: 1,
+            reason: reason.into(),
+        },
+    );
+    assert_eq!(changes.notices.len(), 0);
 }

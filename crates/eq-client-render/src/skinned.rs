@@ -41,6 +41,8 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Training => "EQUI_TrainWindow.xml",
         WindowId::Skills => "EQUI_SkillsWindow.xml",
         WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
+        WindowId::Note => "EQUI_NoteWindow.xml",
+        WindowId::Book => "EQUI_BookWindow.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -404,8 +406,9 @@ fn text_box(
             if let Some(template) = &text.template {
                 client = border(frame, art, &template.border, (area.width, area.height));
             }
+            let ink = text.color.map_or(theme::INK_BRIGHT, rgb);
             let mut words = frame.spawn((
-                theme::text("", Size::Body, theme::INK_BRIGHT),
+                theme::text("", Size::Body, ink),
                 TextLayout::new(Justify::Left, LineBreak::WordBoundary),
                 at(
                     client.x + 4.0,
@@ -414,8 +417,20 @@ fn text_box(
                     (client.height - 8.0).max(0.0),
                 ),
             ));
-            if owner == WindowId::Confirmation {
-                words.insert(super::resurrection::QuestionText);
+            match (owner, text.id.as_deref()) {
+                (WindowId::Confirmation, _) => {
+                    words.insert(super::resurrection::QuestionText);
+                }
+                (WindowId::Note, _) => {
+                    words.insert(super::reading::Text::Note);
+                }
+                (WindowId::Book, Some("Page0")) => {
+                    words.insert(super::reading::Text::Page(0));
+                }
+                (WindowId::Book, Some("Page1")) => {
+                    words.insert(super::reading::Text::Page(1));
+                }
+                _ => (),
             }
         });
 }
@@ -772,6 +787,8 @@ enum Does {
     Trains,
     /// Answers the confirmation dialog's question: Yes (true) or No.
     Answers(bool),
+    /// Turns a book's pages forward (true) or back.
+    TurnsPage(bool),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -795,6 +812,13 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if owner == WindowId::Training && id == "TrainButton" {
         return Some(Does::Trains);
+    }
+    if owner == WindowId::Book {
+        match id {
+            "LeftButton" => return Some(Does::TurnsPage(false)),
+            "RightButton" => return Some(Does::TurnsPage(true)),
+            _ => (),
+        }
     }
     // The dialog asks only Yes-or-No questions so far; its OK stays hidden.
     if owner == WindowId::Confirmation {
@@ -1050,6 +1074,9 @@ fn behave(
             skin(),
             crate::outbox::Needs(Capability::Resurrection),
         )),
+        Does::TurnsPage(forward) => {
+            drawn.insert((Button, super::reading::PageButton(forward), skin()))
+        }
         Does::BagIcon | Does::Nothing => drawn,
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
@@ -1119,6 +1146,7 @@ fn caption(
         | Does::Option(_)
         | Does::Trains
         | Does::Answers(_)
+        | Does::TurnsPage(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 {
@@ -1397,12 +1425,19 @@ fn label(
             .map(|coin| Shows::Coins(CoinPlace::Purse, *coin)),
         _ => None,
     };
-    let words =
-        if label.eq_type.is_some() || bag.is_some() || banker || partner || counted.is_some() {
-            ""
-        } else {
-            label.text.as_str()
-        };
+    // The book window's page numbers.
+    let page_number = match (owner, name) {
+        (WindowId::Book, "BOOK_Page0Number") => Some(0),
+        (WindowId::Book, "BOOK_Page1Number") => Some(1),
+        _ => None,
+    };
+    let filled = label.eq_type.is_some()
+        || bag.is_some()
+        || banker
+        || partner
+        || counted.is_some()
+        || page_number.is_some();
+    let words = if filled { "" } else { label.text.as_str() };
     let text = theme::text(
         words,
         font(label.font),
@@ -1418,6 +1453,14 @@ fn label(
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
         (None, Some(bag)) => aligned(window, node, label.align, (text, items::BagPart::Name(bag))),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
+        (None, None) if let Some(side) = page_number => {
+            aligned(
+                window,
+                node,
+                label.align,
+                (text, super::reading::Text::Number(side)),
+            );
+        }
         (None, None) if let Some(shows) = counted => {
             aligned(window, node, label.align, (text, shows));
         }

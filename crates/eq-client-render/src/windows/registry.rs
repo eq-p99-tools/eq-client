@@ -61,6 +61,10 @@ pub(crate) enum WindowId {
     /// The skin's confirmation dialog: a question to answer Yes or No, such
     /// as a resurrection's.
     Confirmation,
+    /// The skin's note window: a note or scroll being read.
+    Note,
+    /// The skin's book window: a book being read, two pages at a time.
+    Book,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -238,7 +242,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 23] = [
+    pub(crate) const ALL: [Self; 25] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -260,6 +264,8 @@ impl WindowId {
         Self::Training,
         Self::Skills,
         Self::Confirmation,
+        Self::Note,
+        Self::Book,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -296,6 +302,8 @@ impl WindowId {
             Self::Training => Some("TrainWindow"),
             Self::Skills => Some("SkillsWindow"),
             Self::Confirmation => Some("ConfirmationDialogBox"),
+            Self::Note => Some("NoteWindow"),
+            Self::Book => Some("BookWindow"),
             _ => None,
         }
     }
@@ -336,6 +344,8 @@ impl WindowId {
             Self::Training => "training",
             Self::Skills => "skills",
             Self::Confirmation => "confirmation",
+            Self::Note => "note",
+            Self::Book => "book",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -454,6 +464,9 @@ impl WindowId {
                 persists: false,
                 ..floating("", Placement::TopLeft(550.0, 350.0), false, &[])
             },
+            // Where the skin places them; they open with a text to read.
+            Self::Note => floating("", Placement::TopLeft(100.0, 80.0), false, &[]),
+            Self::Book => floating("", Placement::TopLeft(120.0, 20.0), false, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(

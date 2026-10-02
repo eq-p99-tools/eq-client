@@ -128,6 +128,12 @@ impl ClientWorld {
         self.resurrection.as_ref()
     }
 
+    /// The book or note open to read.
+    #[must_use]
+    pub fn reading(&self) -> Option<&crate::books::BookText> {
+        self.reading.as_ref()
+    }
+
     /// The guildmaster the player is training with, and how far they train
     /// each skill.
     #[must_use]

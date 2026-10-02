@@ -84,6 +84,11 @@ impl OnlineState {
         self.world.answer_resurrection();
     }
 
+    /// The player closed the book or note they were reading.
+    pub(super) fn close_reading(&mut self) {
+        self.world.close_reading();
+    }
+
     /// The player closed the merchant window.
     pub(super) fn close_shop(&mut self) {
         self.world.close_shop();

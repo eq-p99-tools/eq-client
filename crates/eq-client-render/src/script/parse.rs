@@ -12,7 +12,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 20] = [
+const GM_COMMANDS: [&str; 21] = [
     // GM mode on or off: off, the server lets the player go hungry.
     "gm",
     // A rule changed in this zone only, such as how fast hunger comes, or
@@ -24,6 +24,8 @@ const GM_COMMANDS: [&str; 20] = [
     "makepet",
     "summon",
     "summonitem",
+    // Searches the server's items by name, to find one to summon.
+    "finditem",
     // A temporary NPC at the GM's feet, and coins or items on the target.
     "spawn",
     "npcloot",
@@ -154,6 +156,8 @@ pub enum ClickTarget {
     Training(TrainingClick),
     /// The confirmation dialog's Yes (true) or No.
     Answer(bool),
+    /// The book window's arrow: forward (true) or back.
+    Page(bool),
 }
 
 /// The Training window's controls.
@@ -377,6 +381,8 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
         ["train"] => ClickTarget::Training(TrainingClick::Train),
         ["answer", "yes"] => ClickTarget::Answer(true),
+        ["page", "next"] => ClickTarget::Page(true),
+        ["page", "back"] => ClickTarget::Page(false),
         ["answer", "no"] => ClickTarget::Answer(false),
         ["training_done"] => ClickTarget::Training(TrainingClick::Done),
         ["slider", name, percent] => ClickTarget::Slider(

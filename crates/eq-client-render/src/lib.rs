@@ -39,6 +39,7 @@ mod preview;
 #[cfg(test)]
 mod probes;
 mod profile_files;
+mod reading;
 mod resources;
 mod resurrection;
 pub mod script;
@@ -332,7 +333,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<windows::Stack>()
         .init_resource::<keys::KeyMap>()
         .init_resource::<keys::Typing>()
-        .init_resource::<training::Chosen>();
+        .init_resource::<training::Chosen>()
+        .init_resource::<reading::Page>();
 }
 
 /// What the tests of the windows start from.
@@ -462,7 +464,12 @@ fn schedule(app: &mut App) {
             (who::zone_list, pet::window),
             combat::input,
             trade::input,
-            (give::buttons, training::buttons, resurrection::buttons),
+            (
+                give::buttons,
+                training::buttons,
+                resurrection::buttons,
+                reading::buttons,
+            ),
             (abilities::input, skinned::slash),
             hud::actions,
             (hud::hotbar::update, hud::hotbar::persist).chain(),
@@ -497,7 +504,12 @@ fn schedule(app: &mut App) {
                 update_hud,
                 // Opens the give and training windows before their frames
                 // are drawn.
-                (give::window, training::window, resurrection::window),
+                (
+                    give::window,
+                    training::window,
+                    resurrection::window,
+                    reading::window,
+                ),
             )
                 .chain(),
             (
@@ -536,6 +548,7 @@ fn schedule(app: &mut App) {
                         training::fill,
                         skills::fill,
                         resurrection::show,
+                        reading::show,
                     ),
                 ),
                 skinned::close,

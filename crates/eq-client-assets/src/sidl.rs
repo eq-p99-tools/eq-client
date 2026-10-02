@@ -423,8 +423,11 @@ pub struct TextBox {
     /// Where it sits when it stretches with its window instead
     /// (`AutoStretch`).
     pub anchors: Option<Anchors>,
-    /// How its frame is drawn.
+    /// How its frame is drawn; None for a box without one, such as a page
+    /// of a book, drawn on the window's own art.
     pub template: Option<WindowTemplate>,
+    /// The colour of its text, where the skin sets one.
+    pub color: Option<[u8; 3]>,
 }
 
 /// A window as the skin defines it.
@@ -807,7 +810,9 @@ impl Library {
         };
         match node.tag_name().name() {
             "Gauge" => self.gauge(node),
-            "Label" => Element::Label(Label {
+            // Words the skin writes, or the client fills: StaticText is how
+            // the skin writes a book's page numbers.
+            "Label" | "StaticText" => Element::Label(Label {
                 area: at(),
                 eq_type: number(node, "EQType"),
                 text: text_of(node, "Text").unwrap_or_default().to_owned(),
@@ -829,12 +834,19 @@ impl Library {
                 background: self.piece(text_of(node, "Background")),
             }),
             "Slider" | "Combobox" | "Listbox" => self.control(node),
-            "STMLbox" => Element::TextBox(TextBox {
+            // A box of text, or a field the client fills with text, as a
+            // book's pages are.
+            "STMLbox" | "Editbox" => Element::TextBox(TextBox {
                 id: text_of(node, "ScreenID").map(str::to_owned),
                 area: at(),
                 anchors: flag(node, "AutoStretch").then(|| anchors(node)),
                 template: text_of(node, "DrawTemplate")
+                    .filter(|_| {
+                        !flag(node, "Style_Transparent")
+                            && text_of(node, "Style_Border") != Some("false")
+                    })
                     .and_then(|template| self.templates.get(template).cloned()),
+                color: color(node, "TextColor"),
             }),
             // Pages and windows within windows nest; skins go a few deep.
             "TabBox" if depth < 4 => Element::Tabs(TabBox {

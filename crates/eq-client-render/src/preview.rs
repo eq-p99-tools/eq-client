@@ -458,6 +458,7 @@ pub(crate) fn items() -> Vec<InventoryItem> {
         items.push(InventoryItem {
             activation: eq_client_core::inventory::ItemActivation::default(),
             scroll_spell: None,
+            book: None,
             rules: eq_client_core::inventory::ItemPlacement {
                 stack_size: if id == 8 { 100 } else { 20 },
                 size: 1,

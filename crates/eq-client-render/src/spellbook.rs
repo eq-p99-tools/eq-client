@@ -923,6 +923,7 @@ mod tests {
             InventoryUpdate::Snapshot(vec![InventoryItem {
                 activation: eq_client_core::inventory::ItemActivation::default(),
                 scroll_spell: Some(73),
+                book: None,
                 rules: ItemPlacement::default(),
                 slot: InventorySlot::CURSOR,
                 details,
