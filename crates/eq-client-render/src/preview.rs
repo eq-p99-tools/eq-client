@@ -7,6 +7,7 @@ use super::{Player, SceneInfo, Stage, TerrainSurface, setup_scene, world_positio
 use bevy::prelude::*;
 use eq_client_core::{
     CharacterChoice, Coins, SpawnKind, WorldEvent, WorldPosition, WorldUpdate,
+    exchange::ExchangeUpdate,
     inventory::{InventoryItem, InventorySlot, InventoryUpdate},
     loot::{LootResponse, LootUpdate},
     merchant::{MerchantItem, MerchantUpdate},
@@ -247,7 +248,8 @@ fn spellbook(news: Res<News>, mut shown: ResMut<super::windows::Shown>) {
 }
 
 /// Opens a corpse to loot and a merchant to trade with, as if the player
-/// had asked for both.
+/// had asked for both, and another player's trade, with two of their items
+/// and some coins in it and their Trade clicked.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn trade(
     news: Res<News>,
@@ -279,7 +281,7 @@ fn trade(
         news.game(WorldEvent::Loot(LootUpdate::Item(Box::new(item))));
     }
     news.game(WorldEvent::Loot(LootUpdate::Listed { corpse_id: 1 }));
-    for (item, slot) in items.into_iter().skip(3).zip(1u32..) {
+    for (item, slot) in items.iter().skip(3).cloned().zip(1u32..) {
         news.game(WorldEvent::Merchant(MerchantUpdate::Item(Box::new(
             MerchantItem {
                 slot,
@@ -289,6 +291,34 @@ fn trade(
             },
         ))));
     }
+    let trader = online
+        .world()
+        .player()
+        .map(|player| player.position)
+        .unwrap_or_default();
+    news.game(WorldEvent::Spawns(vec![eq_client_core::SpawnState {
+        name: "Preview_Trader000".into(),
+        kind: SpawnKind::Player,
+        ..synthetic(5, 1, 0.0, trader)
+    }]));
+    news.game(WorldEvent::Exchange(ExchangeUpdate::Taken { from: 5 }));
+    for (index, item) in [0, 2].into_iter().zip(items) {
+        news.game(WorldEvent::Exchange(ExchangeUpdate::Offered {
+            index,
+            item: Box::new(item),
+        }));
+    }
+    news.game(WorldEvent::CoinsElsewhere {
+        cursor: Coins::default(),
+        bank: Coins::default(),
+        given: Coins::default(),
+        offered: Coins {
+            gold: 3,
+            silver: 5,
+            ..Coins::default()
+        },
+    });
+    news.game(WorldEvent::Exchange(ExchangeUpdate::Accepted { by: 5 }));
 }
 
 /// Says a line on each channel, one of them with an item link.

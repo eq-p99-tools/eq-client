@@ -891,6 +891,79 @@ fn a_merchant_lists_stock_until_closed_or_refusing() {
 }
 
 #[test]
+fn another_players_trade_shows_their_side_and_both_clicks_until_anything_goes_in() {
+    use crate::{exchange::ExchangeUpdate, inventory::InventorySlot};
+    let mut world = admitted();
+    let exchange = |update| WorldEvent::Exchange(update);
+    let clicks = |world: &ClientWorld| {
+        let open = world.exchange().unwrap();
+        (open.given, open.partner_accepted)
+    };
+    let coins = |given, offered| WorldEvent::CoinsElsewhere {
+        cursor: Coins::default(),
+        bank: Coins::default(),
+        given,
+        offered,
+    };
+    let gold = |gold| Coins {
+        gold,
+        ..Coins::default()
+    };
+    // The session took another player's request: the window is open, and
+    // nothing of the player's goes in by itself.
+    let changes = game(&mut world, exchange(ExchangeUpdate::Taken { from: 9 }));
+    assert!(changes.trade);
+    let open = world.exchange().unwrap();
+    assert_eq!(
+        (open.with, open.trade_slots(), open.asker),
+        (9, 8, Asker::Partner)
+    );
+    // Their items show by trade slot, and undo both clicks.
+    game(&mut world, exchange(ExchangeUpdate::Accepted { by: 9 }));
+    world.give();
+    assert_eq!(clicks(&world), (true, true));
+    game(
+        &mut world,
+        exchange(ExchangeUpdate::Offered {
+            index: 2,
+            item: Box::new(chest()),
+        }),
+    );
+    assert_eq!(world.exchange().unwrap().theirs[&2].details.name, "Chest");
+    assert_eq!(clicks(&world), (false, false));
+    // So do the player's own coins and items going in, and theirs.
+    for event in [
+        coins(gold(1), Coins::default()),
+        exchange(ExchangeUpdate::Coins {
+            coin: crate::money::Coin::Gold,
+            amount: 2,
+        }),
+        inventory(vec![crate::inventory::InventoryItem {
+            slot: InventorySlot(3000),
+            ..chest()
+        }]),
+    ] {
+        game(&mut world, exchange(ExchangeUpdate::Accepted { by: 9 }));
+        world.give();
+        game(&mut world, event);
+        assert_eq!(clicks(&world), (false, false));
+    }
+    // Their coins are what the session counts, while the window is open.
+    game(&mut world, coins(gold(1), gold(2)));
+    assert_eq!(world.offered_coins(), Some(gold(2)));
+    // Anyone else's click is not theirs, and nothing else changes them.
+    game(&mut world, exchange(ExchangeUpdate::Accepted { by: 1 }));
+    game(&mut world, coins(gold(1), gold(2)));
+    assert_eq!(clicks(&world), (false, false));
+    game(&mut world, exchange(ExchangeUpdate::Accepted { by: 9 }));
+    game(&mut world, coins(gold(1), gold(2)));
+    assert_eq!(clicks(&world), (false, true));
+    // The other player closing the window ends it.
+    game(&mut world, exchange(ExchangeUpdate::Cancelled { by: 1 }));
+    assert!(world.exchange().is_none() && world.offered_coins().is_none());
+}
+
+#[test]
 fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     use crate::abilities::Ability;
     use std::time::Duration;

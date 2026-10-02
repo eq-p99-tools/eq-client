@@ -2,7 +2,7 @@
 //! character: what the player opened, and what the server listed in it.
 use super::Notice;
 use crate::{
-    exchange::ExchangeUpdate,
+    exchange::{ExchangeUpdate, Partner},
     inventory::InventoryItem,
     loot::{LootResponse, LootUpdate},
     merchant::{MerchantItem, MerchantUpdate},
@@ -29,25 +29,66 @@ pub struct Merchant {
     pub stock: BTreeMap<u32, MerchantItem>,
 }
 
-/// A give window the player asked for, or has open.
+/// Who asked for a give or trade window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Asker {
+    /// The player: what they hold on the cursor goes in when the window
+    /// opens.
+    Player,
+    /// Another player, whose request the session took.
+    Partner,
+}
+
+/// A give or trade window the player asked for, or has open.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Exchange {
     /// The character on the other side.
     pub with: u16,
+    /// Who they are, which decides the window.
+    pub partner: Partner,
     /// How many trade slots the window has.
     pub slots: u8,
     /// Whether their answer has opened the window.
     pub open: bool,
-    /// Whether the player clicked Give.
+    /// Who asked for it.
+    pub asker: Asker,
+    /// Whether the player clicked Give or Trade since anything put in last
+    /// undid it.
     pub given: bool,
+    /// Whether the other player clicked Trade since anything put in last
+    /// undid it.
+    pub partner_accepted: bool,
+    /// What the other player put in, by their trade slot (0 to 7).
+    pub theirs: BTreeMap<u8, InventoryItem>,
 }
 
 impl Exchange {
+    /// A window the player asked for, before the answer.
+    #[must_use]
+    pub const fn asked(with: u16, partner: Partner) -> Self {
+        Self {
+            with,
+            partner,
+            slots: partner.slots(),
+            open: false,
+            asker: Asker::Player,
+            given: false,
+            partner_accepted: false,
+            theirs: BTreeMap::new(),
+        }
+    }
+
     /// How many trade slots the player may fill now: none until the window
     /// opens.
     #[must_use]
     pub const fn trade_slots(&self) -> u8 {
         if self.open { self.slots } else { 0 }
+    }
+
+    /// Anything put in undoes both sides' clicks, as servers undo them.
+    pub(super) const fn undo_clicks(&mut self) {
+        self.given = false;
+        self.partner_accepted = false;
     }
 }
 
@@ -121,18 +162,39 @@ impl Trade {
 }
 
 impl Trade {
-    /// Follows the server's word on a give window. False when the news is
-    /// not about the one the player asked for.
-    pub(super) fn exchange(&mut self, update: ExchangeUpdate) -> bool {
+    /// Follows the server's word on a give or trade window, and the
+    /// session's on another player's request it took. False when the news
+    /// is not about the window the player has.
+    pub(super) fn exchange(&mut self, update: &ExchangeUpdate) -> bool {
+        if let ExchangeUpdate::Taken { from } = update {
+            let Ok(with) = u16::try_from(*from) else {
+                return false;
+            };
+            self.exchange = Some(Exchange {
+                open: true,
+                asker: Asker::Partner,
+                ..Exchange::asked(with, Partner::Player)
+            });
+            return true;
+        }
         let Some(exchange) = self.exchange.as_mut() else {
             return false;
         };
         match update {
-            ExchangeUpdate::Opened { with } if u32::from(exchange.with) == with => {
+            ExchangeUpdate::Opened { with } if u32::from(exchange.with) == *with => {
                 exchange.open = true;
             }
+            ExchangeUpdate::Offered { index, item } => {
+                exchange.theirs.insert(*index, (**item).clone());
+                exchange.undo_clicks();
+            }
+            // The coins themselves are the session's to count.
+            ExchangeUpdate::Coins { .. } => exchange.undo_clicks(),
+            ExchangeUpdate::Accepted { by } if u32::from(exchange.with) == *by => {
+                exchange.partner_accepted = true;
+            }
             ExchangeUpdate::Finished | ExchangeUpdate::Cancelled { .. } => self.exchange = None,
-            ExchangeUpdate::Busy { by } if u32::from(exchange.with) == by => self.exchange = None,
+            ExchangeUpdate::Busy { by } if u32::from(exchange.with) == *by => self.exchange = None,
             _ => return false,
         }
         true

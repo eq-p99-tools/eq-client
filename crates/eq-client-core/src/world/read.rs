@@ -274,16 +274,28 @@ impl ClientWorld {
                 .zone
                 .trade
                 .exchange
+                .as_ref()
                 .filter(|exchange| exchange.open)
                 .map(|_| self.wallet.given),
             place => self.wallet.get(place),
         }
     }
 
-    /// The give window the player asked for or has open.
+    /// The give or trade window the player asked for or has open.
     #[must_use]
     pub const fn exchange(&self) -> Option<&Exchange> {
         self.zone.trade.exchange.as_ref()
+    }
+
+    /// The coins the other player put in the open trade window.
+    #[must_use]
+    pub fn offered_coins(&self) -> Option<Coins> {
+        self.zone
+            .trade
+            .exchange
+            .as_ref()
+            .filter(|exchange| exchange.open)
+            .map(|_| self.wallet.offered)
     }
 
     /// How fed and watered the player is, as the server last said.

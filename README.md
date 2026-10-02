@@ -503,6 +503,15 @@ The target panel lists the keys that apply to the current target:
   cursor, **Give** hands them over (a quest NPC answers in chat, and what it
   does not want comes back on the cursor), and **Cancel** or **Escape**
   takes them back. Only an NPC within 20 units is asked.
+- Clicking another player with an item or coins on the cursor asks them to
+  trade: their client answers on its own and the skin's trade window
+  (`TradeWnd`) opens on both sides, with what the cursor held in the first
+  slot. Another player's request opens it the same way, unless a trade is
+  already open. Their items and coins show on their side (a right click
+  inspects an item); the trade goes through once both players click
+  **Trade**, and anything put in undoes both clicks (a name lit green has
+  clicked). **Cancel** or **Escape** takes everything back. NO DROP items
+  stay with the player.
 - Coins move as in the official client: clicking a coin box in the purse or
   the bank picks coins up onto the cursor (the quantity picker asks how many;
   Shift takes them all), and clicking a box with coins on the cursor puts
@@ -554,7 +563,7 @@ text. Server string-table messages (for example experience, skill-up and range
 errors) are formatted from the installed `eqstr_us.txt`. Casting with less
 server-reported mana than the installed spell cost is refused locally, like the
 official client. These paths have synthetic tests; live verification is pending.
-`--demo-trade` previews the loot and merchant windows offline.
+`--demo-trade` previews the loot, merchant and trade windows offline.
 
 ## Attended scripts
 

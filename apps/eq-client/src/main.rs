@@ -100,7 +100,7 @@ struct Arguments {
     /// Preview character selection with synthetic names and no network connection.
     #[arg(long, conflicts_with = "online")]
     demo_character_select: bool,
-    /// Preview loot and merchant windows with synthetic items and no network connection.
+    /// Preview loot, merchant and trade windows with synthetic items and no network connection.
     #[arg(long, conflicts_with = "online")]
     demo_trade: bool,
 

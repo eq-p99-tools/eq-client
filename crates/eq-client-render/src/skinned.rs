@@ -12,7 +12,7 @@ pub(crate) use controls::{
     light_choices, scroll_lists, show_choices, show_levels, slide,
 };
 
-pub(crate) use items::{Closes, close, contents, frames, picker, toggle_bag};
+pub(crate) use items::{Closes, TheirSlot, close, contents, frames, picker, theirs, toggle_bag};
 
 use super::windows::WindowId;
 use crate::theme::{self, Size};
@@ -38,6 +38,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Bank => "EQUI_BankWnd.xml",
         WindowId::Bag(_) | WindowId::WorldContainer => "EQUI_Container.xml",
         WindowId::Give => "EQUI_GiveWnd.xml",
+        WindowId::Trade => "EQUI_TradeWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
@@ -70,12 +71,17 @@ pub(crate) enum Shows {
     /// choice of target. The official client says it in the chat.
     TargetLine,
     /// The coins of one kind in a place: the purse, the bank or the give
-    /// window.
+    /// or trade window.
     Coins(CoinPlace, Coin),
+    /// The coins of one kind the other player put in the trade.
+    Offered(Coin),
     /// The banker the bank is open at.
     Banker,
-    /// The character the give window hands items to.
+    /// The character the give or trade window is with, lit once they click
+    /// Trade.
     Partner,
+    /// The player in the trade window, lit once they click Trade.
+    Trader,
     /// The pet window's Sit button (false) or its Stand button (true): the
     /// skin keeps one under the other, and the one that does something
     /// shows.
@@ -845,6 +851,8 @@ enum Does {
     /// Holds coins of one kind in a place, which a click picks up or puts
     /// down.
     Coins(CoinPlace, Coin),
+    /// Shows the coins of one kind the other player put in the trade.
+    Offered(Coin),
     /// Shows a bag's picture.
     BagIcon,
     /// Turns melee auto-attack on or off.
@@ -879,12 +887,18 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     if let Some((place, coin)) = coin_box(id) {
         return Some(Does::Coins(place, coin));
     }
+    if let Some(coin) = their_coin_box(id) {
+        return Some(Does::Offered(coin));
+    }
     if let Some(button) = ability_button(id) {
         return Some(Does::Ability(button));
     }
-    // A window's Done button, or the give window's Cancel, closes it; even
-    // in a window whose other buttons do nothing yet.
-    if matches!(id, "DoneButton" | "GVW_Cancel_Button") {
+    // A window's Done button, or the give or trade window's Cancel, closes
+    // it; even in a window whose other buttons do nothing yet.
+    if matches!(
+        id,
+        "DoneButton" | "GVW_Cancel_Button" | "TRDW_Cancel_Button"
+    ) {
         return Some(Does::Closes);
     }
     if owner == WindowId::PetInfo {
@@ -931,7 +945,7 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     Some(match id {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
         "IW_Skills" => Does::Toggles(WindowId::Skills),
-        "GVW_Give_Button" => Does::Gives,
+        "GVW_Give_Button" | "TRDW_Trade_Button" => Does::Gives,
         "ACP_MeleeAttackButton" => Does::Attack,
         "AMP_SitButton" => Does::Slash("/sit"),
         "AMP_StandButton" => Does::Slash("/stand"),
@@ -950,6 +964,16 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
         },
         _ => Does::Nothing,
     })
+}
+
+/// A coin box's count, right of its coin's picture.
+fn coin_count(inner: &mut ChildSpawnerCommands, area: Area, shows: Shows, ink: Color) {
+    aligned(
+        inner,
+        at(0.0, 5.0, area.width - 6.0, area.height - 5.0),
+        Align::Right,
+        (shows, theme::text("", Size::Body, ink)),
+    );
 }
 
 /// The action bar slot a Hot Button window button holds, from
@@ -1195,7 +1219,7 @@ fn behave(
             skin(),
             crate::outbox::Needs::Nothing,
         )),
-        Does::BagIcon | Does::Nothing => drawn,
+        Does::Offered(_) | Does::BagIcon | Does::Nothing => drawn,
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
     if let Does::Slash(command) = does
@@ -1219,7 +1243,8 @@ fn caption(
     owner: WindowId,
     ink: Color,
 ) {
-    // A square button's words wrap, as the Actions window's do.
+    // A square button's words wrap, as the Actions window's do; a wide one
+    // keeps them on one line, centred.
     let words = |text: &str| {
         (
             theme::text(text, Size::Small, ink),
@@ -1228,12 +1253,8 @@ fn caption(
         )
     };
     match does {
-        Does::Coins(place, coin) => aligned(
-            inner,
-            at(0.0, 5.0, area.width - 6.0, area.height - 5.0),
-            Align::Right,
-            (Shows::Coins(place, coin), theme::text("", Size::Body, ink)),
-        ),
+        Does::Coins(place, coin) => coin_count(inner, area, Shows::Coins(place, coin), ink),
+        Does::Offered(coin) => coin_count(inner, area, Shows::Offered(coin), ink),
         Does::BagIcon => {
             let part = match owner {
                 WindowId::Bag(bag) => Some(items::BagPart::Icon(InventorySlot(bag))),
@@ -1275,7 +1296,7 @@ fn caption(
         | Does::Maps(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
-                if area.height >= 30.0 {
+                if area.height >= 30.0 && area.width < area.height * 1.5 {
                     inner.spawn(words(text));
                 } else {
                     aligned(
@@ -1546,7 +1567,12 @@ fn label(
         _ => None,
     };
     let banker = owner == WindowId::Bank && name == "BW_BankerName";
-    let partner = owner == WindowId::Give && name == "GVW_NPCName";
+    let partner = matches!(
+        (owner, name),
+        (WindowId::Give, "GVW_NPCName") | (WindowId::Trade, "TRDW_HisName")
+    );
+    // The player's own name in the trade window, lit once they click Trade.
+    let trader = owner == WindowId::Trade && name == "TRDW_MyName";
     // The Training window's practice points and the coins the player carries.
     let counted = match name {
         "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
@@ -1567,6 +1593,7 @@ fn label(
         || bag.is_some()
         || banker
         || partner
+        || trader
         || counted.is_some()
         || page_number.is_some();
     let words = if filled { "" } else { label.text.as_str() };
@@ -1597,6 +1624,7 @@ fn label(
             aligned(window, node, label.align, (text, shows));
         }
         (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
+        (None, None) if trader => aligned(window, node, label.align, (text, Shows::Trader)),
         (None, None) => match controls::value_label(name, owner) {
             Some(controls::ValueLabel::Shows(level)) => aligned(
                 window,
@@ -1726,9 +1754,24 @@ pub(crate) fn show(
                 None,
             ),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
+            Shows::Offered(coin) => (
+                world
+                    .offered_coins()
+                    .map_or_else(String::new, |coins| coins.of(coin).to_string()),
+                None,
+            ),
             Shows::Banker => (inventory.banker().to_owned(), None),
             Shows::PracticePoints => (super::training::practice_points(world), None),
-            Shows::Partner => (super::give::partner(world), None),
+            Shows::Partner => (
+                super::give::partner(world),
+                Some(super::give::ink(world, super::give::Side::Theirs)),
+            ),
+            Shows::Trader => (
+                world
+                    .player()
+                    .map_or_else(String::new, |player| player.name.clone()),
+                Some(super::give::ink(world, super::give::Side::Mine)),
+            ),
             Shows::Fill(_) | Shows::Attacking | Shows::WhilePetSits(_) | Shows::PetBuff(_) => {
                 continue;
             }
@@ -1868,11 +1911,19 @@ fn coin_box(id: &str) -> Option<(CoinPlace, Coin)> {
         ("IW_Money", CoinPlace::Purse),
         ("BW_Money", CoinPlace::Bank),
         ("GVW_MyMoney", CoinPlace::Trade),
+        ("TRDW_MyMoney", CoinPlace::Trade),
     ]
     .into_iter()
     .find_map(|(prefix, place)| Some((place, id.strip_prefix(prefix)?)))?;
     let coin = *Coin::ALL.get(index.parse::<usize>().ok()?)?;
     Some((place, coin))
+}
+
+/// The coin a trade window's box for the other player's coins shows,
+/// numbered platinum to copper as the player's own.
+fn their_coin_box(id: &str) -> Option<Coin> {
+    let index = id.strip_prefix("TRDW_HisMoney")?.parse::<usize>().ok()?;
+    Coin::ALL.get(index).copied()
 }
 
 /// The target's health in percent, the player's own when they target

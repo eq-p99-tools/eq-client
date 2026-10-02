@@ -319,10 +319,11 @@ impl InventoryState {
 
     fn actor(&self, online: &OnlineState) -> anyhow::Result<InventoryActor> {
         use anyhow::Context;
-        let trade_slots = online
-            .world()
-            .exchange()
-            .map_or(0, eq_client_core::world::Exchange::trade_slots);
+        let exchange = online.world().exchange();
+        let trade_slots = exchange.map_or(0, eq_client_core::world::Exchange::trade_slots);
+        // An NPC takes NO DROP items; another player never does.
+        let trade_no_drop = exchange
+            .is_none_or(|exchange| exchange.partner == eq_client_core::exchange::Partner::Npc);
         let world_container = online.world().container().is_some();
         if self.demo {
             return Ok(InventoryActor {
@@ -333,6 +334,7 @@ impl InventoryState {
                 race: 1,
                 level: 60,
                 trade_slots,
+                trade_no_drop,
                 world_container,
             });
         }
@@ -352,6 +354,7 @@ impl InventoryState {
             race: player.race,
             level: player.level,
             trade_slots,
+            trade_no_drop,
             world_container,
         })
     }

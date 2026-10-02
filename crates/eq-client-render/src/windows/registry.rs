@@ -43,6 +43,8 @@ pub(crate) enum WindowId {
     Merchant,
     /// The give window: what the player hands an NPC, drawn from the skin.
     Give,
+    /// The trade window between two players, drawn from the skin.
+    Trade,
     /// The skin's Actions window: its Main page's sit, stand and camp, and
     /// the abilities on its Combat and Abilities pages.
     ActionsWindow,
@@ -248,7 +250,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 27] = [
+    pub(crate) const ALL: [Self; 28] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -264,6 +266,7 @@ impl WindowId {
         Self::Loot,
         Self::Merchant,
         Self::Give,
+        Self::Trade,
         Self::ActionsWindow,
         Self::PetInfo,
         Self::Options,
@@ -304,6 +307,7 @@ impl WindowId {
             Self::Loot => Some("LootWnd"),
             Self::Merchant => Some("MerchantWnd"),
             Self::Give => Some("GiveWnd"),
+            Self::Trade => Some("TradeWnd"),
             Self::ActionsWindow => Some("ActionsWindow"),
             Self::PetInfo => Some("PetInfoWindow"),
             Self::Options => Some("OptionsWindow"),
@@ -356,6 +360,7 @@ impl WindowId {
             Self::Loot => "loot",
             Self::Merchant => "merchant",
             Self::Give => "give",
+            Self::Trade => "trade",
             Self::ActionsWindow => "actions-window",
             Self::PetInfo => "pet-info",
             Self::Options => "options",
@@ -471,6 +476,8 @@ impl WindowId {
             // Right of the effects window, clear of the inventory and its
             // bags, where the items to give come from.
             Self::Give => floating("GIVE", Placement::TopRight(220.0, 100.0), false, &[]),
+            // Where the give window opens: the two never show at once.
+            Self::Trade => floating("TRADE", Placement::TopRight(220.0, 100.0), false, &[]),
             // Where the skin places it, right of the player and target windows.
             Self::ActionsWindow => floating("ACTIONS", Placement::TopLeft(516.0, 292.0), true, &[]),
             // Where the skin places it, right of the hotbar; it opens with a

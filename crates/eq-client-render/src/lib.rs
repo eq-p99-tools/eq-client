@@ -480,6 +480,7 @@ fn schedule(app: &mut App) {
             trade::input,
             (
                 give::buttons,
+                give::inspect_theirs,
                 training::buttons,
                 resurrection::buttons,
                 reading::buttons,
@@ -554,6 +555,7 @@ fn schedule(app: &mut App) {
                 skinned::buttons,
                 (
                     skinned::contents,
+                    skinned::theirs,
                     skinned::tabs,
                     abilities::present,
                     (

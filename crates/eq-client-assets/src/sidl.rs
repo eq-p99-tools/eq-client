@@ -1137,8 +1137,14 @@ mod tests {
             <ButtonDrawTemplate><Normal>A_Back</Normal><NormalDecal>A_Corner</NormalDecal></ButtonDrawTemplate>
             <DecalOffset><X>1</X><Y>3</Y></DecalOffset><DecalSize><CX>18</CX><CY>18</CY></DecalSize>
         </Button>
+        <Button item="Trade"><ScreenID>TRDW_Trade_Button</ScreenID>
+            <AutoStretch>true</AutoStretch>
+            <LeftAnchorOffset>5</LeftAnchorOffset><TopAnchorOffset>37</TopAnchorOffset>
+            <RightAnchorOffset>90</RightAnchorOffset><BottomAnchorOffset>5</BottomAnchorOffset>
+            <TopAnchorToTop>false</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+        </Button>
         <Screen item="Bags"><Size><CX>428</CX><CY>460</CY></Size>
-            <Pieces>Tabs</Pieces><Pieces>Platinum</Pieces>
+            <Pieces>Tabs</Pieces><Pieces>Platinum</Pieces><Pieces>Trade</Pieces>
         </Screen>
         <Screen item="SampleWindow">
             <Location><X>516</X><Y>242</Y></Location><Size><CX>147</CX><CY>50</CY></Size>
@@ -1224,6 +1230,29 @@ mod tests {
             button.tooltip.as_deref(),
             Some("Opens and closes Your Spellbook")
         );
+    }
+
+    #[test]
+    fn a_stretched_button_hugs_the_edges_it_is_anchored_to() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let screen = library.screen(WINDOW, "Bags").unwrap();
+        let Element::Button(button) = &screen.pieces[2].1 else {
+            panic!("a button")
+        };
+        // Left and right count from the left; top and bottom from the bottom.
+        assert_eq!(
+            button.anchors.unwrap().within(226.0, 330.0),
+            Area {
+                x: 5.0,
+                y: 293.0,
+                width: 85.0,
+                height: 32.0
+            }
+        );
+        let Element::Button(platinum) = &screen.pieces[1].1 else {
+            panic!("a button")
+        };
+        assert_eq!(platinum.anchors, None);
     }
 
     #[test]

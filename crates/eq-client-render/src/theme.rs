@@ -68,6 +68,8 @@ pub(crate) const INK_BRIGHT: Color = Color::srgb(0.88, 0.89, 0.91);
 pub(crate) const INK_DIM: Color = Color::srgb(0.50, 0.54, 0.58);
 /// Names of things and headings: items, the target, tooltips.
 pub(crate) const INK_WARM: Color = Color::srgb(0.88, 0.85, 0.73);
+/// A side of a trade that has clicked Trade.
+pub(crate) const AGREED: Color = Color::srgb(0.45, 0.86, 0.47);
 /// An item link in chat, as the official client colours it.
 pub(crate) const LINK: Color = Color::srgb_u8(190, 80, 255);
 
