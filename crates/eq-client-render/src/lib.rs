@@ -53,6 +53,7 @@ mod target;
 mod theme;
 mod tooltip;
 mod trade;
+mod tradeskills;
 mod training;
 mod who;
 mod windows;
@@ -469,6 +470,7 @@ fn schedule(app: &mut App) {
                 training::buttons,
                 resurrection::buttons,
                 reading::buttons,
+                tradeskills::buttons,
             ),
             (abilities::input, skinned::slash),
             hud::actions,
@@ -549,6 +551,7 @@ fn schedule(app: &mut App) {
                         skills::fill,
                         resurrection::show,
                         reading::show,
+                        tradeskills::show,
                     ),
                 ),
                 skinned::close,

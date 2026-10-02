@@ -101,6 +101,8 @@ pub enum Notice {
     ResurrectionRefused(String),
     /// A request to read was not sent, and why.
     ReadRefused(String),
+    /// A combine was not sent, and why.
+    CombineRefused(String),
     /// A consent to drag a player's corpses was given or taken back.
     Consent {
         /// What the server said.

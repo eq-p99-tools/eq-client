@@ -33,21 +33,7 @@ pub(super) fn state(
         .world()
         .player()
         .and_then(|player| online.world().posture(player.spawn_id));
-    let items: Vec<ReportedItem> = online
-        .world()
-        .inventory()
-        .items()
-        .values()
-        .map(|item| {
-            (
-                item.slot.0,
-                item.details.id,
-                item.stack_count,
-                item.scroll_spell,
-                item.details.flags.iter().any(|flag| flag == "NO DROP"),
-            )
-        })
-        .collect();
+    let items = items(online);
     let book: Vec<(usize, u32)> = online
         .world()
         .spell_book()
@@ -112,6 +98,8 @@ pub(super) fn state(
         practice_points = ?online.world().player().and_then(|player| player.practice_points),
         resurrection = ?resurrection(online),
         readable = ?readable(online),
+        containers = ?containers(online),
+        combining = ?online.world().combining(),
         purse = ?online.world().coins(),
         cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
         bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
@@ -121,6 +109,25 @@ pub(super) fn state(
         show_helm = ?online.world().player().map(|player| player.appearance.show_helm),
         "Script report"
     );
+}
+
+/// Every item the player has, where it is and what it is.
+fn items(online: &crate::online::OnlineState) -> Vec<ReportedItem> {
+    online
+        .world()
+        .inventory()
+        .items()
+        .values()
+        .map(|item| {
+            (
+                item.slot.0,
+                item.details.id,
+                item.stack_count,
+                item.scroll_spell,
+                item.details.flags.iter().any(|flag| flag == "NO DROP"),
+            )
+        })
+        .collect()
 }
 
 /// The guildmaster training the player, and how many skills they teach.
@@ -143,6 +150,18 @@ fn readable(online: &crate::online::OnlineState) -> Vec<(i32, u32, u8, String)> 
             let book = item.book.as_ref()?;
             Some((item.slot.0, item.details.id, book.kind, book.file.clone()))
         })
+        .collect()
+}
+
+/// The carried tradeskill containers: slot, item and bag type.
+fn containers(online: &crate::online::OnlineState) -> Vec<(i32, u32, u8)> {
+    online
+        .world()
+        .inventory()
+        .items()
+        .values()
+        .filter(|item| eq_client_core::tradeskills::can_combine_in(item))
+        .map(|item| (item.slot.0, item.details.id, item.rules.bag_type))
         .collect()
 }
 
@@ -326,7 +345,14 @@ fn looks(
 pub(super) fn game_messages(seen: &mut u64, chat: &crate::chat::ChatState) {
     for (id, line) in chat.history.lines(eq_client_core::chat::ChatTab::All) {
         if id > *seen && line.sender.as_deref().is_none_or(str::is_empty) {
-            info!(text = line.message.text, "Script game message");
+            // The items a line links to, such as a recipe's components.
+            let links: Vec<(&str, u32)> = line
+                .message
+                .item_links
+                .iter()
+                .map(|link| (link.text.as_str(), link.item_id))
+                .collect();
+            info!(text = line.message.text, ?links, "Script game message");
         }
         *seen = (*seen).max(id);
     }
