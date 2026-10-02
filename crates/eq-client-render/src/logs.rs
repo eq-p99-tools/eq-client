@@ -70,7 +70,6 @@ pub(crate) fn write(
     for (_, line) in lines.iter().filter(|(id, _)| *id > seen) {
         let words = read(logs::words(line, &player.name), messages.as_deref());
         text.push_str(&logs::line(now, &words));
-        text.push('\n');
     }
     let name = logs::file_name(&player.name, server);
     if log.file.as_ref().is_none_or(|(open, _)| *open != name) {
@@ -168,6 +167,7 @@ mod tests {
             app.update();
         };
         say(&mut app, "Arrived in The Qeynos Hills.");
+        say(&mut app, "\u{c9}p\u{e9}e \u{2026}");
         app.world_mut()
             .resource_mut::<crate::chat::ChatState>()
             .log_toggle = true;
@@ -178,11 +178,37 @@ mod tests {
             .join("eqlog_Examplar_ExampleWorld.txt");
         let written = std::fs::read_to_string(&file).unwrap();
         let lines: Vec<&str> = written.lines().collect();
-        assert_eq!(lines.len(), 2, "{written}");
+        assert_eq!(lines.len(), 3, "{written}");
         assert!(lines[0].starts_with('['));
         assert!(lines[0].ends_with("] Arrived in The Qeynos Hills."));
+        // Non-ASCII text goes as the UTF-8 it came in.
+        assert!(lines[1].ends_with("] \u{c9}p\u{e9}e \u{2026}"));
         // The official client writes its *OFF* line, then nothing more.
-        assert!(lines[1].ends_with(logs::LOGGING_OFF_TEXT));
+        assert!(lines[2].ends_with(logs::LOGGING_OFF_TEXT));
+        // Its *ON* line starts the log again.
+        app.world_mut()
+            .resource_mut::<crate::chat::ChatState>()
+            .log_toggle = true;
+        app.update();
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            written
+                .lines()
+                .nth(3)
+                .is_some_and(|line| line.ends_with(logs::LOGGING_ON_TEXT)),
+            "{written}"
+        );
+        // Every line ends as the official client ends its lines.
+        assert!(written.ends_with("\r\n"));
+        assert_eq!(
+            written.matches("\r\n").count(),
+            written.matches('\n').count()
+        );
+        assert_eq!(written.matches('\n').count(), 4);
+        app.world_mut()
+            .resource_mut::<crate::chat::ChatState>()
+            .log_toggle = true;
+        app.update();
         // And the character's options keep the choice.
         assert!(
             !app.world()
