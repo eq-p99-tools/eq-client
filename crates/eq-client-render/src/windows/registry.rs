@@ -437,9 +437,9 @@ impl WindowId {
             // Where the skin places it; it opens with a guildmaster's answer
             // and closes when training ends.
             Self::Training => floating("TRAINING", Placement::TopLeft(120.0, 20.0), false, &[]),
-            // Between the chat and the hotbar, clear of the inventory whose
-            // Skills button also opens it; the skin puts it over the chat.
-            Self::Skills => floating("SKILLS", Placement::TopLeft(456.0, 512.0), true, &[]),
+            // Where the skin places it, over the chat; the inventory's
+            // Skills button opens it too.
+            Self::Skills => floating("SKILLS", Placement::TopLeft(120.0, 445.0), true, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(
