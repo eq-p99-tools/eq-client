@@ -138,7 +138,7 @@ pub(super) fn reconcile(
         .id();
     if !races::drawn(spawn.race) {
         // An unseen marker, such as a spawn point: nothing to draw.
-    } else if let Some(asset) = asset.filter(|_| !corpse) {
+    } else if let Some(asset) = asset {
         let height = asset.height().max(0.1);
         let scale = if spawn.size > 0.0 {
             (spawn.size / height).clamp(0.05, 20.0)
@@ -156,6 +156,13 @@ pub(super) fn reconcile(
                 )))
                 .with_scale(Vec3::splat(scale)),
         );
+        if corpse {
+            // Lying down, its name shows just over the body.
+            commands.entity(entity).insert((
+                character::Corpse,
+                super::names::Overhead(character::CORPSE_NAME_HEIGHT / scale),
+            ));
+        }
     } else {
         // An explicit marker keeps unknown model races visible without inventing an appearance.
         let height = if corpse {
