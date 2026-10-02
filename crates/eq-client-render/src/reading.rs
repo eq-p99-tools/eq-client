@@ -7,7 +7,7 @@ use crate::{
     windows::{Shown, WindowId},
 };
 use bevy::prelude::*;
-use eq_client_core::world::ClientWorld;
+use eq_client_core::{books::BookText, world::ClientWorld};
 
 /// How many characters a line of a book's page holds, and how many lines a
 /// page holds, as the skin's default book pages (190 by 246 pixels) fit
@@ -53,14 +53,20 @@ fn pages(world: &ClientWorld) -> Vec<String> {
 }
 
 /// Keeps the note or book window open while there is something to read; a
-/// window the player closes puts the text away.
+/// window the player closes puts the text away. A new text, even one that
+/// arrives while the window is open, starts at its first pages.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn window(
     mut online: ResMut<OnlineState>,
     mut shown: ResMut<Shown>,
     mut page: ResMut<Page>,
-    mut opened: Local<Option<WindowId>>,
+    (mut opened, mut read): (Local<Option<WindowId>>, Local<Option<BookText>>),
 ) {
+    let text = online.world().reading();
+    if text != read.as_ref() {
+        page.0 = 0;
+        *read = text.cloned();
+    }
     let wanted = window_for(online.world());
     if let Some(id) = *opened {
         if wanted == Some(id) && !shown.is_open(id) {
@@ -78,7 +84,6 @@ pub(crate) fn window(
         && *opened != Some(id)
     {
         shown.open(id);
-        page.0 = 0;
         *opened = Some(id);
     }
 }
@@ -188,5 +193,27 @@ mod tests {
         assert!(app.world().resource::<Shown>().is_open(WindowId::Book));
         assert_eq!(app.world().resource::<Page>().0, 0);
         assert!(pages(app.world().resource::<OnlineState>().world()).len() > 2);
+    }
+
+    #[test]
+    fn a_second_book_opened_over_the_first_starts_at_its_first_pages() {
+        let long = "word ".repeat(PAGE_COLUMNS * PAGE_LINES);
+        let mut app = read(1, &long);
+        app.update();
+        // The player turns to pages 3 and 4, then opens a shorter book
+        // without closing the first.
+        app.world_mut().resource_mut::<Page>().0 = 2;
+        app.update();
+        assert_eq!(app.world().resource::<Page>().0, 2);
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::BookText(BookText {
+                kind: 1,
+                text: "A short book".into(),
+            })],
+        );
+        app.update();
+        assert!(app.world().resource::<Shown>().is_open(WindowId::Book));
+        assert_eq!(app.world().resource::<Page>().0, 0);
     }
 }
