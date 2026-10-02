@@ -1,5 +1,6 @@
-//! The Pet Info window opens as the player gets a pet and closes when the
-//! pet is gone; the player may close it in between.
+//! The Pet Info window opens as the player gets a pet, unless the player
+//! turned the Options window's Pet Window Popup off, and closes when the pet
+//! is gone; the player may close it in between.
 use super::windows::{Shown, WindowId};
 use bevy::prelude::*;
 
@@ -7,6 +8,7 @@ use bevy::prelude::*;
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn window(
     online: Res<super::online::OnlineState>,
+    options: Res<super::options::OptionsState>,
     mut shown: ResMut<Shown>,
     mut had: Local<Option<u16>>,
 ) {
@@ -15,7 +17,9 @@ pub(super) fn window(
         return;
     }
     if pet.is_some() {
-        shown.open(WindowId::PetInfo);
+        if options.options.pet_window_popup {
+            shown.open(WindowId::PetInfo);
+        }
     } else {
         shown.close(WindowId::PetInfo);
     }

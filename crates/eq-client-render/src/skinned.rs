@@ -31,6 +31,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Give => "EQUI_GiveWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
+        WindowId::Options => "EQUI_OptionsWindow.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -70,9 +71,13 @@ pub(crate) enum Shows {
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
 /// picture for the inventory's figure.
+#[derive(Clone, Copy)]
 struct Context<'a> {
     id: WindowId,
     paperdoll: Option<&'a super::paperdoll::PaperdollImage>,
+    /// How many tab boxes the pieces lie in: a tab box on a page has its
+    /// own tabs and its own page shown.
+    depth: u8,
 }
 
 /// The skin's windows as read, by skin: read once, whatever rebuilds the
@@ -179,6 +184,7 @@ pub(crate) fn apply(
             let context = Context {
                 id: *id,
                 paperdoll: paperdoll.as_deref(),
+                depth: 0,
             };
             draw(window, screen, &mut art, &context);
             if *id == WindowId::Target {
@@ -312,12 +318,20 @@ fn pieces(
             Element::SpellGem(gem) => spell_gem(window, art, gem, &inside),
             Element::Button(button) => self::button(window, art, button, &inside, context.id),
             Element::InvSlot(slot) => items::slot(window, art, slot, &inside, context.id),
-            Element::Tabs(pages) if TABBED.contains(&context.id) => {
-                tabbed(window, art, pages, &inside, context);
+            Element::Tabs(tabs) if TABBED.contains(&context.id) => {
+                // A tab box the skin places sits there; one it stretches
+                // fills its container.
+                let at = tabs.area.map_or(inside, |at| Area {
+                    x: inside.x + at.x,
+                    y: inside.y + at.y,
+                    width: at.width,
+                    height: at.height,
+                });
+                tabbed(window, art, &tabs.pages, &at, context);
             }
             // The first page shows; the client has nothing for the others yet.
-            Element::Tabs(pages) => {
-                if let Some(page) = pages.first() {
+            Element::Tabs(tabs) => {
+                if let Some(page) = tabs.pages.first() {
                     let at = page.area.unwrap_or(Area {
                         x: 0.0,
                         y: 0.0,
@@ -390,13 +404,22 @@ fn view(
         });
 }
 
-/// Windows whose tab boxes show every page, a tab for each.
-const TABBED: [WindowId; 1] = [WindowId::ActionsWindow];
+/// How wide a tab with these words is: the small font's letters are about
+/// six pixels wide.
+fn tab_width(title: &str) -> f32 {
+    let letters = u16::try_from(title.chars().count()).unwrap_or(u16::MAX);
+    f32::from(letters) * 6.0 + 10.0
+}
 
-/// A tab of a skinned window's tab box: the page it shows.
+/// Windows whose tab boxes show every page, a tab for each.
+const TABBED: [WindowId; 2] = [WindowId::ActionsWindow, WindowId::Options];
+
+/// A tab of a skinned window's tab box: the page it shows. A tab box on
+/// another's page has a depth of one.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SkinTab {
     pub(crate) window: WindowId,
+    pub(crate) depth: u8,
     pub(crate) index: usize,
 }
 
@@ -411,13 +434,14 @@ pub(crate) struct TabFace {
     active: bool,
 }
 
-/// The page each tabbed window shows: its first until another is chosen.
+/// The page each tab box of a tabbed window shows: its first until another
+/// is chosen.
 #[derive(Resource, Default)]
-pub(crate) struct Tabs(std::collections::BTreeMap<WindowId, usize>);
+pub(crate) struct Tabs(std::collections::BTreeMap<(WindowId, u8), usize>);
 
 impl Tabs {
     fn shows(&self, tab: SkinTab) -> bool {
-        self.0.get(&tab.window).copied().unwrap_or(0) == tab.index
+        self.0.get(&(tab.window, tab.depth)).copied().unwrap_or(0) == tab.index
     }
 }
 
@@ -430,22 +454,37 @@ fn tabbed(
     inside: &Area,
     context: &Context,
 ) {
-    let size = |page: &eq_client_assets::sidl::Page| {
-        page.icon[0].as_ref().map_or((24.0, 24.0), |piece| {
-            (to_f32(piece.width), to_f32(piece.height))
-        })
+    let pages = with_client_page(pages, context.id);
+    let pages = pages.as_ref();
+    // A tab shows its page's picture, or else its words.
+    let size = |page: &eq_client_assets::sidl::Page| match (&page.icon[0], &page.title) {
+        (Some(piece), _) => (to_f32(piece.width), to_f32(piece.height)),
+        (None, Some(title)) => (tab_width(title), 18.0),
+        (None, None) => (24.0, 24.0),
     };
     let strip = pages.iter().map(|page| size(page).1).fold(0.0, f32::max) + 2.0;
     let mut x = inside.x + 2.0;
     for (index, page) in pages.iter().enumerate() {
         let tab = SkinTab {
             window: context.id,
+            depth: context.depth,
             index,
         };
         let (width, height) = size(page);
         let mut cell = window.spawn((Button, tab, at(x, inside.y + 1.0, width, height)));
         if let Some(tooltip) = &page.tooltip {
             cell.insert(crate::tooltip::Tooltip(tooltip.clone()));
+        }
+        let words = page.title.as_deref().filter(|_| page.icon[0].is_none());
+        if words.is_some() {
+            cell.insert((
+                BackgroundColor(theme::INSET),
+                BorderColor::all(theme::EDGE),
+                Node {
+                    border: UiRect::all(px(1)),
+                    ..at(x, inside.y + 1.0, width, height)
+                },
+            ));
         }
         cell.with_children(|cell| {
             for (face, piece) in page.icon.iter().enumerate() {
@@ -460,6 +499,27 @@ fn tabbed(
                     ));
                 }
             }
+            // The words in the page's colours: one while another page
+            // shows, the other while it does.
+            for (face, color) in page.title_colors.iter().enumerate() {
+                let Some(words) = words else {
+                    break;
+                };
+                let fallback = if face == 1 {
+                    theme::INK_BRIGHT
+                } else {
+                    theme::INK
+                };
+                cell.spawn((
+                    TabFace {
+                        tab,
+                        active: face == 1,
+                    },
+                    theme::text(words, Size::Small, color.map_or(fallback, rgb)),
+                    TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                    at(0.0, 1.0, width - 2.0, height - 2.0),
+                ));
+            }
         });
         x += width + 2.0;
     }
@@ -469,9 +529,14 @@ fn tabbed(
         width: inside.width,
         height: inside.height - strip,
     };
+    let within = Context {
+        depth: context.depth + 1,
+        ..*context
+    };
     for (index, page) in pages.iter().enumerate() {
         let tab = SkinTab {
             window: context.id,
+            depth: context.depth,
             index,
         };
         window
@@ -483,7 +548,7 @@ fn tabbed(
                     ..at(inside.x, inside.y + strip, area.width, area.height)
                 },
             ))
-            .with_children(|page_area| pieces(page_area, art, &page.pieces, &area, context));
+            .with_children(|page_area| pieces(page_area, art, &page.pieces, &area, &within));
     }
 }
 
@@ -498,7 +563,7 @@ pub(crate) fn tabs(
 ) {
     for (interaction, tab) in &clicks {
         if *interaction == Interaction::Pressed {
-            chosen.0.insert(tab.window, tab.index);
+            chosen.0.insert((tab.window, tab.depth), tab.index);
         }
     }
     let display = |shown: bool| if shown { Display::Flex } else { Display::None };
@@ -588,6 +653,8 @@ enum Does {
     Slash(&'static str),
     /// Shows the pet's buff in this slot.
     PetBuff(usize),
+    /// Turns an option on or off, and shows which.
+    Option(eq_client_core::options::Toggle),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -604,6 +671,19 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     if owner == WindowId::PetInfo {
         return Some(pet_button(id));
     }
+    // The skin keeps Switch to Windowed under Switch to Fullscreen; the
+    // client runs in a window.
+    if owner == WindowId::Options && id == "ODP_SetWindowedButton" {
+        return None;
+    }
+    if owner == WindowId::Options {
+        return Some(
+            OPTION_CHECKBOXES
+                .iter()
+                .find(|(checkbox, _)| *checkbox == id)
+                .map_or(Does::Nothing, |(_, toggle)| Does::Option(*toggle)),
+        );
+    }
     Some(match id {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
         "DoneButton" | "GVW_Cancel_Button" => Does::Closes,
@@ -618,6 +698,69 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
         "Container_Combine" => return None,
         _ => Does::Nothing,
     })
+}
+
+/// The Options window's checkboxes for the options this client keeps, by
+/// screen ID; the Client page's is this client's own.
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 5] = {
+    use eq_client_core::options::Toggle;
+    [
+        ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
+        ("ODP_ShowTargetRingCheckbox", Toggle::TargetRing),
+        ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
+        ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
+        (CLIENT_FOOD_CHECKBOX, Toggle::SkipModifiedFood),
+    ]
+};
+
+/// The Client page's checkbox, which this client adds to the skin's
+/// Options window.
+const CLIENT_FOOD_CHECKBOX: &str = "EQC_SkipModifiedFoodCheckbox";
+
+/// The skin's pages of a tab box, and for the Options window a last page
+/// of the options only this client has, drawn with the skin's own
+/// checkbox.
+fn with_client_page(
+    pages: &[eq_client_assets::sidl::Page],
+    owner: WindowId,
+) -> std::borrow::Cow<'_, [eq_client_assets::sidl::Page]> {
+    use eq_client_assets::sidl::Element;
+    if owner != WindowId::Options {
+        return std::borrow::Cow::Borrowed(pages);
+    }
+    let checkbox =
+        pages
+            .iter()
+            .flat_map(|page| &page.pieces)
+            .find_map(|(_, element)| match element {
+                Element::Button(button) if button.checkbox => Some(button.clone()),
+                _ => None,
+            });
+    let (Some(mut checkbox), Some(first)) = (checkbox, pages.first()) else {
+        return std::borrow::Cow::Borrowed(pages);
+    };
+    checkbox.id = Some(CLIENT_FOOD_CHECKBOX.to_owned());
+    checkbox.text = Some("Skip Food With Modifiers".to_owned());
+    checkbox.tooltip = Some(
+        "Leave food and drink with modifiers for you to eat or drink by hand when you get hungry or thirsty."
+            .to_owned(),
+    );
+    checkbox.area.x = 10.0;
+    checkbox.area.y = 10.0;
+    checkbox.area.width = checkbox.area.width.max(170.0);
+    let client = eq_client_assets::sidl::Page {
+        name: "EQC_ClientPage".to_owned(),
+        title: Some("Client".to_owned()),
+        area: first.area,
+        template: first.template.clone(),
+        pieces: vec![(CLIENT_FOOD_CHECKBOX.to_owned(), Element::Button(checkbox))],
+        icon: [None, None],
+        title_colors: first.title_colors,
+        tooltip: Some("Options only this client has.".to_owned()),
+    };
+    let mut all = pages.to_vec();
+    all.push(client);
+    std::borrow::Cow::Owned(all)
 }
 
 /// The Pet Info window's command buttons, by screen ID, with the `/pet`
@@ -754,6 +897,9 @@ fn behave(
         )),
         Does::Slash(command) => drawn.insert((Button, SlashButton(command), skin())),
         Does::PetBuff(slot) => drawn.insert((Shows::PetBuff(slot), Visibility::Hidden)),
+        Does::Option(toggle) => {
+            drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()))
+        }
         Does::BagIcon | Does::Nothing => drawn,
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
@@ -820,6 +966,7 @@ fn caption(
         | Does::Gives
         | Does::Attack
         | Does::Slash(_)
+        | Does::Option(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 {
@@ -871,24 +1018,30 @@ type Stateful<'w, 's> = Query<
         &'static SkinButton,
         Option<&'static super::windows::SelectorButton>,
         Has<AttackButton>,
+        Option<&'static super::options::OptionCheckbox>,
         &'static Interaction,
         &'static mut ImageNode,
     ),
 >;
 
-/// Draws each skin button in its state: on while its window is open or the
-/// player attacks, lit under the pointer.
+/// Draws each skin button in its state: on while its window is open, the
+/// player attacks or its option is on, lit under the pointer.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
-    shown: Res<super::windows::Shown>,
+    (shown, options): (
+        Res<super::windows::Shown>,
+        Res<super::options::OptionsState>,
+    ),
     combat: Res<super::combat::CombatState>,
     mut art: crate::sheets::Art,
     mut buttons: Stateful,
 ) {
-    for (SkinButton(look), selector, attack, interaction, mut image) in &mut buttons {
-        let on = selector.map_or(attack && combat.auto_attack, |selector| {
-            shown.is_open(selector.0)
-        });
+    for (SkinButton(look), selector, attack, checkbox, interaction, mut image) in &mut buttons {
+        let on = match (selector, checkbox) {
+            (Some(selector), _) => shown.is_open(selector.0),
+            (None, Some(checkbox)) => options.on(checkbox.0),
+            (None, None) => attack && combat.auto_attack,
+        };
         let hovered = *interaction != Interaction::None;
         let piece = match (on, hovered) {
             (true, true) => look.pressed_flyby.as_ref().or(look.pressed.as_ref()),
@@ -1381,6 +1534,65 @@ fn target_health(world: &eq_client_core::world::ClientWorld) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_options_window_checkboxes_turn_its_options_on_and_off() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element, Page};
+        use eq_client_core::options::Toggle;
+        assert!(matches!(
+            does("ODP_ShowTargetRingCheckbox", WindowId::Options),
+            Some(Does::Option(Toggle::TargetRing))
+        ));
+        // What this client does not keep yet is greyed out, and of the two
+        // window-mode buttons the skin stacks, only fullscreen shows.
+        assert!(matches!(
+            does("ODP_LevelOfDetailCheckbox", WindowId::Options),
+            Some(Does::Nothing)
+        ));
+        assert!(does("ODP_SetWindowedButton", WindowId::Options).is_none());
+        // The Client page comes last, with the skin's own checkbox.
+        let checkbox = Button {
+            id: Some("OGP_PetWindowPopupCheckbox".into()),
+            area: Area {
+                x: 10.0,
+                y: 175.0,
+                width: 150.0,
+                height: 20.0,
+            },
+            look: ButtonLook::default(),
+            checkbox: true,
+            text: Some("Pet Window Popup".into()),
+            text_color: None,
+            decal: None,
+            decal_area: None,
+            tooltip: None,
+        };
+        let general = Page {
+            name: "OptionsGeneralPage".into(),
+            title: Some("General".into()),
+            area: None,
+            template: None,
+            pieces: vec![("checkbox".into(), Element::Button(checkbox))],
+            icon: [None, None],
+            title_colors: [None, None],
+            tooltip: None,
+        };
+        let pages = with_client_page(std::slice::from_ref(&general), WindowId::Options);
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[1].title.as_deref(), Some("Client"));
+        let Element::Button(food) = &pages[1].pieces[0].1 else {
+            panic!("a checkbox")
+        };
+        assert!(matches!(
+            does(food.id.as_deref().unwrap(), WindowId::Options),
+            Some(Does::Option(Toggle::SkipModifiedFood))
+        ));
+        // Other windows keep the skin's pages as they are.
+        assert_eq!(
+            with_client_page(std::slice::from_ref(&general), WindowId::ActionsWindow).len(),
+            1
+        );
+    }
 
     #[test]
     fn the_pet_window_buttons_command_the_pet_and_show_its_buffs() {

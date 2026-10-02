@@ -168,6 +168,7 @@ impl Default for KeyMap {
             Act::Toggle(WindowId::Spellbook),
             &[Chord::key(KeyCode::KeyB)],
         );
+        bind(Act::Toggle(WindowId::Options), &[Chord::alt(KeyCode::KeyO)]);
         bind(Act::TargetSelf, &[Chord::key(KeyCode::F1)]);
         bind(Act::TargetNext, &[Chord::key(KeyCode::Tab)]);
         bind(Act::TargetPrevious, &[Chord::shift(KeyCode::Tab)]);
