@@ -521,11 +521,15 @@ fn sync_lines(
 fn spawn_line(parent: &mut ChildSpawnerCommands, id: u64, line: &ChatLine) {
     let [r, g, b] = channel_rgb(line.channel);
     let color = Color::srgb_u8(r, g, b);
-    let sender = line
-        .sender
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .map_or(String::new(), |s| format!("{s}: "));
+    // The echo of a tell the player sent says whom they told.
+    let sender = match (line.channel, line.target.as_deref()) {
+        (ChannelName::TellEcho, Some(target)) => format!("To {target}: "),
+        _ => line
+            .sender
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map_or(String::new(), |s| format!("{s}: ")),
+    };
     let prefix = format!("[{}] {sender}", ChatTab::for_channel(line.channel).label());
     if line.message.item_links.is_empty() {
         parent.spawn((
