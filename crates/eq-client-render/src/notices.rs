@@ -119,15 +119,15 @@ fn nothing_to_eat(
         lacks(water, Shortage::OnlyModified),
     ) {
         (true, true) => Some(
-            "You are hungry and thirsty. Your food and drink have modifiers, so \
-             they are only eaten and drunk when you right-click them.",
+            "You need food and drink, but yours have modifiers, so they are \
+             only eaten and drunk when you right-click them.",
         ),
         (true, false) => Some(
-            "You are hungry. Your food has modifiers, so it is only eaten when \
+            "You need food, but yours has modifiers, so it is only eaten when \
              you right-click it.",
         ),
         (false, true) => Some(
-            "You are thirsty. Your drink has modifiers, so it is only drunk \
+            "You need a drink, but yours has modifiers, so it is only drunk \
              when you right-click it.",
         ),
         (false, false) => None,
@@ -192,6 +192,22 @@ const fn loot_refusal(response: LootResponse) -> (&'static str, Option<u32>) {
         LootResponse::TooFar => ("That corpse is out of reach.", Some(12390)),
         LootResponse::Normal | LootResponse::Other(_) => ("You cannot loot that corpse.", None),
     }
+}
+
+/// The official client's line for coins taken from a corpse, which names
+/// the coins (eqstr 12072).
+const LOOT_COINS: u32 = 12072;
+
+/// Coins taken from a corpse, in the official client's words where the
+/// installation has them.
+fn loot_coins(coins: eq_client_core::Coins, messages: Option<&Messages>) -> String {
+    let coins = coin_text(coins.total_copper());
+    official(
+        Some(LOOT_COINS),
+        std::slice::from_ref(&coins),
+        &format!("The corpse gave you {coins}."),
+        messages,
+    )
 }
 
 /// Why a corpse could not be looted, in the official client's words where
@@ -287,10 +303,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             CampStatus::Rejected(reason) => Some(reason.clone()),
         }
         .map_or_else(Vec::new, chat),
-        Notice::LootCoins(coins) => chat(format!(
-            "You receive {} from the corpse.",
-            coin_text(coins.total_copper())
-        )),
+        Notice::LootCoins(coins) => chat(loot_coins(*coins, messages)),
         Notice::LootRefused(response) => chat(loot_line(*response, messages)),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
@@ -391,14 +404,21 @@ mod tests {
     #[test]
     fn loot_replies_say_what_the_corpse_gave_or_refused() {
         let line = |notice| wording(&notice, None);
+        let coins = Coins {
+            platinum: 0,
+            gold: 1,
+            silver: 0,
+            copper: 2,
+        };
         assert_eq!(
-            line(Notice::LootCoins(Coins {
-                platinum: 0,
-                gold: 1,
-                silver: 0,
-                copper: 2,
-            })),
-            [(Place::Chat, "You receive 1g 2c from the corpse.".into())]
+            line(Notice::LootCoins(coins)),
+            [(Place::Chat, "The corpse gave you 1g 2c.".into())]
+        );
+        // With the installed strings, the official line names the coins.
+        let messages = Messages::parse("EQST0002\n0 1\n12072 Took %1.\n");
+        assert_eq!(
+            wording(&Notice::LootCoins(coins), Some(&messages)),
+            [(Place::Chat, "Took 1g 2c.".into())]
         );
         assert_eq!(
             line(Notice::ItemRefused),
@@ -515,7 +535,7 @@ mod tests {
             [
                 "Out of drink.",
                 concat!(
-                    "You are hungry. Your food has modifiers, so it is only eaten when ",
+                    "You need food, but yours has modifiers, so it is only eaten when ",
                     "you right-click it."
                 )
             ]
@@ -523,7 +543,7 @@ mod tests {
         assert_eq!(
             lines(None, Some(Shortage::OnlyModified)),
             [concat!(
-                "You are thirsty. Your drink has modifiers, so it is only drunk when ",
+                "You need a drink, but yours has modifiers, so it is only drunk when ",
                 "you right-click it."
             )]
         );
@@ -544,10 +564,10 @@ mod tests {
     fn consents_read_for_the_owner_and_the_one_consented() {
         let messages = Messages::parse(
             "EQST0002\n0 4\n\
-             1427 You have given %1 permission to drag your corpse in %2.\n\
-             1428 You have denied %1 permission to drag your corpse in %2.\n\
-             2080 You have been given permission to drag %1's corpse in %2.\n\
-             2103 You have been denied permission to drag %1's corpse in %2.\n",
+             1427 %1 may now drag your corpse in %2.\n\
+             1428 %1 may no longer drag your corpse in %2.\n\
+             2080 You may now drag %1's corpse in %2.\n\
+             2103 You may no longer drag %1's corpse in %2.\n",
         );
         let line = |given, own| {
             wording(
@@ -566,19 +586,19 @@ mod tests {
         let chat = |text: &str| vec![(Place::Chat, text.to_owned())];
         assert_eq!(
             line(true, true),
-            chat("You have given Helper permission to drag your corpse in The Qeynos Hills.")
+            chat("Helper may now drag your corpse in The Qeynos Hills.")
         );
         assert_eq!(
             line(false, true),
-            chat("You have denied Helper permission to drag your corpse in The Qeynos Hills.")
+            chat("Helper may no longer drag your corpse in The Qeynos Hills.")
         );
         assert_eq!(
             line(true, false),
-            chat("You have been given permission to drag Owner's corpse in The Qeynos Hills.")
+            chat("You may now drag Owner's corpse in The Qeynos Hills.")
         );
         assert_eq!(
             line(false, false),
-            chat("You have been denied permission to drag Owner's corpse in The Qeynos Hills.")
+            chat("You may no longer drag Owner's corpse in The Qeynos Hills.")
         );
     }
 

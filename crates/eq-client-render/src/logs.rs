@@ -68,7 +68,8 @@ pub(crate) fn write(
     let now = chrono::Local::now().naive_local();
     let mut text = String::new();
     for (_, line) in lines.iter().filter(|(id, _)| *id > seen) {
-        text.push_str(&logs::line(now, &logs::words(line, &player.name)));
+        let words = read(logs::words(line, &player.name), messages.as_deref());
+        text.push_str(&logs::line(now, &words));
         text.push('\n');
     }
     let name = logs::file_name(&player.name, server);
@@ -97,10 +98,43 @@ pub(crate) fn write(
     }
 }
 
+/// A log line's words: the installed client's string where the line has
+/// one and the installation has the table, and this client's words
+/// otherwise.
+fn read(words: logs::Words, messages: Option<&crate::hud::messages::Messages>) -> String {
+    match (words.string_id, messages) {
+        (Some(id), Some(messages)) => messages.official(id, &words.arguments, &words.text),
+        _ => words.text,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
+
+    #[test]
+    fn speech_reads_by_the_installed_string() {
+        let messages = crate::hud::messages::Messages::parse(
+            "EQST0002
+0 1
+1410 %1 speaks%2: %3
+",
+        );
+        let words = || logs::Words {
+            string_id: Some(1410),
+            arguments: vec!["Examplar".into(), String::new(), "Hail".into()],
+            text: "Examplar (say): Hail".into(),
+        };
+        assert_eq!(read(words(), Some(&messages)), "Examplar speaks: Hail");
+        assert_eq!(read(words(), None), "Examplar (say): Hail");
+        // A string the table lacks falls back to this client's words.
+        let missing = logs::Words {
+            string_id: Some(1416),
+            ..words()
+        };
+        assert_eq!(read(missing, Some(&messages)), "Examplar (say): Hail");
+    }
 
     #[test]
     fn the_chat_goes_to_the_characters_log_until_log_turns_it_off() {
@@ -133,7 +167,7 @@ mod tests {
                 .push(crate::chat::system_line(text.to_owned()));
             app.update();
         };
-        say(&mut app, "You have entered The Qeynos Hills.");
+        say(&mut app, "Arrived in The Qeynos Hills.");
         app.world_mut()
             .resource_mut::<crate::chat::ChatState>()
             .log_toggle = true;
@@ -146,7 +180,7 @@ mod tests {
         let lines: Vec<&str> = written.lines().collect();
         assert_eq!(lines.len(), 2, "{written}");
         assert!(lines[0].starts_with('['));
-        assert!(lines[0].ends_with("] You have entered The Qeynos Hills."));
+        assert!(lines[0].ends_with("] Arrived in The Qeynos Hills."));
         // The official client writes its *OFF* line, then nothing more.
         assert!(lines[1].ends_with(logs::LOGGING_OFF_TEXT));
         // And the character's options keep the choice.

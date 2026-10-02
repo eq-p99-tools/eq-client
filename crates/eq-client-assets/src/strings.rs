@@ -178,13 +178,13 @@ mod tests {
             "EQST0002
 0 2
 554 %1 utters '%T2'
-1146 Greetings, %3. You look like you could use a %4.
+1146 Hello, %3. Care for a %4?
 ",
         );
         let arguments = ["Rowyl", "1146", "Examplecleric", "Bread"].map(str::to_owned);
         assert_eq!(
             table.format(554, &arguments).as_deref(),
-            Some("Rowyl utters 'Greetings, Examplecleric. You look like you could use a Bread.'")
+            Some("Rowyl utters 'Hello, Examplecleric. Care for a Bread?'")
         );
         // Unknown ids and plain text stay literal.
         assert_eq!(

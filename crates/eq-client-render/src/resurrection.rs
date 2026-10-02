@@ -1,6 +1,6 @@
 //! Being resurrected, as the official client asks it: an offer opens the
-//! skin's confirmation dialog with "%1 wants to RESURRECT you. Do you wish
-//! this?", and Yes or No answers it. On Yes the server moves the player to
+//! skin's confirmation dialog with the official question, which names the
+//! caster, and Yes or No answers it. On Yes the server moves the player to
 //! the corpse as it moves them anywhere.
 use crate::{
     online::OnlineState,
@@ -33,7 +33,7 @@ pub(crate) fn question(
     };
     let caster = eq_client_core::entities::display_name(&offer.caster);
     messages.map_or_else(
-        || format!("{caster} wants to RESURRECT you. Do you wish this?"),
+        || format!("{caster} offers to resurrect you. Do you accept?"),
         |messages| messages.format(QUESTION, std::slice::from_ref(&caster)),
     )
 }
@@ -119,7 +119,7 @@ mod tests {
         testing::news(&mut online, [WorldEvent::Resurrection(offer)]);
         assert_eq!(
             question(online.world(), None),
-            "Tester wants to RESURRECT you. Do you wish this?"
+            "Tester offers to resurrect you. Do you accept?"
         );
         app.insert_resource(online);
         app.update();

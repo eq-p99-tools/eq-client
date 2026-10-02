@@ -266,13 +266,13 @@ mod tests {
 
     fn table() -> Messages {
         Messages::parse(
-            "EQST0002\n0 0\n1466 Auto attack off.\n12156 miss\n12157 misses\n\
-             12158 %1 try to %2 %3, but %4!\n12159 %1 tries to %2 %3, but %4!\n\
-             12160 for %1 points of damage.\n12161 for %1 point of damage.\n\
-             12162 %1 %2 %3 %4\n12150 %1 dodge\n12151 %1 dodges\n12179 slash\n\
-             12180 slashes\n12183 hit\n12184 hits\n12185 You\n12187 YOU\n\
-             12217 scowls at you, ready to attack\n12231 looks like quite a gamble.\n\
-             12239 %1 %2 -- %3\n434 %1 was hit by non-melee for %2 points of damage.\n",
+            "EQST0002\n0 0\n1466 Melee stops.\n12156 whiff\n12157 whiffs\n\
+             12158 %1 aim to %2 %3 and %4.\n12159 %1 aims to %2 %3 and %4.\n\
+             12160 dealing %1 damage.\n12161 dealing just %1 damage point.\n\
+             12162 %1 %2 %3, %4\n12150 %1 duck\n12151 %1 ducks\n12179 cut\n\
+             12180 cuts\n12183 strike\n12184 strikes\n12185 Thou\n12187 THEE\n\
+             12217 glares, set to fight\n12231 seems a fair match.\n\
+             12239 %1 %2; %3\n434 %1 took %2 damage from a spell.\n",
         )
     }
 
@@ -299,23 +299,23 @@ mod tests {
         let text = |damage: Damage| damage_text(&messages, 7, names, &damage);
         assert_eq!(
             text(hit(7, 9, 1, DamageOutcome::Hit(5))).unwrap(),
-            "You slash a rat for 5 points of damage."
+            "Thou cut a rat, dealing 5 damage."
         );
         assert_eq!(
             text(hit(9, 7, 28, DamageOutcome::Hit(1))).unwrap(),
-            "A rat hits YOU for 1 point of damage."
+            "A rat strikes THEE, dealing just 1 damage point."
         );
         assert_eq!(
             text(hit(7, 9, 1, DamageOutcome::Miss)).unwrap(),
-            "You try to slash a rat, but miss!"
+            "Thou aim to cut a rat and whiff."
         );
         assert_eq!(
             text(hit(9, 7, 28, DamageOutcome::Dodge)).unwrap(),
-            "A rat tries to hit YOU, but YOU dodge!"
+            "A rat aims to strike THEE and THEE duck."
         );
         assert_eq!(
             text(hit(7, 9, 1, DamageOutcome::Dodge)).unwrap(),
-            "You try to slash a rat, but a rat dodges!"
+            "Thou aim to cut a rat and a rat ducks."
         );
         assert_eq!(text(hit(9, 11, 1, DamageOutcome::Hit(5))), None);
         let spell = Damage {
@@ -323,10 +323,7 @@ mod tests {
             spell_id: Some(93),
             ..hit(7, 9, 0, DamageOutcome::Hit(8))
         };
-        assert_eq!(
-            text(spell).unwrap(),
-            "A rat was hit by non-melee for 8 points of damage."
-        );
+        assert_eq!(text(spell).unwrap(), "A rat took 8 damage from a spell.");
     }
 
     #[test]
@@ -341,9 +338,6 @@ mod tests {
                 hit_points: None,
             },
         );
-        assert_eq!(
-            text,
-            "A rat scowls at you, ready to attack -- looks like quite a gamble."
-        );
+        assert_eq!(text, "A rat glares, set to fight; seems a fair match.");
     }
 }
