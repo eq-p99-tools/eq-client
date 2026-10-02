@@ -895,7 +895,8 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     use crate::abilities::Ability;
     use std::time::Duration;
     let mut world = admitted();
-    assert!(world.abilities().is_empty(), "no skills, no abilities");
+    // Without skills, only fishing, which anyone can try.
+    assert_eq!(world.abilities(), [Ability::Fishing]);
     let mut skills = vec![0; 100];
     skills[30] = 12;
     skills[29] = 3;
@@ -916,7 +917,12 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     // An Ogre slams without the bash skill.
     assert_eq!(
         world.abilities(),
-        [Ability::Kick, Ability::Bash, Ability::Hide]
+        [
+            Ability::Kick,
+            Ability::Bash,
+            Ability::Hide,
+            Ability::Fishing
+        ]
     );
     let now = Instant::now();
     let used = |session_id| WorldEvent::AbilityUsed {

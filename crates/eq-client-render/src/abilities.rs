@@ -151,7 +151,8 @@ mod tests {
                 Some(Ability::Taunt),
                 Some(Ability::Mend),
                 Some(Ability::FeignDeath),
-                None,
+                // Anyone can fish, so it comes last.
+                Some(Ability::Fishing),
                 None
             ]
         );
