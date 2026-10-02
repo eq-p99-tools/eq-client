@@ -358,6 +358,7 @@ impl ClientWorld {
                 }
             }
             WorldEvent::GuildNames(names) => self.guild_names = names.iter().cloned().collect(),
+            WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
                 self.zone.posture(*spawn_id, *posture, player);

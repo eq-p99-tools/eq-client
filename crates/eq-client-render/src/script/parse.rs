@@ -246,6 +246,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
             Step::Slash(format!("/{command} {name}"))
         }
         ("slash", ["log"]) => Step::Slash("/log".into()),
+        ("slash", ["shownames", level]) => Step::Slash(format!("/shownames {level}")),
         ("slash", [command @ ("corpse" | "corpsedrag" | "corpsedrop")]) => {
             Step::Slash(format!("/{command}"))
         }

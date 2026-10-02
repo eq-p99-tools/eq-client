@@ -226,6 +226,12 @@ pub fn run(
                 option_defaults.set(toggle, on);
             }
         }
+        if let Some(level) = official
+            .show_names_level
+            .and_then(eq_client_core::names::ShowNames::from_level)
+        {
+            option_defaults.show_names = level;
+        }
     }
     let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
@@ -485,7 +491,7 @@ fn schedule(app: &mut App) {
                 outfit::dress,
                 character::animate,
                 target::marker::update,
-                names::update,
+                (names::request, names::update).chain(),
                 schedule_screenshot,
                 exit_after_screenshot,
             )
