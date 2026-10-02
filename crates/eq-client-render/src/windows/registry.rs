@@ -329,6 +329,11 @@ impl WindowId {
         }
     }
 
+    /// The window with this saved name ([`Self::key`]), bags aside.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|id| id.key() == name)
+    }
+
     /// The name its placement is saved under; each bag's names its slot.
     pub(crate) fn key(self) -> Cow<'static, str> {
         Cow::Borrowed(match self {

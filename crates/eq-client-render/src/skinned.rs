@@ -199,7 +199,7 @@ pub(crate) fn apply(
         commands.entity(frame).insert(Drawn(skin.0.clone()));
         skinned.0.insert(*id);
         reshape(&mut node, screen, state.placed(), *id);
-        super::windows::drag_anywhere(&mut commands, frame);
+        super::windows::drag_anywhere(&mut commands, frame, *id);
         background.0 = Color::NONE;
         *border = BorderColor::all(Color::NONE);
         commands.entity(frame).despawn_children();
