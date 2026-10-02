@@ -250,7 +250,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::AbilityRefused(reason)
         | Notice::ConsumeRefused(reason)
         | Notice::CorpseRefused(reason)
-        | Notice::PetRefused(reason) => chat(reason.clone()),
+        | Notice::PetRefused(reason)
+        | Notice::TrainingRefused(reason) => chat(reason.clone()),
+        Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),
         Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
         Notice::WhoList(list) => who_lines(list, messages),
         Notice::NothingToEat { food, water } => nothing_to_eat(*food, *water, messages)
@@ -279,6 +281,19 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             format!("Cast rejected (spell {spell_id}): {reason}"),
         )],
     }
+}
+
+/// "You have become better at Kick! (21)": the client's line when a skill
+/// rises, with its own name for the skill where its string table has one.
+fn skill_up(skill: u32, value: u32, messages: Option<&Messages>) -> String {
+    use eq_client_core::skills;
+    let fallback = skills::name(skill).map_or_else(|| format!("Skill {skill}"), str::to_owned);
+    let Some(messages) = messages else {
+        return format!("You have become better at {fallback}! ({value})");
+    };
+    let name = skills::name_string(skill)
+        .map_or_else(|| fallback.clone(), |id| messages.text(id, &fallback));
+    messages.format(skills::BETTER_AT, &[name, value.to_string()])
 }
 
 /// The status line for where the connection stands; nothing while the

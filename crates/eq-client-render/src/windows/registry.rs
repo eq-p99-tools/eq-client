@@ -52,6 +52,9 @@ pub(crate) enum WindowId {
     /// The skin's Options window: the options the player sets, on its pages,
     /// and a page of the options only this client has.
     Options,
+    /// The skin's Training window: the skills a guildmaster teaches, open
+    /// while the player trains.
+    Training,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -229,7 +232,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 20] = [
+    pub(crate) const ALL: [Self; 21] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -248,6 +251,7 @@ impl WindowId {
         Self::ActionsWindow,
         Self::PetInfo,
         Self::Options,
+        Self::Training,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -281,6 +285,7 @@ impl WindowId {
             Self::ActionsWindow => Some("ActionsWindow"),
             Self::PetInfo => Some("PetInfoWindow"),
             Self::Options => Some("OptionsWindow"),
+            Self::Training => Some("TrainWindow"),
             _ => None,
         }
     }
@@ -318,6 +323,7 @@ impl WindowId {
             Self::ActionsWindow => "actions-window",
             Self::PetInfo => "pet-info",
             Self::Options => "options",
+            Self::Training => "training",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -422,6 +428,9 @@ impl WindowId {
             // Where the skin places it; Alt+O opens and closes it, as in the
             // official client.
             Self::Options => floating("OPTIONS", Placement::TopLeft(90.0, 47.0), true, &[]),
+            // Where the skin places it; it opens with a guildmaster's answer
+            // and closes when training ends.
+            Self::Training => floating("TRAINING", Placement::TopLeft(120.0, 20.0), false, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(

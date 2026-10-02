@@ -28,6 +28,8 @@ pub(super) struct Zone {
     pub(super) sky: Option<crate::clock::ZoneSky>,
     /// The player's pet's buffs, as the server last said.
     pub(super) pet_buffs: Option<crate::pets::PetBuffs>,
+    /// The guildmaster the player is training with, and what they teach.
+    pub(super) training: Option<crate::training::TrainingOffer>,
 }
 
 impl Zone {

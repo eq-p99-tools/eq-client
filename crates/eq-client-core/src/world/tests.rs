@@ -21,6 +21,7 @@ fn player(spawn_id: u16) -> PlayerState {
         mana: 0,
         endurance: Some(0),
         skills: None,
+        practice_points: None,
         spell_refresh_ms: None,
         memorized_spells: [None; 8],
         size: 0.0,
@@ -1577,4 +1578,73 @@ fn last_names_change_by_the_name_spawned_with() {
         },
     );
     assert_eq!(world.spawn(6).unwrap().state.name_parts.last_name, "");
+}
+
+#[test]
+fn training_opens_raises_skills_with_a_line_and_closes() {
+    use crate::training::{TrainingOffer, TrainingUpdate};
+    let mut world = ClientWorld::default();
+    let mut trainee = player(9);
+    trainee.skills = Some(vec![0; 100]);
+    trainee.practice_points = Some(5);
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities: Vec::new(),
+            session_id: 1,
+            zone: "qeynos".into(),
+            player: Box::new(trainee),
+            far_clip: None,
+        },
+    );
+    connection(&mut world, true, false);
+    let mut caps = vec![0; 100];
+    caps[30] = 200;
+    game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Offered(TrainingOffer { trainer: 42, caps })),
+    );
+    assert_eq!(world.training().map(|offer| offer.trainer), Some(42));
+    let changes = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Trained {
+            skill: 30,
+            value: 1,
+            cost: 0,
+        }),
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::SkillUp {
+            skill: 30,
+            value: 1
+        }]
+    );
+    game(&mut world, WorldEvent::PracticePoints(4));
+    assert_eq!(
+        world.player().and_then(|player| player.practice_points),
+        Some(4)
+    );
+    // A value that does not rise says nothing.
+    let changes = game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 1,
+        },
+    );
+    assert_eq!(changes.notices.len(), 0);
+    game(&mut world, WorldEvent::Training(TrainingUpdate::Ended));
+    assert!(world.training().is_none());
+    let changes = game(
+        &mut world,
+        WorldEvent::TrainingRefused {
+            session_id: 1,
+            reason: "No practice points".into(),
+        },
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::TrainingRefused("No practice points".into())]
+    );
 }

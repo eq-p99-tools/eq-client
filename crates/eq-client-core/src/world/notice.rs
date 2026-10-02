@@ -88,6 +88,15 @@ pub enum Notice {
     ConsumeRefused(String),
     /// A command to the pet was not sent, and why.
     PetRefused(String),
+    /// One of the player's skills rose, to this value.
+    SkillUp {
+        /// The skill's number.
+        skill: u32,
+        /// Its value now.
+        value: u32,
+    },
+    /// A training request was not sent, and why.
+    TrainingRefused(String),
     /// A consent to drag a player's corpses was given or taken back.
     Consent {
         /// What the server said.

@@ -93,6 +93,7 @@ mod tests {
                 mana: 0,
                 endurance: None,
                 skills: None,
+                practice_points: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],
                 size: 0.0,

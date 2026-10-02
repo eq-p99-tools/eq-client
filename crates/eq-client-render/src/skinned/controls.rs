@@ -486,6 +486,8 @@ pub(crate) fn show_choices(
 pub(crate) enum Listing {
     /// The client's key assignments, as the key filter chooses.
     Keys,
+    /// The skills a guildmaster teaches.
+    Training,
 }
 
 /// A list's rows, which the client fills and the wheel scrolls.
@@ -502,7 +504,11 @@ pub(crate) struct ListRows {
 
 /// What a list shows, if the client fills it.
 fn listing(id: Option<&str>, owner: WindowId) -> Option<Listing> {
-    (owner == WindowId::Options && id == Some(KEY_LIST)).then_some(Listing::Keys)
+    match (owner, id) {
+        (WindowId::Options, Some(KEY_LIST)) => Some(Listing::Keys),
+        (WindowId::Training, Some("SkillList")) => Some(Listing::Training),
+        _ => None,
+    }
 }
 
 /// A list: its frame, its columns' headings, and its rows under them.
@@ -571,16 +577,26 @@ pub(super) fn listbox(
                 },
                 ScrollPosition::default(),
             ));
-            if let Some(listing) = listing {
-                rows.insert((
-                    ListRows {
-                        listing,
-                        columns: list.columns.iter().map(|column| column.width).collect(),
-                        filled: false,
-                        filter: None,
-                    },
-                    crate::windows::pointer::TakesWheel,
-                ));
+            let columns = list.columns.iter().map(|column| column.width).collect();
+            match listing {
+                Some(Listing::Keys) => {
+                    rows.insert((
+                        ListRows {
+                            listing: Listing::Keys,
+                            columns,
+                            filled: false,
+                            filter: None,
+                        },
+                        crate::windows::pointer::TakesWheel,
+                    ));
+                }
+                Some(Listing::Training) => {
+                    rows.insert((
+                        crate::training::SkillRows::new(columns),
+                        crate::windows::pointer::TakesWheel,
+                    ));
+                }
+                None => (),
             }
         });
 }
@@ -597,6 +613,8 @@ pub(crate) fn fill_lists(
     for (entity, mut rows, children) in &mut lists {
         let wanted = match rows.listing {
             Listing::Keys => filter.0.clone(),
+            // The Training window's list fills itself.
+            Listing::Training => continue,
         };
         if rows.filled && rows.filter == wanted && !keys.is_changed() {
             continue;
@@ -648,11 +666,14 @@ pub(crate) fn fill_lists(
     }
 }
 
+/// The lists the wheel scrolls: those the client fills.
+type ScrolledList = Or<(With<ListRows>, With<crate::training::SkillRows>)>;
+
 /// Scrolls the list the wheel turns.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn scroll_lists(
     wheel: Res<crate::windows::pointer::Wheel>,
-    mut lists: Query<(&ComputedNode, &mut ScrollPosition), With<ListRows>>,
+    mut lists: Query<(&ComputedNode, &mut ScrollPosition), ScrolledList>,
 ) {
     if let Some((node, mut position)) = wheel.surface.and_then(|list| lists.get_mut(list).ok()) {
         crate::windows::scroll_by(&mut position, node, wheel.pixels);
