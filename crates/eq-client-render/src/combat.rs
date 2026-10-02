@@ -74,7 +74,7 @@ pub(super) fn input(
     if !online.world().connected() || online.world().death().is_some() || !keys.focused() {
         return;
     }
-    let mut feedback = |text: String| chat.history.push(super::chat::system_line(text));
+    let mut feedback = |text: String| chat.refuse(text);
     // The outbox shows why a request did not leave.
     if keys.pressed(Act::Consider) {
         match spawn {

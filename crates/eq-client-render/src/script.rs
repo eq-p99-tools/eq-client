@@ -235,10 +235,7 @@ type Pointers<'w, 's> = Query<'w, 's, &'static mut bevy::ui::RelativeCursorPosit
 type Layout<'w, 's> = Query<'w, 's, (&'static Node, Option<&'static ChildOf>)>;
 
 type Observed<'w> = (
-    (
-        Res<'w, super::hud::HudState>,
-        Res<'w, super::notices::Lines>,
-    ),
+    Res<'w, super::hud::HudState>,
     Res<'w, crate::outbox::Outbox>,
     Res<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,

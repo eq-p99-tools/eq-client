@@ -96,7 +96,6 @@ pub(super) fn input(
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<Outbox>,
-    mut lines: ResMut<super::notices::Lines>,
     (ui, escape): (
         super::windows::pointer::PointerUi,
         Res<super::escape::Escape>,
@@ -143,7 +142,7 @@ pub(super) fn input(
     if let Some(name) = requested {
         match named(&ids, &online, &name) {
             Some(id) => proposal = Some(Some(id)),
-            None => lines.target.set(format!("No nearby target named {name}")),
+            None => chat.refuse(format!("No nearby target named {name}")),
         }
     } else if *escape == super::escape::Escape::Target {
         proposal = Some(None);
@@ -216,10 +215,8 @@ pub(super) fn input(
     {
         return;
     }
+    // A choice sent says nothing, as in the official client.
     online.select_target(selected);
-    // A new choice replaces an earlier refusal; a choice sent says nothing,
-    // as in the official client.
-    lines.target.clear();
 }
 
 /// Drawn spawns the player may target: visible ones within the zone's far clip.
@@ -275,7 +272,6 @@ fn named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn update(
     online: Res<OnlineState>,
-    lines: Res<super::notices::Lines>,
     combat: Option<Res<super::combat::CombatState>>,
     mut texts: Query<(&mut Text, Option<&TargetName>, Option<&TargetDetails>)>,
     mut bars: Query<&mut Node, With<TargetHp>>,
@@ -293,7 +289,6 @@ pub(super) fn update(
         .and_then(|id| online.world().health(id))
         .or_else(|| own.and_then(|player| player.hp_percent));
     let health = format!("HP {}", hp.map_or_else(|| "--".into(), |v| format!("{v}%")));
-    let status = lines.target.text(std::time::Instant::now());
     for (mut text, name, details) in &mut texts {
         if name.is_some() {
             text.0 = spawn.map_or_else(
@@ -309,7 +304,7 @@ pub(super) fn update(
         }
         if details.is_some() {
             text.0 = spawn.map_or_else(
-                || own.map_or_else(|| status.to_owned(), |_| joined(&["You", &health, status])),
+                || own.map_or_else(String::new, |_| joined(&["You", &health])),
                 |s| {
                     let kind = match s.kind {
                         SpawnKind::Player => "Player",
@@ -317,7 +312,7 @@ pub(super) fn update(
                         _ => "Corpse",
                     };
                     let attacking = combat.as_ref().is_some_and(|combat| combat.auto_attack);
-                    let doing = if attacking { "Attacking" } else { status };
+                    let doing = if attacking { "Attacking" } else { "" };
                     joined(&[kind, &health, doing])
                 },
             );
@@ -676,7 +671,6 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<NearbyEntities>()
             .init_resource::<super::super::chat::ChatState>()
-            .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::escape::Escape>()
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .add_systems(Update, (input, update).chain());

@@ -1,8 +1,9 @@
 //! The one way the client's commands leave for the session. The outbox
 //! stamps a command with the admission it belongs to and the time it was
 //! made, refuses what the session cannot take (no session, something the
-//! server does not offer, a full or closed queue) with one reason, and shows
-//! every refusal in one place: the HUD's feedback line. Windows grey out
+//! server does not offer, a full or closed queue) with one reason, and says
+//! every refusal in one place: the chat, as the official client says its
+//! refusals. Windows grey out
 //! what the session does not offer from the same answer, the world's
 //! capability report.
 use crate::theme;
@@ -66,8 +67,7 @@ impl std::fmt::Display for Refusal {
 impl std::error::Error for Refusal {}
 
 /// The line a window shows for a failed action of its own. A refusal from the
-/// outbox already shows in the feedback line, so the window shows nothing
-/// for it.
+/// outbox is already said in the chat, so the window shows nothing for it.
 pub(crate) fn window_line(error: &anyhow::Error) -> String {
     if error.downcast_ref::<Refusal>().is_some() {
         String::new()
@@ -124,8 +124,8 @@ impl Outbox {
         })
     }
 
-    /// Sends a command, or refuses it with one reason, which shows in the
-    /// HUD's feedback line.
+    /// Sends a command, or refuses it with one reason, which the chat says
+    /// ([`show`]).
     ///
     /// # Errors
     /// Refuses a command the session cannot take now.
@@ -201,12 +201,11 @@ impl Outbox {
     }
 }
 
-/// Shows this frame's last refusal in the HUD's feedback line, the one place
-/// refusals show.
+/// Says this frame's last refusal in the chat, where every refusal is said.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn show(outbox: Res<Outbox>, mut lines: ResMut<super::notices::Lines>) {
+pub(crate) fn show(outbox: Res<Outbox>, mut chat: ResMut<super::chat::ChatState>) {
     if let Some(refusal) = outbox.take_refused().pop() {
-        lines.feedback.flash(refusal.text(), Instant::now());
+        chat.refuse(refusal.text());
     }
 }
 

@@ -141,7 +141,7 @@ pub(super) fn use_object(
         .entries()
         .get(&drop_id)
         .is_some_and(GroundObject::is_tradeskill_container);
-    // A refusal shows in the feedback line.
+    // The outbox says a refusal itself.
     let posted = outbox.post(state.world(), |stamp| {
         if container {
             eq_client_core::ClientCommand::OpenContainer {

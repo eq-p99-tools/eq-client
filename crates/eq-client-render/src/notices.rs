@@ -14,80 +14,41 @@ use eq_client_core::{
     world::{Link, Notice},
 };
 
-/// How long feedback on the player's own action stays on screen.
-pub(crate) const FLASH: std::time::Duration = std::time::Duration::from_secs(3);
-
-/// One line on screen besides the chat, which notices and the player's own
-/// actions set: what it says, and until when if it says it for a moment.
+/// One line on screen besides the chat, which notices set.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Line {
     text: String,
-    until: Option<std::time::Instant>,
 }
 
 impl Line {
     /// Says this until something else is said.
     pub(crate) fn set(&mut self, text: impl Into<String>) {
         self.text = text.into();
-        self.until = None;
     }
 
-    /// Says this for a moment ([`FLASH`]).
-    pub(crate) fn flash(&mut self, text: impl Into<String>, now: std::time::Instant) {
-        self.text = text.into();
-        self.until = Some(now + FLASH);
-    }
-
-    /// Says nothing.
-    pub(crate) fn clear(&mut self) {
-        self.text.clear();
-        self.until = None;
-    }
-
-    /// Moves a moment's words this much closer to passing.
-    #[cfg(test)]
-    pub(crate) fn age(&mut self, by: std::time::Duration) {
-        self.until = self.until.and_then(|until| until.checked_sub(by));
-    }
-
-    /// What the line says now: nothing once a moment's words have passed.
-    pub(crate) fn text(&self, now: std::time::Instant) -> &str {
-        if self.until.is_some_and(|until| now >= until) {
-            ""
-        } else {
-            &self.text
-        }
+    /// What the line says.
+    pub(crate) fn text(&self) -> &str {
+        &self.text
     }
 }
 
-/// The client's lines besides the chat, one for each place a notice shows.
-/// Each has one writer API, so every line is set, cleared or expires the
-/// same way.
+/// The client's line besides the chat: the status line, which says what
+/// state the session is in. Refusals are said in the chat instead, as the
+/// official client says them, since a skinned window has no line of its own
+/// for them.
 #[derive(bevy::prelude::Resource, Default)]
 pub(crate) struct Lines {
     /// The status line: the connection, death and camping.
     pub status: Line,
-    /// The target window's line.
-    pub target: Line,
-    /// Feedback on the player's last action, for a moment.
-    pub feedback: Line,
-    /// What became of the last door the player used.
-    pub door: Line,
 }
 
 /// Where a notice shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Place {
-    /// A system line in the chat window.
+    /// A system line in the chat window, where every refusal is said.
     Chat,
     /// The HUD's status line.
     Status,
-    /// The target window's status line.
-    Target,
-    /// The action bar's short-lived feedback.
-    Feedback,
-    /// The door line under the zone status.
-    Door,
 }
 
 /// Sense Heading in the official client's own words, with the point's name.
@@ -337,22 +298,19 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             chat(super::ground::refusal(reason))
         }
         // A click sent says nothing, as in the official client; a refused
-        // one says why, and a later click clears it.
-        Notice::Door { error, .. } => vec![(Place::Door, error.clone().unwrap_or_default())],
+        // one says why.
+        Notice::Door { error, .. } => error.clone().map_or_else(Vec::new, chat),
+        // The player stays in the zone, so the status line no longer says
+        // they are zoning.
         Notice::TransferRefused(reason) => vec![
-            (Place::Status, reason.to_string()),
+            (Place::Status, connection_text(Link::Connected, false)),
             (Place::Chat, reason.to_string()),
         ],
-        Notice::ZoneLineRefused(reason) => {
-            vec![(Place::Status, format!("Cannot cross zone line: {reason}"))]
+        Notice::ZoneLineRefused(reason) => chat(format!("Cannot cross zone line: {reason}")),
+        Notice::TargetRefused(reason) => chat(format!("Target rejected: {reason}")),
+        Notice::CastRefused { spell_id, reason } => {
+            chat(format!("Cast rejected (spell {spell_id}): {reason}"))
         }
-        Notice::TargetRefused(reason) => {
-            vec![(Place::Target, format!("Target rejected: {reason}"))]
-        }
-        Notice::CastRefused { spell_id, reason } => vec![(
-            Place::Feedback,
-            format!("Cast rejected (spell {spell_id}): {reason}"),
-        )],
     }
 }
 
@@ -385,20 +343,6 @@ const fn link_text(link: Link) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_line_says_its_words_until_cleared_and_a_flash_passes() {
-        let now = std::time::Instant::now();
-        let mut line = Line::default();
-        line.set("Zoning");
-        assert_eq!(line.text(now + FLASH * 10), "Zoning");
-        line.flash("Request queue is full", now);
-        assert_eq!(line.text(now), "Request queue is full");
-        assert_eq!(line.text(now + FLASH), "");
-        line.set("Camped - choose a character");
-        line.clear();
-        assert_eq!(line.text(now), "");
-    }
     use eq_client_core::Coins;
 
     #[test]
@@ -603,28 +547,36 @@ mod tests {
     }
 
     #[test]
-    fn refusals_show_where_their_request_was_made() {
+    fn refusals_are_said_in_the_chat() {
         assert_eq!(
             wording(&Notice::TargetRefused("Too far away".into()), None),
-            [(Place::Target, "Target rejected: Too far away".into())]
+            [(Place::Chat, "Target rejected: Too far away".into())]
         );
-        assert_eq!(
+        // A door click sent says nothing; a refused one says why.
+        let door = |error: Option<&str>| {
             wording(
                 &Notice::Door {
                     door_id: 4,
-                    error: None
+                    error: error.map(str::to_owned),
                 },
-                None
-            ),
-            [(Place::Door, String::new())]
-        );
+                None,
+            )
+        };
+        assert_eq!(door(None), []);
+        assert_eq!(door(Some("Locked")), [(Place::Chat, "Locked".into())]);
         let transfer = wording(
             &Notice::TransferRefused(eq_client_core::ZoneRejection::Cancelled),
             None,
         );
         assert_eq!(
-            transfer.iter().map(|(place, _)| *place).collect::<Vec<_>>(),
-            [Place::Status, Place::Chat]
+            transfer,
+            [
+                (Place::Status, String::new()),
+                (
+                    Place::Chat,
+                    eq_client_core::ZoneRejection::Cancelled.to_string()
+                )
+            ]
         );
         // Without the installed strings, a server string still says which it was.
         assert_eq!(

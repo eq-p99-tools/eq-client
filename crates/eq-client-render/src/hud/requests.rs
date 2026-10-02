@@ -65,10 +65,10 @@ pub(super) fn check(
 }
 
 /// Checks the request and sends it without predicting its result. A refusal
-/// is worth a line; a request sent says nothing, as the cast bar shows the
-/// cast once the server takes it, and the outbox shows its own refusals.
+/// is said in the chat; a request sent says nothing, as the cast bar shows
+/// the cast once the server takes it, and the outbox says its own refusals.
 pub(super) fn spell(
-    feedback: &mut crate::notices::Line,
+    chat: &mut crate::chat::ChatState,
     world: &eq_client_core::world::ClientWorld,
     player: &PlayerState,
     outbox: &crate::outbox::Outbox,
@@ -83,9 +83,8 @@ pub(super) fn spell(
         ..
     } = *request;
     match check(world, player, request, wording, now) {
-        Err(refusal) => feedback.flash(refusal, now),
+        Err(refusal) => chat.refuse(refusal),
         Ok(spell_id) => {
-            feedback.clear();
             let _ = outbox.post(world, |stamp| {
                 if forgetting {
                     ClientCommand::ForgetSpell {

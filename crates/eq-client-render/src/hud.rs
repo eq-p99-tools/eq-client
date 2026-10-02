@@ -353,7 +353,6 @@ pub(super) fn empty_gem(gem: u8, map: &super::keys::KeyMap) -> String {
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn spell_details(
     map: Res<super::keys::KeyMap>,
-    lines: Res<super::notices::Lines>,
     online: Res<super::online::OnlineState>,
     names: Res<super::spellbook::SpellNames>,
     mut gems: Query<(&Interaction, &SpellGem, &mut BackgroundColor)>,
@@ -374,7 +373,7 @@ pub(super) fn spell_details(
         }
         background.0 = theme::readiness(pointed, spell.is_none(), waiting);
     }
-    let mut text = match hovered {
+    let text = match hovered {
         None => String::new(),
         Some((gem, None)) => empty_gem(gem, &map),
         Some((_, Some(spell))) => {
@@ -400,10 +399,6 @@ pub(super) fn spell_details(
             text
         }
     };
-    let feedback = lines.feedback.text(now);
-    if !feedback.is_empty() {
-        feedback.clone_into(&mut text);
-    }
     for mut label in &mut labels {
         if label.0 != text {
             label.0.clone_from(&text);
@@ -415,7 +410,7 @@ pub(super) fn spell_details(
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn actions(
     keys: super::keys::Keys,
-    mut lines: ResMut<super::notices::Lines>,
+    mut chat: ResMut<super::chat::ChatState>,
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     clicks: Query<(&Interaction, &SpellGem), Changed<Interaction>>,
@@ -452,7 +447,7 @@ pub(super) fn actions(
             .gem(usize::from(gem))
             .and_then(|spell| names.mana(spell));
         requests::spell(
-            &mut lines.feedback,
+            &mut chat,
             online.world(),
             player,
             &outbox,

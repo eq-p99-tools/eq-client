@@ -547,7 +547,7 @@ fn schedule(app: &mut App) {
                     logs::write,
                     (options::toggle, options::persist, options::tell_session).chain(),
                 ),
-                outbox::show,
+                (outbox::show, inventory::say_refusals),
                 hud::action_bar::update,
                 skinned::frames,
                 skinned::apply,
@@ -1251,8 +1251,7 @@ fn update_hud(
     let (Ok(player), Ok(mut label)) = (players.single(), labels.single_mut()) else {
         return;
     };
-    let now = std::time::Instant::now();
-    let mut lines = vec![scene.zone_name.clone(), notices.status.text(now).to_owned()];
+    let mut lines = vec![scene.zone_name.clone(), notices.status.text().to_owned()];
     if online.enabled && online.in_world() && motion.speed.is_none() {
         lines.push("Movement unavailable: start with --movement-calibration".into());
     }
@@ -1264,7 +1263,6 @@ fn update_hud(
         }
         None => String::new(),
     });
-    lines.push(notices.door.text(now).to_owned());
     if settings.0.debug_overlay {
         let position = world_position(player.translation.to_array(), 0.0);
         lines.push(format!(

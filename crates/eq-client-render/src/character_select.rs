@@ -129,7 +129,7 @@ pub(super) fn update(
             selection.enter(&outbox, world);
         }
     }
-    let status = lines.status.text(std::time::Instant::now());
+    let status = lines.status.text();
     let signature = format!(
         "{visible}:{status}:{:?}",
         online

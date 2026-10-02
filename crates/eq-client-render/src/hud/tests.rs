@@ -194,7 +194,6 @@ fn spell_hover_tracks_live_gem_contents_and_clears_when_pointer_leaves() {
     player.memorized_spells[0] = Some(42);
     testing::admit(&mut state, 7, player);
     app.init_resource::<HudState>()
-        .init_resource::<crate::notices::Lines>()
         .insert_resource(state)
         .insert_resource(crate::spellbook::SpellNames::parse("42^Synthetic spell"))
         .add_systems(Update, spell_details);
@@ -272,32 +271,6 @@ Alt+2: cast | Shift-click: forget"
 }
 
 #[test]
-fn action_feedback_expires() {
-    let mut app = App::new();
-    crate::keys::testing::install(&mut app);
-    let mut lines = crate::notices::Lines::default();
-    lines
-        .feedback
-        .flash("Request queue is full", std::time::Instant::now());
-    app.insert_resource(lines)
-        .insert_resource(OnlineState::new(true))
-        .init_resource::<crate::spellbook::SpellNames>()
-        .add_systems(Update, spell_details);
-    let label = app.world_mut().spawn((SpellDetails, Text::default())).id();
-    app.update();
-    assert_eq!(
-        app.world().get::<Text>(label).unwrap().0,
-        "Request queue is full"
-    );
-    app.world_mut()
-        .resource_mut::<crate::notices::Lines>()
-        .feedback
-        .age(std::time::Duration::from_secs(4));
-    app.update();
-    assert_eq!(app.world().get::<Text>(label).unwrap().0, "");
-}
-
-#[test]
 #[allow(
     clippy::too_many_lines,
     reason = "Keep the ordered UI interaction scenario together"
@@ -310,7 +283,6 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         .insert_resource(crate::outbox::Outbox::new(Some(tx)))
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ChatState>()
-        .init_resource::<crate::notices::Lines>()
         .init_resource::<HudState>()
         .init_resource::<hotbar::Bindings>()
         .init_resource::<crate::spellbook::SpellNames>()
@@ -372,13 +344,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
         app.update();
     };
-    let feedback = |app: &App| {
-        app.world()
-            .resource::<crate::notices::Lines>()
-            .feedback
-            .text(std::time::Instant::now())
-            .to_owned()
-    };
+    let feedback = |app: &App| app.world().resource::<ChatState>().newest();
     // A submitted request blocks another click even before a server Begin notification.
     testing::pending_cast(&mut online(&mut app), Some(73));
     press(&mut app);
@@ -469,7 +435,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     let player = world(&app).player().cloned().unwrap();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let sender = Outbox::new(Some(sender));
-    let mut feedback = crate::notices::Line::default();
+    let mut chat = ChatState::default();
     let request = |gem, target_id| requests::Request {
         gem,
         target_id,
@@ -478,21 +444,18 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     };
     let messages = messages::Messages::default();
     requests::spell(
-        &mut feedback,
+        &mut chat,
         world(&app),
         &player,
         &sender,
         &request(1, 12),
         (&messages, &crate::keys::KeyMap::default()),
     );
-    assert!(
-        feedback
-            .text(std::time::Instant::now())
-            .contains("Gem 2 is empty")
-    );
+    assert!(chat.newest().contains("Gem 2 is empty"));
+    let said = chat.history.lines(eq_client_core::chat::ChatTab::All).len();
     assert!(receiver.try_recv().is_err());
     requests::spell(
-        &mut feedback,
+        &mut chat,
         world(&app),
         &player,
         &sender,
@@ -501,18 +464,21 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     );
     // A request sent says nothing, and never claims a cast the server has
     // not answered.
-    assert_eq!(feedback.text(std::time::Instant::now()), "");
+    assert_eq!(
+        chat.history.lines(eq_client_core::chat::ChatTab::All).len(),
+        said
+    );
     assert!(world(&app).casting().pending.is_none());
     assert!(world(&app).casting().cast.is_none());
     requests::spell(
-        &mut feedback,
+        &mut chat,
         world(&app),
         &player,
         &sender,
         &request(0, 99),
         (&messages, &crate::keys::KeyMap::default()),
     );
-    // The outbox refuses a full queue and shows why in the feedback line.
+    // The outbox refuses a full queue and says why itself.
     assert_eq!(sender.take_refused(), [crate::outbox::Refusal::Busy]);
     assert!(matches!(
         receiver.try_recv().unwrap(),
@@ -521,7 +487,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     assert!(receiver.try_recv().is_err());
     drop(receiver);
     requests::spell(
-        &mut feedback,
+        &mut chat,
         world(&app),
         &player,
         &sender,

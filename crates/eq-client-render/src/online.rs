@@ -6,7 +6,7 @@ use super::{ViewerSettings, hud};
 use bevy::prelude::*;
 use eq_client_core::{
     WorldEvent, WorldUpdate,
-    world::{CastNews, Changes, ClientWorld, Moved, NoSpells, Reply, Reset, SpellCatalog},
+    world::{Changes, ClientWorld, Moved, NoSpells, Reply, Reset, SpellCatalog},
 };
 use std::sync::{LazyLock, Mutex, mpsc::Receiver};
 
@@ -170,9 +170,9 @@ pub(super) struct Panels<'w> {
 }
 
 impl Panels<'_> {
-    /// Shows what the world's changes mean for the panels: feedback a cast
-    /// ends, the inventory, the notices, motion, the trade windows and the
-    /// answers to the panels' own requests.
+    /// Shows what the world's changes mean for the panels: the inventory, the
+    /// notices, motion, the trade windows and the answers to the panels' own
+    /// requests.
     fn show(
         &mut self,
         changes: &Changes,
@@ -180,12 +180,6 @@ impl Panels<'_> {
         messages: Option<&hud::messages::Messages>,
         chat: &mut super::chat::ChatState,
     ) {
-        if matches!(
-            changes.cast,
-            Some(CastNews::Began | CastNews::Refreshed | CastNews::Interrupted)
-        ) {
-            self.lines.feedback.clear();
-        }
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
         }
@@ -211,17 +205,9 @@ impl Panels<'_> {
                     session_id,
                     request_id,
                     error,
-                } => {
-                    if self
-                        .inventory
-                        .item_use_result(*session_id, *request_id, error.clone())
-                    {
-                        let message = self.inventory.action_message().to_owned();
-                        self.lines
-                            .feedback
-                            .flash(message, std::time::Instant::now());
-                    }
-                }
+                } => self
+                    .inventory
+                    .item_use_result(*session_id, *request_id, error.clone()),
                 Reply::InventoryMove {
                     session_id,
                     revision,
@@ -260,19 +246,12 @@ impl Panels<'_> {
             match place {
                 Place::Chat => chat.history.push(super::chat::system_line(text)),
                 Place::Status => self.lines.status.set(text),
-                Place::Target => self.lines.target.set(text),
-                Place::Feedback => self.lines.feedback.flash(text, std::time::Instant::now()),
-                Place::Door => self.lines.door.set(text),
             }
         }
     }
 
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
-        // Whatever was in flight, its feedback is stale, and the world forgot
-        // the target.
-        self.lines.feedback.clear();
-        self.lines.target.clear();
         if matches!(reason, Reset::Entered | Reset::Camped) {
             // Requests and choices made in the old admission are void.
             *self.combat = super::combat::CombatState::default();
@@ -290,14 +269,12 @@ impl Panels<'_> {
                 self.motion.reset(None);
                 if ended {
                     state.selection = None;
-                    self.lines.door.clear();
                     self.inventory.forget();
                 }
             }
             Reset::Entered => {
                 self.motion.reset(None);
                 state.selection = None;
-                self.lines.door.clear();
                 self.inventory.forget();
             }
             Reset::Zoning { to_bind } => {
@@ -318,7 +295,6 @@ impl Panels<'_> {
             }
             Reset::Camped => {
                 // Leave the zone; the world server sends a fresh character list.
-                self.lines.door.clear();
                 self.inventory.forget();
                 self.motion.reset(None);
                 self.lines.status.set("Camped - choose a character");
@@ -414,13 +390,8 @@ pub(super) fn receive(
             panels.motion.reset(None);
             scene.place(&mut commands, super::zone::placement(position), entered);
         }
-        match update {
-            WorldUpdate::Chat(line) => chat.history.push(line),
-            // The door line is about a door the zone no longer has.
-            WorldUpdate::Game(WorldEvent::Doors(eq_client_core::doors::DoorUpdate::RemoveAll)) => {
-                panels.lines.door.clear();
-            }
-            _ => (),
+        if let WorldUpdate::Chat(line) = update {
+            chat.history.push(line);
         }
     }
 }
@@ -914,10 +885,6 @@ mod tests {
         app.world_mut()
             .resource_mut::<super::super::spellbook::BookView>()
             .page = 2;
-        app.world_mut()
-            .resource_mut::<crate::notices::Lines>()
-            .target
-            .set("Sending selection");
         // Zoning keeps the item panel and the book's page.
         sender
             .send(WorldUpdate::Game(WorldEvent::ZoneTransfer(
@@ -937,13 +904,6 @@ mod tests {
                 .resource::<super::super::items::ItemState>()
                 .selected()
                 .is_some()
-        );
-        assert_eq!(
-            app.world()
-                .resource::<crate::notices::Lines>()
-                .target
-                .text(std::time::Instant::now()),
-            ""
         );
         sender
             .send(WorldUpdate::Game(WorldEvent::Entered {
@@ -1279,12 +1239,12 @@ mod tests {
             }))
             .unwrap();
         app.update();
-        assert_eq!(
-            app.world()
-                .resource::<crate::notices::Lines>()
-                .feedback
-                .text(std::time::Instant::now()),
-            ""
+        // A refusal from an earlier admission is not said.
+        assert!(
+            !app.world()
+                .resource::<crate::chat::ChatState>()
+                .newest()
+                .contains("Old admission")
         );
         sender
             .send(WorldUpdate::Game(WorldEvent::CastRejected {
@@ -1296,9 +1256,8 @@ mod tests {
         app.update();
         assert!(
             app.world()
-                .resource::<crate::notices::Lines>()
-                .feedback
-                .text(std::time::Instant::now())
+                .resource::<crate::chat::ChatState>()
+                .newest()
                 .contains("Target unavailable")
         );
         assert_eq!(world(&app).casting().pending, Some(42));
