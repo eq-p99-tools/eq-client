@@ -71,8 +71,12 @@ repository. On Windows, the viewer also detects the standard
 provided. `--start-x` and `--start-y` select an initial EQ location, and
 `--camera-distance` adjusts the initial view distance. `--terrain-only` hides
 placed objects when inspecting terrain materials. The client draws at most 60
-frames a second; `--max-fps` sets another cap, and `--max-fps 0` leaves the
-rate to vsync, which is the monitor's refresh rate.
+frames a second, or the `MaxFPS` in the installation's `eqclient.ini`;
+`--max-fps` sets another cap over both, and `--max-fps 0` leaves the rate to
+vsync, which is the monitor's refresh rate. The Options window (Alt+O) sets
+the cap per character with its Max FPS slider, which wins once moved, and its
+Far Clip Plane and Mouselook Sensitivity sliders set how far the scene is
+drawn and how fast the camera turns; its Keyboard page lists the keys.
 
 ## Stationary online preview
 
