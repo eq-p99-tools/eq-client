@@ -40,6 +40,7 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
                 sender: event.sender,
                 target: event.target,
                 message,
+                source: eq_client_core::chat::Source::Server,
             })
         })
 }

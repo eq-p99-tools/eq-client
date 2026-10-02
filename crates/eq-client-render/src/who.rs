@@ -2,7 +2,7 @@
 //! installed string table, filled with the player's level, class title,
 //! name, race, guild and zone. `/who all` lists what the world answered; a
 //! plain `/who` lists the zone's players from what the client knows.
-use super::hud::messages::Messages;
+use super::{chat::Said, hud::messages::Messages};
 use bevy::prelude::{Res, ResMut};
 use eq_client_core::{
     classes::{class_name, title_string},
@@ -43,16 +43,19 @@ const ANONYMOUS: u32 = 5024;
 
 /// The lines a `/who all` answer prints: the heading and the rule under it,
 /// a line per player, and the count.
-pub(super) fn lines(list: &WhoList, messages: &Messages) -> Vec<String> {
-    let mut lines = vec![messages.format(list.heading, &[]), list.rule.clone()];
+pub(super) fn lines(list: &WhoList, messages: &Messages) -> Vec<Said> {
+    let mut lines = vec![
+        messages.said(list.heading, &[]),
+        Said::official(list.rule.clone()),
+    ];
     lines.extend(list.players.iter().map(|player| line(player, messages)));
-    lines.push(messages.format(list.closing, &[list.count.to_string()]));
+    lines.push(messages.said(list.closing, &[list.count.to_string()]));
     lines
 }
 
 /// One player's line. A string number passed as the first argument is
 /// worded by the line's `%T1`.
-fn line(player: &WhoPlayer, messages: &Messages) -> String {
+fn line(player: &WhoPlayer, messages: &Messages) -> Said {
     let rank = player.rank.map(|rank| rank.to_string()).unwrap_or_default();
     let tag = player
         .tag
@@ -84,10 +87,15 @@ fn line(player: &WhoPlayer, messages: &Messages) -> String {
         ANONYMOUS_TO_A_GAME_MASTER => vec![rank, level, class, name, race, guild, zone, tag],
         _ => vec![rank, level, class, name, race, guild, zone, tag, account],
     };
-    messages
-        .format(player.line, &arguments)
-        .trim_end()
-        .to_owned()
+    trimmed(messages.said(player.line, &arguments))
+}
+
+/// A line without the spaces its string leaves at its end where an
+/// argument is empty.
+fn trimmed(mut said: Said) -> Said {
+    let end = said.text.trim_end().len();
+    said.text.truncate(end);
+    said
 }
 
 /// A class's words at a level: its title from level 51, from the installed
@@ -102,13 +110,16 @@ fn class_words(class: u32, level: u32, messages: &Messages) -> String {
 /// The zone's own `/who`, as the Titanium client words it: a heading, the
 /// rule, a line per player and the count in the zone's long name; when no
 /// one matches, that alone.
-pub(super) fn zone_lines(players: &[ZonePlayer], zone: &str, messages: &Messages) -> Vec<String> {
+pub(super) fn zone_lines(players: &[ZonePlayer], zone: &str, messages: &Messages) -> Vec<Said> {
     let closing = match players.len() {
-        0 => return vec![messages.format(ZONE_NONE, &[zone.to_owned()])],
-        1 => messages.format(ZONE_ONE, &[zone.to_owned()]),
-        count => messages.format(ZONE_COUNT, &[count.to_string(), zone.to_owned()]),
+        0 => return vec![messages.said(ZONE_NONE, &[zone.to_owned()])],
+        1 => messages.said(ZONE_ONE, &[zone.to_owned()]),
+        count => messages.said(ZONE_COUNT, &[count.to_string(), zone.to_owned()]),
     };
-    let mut lines = vec![messages.format(ZONE_HEADING, &[]), "-".repeat(RULE_LENGTH)];
+    let mut lines = vec![
+        messages.said(ZONE_HEADING, &[]),
+        Said::official("-".repeat(RULE_LENGTH)),
+    ];
     lines.extend(players.iter().map(|player| zone_line(player, messages)));
     lines.push(closing);
     lines
@@ -117,7 +128,7 @@ pub(super) fn zone_lines(players: &[ZonePlayer], zone: &str, messages: &Messages
 /// One player's line in the zone's `/who`: the same lines as `/who all`
 /// gives, without a zone, flagged before for a game master or an away
 /// player and after for one looking for a group.
-fn zone_line(player: &ZonePlayer, messages: &Messages) -> String {
+fn zone_line(player: &ZonePlayer, messages: &Messages) -> Said {
     let listing = player.listing;
     let flag = if listing.game_master {
         GAME_MASTER.to_string()
@@ -164,7 +175,7 @@ fn zone_line(player: &ZonePlayer, messages: &Messages) -> String {
             )
         }
     };
-    messages.format(line, &arguments).trim_end().to_owned()
+    trimmed(messages.said(line, &arguments))
 }
 
 /// Prints the zone's own `/who` that chat asked for.
@@ -192,6 +203,18 @@ pub(super) fn zone_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The lines' words, each the official client's.
+    fn official(lines: Vec<Said>) -> Vec<String> {
+        lines
+            .into_iter()
+            .map(|said| {
+                let source = eq_client_core::chat::Source::Official;
+                assert_eq!(said.source, source, "{}", said.text);
+                said.text
+            })
+            .collect()
+    }
 
     fn messages() -> Messages {
         Messages::parse(
@@ -269,7 +292,7 @@ mod tests {
             players: vec![open, master, roleplaying, player(ANONYMOUS, "Hidden")],
         };
         assert_eq!(
-            lines(&list, &messages()),
+            official(lines(&list, &messages())),
             [
                 "Everyone online:".to_owned(),
                 "-".repeat(27),
@@ -323,7 +346,7 @@ mod tests {
             ),
         ];
         assert_eq!(
-            zone_lines(&players, "The Qeynos Hills", &messages()),
+            official(zone_lines(&players, "The Qeynos Hills", &messages())),
             [
                 "Everyone here:".to_owned(),
                 "-".repeat(27),
@@ -334,11 +357,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            zone_lines(&players[..1], "The Qeynos Hills", &messages()).last(),
+            official(zone_lines(&players[..1], "The Qeynos Hills", &messages())).last(),
             Some(&"Just one here in The Qeynos Hills.".to_owned())
         );
         assert_eq!(
-            zone_lines(&[], "The Qeynos Hills", &messages()),
+            official(zone_lines(&[], "The Qeynos Hills", &messages())),
             ["Nobody in The Qeynos Hills matches."]
         );
     }

@@ -42,7 +42,11 @@ pub(crate) fn write(
             || fallback.to_owned(),
             |messages| messages.text(id, fallback),
         );
-        chat.history.push(crate::chat::system_line(words));
+        // The official client writes these lines itself, so the log takes
+        // them even in this client's words, where the installation lacks
+        // the string.
+        chat.history
+            .push(crate::chat::system_line(crate::chat::Said::official(words)));
         // The official client writes its *OFF* line before it stops, as it
         // writes its *ON* line as it starts.
         writes = true;
@@ -67,9 +71,15 @@ pub(crate) fn write(
     };
     let now = chrono::Local::now().naive_local();
     let mut text = String::new();
+    // A line in this client's own words is never the official client's,
+    // so the log leaves it out (`logs::words`).
     for (_, line) in lines.iter().filter(|(id, _)| *id > seen) {
-        let words = read(logs::words(line, &player.name), messages.as_deref());
-        text.push_str(&logs::line(now, &words));
+        if let Some(words) = logs::words(line, &player.name) {
+            text.push_str(&logs::line(now, &read(words, messages.as_deref())));
+        }
+    }
+    if text.is_empty() {
+        return;
     }
     let name = logs::file_name(&player.name, server);
     if log.file.as_ref().is_none_or(|(open, _)| *open != name) {
@@ -159,20 +169,24 @@ mod tests {
             .init_resource::<crate::chat::ChatState>()
             .init_resource::<ChatLog>()
             .add_systems(Update, write);
-        let say = |app: &mut App, text: &str| {
+        let say = |app: &mut App, said: crate::chat::Said| {
             app.world_mut()
                 .resource_mut::<crate::chat::ChatState>()
                 .history
-                .push(crate::chat::system_line(text.to_owned()));
+                .push(crate::chat::system_line(said));
             app.update();
         };
-        say(&mut app, "Arrived in The Qeynos Hills.");
-        say(&mut app, "\u{c9}p\u{e9}e \u{2026}");
+        let official = crate::chat::Said::official;
+        say(&mut app, official("Arrived in The Qeynos Hills."));
+        // This client's own words are never the official client's, so the
+        // log leaves them out.
+        say(&mut app, "Nobody here by that name.".into());
+        say(&mut app, official("\u{c9}p\u{e9}e \u{2026}"));
         app.world_mut()
             .resource_mut::<crate::chat::ChatState>()
             .log_toggle = true;
         app.update();
-        say(&mut app, "Not logged.");
+        say(&mut app, official("Not logged."));
         let file = directory
             .join("Logs")
             .join("eqlog_Examplar_ExampleWorld.txt");

@@ -7,12 +7,53 @@ use bevy::{
 };
 use eq_client_core::{
     ClientCommand, OutboundChat,
-    chat::{ChannelName, ChatHistory, ChatLine, ChatTab, Message, channel_rgb},
+    chat::{ChannelName, ChatHistory, ChatLine, ChatTab, Message, Source, channel_rgb},
 };
 use std::collections::{BTreeMap, HashSet};
 
+/// Words the client says in the chat, and whose they are: the official
+/// client's, read from its string table, or this client's own, which the
+/// official client's log never takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Said {
+    pub text: String,
+    pub source: Source,
+}
+
+impl Said {
+    /// The official client's words.
+    pub(crate) fn official(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            source: Source::Official,
+        }
+    }
+
+    /// This client's own words.
+    pub(crate) fn own(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            source: Source::Client,
+        }
+    }
+}
+
+/// Words with nothing said of whose they are are this client's own.
+impl From<String> for Said {
+    fn from(text: String) -> Self {
+        Self::own(text)
+    }
+}
+
+impl From<&str> for Said {
+    fn from(text: &str) -> Self {
+        Self::own(text)
+    }
+}
+
 /// A locally produced line in the System channel.
-pub(super) fn system_line(text: String) -> ChatLine {
+pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
+    let Said { text, source } = said.into();
     ChatLine {
         channel: ChannelName::System,
         sender: None,
@@ -23,6 +64,7 @@ pub(super) fn system_line(text: String) -> ChatLine {
             text,
             item_links: Vec::new(),
         },
+        source,
     }
 }
 
@@ -69,23 +111,23 @@ const REPEATED: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl ChatState {
     /// Says a refusal in the chat as a system line, where the official client
-    /// says its refusals; the same refusal again within [`REPEATED`] is not
-    /// said twice.
-    pub(super) fn refuse(&mut self, text: impl Into<String>) {
-        self.refuse_at(text.into(), std::time::Instant::now());
+    /// says its refusals; the same refusal again within [`REPEATED`], as from
+    /// a held key, is not said twice.
+    pub(super) fn refuse(&mut self, said: impl Into<Said>) {
+        self.refuse_at(said.into(), std::time::Instant::now());
     }
 
-    fn refuse_at(&mut self, text: String, now: std::time::Instant) {
-        if text.is_empty() {
+    fn refuse_at(&mut self, said: Said, now: std::time::Instant) {
+        if said.text.is_empty() {
             return;
         }
-        if self.last_refusal.as_ref().is_some_and(|(said, at)| {
-            *said == text && now.saturating_duration_since(*at) < REPEATED
+        if self.last_refusal.as_ref().is_some_and(|(text, at)| {
+            *text == said.text && now.saturating_duration_since(*at) < REPEATED
         }) {
             return;
         }
-        self.history.push(system_line(text.clone()));
-        self.last_refusal = Some((text, now));
+        self.last_refusal = Some((said.text.clone(), now));
+        self.history.push(system_line(said));
     }
 }
 
@@ -642,8 +684,9 @@ fn submit_draft(
             let active = state.active;
             state.views.entry(active).or_default().follow = true;
         }
-        // The draft stays, to mend and send again.
-        Err(Unsent::Mistake(mistake)) => state.refuse(mistake),
+        // The draft stays, to mend and send again. Each line typed is
+        // answered, however soon the same one comes again.
+        Err(Unsent::Mistake(mistake)) => state.history.push(system_line(mistake)),
         // The draft stays, to send again.
         Err(Unsent::Refused) => (),
     }
@@ -934,8 +977,18 @@ mod tests {
         state.refuse_at("Too far away".into(), now + REPEATED);
         assert_eq!(said(&state), 2);
         state.refuse_at("Locked".into(), now + REPEATED);
-        state.refuse_at(String::new(), now + REPEATED);
+        state.refuse_at("".into(), now + REPEATED);
         assert_eq!(said(&state), 3);
+        // A refusal keeps whose words it is in.
+        state.refuse_at(Said::official("Closer, please."), now + REPEATED);
+        assert_eq!(
+            state
+                .history
+                .lines(ChatTab::All)
+                .last()
+                .map(|(_, line)| line.source),
+            Some(Source::Official)
+        );
     }
 
     /// The entries shown in the chat window, in order.
@@ -983,7 +1036,7 @@ mod tests {
         let push = |app: &mut App, count| {
             let mut state = app.world_mut().resource_mut::<ChatState>();
             for _ in 0..count {
-                state.history.push(system_line("Synthetic line".into()));
+                state.history.push(system_line("Synthetic line"));
             }
             app.update();
         };

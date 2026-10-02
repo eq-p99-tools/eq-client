@@ -446,6 +446,7 @@ pub(crate) fn chat_lines() -> Vec<eq_client_core::chat::ChatLine> {
         channel,
         sender: Some("Preview".into()),
         target: None,
+        source: eq_client_core::chat::Source::Server,
         message: Message {
             message: None,
             message_hex: None,
