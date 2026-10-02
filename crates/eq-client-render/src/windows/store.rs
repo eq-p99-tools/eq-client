@@ -73,12 +73,12 @@ pub(super) fn persist(
         // the official client last put them.
         if seeded
             && let Some((world, character)) = &store.profile
-            && let Some(install) = settings.0.eq_directory.as_deref()
+            && let Some(official) = settings.0.official_settings()
             && let Ok(window) = windows.single()
         {
             seed(
                 &mut layouts.0,
-                &eq_client_assets::ui::window_positions(install, character, world),
+                &official.window_positions(character, world),
                 Vec2::new(window.width(), window.height()),
             );
         }

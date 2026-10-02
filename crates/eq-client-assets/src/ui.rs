@@ -174,16 +174,109 @@ pub fn texture_sheet(
     Ok(pixels)
 }
 
-/// The skin a character last chose in the official client: `UISkin` in the
-/// `[Main]` section of `UI_<character>_<world>.ini`, where `world` is the world's
-/// short name. None when the file or setting is missing or names no usable skin.
-pub fn chosen_skin(eq_directory: &Path, character: &str, world: &str) -> Option<String> {
-    if !plain_name(character) || !plain_name(world) {
-        return None;
-    }
-    let bytes = std::fs::read(eq_directory.join(format!("UI_{character}_{world}.ini"))).ok()?;
-    ini_value(&String::from_utf8_lossy(&bytes), "Main", "UISkin").filter(|skin| valid_skin(skin))
+/// Which official client an installation holds. Its own settings files
+/// (`eqclient.ini`, `UI_<character>_<world>.ini` and `<character>_<world>.ini`)
+/// are read only by the rules of the generation they were checked against.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InstalledClient {
+    /// Titanium, the client P99 and stock `EQEmu` servers expect.
+    #[default]
+    Titanium,
+    /// The Mac-era client Project Quarm and TAKP servers expect.
+    EqMac,
 }
+
+impl InstalledClient {
+    /// The settings files of this client, installed in `eq_directory`.
+    pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
+        match self {
+            Self::Titanium => Box::new(Titanium(eq_directory)),
+            Self::EqMac => Box::new(Unchecked),
+        }
+    }
+}
+
+/// What this client reads, read only, from the settings an installed official
+/// client keeps for itself and its characters. Each reader reads nothing by
+/// default, so a client generation's files stay unread until a reader for
+/// them has been checked against that client.
+pub trait OfficialSettings {
+    /// The options in `eqclient.ini`.
+    fn options(&self) -> OfficialOptions {
+        OfficialOptions::default()
+    }
+
+    /// The skin a character last chose, by its name. None when the client
+    /// says nothing usable.
+    fn chosen_skin(&self, _character: &str, _world: &str) -> Option<String> {
+        None
+    }
+
+    /// The first page of a character's hotbuttons on a world, as each
+    /// button's number from 1 and its code (such as `H2`).
+    fn hotbuttons(&self, _character: &str, _world: &str) -> Vec<(u8, String)> {
+        Vec::new()
+    }
+
+    /// Where the client last put a character's windows on a world, at every
+    /// screen size it was played at.
+    fn window_positions(&self, _character: &str, _world: &str) -> Vec<WindowPosition> {
+        Vec::new()
+    }
+}
+
+/// An installed Titanium client's settings files, in its installation.
+struct Titanium<'a>(&'a Path);
+
+impl OfficialSettings for Titanium<'_> {
+    /// `eqclient.ini`, the options the client keeps for every character.
+    fn options(&self) -> OfficialOptions {
+        std::fs::read(self.0.join("eqclient.ini"))
+            .map(|bytes| options_from_ini(&String::from_utf8_lossy(&bytes)))
+            .unwrap_or_default()
+    }
+
+    /// `UISkin` in the `[Main]` section of `UI_<character>_<world>.ini`, where
+    /// `world` is the world's short name. None when the file or setting is
+    /// missing or names no usable skin.
+    fn chosen_skin(&self, character: &str, world: &str) -> Option<String> {
+        if !plain_name(character) || !plain_name(world) {
+            return None;
+        }
+        let bytes = std::fs::read(self.0.join(format!("UI_{character}_{world}.ini"))).ok()?;
+        ini_value(&String::from_utf8_lossy(&bytes), "Main", "UISkin")
+            .filter(|skin| valid_skin(skin))
+    }
+
+    /// `[HotButtons]` in `<character>_<world>.ini`. Empty when the file, the
+    /// section or a sane name is missing.
+    fn hotbuttons(&self, character: &str, world: &str) -> Vec<(u8, String)> {
+        let plain =
+            |text: &str| !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric());
+        if !plain(character) || !plain(world) {
+            return Vec::new();
+        }
+        std::fs::read(self.0.join(format!("{character}_{world}.ini")))
+            .map(|bytes| hotbuttons_from_ini(&String::from_utf8_lossy(&bytes)))
+            .unwrap_or_default()
+    }
+
+    /// The sections of `UI_<character>_<world>.ini`; none when the file is
+    /// missing.
+    fn window_positions(&self, character: &str, world: &str) -> Vec<WindowPosition> {
+        if !plain_name(character) || !plain_name(world) {
+            return Vec::new();
+        }
+        std::fs::read(self.0.join(format!("UI_{character}_{world}.ini")))
+            .map(|bytes| positions_from_ini(&String::from_utf8_lossy(&bytes)))
+            .unwrap_or_default()
+    }
+}
+
+/// A client whose settings files no reader has been checked against yet.
+struct Unchecked;
+
+impl OfficialSettings for Unchecked {}
 
 /// What the official client's `eqclient.ini` says of the options this
 /// client keeps per character; each None when the file or setting is missing
@@ -211,14 +304,6 @@ pub struct OfficialOptions {
     pub mouse_sensitivity: Option<u32>,
 }
 
-/// The options the official client keeps in the installation's
-/// `eqclient.ini`, which this client only reads.
-pub fn official_options(eq_directory: &Path) -> OfficialOptions {
-    std::fs::read(eq_directory.join("eqclient.ini"))
-        .map(|bytes| options_from_ini(&String::from_utf8_lossy(&bytes)))
-        .unwrap_or_default()
-}
-
 fn options_from_ini(text: &str) -> OfficialOptions {
     let flag = |section, key| match ini_value(text, section, key)?.to_ascii_uppercase().as_str() {
         "TRUE" | "1" => Some(true),
@@ -236,20 +321,6 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         mouse_sensitivity: ini_value(text, "Options", "MouseSensitivity")
             .and_then(|v| v.trim().parse().ok()),
     }
-}
-
-/// The first page of the official client's hotbuttons for a character on
-/// a world: `[HotButtons]` in the installation's `<Name>_<world>.ini`, read
-/// only, as each button's number from 1 and its code (such as `H2`). Empty
-/// when the file, the section or a sane name is missing.
-pub fn official_hotbuttons(eq_directory: &Path, character: &str, world: &str) -> Vec<(u8, String)> {
-    let plain = |text: &str| !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric());
-    if !plain(character) || !plain(world) {
-        return Vec::new();
-    }
-    std::fs::read(eq_directory.join(format!("{character}_{world}.ini")))
-        .map(|bytes| hotbuttons_from_ini(&String::from_utf8_lossy(&bytes)))
-        .unwrap_or_default()
 }
 
 fn hotbuttons_from_ini(text: &str) -> Vec<(u8, String)> {
@@ -273,17 +344,6 @@ pub struct WindowPosition {
     pub x: i32,
     /// Top edge.
     pub y: i32,
-}
-
-/// The window positions the official client saved for a character on a world,
-/// at every screen size it was played at; none when the file is missing.
-pub fn window_positions(eq_directory: &Path, character: &str, world: &str) -> Vec<WindowPosition> {
-    if !plain_name(character) || !plain_name(world) {
-        return Vec::new();
-    }
-    std::fs::read(eq_directory.join(format!("UI_{character}_{world}.ini")))
-        .map(|bytes| positions_from_ini(&String::from_utf8_lossy(&bytes)))
-        .unwrap_or_default()
 }
 
 /// `XPos<width>x<height>` and `YPos<width>x<height>` pairs, by section.
@@ -582,9 +642,48 @@ MouseSensitivity=4
         );
         assert_eq!(hotbuttons_from_ini("").len(), 0);
         assert_eq!(
-            official_hotbuttons(Path::new("."), "../x", "World").len(),
+            InstalledClient::Titanium
+                .settings(Path::new("."))
+                .hotbuttons("../x", "World")
+                .len(),
             0
         );
+    }
+
+    #[test]
+    fn only_a_checked_client_generation_has_its_settings_read() {
+        let install = std::env::temp_dir().join(format!("eq-ui-generation-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(install.join("eqclient.ini"), "[Defaults]\nLog=TRUE\n").unwrap();
+        std::fs::write(
+            install.join("UI_Example_ExampleWorld.ini"),
+            "[Main]\nUISkin=velious\n[PlayerWindow]\nXPos1280x720=10\nYPos1280x720=20\n",
+        )
+        .unwrap();
+        std::fs::write(
+            install.join("Example_ExampleWorld.ini"),
+            "[HotButtons]\nPage1Button1=H0\n",
+        )
+        .unwrap();
+        let read = |client: InstalledClient| {
+            let settings = client.settings(&install);
+            (
+                settings.options(),
+                settings.chosen_skin("Example", "ExampleWorld"),
+                settings.hotbuttons("Example", "ExampleWorld").len(),
+                settings.window_positions("Example", "ExampleWorld").len(),
+            )
+        };
+        let titanium = read(InstalledClient::Titanium);
+        let eqmac = read(InstalledClient::EqMac);
+        std::fs::remove_dir_all(&install).unwrap();
+        assert_eq!(titanium.0.log, Some(true));
+        assert_eq!(
+            (titanium.1.as_deref(), titanium.2, titanium.3),
+            (Some("velious"), 1, 1)
+        );
+        // The same files in an EQMac installation are left unread.
+        assert_eq!(eqmac, (OfficialOptions::default(), None, 0, 0));
     }
 
     #[test]
@@ -797,10 +896,11 @@ MouseSensitivity=4
             "[Main]\nUISkin=../x\n",
         )
         .unwrap();
-        let chosen = chosen_skin(&install, "Example", "ExampleWorld");
-        let unsafe_skin = chosen_skin(&install, "Other", "ExampleWorld");
-        let missing = chosen_skin(&install, "Nobody", "ExampleWorld");
-        let escaping = chosen_skin(&install, "../Example", "ExampleWorld");
+        let settings = InstalledClient::Titanium.settings(&install);
+        let chosen = settings.chosen_skin("Example", "ExampleWorld");
+        let unsafe_skin = settings.chosen_skin("Other", "ExampleWorld");
+        let missing = settings.chosen_skin("Nobody", "ExampleWorld");
+        let escaping = settings.chosen_skin("../Example", "ExampleWorld");
         std::fs::remove_dir_all(&install).unwrap();
         assert_eq!(chosen.as_deref(), Some("velious"));
         assert_eq!((unsafe_skin, missing, escaping), (None, None, None));
