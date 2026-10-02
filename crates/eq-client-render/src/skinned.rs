@@ -244,10 +244,7 @@ fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
     node.padding = UiRect::ZERO;
     node.border = UiRect::ZERO;
     node.row_gap = Val::ZERO;
-    // The skin puts its Hot Button window over the lower part of its spell
-    // gems (the default skin's at 0, 230 under gems reaching 315), so the
-    // action bar keeps the client's dock until the player moves it.
-    if !placed && id.describe().layer == super::windows::Layer::Hud && id != WindowId::Actions {
+    if !placed && id.describe().layer == super::windows::Layer::Hud {
         node.position_type = PositionType::Absolute;
         node.left = px(screen.area.x);
         node.top = px(screen.area.y);
