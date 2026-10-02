@@ -1648,3 +1648,20 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         [Notice::TrainingRefused("No practice points".into())]
     );
 }
+
+#[test]
+fn a_resurrection_offer_is_forgotten_when_the_player_enters_a_zone() {
+    let mut world = admitted();
+    // An offer from Tester to Example's corpse: the caster's name at 92 and
+    // the corpse's at 160 of the 228 bytes.
+    let mut body = vec![0; 228];
+    body[92..98].copy_from_slice(b"Tester");
+    body[160..177].copy_from_slice(b"Example's corpse0");
+    let offer = crate::resurrection::titanium_offer(&body).unwrap();
+    game(&mut world, WorldEvent::Resurrection(offer));
+    assert!(world.resurrection().is_some());
+    // The session that held the offer ends with the zone; the next zone's
+    // knows nothing of it, so neither does the world.
+    game(&mut world, entered(2));
+    assert!(world.resurrection().is_none());
+}
