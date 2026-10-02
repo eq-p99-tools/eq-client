@@ -143,17 +143,20 @@ impl Hotbar {
             else {
                 continue;
             };
-            let (kind, number) = code.split_at(code.len().min(1));
-            let Ok(number) = number.parse::<u32>() else {
-                continue;
-            };
-            hotbar.0[index] = match kind {
-                "H" => u8::try_from(number)
+            // The ini is read lossily, so a code may start with any character.
+            hotbar.0[index] = if let Some(gem) = code.strip_prefix('H') {
+                gem.parse::<u8>()
                     .ok()
                     .filter(|gem| *gem < 8)
-                    .map(Binding::Gem),
-                "J" => Ability::from_skill(number).map(Binding::Ability),
-                _ => None,
+                    .map(Binding::Gem)
+            } else if let Some(skill) = code.strip_prefix('J') {
+                skill
+                    .parse()
+                    .ok()
+                    .and_then(Ability::from_skill)
+                    .map(Binding::Ability)
+            } else {
+                None
             };
         }
         Some(hotbar)
@@ -203,5 +206,22 @@ mod tests {
         // A social, a ninth gem and an empty button leave their slots empty.
         assert_eq!(hotbar.0[3..], [None; 7]);
         assert_eq!(Hotbar::official(&[]), None);
+    }
+
+    #[test]
+    fn a_corrupt_hotbutton_leaves_its_slot_empty() {
+        // A byte the ini reader replaced with U+FFFD, other characters that
+        // are more than one byte long, and an empty code.
+        let buttons = [
+            (1, "\u{FFFD}1".to_owned()),
+            (2, "é2".to_owned()),
+            (3, "H\u{FFFD}".to_owned()),
+            (4, "J€".to_owned()),
+            (5, String::new()),
+            (6, "H3".to_owned()),
+        ];
+        let hotbar = Hotbar::official(&buttons).unwrap();
+        assert_eq!(hotbar.0[..5], [None; 5]);
+        assert_eq!(hotbar.0[5], Some(Binding::Gem(3)));
     }
 }
