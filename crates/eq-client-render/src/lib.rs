@@ -11,6 +11,7 @@ mod character_select;
 mod chat;
 mod coins;
 mod combat;
+mod daylight;
 mod doors;
 mod entities;
 mod escape;
@@ -359,7 +360,7 @@ fn schedule(app: &mut App) {
     .add_systems(
         Update,
         (
-            (online::receive, online::tick)
+            (online::receive, online::tick, daylight::update)
                 .chain()
                 .in_set(Stage::Receive),
             (
@@ -692,17 +693,20 @@ fn spawn_player_and_hud(
 }
 
 fn spawn_lighting(commands: &mut Commands, ambient_light: &mut GlobalAmbientLight) {
+    // The day's light; online, the time of day changes it.
     commands.spawn((
         DirectionalLight {
-            illuminance: 12_000.0,
+            illuminance: daylight::DAY_SUN,
             shadow_maps_enabled: true,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.0, -0.8, 0.0)),
+        daylight::Sun,
     ));
+    let [red, green, blue] = daylight::DAY_AMBIENT_COLOR;
     *ambient_light = GlobalAmbientLight {
-        color: Color::srgb(0.62, 0.68, 0.8),
-        brightness: 150.0,
+        color: Color::srgb(red, green, blue),
+        brightness: daylight::DAY_AMBIENT,
         affects_lightmapped_meshes: true,
     };
 }

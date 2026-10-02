@@ -104,6 +104,8 @@ pub(super) fn state(
         exchange = ?online.world().exchange(),
         abilities = ?online.world().abilities(),
         nourishment = ?online.world().nourishment(),
+        game_time = ?online.world().game_time(std::time::Instant::now()),
+        sky = ?online.world().sky(),
         cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
         bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
         gear = ?online.world().player().map(|player| player.appearance.materials),

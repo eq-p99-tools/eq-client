@@ -24,6 +24,8 @@ pub(super) struct Zone {
     pub(super) objects: Objects,
     /// The corpse and the merchant are the zone's.
     pub(super) trade: Trade,
+    /// How the zone's sky and fog look, once the zone says.
+    pub(super) sky: Option<crate::clock::ZoneSky>,
 }
 
 impl Zone {

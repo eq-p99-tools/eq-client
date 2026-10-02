@@ -535,6 +535,14 @@ The target panel lists the keys that apply to the current target:
   guilds are named from the world's guild list, and the count names the
   zone's long name.
 
+Day and night follow the time in Norrath the server gives as a zone admits the
+player, run on by the client between updates (an hour every three real
+minutes). Where a zone has a sky, the picture darkens through dawn and dusk to
+night, the sky and fog colors follow, and each zone's fog closes in from its
+own distances; below ground the light stays as it is. The night look is
+provisional (`PROVISIONAL_DAY_NIGHT` in eq-client-core) until official-client
+captures settle it.
+
 Melee and non-melee damage involving the player prints Titanium-style combat
 text. Server string-table messages (for example experience, skill-up and range
 errors) are formatted from the installed `eqstr_us.txt`. Casting with less

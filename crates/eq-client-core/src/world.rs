@@ -96,6 +96,8 @@ pub struct ClientWorld {
     connected: bool,
     ended: bool,
     world_name: Option<String>,
+    /// The time in Norrath the server last gave, and when it came.
+    time: Option<(crate::clock::GameTime, Instant)>,
     /// Guild names by number, from the world's guild list.
     guild_names: BTreeMap<u32, String>,
     characters: Option<CharacterList>,
@@ -274,6 +276,9 @@ impl ClientWorld {
         match event {
             // The connection, the characters on offer and the admission.
             WorldEvent::WorldName { short_name } => self.world_name = Some(short_name.clone()),
+            // The time of day, and how the zone's sky looks.
+            WorldEvent::TimeOfDay(time) => self.time = Some((*time, now)),
+            WorldEvent::Sky(sky) => self.zone.sky = Some(*sky),
             WorldEvent::CharacterSelection {
                 selection_id,
                 characters,
