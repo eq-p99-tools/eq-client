@@ -1739,3 +1739,46 @@ fn a_combine_is_under_way_until_the_server_answers() {
         }]
     );
 }
+
+#[test]
+fn a_world_container_opens_only_when_asked_and_closes_with_the_player() {
+    use crate::ground::{ContainerView, ObjectUpdate};
+    let mut world = admitted();
+    let view = |open| ContainerView {
+        player_id: 9,
+        drop_id: 40,
+        open,
+        object_type: 15,
+        icon: 0,
+        name: String::new(),
+    };
+    // A container the player did not ask for never shows.
+    game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Container(view(true))),
+    );
+    assert!(world.container().is_none());
+    world.ask_container(40);
+    let changes = game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Container(view(false))),
+    );
+    assert_eq!(changes.notices, [Notice::ContainerInUse]);
+    assert!(world.container().is_none());
+    world.ask_container(40);
+    game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Container(view(true))),
+    );
+    assert_eq!(world.container().map(|view| view.drop_id), Some(40));
+    world.close_container();
+    assert!(world.container().is_none());
+    // Zoning forgets an open container.
+    world.ask_container(40);
+    game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Container(view(true))),
+    );
+    game(&mut world, entered(2));
+    assert!(world.container().is_none());
+}

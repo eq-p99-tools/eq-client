@@ -1,4 +1,5 @@
-//! F uses what is nearest within reach: a door, or an item on the ground.
+//! F uses what is nearest within reach: a door, an item on the ground, or a
+//! world container such as a forge.
 use bevy::prelude::*;
 
 /// What F would use now.
@@ -6,11 +7,11 @@ use bevy::prelude::*;
 pub(super) enum Use {
     /// Open or close a door, with its model.
     Door(u8, String),
-    /// Pick up an item on the ground.
-    Item(u32),
+    /// Pick up an item on the ground, or open a world container.
+    Object(u32),
 }
 
-/// The door or item nearest the player within reach, if any.
+/// The door or object nearest the player within reach, if any.
 pub(super) fn nearest(state: &super::online::OnlineState) -> Option<Use> {
     let door = super::doors::nearest(state);
     let item = state
@@ -18,7 +19,7 @@ pub(super) fn nearest(state: &super::online::OnlineState) -> Option<Use> {
         .player()
         .filter(|_| state.in_world())
         .and_then(|player| {
-            eq_client_core::ground::nearest_item(state.world().objects(), player.position)
+            eq_client_core::ground::nearest_usable(state.world().objects(), player.position)
         });
     match (door, item) {
         (Some((door_distance, door)), item)
@@ -26,7 +27,7 @@ pub(super) fn nearest(state: &super::online::OnlineState) -> Option<Use> {
         {
             Some(Use::Door(door.id, door.model.clone()))
         }
-        (_, Some((drop_id, _))) => Some(Use::Item(drop_id)),
+        (_, Some((drop_id, _))) => Some(Use::Object(drop_id)),
         _ => None,
     }
 }
@@ -37,7 +38,7 @@ pub(super) fn input(
     keys: super::keys::Keys,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<crate::outbox::Outbox>,
-    state: Res<super::online::OnlineState>,
+    mut state: ResMut<super::online::OnlineState>,
     mut lines: ResMut<super::notices::Lines>,
 ) {
     if !keys.pressed(super::keys::Act::Use) {
@@ -47,8 +48,8 @@ pub(super) fn input(
         Some(Use::Door(door_id, _)) => {
             super::doors::open(door_id, &state, &outbox, &mut lines.door);
         }
-        Some(Use::Item(drop_id)) => {
-            if let Some(line) = super::ground::pick_up(drop_id, &state, &outbox) {
+        Some(Use::Object(drop_id)) => {
+            if let Some(line) = super::ground::use_object(drop_id, &mut state, &outbox) {
                 chat.history.push(super::chat::system_line(line));
             }
         }
@@ -119,7 +120,7 @@ mod tests {
         assert_eq!(nearest(&state), None);
         crate::online::testing::doors(&mut state, &door_at(6.0), std::time::Instant::now());
         crate::online::testing::objects(&mut state, &item_at(3.0));
-        assert_eq!(nearest(&state), Some(Use::Item(71)));
+        assert_eq!(nearest(&state), Some(Use::Object(71)));
         crate::online::testing::objects(&mut state, &item_at(9.0));
         assert_eq!(nearest(&state), Some(Use::Door(3, "DOOR".into())));
         crate::online::testing::doors(
@@ -127,7 +128,7 @@ mod tests {
             &eq_client_core::doors::DoorUpdate::RemoveAll,
             std::time::Instant::now(),
         );
-        assert_eq!(nearest(&state), Some(Use::Item(71)));
+        assert_eq!(nearest(&state), Some(Use::Object(71)));
         crate::online::testing::connect(&mut state, false);
         assert_eq!(nearest(&state), None);
     }

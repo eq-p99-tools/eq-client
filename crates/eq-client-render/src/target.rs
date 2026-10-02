@@ -183,7 +183,7 @@ pub(super) fn input(
                 (spawn, Some((drop_id, distance)))
                     if spawn.is_none_or(|(_, nearer)| distance < nearer) =>
                 {
-                    if let Some(line) = super::ground::pick_up(drop_id, &online, &outbox) {
+                    if let Some(line) = super::ground::use_object(drop_id, &mut online, &outbox) {
                         chat.history.push(super::chat::system_line(line));
                     }
                 }

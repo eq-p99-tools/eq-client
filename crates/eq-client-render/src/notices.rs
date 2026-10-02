@@ -265,6 +265,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::TrainingRefused(reason)
         | Notice::ResurrectionRefused(reason)
         | Notice::ReadRefused(reason) => chat(reason.clone()),
+        // eqstr 1406, where the installation has it.
+        Notice::ContainerInUse => chat(official(Some(1406), "That is in use.", messages)),
         Notice::CombineRefused { reason, string_id } => {
             chat(official(*string_id, reason, messages))
         }

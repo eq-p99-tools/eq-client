@@ -323,6 +323,7 @@ impl InventoryState {
             .world()
             .exchange()
             .map_or(0, eq_client_core::world::Exchange::trade_slots);
+        let world_container = online.world().container().is_some();
         if self.demo {
             return Ok(InventoryActor {
                 bank_access: self.bank_open,
@@ -332,6 +333,7 @@ impl InventoryState {
                 race: 1,
                 level: 60,
                 trade_slots,
+                world_container,
             });
         }
         let player = online
@@ -350,6 +352,7 @@ impl InventoryState {
             race: player.race,
             level: player.level,
             trade_slots,
+            world_container,
         })
     }
 
@@ -397,7 +400,8 @@ impl InventoryState {
                 || slot.is_carried()
                 || slot == InventorySlot::CURSOR
                 || (self.bank_open && slot.is_personal_bank())
-                || (slot.is_trade() && slot.0 - 3000 < i32::from(trade_slots)),
+                || (slot.is_trade() && slot.0 - 3000 < i32::from(trade_slots))
+                || (slot.is_world() && online.world().container().is_some()),
             "This slot is view only"
         );
         let cursor_item = inventory.items().get(&InventorySlot::CURSOR);

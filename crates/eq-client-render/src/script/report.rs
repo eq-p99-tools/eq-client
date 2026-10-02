@@ -204,6 +204,58 @@ type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
 /// A guildmaster in view: spawn, name, class, distance and position.
 type NearbyGuildmaster = (u16, String, Option<u8>, i32, [i32; 3]);
 
+/// An object near the player: id, model, kind or type, distance and
+/// position.
+type NearbyObject<T> = (u32, String, T, i32, [i32; 3]);
+
+/// The objects on the ground nearest the player, and the zone's world
+/// containers (such as forges and ovens) nearest first.
+fn objects(
+    online: &crate::online::OnlineState,
+    origin: Option<Vec3>,
+) -> (Vec<NearbyObject<String>>, Vec<NearbyObject<u32>>) {
+    // Objects on the ground: id, model, kind, distance and position.
+    let mut ground: Vec<NearbyObject<String>> = online
+        .world()
+        .objects()
+        .entries()
+        .values()
+        .map(|object| {
+            let position = Vec3::from_array(eq_client_core::render_position(object.position));
+            #[allow(clippy::cast_possible_truncation)] // Rounded report values.
+            let (distance, at) = (
+                origin.map_or(-1, |origin| position.distance(origin).round() as i32),
+                [object.position.x, object.position.y, object.position.z].map(|v| v.round() as i32),
+            );
+            let kind = format!("{:?}", object.kind());
+            (object.drop_id, object.model.clone(), kind, distance, at)
+        })
+        .collect();
+    ground.sort_by_key(|object| object.3);
+    // The zone's world containers, such as forges and ovens, nearest first.
+    let mut stations: Vec<NearbyObject<u32>> = online
+        .world()
+        .objects()
+        .entries()
+        .values()
+        .filter(|object| object.is_tradeskill_container())
+        .filter_map(|object| {
+            let at = ground.iter().find(|entry| entry.0 == object.drop_id)?;
+            Some((
+                object.drop_id,
+                object.model.clone(),
+                object.object_type,
+                at.3,
+                at.4,
+            ))
+        })
+        .collect();
+    stations.sort_by_key(|station| station.3);
+    stations.truncate(8);
+    ground.truncate(5);
+    (ground, stations)
+}
+
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
 pub(super) fn surroundings(
     online: &crate::online::OnlineState,
@@ -275,25 +327,7 @@ pub(super) fn surroundings(
         .collect();
     doors.sort_by_key(|door| door.3);
     doors.truncate(3);
-    // Objects on the ground: id, model, kind, distance and position.
-    let mut ground: Vec<(u32, String, String, i32, [i32; 3])> = online
-        .world()
-        .objects()
-        .entries()
-        .values()
-        .map(|object| {
-            let position = Vec3::from_array(eq_client_core::render_position(object.position));
-            #[allow(clippy::cast_possible_truncation)] // Rounded report values.
-            let (distance, at) = (
-                origin.map_or(-1, |origin| position.distance(origin).round() as i32),
-                [object.position.x, object.position.y, object.position.z].map(|v| v.round() as i32),
-            );
-            let kind = format!("{:?}", object.kind());
-            (object.drop_id, object.model.clone(), kind, distance, at)
-        })
-        .collect();
-    ground.sort_by_key(|object| object.3);
-    ground.truncate(5);
+    let (ground, stations) = objects(online, origin);
     let (models, gear) = looks(online, &nearby);
     info!(
         ?nearby,
@@ -301,6 +335,11 @@ pub(super) fn surroundings(
         ?guildmasters,
         ?doors,
         ?ground,
+        ?stations,
+        container = ?online
+            .world()
+            .container()
+            .map(|view| (view.drop_id, view.name.clone(), view.object_type, view.icon)),
         ?gear,
         ?models,
         door_status = lines.door.text(std::time::Instant::now()),
