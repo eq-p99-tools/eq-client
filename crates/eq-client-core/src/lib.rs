@@ -22,6 +22,7 @@ pub mod targeting;
 pub mod who;
 pub mod world;
 pub use eq_network_game::abilities;
+pub use eq_network_game::bind_wound;
 pub use eq_network_game::books;
 pub use eq_network_game::characters::CharacterChoice;
 pub use eq_network_game::chat::OutboundChat;

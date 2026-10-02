@@ -7,6 +7,7 @@ use super::{
 };
 use eq_client_core::{
     CampStatus,
+    bind_wound::{BindWoundUpdate, strings},
     entities::display_name,
     food::Shortage,
     loot::LootResponse,
@@ -191,13 +192,40 @@ const fn loot_refusal(response: LootResponse) -> &'static str {
     }
 }
 
-/// The official client's own words for a refusal, where the session names
-/// its string and the installation has it; the session's words otherwise.
-fn official(string_id: Option<u32>, reason: &str, messages: Option<&Messages>) -> String {
+/// The official client's own words for a refusal or other notice, with
+/// what they name, where the session names its string and the installation
+/// has it; the session's words otherwise.
+fn official(
+    string_id: Option<u32>,
+    arguments: &[String],
+    reason: &str,
+    messages: Option<&Messages>,
+) -> String {
     match (string_id, messages) {
-        (Some(id), Some(messages)) => messages.text(id, reason),
+        (Some(id), Some(messages)) => messages.official(id, arguments, reason),
         _ => reason.to_owned(),
     }
+}
+
+/// What a bandaging's start or end says: the official client's words where
+/// the installation has them.
+fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<String> {
+    Some(match update {
+        BindWoundUpdate::Started { target: None } => official(
+            Some(strings::STARTED_ON_SELF),
+            &[],
+            "You start bandaging yourself.",
+            messages,
+        ),
+        BindWoundUpdate::Started { target: Some(name) } => official(
+            Some(strings::STARTED_ON_OTHER),
+            std::slice::from_ref(name),
+            &format!("You start bandaging {name}."),
+            messages,
+        ),
+        BindWoundUpdate::Ended(end) => official(Some(end.string_id()), &[], end.text(), messages),
+        BindWoundUpdate::Unlocked => return None,
+    })
 }
 
 /// How a notice reads, and where each part shows.
@@ -257,8 +285,13 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::LootRefused(response) => chat(loot_refusal(*response).into()),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
+        Notice::AbilityRefused {
+            reason,
+            string_id,
+            arguments,
+        } => chat(official(*string_id, arguments, reason, messages)),
+        Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
         Notice::TradeRefused(reason)
-        | Notice::AbilityRefused(reason)
         | Notice::ConsumeRefused(reason)
         | Notice::CorpseRefused(reason)
         | Notice::PetRefused(reason)
@@ -266,9 +299,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::ResurrectionRefused(reason)
         | Notice::ReadRefused(reason) => chat(reason.clone()),
         // eqstr 1406, where the installation has it.
-        Notice::ContainerInUse => chat(official(Some(1406), "That is in use.", messages)),
+        Notice::ContainerInUse => chat(official(Some(1406), &[], "That is in use.", messages)),
         Notice::CombineRefused { reason, string_id } => {
-            chat(official(*string_id, reason, messages))
+            chat(official(*string_id, &[], reason, messages))
         }
         Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),
         Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
@@ -371,6 +404,57 @@ mod tests {
         assert_eq!(
             line(Notice::ShopRefused),
             [(Place::Chat, "That merchant will not trade with you.".into())]
+        );
+    }
+
+    #[test]
+    fn bandaging_speaks_in_the_installed_words_with_whom_it_names() {
+        use eq_client_core::bind_wound::{BindWoundEnd, BindWoundUpdate};
+        let messages = Messages::parse(
+            "EQST0002
+0 3
+420 Closer to %1, please.
+1436 Moved, failed.
+12437 Wrapping %1.
+",
+        );
+        let started = Notice::BindWound(BindWoundUpdate::Started {
+            target: Some("Firiona".into()),
+        });
+        assert_eq!(
+            wording(&started, Some(&messages)),
+            [(Place::Chat, "Wrapping Firiona.".into())]
+        );
+        assert_eq!(
+            wording(&started, None),
+            [(Place::Chat, "You start bandaging Firiona.".into())]
+        );
+        let ended = Notice::BindWound(BindWoundUpdate::Ended(BindWoundEnd::YouMoved));
+        assert_eq!(
+            wording(&ended, Some(&messages)),
+            [(Place::Chat, "Moved, failed.".into())]
+        );
+        // A string the installation lacks falls back to the session's words.
+        let complete = Notice::BindWound(BindWoundUpdate::Ended(BindWoundEnd::Complete));
+        assert_eq!(
+            wording(&complete, Some(&messages)),
+            [(Place::Chat, BindWoundEnd::Complete.text().into())]
+        );
+        assert_eq!(
+            wording(
+                &Notice::BindWound(BindWoundUpdate::Unlocked),
+                Some(&messages)
+            ),
+            []
+        );
+        let far = Notice::AbilityRefused {
+            reason: "Firiona is too far away to bandage".into(),
+            string_id: Some(420),
+            arguments: vec!["Firiona".into()],
+        };
+        assert_eq!(
+            wording(&far, Some(&messages)),
+            [(Place::Chat, "Closer to Firiona, please.".into())]
         );
     }
 

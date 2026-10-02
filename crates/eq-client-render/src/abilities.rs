@@ -174,7 +174,7 @@ mod tests {
         };
         let kick = app.world_mut().spawn(button(Page::Combat, 0)).id();
         let feign = app.world_mut().spawn(button(Page::Abilities, 3)).id();
-        let empty = app.world_mut().spawn(button(Page::Abilities, 5)).id();
+        let empty = app.world_mut().spawn(button(Page::Abilities, 6)).id();
         app.update();
         let needs = |entity| *app.world().get::<Needs>(entity).unwrap();
         assert_eq!(needs(kick), Needs::Ability(Ability::Kick));
@@ -201,7 +201,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            (0..6)
+            (0..7)
                 .map(|index| on(Page::Abilities, index))
                 .collect::<Vec<_>>(),
             [
@@ -209,7 +209,8 @@ mod tests {
                 Some(Ability::Taunt),
                 Some(Ability::Mend),
                 Some(Ability::FeignDeath),
-                // Anyone can fish, so it comes last.
+                // Anyone can bandage and fish, so they come last.
+                Some(Ability::BindWound),
                 Some(Ability::Fishing),
                 None
             ]

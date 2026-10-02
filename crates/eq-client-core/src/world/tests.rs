@@ -895,8 +895,8 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     use crate::abilities::Ability;
     use std::time::Duration;
     let mut world = admitted();
-    // Without skills, only fishing, which anyone can try.
-    assert_eq!(world.abilities(), [Ability::Fishing]);
+    // Without skills, only binding wounds and fishing, which anyone can try.
+    assert_eq!(world.abilities(), [Ability::BindWound, Ability::Fishing]);
     let mut skills = vec![0; 100];
     skills[30] = 12;
     skills[29] = 3;
@@ -921,6 +921,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
             Ability::Kick,
             Ability::Bash,
             Ability::Hide,
+            Ability::BindWound,
             Ability::Fishing
         ]
     );
@@ -967,14 +968,48 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
         WorldEvent::AbilityRefused {
             session_id: 1,
             reason: "Your target is too far away, get closer!".into(),
+            string_id: None,
+            arguments: Vec::new(),
         },
     );
     assert_eq!(
         changes.notices,
-        [Notice::AbilityRefused(
-            "Your target is too far away, get closer!".into()
-        )]
+        [Notice::AbilityRefused {
+            reason: "Your target is too far away, get closer!".into(),
+            string_id: None,
+            arguments: Vec::new(),
+        }]
     );
+}
+
+#[test]
+fn a_bandaging_that_ends_frees_bind_wound_and_the_player_hears_how_it_went() {
+    use crate::{
+        abilities::Ability,
+        bind_wound::{BindWoundEnd, BindWoundUpdate},
+    };
+    use std::time::Duration;
+    let mut world = admitted();
+    let now = Instant::now();
+    game(
+        &mut world,
+        WorldEvent::AbilityUsed {
+            session_id: 1,
+            ability: Ability::BindWound,
+            ready_in: Duration::from_secs(10),
+        },
+    );
+    assert!(world.ability_wait(Ability::BindWound, now).is_some());
+    let started = BindWoundUpdate::Started { target: None };
+    let changes = game(&mut world, WorldEvent::BindWound(started.clone()));
+    assert_eq!(changes.notices, [Notice::BindWound(started)]);
+    // The server's unlock as it starts says nothing.
+    let changes = game(&mut world, WorldEvent::BindWound(BindWoundUpdate::Unlocked));
+    assert_eq!(changes.notices, []);
+    let ended = BindWoundUpdate::Ended(BindWoundEnd::Complete);
+    let changes = game(&mut world, WorldEvent::BindWound(ended.clone()));
+    assert_eq!(changes.notices, [Notice::BindWound(ended)]);
+    assert_eq!(world.ability_wait(Ability::BindWound, now), None);
 }
 
 #[test]
