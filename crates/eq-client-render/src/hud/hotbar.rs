@@ -136,11 +136,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
             let button = super::slot(commands, row, key, 40.0, true);
             commands
                 .entity(button)
-                .insert((
-                    Button,
-                    Slot(index),
-                    crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
-                ))
+                .insert((Button, Slot(index), crate::outbox::Needs::Nothing))
                 .with_children(|button| contents(button, index));
         }
     }
@@ -414,19 +410,27 @@ fn bound_item(
         .filter(|item| item.details.id == id && item.activation.effect.is_some())
 }
 
-/// Keeps what each slot needs of the session in step with its binding:
-/// sitting and standing are moves, an ability is one the server type lists,
-/// a gem or an item's effect is a cast.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate::outbox::Needs)>) {
+/// What a slot needs of the session for what it holds, as the command it
+/// sends needs it (`ClientCommand::capability`): sitting and standing are
+/// moves, an ability is one the server type lists, and a gem's spell or an
+/// item's click effect is a cast. An empty slot needs nothing.
+pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
     use crate::outbox::Needs;
     use eq_client_core::Capability;
+    match action {
+        None => Needs::Nothing,
+        Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Moving),
+        Some(Action::Ability(ability)) => Needs::Ability(ability),
+        Some(Action::Gem(_) | Action::Item { .. }) => Needs::Capability(Capability::Casting),
+    }
+}
+
+/// Keeps what each slot needs of the session in step with its binding, in
+/// the client's own bar and in the skin's alike ([`need`]).
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate::outbox::Needs)>) {
     for (slot, mut needs) in &mut slots {
-        let wanted = match bindings.0[slot.0] {
-            Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Moving),
-            Some(Action::Ability(ability)) => Needs::Ability(ability),
-            _ => Needs::Capability(Capability::Casting),
-        };
+        let wanted = need(bindings.0[slot.0]);
         if *needs != wanted {
             *needs = wanted;
         }
@@ -467,6 +471,35 @@ pub(crate) fn item_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_slot_needs_what_its_binding_sends_and_an_empty_one_nothing() {
+        use crate::outbox::Needs;
+        use eq_client_core::{Capability, ClientCommand, Posture};
+        assert_eq!(need(None), Needs::Nothing);
+        for action in [Action::Sit, Action::Stand] {
+            assert_eq!(need(Some(action)), Needs::Capability(Capability::Moving));
+        }
+        // Sitting and standing go as a posture, which the session takes with
+        // moving.
+        let posture = ClientCommand::SetPosture {
+            session_id: 1,
+            spawn_id: 1,
+            posture: Posture::Sitting,
+            created: std::time::Instant::now(),
+        };
+        assert_eq!(posture.capability(), Some(Capability::Moving));
+        let item = Action::Item {
+            slot: eq_client_core::inventory::InventorySlot(22),
+            id: 9,
+        };
+        for action in [Action::Gem(4), item] {
+            assert_eq!(need(Some(action)), Needs::Capability(Capability::Casting));
+        }
+        let bash = eq_client_core::abilities::Ability::Bash;
+        assert_eq!(need(Some(Action::Ability(bash))), Needs::Ability(bash));
+    }
+
     #[test]
     fn hover_follows_current_spell_and_distinguishes_empty_from_unassigned() {
         let mut fields = vec!["0"; 145];
