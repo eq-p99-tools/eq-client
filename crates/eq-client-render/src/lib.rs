@@ -31,6 +31,7 @@ mod online;
 mod outbox;
 mod outfit;
 mod paperdoll;
+mod pet;
 mod preview;
 #[cfg(test)]
 mod probes;
@@ -387,7 +388,7 @@ fn schedule(app: &mut App) {
             inventory::colors::input,
             interact::input,
             target::input,
-            who::zone_list,
+            (who::zone_list, pet::window),
             combat::input,
             trade::input,
             give::buttons,

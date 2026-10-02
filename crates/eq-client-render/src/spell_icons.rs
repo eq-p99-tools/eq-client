@@ -4,6 +4,8 @@ use bevy::prelude::*;
 pub(super) enum Source {
     Effect(u16),
     Buff(u32),
+    /// The pet's buff in this slot.
+    PetBuff(usize),
     Gem(usize),
     Book(usize),
     Action(usize),
@@ -60,6 +62,11 @@ pub(super) fn update(
                 .slots()
                 .as_ref()
                 .and_then(|buffs| buffs.get(&slot))
+                .map(|buff| buff.spell_id),
+            Source::PetBuff(slot) => online
+                .world()
+                .pet_buffs()
+                .and_then(|buffs| buffs.slots.get(slot).copied().flatten())
                 .map(|buff| buff.spell_id),
             Source::Gem(index) => online.world().gem(index),
             Source::Action(index) => bindings.gem(index).and_then(|gem| online.world().gem(gem)),

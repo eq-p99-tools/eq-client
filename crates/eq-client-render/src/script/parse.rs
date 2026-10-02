@@ -12,7 +12,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 19] = [
+const GM_COMMANDS: [&str; 20] = [
     // GM mode on or off: off, the server lets the player go hungry.
     "gm",
     // A rule changed in this zone only, such as how fast hunger comes, or
@@ -20,6 +20,8 @@ const GM_COMMANDS: [&str; 19] = [
     "rules",
     // The time of day, for every zone.
     "time",
+    // A pet of a kind the server knows, such as an earth elemental.
+    "makepet",
     "summon",
     "summonitem",
     // A temporary NPC at the GM's feet, and coins or items on the target.
@@ -241,6 +243,10 @@ fn parse_step(line: &str) -> Result<Step, String> {
         }
         ("slash", [command @ ("corpse" | "corpsedrag" | "corpsedrop")]) => {
             Step::Slash(format!("/{command}"))
+        }
+        // A command to the pet, as typed.
+        ("slash", ["pet", words @ ..]) if !words.is_empty() => {
+            Step::Slash(format!("/pet {}", words.join(" ")))
         }
         // Asking who is online changes nothing.
         ("slash", ["who", words @ ..]) => Step::Slash(
