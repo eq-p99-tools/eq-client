@@ -171,8 +171,8 @@ pub(crate) fn toggle(
     keys: crate::keys::Keys,
     escape: Res<crate::escape::Escape>,
     buttons: Query<(&Interaction, &SelectorButton), Changed<Interaction>>,
-    mut shown: ResMut<Shown>,
-    mut stack: ResMut<Stack>,
+    (mut shown, mut stack): (ResMut<Shown>, ResMut<Stack>),
+    online: Res<crate::online::OnlineState>,
 ) {
     if let crate::escape::Escape::Close(id) = *escape
         && id.describe().toggled
@@ -181,6 +181,10 @@ pub(crate) fn toggle(
     }
     let pressed = WindowId::ALL.into_iter().filter(|id| {
         id.describe().toggled
+            // A window the session does not offer stays shut.
+            && id
+                .needs()
+                .is_none_or(|needs| crate::outbox::offered(online.world(), needs))
             && (keys.pressed(crate::keys::Act::Toggle(*id))
                 || buttons.iter().any(|(interaction, button)| {
                     *interaction == Interaction::Pressed && button.0 == *id
@@ -215,7 +219,7 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
                 .into_iter()
                 .filter(|window| window.describe().toggled)
             {
-                row.spawn((
+                let mut button = row.spawn((
                     Button,
                     SelectorButton(window),
                     crate::tooltip::Tooltip(format!(
@@ -227,11 +231,15 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
                         ..default()
                     },
                     BackgroundColor(theme::BUTTON),
-                ))
-                .with_child((
+                ));
+                button.with_child((
                     SelectorLabel(window),
                     theme::text(name(window), Size::Label, theme::INK_BRIGHT),
                 ));
+                // Greyed where the session does not offer the window.
+                if let Some(needs) = window.needs() {
+                    button.insert(crate::outbox::Needs(needs));
+                }
             }
         });
 }
@@ -330,6 +338,46 @@ mod tests {
         );
         app.update();
         assert_eq!(front(&app), Some(WindowId::Merchant));
+    }
+
+    #[test]
+    fn the_map_opens_only_where_the_session_offers_it() {
+        use eq_client_core::{Capability, WorldEvent};
+        let mut app = crate::testing::app();
+        app.add_systems(Update, toggle);
+        let mut online = crate::online::OnlineState::new(true);
+        // A session that offers everything but the map.
+        crate::online::testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities: Capability::ALL
+                    .into_iter()
+                    .filter(|capability| *capability != Capability::Map)
+                    .collect(),
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(crate::online::testing::player(7)),
+                far_clip: None,
+            }],
+        );
+        app.insert_resource(online);
+        app.world_mut()
+            .spawn((SelectorButton(WindowId::Map), Interaction::Pressed));
+        app.update();
+        assert!(!app.world().resource::<Shown>().is_open(WindowId::Map));
+        // Offered, it opens.
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        app.insert_resource(online);
+        for mut interaction in app
+            .world_mut()
+            .query::<&mut Interaction>()
+            .iter_mut(app.world_mut())
+        {
+            *interaction = Interaction::Pressed;
+        }
+        app.update();
+        assert!(app.world().resource::<Shown>().is_open(WindowId::Map));
     }
 
     #[test]

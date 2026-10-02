@@ -46,6 +46,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
         WindowId::Note => "EQUI_NoteWindow.xml",
         WindowId::Book => "EQUI_BookWindow.xml",
+        WindowId::Map => "EQUI_MapViewWnd.xml",
         _ => return None,
     };
     Some((file, id.official()?))
@@ -376,6 +377,28 @@ fn pieces(
             }
             Element::View(view) if view.name == "IW_CharacterView" => {
                 items::figure(window, view, &inside, context.paperdoll);
+            }
+            // The map draws in its render area, over the skin's parchment.
+            Element::View(view)
+                if context.id == WindowId::Map && view.name == "MVW_MapRenderArea" =>
+            {
+                let area = view.anchors.map_or(view.area, |anchors| {
+                    anchors.within(inside.width, inside.height)
+                });
+                window.spawn((
+                    super::map::MapCanvas,
+                    ImageNode::default(),
+                    ZIndex(1),
+                    Node {
+                        overflow: Overflow::clip(),
+                        ..at(
+                            inside.x + area.x,
+                            inside.y + area.y,
+                            area.width,
+                            area.height,
+                        )
+                    },
+                ));
             }
             Element::View(view) if !view.pieces.is_empty() => {
                 self::view(window, art, view, &inside, context);
@@ -799,6 +822,8 @@ enum Does {
     TurnsPage(bool),
     /// Combines what the tradeskill container in this pack slot holds.
     Combines(InventorySlot),
+    /// Zooms, pans or toggles the map.
+    Maps(super::map::MapButton),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -822,6 +847,9 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if owner == WindowId::Training && id == "TrainButton" {
         return Some(Does::Trains);
+    }
+    if owner == WindowId::Map {
+        return Some(super::map::MapButton::for_screen(id).map_or(Does::Nothing, Does::Maps));
     }
     if owner == WindowId::Book {
         match id {
@@ -1101,6 +1129,7 @@ fn behave(
             skin(),
             crate::outbox::Needs(Capability::Tradeskills),
         )),
+        Does::Maps(action) => drawn.insert((Button, action, skin())),
         Does::BagIcon | Does::Nothing => drawn,
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
@@ -1177,6 +1206,7 @@ fn caption(
         | Does::Answers(_)
         | Does::TurnsPage(_)
         | Does::Combines(_)
+        | Does::Maps(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 {

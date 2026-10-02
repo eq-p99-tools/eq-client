@@ -213,6 +213,7 @@ type Buttons<'w, 's> = Query<
                 Option<&'static super::resurrection::AnswerButton>,
                 Option<&'static super::reading::PageButton>,
                 Option<&'static super::tradeskills::CombineButton>,
+                Option<&'static super::map::MapButton>,
             ),
         ),
     ),
@@ -675,7 +676,7 @@ fn click(
         give,
         (coins, pick),
         (selector, tab, ability, attack, slash, checkbox),
-        (slider, drop_down, choice, (skill_row, train, closes, answer, page, combine)),
+        (slider, drop_down, choice, (skill_row, train, closes, answer, page, combine, map)),
     ) in buttons.iter_mut()
     {
         let matches = match target {
@@ -706,6 +707,7 @@ fn click(
             }
             ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
             ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),
+            ClickTarget::Map(action) => map.is_some_and(|button| *button == action),
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,

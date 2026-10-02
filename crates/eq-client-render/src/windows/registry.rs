@@ -68,6 +68,9 @@ pub(crate) enum WindowId {
     /// The skin's container window for the world container open for the
     /// player, such as a forge.
     WorldContainer,
+    /// The skin's Map window: the zone's map and the player on it, where the
+    /// server type offers the map.
+    Map,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -245,7 +248,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 26] = [
+    pub(crate) const ALL: [Self; 27] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -270,6 +273,7 @@ impl WindowId {
         Self::Note,
         Self::Book,
         Self::WorldContainer,
+        Self::Map,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -308,6 +312,7 @@ impl WindowId {
             Self::Confirmation => Some("ConfirmationDialogBox"),
             Self::Note => Some("NoteWindow"),
             Self::Book => Some("BookWindow"),
+            Self::Map => Some("MapViewWnd"),
             _ => None,
         }
     }
@@ -352,9 +357,19 @@ impl WindowId {
             Self::Note => "note",
             Self::Book => "book",
             Self::WorldContainer => "world-container",
+            Self::Map => "map",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
+    }
+
+    /// What the session must offer for the window to open, if anything: the
+    /// map opens only where the server type offers it.
+    pub(crate) const fn needs(self) -> Option<eq_client_core::Capability> {
+        match self {
+            Self::Map => Some(eq_client_core::Capability::Map),
+            _ => None,
+        }
     }
 
     /// The window whose placement is saved under this name, now or before
@@ -473,6 +488,8 @@ impl WindowId {
             // Where the skin places them; they open with a text to read.
             Self::Note => floating("", Placement::TopLeft(100.0, 80.0), false, &[]),
             Self::Book => floating("", Placement::TopLeft(120.0, 20.0), false, &[]),
+            // Where the skin places it (EQUI_MapViewWnd.xml).
+            Self::Map => floating("MAP", Placement::TopLeft(100.0, 80.0), true, &["MAP"]),
             // Where the skin places its container window (EQUI_Container.xml).
             Self::WorldContainer => floating("", Placement::TopLeft(350.0, 100.0), false, &[]),
             Self::Item => Description {
