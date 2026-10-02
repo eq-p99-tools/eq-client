@@ -215,10 +215,13 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::skinned::DropDown>,
             Option<&'static super::skinned::DropDownChoice>,
             (
-                Option<&'static super::training::SkillRow>,
-                Has<super::training::TrainButton>,
-                Option<&'static super::skinned::Closes>,
-                Option<&'static super::resurrection::AnswerButton>,
+                (
+                    Option<&'static super::training::SkillRow>,
+                    Has<super::training::TrainButton>,
+                    Option<&'static super::skinned::Closes>,
+                    Option<&'static super::resurrection::AnswerButton>,
+                    Option<&'static super::skinned::TitleBox>,
+                ),
                 Option<&'static super::reading::PageButton>,
                 Option<&'static super::tradeskills::CombineButton>,
                 Option<&'static super::map::MapButton>,
@@ -669,18 +672,21 @@ fn local_chat(
     Ok(chat.clone())
 }
 
-/// Whether a control of the Training window or the confirmation dialog is
-/// the one a click names.
+/// Whether a control of the Training window, the confirmation dialog or a
+/// skinned window's title bar is the one a click names.
 fn dialog_control(
     target: ClickTarget,
-    (skill_row, train, closes, answer): (
+    (skill_row, train, closes, answer, title_box): (
         Option<&super::training::SkillRow>,
         bool,
         Option<&super::skinned::Closes>,
         Option<&super::resurrection::AnswerButton>,
+        Option<&super::skinned::TitleBox>,
     ),
 ) -> bool {
     match target {
+        ClickTarget::TitleBox(key, close) => title_box
+            .is_some_and(|title_box| title_box.window.key() == key && title_box.close == close),
         ClickTarget::Answer(yes) => answer.is_some_and(|answer| answer.0 == yes),
         ClickTarget::Training(TrainingClick::Row(index)) => {
             skill_row.is_some_and(|row| row.index == index)
@@ -715,7 +721,7 @@ fn click(
         give,
         (coins, pick),
         (selector, tab, ability, attack, slash, checkbox),
-        (slider, drop_down, choice, (skill_row, train, closes, answer, page, combine, map)),
+        (slider, drop_down, choice, (dialog, page, combine, map)),
     ) in buttons.iter_mut()
     {
         let matches = match target {
@@ -741,8 +747,8 @@ fn click(
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
             ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
-            ClickTarget::Answer(_) | ClickTarget::Training(_) => {
-                dialog_control(target, (skill_row, train, closes, answer))
+            ClickTarget::Answer(_) | ClickTarget::Training(_) | ClickTarget::TitleBox(..) => {
+                dialog_control(target, dialog)
             }
             ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
             ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),

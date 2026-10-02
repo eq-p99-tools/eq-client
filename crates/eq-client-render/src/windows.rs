@@ -112,6 +112,9 @@ pub(super) struct Frame {
     placed: bool,
     restored_display: Vec<(Entity, Display)>,
     restored_height: Option<(Val, Val)>,
+    /// How tall a window drawn from the skin is when minimized: the bottom
+    /// of its title bar, below which it is cut off.
+    title_bottom: Option<f32>,
 }
 
 #[derive(Component)]
@@ -122,6 +125,16 @@ impl Frame {
     /// was restored, so it is not left where it opens.
     pub(crate) const fn placed(&self) -> bool {
         self.placed
+    }
+
+    /// Notes where a window just drawn from the skin is cut off when
+    /// minimized, and cuts it off there if it is minimized already.
+    pub(crate) fn drawn_from_skin(&mut self, node: &mut Node, title_bottom: Option<f32>) {
+        self.title_bottom = title_bottom;
+        self.restored_height = None;
+        if self.minimized {
+            collapse_skinned(node, self);
+        }
     }
 }
 
@@ -180,8 +193,9 @@ fn scripted_moves(
 #[derive(Component)]
 pub(super) struct TitleBar;
 
+/// A button that minimizes its window, or restores it.
 #[derive(Component)]
-pub(super) struct Minimize(Entity);
+pub(crate) struct Minimize(pub(crate) Entity);
 
 #[derive(Component)]
 pub(super) struct MinimizeLabel(Entity);
@@ -371,6 +385,10 @@ fn collapse(
     title_bars: &Query<(), With<TitleBar>>,
     child_nodes: &mut Query<&mut Node, Without<Frame>>,
 ) {
+    if state.title_bottom.is_some() {
+        collapse_skinned(node, state);
+        return;
+    }
     if state.minimized {
         state.restored_height = Some((node.height, node.min_height));
         node.height = Val::Auto;
@@ -398,9 +416,51 @@ fn collapse(
     }
 }
 
+/// Minimizes a window drawn from the skin to its title bar, cutting off
+/// what lies below, or restores it; its own pieces stay as they are.
+fn collapse_skinned(node: &mut Node, state: &mut Frame) {
+    let Some(bottom) = state.title_bottom else {
+        return;
+    };
+    if state.minimized {
+        if state.restored_height.is_none() {
+            state.restored_height = Some((node.height, node.min_height));
+        }
+        node.height = px(bottom);
+        node.min_height = Val::Auto;
+        node.overflow = Overflow::clip();
+    } else {
+        if let Some((height, min_height)) = state.restored_height.take() {
+            node.height = height;
+            node.min_height = min_height;
+        }
+        node.overflow = Overflow::visible();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_skinned_window_minimizes_to_its_title_bar_and_back() {
+        let mut node = Node {
+            height: px(200),
+            ..default()
+        };
+        let mut frame = Frame::default();
+        frame.drawn_from_skin(&mut node, Some(18.0));
+        frame.minimized = true;
+        collapse_skinned(&mut node, &mut frame);
+        assert_eq!((node.height, node.overflow), (px(18), Overflow::clip()));
+        frame.minimized = false;
+        collapse_skinned(&mut node, &mut frame);
+        assert_eq!((node.height, node.overflow), (px(200), Overflow::visible()));
+        // Drawn again while minimized, it stays minimized.
+        frame.minimized = true;
+        frame.drawn_from_skin(&mut node, Some(18.0));
+        assert_eq!(node.height, px(18));
+    }
 
     #[test]
     fn a_scripted_move_places_a_window_and_its_place_is_kept() {

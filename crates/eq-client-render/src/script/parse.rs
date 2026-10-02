@@ -144,6 +144,9 @@ pub enum ClickTarget {
     /// A button that opens and closes a window, by the window's key, such
     /// as the inventory's Skills button (`skills`).
     Toggle(&'static str),
+    /// A box on a skinned window's title bar, by the window's key: its
+    /// close box (true) or its minimize box.
+    TitleBox(&'static str, bool),
     /// A tab of the open tabbed window, from zero.
     Tab(usize),
     /// An ability button of the Actions window: its page and place, from
@@ -373,15 +376,9 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
         ["give"] => ClickTarget::Give,
         ["actions"] => ClickTarget::ActionsWindow,
-        ["window", key] => ClickTarget::Toggle(
-            crate::windows::WindowId::ALL
-                .into_iter()
-                .find_map(|id| match id.key() {
-                    std::borrow::Cow::Borrowed(name) if name == *key => Some(name),
-                    _ => None,
-                })
-                .ok_or("expected a window, by its key such as skills")?,
-        ),
+        ["window", key] => ClickTarget::Toggle(window_key(key)?),
+        ["close_box", key] => ClickTarget::TitleBox(window_key(key)?, true),
+        ["minimize_box", key] => ClickTarget::TitleBox(window_key(key)?, false),
         ["pet", words @ ..] => {
             let line = format!("/pet {}", words.join(" "));
             ClickTarget::Pet(
@@ -528,6 +525,17 @@ fn parse_gm(words: &[&str]) -> Result<Step, String> {
         return Err("gm rules takes set <Category:Rule> <value> or reload".into());
     }
     Ok(Step::Gm(words.join(" ")))
+}
+
+/// A window's key, such as `skills`, as the window registry spells it.
+fn window_key(key: &str) -> Result<&'static str, String> {
+    crate::windows::WindowId::ALL
+        .into_iter()
+        .find_map(|id| match id.key() {
+            std::borrow::Cow::Borrowed(name) if name == key => Some(name),
+            _ => None,
+        })
+        .ok_or_else(|| "expected a window, by its key such as skills".into())
 }
 
 /// `chat <say|ooc|shout|auction|group|guild|raid> <words>` or `chat tell
