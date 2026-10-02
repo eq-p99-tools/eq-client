@@ -20,6 +20,12 @@ pub enum Toggle {
     /// P99, it changes only how the player sees themselves: other players'
     /// helms always show, and the server hears nothing of it.
     ShowHelm,
+    /// Draws players' names over their heads (the Display page's Show PC
+    /// Names).
+    PcNames,
+    /// Draws the names of creatures, merchants and every other non-player
+    /// over their heads (the Display page's Show NPC Names).
+    NpcNames,
     /// Turns the camera the other way when the mouse moves up or down (the
     /// Mouse page's Invert Y Axis).
     InvertY,
@@ -36,10 +42,12 @@ pub enum Toggle {
 
 impl Toggle {
     /// Every toggle, in the order a file lists them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::PetWindowPopup,
         Self::TargetRing,
         Self::ShowHelm,
+        Self::PcNames,
+        Self::NpcNames,
         Self::InvertY,
         Self::WheelZoom,
         Self::SkipModifiedFood,
@@ -53,6 +61,8 @@ impl Toggle {
             Self::PetWindowPopup => "pet_window_popup",
             Self::TargetRing => "target_ring",
             Self::ShowHelm => "show_helm",
+            Self::PcNames => "pc_names",
+            Self::NpcNames => "npc_names",
             Self::InvertY => "invert_y",
             Self::WheelZoom => "wheel_zoom",
             Self::SkipModifiedFood => "skip_modified_food",
@@ -74,6 +84,10 @@ pub struct Options {
     pub target_ring: bool,
     /// See [`Toggle::ShowHelm`].
     pub show_helm: bool,
+    /// See [`Toggle::PcNames`].
+    pub pc_names: bool,
+    /// See [`Toggle::NpcNames`].
+    pub npc_names: bool,
     /// See [`Toggle::InvertY`].
     pub invert_y: bool,
     /// See [`Toggle::WheelZoom`].
@@ -85,8 +99,8 @@ pub struct Options {
 }
 
 impl Default for Options {
-    /// The client's defaults: the pet's window pops up, the target ring and
-    /// the player's helm show, the mouse is not inverted and its wheel
+    /// The client's defaults: the pet's window pops up, the target ring, the
+    /// player's helm and everyone's names show, the mouse is not inverted and its wheel
     /// zooms, food with modifiers waits for the player, and the chat is
     /// logged.
     fn default() -> Self {
@@ -94,6 +108,8 @@ impl Default for Options {
             pet_window_popup: true,
             target_ring: true,
             show_helm: true,
+            pc_names: true,
+            npc_names: true,
             invert_y: false,
             wheel_zoom: true,
             skip_modified_food: true,
@@ -110,6 +126,8 @@ impl Options {
             Toggle::PetWindowPopup => self.pet_window_popup,
             Toggle::TargetRing => self.target_ring,
             Toggle::ShowHelm => self.show_helm,
+            Toggle::PcNames => self.pc_names,
+            Toggle::NpcNames => self.npc_names,
             Toggle::InvertY => self.invert_y,
             Toggle::WheelZoom => self.wheel_zoom,
             Toggle::SkipModifiedFood => self.skip_modified_food,
@@ -123,6 +141,8 @@ impl Options {
             Toggle::PetWindowPopup => &mut self.pet_window_popup,
             Toggle::TargetRing => &mut self.target_ring,
             Toggle::ShowHelm => &mut self.show_helm,
+            Toggle::PcNames => &mut self.pc_names,
+            Toggle::NpcNames => &mut self.npc_names,
             Toggle::InvertY => &mut self.invert_y,
             Toggle::WheelZoom => &mut self.wheel_zoom,
             Toggle::SkipModifiedFood => &mut self.skip_modified_food,

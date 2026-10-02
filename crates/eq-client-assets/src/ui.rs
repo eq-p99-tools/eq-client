@@ -185,22 +185,38 @@ pub fn chosen_skin(eq_directory: &Path, character: &str, world: &str) -> Option<
     ini_value(&String::from_utf8_lossy(&bytes), "Main", "UISkin").filter(|skin| valid_skin(skin))
 }
 
-/// Whether the official client logs the chat from login: `Log` in the
-/// `[Defaults]` section of `eqclient.ini`, which its `/log` saves. None when
-/// the file or setting is missing or says neither.
-pub fn logging(eq_directory: &Path) -> Option<bool> {
-    let bytes = std::fs::read(eq_directory.join("eqclient.ini")).ok()?;
-    logging_from_ini(&String::from_utf8_lossy(&bytes))
+/// What the official client's `eqclient.ini` says of the options this
+/// client keeps per character; each None when the file or setting is missing
+/// or says neither on nor off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OfficialOptions {
+    /// Whether the chat is logged from login: `Log` in `[Defaults]`, which
+    /// the official `/log` saves.
+    pub log: Option<bool>,
+    /// The Display page's Show PC Names: `PCNames` in `[Options]`.
+    pub pc_names: Option<bool>,
+    /// The Display page's Show NPC Names: `NPCNames` in `[Options]`.
+    pub npc_names: Option<bool>,
 }
 
-fn logging_from_ini(text: &str) -> Option<bool> {
-    match ini_value(text, "Defaults", "Log")?
-        .to_ascii_uppercase()
-        .as_str()
-    {
+/// The options the official client keeps in the installation's
+/// `eqclient.ini`, which this client only reads.
+pub fn official_options(eq_directory: &Path) -> OfficialOptions {
+    std::fs::read(eq_directory.join("eqclient.ini"))
+        .map(|bytes| options_from_ini(&String::from_utf8_lossy(&bytes)))
+        .unwrap_or_default()
+}
+
+fn options_from_ini(text: &str) -> OfficialOptions {
+    let flag = |section, key| match ini_value(text, section, key)?.to_ascii_uppercase().as_str() {
         "TRUE" | "1" => Some(true),
         "FALSE" | "0" => Some(false),
         _ => None,
+    };
+    OfficialOptions {
+        log: flag("Defaults", "Log"),
+        pc_names: flag("Options", "PCNames"),
+        npc_names: flag("Options", "NPCNames"),
     }
 }
 
@@ -460,40 +476,53 @@ mod tests {
 
     #[test]
     fn eqclient_ini_says_whether_the_chat_is_logged() {
+        let log = |text| options_from_ini(text).log;
         assert_eq!(
-            logging_from_ini(
-                "[Defaults]
+            log("[Defaults]
 Sound=TRUE
 Log=TRUE
-"
-            ),
+"),
             Some(true)
         );
         assert_eq!(
-            logging_from_ini(
-                "[defaults]
+            log("[defaults]
 log = false
-"
-            ),
+"),
             Some(false)
         );
         // Another section's Log, or none at all, says nothing.
         assert_eq!(
-            logging_from_ini(
-                "[Other]
+            log("[Other]
 Log=TRUE
-"
-            ),
+"),
             None
         );
         assert_eq!(
-            logging_from_ini(
-                "[Defaults]
+            log("[Defaults]
 Log=maybe
-"
-            ),
+"),
             None
         );
+    }
+
+    #[test]
+    fn eqclient_ini_says_whose_names_show() {
+        assert_eq!(
+            options_from_ini(
+                "[Defaults]
+ShowNamesLevel=4
+[Options]
+PCNames=1
+NPCNames=0
+"
+            ),
+            OfficialOptions {
+                log: None,
+                pc_names: Some(true),
+                npc_names: Some(false),
+            }
+        );
+        assert_eq!(options_from_ini(""), OfficialOptions::default());
     }
 
     #[test]

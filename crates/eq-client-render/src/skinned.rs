@@ -702,12 +702,14 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
 
 /// The Options window's checkboxes for the options this client keeps, by
 /// screen ID; the Client page's is this client's own.
-const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 6] = {
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 8] = {
     use eq_client_core::options::Toggle;
     [
         ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
         ("ODP_ShowTargetRingCheckbox", Toggle::TargetRing),
         ("ODP_ShowHelmCheckbox", Toggle::ShowHelm),
+        ("ODP_PCNamesCheckbox", Toggle::PcNames),
+        ("ODP_NPCNamesCheckbox", Toggle::NpcNames),
         ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
         ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
         (CLIENT_FOOD_CHECKBOX, Toggle::SkipModifiedFood),
