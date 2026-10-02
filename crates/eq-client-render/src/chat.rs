@@ -59,7 +59,6 @@ pub(super) struct ChatState {
     /// line.
     pub show_names_usage: bool,
     draft: String,
-    status: String,
 }
 #[derive(Component)]
 pub(super) struct Panel;
@@ -91,11 +90,11 @@ pub(super) struct InputBox;
 pub(super) struct InputLabel;
 #[derive(Component)]
 pub(super) struct Send;
-#[derive(Component)]
-pub(super) struct InputStatus;
 
-/// Creates a clipped scrollback window; changing tabs never destroys stored messages.
-#[allow(clippy::too_many_lines)] // Declarative UI tree.
+/// Creates a clipped scrollback window; changing tabs never destroys stored
+/// messages. Where the installed skin has a chat window, it is drawn from
+/// the skin instead, with the same tabs, lines and input in its boxes
+/// ([`skinned_output`], [`skinned_input`]).
 pub(super) fn spawn(commands: &mut Commands) {
     let frame = super::windows::frame(
         commands,
@@ -117,7 +116,79 @@ pub(super) fn spawn(commands: &mut Commands) {
         super::windows::pointer::TakesWheel,
     ));
     commands.entity(frame).with_children(|root| {
+        tab_row(root);
+        lines(root);
         root.spawn(Node {
+            column_gap: px(5),
+            align_items: AlignItems::Center,
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|row| {
+            typing_box(
+                row,
+                Node {
+                    flex_grow: 1.0,
+                    min_width: px(0),
+                    padding: UiRect::axes(px(7), px(5)),
+                    border: UiRect::all(px(1)),
+                    ..default()
+                },
+            );
+            theme::button_with(row, Send, "Send", Size::Body);
+        });
+        root.spawn(Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|footer| {
+            footer.spawn(theme::text(
+                "Wheel: history | Enter: chat",
+                Size::Small,
+                theme::INK,
+            ));
+            theme::button_with(footer, Latest, "Latest", Size::Small);
+        });
+    });
+}
+
+/// The skin's output box, filled with the chat's tabs along its top and the
+/// active tab's lines below them.
+pub(super) fn skinned_output(parent: &mut ChildSpawnerCommands, node: Node) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(3),
+            padding: UiRect::all(px(2)),
+            ..node
+        })
+        .with_children(|output| {
+            tab_row(output);
+            lines(output);
+        });
+}
+
+/// The skin's input box, filled with the line the player types into.
+pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node) {
+    typing_box(
+        parent,
+        Node {
+            padding: UiRect::axes(px(4), px(1)),
+            border: UiRect::all(px(1)),
+            align_items: AlignItems::Center,
+            overflow: Overflow::clip(),
+            ..node
+        },
+    );
+}
+
+/// The chat's tabs, one for each group of channels, with their unread
+/// counts.
+fn tab_row(parent: &mut ChildSpawnerCommands) {
+    parent
+        .spawn(Node {
             flex_wrap: FlexWrap::Wrap,
             column_gap: px(3),
             row_gap: px(3),
@@ -147,7 +218,12 @@ pub(super) fn spawn(commands: &mut Commands) {
                 });
             }
         });
-        root.spawn((
+}
+
+/// The active tab's lines, which scroll on their own.
+fn lines(parent: &mut ChildSpawnerCommands) {
+    parent
+        .spawn((
             Viewport,
             // Hovered only when no window drawn over the chat takes the pointer.
             Interaction::default(),
@@ -171,52 +247,26 @@ pub(super) fn spawn(commands: &mut Commands) {
                 },
             ));
         });
-        root.spawn(Node {
-            column_gap: px(5),
-            align_items: AlignItems::Center,
-            flex_shrink: 0.0,
-            ..default()
-        })
-        .with_children(|row| {
-            row.spawn((
-                Button,
-                InputBox,
-                Node {
-                    flex_grow: 1.0,
-                    min_width: px(0),
-                    padding: UiRect::axes(px(7), px(5)),
-                    border: UiRect::all(px(1)),
-                    ..default()
-                },
-                BackgroundColor(theme::WELL),
-                BorderColor::all(theme::EDGE),
-            ))
-            .with_children(|input| {
-                input.spawn((
-                    InputLabel,
-                    Text::new("Press Enter to chat"),
-                    theme::font(Size::Body),
-                    TextColor(theme::INK),
-                ));
-            });
-            theme::button_with(row, Send, "Send", Size::Body);
-        });
-        root.spawn(Node {
-            justify_content: JustifyContent::SpaceBetween,
-            align_items: AlignItems::Center,
-            flex_shrink: 0.0,
-            ..default()
-        })
-        .with_children(|footer| {
-            footer.spawn((
-                InputStatus,
-                Text::new("Wheel: history | Enter: chat"),
-                theme::font(Size::Small),
+}
+
+/// The line the player types into, which shows the draft.
+fn typing_box(parent: &mut ChildSpawnerCommands, node: Node) {
+    parent
+        .spawn((
+            Button,
+            InputBox,
+            node,
+            BackgroundColor(theme::WELL),
+            BorderColor::all(theme::EDGE),
+        ))
+        .with_children(|input| {
+            input.spawn((
+                InputLabel,
+                Text::new("Press Enter to chat"),
+                theme::font(Size::Body),
                 TextColor(theme::INK),
             ));
-            theme::button_with(footer, Latest, "Latest", Size::Small);
         });
-    });
 }
 
 /// Routes tab presses and wheel input, reserving the wheel from the camera over chat.
@@ -334,7 +384,7 @@ pub(super) fn refresh(
     typing: Res<crate::keys::Typing>,
     mut contents: Query<(Entity, &mut Content, Option<&Children>)>,
     rendered: Query<(Option<&LineId>, Has<Placeholder>)>,
-    mut labels: Query<(&TabLabel, &mut Text), (Without<InputLabel>, Without<InputStatus>)>,
+    mut labels: Query<(&TabLabel, &mut Text), Without<InputLabel>>,
     mut buttons: Query<
         (
             &TabButton,
@@ -344,9 +394,8 @@ pub(super) fn refresh(
         ),
         Without<InputBox>,
     >,
-    mut input_labels: Query<&mut Text, (With<InputLabel>, Without<TabLabel>, Without<InputStatus>)>,
+    mut input_labels: Query<&mut Text, (With<InputLabel>, Without<TabLabel>)>,
     mut input_boxes: Query<&mut BorderColor, (With<InputBox>, Without<TabButton>)>,
-    mut input_status: Query<&mut Text, (With<InputStatus>, Without<InputLabel>, Without<TabLabel>)>,
 ) {
     let active = state.active;
     let revision = state.history.revision();
@@ -408,13 +457,6 @@ pub(super) fn refresh(
         } else {
             theme::EDGE
         });
-    }
-    for mut text in &mut input_status {
-        text.0 = if state.status.is_empty() {
-            "Wheel: history | Enter: chat".into()
-        } else {
-            state.status.clone()
-        };
     }
     // Only the active tab's lines exist, as laying out every tab's lines each frame
     // would cost more than redrawing one tab when it is chosen.
@@ -503,8 +545,8 @@ fn spawn_line(parent: &mut ChildSpawnerCommands, id: u64, line: &ChatLine) {
     }
 }
 
-/// Why a draft did not go: a mistake in it, which the chat's status line
-/// shows, or a refusal, which the outbox shows in the feedback line.
+/// Why a draft did not go: a mistake in it, which the chat says as a
+/// system line, or a refusal, which the outbox shows in the feedback line.
 enum Unsent {
     Mistake(String),
     Refused,
@@ -550,12 +592,14 @@ fn submit_draft(
     match result {
         Ok(()) => {
             state.draft.clear();
-            // Sent lines return the keyboard to the game; a line sent says
-            // nothing more.
+            // Sent lines return the keyboard to the game, and the chat to its
+            // newest line; a line sent says nothing more.
             typing.composing = false;
-            state.status.clear();
+            let active = state.active;
+            state.views.entry(active).or_default().follow = true;
         }
-        Err(Unsent::Mistake(mistake)) => state.status = mistake,
+        // The draft stays, to mend and send again.
+        Err(Unsent::Mistake(mistake)) => state.history.push(system_line(mistake)),
         // The draft stays, to send again.
         Err(Unsent::Refused) => (),
     }
@@ -1092,7 +1136,11 @@ mod tests {
             repeat: false,
             window: Entity::PLACEHOLDER,
         };
-        app.world_mut().resource_mut::<ChatState>().draft = "hello".into();
+        {
+            let mut state = app.world_mut().resource_mut::<ChatState>();
+            state.draft = "hello".into();
+            state.views.entry(ChatTab::All).or_default().follow = false;
+        }
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = true;
@@ -1101,6 +1149,8 @@ mod tests {
         assert!(receiver.try_recv().is_ok());
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
         assert_eq!(app.world().resource::<ChatState>().draft, "");
+        // A line sent brings the chat back to its newest line.
+        assert!(app.world().resource::<ChatState>().views[&ChatTab::All].follow);
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = true;
@@ -1108,6 +1158,81 @@ mod tests {
         app.update();
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_mistake_is_said_in_the_chat_and_the_draft_stays() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ChatState>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
+            .add_message::<KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, input);
+        app.world_mut().resource_mut::<ChatState>().draft = "/tell Friend".into();
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::Enter,
+            logical_key: Key::Enter,
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        let state = app.world().resource::<ChatState>();
+        assert_eq!(state.draft, "/tell Friend");
+        assert_eq!(
+            state
+                .history
+                .lines(ChatTab::All)
+                .last()
+                .map(|(_, line)| (line.channel, line.message.text.as_str())),
+            Some((ChannelName::System, "Use /tell Name message"))
+        );
+        assert!(app.world().resource::<crate::keys::Typing>().composing);
+    }
+
+    #[test]
+    fn the_skins_boxes_hold_the_tabs_lines_and_input() {
+        let mut world = World::new();
+        world
+            .commands()
+            .spawn(Node::default())
+            .with_children(|window| {
+                skinned_output(window, Node::default());
+                skinned_input(window, Node::default());
+            });
+        world.flush();
+        let count = |world: &mut World, filter: fn(EntityRef) -> bool| {
+            world
+                .iter_entities()
+                .filter(|entity| filter(*entity))
+                .count()
+        };
+        assert_eq!(
+            count(&mut world, |entity| entity.contains::<TabButton>()),
+            ChatTab::ALL.len()
+        );
+        for part in [
+            |entity: EntityRef| entity.contains::<Viewport>(),
+            |entity: EntityRef| entity.contains::<Content>(),
+            |entity: EntityRef| entity.contains::<InputBox>(),
+            |entity: EntityRef| entity.contains::<InputLabel>(),
+        ] {
+            assert_eq!(count(&mut world, part), 1);
+        }
+        // Enter sends, as in the official client: the skin's window has no
+        // Send button or footer.
+        assert_eq!(count(&mut world, |entity| entity.contains::<Send>()), 0);
+        assert_eq!(count(&mut world, |entity| entity.contains::<Latest>()), 0);
     }
 
     #[test]
