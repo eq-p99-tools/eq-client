@@ -4,12 +4,7 @@
 //! enters and seeds characters that have none yet.
 use super::layout::{Layouts, Saved};
 use bevy::prelude::*;
-use std::{
-    collections::BTreeMap,
-    fmt::Write as _,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::BTreeMap, fmt::Write as _, path::PathBuf, time::Duration};
 
 /// Changed placements are written at most this often, and never mid-drag.
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
@@ -165,7 +160,7 @@ fn save(store: &mut Store, layouts: &Layouts) {
         return;
     }
     let path = directory.join(file_name(store.profile.as_ref()));
-    match write(directory, &path, &text) {
+    match crate::profile_files::write(directory, &path, &text) {
         Ok(()) => store.written = text,
         Err(error) => {
             warn!(
@@ -178,32 +173,9 @@ fn save(store: &mut Store, layouts: &Layouts) {
     }
 }
 
-/// Replaces the file in one step, so a crash never leaves half a layout.
-fn write(directory: &Path, path: &Path, text: &str) -> std::io::Result<()> {
-    std::fs::create_dir_all(directory)?;
-    let partial = path.with_extension("tmp");
-    std::fs::write(&partial, text)?;
-    std::fs::rename(&partial, path)
-}
-
-/// The shared file, or `windows-<world>-<character>.txt` with anything but
-/// letters, digits, `-` and `_` replaced.
+/// The shared file, or the profile's own.
 fn file_name(profile: Option<&(String, String)>) -> String {
-    let clean = |text: &str| -> String {
-        text.chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect()
-    };
-    profile.map_or_else(
-        || SHARED.to_owned(),
-        |(world, character)| format!("windows-{}-{}.txt", clean(world), clean(character)),
-    )
+    crate::profile_files::name("windows", SHARED, profile)
 }
 
 /// One line per window: four edges, four margins, positioning, whether it is

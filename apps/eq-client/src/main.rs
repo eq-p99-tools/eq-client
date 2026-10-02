@@ -132,7 +132,8 @@ struct Arguments {
 
     /// When hungry or thirsty, eat and drink whatever comes first, as the
     /// official client does. By default food and drink with modifiers are
-    /// left to eat or drink by hand.
+    /// left to eat or drink by hand. A character's own choice in the Options
+    /// window's Client page wins over this.
     #[arg(long, requires = "online")]
     auto_eat_anything: bool,
 
@@ -368,6 +369,10 @@ fn viewer_config(
         eq_directory: Some(eq_directory),
         entity_distance: Some(arguments.entity_distance),
         hide_own_helm: arguments.hide_own_helm,
+        option_defaults: eq_client_core::options::Options {
+            skip_modified_food: !arguments.auto_eat_anything,
+            ..eq_client_core::options::Options::default()
+        },
         frame_rate_cap: (arguments.max_fps > 0).then_some(arguments.max_fps),
         validation: if arguments.target_nearest_player_once {
             Some(ValidationAction::TargetNearestPlayer)
