@@ -39,18 +39,15 @@ pub(super) fn input(
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<crate::outbox::Outbox>,
     mut state: ResMut<super::online::OnlineState>,
-    mut lines: ResMut<super::notices::Lines>,
 ) {
     if !keys.pressed(super::keys::Act::Use) {
         return;
     }
     match nearest(&state) {
-        Some(Use::Door(door_id, _)) => {
-            super::doors::open(door_id, &state, &outbox, &mut lines.door);
-        }
+        Some(Use::Door(door_id, _)) => super::doors::open(door_id, &state, &outbox),
         Some(Use::Object(drop_id)) => {
-            if let Some(line) = super::ground::use_object(drop_id, &mut state, &outbox) {
-                chat.history.push(super::chat::system_line(line));
+            if let Some(refusal) = super::ground::use_object(drop_id, &mut state, &outbox) {
+                chat.refuse(refusal);
             }
         }
         None => (),
@@ -141,7 +138,6 @@ mod tests {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .insert_resource(state)

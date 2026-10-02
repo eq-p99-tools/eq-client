@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 const BOOK_PREPARATION: Duration = Duration::from_secs(5);
 /// Matches the server's camp preparation time.
 const CAMP_PREPARATION: Duration = Duration::from_secs(30);
-/// How long a refusal or interruption stays visible once nothing is in progress.
-const FEEDBACK: Duration = Duration::from_secs(3);
+/// How long an interrupted cast stays on the bar once nothing is in progress.
+const INTERRUPTED: Duration = Duration::from_secs(3);
 
 /// Labels for requests whose progress is reported only as a generic status.
 #[derive(Resource, Default)]
@@ -99,9 +99,9 @@ pub(crate) fn spawn(commands: &mut Commands) {
         });
 }
 
-/// Chooses the most specific action in progress, then recent feedback.
+/// Chooses the most specific action in progress, then a cast just
+/// interrupted.
 pub(super) fn current(
-    feedback: &crate::notices::Line,
     world: &eq_client_core::world::ClientWorld,
     requests: &ActionRequests,
     names: &crate::spellbook::SpellNames,
@@ -154,17 +154,13 @@ pub(super) fn current(
             }
         });
     }
-    let recent = |at: Instant| now.saturating_duration_since(at) < FEEDBACK;
-    if let Some((_, reason)) = world.casting().interrupted.filter(|(at, _)| recent(*at)) {
-        return Some(Shown {
+    let recent = |at: Instant| now.saturating_duration_since(at) < INTERRUPTED;
+    world
+        .casting()
+        .interrupted
+        .filter(|(at, _)| recent(*at))
+        .map(|(_, reason)| Shown {
             label: messages.interruption(reason),
-            progress: Some(0.0),
-        });
-    }
-    Some(feedback.text(now))
-        .filter(|text| !text.is_empty())
-        .map(|text| Shown {
-            label: text.to_owned(),
             progress: Some(0.0),
         })
 }
@@ -172,11 +168,7 @@ pub(super) fn current(
 /// Shows or hides the bar and moves its fill; waiting states pulse at full width.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update(
-    state: (
-        Res<crate::notices::Lines>,
-        Res<crate::online::OnlineState>,
-        Res<ActionRequests>,
-    ),
+    state: (Res<crate::online::OnlineState>, Res<ActionRequests>),
     definitions: (
         Res<crate::spellbook::SpellNames>,
         Res<super::messages::Messages>,
@@ -186,16 +178,9 @@ pub(crate) fn update(
     mut labels: Query<&mut Text, With<ActionLabel>>,
     mut fills: Query<(&mut Node, &mut BackgroundColor), With<ActionFill>>,
 ) {
-    let (lines, online, requests) = state;
+    let (online, requests) = state;
     let (names, messages) = definitions;
-    let shown = current(
-        &lines.feedback,
-        online.world(),
-        &requests,
-        &names,
-        &messages,
-        Instant::now(),
-    );
+    let shown = current(online.world(), &requests, &names, &messages, Instant::now());
     for mut node in &mut bars {
         let display = if shown.is_some() {
             Display::Flex
@@ -234,16 +219,15 @@ mod tests {
     use eq_client_core::SpellUpdate;
 
     #[test]
-    fn casting_wins_then_book_changes_then_camping_then_feedback() {
+    fn casting_wins_then_book_changes_then_camping() {
         let names = crate::spellbook::SpellNames::default();
         let messages = super::super::messages::Messages::load(None);
         let now = Instant::now();
-        let mut feedback = crate::notices::Line::default();
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 1, testing::player(7));
         let mut requests = ActionRequests::default();
         assert_eq!(
-            current(&feedback, online.world(), &requests, &names, &messages, now),
+            current(online.world(), &requests, &names, &messages, now),
             None
         );
 
@@ -254,8 +238,7 @@ mod tests {
             )],
             now.checked_sub(Duration::from_secs(15)).unwrap(),
         );
-        let camping =
-            current(&feedback, online.world(), &requests, &names, &messages, now).unwrap();
+        let camping = current(online.world(), &requests, &names, &messages, now).unwrap();
         assert_eq!(camping.label, "Camping (15s)");
         assert!((camping.progress.unwrap() - 0.5).abs() < 0.01);
 
@@ -264,12 +247,12 @@ mod tests {
             now.checked_sub(Duration::from_secs(1)).unwrap(),
             "Memorizing Courage into gem 2".into(),
         ));
-        let book = current(&feedback, online.world(), &requests, &names, &messages, now).unwrap();
+        let book = current(online.world(), &requests, &names, &messages, now).unwrap();
         assert_eq!(book.label, "Memorizing Courage into gem 2");
         assert!((book.progress.unwrap() - 0.2).abs() < 0.01);
         testing::book_action(&mut online, BookActionStatus::AwaitingReply);
         assert_eq!(
-            current(&feedback, online.world(), &requests, &names, &messages, now)
+            current(online.world(), &requests, &names, &messages, now)
                 .unwrap()
                 .progress,
             None
@@ -285,8 +268,7 @@ mod tests {
             })],
             now.checked_sub(Duration::from_secs(1)).unwrap(),
         );
-        let casting =
-            current(&feedback, online.world(), &requests, &names, &messages, now).unwrap();
+        let casting = current(online.world(), &requests, &names, &messages, now).unwrap();
         assert!(casting.label.starts_with("Casting "));
         assert!((casting.progress.unwrap() - 0.25).abs() < 0.01);
 
@@ -304,23 +286,8 @@ mod tests {
                 eq_client_core::CampStatus::Abandoned,
             )],
         );
-        feedback.flash("Spell available in 2.0s", now);
         assert_eq!(
-            current(&feedback, online.world(), &requests, &names, &messages, now)
-                .unwrap()
-                .label,
-            "Spell available in 2.0s"
-        );
-        let later = now + FEEDBACK;
-        assert_eq!(
-            current(
-                &feedback,
-                online.world(),
-                &requests,
-                &names,
-                &messages,
-                later
-            ),
+            current(online.world(), &requests, &names, &messages, now),
             None
         );
     }

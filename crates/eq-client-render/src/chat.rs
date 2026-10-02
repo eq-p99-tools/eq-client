@@ -59,6 +59,46 @@ pub(super) struct ChatState {
     /// line.
     pub show_names_usage: bool,
     draft: String,
+    /// The last refusal said and when, so one repeated every frame, as a
+    /// held key's is, is said once.
+    last_refusal: Option<(String, std::time::Instant)>,
+}
+
+/// How soon the same refusal again goes unsaid.
+const REPEATED: std::time::Duration = std::time::Duration::from_secs(3);
+
+impl ChatState {
+    /// Says a refusal in the chat as a system line, where the official client
+    /// says its refusals; the same refusal again within [`REPEATED`] is not
+    /// said twice.
+    pub(super) fn refuse(&mut self, text: impl Into<String>) {
+        self.refuse_at(text.into(), std::time::Instant::now());
+    }
+
+    fn refuse_at(&mut self, text: String, now: std::time::Instant) {
+        if text.is_empty() {
+            return;
+        }
+        if self.last_refusal.as_ref().is_some_and(|(said, at)| {
+            *said == text && now.saturating_duration_since(*at) < REPEATED
+        }) {
+            return;
+        }
+        self.history.push(system_line(text.clone()));
+        self.last_refusal = Some((text, now));
+    }
+}
+
+#[cfg(test)]
+impl ChatState {
+    /// The newest line's words, for tests of what the chat says.
+    pub(crate) fn newest(&self) -> String {
+        self.history
+            .lines(ChatTab::All)
+            .last()
+            .map(|(_, line)| line.message.text.clone())
+            .unwrap_or_default()
+    }
 }
 #[derive(Component)]
 pub(super) struct Panel;
@@ -549,8 +589,8 @@ fn spawn_line(parent: &mut ChildSpawnerCommands, id: u64, line: &ChatLine) {
     }
 }
 
-/// Why a draft did not go: a mistake in it, which the chat says as a
-/// system line, or a refusal, which the outbox shows in the feedback line.
+/// Why a draft did not go: a mistake in it, or a refusal, which the outbox
+/// says itself. The chat says either as a system line.
 enum Unsent {
     Mistake(String),
     Refused,
@@ -603,7 +643,7 @@ fn submit_draft(
             state.views.entry(active).or_default().follow = true;
         }
         // The draft stays, to mend and send again.
-        Err(Unsent::Mistake(mistake)) => state.history.push(system_line(mistake)),
+        Err(Unsent::Mistake(mistake)) => state.refuse(mistake),
         // The draft stays, to send again.
         Err(Unsent::Refused) => (),
     }
@@ -882,6 +922,21 @@ pub(super) fn scroll(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refusal_repeated_at_once_is_said_once() {
+        let mut state = ChatState::default();
+        let said = |state: &ChatState| state.history.lines(ChatTab::All).len();
+        let now = std::time::Instant::now();
+        state.refuse_at("Too far away".into(), now);
+        state.refuse_at("Too far away".into(), now + REPEATED / 2);
+        assert_eq!(said(&state), 1);
+        state.refuse_at("Too far away".into(), now + REPEATED);
+        assert_eq!(said(&state), 2);
+        state.refuse_at("Locked".into(), now + REPEATED);
+        state.refuse_at(String::new(), now + REPEATED);
+        assert_eq!(said(&state), 3);
+    }
 
     /// The entries shown in the chat window, in order.
     fn column(app: &mut App) -> Vec<Entity> {

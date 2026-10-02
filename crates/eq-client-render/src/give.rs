@@ -28,7 +28,7 @@ pub(crate) struct GiveButton;
 
 /// Asks a clicked NPC or another player to take what the player holds on
 /// the cursor, an item or coins; nothing happens with an empty cursor, as in
-/// the official client. A refusal shows in the feedback line.
+/// the official client. The outbox says a refusal itself.
 pub(crate) fn offer(spawn_id: u16, online: &mut OnlineState, outbox: &Outbox) {
     let world = online.world();
     let holding = world
@@ -97,7 +97,7 @@ pub(crate) fn partner(world: &ClientWorld) -> String {
 
 /// Closes the exchange the player walked away from; what it held comes back.
 fn cancel(online: &mut OnlineState, outbox: &Outbox) {
-    // A refusal shows in the feedback line; the window closes either way.
+    // The outbox says a refusal itself; the window closes either way.
     let _ = outbox.post(online.world(), |stamp| ClientCommand::CancelTrade {
         session_id: stamp.session_id,
     });

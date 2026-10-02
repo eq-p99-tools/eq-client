@@ -34,6 +34,8 @@ pub(super) struct InventoryState {
     /// The banker in reach, by name, while the bank is open.
     banker: String,
     actions: interaction::Actions,
+    /// Refusals of the player's actions, on their way to the chat.
+    refused: Vec<String>,
     /// Moves the offline preview settled itself, on their way to the world.
     demo_news: Vec<InventoryUpdate>,
 }
@@ -108,10 +110,6 @@ impl InventoryState {
         self.actions.auto_store || self.actions.split.is_some()
     }
 
-    /// Current request feedback, also shown when inventory is closed for hotbar use.
-    pub(crate) fn action_message(&self) -> &str {
-        &self.actions.message
-    }
     /// Uses the same item controller for action-bar and inventory activation.
     pub(crate) fn activate_shortcut(
         &mut self,
@@ -120,9 +118,8 @@ impl InventoryState {
         sender: &crate::outbox::Outbox,
         target: Option<u16>,
         casting: bool,
-    ) -> String {
+    ) {
         self.use_slot(slot, online, sender, target, casting);
-        self.actions.message.clone()
     }
     /// Closes personal banking as soon as admission, life, or banker proximity changes.
     fn refresh_bank_access(&mut self, online: &super::online::OnlineState) {
@@ -298,6 +295,21 @@ pub(super) fn spawn(commands: &mut Commands) {
 /// What the inventory's mouse does, shown until a slot is hovered.
 const SLOT_HELP: &str =
     "Click: move | Shift-click a stack: split | Right-click: inspect | Alt+right-click: use";
+
+/// Says the inventory's refusals in the chat, where the official client
+/// says them; a skinned window has no line of its own for them.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn say_refusals(
+    mut state: ResMut<InventoryState>,
+    mut chat: ResMut<super::chat::ChatState>,
+) {
+    if state.refused.is_empty() {
+        return;
+    }
+    for refusal in std::mem::take(&mut state.refused) {
+        chat.refuse(refusal);
+    }
+}
 
 /// Left-click moves through the cursor, Shift opens a quantity picker, and right-click inspects.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]

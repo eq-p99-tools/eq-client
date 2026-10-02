@@ -67,9 +67,6 @@ pub(crate) enum Shows {
     Label(u32),
     /// The box that shows the player is attacking.
     Attacking,
-    /// The target window's line, under it: what became of the player's
-    /// choice of target. The official client says it in the chat.
-    TargetLine,
     /// The coins of one kind in a place: the purse, the bank or the give
     /// or trade window.
     Coins(CoinPlace, Coin),
@@ -217,20 +214,6 @@ pub(crate) fn apply(
                 depth: 0,
             };
             draw(window, screen, &mut art, &context);
-            if *id == WindowId::Target {
-                window.spawn((
-                    Shows::TargetLine,
-                    theme::text("", Size::Small, theme::INK),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(0),
-                        top: percent(100),
-                        width: px(screen.area.width),
-                        ..default()
-                    },
-                    TextLayout::new(Justify::Center, LineBreak::WordBoundary),
-                ));
-            }
         });
     }
 }
@@ -1709,7 +1692,6 @@ pub(crate) fn show(
         Res<super::inventory::InventoryState>,
     ),
     combat: Res<super::combat::CombatState>,
-    lines: Res<super::notices::Lines>,
     mut fills: Query<(&Shows, &mut Node), Without<Text>>,
     mut texts: Query<(&Shows, &mut Text, &mut TextColor)>,
     mut boxes: Query<(&Shows, &mut Visibility)>,
@@ -1749,10 +1731,6 @@ pub(crate) fn show(
         let (wanted, tint) = match *shows {
             Shows::GaugeText(kind) => gauge_text(world, kind),
             Shows::Label(kind) => (label_text(world, hud.resource_estimate, kind), None),
-            Shows::TargetLine => (
-                lines.target.text(std::time::Instant::now()).to_owned(),
-                None,
-            ),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Offered(coin) => (
                 world

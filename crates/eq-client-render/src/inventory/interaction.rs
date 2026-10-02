@@ -49,6 +49,16 @@ pub(crate) enum SplitAction {
     Cancel,
 }
 impl InventoryState {
+    /// Refuses the player's action: the inventory's line says why, and so
+    /// does the chat (`say_refusals`), as the official client says its
+    /// refusals. Progress, such as a move under way, stays in the line.
+    fn refuse(&mut self, refusal: String) {
+        self.actions.message.clone_from(&refusal);
+        if !refusal.is_empty() {
+            self.refused.push(refusal);
+        }
+    }
+
     /// Queues an explicit click effect without predicting charges or inventory changes.
     pub(super) fn use_slot(
         &mut self,
@@ -120,30 +130,28 @@ impl InventoryState {
         })();
         // A use sent says nothing; the cast bar shows the effect once the
         // server takes it.
-        self.actions.message = result.map_or_else(
-            |error| crate::outbox::window_line(&error),
-            |()| String::new(),
-        );
+        match result {
+            Ok(()) => self.actions.message.clear(),
+            Err(error) => self.refuse(crate::outbox::window_line(&error)),
+        }
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Returns whether the reply matched; success is submission, not activation.
-    pub fn item_use_result(
-        &mut self,
-        session_id: u64,
-        request_id: u64,
-        error: Option<String>,
-    ) -> bool {
+    /// Takes the answer to the pending item use, never an earlier one;
+    /// success is submission, not activation.
+    pub fn item_use_result(&mut self, session_id: u64, request_id: u64, error: Option<String>) {
         if self.actions.pending_use != Some((session_id, request_id)) {
-            return false;
+            return;
         }
         self.actions.pending_use = None;
-        self.actions.message = error.map_or_else(
-            || "Item-use packet submitted; waiting for server result".into(),
-            |reason| format!("Item use rejected: {reason}"),
-        );
+        match error {
+            None => {
+                self.actions.message =
+                    "Item-use packet submitted; waiting for server result".into();
+            }
+            Some(reason) => self.refuse(format!("Item use rejected: {reason}")),
+        }
         self.revision = self.revision.wrapping_add(1);
-        true
     }
 
     /// Discards unsent selection and pending presentation when leaving an admission.
@@ -170,15 +178,15 @@ impl InventoryState {
         if error.is_some() {
             self.actions.auto_store = false;
         }
-        self.actions.message = error.unwrap_or_else(|| {
-            if to_cursor || inventory.items().contains_key(&InventorySlot::CURSOR) {
-                "Item is on the cursor; choose a destination".into()
-            } else {
-                // Servers acknowledge only refused moves, so the placement
-                // settles without a later message; claim nothing more.
-                "Item placed".into()
-            }
-        });
+        if let Some(error) = error {
+            self.refuse(error);
+        } else if to_cursor || inventory.items().contains_key(&InventorySlot::CURSOR) {
+            self.actions.message = "Item is on the cursor; choose a destination".into();
+        } else {
+            // Servers acknowledge only refused moves, so the placement
+            // settles without a later message; claim nothing more.
+            self.actions.message = "Item placed".into();
+        }
         self.revision = self.revision.wrapping_add(1);
     }
 
@@ -194,7 +202,7 @@ impl InventoryState {
         self.actions.split = None;
         let result = self.try_click(slot, split.then_some(NonZeroU32::MIN), online, sender);
         if let Err(error) = result {
-            self.actions.message = crate::outbox::window_line(&error);
+            self.refuse(crate::outbox::window_line(&error));
         }
         self.revision = self.revision.wrapping_add(1);
     }
@@ -211,7 +219,7 @@ impl InventoryState {
             || inventory.stale()
             || inventory.items().contains_key(&InventorySlot::CURSOR)
         {
-            self.actions.message = "Finish the current cursor move first".into();
+            self.refuse("Finish the current cursor move first".into());
         } else if let Some(available) = count.filter(|count| *count > 1) {
             self.actions.split = Some(SplitSelection {
                 picked: Picked::Stack(slot),
@@ -220,7 +228,7 @@ impl InventoryState {
                 available,
             });
         } else {
-            self.actions.message = "Choose a stack with more than one item".into();
+            self.refuse("Choose a stack with more than one item".into());
         }
         self.revision = self.revision.wrapping_add(1);
     }
@@ -241,7 +249,7 @@ impl InventoryState {
             Picked::Coins(..) => None,
         };
         if stack.is_some() && selection.revision != online.world().inventory().revision() {
-            self.actions.message = "Inventory changed; choose the stack again".into();
+            self.refuse("Inventory changed; choose the stack again".into());
             return;
         }
         match action {
@@ -258,7 +266,7 @@ impl InventoryState {
                         if let Err(error) =
                             self.try_click(slot, NonZeroU32::new(selection.amount), online, sender)
                         {
-                            self.actions.message = crate::outbox::window_line(&error);
+                            self.refuse(crate::outbox::window_line(&error));
                         }
                     }
                     Picked::Coins(place, coin) => {
@@ -293,7 +301,7 @@ impl InventoryState {
         });
         if let Err(error) = result {
             self.actions.auto_store = false;
-            self.actions.message = crate::outbox::window_line(&error);
+            self.refuse(crate::outbox::window_line(&error));
         }
         self.revision = self.revision.wrapping_add(1);
     }
@@ -655,6 +663,8 @@ mod tests {
             state.actions.message,
             "Item use rejected: Target unavailable"
         );
+        // Only the refusal is on its way to the chat; progress stays here.
+        assert_eq!(state.refused, ["Item use rejected: Target unavailable"]);
         state.actions.pending_use = Some((9, 3));
         state.item_use_result(9, 3, None);
         assert_eq!(
@@ -663,6 +673,7 @@ mod tests {
         );
         state.item_use_result(9, 2, Some("late duplicate".into()));
         assert!(state.actions.message.contains("submitted"));
+        assert_eq!(state.refused.len(), 1);
         state.actions.pending_use = Some((9, 4));
         state.next_use_id = 4;
         state.cancel_actions();

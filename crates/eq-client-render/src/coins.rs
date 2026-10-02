@@ -31,7 +31,7 @@ pub(crate) fn on_cursor(world: &ClientWorld) -> Option<(Coin, u32)> {
 }
 
 /// Sends a coin move; the session says where the coins went, or why they
-/// did not go. An outbox refusal shows in the feedback line.
+/// did not go. The outbox says a refusal itself.
 pub(crate) fn send(transfer: CoinTransfer, online: &OnlineState, outbox: &Outbox) {
     let _ = outbox.post(online.world(), |stamp| ClientCommand::MoveCoins {
         session_id: stamp.session_id,

@@ -445,7 +445,7 @@ pub(crate) fn item_actions(
     clicks: Query<(&Interaction, &Slot), Changed<Interaction>>,
     online: Res<crate::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
-    mut lines: ResMut<crate::notices::Lines>,
+    mut chat: ResMut<crate::chat::ChatState>,
     mut inventory: ResMut<crate::inventory::InventoryState>,
 ) {
     if !keys.focused() {
@@ -454,8 +454,9 @@ pub(crate) fn item_actions(
     let Some(Action::Item { slot, id }) = requested(&keys, &bindings, &clicks) else {
         return;
     };
-    let message = if bound_item(online.world().inventory(), slot, id).is_none() {
-        "Bound item unavailable; rebind after moving it".to_owned()
+    // The inventory says its own refusals.
+    if bound_item(online.world().inventory(), slot, id).is_none() {
+        chat.refuse("Bound item unavailable; rebind after moving it");
     } else {
         inventory.activate_shortcut(
             slot,
@@ -463,9 +464,8 @@ pub(crate) fn item_actions(
             &sender,
             online.world().target().selected,
             online.world().casting().cast.is_some() || online.world().casting().pending.is_some(),
-        )
-    };
-    lines.feedback.flash(message, std::time::Instant::now());
+        );
+    }
 }
 
 #[cfg(test)]
