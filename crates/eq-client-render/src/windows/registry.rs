@@ -24,6 +24,9 @@ pub(crate) enum WindowId {
     CastBar,
     /// The player's lasting effects.
     Effects,
+    /// The skin's short effects window: songs and other short effects, open
+    /// while the player has one.
+    ShortEffects,
     /// Chat.
     Chat,
     /// The inventory and, drawn by the client's own chrome, the bank.
@@ -267,7 +270,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 28] = [
+    pub(crate) const ALL: [Self; 29] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -275,6 +278,7 @@ impl WindowId {
         Self::Actions,
         Self::CastBar,
         Self::Effects,
+        Self::ShortEffects,
         Self::Chat,
         Self::Inventory,
         Self::Bank,
@@ -315,6 +319,7 @@ impl WindowId {
             Self::Actions => Some("HotButtonWnd"),
             Self::CastBar => Some("CastingWindow"),
             Self::Effects => Some("BuffWindow"),
+            Self::ShortEffects => Some("ShortDurationBuffWindow"),
             Self::Chat => Some("ChatWindow"),
             Self::Inventory => Some("InventoryWindow"),
             Self::Bank => Some("BankWnd"),
@@ -368,6 +373,7 @@ impl WindowId {
             Self::Actions => "actions",
             Self::CastBar => "cast-bar",
             Self::Effects => "effects",
+            Self::ShortEffects => "short-effects",
             Self::Chat => "chat",
             Self::Inventory => "inventory",
             Self::Bank => "bank",
@@ -416,6 +422,7 @@ impl WindowId {
     /// Where the window opens and how it behaves. The default placements are
     /// laid out so that no two windows that can be open together cover each
     /// other on a 1280 by 720 screen.
+    #[allow(clippy::too_many_lines)] // One table of every window, side by side.
     pub(crate) const fn describe(self) -> Description {
         match self {
             // Clear of the skin's spell gems along the left edge.
@@ -456,6 +463,13 @@ impl WindowId {
                     true,
                     &["BUFFS"],
                 )
+            },
+            // Drawn only from the skin, where the skin places it, under the
+            // effects window; it opens with the first short effect and
+            // closes with the last.
+            Self::ShortEffects => Description {
+                closes_on_escape: false,
+                ..floating("", Placement::TopRight(340.0, 400.0), false, &[])
             },
             Self::Inventory => Description {
                 ..floating(

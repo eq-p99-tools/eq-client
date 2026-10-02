@@ -122,6 +122,9 @@ pub struct Button {
     pub id: Option<String>,
     /// Where it sits in its window.
     pub area: Area,
+    /// Whether the skin gives its place (`Location`); some skins leave the
+    /// effects windows' buttons for the client to place.
+    pub placed: bool,
     /// Where it sits when it stretches with its window instead
     /// (`AutoStretch`), such as a Done button kept to the bottom corner.
     pub anchors: Option<Anchors>,
@@ -663,6 +666,7 @@ impl Library {
         Element::Button(Button {
             id: text_of(node, "ScreenID").map(str::to_owned),
             area: at(),
+            placed: child(node, "Location").is_some(),
             anchors: flag(node, "AutoStretch").then(|| anchors(node)),
             look: self.button_look(look),
             checkbox: flag(node, "Style_Checkbox"),

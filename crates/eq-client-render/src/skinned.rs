@@ -22,6 +22,7 @@ use eq_client_assets::{
     ui::Area,
 };
 use eq_client_core::{
+    buffs::EffectWindow,
     inventory::InventorySlot,
     money::{Coin, CoinPlace},
 };
@@ -41,6 +42,8 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Trade => "EQUI_TradeWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
+        WindowId::Effects => "EQUI_BuffWindow.xml",
+        WindowId::ShortEffects => "EQUI_ShortDurationBuffWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
         WindowId::Training => "EQUI_TrainWindow.xml",
         WindowId::Skills => "EQUI_SkillsWindow.xml",
@@ -87,6 +90,11 @@ pub(crate) enum Shows {
     /// slots 15 to 29 over slots 0 to 14, so an empty slot would hide the
     /// buff under it.
     PetBuff(usize),
+    /// A button of an effects window, shown only while its slot holds a
+    /// buff, as the official client leaves an empty slot blank.
+    Buff(EffectWindow, u32),
+    /// The name of the buff on this button of an effects window.
+    BuffName(EffectWindow, u32),
     /// The player's practice points, which the Training window counts.
     PracticePoints,
 }
@@ -846,6 +854,8 @@ enum Does {
     Slash(&'static str),
     /// Shows the pet's buff in this slot.
     PetBuff(usize),
+    /// Shows the player's buff on this button of an effects window.
+    Buff(EffectWindow, u32),
     /// Turns an option on or off, and shows which.
     Option(eq_client_core::options::Toggle),
     /// Practices the skill chosen in the Training window.
@@ -886,6 +896,14 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if owner == WindowId::PetInfo {
         return Some(pet_button(id));
+    }
+    // An effects window's buttons, `Buff0` on, are its slots in order.
+    if let Some(window) = effect_window(owner) {
+        return Some(
+            id.strip_prefix("Buff")
+                .and_then(|button| button.parse().ok())
+                .map_or(Does::Nothing, |button| Does::Buff(window, button)),
+        );
     }
     if owner == WindowId::Training && id == "TrainButton" {
         return Some(Does::Trains);
@@ -1048,6 +1066,32 @@ pub(crate) const PET_COMMANDS: [(&str, &str); 8] = [
     ("LostButton", "/pet get lost"),
 ];
 
+/// The effects window a window is, if it is one.
+const fn effect_window(id: WindowId) -> Option<EffectWindow> {
+    match id {
+        WindowId::Effects => Some(EffectWindow::Long),
+        WindowId::ShortEffects => Some(EffectWindow::Short),
+        _ => None,
+    }
+}
+
+/// The buff whose name a label of an effects window shows, by the label's
+/// number (`EQType`): 500 on for the long window's buttons and 600 on for
+/// the short one's, as the skins that name their buffs number them. Other
+/// windows' labels keep their own numbering.
+const fn effect_label(kind: u32) -> Option<(EffectWindow, u32)> {
+    match kind {
+        500..=599 => Some((EffectWindow::Long, kind - 500)),
+        600..=699 => Some((EffectWindow::Short, kind - 600)),
+        _ => None,
+    }
+}
+
+/// The buff a label names, if its window is an effects window.
+fn buff_label(owner: WindowId, eq_type: Option<u32>) -> Option<(EffectWindow, u32)> {
+    effect_window(owner).and(eq_type).and_then(effect_label)
+}
+
 /// Whether a pet command's button shows only while the pet sits (Stand) or
 /// while it does not (Sit); the skin keeps the two in one place.
 fn pet_posture_button(command: &str) -> Option<bool> {
@@ -1099,9 +1143,12 @@ fn button(
     let Some(does) = does(button.id.as_deref().unwrap_or_default(), owner) else {
         return;
     };
-    let area = button.anchors.map_or(button.area, |anchors| {
-        anchors.within(inside.width, inside.height)
-    });
+    let area = match does {
+        Does::Buff(_, index) if !button.placed => stacked(button.area, index, inside),
+        _ => button.anchors.map_or(button.area, |anchors| {
+            anchors.within(inside.width, inside.height)
+        }),
+    };
     let node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -1128,7 +1175,7 @@ fn button(
     drawn.with_children(|inner| {
         // A buff slot's decal is the buff's own icon, which the caption draws.
         if let (Some(decal), Some(place)) = (&button.decal, button.decal_area)
-            && !matches!(does, Does::PetBuff(_))
+            && !matches!(does, Does::PetBuff(_) | Does::Buff(..))
         {
             picture(
                 inner,
@@ -1139,6 +1186,26 @@ fn button(
         }
         caption(inner, does, (button, area), owner, ink);
     });
+}
+
+/// Where an effects window's button goes when the skin gives it no place:
+/// down the window's left edge a row each, a pixel apart, then on in the
+/// next column, so it lines up with the rows of the skins that leave their
+/// buttons unplaced and name each buff beside it. How the official client
+/// places them is not checked yet.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a window holds few rows"
+)]
+fn stacked(area: Area, index: u32, inside: &Area) -> Area {
+    let pitch = area.height + 1.0;
+    let rows = (((inside.height + 1.0) / pitch).floor() as u32).max(1);
+    Area {
+        x: to_f32(index / rows) * (area.width + 1.0),
+        y: to_f32(index % rows) * pitch,
+        ..area
+    }
 }
 
 /// What a pressed skin button does, and the state it shows.
@@ -1171,6 +1238,13 @@ fn behave(
         )),
         Does::Slash(command) => drawn.insert((Button, SlashButton(command), skin())),
         Does::PetBuff(slot) => drawn.insert((Shows::PetBuff(slot), Visibility::Hidden)),
+        // Hovering a buff names it, as the client's own window does.
+        Does::Buff(window, index) => drawn.insert((
+            Shows::Buff(window, index),
+            Visibility::Hidden,
+            Interaction::default(),
+            super::tooltip::Tooltip::default(),
+        )),
         Does::Option(toggle) => {
             drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()))
         }
@@ -1259,6 +1333,12 @@ fn caption(
         Does::PetBuff(slot) => {
             inner.spawn(super::spell_icons::artwork(
                 super::spell_icons::Source::PetBuff(slot),
+                area.height.min(area.width) - 4.0,
+            ));
+        }
+        Does::Buff(window, index) => {
+            inner.spawn(super::spell_icons::artwork(
+                super::spell_icons::Source::Window(window, index),
                 area.height.min(area.width) - 4.0,
             ));
         }
@@ -1603,7 +1683,14 @@ fn label(
         area.width,
         area.height,
     );
+    let buff_name = buff_label(owner, label.eq_type);
     match (label.eq_type, bag) {
+        (Some(_), _) if let Some((effects, index)) = buff_name => aligned(
+            window,
+            node,
+            label.align,
+            (text, Shows::BuffName(effects, index)),
+        ),
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
         (None, Some(bag)) => aligned(window, node, label.align, (text, bag)),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
@@ -1699,9 +1786,10 @@ const fn to_f32(value: u32) -> f32 {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
     online: Res<super::online::OnlineState>,
-    (hud, inventory): (
+    (hud, inventory, names): (
         Res<super::hud::HudState>,
         Res<super::inventory::InventoryState>,
+        Res<super::spellbook::SpellNames>,
     ),
     combat: Res<super::combat::CombatState>,
     mut fills: Query<(&Shows, &mut Node), Without<Text>>,
@@ -1721,6 +1809,7 @@ pub(crate) fn show(
                 .pet_buffs()
                 .and_then(|buffs| buffs.slots.get(slot).copied().flatten())
                 .is_some(),
+            Shows::Buff(window, index) => world.buffs().in_window(window, index).is_some(),
             _ => continue,
         };
         visibility.set_if_neq(if shown {
@@ -1743,6 +1832,13 @@ pub(crate) fn show(
         let (wanted, tint) = match *shows {
             Shows::GaugeText(kind) => gauge_text(world, kind),
             Shows::Label(kind) => (label_text(world, hud.resource_estimate, kind), None),
+            Shows::BuffName(window, index) => (
+                world
+                    .buffs()
+                    .in_window(window, index)
+                    .map_or_else(String::new, |shown| names.label(shown.spell_id())),
+                None,
+            ),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Offered(coin) => (
                 world
@@ -1762,7 +1858,11 @@ pub(crate) fn show(
                     .map_or_else(String::new, |player| player.name.clone()),
                 Some(super::give::ink(world, super::give::Side::Mine)),
             ),
-            Shows::Fill(_) | Shows::Attacking | Shows::WhilePetSits(_) | Shows::PetBuff(_) => {
+            Shows::Fill(_)
+            | Shows::Attacking
+            | Shows::WhilePetSits(_)
+            | Shows::PetBuff(_)
+            | Shows::Buff(..) => {
                 continue;
             }
         };
@@ -2086,6 +2186,7 @@ mod tests {
                 width: 150.0,
                 height: 20.0,
             },
+            placed: true,
             anchors: None,
             look: ButtonLook::default(),
             checkbox: true,
@@ -2120,6 +2221,56 @@ mod tests {
             with_client_page(std::slice::from_ref(&general), WindowId::ActionsWindow).len(),
             1
         );
+    }
+
+    #[test]
+    fn unplaced_effects_buttons_stack_down_the_window_a_row_each() {
+        let button = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 24.0,
+            height: 24.0,
+        };
+        let window = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 375.0,
+        };
+        let place = |index| {
+            let area = stacked(button, index, &window);
+            (area.x, area.y)
+        };
+        assert_eq!(place(0), (0.0, 0.0));
+        assert_eq!(place(1), (0.0, 25.0));
+        // Fifteen rows fill the window; the sixteenth starts a column.
+        assert_eq!(place(14), (0.0, 350.0));
+        assert_eq!(place(15), (25.0, 0.0));
+    }
+
+    #[test]
+    fn the_effects_windows_buttons_and_labels_are_their_slots_in_order() {
+        assert!(matches!(
+            does("Buff3", WindowId::Effects),
+            Some(Does::Buff(EffectWindow::Long, 3))
+        ));
+        assert!(matches!(
+            does("Buff11", WindowId::ShortEffects),
+            Some(Does::Buff(EffectWindow::Short, 11))
+        ));
+        assert!(matches!(
+            does("Buff3", WindowId::Player),
+            Some(Does::Nothing)
+        ));
+        assert_eq!(effect_label(524), Some((EffectWindow::Long, 24)));
+        assert_eq!(effect_label(600), Some((EffectWindow::Short, 0)));
+        assert_eq!(effect_label(17), None);
+        // Only the effects windows' labels name buffs.
+        assert_eq!(
+            buff_label(WindowId::Effects, Some(503)),
+            Some((EffectWindow::Long, 3))
+        );
+        assert_eq!(buff_label(WindowId::Inventory, Some(503)), None);
     }
 
     #[test]

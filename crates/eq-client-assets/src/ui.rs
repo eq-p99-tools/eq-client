@@ -187,6 +187,13 @@ pub enum InstalledClient {
 }
 
 impl InstalledClient {
+    /// Whether this client has the short effects window, for songs and
+    /// other short buffs; unchecked for the Mac-era client.
+    #[must_use]
+    pub const fn short_effects(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
+
     /// The face this client writes its windows in, by its file among
     /// Windows' fonts; None until it is checked for this client.
     #[must_use]

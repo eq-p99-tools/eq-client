@@ -15,12 +15,14 @@ pub(super) struct Unplaced(u16);
 #[derive(Component)]
 pub(super) struct Hint;
 
-/// Rebuilds only buff content, keeping the title bar and its saved layout intact.
+/// Rebuilds only buff content, keeping the title bar and its saved layout
+/// intact. Where the skin draws the window, it keeps only the frame, which
+/// the skin fills.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
     mut commands: Commands,
     online: Res<OnlineState>,
-    shown: Res<windows::Shown>,
+    (shown, skinned): (Res<windows::Shown>, Res<crate::skinned::Skinned>),
     mut panels: Query<(Entity, &mut Node), With<Panel>>,
     bodies: Query<Entity, With<Body>>,
     mut previous: Local<Option<BTreeMap<u32, eq_client_core::Buff>>>,
@@ -53,6 +55,20 @@ pub(super) fn update(
     }
     *previous = Some(buffs.clone());
     previous_effects.clone_from(online.world().buffs().effects());
+    if skinned.has(windows::WindowId::Effects) {
+        if panels.is_empty() {
+            let frame = windows::frame(
+                &mut commands,
+                windows::WindowId::Effects,
+                Node {
+                    display,
+                    ..default()
+                },
+            );
+            commands.entity(frame).insert(Panel);
+        }
+        return;
+    }
     let body = if let Ok(body) = bodies.single() {
         commands.entity(body).despawn_children();
         body
@@ -182,28 +198,8 @@ pub(super) fn hover(
                 .iter()
                 .find(|(_, interaction)| **interaction != Interaction::None)
             {
-                let duration = online
-                    .world()
-                    .buffs()
-                    .effects()
-                    .get(&entry.0)
-                    .and_then(|effect| {
-                        names
-                            .mechanics(u32::from(entry.0))?
-                            .base_duration(effect.caster_level)
-                    });
-                let level = online
-                    .world()
-                    .buffs()
-                    .effects()
-                    .get(&entry.0)
-                    .map(|effect| effect.caster_level);
-                return format!(
-                    "{}\n{}{}",
-                    names.label(u32::from(entry.0)),
-                    base_duration_label(duration),
-                    resource_hint(names.mechanics(u32::from(entry.0)), level)
-                );
+                let effect = online.world().buffs().effects().get(&entry.0);
+                return effect_details(entry.0, effect, &names);
             }
             if online
                 .world()
@@ -217,21 +213,100 @@ pub(super) fn hover(
                 "Hover an effect for details".into()
             }
         },
-        |buff| {
-            format!(
-                "{}\nServer duration: {} ticks{}",
-                names.label(buff.spell_id),
-                buff.duration_ticks,
-                resource_hint(
-                    names.mechanics(buff.spell_id),
-                    Some(u16::from(buff.caster_level))
-                )
-            )
-        },
+        |buff| details(buff, &names),
     );
     for mut hint in &mut hints {
         if hint.0 != text {
             hint.0.clone_from(&text);
+        }
+    }
+}
+
+/// What an effect without a slot is: its spell, its duration and its
+/// bonuses as the spell file has them for the caster's level.
+fn effect_details(
+    spell: u16,
+    effect: Option<&eq_client_core::SpellEffect>,
+    names: &SpellNames,
+) -> String {
+    let spell = u32::from(spell);
+    let duration =
+        effect.and_then(|effect| names.mechanics(spell)?.base_duration(effect.caster_level));
+    let level = effect.map(|effect| effect.caster_level);
+    format!(
+        "{}\n{}{}",
+        names.label(spell),
+        base_duration_label(duration),
+        resource_hint(names.mechanics(spell), level)
+    )
+}
+
+/// What a buff in a slot is: its spell, the duration the server last gave
+/// and its bonuses as the spell file has them.
+fn details(buff: &eq_client_core::Buff, names: &SpellNames) -> String {
+    format!(
+        "{}\nServer duration: {} ticks{}",
+        names.label(buff.spell_id),
+        buff.duration_ticks,
+        resource_hint(
+            names.mechanics(buff.spell_id),
+            Some(u16::from(buff.caster_level))
+        )
+    )
+}
+
+/// Names the buff under the pointer in the skin's effects windows, as the
+/// client's own window does.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn skinned_details(
+    online: Res<OnlineState>,
+    names: Res<SpellNames>,
+    mut buttons: Query<(
+        &crate::skinned::Shows,
+        &Interaction,
+        &mut crate::tooltip::Tooltip,
+    )>,
+) {
+    for (shows, interaction, mut tooltip) in &mut buttons {
+        let crate::skinned::Shows::Buff(window, button) = *shows else {
+            continue;
+        };
+        if *interaction == Interaction::None {
+            continue;
+        }
+        let text = match online.world().buffs().in_window(window, button) {
+            Some(eq_client_core::buffs::Shown::Slot(buff)) => details(buff, &names),
+            Some(eq_client_core::buffs::Shown::Unplaced(effect)) => {
+                effect_details(effect.spell_id, Some(effect), &names)
+            }
+            None => String::new(),
+        };
+        if tooltip.0 != text {
+            tooltip.0 = text;
+        }
+    }
+}
+
+/// Opens the skin's short effects window while the player has a short
+/// effect, such as a song, and closes it with the last one. Without the
+/// skin's effects window, or a client known to have the short one, the
+/// client's own lists them with the rest.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn short_window(
+    (online, settings): (Res<OnlineState>, Res<crate::ViewerSettings>),
+    skinned: Res<crate::skinned::Skinned>,
+    mut shown: ResMut<windows::Shown>,
+) {
+    let id = windows::WindowId::ShortEffects;
+    // Only the client generations known to have the window open it.
+    let wanted = settings.0.installed_client.short_effects()
+        && skinned.has(windows::WindowId::Effects)
+        && online.world().buffs().has_short();
+    if wanted != shown.is_open(id) {
+        if wanted {
+            shown.open(id);
+        } else {
+            shown.close(id);
         }
     }
 }

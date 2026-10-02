@@ -2,18 +2,89 @@
 use crate::{Buff, BuffUpdate, SpellEffect};
 use std::collections::BTreeMap;
 
+/// The official client's two effects windows, which split the server's buff
+/// slots between them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EffectWindow {
+    /// The lasting effects: the slots of the admission's buff table.
+    Long,
+    /// The short ones, such as songs: the slots the server numbers after
+    /// the table's.
+    Short,
+}
+
+/// What a button of an effects window shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown<'a> {
+    /// A buff in the server slot the button stands for.
+    Slot(&'a Buff),
+    /// An effect the server has given no slot, which takes one of the long
+    /// window's empty buttons, in the order the effects landed.
+    Unplaced(&'a SpellEffect),
+}
+
+impl Shown<'_> {
+    /// The spell of the buff or effect.
+    #[must_use]
+    pub fn spell_id(self) -> u32 {
+        match self {
+            Self::Slot(buff) => buff.spell_id,
+            Self::Unplaced(effect) => u32::from(effect.spell_id),
+        }
+    }
+}
+
 /// Server slots and observed lasting effects awaiting explicit slot information.
 #[derive(Clone, Debug, Default)]
 pub struct BuffTracker {
     slots: Option<BTreeMap<u32, Buff>>,
     effects: BTreeMap<u16, SpellEffect>,
+    /// The effects without a slot, by spell, in the order they landed.
+    landed: Vec<u16>,
+    /// How many slots the admission's buff table holds: the long window's.
+    long_slots: u32,
 }
 
 impl BuffTracker {
-    /// Starts a new authoritative snapshot, discarding previous-admission effects.
-    pub fn replace_snapshot(&mut self, slots: BTreeMap<u32, Buff>) {
+    /// Starts a new authoritative snapshot from the admission's buff table,
+    /// which holds this many slots, discarding previous-admission effects.
+    pub fn replace_snapshot(&mut self, slots: BTreeMap<u32, Buff>, long_slots: u32) {
         self.slots = Some(slots);
+        self.long_slots = long_slots;
         self.effects.clear();
+        self.landed.clear();
+    }
+
+    /// What a window's button shows: the long window's buttons are the
+    /// table's slots in order, the short window's the slots after them. An
+    /// effect without a slot takes the long window's first empty button
+    /// that no earlier one took, since a server need not say where a new
+    /// buff went: `EQEmu` sends a landing buff's slot only for a level
+    /// override, a hit counter or a duration past the spell's formula, at
+    /// the next buff tick, and gives a new buff the first empty slot of its
+    /// range, as here.
+    #[must_use]
+    pub fn in_window(&self, window: EffectWindow, button: u32) -> Option<Shown<'_>> {
+        let slots = self.slots.as_ref()?;
+        match window {
+            EffectWindow::Short => slots
+                .get(&self.long_slots.checked_add(button)?)
+                .map(Shown::Slot),
+            EffectWindow::Long if button >= self.long_slots => None,
+            EffectWindow::Long => slots.get(&button).map(Shown::Slot).or_else(|| {
+                let earlier = (0..button).filter(|slot| !slots.contains_key(slot)).count();
+                let spell = self.landed.get(earlier)?;
+                self.effects.get(spell).map(Shown::Unplaced)
+            }),
+        }
+    }
+
+    /// Whether the player has a short effect, such as a song.
+    #[must_use]
+    pub fn has_short(&self) -> bool {
+        self.slots
+            .as_ref()
+            .is_some_and(|slots| slots.range(self.long_slots..).next().is_some())
     }
 
     /// Creates a tracker with a known empty admission snapshot.
@@ -21,7 +92,7 @@ impl BuffTracker {
     pub fn empty_snapshot() -> Self {
         Self {
             slots: Some(BTreeMap::new()),
-            effects: BTreeMap::new(),
+            ..Self::default()
         }
     }
 
@@ -51,14 +122,19 @@ impl BuffTracker {
         if let Some(slots) = &mut self.slots {
             slots.retain(|_, buff| buff.spell_id != u32::from(effect.spell_id));
         }
-        self.effects.insert(effect.spell_id, effect);
+        let spell = effect.spell_id;
+        if self.effects.insert(spell, effect).is_none() {
+            self.landed.push(spell);
+        }
     }
 
     /// Applies an explicit replacement or fade after entity filtering by the session.
     /// A fade removes its unslotted effect too; repeated empty-slot fades are harmless.
     pub fn apply(&mut self, update: BuffUpdate) {
-        if let Ok(id) = u16::try_from(update.spell_id) {
-            self.effects.remove(&id);
+        if let Ok(id) = u16::try_from(update.spell_id)
+            && self.effects.remove(&id).is_some()
+        {
+            self.landed.retain(|landed| *landed != id);
         }
         if let Some(slots) = &mut self.slots {
             if let Some(buff) = update.buff {
@@ -73,6 +149,32 @@ impl BuffTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_long_window_shows_the_tables_slots_and_the_short_one_those_after() {
+        let mut state = BuffTracker::default();
+        state.replace_snapshot(BTreeMap::from([(3, buff(42)), (25, buff(43))]), 25);
+        let spell = |state: &BuffTracker, window, button| {
+            state.in_window(window, button).map(Shown::spell_id)
+        };
+        assert_eq!(spell(&state, EffectWindow::Long, 3), Some(42));
+        assert_eq!(spell(&state, EffectWindow::Short, 0), Some(43));
+        // A long window's button past the table shows nothing.
+        assert_eq!(spell(&state, EffectWindow::Long, 25), None);
+        assert!(state.has_short());
+        state.apply(update(25, 43, false));
+        assert!(!state.has_short());
+        // Effects without a slot take the empty buttons, as they landed.
+        state.observe_effect(effect(51));
+        state.observe_effect(effect(50));
+        assert_eq!(spell(&state, EffectWindow::Long, 0), Some(51));
+        assert_eq!(spell(&state, EffectWindow::Long, 1), Some(50));
+        assert_eq!(spell(&state, EffectWindow::Long, 2), None);
+        assert_eq!(spell(&state, EffectWindow::Long, 3), Some(42));
+        // A fade frees the button for the next.
+        state.apply(update(9, 51, false));
+        assert_eq!(spell(&state, EffectWindow::Long, 0), Some(50));
+    }
 
     fn buff(spell_id: u32) -> Buff {
         Buff {
@@ -160,7 +262,7 @@ mod tests {
         state.clear();
         assert!(state.slots().is_none());
         assert!(state.effects().is_empty());
-        state.replace_snapshot(BTreeMap::from([(6, buff(43))]));
+        state.replace_snapshot(BTreeMap::from([(6, buff(43))]), 25);
         assert_eq!(
             state.slots().unwrap().keys().copied().collect::<Vec<_>>(),
             [6]

@@ -155,6 +155,7 @@ const fn framed_while_open(id: WindowId) -> bool {
             | WindowId::Trade
             | WindowId::ActionsWindow
             | WindowId::PetInfo
+            | WindowId::ShortEffects
             | WindowId::Options
             | WindowId::Training
             | WindowId::Skills
