@@ -24,11 +24,12 @@ impl Messages {
         Self(StringTable::parse(text))
     }
 
-    /// Interrupt packets supply a reason ID but no format arguments; never invent them.
-    pub(super) fn interruption(&self, id: u32) -> String {
+    /// Why a cast was interrupted, as the chat says it. Interrupt packets
+    /// supply a reason ID but no format arguments; never invent them.
+    pub(crate) fn interruption(&self, id: u32) -> Said {
         self.0.argument_free(id).map_or_else(
-            || format!("Casting interrupted (server reason {id})"),
-            str::to_owned,
+            || Said::own(format!("Casting interrupted (server reason {id})")),
+            Said::official,
         )
     }
 
@@ -93,16 +94,17 @@ mod tests {
     #[test]
     fn missing_strings_keep_numeric_reasons() {
         let table = Messages::parse("EQST0002\n0 2\n73 Synthetic failure\n74 %1 failed\n");
-        assert_eq!(table.interruption(73), "Synthetic failure");
+        assert_eq!(table.interruption(73), Said::official("Synthetic failure"));
+        // A string that takes arguments is never filled in with made-up ones.
         for id in [74, 99] {
             assert_eq!(
                 table.interruption(id),
-                format!("Casting interrupted (server reason {id})")
+                Said::own(format!("Casting interrupted (server reason {id})"))
             );
         }
         assert_eq!(
             Messages::load(None).interruption(73),
-            "Casting interrupted (server reason 73)"
+            Said::own("Casting interrupted (server reason 73)")
         );
         assert_eq!(table.format(99, &[]), "Server message 99");
         assert_eq!(table.format(99, &["x".to_owned()]), "Server message 99: x");

@@ -463,7 +463,8 @@ fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
         caster_id,
         message_id: 439,
     };
-    assert_eq!(spell(&mut world, interrupted(8)).cast, None);
+    let others = spell(&mut world, interrupted(8));
+    assert_eq!((others.cast, others.notices), (None, Vec::new()));
     assert!(world.casting().cast.is_some());
     assert!(world.casting().interrupted.is_none());
     let mana = |spell_id, keep_casting| SpellUpdate::Mana {
@@ -472,10 +473,10 @@ fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     };
     spell(&mut world, mana(42, true));
     assert!(world.casting().cast.is_some());
-    assert_eq!(
-        spell(&mut world, interrupted(9)).cast,
-        Some(CastNews::Interrupted)
-    );
+    // The player's own interruption also tells them why.
+    let own = spell(&mut world, interrupted(9));
+    assert_eq!(own.cast, Some(CastNews::Interrupted));
+    assert_eq!(own.notices, [Notice::CastInterrupted { string_id: 439 }]);
     assert!(world.casting().cast.is_none());
     assert_eq!(world.casting().interrupted, Some((now, 439)));
     spell(&mut world, mana(42, false));
