@@ -448,7 +448,7 @@ fn schedule(app: &mut App) {
             give::buttons,
             (abilities::input, skinned::slash),
             hud::actions,
-            hud::hotbar::update,
+            (hud::hotbar::update, hud::hotbar::persist).chain(),
             hud::hotbar::item_actions,
             spellbook::update,
             character_select::update,

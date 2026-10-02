@@ -238,6 +238,29 @@ fn options_from_ini(text: &str) -> OfficialOptions {
     }
 }
 
+/// The first page of the official client's hotbuttons for a character on
+/// a world: `[HotButtons]` in the installation's `<Name>_<world>.ini`, read
+/// only, as each button's number from 1 and its code (such as `H2`). Empty
+/// when the file, the section or a sane name is missing.
+pub fn official_hotbuttons(eq_directory: &Path, character: &str, world: &str) -> Vec<(u8, String)> {
+    let plain = |text: &str| !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric());
+    if !plain(character) || !plain(world) {
+        return Vec::new();
+    }
+    std::fs::read(eq_directory.join(format!("{character}_{world}.ini")))
+        .map(|bytes| hotbuttons_from_ini(&String::from_utf8_lossy(&bytes)))
+        .unwrap_or_default()
+}
+
+fn hotbuttons_from_ini(text: &str) -> Vec<(u8, String)> {
+    (1..=10u8)
+        .filter_map(|button| {
+            let code = ini_value(text, "HotButtons", &format!("Page1Button{button}"))?;
+            (!code.is_empty()).then_some((button, code))
+        })
+        .collect()
+}
+
 /// Where the official client last put one of a character's windows, at one
 /// screen size: a section of `UI_<character>_<world>.ini`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -548,6 +571,20 @@ MouseSensitivity=4
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
+    }
+
+    #[test]
+    fn a_characters_ini_holds_the_first_page_of_hotbuttons() {
+        let text = "[Socials]\nPage1Button1Name=Wave\n[HotButtons]\nPage1Button1=H0\nPage1Button3=J29\nPage2Button1=H4\nPage1Button10=\n";
+        assert_eq!(
+            hotbuttons_from_ini(text),
+            [(1, "H0".to_owned()), (3, "J29".to_owned())]
+        );
+        assert_eq!(hotbuttons_from_ini("").len(), 0);
+        assert_eq!(
+            official_hotbuttons(Path::new("."), "../x", "World").len(),
+            0
+        );
     }
 
     #[test]
