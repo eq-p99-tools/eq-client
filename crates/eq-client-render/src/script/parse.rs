@@ -69,6 +69,9 @@ pub enum Step {
     /// Says a line on a chat channel as a player types it, on a local `EQEmu`
     /// or TAKP server only, as `gm` steps are.
     Chat(eq_client_core::OutboundChat),
+    /// Moves a window, by its saved name, as a drag moves it: its top left
+    /// corner to this place on screen, in logical pixels.
+    Drag(String, bevy::math::Vec2),
     /// Presses keys together for one frame, modifiers first.
     Press(Vec<KeyCode>),
     /// Holds keys together for a bounded duration.
@@ -305,6 +308,12 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ),
         ("gm", words) => parse_gm(words)?,
         ("chat", words) => parse_chat(words)?,
+        ("drag", [window, x, y]) => Step::Drag(
+            crate::windows::WindowId::named(window)
+                .map(|_| (*window).to_owned())
+                .ok_or_else(|| format!("no window is named {window}"))?,
+            bevy::math::Vec2::new(number(x, 0.0, 10_000.0)?, number(y, 0.0, 10_000.0)?),
+        ),
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
         ("wait", [duration]) => Step::Wait(millis(duration, MAX_WAIT)?),
@@ -852,6 +861,21 @@ chat tell Friend inc now
             "chat tell Fr1end hi",
             "chat say #summon",
         ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_script_may_drag_a_window_by_its_name() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("drag actions 600 300\ndrag chat 700.5 450\n", base).unwrap(),
+            [
+                Step::Drag("actions".into(), bevy::math::Vec2::new(600.0, 300.0)),
+                Step::Drag("chat".into(), bevy::math::Vec2::new(700.5, 450.0)),
+            ]
+        );
+        for bad in ["drag", "drag chat 1", "drag nowhere 1 2", "drag chat -5 2"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }

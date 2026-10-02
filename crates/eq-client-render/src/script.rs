@@ -255,7 +255,10 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    mut chat: ResMut<super::chat::ChatState>,
+    (mut chat, mut moves): (
+        ResMut<super::chat::ChatState>,
+        ResMut<super::windows::Moves>,
+    ),
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
     bodies: Query<&super::PlayerBody, With<super::Player>>,
@@ -487,6 +490,12 @@ pub(super) fn drive(
                     "wait_online or wait_zone first"
                 ),
             );
+            return;
+        }
+        Step::Drag(window, to) => {
+            if let Some(id) = super::windows::WindowId::named(window) {
+                moves.0.push((id, *to));
+            }
             return;
         }
         Step::Slash(command) => {
