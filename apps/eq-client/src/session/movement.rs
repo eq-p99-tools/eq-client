@@ -1,5 +1,5 @@
 //! Carries an explicit movement calibration across an uninterrupted normal handoff.
-use eq_client_core::{ClientCommand, MotionCalibration, PlayerState, WorldEvent};
+use eq_client_core::{Capability, ClientCommand, MotionCalibration, PlayerState, WorldEvent};
 use std::time::Instant;
 
 /// Observable metadata, not a measurement of effective speed or buffs.
@@ -34,6 +34,8 @@ struct Admission {
     identity: Option<Identity>,
     granted: bool,
     dead: bool,
+    /// Whether the server type moves the player at all.
+    moves: bool,
 }
 
 /// Calibration remains opt-in; only an uninterrupted normal transfer can carry it.
@@ -55,7 +57,10 @@ impl Continuity {
     pub(super) fn observe(&mut self, event: &WorldEvent, now: Instant) -> Option<ClientCommand> {
         match event {
             WorldEvent::Entered {
-                session_id, player, ..
+                session_id,
+                player,
+                capabilities,
+                ..
             } => {
                 if self
                     .admission
@@ -70,14 +75,17 @@ impl Continuity {
                     .transfer
                     .take()
                     .is_some_and(|old| Some(old) == identity);
+                let moves = capabilities.contains(&Capability::Moving);
                 self.admission = Some(Admission {
                     session: *session_id,
                     spawn: player.spawn_id,
                     identity,
                     granted: false,
                     dead: false,
+                    moves,
                 });
-                if (initial || carry) && player.hp_percent != Some(0) {
+                // A server type that does not move the player is never asked.
+                if (initial || carry) && moves && player.hp_percent != Some(0) {
                     return self
                         .calibration
                         .map(|calibration| ClientCommand::ConfigureMotion {
@@ -155,9 +163,13 @@ impl Continuity {
         None
     }
 
-    /// Asks again for movement in the current admission, unless the player died.
+    /// Asks again for movement in the current admission, unless the player
+    /// died or the server type does not move the player.
     fn regrant(&self, now: Instant) -> Option<ClientCommand> {
-        let active = self.admission.as_ref().filter(|active| !active.dead)?;
+        let active = self
+            .admission
+            .as_ref()
+            .filter(|active| !active.dead && active.moves)?;
         self.calibration
             .map(|calibration| ClientCommand::ConfigureMotion {
                 session_id: active.session,
@@ -192,7 +204,7 @@ mod tests {
     }
     fn entered(session_id: u64, run_speed: f32) -> WorldEvent {
         WorldEvent::Entered {
-            capabilities: Vec::new(),
+            capabilities: vec![Capability::Moving],
             session_id,
             zone: "example".into(),
             far_clip: None,
@@ -242,6 +254,36 @@ mod tests {
             solicited: true,
         })
     }
+    #[test]
+    fn a_server_type_that_does_not_move_the_player_is_never_asked_to() {
+        let now = Instant::now();
+        let mut policy = Continuity::new(Some(calibration()));
+        let WorldEvent::Entered {
+            session_id,
+            player,
+            zone,
+            far_clip,
+            ..
+        } = entered(1, 0.7)
+        else {
+            unreachable!()
+        };
+        let still = WorldEvent::Entered {
+            capabilities: vec![Capability::Talking],
+            session_id,
+            player,
+            zone,
+            far_clip,
+        };
+        assert!(policy.observe(&still, now).is_none());
+        let correction = WorldEvent::Position {
+            spawn_id: 7,
+            position: WorldPosition::default(),
+            velocity: [0.0; 3],
+        };
+        assert!(policy.observe(&correction, now).is_none());
+    }
+
     #[test]
     fn normal_handoff_reissues_once_with_new_session_and_creation_time() {
         let mut policy = Continuity::new(Some(calibration()));
