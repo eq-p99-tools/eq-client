@@ -5,8 +5,13 @@
 //! The world's own colours (lights, markers, placeholder models) stay with
 //! the scene, and colours that come from the game's data (chat channels,
 //! dyes) stay data.
-use bevy::{ecs::system::EntityCommands, prelude::*};
+//!
+//! Every text is in Arial, as the official client writes, read from
+//! Windows' own fonts at run time and never bundled; without it, Bevy's
+//! built-in face stays.
+use bevy::{asset::AssetId, ecs::system::EntityCommands, prelude::*};
 use eq_client_core::combat::ConColor;
+use std::path::{Path, PathBuf};
 
 // Surfaces, from the back.
 
@@ -170,6 +175,36 @@ impl Size {
     }
 }
 
+/// Where Windows keeps Arial, under the system root the environment names
+/// (`SystemRoot`, else `windir`).
+fn arial_file(system_root: Option<&Path>) -> Option<PathBuf> {
+    Some(system_root?.join("Fonts").join("arial.ttf"))
+}
+
+/// Makes Arial the face of every text that names none of its own, as the
+/// official client writes, where Windows has it. It replaces Bevy's
+/// built-in face, so it runs after the text plugin is added and before any
+/// text is laid out.
+pub(crate) fn install_font(app: &mut App) {
+    let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"));
+    let Some(file) = arial_file(root.as_deref().map(Path::new)) else {
+        info!("Not on Windows: text keeps the built-in face");
+        return;
+    };
+    match std::fs::read(&file) {
+        Ok(bytes) => {
+            let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
+            if let Err(error) = fonts.insert(AssetId::default(), Font::from_bytes(bytes)) {
+                warn!("Could not use {}: {error}", file.display());
+            }
+        }
+        Err(error) => info!(
+            "No Arial at {}: {error}; text keeps the built-in face",
+            file.display()
+        ),
+    }
+}
+
 /// The client's font at this size.
 pub(crate) fn font(size: Size) -> TextFont {
     TextFont {
@@ -223,6 +258,15 @@ mod tests {
         assert_eq!(button(true, true, Interaction::Hovered), BUTTON_ON);
         assert_eq!(button(true, false, Interaction::Pressed), BUTTON_HOVER);
         assert_eq!(button(true, false, Interaction::None), BUTTON);
+    }
+
+    #[test]
+    fn arial_is_read_from_the_windows_fonts() {
+        assert_eq!(
+            arial_file(Some(Path::new("C:/Windows"))),
+            Some(Path::new("C:/Windows").join("Fonts").join("arial.ttf"))
+        );
+        assert_eq!(arial_file(None), None);
     }
 
     #[test]

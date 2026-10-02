@@ -291,9 +291,10 @@ pub fn run(
                 custom_layer: exit_log::file_layer,
                 ..default()
             }),
-    )
-    .add_systems(Startup, setup_scene)
-    .add_systems(Update, exit_log::close_requests);
+    );
+    theme::install_font(&mut app);
+    app.add_systems(Startup, setup_scene)
+        .add_systems(Update, exit_log::close_requests);
     schedule(&mut app);
     navigation::install(&mut app);
     frame_limit::install(&mut app);
