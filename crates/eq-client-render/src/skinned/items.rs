@@ -151,6 +151,7 @@ const fn framed_while_open(id: WindowId) -> bool {
             | WindowId::Note
             | WindowId::Book
             | WindowId::WorldContainer
+            | WindowId::Map
     )
 }
 

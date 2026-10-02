@@ -25,6 +25,7 @@ mod item_models;
 mod items;
 mod keys;
 mod logs;
+mod map;
 mod motion;
 mod names;
 mod navigation;
@@ -335,7 +336,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<keys::KeyMap>()
         .init_resource::<keys::Typing>()
         .init_resource::<training::Chosen>()
-        .init_resource::<reading::Page>();
+        .init_resource::<reading::Page>()
+        .init_resource::<map::MapView>();
 }
 
 /// What the tests of the windows start from.
@@ -471,6 +473,7 @@ fn schedule(app: &mut App) {
                 resurrection::buttons,
                 reading::buttons,
                 tradeskills::buttons,
+                map::buttons,
             ),
             (abilities::input, skinned::slash),
             hud::actions,
@@ -512,6 +515,7 @@ fn schedule(app: &mut App) {
                     resurrection::window,
                     reading::window,
                     tradeskills::world_window,
+                    map::load,
                 ),
             )
                 .chain(),
@@ -553,6 +557,7 @@ fn schedule(app: &mut App) {
                         resurrection::show,
                         reading::show,
                         tradeskills::show,
+                        map::draw,
                     ),
                 ),
                 skinned::close,
