@@ -1657,7 +1657,9 @@ fn title_boxes(
         ));
         match (close, closes) {
             (true, true) => drawn.insert(items::Closes(owner)),
-            (true, false) => drawn.insert(Greyed),
+            // The client keeps this window open: its close box is one more
+            // control the client does not have yet.
+            (true, false) => drawn.insert((Greyed, missing())),
             (false, _) => drawn.insert(super::windows::Minimize(frame)),
         };
     }
@@ -2336,7 +2338,7 @@ mod tests {
                 height: 30.0,
             },
             template: None,
-            titlebar: false,
+            title_bar: None,
             border: false,
             tooltip: None,
             pieces: vec![
@@ -2357,9 +2359,9 @@ mod tests {
                         paperdoll: None,
                         depth: 0,
                     };
-                    commands
-                        .spawn(Node::default())
-                        .with_children(|window| draw(window, &screen, &mut art, &context));
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
                 },
             );
         app.update();
