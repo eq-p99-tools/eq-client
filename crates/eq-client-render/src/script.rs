@@ -54,6 +54,9 @@ pub struct Script {
     focus: Option<bool>,
     /// The route a `walk` step is searching for or following.
     route: Option<eq_client_core::movement::Route>,
+    /// The control a `hover` step rests the pointer on, until the next click
+    /// or hover.
+    hovering: Option<Entity>,
 }
 
 struct Follow {
@@ -81,6 +84,7 @@ impl Script {
             offline: false,
             focus: None,
             route: None,
+            hovering: None,
         }
     }
 
@@ -322,6 +326,13 @@ pub(super) fn drive(
     if std::mem::take(&mut script.paused) {
         info!("Script resumed");
     }
+    // The focus system clears a hover no pointer is over; a hovered control
+    // stays hovered.
+    if let Some(entity) = script.hovering
+        && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+    {
+        interaction.set_if_neq(Interaction::Hovered);
+    }
     // One-frame presses and clicks are released on the frame after they were pressed.
     if matches!(
         script.current,
@@ -438,10 +449,11 @@ pub(super) fn drive(
                 if window.is_some_and(|window| window.cursor_position().is_some()) {
                     return;
                 }
-                if !click(*target, &mut buttons, &layout, &mut pointers) {
+                let Some(entity) = find(*target, &buttons, &layout) else {
                     script.stop(&mut keys, &mut mouse, "click target is not visible");
                     return;
-                }
+                };
+                press(entity, *target, &mut buttons, &mut pointers);
                 let button = if matches!(step, Step::RightClick(_)) {
                     MouseButton::Right
                 } else {
@@ -579,9 +591,17 @@ pub(super) fn drive(
             return;
         }
         Step::Click(_) | Step::RightClick(_) => {
+            script.hovering = None;
             if window.is_some_and(|window| window.cursor_position().is_some()) {
                 info!("Scripted click waits until the pointer leaves the client window");
             }
+        }
+        Step::Hover(target) => {
+            match find(*target, &buttons, &layout) {
+                Some(entity) => script.hovering = Some(entity),
+                None => script.stop(&mut keys, &mut mouse, "hover target is not visible"),
+            }
+            return;
         }
         Step::Report(label) => {
             report::state(label, &online, &observed, players.single().ok());
@@ -699,17 +719,12 @@ fn dialog_control(
     }
 }
 
-/// Marks the first visible matching control in an open window pressed; the
-/// focus system clears it next frame.
-fn click(
-    target: ClickTarget,
-    buttons: &mut Buttons,
-    layout: &Layout,
-    pointers: &mut Pointers,
-) -> bool {
+/// The first visible matching control in an open window, as a click or a
+/// hover reaches it.
+fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entity> {
     for (
         entity,
-        mut interaction,
+        _,
         visibility,
         slot,
         scribe,
@@ -722,7 +737,7 @@ fn click(
         (coins, pick),
         (selector, tab, ability, attack, slash, checkbox),
         (slider, drop_down, choice, (dialog, page, combine, map)),
-    ) in buttons.iter_mut()
+    ) in buttons
     {
         let matches = match target {
             ClickTarget::ActionsWindow => selector
@@ -796,18 +811,24 @@ fn click(
             }),
         };
         if matches && visibility.get() && displayed(entity, layout) {
-            // A slider is pressed where the setting is to go.
-            if let (ClickTarget::Slider(_, percent), Some(slider), Ok(mut pointer)) =
-                (target, slider, pointers.get_mut(entity))
-            {
-                pointer.normalized =
-                    Some(Vec2::new(slider.across(f32::from(percent) / 100.0), 0.0));
-            }
-            *interaction = Interaction::Pressed;
-            return true;
+            return Some(entity);
         }
     }
-    false
+    None
+}
+
+/// Marks a found control pressed, a slider where the setting is to go; the
+/// focus system clears it next frame.
+fn press(entity: Entity, target: ClickTarget, buttons: &mut Buttons, pointers: &mut Pointers) {
+    let Ok((_, mut interaction, .., (slider, ..))) = buttons.get_mut(entity) else {
+        return;
+    };
+    if let (ClickTarget::Slider(_, percent), Some(slider), Ok(mut pointer)) =
+        (target, slider, pointers.get_mut(entity))
+    {
+        pointer.normalized = Some(Vec2::new(slider.across(f32::from(percent) / 100.0), 0.0));
+    }
+    *interaction = Interaction::Pressed;
 }
 
 /// Whether a node and every node above it are laid out, as a pointer needs
@@ -910,21 +931,12 @@ mod tests {
         };
         let closed = button(&mut world, Display::None);
         let mut state = SystemState::<(Buttons, Layout, Pointers)>::new(&mut world);
-        let (mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
-        assert!(!click(
-            ClickTarget::Give,
-            &mut buttons,
-            &layout,
-            &mut pointers
-        ));
+        let (buttons, layout, _) = state.get_mut(&mut world).unwrap();
+        assert_eq!(find(ClickTarget::Give, &buttons, &layout), None);
         let open = button(&mut world, Display::Flex);
         let (mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
-        assert!(click(
-            ClickTarget::Give,
-            &mut buttons,
-            &layout,
-            &mut pointers
-        ));
+        assert_eq!(find(ClickTarget::Give, &buttons, &layout), Some(open));
+        press(open, ClickTarget::Give, &mut buttons, &mut pointers);
         assert_eq!(world.get::<Interaction>(open), Some(&Interaction::Pressed));
         assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
     }

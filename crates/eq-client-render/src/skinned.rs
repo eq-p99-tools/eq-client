@@ -176,6 +176,12 @@ pub(crate) struct TitleBox {
 #[derive(Component)]
 pub(crate) struct Greyed;
 
+/// What a skin's control this client does not have yet carries, over the
+/// skin's disabled look: the same reason on hover in every window.
+fn missing() -> (crate::outbox::Needs, Interaction) {
+    (crate::outbox::Needs::Missing, Interaction::default())
+}
+
 /// Window frames, with what the skin changes on them and the skin they are
 /// drawn in.
 type Frames<'w, 's> = Query<
@@ -1324,7 +1330,8 @@ fn behave(
             skin(),
             crate::outbox::Needs::Nothing,
         )),
-        Does::Offered(_) | Does::BagIcon | Does::Nothing => drawn,
+        Does::Offered(_) | Does::BagIcon => drawn,
+        Does::Nothing => drawn.insert(missing()),
     };
     // The skin keeps the pet's Stand under its Sit; one shows at a time.
     if let Does::Slash(command) = does
@@ -1650,7 +1657,9 @@ fn title_boxes(
         ));
         match (close, closes) {
             (true, true) => drawn.insert(items::Closes(owner)),
-            (true, false) => drawn.insert(Greyed),
+            // The client keeps this window open: its close box is one more
+            // control the client does not have yet.
+            (true, false) => drawn.insert((Greyed, missing())),
             (false, _) => drawn.insert(super::windows::Minimize(frame)),
         };
     }
@@ -2291,6 +2300,84 @@ mod tests {
                 "{id}"
             );
         }
+    }
+
+    #[test]
+    fn a_button_the_client_does_not_have_yet_says_so_on_hover() {
+        use crate::outbox::Needs;
+        use eq_client_assets::sidl::{Button, ButtonLook, Element};
+        let button = |id: &str, x| {
+            Element::Button(Button {
+                id: Some(id.into()),
+                area: Area {
+                    x,
+                    y: 0.0,
+                    width: 20.0,
+                    height: 20.0,
+                },
+                placed: true,
+                anchors: None,
+                look: ButtonLook::default(),
+                checkbox: false,
+                text: None,
+                text_color: None,
+                decal: None,
+                decal_area: None,
+                tooltip: Some("Sample".into()),
+            })
+        };
+        let screen = Screen {
+            name: "HotButtonWnd".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 30.0,
+            },
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![
+                ("page".into(), button("HB_PageLeftButton", 0.0)),
+                ("slot".into(), button("HB_Button1", 20.0)),
+            ],
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id: WindowId::Actions,
+                        paperdoll: None,
+                        depth: 0,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            );
+        app.update();
+        let mut controls = app
+            .world_mut()
+            .query::<(&Needs, Has<Interaction>, Has<crate::tooltip::Tooltip>)>();
+        let drawn: Vec<_> = controls
+            .iter(app.world())
+            .map(|(needs, hovers, tooltip)| (*needs, hovers, tooltip))
+            .collect();
+        // The page button the client lacks gives its reason on hover in
+        // place of the skin's tooltip; the slot beside it works and keeps
+        // its own.
+        assert_eq!(drawn.len(), 2);
+        assert!(drawn.contains(&(Needs::Missing, true, false)));
+        assert!(drawn.contains(&(Needs::Nothing, true, true)));
     }
 
     #[test]
