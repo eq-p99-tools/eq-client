@@ -127,33 +127,48 @@ fn ask(request: TrainingRequest, world: &ClientWorld, outbox: &Outbox) {
     });
 }
 
+/// Where the Training window stands with the guildmaster it was opened for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Opened {
+    /// No training.
+    #[default]
+    Closed,
+    /// Open for this guildmaster.
+    For(u16),
+    /// Closed by the player, while leaving this guildmaster is under way.
+    Leaving(u16),
+}
+
 /// Keeps the Training window with the training: it opens when the
 /// guildmaster answers and closes when training ends. A window the player
-/// closes, with Done or otherwise, leaves.
+/// closes, with Done or otherwise, leaves, and stays closed until the
+/// training has ended.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn window(
     online: Res<OnlineState>,
     outbox: Res<Outbox>,
     mut shown: ResMut<Shown>,
     mut chosen: ResMut<Chosen>,
-    mut opened: Local<Option<u16>>,
+    mut opened: Local<Opened>,
 ) {
     let training = online.world().training().map(|offer| offer.trainer);
     match (training, *opened) {
-        (Some(trainer), mine) if mine != Some(trainer) => {
+        (Some(trainer), Opened::For(open) | Opened::Leaving(open)) if open == trainer => {
+            if *opened == Opened::For(trainer) && !shown.is_open(WindowId::Training) {
+                ask(TrainingRequest::End, online.world(), &outbox);
+                *opened = Opened::Leaving(trainer);
+            }
+        }
+        (Some(trainer), _) => {
             shown.open(WindowId::Training);
-            *opened = Some(trainer);
+            *opened = Opened::For(trainer);
             chosen.0 = None;
         }
-        (Some(_), Some(_)) if !shown.is_open(WindowId::Training) => {
-            ask(TrainingRequest::End, online.world(), &outbox);
-            *opened = None;
-        }
-        (None, Some(_)) => {
+        (None, Opened::For(_) | Opened::Leaving(_)) => {
             shown.close(WindowId::Training);
-            *opened = None;
+            *opened = Opened::Closed;
         }
-        _ => (),
+        (None, Opened::Closed) => (),
     }
 }
 
@@ -270,6 +285,51 @@ mod tests {
         WorldEvent,
         training::{TrainingOffer, TrainingUpdate},
     };
+
+    #[test]
+    fn a_window_the_player_closes_stays_closed_until_training_ends() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, window);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::news(
+            &mut online,
+            [WorldEvent::Training(TrainingUpdate::Offered(
+                TrainingOffer {
+                    trainer: 42,
+                    caps: vec![0; 100],
+                },
+            ))],
+        );
+        app.insert_resource(online);
+        app.update();
+        assert!(app.world().resource::<Shown>().is_open(WindowId::Training));
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .close(WindowId::Training);
+        // Leaving is asked; the training lasts until the session says it
+        // ended, and the window does not come back meanwhile.
+        app.update();
+        app.update();
+        assert!(!app.world().resource::<Shown>().is_open(WindowId::Training));
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Training(TrainingUpdate::Ended)],
+        );
+        app.update();
+        // A guildmaster's next answer opens it again.
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Training(TrainingUpdate::Offered(
+                TrainingOffer {
+                    trainer: 42,
+                    caps: vec![0; 100],
+                },
+            ))],
+        );
+        app.update();
+        assert!(app.world().resource::<Shown>().is_open(WindowId::Training));
+    }
 
     #[test]
     fn the_list_names_each_skill_the_guildmaster_teaches_with_its_cost() {
