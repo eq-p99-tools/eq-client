@@ -139,7 +139,8 @@ pub(super) fn target_color(
     }
 }
 
-/// `%1 %2 -- %3`: the target, its faction standing, and the level assessment.
+/// The consider line: the target, its faction standing, and the level
+/// assessment.
 pub(super) fn consideration_text(
     messages: &Messages,
     name: &str,

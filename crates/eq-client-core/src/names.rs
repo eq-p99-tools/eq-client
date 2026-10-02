@@ -8,9 +8,11 @@ use crate::{
     listing::{Anonymity, Listing},
 };
 
-/// The official client's answer to a `/shownames` it cannot read (string
-/// 13298).
-pub const SHOW_NAMES_FORMAT: &str = "Format: /shownames <off/1/2/3/4/5/6>";
+/// The official client's answer to a `/shownames` it cannot read
+/// (`eqstr_us.txt`), which a front end shows where the installation has it.
+pub const SHOW_NAMES_USAGE: u32 = 13298;
+/// The same answer in this client's words.
+pub const SHOW_NAMES_USAGE_TEXT: &str = "Use /shownames off, or /shownames and a level.";
 
 /// How much of a player's name shows over their head, as `/shownames` sets
 /// it.
@@ -72,16 +74,17 @@ impl ShowNames {
         word.parse().ok().and_then(Self::from_level)
     }
 
-    /// What the official client says when `/shownames` sets it (strings
-    /// 13293 to 13297).
+    /// What the client says when `/shownames` sets it: the official
+    /// client's string (`eqstr_us.txt`, 13293 to 13297) for a front end with
+    /// the installed strings, and the same in this client's words.
     #[must_use]
-    pub const fn announcement(self) -> &'static str {
+    pub const fn announcement(self) -> (u32, &'static str) {
         match self {
-            Self::Off => "Player names are *off*.",
-            Self::First => "Showing only first names.",
-            Self::Last => "Showing first and last names.",
-            Self::Guild => "Showing first, last and guild names.",
-            Self::Everything => "Showing everything.",
+            Self::Off => (13293, "Names over players are hidden."),
+            Self::First => (13294, "Names over players show first names only."),
+            Self::Last => (13295, "Names over players show first and last names."),
+            Self::Guild => (13296, "Names over players show names and guilds."),
+            Self::Everything => (13297, "Names over players show everything."),
         }
     }
 }
@@ -145,9 +148,10 @@ mod tests {
         }
         assert_eq!(ShowNames::from_level(4), Some(ShowNames::Everything));
         assert_eq!(ShowNames::default(), ShowNames::Everything);
-        assert_eq!(
-            ShowNames::Guild.announcement(),
-            "Showing first, last and guild names."
+        assert_eq!(ShowNames::Guild.announcement().0, 13296);
+        assert_ne!(
+            ShowNames::Guild.announcement().1,
+            ShowNames::Last.announcement().1
         );
     }
 

@@ -4,10 +4,15 @@
 //! words, stamped with the local time.
 use crate::chat::{ChannelName, ChatLine};
 
-/// What the official client says as `/log` turns logging on (eqstr 13221).
-pub const LOGGING_ON: &str = "Logging to 'eqlog.txt' is now *ON*.";
-/// What it says as `/log` turns logging off (eqstr 13222).
-pub const LOGGING_OFF: &str = "Logging to 'eqlog.txt' is now *OFF*.";
+/// The official client's line as `/log` turns logging on (`eqstr_us.txt`),
+/// which a front end shows where the installation has it.
+pub const LOGGING_ON: u32 = 13221;
+/// Its line as `/log` turns logging off.
+pub const LOGGING_OFF: u32 = 13222;
+/// Logging turning on, in this client's words.
+pub const LOGGING_ON_TEXT: &str = "Your chat log is on.";
+/// Logging turning off, in this client's words.
+pub const LOGGING_OFF_TEXT: &str = "Your chat log is off.";
 
 /// The log file's name for a character on a server, by the server's short
 /// name: `eqlog_<character>_<server>.txt`.

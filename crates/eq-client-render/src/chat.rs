@@ -55,6 +55,9 @@ pub(super) struct ChatState {
     pub log_toggle: bool,
     /// A `/shownames`, waiting to set how much of players' names shows.
     pub show_names: Option<eq_client_core::names::ShowNames>,
+    /// A `/shownames` the client could not read, answered with the usage
+    /// line.
+    pub show_names_usage: bool,
     draft: String,
     status: String,
 }
@@ -612,14 +615,12 @@ pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Resul
     }
     let (command, word) = input.split_once(' ').unwrap_or((input, ""));
     if command.eq_ignore_ascii_case("/shownames") {
-        use eq_client_core::names::{SHOW_NAMES_FORMAT, ShowNames};
-        return Some(match ShowNames::parse(word) {
-            Some(level) => {
-                state.show_names = Some(level);
-                Ok(())
-            }
-            None => Err(SHOW_NAMES_FORMAT.to_owned()),
-        });
+        use eq_client_core::names::ShowNames;
+        match ShowNames::parse(word) {
+            Some(level) => state.show_names = Some(level),
+            None => state.show_names_usage = true,
+        }
+        return Some(Ok(()));
     }
     None
 }

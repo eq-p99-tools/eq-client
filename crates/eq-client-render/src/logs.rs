@@ -20,7 +20,10 @@ pub(crate) struct ChatLog {
 /// does, and writes each new chat line to the character's log.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn write(
-    settings: Res<crate::ViewerSettings>,
+    (settings, messages): (
+        Res<crate::ViewerSettings>,
+        Option<Res<crate::hud::messages::Messages>>,
+    ),
     online: Res<crate::online::OnlineState>,
     mut chat: ResMut<crate::chat::ChatState>,
     (mut log, mut options): (ResMut<ChatLog>, ResMut<crate::options::OptionsState>),
@@ -30,13 +33,16 @@ pub(crate) fn write(
         chat.log_toggle = false;
         let on = !options.options.log;
         options.options.log = on;
-        let words = if on {
-            logs::LOGGING_ON
+        let (id, fallback) = if on {
+            (logs::LOGGING_ON, logs::LOGGING_ON_TEXT)
         } else {
-            logs::LOGGING_OFF
+            (logs::LOGGING_OFF, logs::LOGGING_OFF_TEXT)
         };
-        chat.history
-            .push(crate::chat::system_line(words.to_owned()));
+        let words = messages.as_deref().map_or_else(
+            || fallback.to_owned(),
+            |messages| messages.text(id, fallback),
+        );
+        chat.history.push(crate::chat::system_line(words));
         // The official client writes its *OFF* line before it stops, as it
         // writes its *ON* line as it starts.
         writes = true;
@@ -142,7 +148,7 @@ mod tests {
         assert!(lines[0].starts_with('['));
         assert!(lines[0].ends_with("] You have entered The Qeynos Hills."));
         // The official client writes its *OFF* line, then nothing more.
-        assert!(lines[1].ends_with(logs::LOGGING_OFF));
+        assert!(lines[1].ends_with(logs::LOGGING_OFF_TEXT));
         // And the character's options keep the choice.
         assert!(
             !app.world()
@@ -156,7 +162,7 @@ mod tests {
             chat.history
                 .lines(eq_client_core::chat::ChatTab::All)
                 .iter()
-                .any(|(_, line)| line.message.text == logs::LOGGING_OFF)
+                .any(|(_, line)| line.message.text == logs::LOGGING_OFF_TEXT)
         );
         let _ = std::fs::remove_dir_all(&directory);
     }

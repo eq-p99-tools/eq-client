@@ -52,7 +52,7 @@ pub(super) fn check(
         .zip(world.vitals().mana)
         .is_some_and(|(cost, mana)| cost > mana)
     {
-        return Err(messages.text(199, "Insufficient Mana to cast this spell!"));
+        return Err(messages.text(199, "Not enough mana for that spell"));
     }
     let remaining = world.casting().cooldowns.remaining(spell_id, now);
     if !remaining.is_zero() {
