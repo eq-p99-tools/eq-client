@@ -121,7 +121,9 @@ worker. `--session-seconds 150` bounds a test; `--screenshot frame.png
 Allow the usual server logout timeout before another client uses the character.
 
 Online sessions are stationary by default. The opt-in P99 movement path is described
-below. `EQ_PROTOCOL` selects `p99` (default) or `quarm`.
+below. `EQ_PROTOCOL` selects `p99` (default) or `quarm`, or a stock server for
+local testing: `eqemu` (Titanium) or `takp` (a TAKP server, which speaks
+Quarm's protocol).
 For Quarm, use the TAKP installation as `--eq-dir`; P99 checksum scanning is skipped.
 Both protocols supply server-selected terrain, character state, nearby spawns,
 position updates, despawns, HP, mana, and experience. Quarm's compressed profile and
@@ -567,7 +569,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `right_click` with the same targets (a bag's slot opens its window),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
-window is focused (except offline, or on a local `EQEmu` server), stop if focus is lost while a key is held, cap each hold, wait
+window is focused (except offline, or on a local `EQEmu` or TAKP server), stop if focus is lost while a key is held, cap each hold, wait
 and the whole run, inject clicks only while the real pointer is outside the
 window, never send chat, and save screenshots beside the script file.
 
