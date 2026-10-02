@@ -371,6 +371,9 @@ pub(super) fn receive(
     // the session here, instead of leaving it looking connected.
     let lost = (ended && !state.world.ended())
         .then_some(WorldUpdate::Connection(eq_client_core::world::Link::Ended));
+    if lost.is_some() {
+        warn!("The session stopped without saying why");
+    }
     // The player entity spawned by zone entry in this batch, not yet in the world.
     let mut entered = None;
     for update in batch.into_iter().chain(lost) {
@@ -424,8 +427,15 @@ pub(super) fn receive(
 
 /// Logs what diagnosing a session needs from its news.
 fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: &ClientWorld) {
-    let WorldUpdate::Game(event) = update else {
-        return;
+    let event = match update {
+        WorldUpdate::Game(event) => event,
+        // Every change of connection is logged, so a session that ends
+        // leaves its reason behind.
+        WorldUpdate::Connection(link) => {
+            info!(?link, dead = world.ended(), "Session connection changed");
+            return;
+        }
+        _ => return,
     };
     match event {
         WorldEvent::ItemDetails(item) => debug!("Item definition received: ID {}", item.id),
