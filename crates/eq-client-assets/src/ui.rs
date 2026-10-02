@@ -194,6 +194,13 @@ impl InstalledClient {
         matches!(self, Self::Titanium)
     }
 
+    /// Whether this client shows casts in its own casting window;
+    /// unchecked for the Mac-era client.
+    #[must_use]
+    pub const fn casting_window(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
+
     /// The face this client writes its windows in, by its file among
     /// Windows' fonts; None until it is checked for this client.
     #[must_use]
