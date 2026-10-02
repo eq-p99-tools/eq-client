@@ -66,6 +66,7 @@ impl ClientWorld {
                 .enumerate()
                 .filter_map(|(slot, buff)| Some((u32::try_from(slot).ok()?, buff.clone()?)))
                 .collect(),
+            u32::try_from(buffs.len()).unwrap_or(u32::MAX),
         );
     }
 

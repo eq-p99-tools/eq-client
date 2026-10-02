@@ -543,7 +543,7 @@ fn schedule(app: &mut App) {
                 hud::hotbar::presentation,
                 spellbook::scribe_presentation,
                 buffs::update,
-                buffs::hover,
+                (buffs::hover, buffs::skinned_details, buffs::short_window),
                 (
                     spell_icons::update,
                     logs::write,

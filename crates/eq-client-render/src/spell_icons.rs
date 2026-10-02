@@ -6,6 +6,8 @@ pub(super) enum Source {
     Buff(u32),
     /// The pet's buff in this slot.
     PetBuff(usize),
+    /// The player's buff on this button of an effects window.
+    Window(eq_client_core::buffs::EffectWindow, u32),
     Gem(usize),
     Book(usize),
     Action(usize),
@@ -68,6 +70,11 @@ pub(super) fn update(
                 .pet_buffs()
                 .and_then(|buffs| buffs.slots.get(slot).copied().flatten())
                 .map(|buff| buff.spell_id),
+            Source::Window(window, button) => online
+                .world()
+                .buffs()
+                .in_window(window, button)
+                .map(eq_client_core::buffs::Shown::spell_id),
             Source::Gem(index) => online.world().gem(index),
             Source::Action(index) => bindings.gem(index).and_then(|gem| online.world().gem(gem)),
             Source::Book(index) => online.world().spell_book().and_then(|spells| {
