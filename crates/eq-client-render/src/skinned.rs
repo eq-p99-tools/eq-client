@@ -1680,6 +1680,7 @@ mod tests {
                 width: 150.0,
                 height: 20.0,
             },
+            anchors: None,
             look: ButtonLook::default(),
             checkbox: true,
             text: Some("Pet Window Popup".into()),
