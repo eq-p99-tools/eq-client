@@ -200,6 +200,7 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::abilities::AbilityButton>,
             Has<super::skinned::AttackButton>,
             Option<&'static super::skinned::SlashButton>,
+            Option<&'static super::options::OptionCheckbox>,
         ),
     ),
 >;
@@ -634,13 +635,14 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
         tint,
         give,
         (coins, pick),
-        (selector, tab, ability, attack, slash),
+        (selector, tab, ability, attack, slash, checkbox),
     ) in buttons.iter_mut()
     {
         let matches = match target {
             ClickTarget::ActionsWindow => selector
                 .is_some_and(|selector| selector.0 == super::windows::WindowId::ActionsWindow),
-            ClickTarget::Tab(index) => tab.is_some_and(|tab| tab.index == index),
+            // A tab of the window's own tab box, not one on its pages.
+            ClickTarget::Tab(index) => tab.is_some_and(|tab| tab.depth == 0 && tab.index == index),
             ClickTarget::Ability(page, index) => ability.is_some_and(|button| {
                 use super::abilities::Page;
                 button.index == index
@@ -652,6 +654,7 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
             }),
             ClickTarget::Attack => attack,
             ClickTarget::Pet(command) => slash.is_some_and(|button| button.0 == command),
+            ClickTarget::Option(toggle) => checkbox.is_some_and(|checkbox| checkbox.0 == toggle),
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,

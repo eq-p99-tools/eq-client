@@ -138,6 +138,8 @@ pub enum ClickTarget {
     Attack,
     /// A Pet Info window button, by the `/pet` line it gives.
     Pet(&'static str),
+    /// An Options window checkbox, by the option's name in a file.
+    Option(eq_client_core::options::Toggle),
 }
 
 /// The Actions window's pages that hold ability buttons.
@@ -329,6 +331,12 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                     .ok_or("expected a Pet Info window button, by its /pet words")?,
             )
         }
+        ["option", name] => ClickTarget::Option(
+            eq_client_core::options::Toggle::ALL
+                .into_iter()
+                .find(|toggle| toggle.key() == *name)
+                .ok_or("expected an option, by its name in a file")?,
+        ),
         ["attack"] => ClickTarget::Attack,
         ["tab", tab] => ClickTarget::Tab(ordinal(tab, "a tab")?),
         ["ability", page, place] => ClickTarget::Ability(
@@ -691,7 +699,19 @@ mod tests {
                 Step::Click(ClickTarget::Pet("/pet sit down")),
             ]
         );
-        for bad in ["slash pet", "click pet", "click pet dance"] {
+        assert_eq!(
+            parse("click option target_ring\n", base).unwrap(),
+            [Step::Click(ClickTarget::Option(
+                eq_client_core::options::Toggle::TargetRing
+            ))]
+        );
+        for bad in [
+            "slash pet",
+            "click pet",
+            "click pet dance",
+            "click option",
+            "click option shiny",
+        ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }

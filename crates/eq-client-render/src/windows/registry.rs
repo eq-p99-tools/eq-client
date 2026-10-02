@@ -49,6 +49,9 @@ pub(crate) enum WindowId {
     /// The skin's Pet Info window: the pet's health, its commands and its
     /// buffs, open while the player has a pet.
     PetInfo,
+    /// The skin's Options window: the options the player sets, on its pages,
+    /// and a page of the options only this client has.
+    Options,
     /// The buttons that open the other windows.
     Selector,
     /// The character list.
@@ -226,7 +229,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 19] = [
+    pub(crate) const ALL: [Self; 20] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -244,6 +247,7 @@ impl WindowId {
         Self::Give,
         Self::ActionsWindow,
         Self::PetInfo,
+        Self::Options,
         Self::Selector,
         Self::CharacterSelect,
     ];
@@ -276,6 +280,7 @@ impl WindowId {
             Self::Give => Some("GiveWnd"),
             Self::ActionsWindow => Some("ActionsWindow"),
             Self::PetInfo => Some("PetInfoWindow"),
+            Self::Options => Some("OptionsWindow"),
             _ => None,
         }
     }
@@ -312,6 +317,7 @@ impl WindowId {
             Self::Give => "give",
             Self::ActionsWindow => "actions-window",
             Self::PetInfo => "pet-info",
+            Self::Options => "options",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
@@ -413,6 +419,9 @@ impl WindowId {
             // Where the skin places it, right of the hotbar; it opens with a
             // pet and closes when the pet is gone.
             Self::PetInfo => floating("PET", Placement::TopLeft(56.0, 160.0), false, &[]),
+            // Where the skin places it; Alt+O opens and closes it, as in the
+            // official client.
+            Self::Options => floating("OPTIONS", Placement::TopLeft(90.0, 47.0), true, &[]),
             Self::Item => Description {
                 layer: Layer::Popup,
                 ..floating(
