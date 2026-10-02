@@ -24,6 +24,17 @@ pub(super) struct Zone {
     pub(super) objects: Objects,
     /// The corpse and the merchant are the zone's.
     pub(super) trade: Trade,
+    /// How the zone's sky and fog look, once the zone says.
+    pub(super) sky: Option<crate::clock::ZoneSky>,
+    /// The player's pet's buffs, as the server last said.
+    pub(super) pet_buffs: Option<crate::pets::PetBuffs>,
+    /// The guildmaster the player is training with, and what they teach.
+    pub(super) training: Option<crate::training::TrainingOffer>,
+    /// The world container the player asked to open, until the server
+    /// answers.
+    pub(super) asked_container: Option<u32>,
+    /// The world container open for the player, such as a forge.
+    pub(super) container: Option<crate::ground::ContainerView>,
 }
 
 impl Zone {
@@ -37,7 +48,7 @@ impl Zone {
                 spawn.spawn_id,
                 Spawn {
                     state: spawn.clone(),
-                    health: None,
+                    health: spawn.hp_percent,
                     posture: None,
                     revision: *revision,
                 },
@@ -213,6 +224,29 @@ impl super::ClientWorld {
             });
         } else {
             changes.ignored = true;
+        }
+    }
+
+    /// The server's word on the zone's objects: a container the player asked
+    /// for opens, or is in use by someone else; one opened unasked the
+    /// session closes again, and it never shows.
+    pub(super) fn objects_news(
+        &mut self,
+        update: &crate::ground::ObjectUpdate,
+        changes: &mut super::Changes,
+    ) {
+        self.zone.objects.apply(update);
+        let own = self.player.as_ref().map(|player| player.spawn_id);
+        if let crate::ground::ObjectUpdate::Container(view) = update
+            && own.is_some_and(|own| u32::from(own) == view.player_id)
+            && self.zone.asked_container == Some(view.drop_id)
+        {
+            self.zone.asked_container = None;
+            if view.open {
+                self.zone.container = Some(view.clone());
+            } else {
+                changes.notices.push(Notice::ContainerInUse);
+            }
         }
     }
 

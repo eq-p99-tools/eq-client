@@ -243,6 +243,11 @@ mod tests {
                 size: 6.0,
                 invisible: false,
                 appearance: eq_client_core::outfit::Appearance::default(),
+                level: 0,
+                listing: eq_client_core::listing::Listing::default(),
+                name_parts: eq_client_core::names::NameParts::default(),
+                pet_owner: None,
+                hp_percent: None,
             }],
         );
         let mut sword = crate::preview::items()
@@ -348,6 +353,11 @@ mod tests {
                 size: 0.0,
                 invisible: false,
                 appearance: eq_client_core::outfit::Appearance::default(),
+                level: 0,
+                listing: eq_client_core::listing::Listing::default(),
+                name_parts: eq_client_core::names::NameParts::default(),
+                pet_owner: None,
+                hp_percent: None,
             }],
         );
         testing::news(

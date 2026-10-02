@@ -137,6 +137,7 @@ pub(crate) fn player(
         mana: 0,
         endurance: Some(0),
         skills: None,
+        practice_points: None,
         spell_refresh_ms: None,
         memorized_spells: gems,
         size: 0.0,
@@ -144,6 +145,8 @@ pub(crate) fn player(
         run_speed: 0.0,
         hp_percent: None,
         appearance: eq_client_core::outfit::Appearance::default(),
+        listing: eq_client_core::listing::Listing::default(),
+        name_parts: eq_client_core::names::NameParts::default(),
     }
 }
 
@@ -408,6 +411,11 @@ fn synthetic(id: u16, race: u32, size: f32, position: WorldPosition) -> eq_clien
         size,
         invisible: false,
         appearance: eq_client_core::outfit::Appearance::default(),
+        level: 0,
+        listing: eq_client_core::listing::Listing::default(),
+        name_parts: eq_client_core::names::NameParts::default(),
+        pet_owner: None,
+        hp_percent: None,
     }
 }
 
@@ -480,6 +488,7 @@ pub(crate) fn items() -> Vec<InventoryItem> {
         items.push(InventoryItem {
             activation: eq_client_core::inventory::ItemActivation::default(),
             scroll_spell: None,
+            book: None,
             rules: eq_client_core::inventory::ItemPlacement {
                 stack_size: if id == 8 { 100 } else { 20 },
                 size: 1,

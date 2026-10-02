@@ -29,9 +29,10 @@ impl StringTable {
         Self(
             lines
                 .filter_map(|line| {
-                    let (id, message) = line.split_once(char::is_whitespace)?;
-                    let message = message.trim();
-                    if message.is_empty() {
+                    // One space parts the number from the words, whose own
+                    // spaces stand: " AFK " goes between parts of a line.
+                    let (id, message) = line.split_once(' ')?;
+                    if message.trim().is_empty() {
                         return None;
                     }
                     Some((id.parse().ok()?, message.to_owned()))
@@ -133,6 +134,9 @@ mod tests {
             assert_eq!(table.argument_free(id), None);
         }
         assert!(StringTable::parse("OTHER\n0 1\n73 Wrong format").is_empty());
+        // Spaces around the words are part of them.
+        let table = StringTable::parse("EQST0002\n0 1\n12311  AFK \n");
+        assert_eq!(table.argument_free(12311), Some(" AFK "));
     }
 
     #[test]
@@ -173,27 +177,27 @@ mod tests {
         let table = StringTable::parse(
             "EQST0002
 0 2
-554 %1 says '%T2'
-1146 Greetings, %3. You look like you could use a %4.
+554 %1 utters '%T2'
+1146 Hello, %3. Care for a %4?
 ",
         );
         let arguments = ["Rowyl", "1146", "Examplecleric", "Bread"].map(str::to_owned);
         assert_eq!(
             table.format(554, &arguments).as_deref(),
-            Some("Rowyl says 'Greetings, Examplecleric. You look like you could use a Bread.'")
+            Some("Rowyl utters 'Hello, Examplecleric. Care for a Bread?'")
         );
         // Unknown ids and plain text stay literal.
         assert_eq!(
             table
                 .format(554, &["Nura".into(), "9999".into()])
                 .as_deref(),
-            Some("Nura says '9999'")
+            Some("Nura utters '9999'")
         );
         assert_eq!(
             table
                 .format(554, &["Nura".into(), "Hello".into()])
                 .as_deref(),
-            Some("Nura says 'Hello'")
+            Some("Nura utters 'Hello'")
         );
     }
 }

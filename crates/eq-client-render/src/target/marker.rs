@@ -14,13 +14,18 @@ pub(crate) fn update(
     player: Query<Entity, With<crate::Player>>,
     collision: Option<Res<crate::Collision>>,
     mut rings: Query<(&mut Transform, &mut Visibility), With<Marker>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    (mut meshes, mut materials, options): (
+        ResMut<Assets<Mesh>>,
+        ResMut<Assets<StandardMaterial>>,
+        Res<crate::options::OptionsState>,
+    ),
 ) {
+    // The Display page's Show 3D Target Ring.
     let selected = online
         .world()
         .target()
         .selected
+        .filter(|_| options.options.target_ring)
         .filter(|_| online.world().connected() && online.world().death().is_none());
     let pose = selected.and_then(|id| {
         let own = online
@@ -112,6 +117,11 @@ mod tests {
                 size: 6.0,
                 invisible: false,
                 appearance: eq_client_core::outfit::Appearance::default(),
+                level: 0,
+                listing: eq_client_core::listing::Listing::default(),
+                name_parts: eq_client_core::names::NameParts::default(),
+                pet_owner: None,
+                hp_percent: None,
             },
         );
         let entity = app
@@ -125,6 +135,7 @@ mod tests {
             .insert_resource(nearby)
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<crate::options::OptionsState>()
             .add_systems(Update, update);
         app.update();
         let mut ring = app
@@ -157,6 +168,15 @@ mod tests {
         );
         app.update();
         assert_eq!(*ring.single(app.world()).unwrap().1, Visibility::Inherited);
+        // The Display page's Show 3D Target Ring hides it, and shows it again.
+        for (shown, visibility) in [(false, Visibility::Hidden), (true, Visibility::Inherited)] {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .target_ring = shown;
+            app.update();
+            assert_eq!(*ring.single(app.world()).unwrap().1, visibility);
+        }
         app.world_mut()
             .resource_mut::<crate::entities::NearbyEntities>()
             .rendered

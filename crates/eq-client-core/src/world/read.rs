@@ -23,6 +23,20 @@ impl ClientWorld {
         self.ended
     }
 
+    /// The time in Norrath now, once the server has given it: the time it
+    /// gave, run on by the real time since.
+    #[must_use]
+    pub fn game_time(&self, now: std::time::Instant) -> Option<crate::clock::GameTime> {
+        self.time
+            .map(|(time, given)| time.after(now.saturating_duration_since(given).as_secs()))
+    }
+
+    /// How the zone's sky and fog look, once the zone has said.
+    #[must_use]
+    pub const fn sky(&self) -> Option<crate::clock::ZoneSky> {
+        self.zone.sky
+    }
+
     /// The world server's short name.
     #[must_use]
     pub fn world_name(&self) -> Option<&str> {
@@ -96,6 +110,57 @@ impl ClientWorld {
     #[must_use]
     pub fn gem(&self, gem: usize) -> Option<u32> {
         self.gems().get(gem).copied().flatten()
+    }
+
+    /// The player's pet: the spawn the player owns.
+    #[must_use]
+    pub fn pet(&self) -> Option<&Spawn> {
+        let owner = self.player.as_ref()?.spawn_id;
+        self.zone
+            .spawns
+            .values()
+            .find(|spawn| spawn.state.pet_owner == Some(owner))
+    }
+
+    /// The resurrection offered and not yet answered.
+    #[must_use]
+    pub fn resurrection(&self) -> Option<&crate::resurrection::ResurrectionOffer> {
+        self.resurrection.as_ref()
+    }
+
+    /// The book or note open to read.
+    #[must_use]
+    pub fn reading(&self) -> Option<&crate::books::BookText> {
+        self.reading.as_ref()
+    }
+
+    /// The world container open for the player, such as a forge.
+    #[must_use]
+    pub fn container(&self) -> Option<&crate::ground::ContainerView> {
+        self.zone.container.as_ref()
+    }
+
+    /// The tradeskill container whose combine waits for the server.
+    #[must_use]
+    pub const fn combining(&self) -> Option<crate::inventory::InventorySlot> {
+        self.combining
+    }
+
+    /// The guildmaster the player is training with, and how far they train
+    /// each skill.
+    #[must_use]
+    pub fn training(&self) -> Option<&crate::training::TrainingOffer> {
+        self.zone.training.as_ref()
+    }
+
+    /// The pet's buffs, in their slots, once the server has said.
+    #[must_use]
+    pub fn pet_buffs(&self) -> Option<&crate::pets::PetBuffs> {
+        let pet = self.pet()?.state.spawn_id;
+        self.zone
+            .pet_buffs
+            .as_ref()
+            .filter(|buffs| buffs.pet == pet)
     }
 
     /// The zone's spawns, by spawn ID.
@@ -231,6 +296,12 @@ impl ClientWorld {
             .as_ref()
             .filter(|exchange| exchange.open)
             .map(|_| self.wallet.offered)
+    }
+
+    /// How fed and watered the player is, as the server last said.
+    #[must_use]
+    pub const fn nourishment(&self) -> Option<crate::food::Nourishment> {
+        self.nourishment
     }
 
     /// The merchant the player is trading with.

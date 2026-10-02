@@ -71,8 +71,12 @@ repository. On Windows, the viewer also detects the standard
 provided. `--start-x` and `--start-y` select an initial EQ location, and
 `--camera-distance` adjusts the initial view distance. `--terrain-only` hides
 placed objects when inspecting terrain materials. The client draws at most 60
-frames a second; `--max-fps` sets another cap, and `--max-fps 0` leaves the
-rate to vsync, which is the monitor's refresh rate.
+frames a second, or the `MaxFPS` in the installation's `eqclient.ini`;
+`--max-fps` sets another cap over both, and `--max-fps 0` leaves the rate to
+vsync, which is the monitor's refresh rate. The Options window (Alt+O) sets
+the cap per character with its Max FPS slider, which wins once moved, and its
+Far Clip Plane and Mouselook Sensitivity sliders set how far the scene is
+drawn and how fast the camera turns; its Keyboard page lists the keys.
 
 ## Stationary online preview
 
@@ -117,7 +121,9 @@ worker. `--session-seconds 150` bounds a test; `--screenshot frame.png
 Allow the usual server logout timeout before another client uses the character.
 
 Online sessions are stationary by default. The opt-in P99 movement path is described
-below. `EQ_PROTOCOL` selects `p99` (default) or `quarm`.
+below. `EQ_PROTOCOL` selects `p99` (default) or `quarm`, or a stock server for
+local testing: `eqemu` (Titanium) or `takp` (a TAKP server, which speaks
+Quarm's protocol).
 For Quarm, use the TAKP installation as `--eq-dir`; P99 checksum scanning is skipped.
 Both protocols supply server-selected terrain, character state, nearby spawns,
 position updates, despawns, HP, mana, and experience. Quarm's compressed profile and
@@ -515,9 +521,42 @@ The target panel lists the keys that apply to the current target:
   opens the give window with them. Every coin box shows what the networking
   session says is there; it refuses a move a place cannot cover before it is
   sent, and the reason shows in chat.
+- Food and drink: when the server counts the player hungry or thirsty (3000
+  of 6000 or less), the client eats or drinks from the inventory on its
+  own, as the official client does, and says so when there is nothing left.
+  By default it leaves food and drink with modifiers for the player to eat
+  or drink by hand: attributes, resists, HP, mana, endurance, AC, HP or mana
+  regeneration, haste, or a click, proc, worn or focus effect. When only
+  such food or drink is left, it says so. `--auto-eat-anything` eats and
+  drinks whatever comes first instead, as the official client does. A
+  right click on food or drink eats or drinks it by hand, whatever it is.
 - **/camp** sits, waits the 30-second preparation, logs out and returns to
   character selection. Standing, moving, zoning or dying abandons it. **/sit** and
   **/stand** change posture from chat.
+- **/consent Name** lets another player drag the player's corpses (also
+  `group`, `raid` or `guild`) and **/deny Name** takes it back; the server's
+  answer prints in the official client's words for both players.
+  **/corpse** pulls the targeted player corpse close when it lies within
+  reach, **/corpsedrag** starts dragging it, and **/corpsedrop** stops
+  dragging it, or every corpse when none is targeted.
+- **/who all** asks the world who is online and prints its answer in the
+  official client's words, from the installed `eqstr_us.txt`: class titles
+  from level 51, race names, guilds and zones. Words after it narrow the
+  list as the official client's do: a class (`wizard` or `wiz`), a race
+  (`dark elf` or `def`), a level or two for a range, `gm`, and the start of
+  a name, guild or zone. A plain **/who** lists the zone's players from what
+  the client knows of them, as the Titanium client does: the same words
+  narrow it, ` AFK ` or `* GM * ` comes before a line and ` LFG` after it,
+  guilds are named from the world's guild list, and the count names the
+  zone's long name.
+
+Day and night follow the time in Norrath the server gives as a zone admits the
+player, run on by the client between updates (an hour every three real
+minutes). Where a zone has a sky, the picture darkens through dawn and dusk to
+night, the sky and fog colors follow, and each zone's fog closes in from its
+own distances; below ground the light stays as it is. The night look is
+provisional (`PROVISIONAL_DAY_NIGHT` in eq-client-core) until official-client
+captures settle it.
 
 Melee and non-melee damage involving the player prints Titanium-style combat
 text. Server string-table messages (for example experience, skill-up and range
@@ -539,7 +578,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `right_click` with the same targets (a bag's slot opens its window),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
-window is focused (except offline, or on a local `EQEmu` server), stop if focus is lost while a key is held, cap each hold, wait
+window is focused (except offline, or on a local `EQEmu` or TAKP server), stop if focus is lost while a key is held, cap each hold, wait
 and the whole run, inject clicks only while the real pointer is outside the
 window, never send chat, and save screenshots beside the script file.
 

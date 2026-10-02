@@ -1,7 +1,9 @@
 //! Items on the ground as the client finds and picks them. The server's object
 //! table, the pickup rules and the reach live in the network session; this
 //! module only chooses which object a key press or a click means.
-pub use eq_network_game::objects::{GroundObject, ObjectKind, ObjectUpdate, Objects};
+pub use eq_network_game::objects::{
+    ContainerView, GroundObject, ObjectKind, ObjectUpdate, Objects,
+};
 
 use crate::WorldPosition;
 use glam::Vec3;
@@ -10,15 +12,15 @@ use glam::Vec3;
 /// long, in EQ units, around the model's own bounds.
 pub const MIN_PICK_SIZE: f32 = 1.5;
 
-/// The nearest item within reach of the player, measured as the session
-/// measures it, with its distance. Fixtures are left out: they cannot be
-/// picked up.
+/// The nearest object within reach that the player can use, measured as
+/// the session measures it, with its distance: an item to pick up or a world
+/// container such as a forge to open. Other fixtures are left out.
 #[must_use]
-pub fn nearest_item(objects: &Objects, player: WorldPosition) -> Option<(u32, f32)> {
+pub fn nearest_usable(objects: &Objects, player: WorldPosition) -> Option<(u32, f32)> {
     objects
         .entries()
         .values()
-        .filter(|object| object.kind() == ObjectKind::Item)
+        .filter(|object| object.kind() == ObjectKind::Item || object.is_tradeskill_container())
         .filter_map(|object| {
             let distance = (object.position.x - player.x)
                 .hypot(object.position.y - player.y)
@@ -84,8 +86,9 @@ mod tests {
     }
 
     #[test]
-    fn the_nearest_item_within_reach_is_chosen_and_fixtures_are_skipped() {
+    fn the_nearest_usable_object_within_reach_is_chosen() {
         let mut objects = Objects::default();
+        // A fixture that is not a container, nearest of all, is skipped.
         for update in [
             object(1, "IT63_ACTORDEF", 12.0),
             object(2, "IT10_ACTORDEF", 5.0),
@@ -95,16 +98,21 @@ mod tests {
             objects.apply(&ObjectUpdate::Spawn(update));
         }
         let player = WorldPosition::default();
-        let (id, distance) = nearest_item(&objects, player).unwrap();
+        let (id, distance) = nearest_usable(&objects, player).unwrap();
         assert_eq!(id, 2);
         assert!(close(distance, 5.0));
         objects.apply(&ObjectUpdate::Remove {
             drop_id: 2,
             taken_by: None,
         });
-        assert_eq!(nearest_item(&objects, player).map(|hit| hit.0), Some(1));
+        assert_eq!(nearest_usable(&objects, player).map(|hit| hit.0), Some(1));
+        // A forge, a tradeskill container, is used as an item is.
+        let mut forge = object(5, "FORGE", 2.0);
+        forge.object_type = 17;
+        objects.apply(&ObjectUpdate::Spawn(forge));
+        assert_eq!(nearest_usable(&objects, player).map(|hit| hit.0), Some(5));
         objects.apply(&ObjectUpdate::Snapshot(Vec::new()));
-        assert_eq!(nearest_item(&objects, player), None);
+        assert_eq!(nearest_usable(&objects, player), None);
     }
 
     #[test]

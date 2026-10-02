@@ -5,11 +5,12 @@
 //! Scripted clicks are only injected while the real pointer is outside the window,
 //! so they cannot also press whatever the pointer happens to be over. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
-//! `gm` steps send `#` commands only to a local `EQEmu` server.
+//! `gm` steps send `#` commands only to a local `EQEmu` server, and `chat`
+//! steps speak only there.
 mod parse;
 mod report;
 
-pub use parse::{AbilityPage, ClickTarget, PickButton, Step, TradeClick, parse};
+pub use parse::{AbilityPage, ClickTarget, PickButton, Step, TradeClick, TrainingClick, parse};
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -199,9 +200,28 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::skinned::SkinTab>,
             Option<&'static super::abilities::AbilityButton>,
             Has<super::skinned::AttackButton>,
+            Option<&'static super::skinned::SlashButton>,
+            Option<&'static super::options::OptionCheckbox>,
+        ),
+        (
+            Option<&'static super::skinned::LevelSlider>,
+            Option<&'static super::skinned::DropDown>,
+            Option<&'static super::skinned::DropDownChoice>,
+            (
+                Option<&'static super::training::SkillRow>,
+                Has<super::training::TrainButton>,
+                Option<&'static super::skinned::Closes>,
+                Option<&'static super::resurrection::AnswerButton>,
+                Option<&'static super::reading::PageButton>,
+                Option<&'static super::tradeskills::CombineButton>,
+                Option<&'static super::map::MapButton>,
+            ),
         ),
     ),
 >;
+
+/// Where the pointer is over each slider, which a scripted press sets.
+type Pointers<'w, 's> = Query<'w, 's, &'static mut bevy::ui::RelativeCursorPosition>;
 
 /// Every UI node's display and parent: a closed window is only left out of
 /// the layout, so its buttons keep their visibility.
@@ -235,13 +255,16 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    mut chat: ResMut<super::chat::ChatState>,
+    (mut chat, mut moves): (
+        ResMut<super::chat::ChatState>,
+        ResMut<super::windows::Moves>,
+    ),
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
     bodies: Query<&super::PlayerBody, With<super::Player>>,
     collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
-    (mut buttons, layout): (Buttons, Layout),
+    (mut buttons, layout, mut pointers): (Buttons, Layout, Pointers),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut exit: MessageWriter<AppExit>,
@@ -408,7 +431,7 @@ pub(super) fn drive(
                 if window.is_some_and(|window| window.cursor_position().is_some()) {
                     return;
                 }
-                if !click(*target, &mut buttons, &layout) {
+                if !click(*target, &mut buttons, &layout, &mut pointers) {
                     script.stop(&mut keys, &mut mouse, "click target is not visible");
                     return;
                 }
@@ -457,20 +480,27 @@ pub(super) fn drive(
             }
             return;
         }
-        Step::Slash(_) | Step::Gm(_) if !online.in_world() => {
+        Step::Slash(_) | Step::Gm(_) | Step::Chat(_) if !online.in_world() => {
             // The worker discards commands while zoning, dead or disconnected.
             script.stop(
                 &mut keys,
                 &mut mouse,
-                "slash and gm steps need a character in the world; wait_online or wait_zone first",
+                concat!(
+                    "slash, gm and chat steps need a character in the world; ",
+                    "wait_online or wait_zone first"
+                ),
             );
             return;
         }
+        Step::Drag(window, to) => {
+            if let Some(id) = super::windows::WindowId::named(window) {
+                moves.0.push((id, *to));
+            }
+            return;
+        }
         Step::Slash(command) => {
-            let queued = match super::chat::target_request(command) {
-                Some(request) => request.map(|name| chat.requested_target = Some(name)),
-                None => super::chat::submit_game_command(command, &online, &observed.1),
-            };
+            let queued = super::chat::client_request(command, &mut chat)
+                .unwrap_or_else(|| super::chat::submit_game_command(command, &online, &observed.1));
             if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);
             }
@@ -484,8 +514,13 @@ pub(super) fn drive(
             super::give::offer(target, &mut online, &observed.1);
             return;
         }
-        Step::Gm(command) => {
-            let sent = gm_chat(command, script.local).and_then(|chat| {
+        Step::Gm(_) | Step::Chat(_) => {
+            let line = match &step {
+                Step::Gm(command) => gm_chat(command, script.local),
+                Step::Chat(chat) => local_chat(chat, script.local),
+                _ => return,
+            };
+            let sent = line.and_then(|chat| {
                 observed
                     .1
                     .send(
@@ -605,17 +640,63 @@ fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool)
 }
 
 /// The say line carrying a `gm` step's `#` command, refused unless the session is
-/// on a local `EQEmu` server.
+/// on a local `EQEmu` or TAKP server.
 fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat, String> {
     if !allowed {
-        return Err("gm steps only run on a local EQEmu server (EQ_PROTOCOL=eqemu)".into());
+        return Err(
+            "gm steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)".into(),
+        );
     }
     Ok(eq_client_core::OutboundChat::Say(format!("#{command}")))
 }
 
+/// A `chat` step's line, refused unless the session is on a local `EQEmu` or
+/// TAKP server, as `gm` steps are.
+fn local_chat(
+    chat: &eq_client_core::OutboundChat,
+    allowed: bool,
+) -> Result<eq_client_core::OutboundChat, String> {
+    if !allowed {
+        return Err(
+            "chat steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)"
+                .into(),
+        );
+    }
+    Ok(chat.clone())
+}
+
+/// Whether a control of the Training window or the confirmation dialog is
+/// the one a click names.
+fn dialog_control(
+    target: ClickTarget,
+    (skill_row, train, closes, answer): (
+        Option<&super::training::SkillRow>,
+        bool,
+        Option<&super::skinned::Closes>,
+        Option<&super::resurrection::AnswerButton>,
+    ),
+) -> bool {
+    match target {
+        ClickTarget::Answer(yes) => answer.is_some_and(|answer| answer.0 == yes),
+        ClickTarget::Training(TrainingClick::Row(index)) => {
+            skill_row.is_some_and(|row| row.index == index)
+        }
+        ClickTarget::Training(TrainingClick::Train) => train,
+        ClickTarget::Training(TrainingClick::Done) => {
+            closes.is_some_and(|closes| closes.0 == super::windows::WindowId::Training)
+        }
+        _ => false,
+    }
+}
+
 /// Marks the first visible matching control in an open window pressed; the
 /// focus system clears it next frame.
-fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
+fn click(
+    target: ClickTarget,
+    buttons: &mut Buttons,
+    layout: &Layout,
+    pointers: &mut Pointers,
+) -> bool {
     for (
         entity,
         mut interaction,
@@ -629,13 +710,16 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
         tint,
         give,
         (coins, pick),
-        (selector, tab, ability, attack),
+        (selector, tab, ability, attack, slash, checkbox),
+        (slider, drop_down, choice, (skill_row, train, closes, answer, page, combine, map)),
     ) in buttons.iter_mut()
     {
         let matches = match target {
             ClickTarget::ActionsWindow => selector
                 .is_some_and(|selector| selector.0 == super::windows::WindowId::ActionsWindow),
-            ClickTarget::Tab(index) => tab.is_some_and(|tab| tab.index == index),
+            ClickTarget::Toggle(key) => selector.is_some_and(|selector| selector.0.key() == key),
+            // A tab of the window's own tab box, not one on its pages.
+            ClickTarget::Tab(index) => tab.is_some_and(|tab| tab.depth == 0 && tab.index == index),
             ClickTarget::Ability(page, index) => ability.is_some_and(|button| {
                 use super::abilities::Page;
                 button.index == index
@@ -646,6 +730,19 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
                         }
             }),
             ClickTarget::Attack => attack,
+            ClickTarget::Pet(command) => slash.is_some_and(|button| button.0 == command),
+            ClickTarget::Option(toggle) => checkbox.is_some_and(|checkbox| checkbox.0 == toggle),
+            ClickTarget::Slider(level, _) => slider.is_some_and(|slider| slider.level == level),
+            ClickTarget::KeyFilter => drop_down.is_some_and(|drop_down| {
+                drop_down.choosing() == super::skinned::Choosing::KeyFilter
+            }),
+            ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
+            ClickTarget::Answer(_) | ClickTarget::Training(_) => {
+                dialog_control(target, (skill_row, train, closes, answer))
+            }
+            ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
+            ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),
+            ClickTarget::Map(action) => map.is_some_and(|button| *button == action),
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
@@ -689,6 +786,13 @@ fn click(target: ClickTarget, buttons: &mut Buttons, layout: &Layout) -> bool {
             }),
         };
         if matches && visibility.get() && displayed(entity, layout) {
+            // A slider is pressed where the setting is to go.
+            if let (ClickTarget::Slider(_, percent), Some(slider), Ok(mut pointer)) =
+                (target, slider, pointers.get_mut(entity))
+            {
+                pointer.normalized =
+                    Some(Vec2::new(slider.across(f32::from(percent) / 100.0), 0.0));
+            }
             *interaction = Interaction::Pressed;
             return true;
         }
@@ -753,6 +857,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chat_steps_speak_only_on_a_local_server() {
+        let line = eq_client_core::OutboundChat::Say("Hail".into());
+        assert!(local_chat(&line, false).is_err());
+        assert_eq!(local_chat(&line, true), Ok(line));
+    }
+
+    #[test]
     fn gm_commands_only_reach_a_local_eqemu_session() {
         assert!(gm_chat("summon", false).is_err());
         assert_eq!(
@@ -788,12 +899,22 @@ mod tests {
                 .id()
         };
         let closed = button(&mut world, Display::None);
-        let mut state = SystemState::<(Buttons, Layout)>::new(&mut world);
-        let (mut buttons, layout) = state.get_mut(&mut world).unwrap();
-        assert!(!click(ClickTarget::Give, &mut buttons, &layout));
+        let mut state = SystemState::<(Buttons, Layout, Pointers)>::new(&mut world);
+        let (mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
+        assert!(!click(
+            ClickTarget::Give,
+            &mut buttons,
+            &layout,
+            &mut pointers
+        ));
         let open = button(&mut world, Display::Flex);
-        let (mut buttons, layout) = state.get_mut(&mut world).unwrap();
-        assert!(click(ClickTarget::Give, &mut buttons, &layout));
+        let (mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
+        assert!(click(
+            ClickTarget::Give,
+            &mut buttons,
+            &layout,
+            &mut pointers
+        ));
         assert_eq!(world.get::<Interaction>(open), Some(&Interaction::Pressed));
         assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
     }

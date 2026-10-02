@@ -190,6 +190,30 @@ const MODELS: [(u32, [&str; 3]); 179] = [
     (367, ["", "", "SKE"]),
 ];
 
+/// A playable race's name, as `/who` shows it.
+#[must_use]
+pub const fn race_name(race: u32) -> Option<&'static str> {
+    Some(match race {
+        1 => "Human",
+        2 => "Barbarian",
+        3 => "Erudite",
+        4 => "Wood Elf",
+        5 => "High Elf",
+        6 => "Dark Elf",
+        7 => "Half Elf",
+        8 => "Dwarf",
+        9 => "Troll",
+        10 => "Ogre",
+        11 => "Halfling",
+        12 => "Gnome",
+        128 => "Iksar",
+        130 => "Vah Shir",
+        330 => "Froglok",
+        522 => "Drakkin",
+        _ => return None,
+    })
+}
+
 /// Whether a race is drawn at all. Servers place spawn points and teleport
 /// pads as unseen markers of the invisible man (127) and the teleport man
 /// (240), which the client draws as nothing.
@@ -232,6 +256,9 @@ mod tests {
         assert_eq!(model(127, 0), None);
         assert_eq!(model(9999, 0), None);
         assert!(drawn(71) && drawn(9999) && !drawn(127) && !drawn(240));
+        assert_eq!(race_name(6), Some("Dark Elf"));
+        assert_eq!(race_name(130), Some("Vah Shir"));
+        assert_eq!(race_name(71), None);
     }
 
     #[test]

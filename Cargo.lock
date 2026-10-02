@@ -2271,6 +2271,7 @@ dependencies = [
 name = "eq-client-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "eq-client-axes",
  "eq-network-game",
  "glam 0.32.1",
@@ -2283,6 +2284,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "chrono",
  "eq-client-assets",
  "eq-client-core",
  "image",
@@ -2291,7 +2293,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftrades#17b06959e9802494a5d0616de385defef82a47b7"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftrades#8d88bbcb6fe358d4f3deab7a51e3c08fe1e631c1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2310,7 +2312,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftrades#17b06959e9802494a5d0616de385defef82a47b7"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftrades#8d88bbcb6fe358d4f3deab7a51e3c08fe1e631c1"
 dependencies = [
  "anyhow",
  "hex",
@@ -2325,7 +2327,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftrades#17b06959e9802494a5d0616de385defef82a47b7"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftrades#8d88bbcb6fe358d4f3deab7a51e3c08fe1e631c1"
 dependencies = [
  "cbc",
  "cipher",
@@ -2338,7 +2340,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftrades#17b06959e9802494a5d0616de385defef82a47b7"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftrades#8d88bbcb6fe358d4f3deab7a51e3c08fe1e631c1"
 dependencies = [
  "anyhow",
  "crc32fast",

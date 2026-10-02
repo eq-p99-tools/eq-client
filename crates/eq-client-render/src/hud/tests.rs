@@ -26,6 +26,7 @@ fn caster() -> PlayerState {
         mana: 50,
         endurance: None,
         skills: None,
+        practice_points: None,
         spell_refresh_ms: None,
         memorized_spells: gems,
         size: 6.0,
@@ -33,6 +34,8 @@ fn caster() -> PlayerState {
         run_speed: 0.0,
         hp_percent: Some(100),
         appearance: eq_client_core::outfit::Appearance::default(),
+        listing: eq_client_core::listing::Listing::default(),
+        name_parts: eq_client_core::names::NameParts::default(),
     }
 }
 

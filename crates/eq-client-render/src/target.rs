@@ -183,7 +183,7 @@ pub(super) fn input(
                 (spawn, Some((drop_id, distance)))
                     if spawn.is_none_or(|(_, nearer)| distance < nearer) =>
                 {
-                    if let Some(line) = super::ground::pick_up(drop_id, &online, &outbox) {
+                    if let Some(line) = super::ground::use_object(drop_id, &mut online, &outbox) {
                         chat.history.push(super::chat::system_line(line));
                     }
                 }
@@ -390,6 +390,11 @@ mod tests {
                     size: 0.0,
                     invisible: false,
                     appearance: eq_client_core::outfit::Appearance::default(),
+                    level: 0,
+                    listing: eq_client_core::listing::Listing::default(),
+                    name_parts: eq_client_core::names::NameParts::default(),
+                    pet_owner: None,
+                    hp_percent: None,
                 },
             );
         }
@@ -428,6 +433,11 @@ mod tests {
                         size: 0.0,
                         invisible: false,
                         appearance: eq_client_core::outfit::Appearance::default(),
+                        level: 0,
+                        listing: eq_client_core::listing::Listing::default(),
+                        name_parts: eq_client_core::names::NameParts::default(),
+                        pet_owner: None,
+                        hp_percent: None,
                     },
                 );
             }
@@ -469,6 +479,11 @@ mod tests {
                         size: 0.0,
                         invisible: false,
                         appearance: eq_client_core::outfit::Appearance::default(),
+                        level: 0,
+                        listing: eq_client_core::listing::Listing::default(),
+                        name_parts: eq_client_core::names::NameParts::default(),
+                        pet_owner: None,
+                        hp_percent: None,
                     },
                 );
             }
@@ -643,6 +658,7 @@ mod tests {
                 mana: 0,
                 endurance: None,
                 skills: None,
+                practice_points: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],
                 size: 6.0,
@@ -650,6 +666,8 @@ mod tests {
                 run_speed: 0.0,
                 hp_percent: Some(55),
                 appearance: eq_client_core::outfit::Appearance::default(),
+                listing: eq_client_core::listing::Listing::default(),
+                name_parts: eq_client_core::names::NameParts::default(),
             },
         );
         let (tx, rx) = std::sync::mpsc::sync_channel(2);

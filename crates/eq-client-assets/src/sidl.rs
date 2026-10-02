@@ -93,6 +93,11 @@ pub struct Gauge {
     pub text_offset: (f32, f32),
     /// How far down the gauge the bar sits.
     pub bar_offset: f32,
+    /// Where the bar starts from the gauge's left (`GaugeOffsetX`); it runs
+    /// to the gauge's right edge, and its fill grows from here. Skins set it
+    /// below zero to show only part of a bar, as the Velious skin's hit
+    /// point bars change colour with each fifth.
+    pub bar_left: f32,
 }
 
 /// How a button is drawn in each of its states.
@@ -110,57 +115,6 @@ pub struct ButtonLook {
     pub pressed_flyby: Option<Piece>,
 }
 
-/// One edge of an element that stretches with its window: how far it sits
-/// from the window's near edge (top or left) or its far one.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Anchor {
-    /// Whether the offset counts from the near edge.
-    pub near: bool,
-    /// The offset.
-    pub offset: f32,
-}
-
-impl Anchor {
-    /// Where the edge falls in a window this wide or tall.
-    #[must_use]
-    pub fn at(self, size: f32) -> f32 {
-        if self.near {
-            self.offset
-        } else {
-            size - self.offset
-        }
-    }
-}
-
-/// Where an element that stretches with its window (`AutoStretch`) sits:
-/// each edge anchored to one of the window's. The skin's own windows anchor
-/// an edge to the top or left unless they say otherwise.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Stretch {
-    /// The left edge.
-    pub left: Anchor,
-    /// The top edge.
-    pub top: Anchor,
-    /// The right edge.
-    pub right: Anchor,
-    /// The bottom edge.
-    pub bottom: Anchor,
-}
-
-impl Stretch {
-    /// Where it sits in a window's client area of this size.
-    #[must_use]
-    pub fn within(self, width: f32, height: f32) -> Area {
-        let (left, top) = (self.left.at(width), self.top.at(height));
-        Area {
-            x: left,
-            y: top,
-            width: (self.right.at(width) - left).max(0.0),
-            height: (self.bottom.at(height) - top).max(0.0),
-        }
-    }
-}
-
 /// A button.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Button {
@@ -168,9 +122,9 @@ pub struct Button {
     pub id: Option<String>,
     /// Where it sits in its window.
     pub area: Area,
-    /// Where it sits instead when it stretches with its window, as the trade
-    /// window's buttons hug its bottom edge.
-    pub stretch: Option<Stretch>,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`), such as a Done button kept to the bottom corner.
+    pub anchors: Option<Anchors>,
     /// How it is drawn.
     pub look: ButtonLook,
     /// Whether it stays on once pressed, as a window's toggle does.
@@ -217,23 +171,92 @@ pub struct Page {
     pub pieces: Vec<(String, Element)>,
     /// The picture on its tab, and while it is the page shown.
     pub icon: [Option<Piece>; 2],
+    /// The colour of its tab's words, and while it is the page shown.
+    pub title_colors: [Option<[u8; 3]>; 2],
     /// What its tab says under the pointer.
     pub tooltip: Option<String>,
 }
 
-/// A window inside a window, such as the inventory's character view.
+/// Pages behind tabs, one shown at a time.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabBox {
+    /// What the window calls it.
+    pub name: String,
+    /// Where it sits in its container; None where the skin stretches it
+    /// over the container.
+    pub area: Option<Area>,
+    /// Its pages, the first shown until another is chosen.
+    pub pages: Vec<Page>,
+}
+
+/// A window inside a window, such as the inventory's character view or the
+/// pet window's buffs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct View {
     /// What the window calls it, such as `IW_CharacterView`.
     pub name: String,
     /// Where it sits in its window.
     pub area: Area,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`).
+    pub anchors: Option<Anchors>,
     /// How its frame is drawn.
     pub template: Option<WindowTemplate>,
     /// Whether it has a border.
     pub border: bool,
     /// The tooltip the skin gives it.
     pub tooltip: Option<String>,
+    /// What it shows, in drawing order, by element name.
+    pub pieces: Vec<(String, Element)>,
+}
+
+/// Where an element that stretches with its container sits: each edge's
+/// distance from the container's edge it keeps to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Anchors {
+    /// The left edge.
+    pub left: Anchor,
+    /// The top edge.
+    pub top: Anchor,
+    /// The right edge.
+    pub right: Anchor,
+    /// The bottom edge.
+    pub bottom: Anchor,
+}
+
+/// One edge of a stretching element.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Anchor {
+    /// This far from the container's left or top.
+    Start(f32),
+    /// This far from the container's right or bottom.
+    End(f32),
+}
+
+impl Anchor {
+    /// Where the edge lies along a container of this length.
+    #[must_use]
+    pub const fn along(self, length: f32) -> f32 {
+        match self {
+            Self::Start(offset) => offset,
+            Self::End(offset) => length - offset,
+        }
+    }
+}
+
+impl Anchors {
+    /// The area these anchors give inside a container of this size.
+    #[must_use]
+    pub fn within(&self, width: f32, height: f32) -> Area {
+        let (left, right) = (self.left.along(width), self.right.along(width));
+        let (top, bottom) = (self.top.along(height), self.bottom.along(height));
+        Area {
+            x: left,
+            y: top,
+            width: (right - left).max(0.0),
+            height: (bottom - top).max(0.0),
+        }
+    }
 }
 
 /// One of the gems that hold the player's memorized spells.
@@ -249,6 +272,75 @@ pub struct SpellGem {
     pub background: Option<Piece>,
     /// Over the gem while it is under the pointer.
     pub highlight: Option<Piece>,
+}
+
+/// How a slider is drawn: its track between two end caps, and its thumb
+/// in each state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SliderLook {
+    /// The track, stretched between the end caps.
+    pub background: Option<Piece>,
+    /// The track's left end.
+    pub cap_left: Option<Piece>,
+    /// The track's right end.
+    pub cap_right: Option<Piece>,
+    /// The thumb the player drags.
+    pub thumb: ButtonLook,
+}
+
+/// A slider: a thumb the player drags along a track to set a value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slider {
+    /// What the window calls it, such as `ODP_ClipPlaneSlider`.
+    pub id: Option<String>,
+    /// Where it sits in its window.
+    pub area: Area,
+    /// How it is drawn.
+    pub look: SliderLook,
+}
+
+/// A drop-down: the choice made, and a button that opens the list of
+/// choices.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Combobox {
+    /// What the window calls it, such as `ODP_SkyCombobox`.
+    pub id: Option<String>,
+    /// Where it sits in its window.
+    pub area: Area,
+    /// How its frame is drawn.
+    pub template: Option<WindowTemplate>,
+    /// The button that opens the list.
+    pub button: ButtonLook,
+    /// What may be chosen, in order.
+    pub choices: Vec<String>,
+    /// How tall the open list is.
+    pub list_height: f32,
+}
+
+/// One column of a list: its heading and width.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Column {
+    /// The column's heading.
+    pub heading: String,
+    /// The column's width.
+    pub width: f32,
+}
+
+/// A list of rows in columns under headings, such as the Options window's
+/// key assignments.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listbox {
+    /// What the window calls it, such as `OKP_KeyboardAssignmentList`.
+    pub id: Option<String>,
+    /// Where it sits in its window, when the skin places it.
+    pub area: Option<Area>,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`).
+    pub anchors: Option<Anchors>,
+    /// How its frame is drawn.
+    pub template: Option<WindowTemplate>,
+    /// Its columns, from the left.
+    pub columns: Vec<Column>,
 }
 
 /// Where a label's text sits in its box.
@@ -304,12 +396,38 @@ pub enum Element {
     SpellGem(SpellGem),
     /// An item slot.
     InvSlot(InvSlot),
+    /// A slider.
+    Slider(Slider),
+    /// A drop-down.
+    Combobox(Combobox),
+    /// A list in columns.
+    Listbox(Listbox),
     /// Pages behind tabs; the first is shown.
-    Tabs(Vec<Page>),
+    Tabs(TabBox),
     /// A window inside the window.
-    View(View),
+    View(Box<View>),
+    /// A box of text the client fills, such as a confirmation's question
+    /// (`STMLbox`).
+    TextBox(TextBox),
     /// An element this reader does not draw yet, by its kind.
     Other(String),
+}
+
+/// A box of text the client fills.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBox {
+    /// What the window calls it (`ScreenID`), such as `TextOutput`.
+    pub id: Option<String>,
+    /// Where it sits in its window, when the skin places it.
+    pub area: Area,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`).
+    pub anchors: Option<Anchors>,
+    /// How its frame is drawn; None for a box without one, such as a page
+    /// of a book, drawn on the window's own art.
+    pub template: Option<WindowTemplate>,
+    /// The colour of its text, where the skin sets one.
+    pub color: Option<[u8; 3]>,
 }
 
 /// A window as the skin defines it.
@@ -337,6 +455,8 @@ pub struct Screen {
 pub struct Library {
     pieces: HashMap<String, Piece>,
     templates: HashMap<String, WindowTemplate>,
+    sliders: HashMap<String, SliderLook>,
+    buttons: HashMap<String, ButtonLook>,
 }
 
 impl Library {
@@ -361,11 +481,23 @@ impl Library {
         let document = roxmltree::Document::parse(templates)?;
         library.add_pieces(&document);
         for node in document.root_element().children() {
-            if node.has_tag_name("WindowDrawTemplate")
-                && let Some(name) = node.attribute("item")
-            {
-                let template = library.template(node);
-                library.templates.insert(name.to_owned(), template);
+            let Some(name) = node.attribute("item") else {
+                continue;
+            };
+            match node.tag_name().name() {
+                "WindowDrawTemplate" => {
+                    let template = library.template(node);
+                    library.templates.insert(name.to_owned(), template);
+                }
+                "SliderDrawTemplate" => {
+                    let look = library.slider_look(node);
+                    library.sliders.insert(name.to_owned(), look);
+                }
+                "ButtonDrawTemplate" => {
+                    let look = library.button_look(Some(node));
+                    library.buttons.insert(name.to_owned(), look);
+                }
+                _ => (),
             }
         }
         Ok(library)
@@ -484,6 +616,29 @@ impl Library {
             .collect()
     }
 
+    /// A button's pictures in each state, from a `ButtonDrawTemplate` or a
+    /// slider's `Thumb`.
+    fn button_look(&self, look: Option<roxmltree::Node<'_, '_>>) -> ButtonLook {
+        let state = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
+        ButtonLook {
+            normal: state("Normal"),
+            pressed: state("Pressed"),
+            flyby: state("Flyby"),
+            disabled: state("Disabled"),
+            pressed_flyby: state("PressedFlyby"),
+        }
+    }
+
+    /// A slider's pictures, from a `SliderDrawTemplate`.
+    fn slider_look(&self, node: roxmltree::Node<'_, '_>) -> SliderLook {
+        SliderLook {
+            background: self.piece(text_of(node, "Background")),
+            cap_left: self.piece(text_of(node, "EndCapLeft")),
+            cap_right: self.piece(text_of(node, "EndCapRight")),
+            thumb: self.button_look(child(node, "Thumb")),
+        }
+    }
+
     fn button(&self, node: roxmltree::Node<'_, '_>) -> Element {
         let at = || {
             area(node).unwrap_or(Area {
@@ -498,14 +653,8 @@ impl Library {
         Element::Button(Button {
             id: text_of(node, "ScreenID").map(str::to_owned),
             area: at(),
-            stretch: stretch(node),
-            look: ButtonLook {
-                normal: state("Normal"),
-                pressed: state("Pressed"),
-                flyby: state("Flyby"),
-                disabled: state("Disabled"),
-                pressed_flyby: state("PressedFlyby"),
-            },
+            anchors: flag(node, "AutoStretch").then(|| anchors(node)),
+            look: self.button_look(look),
             checkbox: flag(node, "Style_Checkbox"),
             text: text_of(node, "Text").map(str::to_owned),
             text_color: color(node, "TextColor"),
@@ -547,10 +696,102 @@ impl Library {
                         self.piece(text_of(*page, "TabIcon")),
                         self.piece(text_of(*page, "TabIconActive")),
                     ],
+                    title_colors: [
+                        color(*page, "TabTextColor"),
+                        color(*page, "TabTextActiveColor"),
+                    ],
                     tooltip: text_of(*page, "TooltipReference").map(str::to_owned),
                 })
             })
             .collect()
+    }
+
+    /// A gauge: a bar showing a fraction, with its text.
+    fn gauge(&self, node: roxmltree::Node<'_, '_>) -> Element {
+        let at = || {
+            area(node).unwrap_or(Area {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            })
+        };
+        let look = child(node, "GaugeDrawTemplate");
+        let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
+        Element::Gauge(Gauge {
+            area: at(),
+            eq_type: number(node, "EQType"),
+            look: GaugeLook {
+                background: part("Background"),
+                fill: part("Fill"),
+                lines: part("Lines"),
+                cap_left: part("EndCapLeft"),
+                cap_right: part("EndCapRight"),
+            },
+            fill_tint: color(node, "FillTint"),
+            text_color: color(node, "TextColor"),
+            text_offset: (
+                number(node, "TextOffsetX").unwrap_or(0.0),
+                number(node, "TextOffsetY").unwrap_or(0.0),
+            ),
+            bar_offset: number(node, "GaugeOffsetY").unwrap_or(0.0),
+            bar_left: number(node, "GaugeOffsetX").unwrap_or(0.0),
+        })
+    }
+
+    /// A slider, a drop-down or a list.
+    fn control(&self, node: roxmltree::Node<'_, '_>) -> Element {
+        let at = || {
+            area(node).unwrap_or(Area {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            })
+        };
+        let id = || text_of(node, "ScreenID").map(str::to_owned);
+        let template = || {
+            text_of(node, "DrawTemplate").and_then(|template| self.templates.get(template).cloned())
+        };
+        match node.tag_name().name() {
+            "Slider" => Element::Slider(Slider {
+                id: id(),
+                area: at(),
+                look: text_of(node, "SliderArt")
+                    .and_then(|art| self.sliders.get(art).cloned())
+                    .unwrap_or_default(),
+            }),
+            "Combobox" => Element::Combobox(Combobox {
+                id: id(),
+                area: at(),
+                template: template(),
+                button: text_of(node, "Button")
+                    .and_then(|button| self.buttons.get(button).cloned())
+                    .unwrap_or_default(),
+                choices: node
+                    .children()
+                    .filter(|child| child.has_tag_name("Choices"))
+                    .filter_map(|child| child.text())
+                    .map(|choice| choice.trim().to_owned())
+                    .collect(),
+                list_height: number(node, "ListHeight").unwrap_or(100.0),
+            }),
+            "Listbox" => Element::Listbox(Listbox {
+                id: id(),
+                area: area(node),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
+                template: template(),
+                columns: node
+                    .children()
+                    .filter(|child| child.has_tag_name("Columns"))
+                    .map(|column| Column {
+                        heading: text_of(column, "Heading").unwrap_or_default().to_owned(),
+                        width: number(column, "Width").unwrap_or(80.0),
+                    })
+                    .collect(),
+            }),
+            other => Element::Other(other.to_owned()),
+        }
     }
 
     fn element(
@@ -568,29 +809,10 @@ impl Library {
             })
         };
         match node.tag_name().name() {
-            "Gauge" => {
-                let look = child(node, "GaugeDrawTemplate");
-                let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
-                Element::Gauge(Gauge {
-                    area: at(),
-                    eq_type: number(node, "EQType"),
-                    look: GaugeLook {
-                        background: part("Background"),
-                        fill: part("Fill"),
-                        lines: part("Lines"),
-                        cap_left: part("EndCapLeft"),
-                        cap_right: part("EndCapRight"),
-                    },
-                    fill_tint: color(node, "FillTint"),
-                    text_color: color(node, "TextColor"),
-                    text_offset: (
-                        number(node, "TextOffsetX").unwrap_or(0.0),
-                        number(node, "TextOffsetY").unwrap_or(0.0),
-                    ),
-                    bar_offset: number(node, "GaugeOffsetY").unwrap_or(0.0),
-                })
-            }
-            "Label" => Element::Label(Label {
+            "Gauge" => self.gauge(node),
+            // Words the skin writes, or the client fills: StaticText is how
+            // the skin writes a book's page numbers.
+            "Label" | "StaticText" => Element::Label(Label {
                 area: at(),
                 eq_type: number(node, "EQType"),
                 text: text_of(node, "Text").unwrap_or_default().to_owned(),
@@ -611,16 +833,41 @@ impl Library {
                 slot: number(node, "EQType"),
                 background: self.piece(text_of(node, "Background")),
             }),
+            "Slider" | "Combobox" | "Listbox" => self.control(node),
+            // A box of text, or a field the client fills with text, as a
+            // book's pages are.
+            "STMLbox" | "Editbox" => Element::TextBox(TextBox {
+                id: text_of(node, "ScreenID").map(str::to_owned),
+                area: at(),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
+                template: text_of(node, "DrawTemplate")
+                    .filter(|_| {
+                        !flag(node, "Style_Transparent")
+                            && text_of(node, "Style_Border") != Some("false")
+                    })
+                    .and_then(|template| self.templates.get(template).cloned()),
+                color: color(node, "TextColor"),
+            }),
             // Pages and windows within windows nest; skins go a few deep.
-            "TabBox" if depth < 4 => Element::Tabs(self.pages(node, elements, depth)),
-            "Screen" => Element::View(View {
+            "TabBox" if depth < 4 => Element::Tabs(TabBox {
+                name: node.attribute("item").unwrap_or_default().to_owned(),
+                area: area(node).filter(|_| !flag(node, "AutoStretch")),
+                pages: self.pages(node, elements, depth),
+            }),
+            "Screen" => Element::View(Box::new(View {
                 name: node.attribute("item").unwrap_or_default().to_owned(),
                 area: at(),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
                 template: text_of(node, "DrawTemplate")
                     .and_then(|template| self.templates.get(template).cloned()),
                 border: flag(node, "Style_Border"),
                 tooltip: text_of(node, "TooltipReference").map(str::to_owned),
-            }),
+                pieces: if depth < 4 {
+                    self.pieces(node, elements, depth + 1)
+                } else {
+                    Vec::new()
+                },
+            })),
             "SpellGem" => {
                 let look = child(node, "SpellGemDrawTemplate");
                 let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
@@ -692,6 +939,25 @@ fn color(node: roxmltree::Node<'_, '_>, name: &str) -> Option<[u8; 3]> {
     ])
 }
 
+/// A stretching element's anchors; an edge keeps to the container's top or
+/// left unless the skin says otherwise.
+fn anchors(node: roxmltree::Node<'_, '_>) -> Anchors {
+    let edge = |offset: &str, to_start: &str| {
+        let offset = number(node, offset).unwrap_or(0.0);
+        if text_of(node, to_start).is_none_or(|text| text.eq_ignore_ascii_case("true")) {
+            Anchor::Start(offset)
+        } else {
+            Anchor::End(offset)
+        }
+    };
+    Anchors {
+        left: edge("LeftAnchorOffset", "LeftAnchorToLeft"),
+        top: edge("TopAnchorOffset", "TopAnchorToTop"),
+        right: edge("RightAnchorOffset", "RightAnchorToLeft"),
+        bottom: edge("BottomAnchorOffset", "BottomAnchorToTop"),
+    }
+}
+
 /// An element's place and size, in its container's pixels.
 fn area(node: roxmltree::Node<'_, '_>) -> Option<Area> {
     let location = child(node, "Location");
@@ -701,23 +967,6 @@ fn area(node: roxmltree::Node<'_, '_>) -> Option<Area> {
         y: location.and_then(|at| number(at, "Y")).unwrap_or(0.0),
         width: number(size, "CX")?,
         height: number(size, "CY")?,
-    })
-}
-
-/// Where an element sits when it stretches with its window, if it does.
-fn stretch(node: roxmltree::Node<'_, '_>) -> Option<Stretch> {
-    if !flag(node, "AutoStretch") {
-        return None;
-    }
-    let anchor = |to: &str, offset: &str| Anchor {
-        near: text_of(node, to).is_none_or(|text| text.eq_ignore_ascii_case("true")),
-        offset: number(node, offset).unwrap_or(0.0),
-    };
-    Some(Stretch {
-        left: anchor("LeftAnchorToLeft", "LeftAnchorOffset"),
-        top: anchor("TopAnchorToTop", "TopAnchorOffset"),
-        right: anchor("RightAnchorToLeft", "RightAnchorOffset"),
-        bottom: anchor("BottomAnchorToTop", "BottomAnchorOffset"),
     })
 }
 
@@ -761,7 +1010,83 @@ mod tests {
             <Border><TopLeft>A_Corner</TopLeft><Top>A_Missing</Top></Border>
             <Titlebar><Middle>A_Back</Middle></Titlebar>
         </WindowDrawTemplate>
+        <SliderDrawTemplate item="SDT_Plain">
+            <Thumb><Normal>A_Fill</Normal><Disabled>A_Corner</Disabled></Thumb>
+            <Background>A_Back</Background>
+            <EndCapLeft>A_Corner</EndCapLeft><EndCapRight>A_Corner</EndCapRight>
+        </SliderDrawTemplate>
+        <ButtonDrawTemplate item="BDT_Down">
+            <Normal>A_Corner</Normal><Pressed>A_Fill</Pressed>
+        </ButtonDrawTemplate>
     </XML>"#;
+
+    const CONTROLS: &str = r#"<XML>
+        <Slider item="Clip"><ScreenID>ODP_ClipPlaneSlider</ScreenID>
+            <Location><X>200</X><Y>129</Y></Location><Size><CX>100</CX><CY>16</CY></Size>
+            <SliderArt>SDT_Plain</SliderArt>
+        </Slider>
+        <Combobox item="Sky"><ScreenID>ODP_SkyCombobox</ScreenID>
+            <DrawTemplate>WDT_Plain</DrawTemplate>
+            <Location><X>272</X><Y>35</Y></Location><Size><CX>105</CX><CY>24</CY></Size>
+            <ListHeight>60</ListHeight><Button>BDT_Down</Button>
+            <Choices>Off</Choices><Choices> Simple </Choices><Choices>Complex</Choices>
+        </Combobox>
+        <Listbox item="Keys"><ScreenID>OKP_KeyboardAssignmentList</ScreenID>
+            <DrawTemplate>WDT_Plain</DrawTemplate><AutoStretch>true</AutoStretch>
+            <TopAnchorOffset>60</TopAnchorOffset><LeftAnchorOffset>5</LeftAnchorOffset>
+            <RightAnchorToLeft>false</RightAnchorToLeft><RightAnchorOffset>5</RightAnchorOffset>
+            <BottomAnchorToTop>false</BottomAnchorToTop><BottomAnchorOffset>5</BottomAnchorOffset>
+            <Columns><Width>180</Width><Heading>Command</Heading></Columns>
+            <Columns><Width>75</Width><Heading>Keypress</Heading></Columns>
+        </Listbox>
+        <Screen item="Options"><Size><CX>400</CX><CY>300</CY></Size>
+            <Pieces>Clip</Pieces><Pieces>Sky</Pieces><Pieces>Keys</Pieces>
+        </Screen>
+    </XML>"#;
+
+    #[test]
+    fn sliders_drop_downs_and_lists_carry_their_art_choices_and_columns() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let screen = library.screen(CONTROLS, "Options").unwrap();
+        let [
+            (_, Element::Slider(slider)),
+            (_, Element::Combobox(sky)),
+            (_, Element::Listbox(keys)),
+        ] = &screen.pieces[..]
+        else {
+            panic!(
+                "expected a slider, a drop-down and a list: {:?}",
+                screen.pieces
+            );
+        };
+        assert_eq!(slider.id.as_deref(), Some("ODP_ClipPlaneSlider"));
+        assert_eq!((slider.area.x, slider.area.width), (200.0, 100.0));
+        assert_eq!(slider.look.background.as_ref().unwrap().y, 7);
+        assert_eq!(slider.look.thumb.normal.as_ref().unwrap().y, 18);
+        assert!(slider.look.thumb.disabled.is_some() && slider.look.cap_left.is_some());
+        assert_eq!(sky.choices, ["Off", "Simple", "Complex"]);
+        assert!((sky.list_height - 60.0).abs() < f32::EPSILON);
+        assert!(sky.button.pressed.is_some() && sky.template.is_some());
+        assert_eq!(keys.area, None);
+        let inside = keys.anchors.unwrap().within(400.0, 300.0);
+        assert_eq!(
+            (inside.x, inside.y, inside.width, inside.height),
+            (5.0, 60.0, 390.0, 235.0)
+        );
+        assert_eq!(
+            keys.columns,
+            [
+                Column {
+                    heading: "Command".into(),
+                    width: 180.0
+                },
+                Column {
+                    heading: "Keypress".into(),
+                    width: 75.0
+                }
+            ]
+        );
+    }
 
     const WINDOW: &str = r#"<?xml version="1.0" encoding="us-ascii"?>
     <XML ID="EQInterfaceDefinitionLanguage">
@@ -771,7 +1096,7 @@ mod tests {
         <StaticAnimation item="BoxPicture"><Animation>A_Box</Animation></StaticAnimation>
         <Gauge item="Health">
             <Location><X>5</X><Y>2</Y></Location><Size><CX>108</CX><CY>27</CY></Size>
-            <TextOffsetX>8</TextOffsetX><GaugeOffsetY>16</GaugeOffsetY>
+            <TextOffsetX>8</TextOffsetX><GaugeOffsetY>16</GaugeOffsetY><GaugeOffsetX>20</GaugeOffsetX>
             <FillTint><R>240</R><G>0</G><B>0</B></FillTint>
             <EQType>6</EQType>
             <GaugeDrawTemplate><Background>A_Back</Background><Fill>A_Fill</Fill></GaugeDrawTemplate>
@@ -801,6 +1126,7 @@ mod tests {
             <TooltipReference>Drop Item Here to Auto Equip</TooltipReference>
         </Screen>
         <Page item="FirstPage"><TabText>Inventory</TabText>
+            <TabTextActiveColor><R>255</R><G>255</G><B>0</B></TabTextActiveColor>
             <Location><X>0</X><Y>22</Y></Location><Size><CX>388</CX><CY>401</CY></Size>
             <Pieces>Ear</Pieces><Pieces>Screen:Figure</Pieces>
         </Page>
@@ -864,7 +1190,10 @@ mod tests {
         assert_eq!(gauge.eq_type, Some(6));
         assert_eq!(gauge.fill_tint, Some([240, 0, 0]));
         assert_eq!(gauge.look.fill.as_ref().unwrap().y, 18);
-        assert_eq!((gauge.text_offset, gauge.bar_offset), ((8.0, 0.0), 16.0));
+        assert_eq!(
+            (gauge.text_offset, gauge.bar_offset, gauge.bar_left),
+            ((8.0, 0.0), 16.0, 20.0)
+        );
         let Element::Label(label) = &screen.pieces[1].1 else {
             panic!("a label")
         };
@@ -912,7 +1241,7 @@ mod tests {
         };
         // Left and right count from the left; top and bottom from the bottom.
         assert_eq!(
-            button.stretch.unwrap().within(226.0, 330.0),
+            button.anchors.unwrap().within(226.0, 330.0),
             Area {
                 x: 5.0,
                 y: 293.0,
@@ -923,18 +1252,119 @@ mod tests {
         let Element::Button(platinum) = &screen.pieces[1].1 else {
             panic!("a button")
         };
-        assert_eq!(platinum.stretch, None);
+        assert_eq!(platinum.anchors, None);
+    }
+
+    #[test]
+    fn a_window_within_a_window_stretches_with_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let text = r#"<XML>
+            <Button item="Slot0"><ScreenID>PetBuff0</ScreenID>
+                <Location><X>3</X><Y>3</Y></Location><Size><CX>24</CX><CY>24</CY></Size></Button>
+            <Screen item="Buffs"><AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>112</LeftAnchorOffset><TopAnchorOffset>4</TopAnchorOffset>
+                <RightAnchorOffset>4</RightAnchorOffset><BottomAnchorOffset>4</BottomAnchorOffset>
+                <TopAnchorToTop>true</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+                <RightAnchorToLeft>false</RightAnchorToLeft><LeftAnchorToLeft>true</LeftAnchorToLeft>
+                <Pieces>Slot0</Pieces></Screen>
+            <Screen item="PetInfoWindow"><Size><CX>154</CX><CY>142</CY></Size>
+                <Pieces>Buffs</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "PetInfoWindow").unwrap();
+        let Element::View(view) = &screen.pieces[0].1 else {
+            panic!("a view")
+        };
+        let Element::Button(slot) = &view.pieces[0].1 else {
+            panic!("a button")
+        };
+        assert_eq!(slot.id.as_deref(), Some("PetBuff0"));
+        // Inside a container 146 wide and 120 high, it keeps 112 from the
+        // left and 4 from the other edges.
+        assert_eq!(
+            view.anchors.unwrap().within(146.0, 120.0),
+            Area {
+                x: 112.0,
+                y: 4.0,
+                width: 30.0,
+                height: 112.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_button_that_stretches_keeps_to_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        // The Skills window's Done button: 102 from the right, 22 above the
+        // bottom, to 2 from the right and 2 below the bottom.
+        let text = r#"<XML>
+            <Button item="SKLW_DoneButton"><ScreenID>DoneButton</ScreenID>
+                <AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>102</LeftAnchorOffset><TopAnchorOffset>22</TopAnchorOffset>
+                <RightAnchorOffset>2</RightAnchorOffset><BottomAnchorOffset>-2</BottomAnchorOffset>
+                <TopAnchorToTop>false</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+                <RightAnchorToLeft>false</RightAnchorToLeft><LeftAnchorToLeft>false</LeftAnchorToLeft>
+                <Text>Done</Text></Button>
+            <Screen item="SkillsWindow"><Size><CX>300</CX><CY>200</CY></Size>
+                <Pieces>SKLW_DoneButton</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "SkillsWindow").unwrap();
+        let Element::Button(done) = &screen.pieces[0].1 else {
+            panic!("a button")
+        };
+        assert_eq!(
+            done.anchors.unwrap().within(290.0, 170.0),
+            Area {
+                x: 188.0,
+                y: 148.0,
+                width: 100.0,
+                height: 24.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_text_box_the_client_fills_keeps_to_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        // The confirmation dialog's question: 2 from three edges, 24 above
+        // the bottom, where the buttons sit.
+        let text = r#"<XML>
+            <STMLbox item="CD_TextOutput"><ScreenID>TextOutput</ScreenID>
+                <AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>2</LeftAnchorOffset><TopAnchorOffset>2</TopAnchorOffset>
+                <RightAnchorOffset>2</RightAnchorOffset><BottomAnchorOffset>24</BottomAnchorOffset>
+                <TopAnchorToTop>true</TopAnchorToTop><BottomAnchorToTop>false</BottomAnchorToTop>
+                <LeftAnchorToLeft>true</LeftAnchorToLeft><RightAnchorToLeft>false</RightAnchorToLeft>
+            </STMLbox>
+            <Screen item="ConfirmationDialogBox"><Size><CX>274</CX><CY>200</CY></Size>
+                <Pieces>CD_TextOutput</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "ConfirmationDialogBox").unwrap();
+        let Element::TextBox(question) = &screen.pieces[0].1 else {
+            panic!("a text box")
+        };
+        assert_eq!(question.id.as_deref(), Some("TextOutput"));
+        assert_eq!(
+            question.anchors.unwrap().within(264.0, 170.0),
+            Area {
+                x: 2.0,
+                y: 2.0,
+                width: 260.0,
+                height: 144.0
+            }
+        );
     }
 
     #[test]
     fn pages_hold_slots_and_windows_within_windows() {
         let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
         let screen = library.screen(WINDOW, "Bags").unwrap();
-        let Element::Tabs(pages) = &screen.pieces[0].1 else {
+        let Element::Tabs(tabs) = &screen.pieces[0].1 else {
             panic!("tabs")
         };
-        let page = &pages[0];
+        assert_eq!((tabs.name.as_str(), tabs.area), ("Tabs", None));
+        let page = &tabs.pages[0];
         assert_eq!(page.title.as_deref(), Some("Inventory"));
+        assert_eq!(page.title_colors, [None, Some([255, 255, 0])]);
         assert_eq!(
             page.area,
             Some(Area {
@@ -991,7 +1421,8 @@ mod tests {
                 .pieces
                 .iter()
                 .flat_map(|(_, element)| match element {
-                    Element::Tabs(pages) => pages
+                    Element::Tabs(tabs) => tabs
+                        .pages
                         .first()
                         .map(|page| page.pieces.iter().map(|(_, piece)| piece).collect())
                         .unwrap_or_default(),

@@ -49,8 +49,16 @@ pub(super) struct ChatState {
     pub hovered: bool,
     /// A `/target Name` request waiting for target selection to resolve it.
     pub requested_target: Option<String>,
+    /// A plain `/who`, waiting to list the zone's players.
+    pub zone_who: Option<eq_client_core::who::WhoFilter>,
+    /// A `/log`, waiting to turn the chat log on or off.
+    pub log_toggle: bool,
+    /// A `/shownames`, waiting to set how much of players' names shows.
+    pub show_names: Option<eq_client_core::names::ShowNames>,
+    /// A `/shownames` the client could not read, answered with the usage
+    /// line.
+    pub show_names_usage: bool,
     draft: String,
-    status: String,
 }
 #[derive(Component)]
 pub(super) struct Panel;
@@ -82,11 +90,11 @@ pub(super) struct InputBox;
 pub(super) struct InputLabel;
 #[derive(Component)]
 pub(super) struct Send;
-#[derive(Component)]
-pub(super) struct InputStatus;
 
-/// Creates a clipped scrollback window; changing tabs never destroys stored messages.
-#[allow(clippy::too_many_lines)] // Declarative UI tree.
+/// Creates a clipped scrollback window; changing tabs never destroys stored
+/// messages. Where the installed skin has a chat window, it is drawn from
+/// the skin instead, with the same tabs, lines and input in its boxes
+/// ([`skinned_output`], [`skinned_input`]).
 pub(super) fn spawn(commands: &mut Commands) {
     let frame = super::windows::frame(
         commands,
@@ -108,7 +116,79 @@ pub(super) fn spawn(commands: &mut Commands) {
         super::windows::pointer::TakesWheel,
     ));
     commands.entity(frame).with_children(|root| {
+        tab_row(root);
+        lines(root);
         root.spawn(Node {
+            column_gap: px(5),
+            align_items: AlignItems::Center,
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|row| {
+            typing_box(
+                row,
+                Node {
+                    flex_grow: 1.0,
+                    min_width: px(0),
+                    padding: UiRect::axes(px(7), px(5)),
+                    border: UiRect::all(px(1)),
+                    ..default()
+                },
+            );
+            theme::button_with(row, Send, "Send", Size::Body);
+        });
+        root.spawn(Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|footer| {
+            footer.spawn(theme::text(
+                "Wheel: history | Enter: chat",
+                Size::Small,
+                theme::INK,
+            ));
+            theme::button_with(footer, Latest, "Latest", Size::Small);
+        });
+    });
+}
+
+/// The skin's output box, filled with the chat's tabs along its top and the
+/// active tab's lines below them.
+pub(super) fn skinned_output(parent: &mut ChildSpawnerCommands, node: Node) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(3),
+            padding: UiRect::all(px(2)),
+            ..node
+        })
+        .with_children(|output| {
+            tab_row(output);
+            lines(output);
+        });
+}
+
+/// The skin's input box, filled with the line the player types into.
+pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node) {
+    typing_box(
+        parent,
+        Node {
+            padding: UiRect::axes(px(4), px(1)),
+            border: UiRect::all(px(1)),
+            align_items: AlignItems::Center,
+            overflow: Overflow::clip(),
+            ..node
+        },
+    );
+}
+
+/// The chat's tabs, one for each group of channels, with their unread
+/// counts.
+fn tab_row(parent: &mut ChildSpawnerCommands) {
+    parent
+        .spawn(Node {
             flex_wrap: FlexWrap::Wrap,
             column_gap: px(3),
             row_gap: px(3),
@@ -138,7 +218,12 @@ pub(super) fn spawn(commands: &mut Commands) {
                 });
             }
         });
-        root.spawn((
+}
+
+/// The active tab's lines, which scroll on their own.
+fn lines(parent: &mut ChildSpawnerCommands) {
+    parent
+        .spawn((
             Viewport,
             // Hovered only when no window drawn over the chat takes the pointer.
             Interaction::default(),
@@ -162,52 +247,26 @@ pub(super) fn spawn(commands: &mut Commands) {
                 },
             ));
         });
-        root.spawn(Node {
-            column_gap: px(5),
-            align_items: AlignItems::Center,
-            flex_shrink: 0.0,
-            ..default()
-        })
-        .with_children(|row| {
-            row.spawn((
-                Button,
-                InputBox,
-                Node {
-                    flex_grow: 1.0,
-                    min_width: px(0),
-                    padding: UiRect::axes(px(7), px(5)),
-                    border: UiRect::all(px(1)),
-                    ..default()
-                },
-                BackgroundColor(theme::WELL),
-                BorderColor::all(theme::EDGE),
-            ))
-            .with_children(|input| {
-                input.spawn((
-                    InputLabel,
-                    Text::new("Press Enter to chat"),
-                    theme::font(Size::Body),
-                    TextColor(theme::INK),
-                ));
-            });
-            theme::button_with(row, Send, "Send", Size::Body);
-        });
-        root.spawn(Node {
-            justify_content: JustifyContent::SpaceBetween,
-            align_items: AlignItems::Center,
-            flex_shrink: 0.0,
-            ..default()
-        })
-        .with_children(|footer| {
-            footer.spawn((
-                InputStatus,
-                Text::new("Wheel: history | Enter: chat"),
-                theme::font(Size::Small),
+}
+
+/// The line the player types into, which shows the draft.
+fn typing_box(parent: &mut ChildSpawnerCommands, node: Node) {
+    parent
+        .spawn((
+            Button,
+            InputBox,
+            node,
+            BackgroundColor(theme::WELL),
+            BorderColor::all(theme::EDGE),
+        ))
+        .with_children(|input| {
+            input.spawn((
+                InputLabel,
+                Text::new("Press Enter to chat"),
+                theme::font(Size::Body),
                 TextColor(theme::INK),
             ));
-            theme::button_with(footer, Latest, "Latest", Size::Small);
         });
-    });
 }
 
 /// Routes tab presses and wheel input, reserving the wheel from the camera over chat.
@@ -325,7 +384,7 @@ pub(super) fn refresh(
     typing: Res<crate::keys::Typing>,
     mut contents: Query<(Entity, &mut Content, Option<&Children>)>,
     rendered: Query<(Option<&LineId>, Has<Placeholder>)>,
-    mut labels: Query<(&TabLabel, &mut Text), (Without<InputLabel>, Without<InputStatus>)>,
+    mut labels: Query<(&TabLabel, &mut Text), Without<InputLabel>>,
     mut buttons: Query<
         (
             &TabButton,
@@ -335,9 +394,8 @@ pub(super) fn refresh(
         ),
         Without<InputBox>,
     >,
-    mut input_labels: Query<&mut Text, (With<InputLabel>, Without<TabLabel>, Without<InputStatus>)>,
+    mut input_labels: Query<&mut Text, (With<InputLabel>, Without<TabLabel>)>,
     mut input_boxes: Query<&mut BorderColor, (With<InputBox>, Without<TabButton>)>,
-    mut input_status: Query<&mut Text, (With<InputStatus>, Without<InputLabel>, Without<TabLabel>)>,
 ) {
     let active = state.active;
     let revision = state.history.revision();
@@ -399,13 +457,6 @@ pub(super) fn refresh(
         } else {
             theme::EDGE
         });
-    }
-    for mut text in &mut input_status {
-        text.0 = if state.status.is_empty() {
-            "Wheel: history | Enter: chat".into()
-        } else {
-            state.status.clone()
-        };
     }
     // Only the active tab's lines exist, as laying out every tab's lines each frame
     // would cost more than redrawing one tab when it is chosen.
@@ -494,8 +545,8 @@ fn spawn_line(parent: &mut ChildSpawnerCommands, id: u64, line: &ChatLine) {
     }
 }
 
-/// Why a draft did not go: a mistake in it, which the chat's status line
-/// shows, or a refusal, which the outbox shows in the feedback line.
+/// Why a draft did not go: a mistake in it, which the chat says as a
+/// system line, or a refusal, which the outbox shows in the feedback line.
 enum Unsent {
     Mistake(String),
     Refused,
@@ -520,9 +571,9 @@ fn submit_draft(
     outbox: &crate::outbox::Outbox,
 ) {
     let result = (|| -> Result<(), Unsent> {
-        if let Some(request) = target_request(state.draft.trim()) {
-            state.requested_target = Some(request?);
-            return Ok(());
+        let draft = state.draft.trim().to_owned();
+        if let Some(request) = client_request(&draft, state) {
+            return Ok(request?);
         }
         if let Some(line) = location(state.draft.trim(), online) {
             state.history.push(system_line(line?));
@@ -541,12 +592,14 @@ fn submit_draft(
     match result {
         Ok(()) => {
             state.draft.clear();
-            // Sent lines return the keyboard to the game; a line sent says
-            // nothing more.
+            // Sent lines return the keyboard to the game, and the chat to its
+            // newest line; a line sent says nothing more.
             typing.composing = false;
-            state.status.clear();
+            let active = state.active;
+            state.views.entry(active).or_default().follow = true;
         }
-        Err(Unsent::Mistake(mistake)) => state.status = mistake,
+        // The draft stays, to mend and send again.
+        Err(Unsent::Mistake(mistake)) => state.history.push(system_line(mistake)),
         // The draft stays, to send again.
         Err(Unsent::Refused) => (),
     }
@@ -568,8 +621,8 @@ pub(super) fn submit_game_command(
     Ok(())
 }
 
-/// `/loc`: where the player stands, worded as the official client words it,
-/// north-south first.
+/// `/loc`: where the player stands, in this client's words, north-south
+/// first as the official client orders it.
 fn location(input: &str, online: &super::online::OnlineState) -> Option<Result<String, String>> {
     let name = input.strip_prefix('/')?.trim();
     if !name.eq_ignore_ascii_case("loc") {
@@ -582,12 +635,38 @@ fn location(input: &str, online: &super::online::OnlineState) -> Option<Result<S
             .map(|player| {
                 let position = player.position;
                 format!(
-                    "Your Location is {:.2}, {:.2}, {:.2}",
+                    "You stand at {:.2}, {:.2}, {:.2}.",
                     position.y, position.x, position.z
                 )
             })
             .ok_or_else(|| "Enter the world first".to_owned()),
     )
+}
+
+/// A slash command the client answers itself, noted for the system that
+/// answers it: `/target Name`, a plain `/who`, `/log` or `/shownames`. None
+/// for any other line.
+pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
+    if let Some(request) = target_request(input) {
+        return Some(request.map(|name| state.requested_target = Some(name)));
+    }
+    if let Some(request) = zone_who_request(input) {
+        return Some(request.map(|filter| state.zone_who = Some(filter)));
+    }
+    if input.eq_ignore_ascii_case("/log") {
+        state.log_toggle = true;
+        return Some(Ok(()));
+    }
+    let (command, word) = input.split_once(' ').unwrap_or((input, ""));
+    if command.eq_ignore_ascii_case("/shownames") {
+        use eq_client_core::names::ShowNames;
+        match ShowNames::parse(word) {
+            Some(level) => state.show_names = Some(level),
+            None => state.show_names_usage = true,
+        }
+        return Some(Ok(()));
+    }
+    None
 }
 
 /// The name in a `/target Name` command; underscores match spaces as in spawn names.
@@ -605,13 +684,50 @@ pub(super) fn target_request(input: &str) -> Option<Result<String, String>> {
     })
 }
 
+/// The player corpse the player targets.
+fn targeted_corpse(online: &super::online::OnlineState) -> Result<u16, String> {
+    let world = online.world();
+    world
+        .target()
+        .selected
+        .filter(|id| {
+            world
+                .spawn(*id)
+                .is_some_and(|spawn| spawn.state.kind == eq_client_core::SpawnKind::PlayerCorpse)
+        })
+        .ok_or_else(|| "You must first target a corpse.".to_owned())
+}
+
+/// The words of a plain `/who`, which lists the zone's players; None for
+/// anything else, `/who all` among it.
+pub(super) fn zone_who_request(
+    input: &str,
+) -> Option<Result<eq_client_core::who::WhoFilter, String>> {
+    let command = input.strip_prefix('/')?.trim();
+    let (name, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    if !name.eq_ignore_ascii_case("who") {
+        return None;
+    }
+    match eq_client_core::who::parse(words) {
+        Ok(request) if request.everywhere => None,
+        Ok(request) => Some(Ok(request.filter)),
+        Err(error) => Some(Err(error)),
+    }
+}
+
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
     input: &str,
     online: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
 ) -> Option<Result<Vec<ClientCommand>, String>> {
-    let name = input.strip_prefix('/')?.trim().to_ascii_lowercase();
+    let command = input.strip_prefix('/')?.trim();
+    let (name, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    let name = name.to_ascii_lowercase();
     let stamp = || {
         outbox
             .stamp(online.world())
@@ -628,6 +744,57 @@ fn game_commands(
         })
     };
     Some(match name.as_str() {
+        "who" => eq_client_core::who::parse(words).and_then(|request| {
+            if !request.everywhere {
+                return Err("The zone's /who is listed by chat, not sent".into());
+            }
+            Ok(vec![ClientCommand::WhoAll {
+                session_id: stamp()?.session_id,
+                filter: request.filter,
+            }])
+        }),
+        // Who may drag the player's corpses; the session refuses no name.
+        "consent" | "deny" => stamp().map(|stamp| {
+            vec![ClientCommand::Consent {
+                session_id: stamp.session_id,
+                name: words.to_owned(),
+                given: name == "consent",
+            }]
+        }),
+        // A command to the player's pet, aimed at the target where it takes one.
+        "pet" => eq_client_core::pet::command(words)
+            .ok_or_else(|| format!("Unknown pet command: {words}"))
+            .and_then(|command| {
+                Ok(vec![ClientCommand::Pet {
+                    session_id: stamp()?.session_id,
+                    command,
+                    target: online.world().target().selected,
+                }])
+            }),
+        // The rest take no words; with words, they are chat.
+        _ if !words.is_empty() => return None,
+        // A player's corpse the player targets, pulled close or dragged.
+        "corpse" | "corpsedrag" => targeted_corpse(online).and_then(|spawn_id| {
+            let session_id = stamp()?.session_id;
+            Ok(vec![if name == "corpse" {
+                ClientCommand::SummonCorpse {
+                    session_id,
+                    spawn_id,
+                }
+            } else {
+                ClientCommand::DragCorpse {
+                    session_id,
+                    spawn_id,
+                }
+            }])
+        }),
+        // The targeted corpse, or every corpse when none is targeted.
+        "corpsedrop" => stamp().map(|stamp| {
+            vec![ClientCommand::DropCorpse {
+                session_id: stamp.session_id,
+                spawn_id: targeted_corpse(online).ok(),
+            }]
+        }),
         "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
         // Camping requires sitting, so sit first as a player would.
@@ -804,6 +971,24 @@ mod tests {
     }
 
     #[test]
+    fn plain_who_lists_the_zone_and_who_all_asks_the_world() {
+        assert_eq!(
+            zone_who_request("/who wiz"),
+            Some(Ok(eq_client_core::who::WhoFilter {
+                class: Some(12),
+                ..eq_client_core::who::WhoFilter::default()
+            }))
+        );
+        assert_eq!(
+            zone_who_request("/WHO"),
+            Some(Ok(eq_client_core::who::WhoFilter::default()))
+        );
+        assert_eq!(zone_who_request("/who all"), None);
+        assert_eq!(zone_who_request("/whoever"), None);
+        assert!(zone_who_request("/who 1 2 3").unwrap().is_err());
+    }
+
+    #[test]
     fn camp_sits_first_and_game_commands_never_become_chat() {
         let mut online = super::super::online::OnlineState::new(true);
         let (queue, _received) = std::sync::mpsc::sync_channel(4);
@@ -827,6 +1012,7 @@ mod tests {
                 mana: 0,
                 endurance: None,
                 skills: None,
+                practice_points: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],
                 size: 6.0,
@@ -834,6 +1020,8 @@ mod tests {
                 run_speed: 0.0,
                 hp_percent: Some(100),
                 appearance: eq_client_core::outfit::Appearance::default(),
+                listing: eq_client_core::listing::Listing::default(),
+                name_parts: eq_client_core::names::NameParts::default(),
             },
         );
         let commands = game_commands("/CAMP", &online, &outbox).unwrap().unwrap();
@@ -859,6 +1047,73 @@ mod tests {
                 ..
             }]
         ));
+        // Words after a command that takes none make it chat.
+        assert!(game_commands("/sit down", &online, &outbox).is_none());
+    }
+
+    #[test]
+    fn who_consent_corpse_and_pet_commands_reach_the_game() {
+        let mut online = super::super::online::OnlineState::new(true);
+        let (queue, _received) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
+        assert!(matches!(
+            game_commands("/who all wiz 50 60", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::WhoAll {
+                session_id: 4,
+                filter: eq_client_core::who::WhoFilter {
+                    class: Some(12),
+                    levels: Some((50, 60)),
+                    ..
+                },
+            }]
+        ));
+        assert!(game_commands("/who", &online, &outbox).unwrap().is_err());
+        // Consent names a player; the corpse commands want a corpse targeted,
+        // but a drop without one drops them all.
+        assert!(matches!(
+            game_commands("/consent Helper", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::Consent { session_id: 4, name, given: true }] if name == "Helper"
+        ));
+        assert!(matches!(
+            game_commands("/deny Helper", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::Consent { given: false, .. }]
+        ));
+        assert_eq!(
+            game_commands("/corpsedrag", &online, &outbox).unwrap(),
+            Err("You must first target a corpse.".into())
+        );
+        // A pet command aims at the target; unknown words say so.
+        assert!(matches!(
+            game_commands("/pet back off", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::Pet {
+                command: eq_client_core::pets::PetCommand::BackOff,
+                ..
+            }]
+        ));
+        assert_eq!(
+            game_commands("/pet dance", &online, &outbox).unwrap(),
+            Err("Unknown pet command: dance".into())
+        );
+        assert!(matches!(
+            game_commands("/corpsedrop", &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::DropCorpse { spawn_id: None, .. }]
+        ));
     }
     #[test]
     fn sending_a_line_or_an_empty_enter_returns_the_keyboard_to_the_game() {
@@ -881,7 +1136,11 @@ mod tests {
             repeat: false,
             window: Entity::PLACEHOLDER,
         };
-        app.world_mut().resource_mut::<ChatState>().draft = "hello".into();
+        {
+            let mut state = app.world_mut().resource_mut::<ChatState>();
+            state.draft = "hello".into();
+            state.views.entry(ChatTab::All).or_default().follow = false;
+        }
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = true;
@@ -890,6 +1149,8 @@ mod tests {
         assert!(receiver.try_recv().is_ok());
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
         assert_eq!(app.world().resource::<ChatState>().draft, "");
+        // A line sent brings the chat back to its newest line.
+        assert!(app.world().resource::<ChatState>().views[&ChatTab::All].follow);
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = true;
@@ -897,6 +1158,81 @@ mod tests {
         app.update();
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_mistake_is_said_in_the_chat_and_the_draft_stays() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ChatState>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
+            .add_message::<KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, input);
+        app.world_mut().resource_mut::<ChatState>().draft = "/tell Friend".into();
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::Enter,
+            logical_key: Key::Enter,
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        let state = app.world().resource::<ChatState>();
+        assert_eq!(state.draft, "/tell Friend");
+        assert_eq!(
+            state
+                .history
+                .lines(ChatTab::All)
+                .last()
+                .map(|(_, line)| (line.channel, line.message.text.as_str())),
+            Some((ChannelName::System, "Use /tell Name message"))
+        );
+        assert!(app.world().resource::<crate::keys::Typing>().composing);
+    }
+
+    #[test]
+    fn the_skins_boxes_hold_the_tabs_lines_and_input() {
+        let mut world = World::new();
+        world
+            .commands()
+            .spawn(Node::default())
+            .with_children(|window| {
+                skinned_output(window, Node::default());
+                skinned_input(window, Node::default());
+            });
+        world.flush();
+        let count = |world: &mut World, filter: fn(EntityRef) -> bool| {
+            world
+                .iter_entities()
+                .filter(|entity| filter(*entity))
+                .count()
+        };
+        assert_eq!(
+            count(&mut world, |entity| entity.contains::<TabButton>()),
+            ChatTab::ALL.len()
+        );
+        for part in [
+            |entity: EntityRef| entity.contains::<Viewport>(),
+            |entity: EntityRef| entity.contains::<Content>(),
+            |entity: EntityRef| entity.contains::<InputBox>(),
+            |entity: EntityRef| entity.contains::<InputLabel>(),
+        ] {
+            assert_eq!(count(&mut world, part), 1);
+        }
+        // Enter sends, as in the official client: the skin's window has no
+        // Send button or footer.
+        assert_eq!(count(&mut world, |entity| entity.contains::<Send>()), 0);
+        assert_eq!(count(&mut world, |entity| entity.contains::<Latest>()), 0);
     }
 
     #[test]

@@ -12,9 +12,24 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 16] = [
+const GM_COMMANDS: [&str; 23] = [
+    // GM mode on or off: off, the server lets the player go hungry.
+    "gm",
+    // A rule changed in this zone only, such as how fast hunger comes, or
+    // the zone's rules reloaded; never stored or reset.
+    "rules",
+    // The time of day, for every zone.
+    "time",
+    // A pet of a kind the server knows, such as an earth elemental.
+    "makepet",
     "summon",
     "summonitem",
+    // Searches the server's items by name, to find one to summon.
+    "finditem",
+    // Searches the server's tradeskill recipes by name, and lists one's
+    // container and components.
+    "findrecipe",
+    "viewrecipe",
     // A temporary NPC at the GM's feet, and coins or items on the target.
     "spawn",
     "npcloot",
@@ -51,6 +66,12 @@ pub enum Step {
     /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
     /// the step stops the script on any other server.
     Gm(String),
+    /// Says a line on a chat channel as a player types it, on a local `EQEmu`
+    /// or TAKP server only, as `gm` steps are.
+    Chat(eq_client_core::OutboundChat),
+    /// Moves a window, by its saved name, as a drag moves it: its top left
+    /// corner to this place on screen, in logical pixels.
+    Drag(String, bevy::math::Vec2),
     /// Presses keys together for one frame, modifiers first.
     Press(Vec<KeyCode>),
     /// Holds keys together for a bounded duration.
@@ -120,6 +141,9 @@ pub enum ClickTarget {
     Pick(PickButton),
     /// The selector's button for the skin's Actions window.
     ActionsWindow,
+    /// A button that opens and closes a window, by the window's key, such
+    /// as the inventory's Skills button (`skills`).
+    Toggle(&'static str),
     /// A tab of the open tabbed window, from zero.
     Tab(usize),
     /// An ability button of the Actions window: its page and place, from
@@ -127,6 +151,38 @@ pub enum ClickTarget {
     Ability(AbilityPage, usize),
     /// The Actions window's melee attack button.
     Attack,
+    /// A Pet Info window button, by the `/pet` line it gives.
+    Pet(&'static str),
+    /// An Options window checkbox, by the option's name in a file.
+    Option(eq_client_core::options::Toggle),
+    /// An Options window slider, pressed this far along it, in percent.
+    Slider(eq_client_core::options::Level, u8),
+    /// The Keyboard page's filter drop-down, which opens or closes its list.
+    KeyFilter,
+    /// A choice in the open drop-down's list, from zero.
+    Choice(usize),
+    /// A row of the Training window's list, its Train button or its Done
+    /// button.
+    Training(TrainingClick),
+    /// The confirmation dialog's Yes (true) or No.
+    Answer(bool),
+    /// The book window's arrow: forward (true) or back.
+    Page(bool),
+    /// Combine on the window of the tradeskill container in this pack slot.
+    Combine(i32),
+    /// A button of the map's toolbar.
+    Map(crate::map::MapButton),
+}
+
+/// The Training window's controls.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrainingClick {
+    /// A row of the list, from zero.
+    Row(usize),
+    /// Train.
+    Train,
+    /// Done.
+    Done,
 }
 
 /// The Actions window's pages that hold ability buttons.
@@ -228,7 +284,36 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("slash", ["target", name @ ..]) if !name.is_empty() => {
             Step::Slash(format!("/target {}", name.join(" ")))
         }
+        // Corpses: consent, summon and drag; a test death leaves one.
+        ("slash", [command @ ("consent" | "deny"), name]) => {
+            Step::Slash(format!("/{command} {name}"))
+        }
+        ("slash", ["log"]) => Step::Slash("/log".into()),
+        ("slash", ["shownames", level]) => Step::Slash(format!("/shownames {level}")),
+        ("slash", [command @ ("corpse" | "corpsedrag" | "corpsedrop")]) => {
+            Step::Slash(format!("/{command}"))
+        }
+        // A command to the pet, as typed.
+        ("slash", ["pet", words @ ..]) if !words.is_empty() => {
+            Step::Slash(format!("/pet {}", words.join(" ")))
+        }
+        // Asking who is online changes nothing.
+        ("slash", ["who", words @ ..]) => Step::Slash(
+            ["/who"]
+                .iter()
+                .chain(words)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
         ("gm", words) => parse_gm(words)?,
+        ("chat", words) => parse_chat(words)?,
+        ("drag", [window, x, y]) => Step::Drag(
+            crate::windows::WindowId::named(window)
+                .map(|_| (*window).to_owned())
+                .ok_or_else(|| format!("no window is named {window}"))?,
+            bevy::math::Vec2::new(number(x, 0.0, 10_000.0)?, number(y, 0.0, 10_000.0)?),
+        ),
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
         ("wait", [duration]) => Step::Wait(millis(duration, MAX_WAIT)?),
@@ -288,7 +373,54 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
         ["give"] => ClickTarget::Give,
         ["actions"] => ClickTarget::ActionsWindow,
+        ["window", key] => ClickTarget::Toggle(
+            crate::windows::WindowId::ALL
+                .into_iter()
+                .find_map(|id| match id.key() {
+                    std::borrow::Cow::Borrowed(name) if name == *key => Some(name),
+                    _ => None,
+                })
+                .ok_or("expected a window, by its key such as skills")?,
+        ),
+        ["pet", words @ ..] => {
+            let line = format!("/pet {}", words.join(" "));
+            ClickTarget::Pet(
+                crate::skinned::PET_COMMANDS
+                    .iter()
+                    .map(|(_, command)| *command)
+                    .find(|command| *command == line)
+                    .ok_or("expected a Pet Info window button, by its /pet words")?,
+            )
+        }
+        ["option", name] => ClickTarget::Option(
+            eq_client_core::options::Toggle::ALL
+                .into_iter()
+                .find(|toggle| toggle.key() == *name)
+                .ok_or("expected an option, by its name in a file")?,
+        ),
         ["attack"] => ClickTarget::Attack,
+        ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
+        ["train"] => ClickTarget::Training(TrainingClick::Train),
+        ["answer", "yes"] => ClickTarget::Answer(true),
+        ["page", "next"] => ClickTarget::Page(true),
+        ["page", "back"] => ClickTarget::Page(false),
+        ["combine", slot] => ClickTarget::Combine(value(slot, "a pack slot number")?),
+        ["map", action] => ClickTarget::Map(map_button(action)?),
+        ["answer", "no"] => ClickTarget::Answer(false),
+        ["training_done"] => ClickTarget::Training(TrainingClick::Done),
+        ["slider", name, percent] => ClickTarget::Slider(
+            eq_client_core::options::Level::ALL
+                .into_iter()
+                .find(|level| level.key() == *name)
+                .ok_or_else(|| String::from("expected clip_plane, max_fps or mouse_sensitivity"))?,
+            percent
+                .parse::<u8>()
+                .ok()
+                .filter(|percent| *percent <= 100)
+                .ok_or_else(|| String::from("expected a percentage from 0 to 100"))?,
+        ),
+        ["dropdown", "key_filter"] => ClickTarget::KeyFilter,
+        ["choice", choice] => ClickTarget::Choice(ordinal(choice, "a choice")?),
         ["tab", tab] => ClickTarget::Tab(ordinal(tab, "a tab")?),
         ["ability", page, place] => ClickTarget::Ability(
             match *page {
@@ -336,6 +468,26 @@ fn coin_place(word: &str) -> Result<eq_client_core::money::CoinPlace, String> {
 }
 
 /// A place counted from one, as a script names it, from zero.
+/// The map toolbar's button a script names.
+fn map_button(action: &str) -> Result<crate::map::MapButton, String> {
+    use crate::map::MapButton;
+    Ok(match action {
+        "zoom_in" => MapButton::ZoomIn,
+        "zoom_out" => MapButton::ZoomOut,
+        "reset" => MapButton::Reset,
+        "labels" => MapButton::Labels,
+        "up" => MapButton::Pan(0, -1),
+        "down" => MapButton::Pan(0, 1),
+        "left" => MapButton::Pan(-1, 0),
+        "right" => MapButton::Pan(1, 0),
+        _ => {
+            return Err(
+                "expected zoom_in, zoom_out, reset, labels, up, down, left or right".into(),
+            );
+        }
+    })
+}
+
 fn ordinal(word: &str, what: &str) -> Result<usize, String> {
     word.parse::<usize>()
         .ok()
@@ -367,12 +519,58 @@ fn parse_gm(words: &[&str]) -> Result<Step, String> {
     let plain = |argument: &&str| {
         argument
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | ':'))
     };
     if arguments.len() > 4 || !arguments.iter().all(plain) {
         return Err("gm takes up to four plain arguments".into());
     }
+    if *command == "rules" && !matches!(arguments, ["set", _, _] | ["reload"]) {
+        return Err("gm rules takes set <Category:Rule> <value> or reload".into());
+    }
     Ok(Step::Gm(words.join(" ")))
+}
+
+/// `chat <say|ooc|shout|auction|group|guild|raid> <words>` or `chat tell
+/// <Name> <words>`: a line as a player types it. The words are printable
+/// ASCII and never a `#` command, which only a `gm` step sends.
+fn parse_chat(words: &[&str]) -> Result<Step, String> {
+    use eq_client_core::OutboundChat;
+    let usage = || {
+        String::from(concat!(
+            "chat takes say, ooc, shout, auction, group, guild or raid and words, ",
+            "or tell, a name and words"
+        ))
+    };
+    let text = |words: &[&str]| {
+        let text = words.join(" ");
+        (!text.is_empty()
+            && !text.starts_with('#')
+            && text.chars().all(|c| c.is_ascii_graphic() || c == ' '))
+        .then_some(text)
+        .ok_or_else(usage)
+    };
+    let [channel, rest @ ..] = words else {
+        return Err(usage());
+    };
+    Ok(Step::Chat(match *channel {
+        "say" => OutboundChat::Say(text(rest)?),
+        "ooc" => OutboundChat::Ooc(text(rest)?),
+        "shout" => OutboundChat::Shout(text(rest)?),
+        "auction" => OutboundChat::Auction(text(rest)?),
+        "group" => OutboundChat::Group(text(rest)?),
+        "guild" => OutboundChat::Guild(text(rest)?),
+        "raid" => OutboundChat::Raid(text(rest)?),
+        "tell" => match rest {
+            [name, words @ ..] if name.chars().all(|c| c.is_ascii_alphabetic()) => {
+                OutboundChat::Tell {
+                    recipient: (*name).to_owned(),
+                    message: text(words)?,
+                }
+            }
+            _ => return Err(usage()),
+        },
+        _ => return Err(usage()),
+    }))
 }
 
 /// `create <Name> <race> <class> <gender> <deity> <start zone> <stat for free points>`.
@@ -587,6 +785,131 @@ mod tests {
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
         );
+    }
+
+    #[test]
+    fn a_zone_rule_may_change_for_now_but_never_be_stored_or_reset() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "gm rules set Character:FoodLossPerUpdate 4000\ngm rules reload\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Gm("rules set Character:FoodLossPerUpdate 4000".into()),
+                Step::Gm("rules reload".into())
+            ]
+        );
+        for bad in [
+            "gm rules reset",
+            "gm rules setdb Character:FoodLossPerUpdate 32",
+            "gm rules set Character:FoodLossPerUpdate",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_script_may_ask_who_is_online() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("slash who\nslash who all wiz 50\n", base).unwrap(),
+            [
+                Step::Slash("/who".into()),
+                Step::Slash("/who all wiz 50".into())
+            ]
+        );
+        assert_eq!(
+            parse("slash consent Helper\nslash corpsedrag\n", base).unwrap(),
+            [
+                Step::Slash("/consent Helper".into()),
+                Step::Slash("/corpsedrag".into())
+            ]
+        );
+        assert!(parse("slash consent\n", base).is_err());
+    }
+
+    #[test]
+    fn a_script_may_speak_as_a_player_types() {
+        use eq_client_core::OutboundChat;
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "chat say Hail there
+chat ooc lfg
+chat tell Friend inc now
+",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Chat(OutboundChat::Say("Hail there".into())),
+                Step::Chat(OutboundChat::Ooc("lfg".into())),
+                Step::Chat(OutboundChat::Tell {
+                    recipient: "Friend".into(),
+                    message: "inc now".into(),
+                }),
+            ]
+        );
+        // Never an empty line or a `#` command, which only a gm step sends.
+        for bad in [
+            "chat",
+            "chat say",
+            "chat yell hi",
+            "chat tell Friend",
+            "chat tell Fr1end hi",
+            "chat say #summon",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_script_may_drag_a_window_by_its_name() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("drag actions 600 300\ndrag chat 700.5 450\n", base).unwrap(),
+            [
+                Step::Drag("actions".into(), bevy::math::Vec2::new(600.0, 300.0)),
+                Step::Drag("chat".into(), bevy::math::Vec2::new(700.5, 450.0)),
+            ]
+        );
+        for bad in ["drag", "drag chat 1", "drag nowhere 1 2", "drag chat -5 2"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_script_may_make_and_command_a_pet() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "gm makepet SumEarthR2\nslash pet back off\nclick pet sit down\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Gm("makepet SumEarthR2".into()),
+                Step::Slash("/pet back off".into()),
+                Step::Click(ClickTarget::Pet("/pet sit down")),
+            ]
+        );
+        assert_eq!(
+            parse("click option target_ring\n", base).unwrap(),
+            [Step::Click(ClickTarget::Option(
+                eq_client_core::options::Toggle::TargetRing
+            ))]
+        );
+        for bad in [
+            "slash pet",
+            "click pet",
+            "click pet dance",
+            "click option",
+            "click option shiny",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

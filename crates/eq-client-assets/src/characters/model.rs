@@ -213,6 +213,14 @@ impl LocalTransform {
 impl CharacterAsset {
     /// Height of the base-pose mesh in native EQ world units.
     pub fn height(&self) -> f32 {
+        self.span().map_or(1.0, |(min, max)| (max - min).max(1.0))
+    }
+
+    /// The lowest and highest points of the base-pose mesh, such as the
+    /// soles and the top of the head, in native EQ world units; None for a
+    /// model without base pieces.
+    #[must_use]
+    pub fn span(&self) -> Option<(f32, f32)> {
         let (min, max) = self
             .primitives
             .iter()
@@ -222,7 +230,7 @@ impl CharacterAsset {
             .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), p| {
                 (min.min(p[1]), max.max(p[1]))
             });
-        (max - min).max(1.0)
+        (min <= max).then_some((min, max))
     }
 
     /// The archive the model came from.

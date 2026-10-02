@@ -104,7 +104,10 @@ fn shape_of(asset: &CharacterAsset, race: u32, look: &Appearance, helm: bool) ->
 pub(super) fn dress(
     mut commands: Commands,
     online: Res<super::online::OnlineState>,
-    settings: Res<super::ViewerSettings>,
+    (settings, options): (
+        Res<super::ViewerSettings>,
+        Res<super::options::OptionsState>,
+    ),
     (mut wardrobe, mut library): (ResMut<Wardrobe>, ResMut<super::item_models::ItemLibrary>),
     mut characters: Query<(
         &mut super::character::AnimatedCharacter,
@@ -127,17 +130,17 @@ pub(super) fn dress(
                 .map(|player| (player.race, player.appearance)),
         }
         .unwrap_or_default();
-        if character.dressed == Some(look) {
+        // Other characters always show their helms; the player's own follows
+        // the Show My Helm option.
+        let helm = remote.is_some() || options.options.show_helm;
+        if character.dressed == Some((look, helm)) {
             continue;
         }
-        character.dressed = Some(look);
+        character.dressed = Some((look, helm));
         let directory = settings.0.eq_directory.as_deref();
         hold(&mut commands, &mut character, &look, |name| {
             library.shape(name, directory, (&mut images, &mut meshes, &mut materials))
         });
-        // Other characters always show their helms; the player's own follows
-        // the show-helm option.
-        let helm = remote.is_some() || !settings.0.hide_own_helm;
         let shape = shape_of(&character.asset, race, &look, helm);
         let character = &mut *character;
         for part in &character.parts {

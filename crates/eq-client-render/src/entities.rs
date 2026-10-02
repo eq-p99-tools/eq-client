@@ -42,7 +42,7 @@ pub(super) struct RemoteEntity {
 pub(super) fn reconcile(
     mut commands: Commands,
     state: Res<OnlineState>,
-    settings: Res<ViewerSettings>,
+    (settings, options): (Res<ViewerSettings>, Res<crate::options::OptionsState>),
     time: Res<Time>,
     mut nearby_state: ResMut<NearbyEntities>,
     mut images: ResMut<Assets<Image>>,
@@ -84,12 +84,16 @@ pub(super) fn reconcile(
         player.spawn_id,
         player.position,
         &present,
-        // As the official client's clip plane, drawing stops at the zone's far clip.
-        settings
-            .0
-            .entity_distance
-            .unwrap_or(200.0)
-            .min(state.world().far_clip().unwrap_or(f32::INFINITY)),
+        // Drawing stops where the scene's does, the Far Clip Plane's share of
+        // the zone's far clip; with no far clip, at its share of the client's
+        // own distance.
+        {
+            let distance = settings.0.entity_distance.unwrap_or(200.0);
+            match options.options.clip_distance(state.world().far_clip()) {
+                Some(clip) => distance.min(clip),
+                None => distance * options.options.clip_share(),
+            }
+        },
         200,
     );
     let desired: BTreeSet<_> = selected.iter().copied().collect();
@@ -134,7 +138,7 @@ pub(super) fn reconcile(
         .id();
     if !races::drawn(spawn.race) {
         // An unseen marker, such as a spawn point: nothing to draw.
-    } else if let Some(asset) = asset.filter(|_| !corpse) {
+    } else if let Some(asset) = asset {
         let height = asset.height().max(0.1);
         let scale = if spawn.size > 0.0 {
             (spawn.size / height).clamp(0.05, 20.0)
@@ -152,6 +156,13 @@ pub(super) fn reconcile(
                 )))
                 .with_scale(Vec3::splat(scale)),
         );
+        if corpse {
+            // Lying down, its name shows just over the body.
+            commands.entity(entity).insert((
+                character::Corpse,
+                super::names::Overhead(character::CORPSE_NAME_HEIGHT / scale),
+            ));
+        }
     } else {
         // An explicit marker keeps unknown model races visible without inventing an appearance.
         let height = if corpse {
@@ -164,6 +175,9 @@ pub(super) fn reconcile(
             SpawnKind::Npc => Color::srgb(0.8, 0.65, 0.3),
             _ => Color::srgb(0.4, 0.4, 0.4),
         };
+        commands
+            .entity(entity)
+            .insert(super::names::Overhead(height / 2.0));
         commands.entity(entity).with_children(|children| {
             children.spawn((
                 Mesh3d(meshes.add(Cuboid::new(0.6, height, 0.6))),

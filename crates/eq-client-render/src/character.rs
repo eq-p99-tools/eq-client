@@ -13,8 +13,8 @@ pub(super) struct AnimatedCharacter {
     meshes: Vec<(usize, Handle<Mesh>)>,
     /// The entities drawing the primitives.
     pub(super) parts: Vec<Part>,
-    /// The gear last drawn, if dressed yet.
-    pub(super) dressed: Option<eq_client_core::outfit::Appearance>,
+    /// The gear last drawn and whether its helm showed, if dressed yet.
+    pub(super) dressed: Option<(eq_client_core::outfit::Appearance, bool)>,
     /// The entity the parts hang from; held items hang from it too.
     pub(super) model: Entity,
     /// The render layers the model draws on.
@@ -32,6 +32,16 @@ pub(super) struct AnimatedCharacter {
     previous_position: Vec3,
     clip: (&'static str, bool),
 }
+
+/// A corpse: drawn with its race's model, lying as it fell.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub(super) struct Corpse;
+
+/// The death clip, whose last frame is the body lying on the ground.
+const DEATH: (&str, bool) = ("D05", true);
+
+/// How high over a corpse's position its name shows.
+pub(super) const CORPSE_NAME_HEIGHT: f32 = 1.5;
 
 /// One drawn primitive of a character instance.
 pub(super) struct Part {
@@ -180,14 +190,7 @@ pub(super) fn spawn_on_layers(
         .iter()
         .map(|(index, mesh, _)| (*index, mesh.clone()))
         .collect();
-    let bottom = asset
-        .primitives
-        .iter()
-        .zip(&asset.pieces)
-        .filter(|(_, piece)| piece.base())
-        .flat_map(|(p, _)| &p.positions)
-        .map(|p| p[1])
-        .fold(f32::INFINITY, f32::min);
+    let (bottom, top) = asset.span().unwrap_or_default();
     // Until gear says otherwise, only the base body and bare head show.
     let shown: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
     let mut parts = Vec::with_capacity(primitives.len());
@@ -227,6 +230,9 @@ pub(super) fn spawn_on_layers(
     commands
         .entity(parent)
         .add_child(child)
+        // The model hangs with its soles at the feet, so its top is this far
+        // above the root.
+        .insert(super::names::Overhead(top - bottom - feet_offset))
         .insert(AnimatedCharacter {
             asset,
             meshes: handles,
@@ -245,21 +251,30 @@ pub(super) fn spawn_on_layers(
         });
 }
 
+/// The characters the animation poses, with what decides their clip: the
+/// spawn they draw, whether they are the player, and whether a corpse.
+type Animated<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Transform,
+        &'static mut AnimatedCharacter,
+        Option<&'static super::entities::RemoteEntity>,
+        Has<super::Player>,
+        Has<Corpse>,
+    ),
+>;
+
 /// Updates local animation only; it cannot send movement or gameplay commands.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn animate(
     time: Res<Time>,
     online: Res<super::online::OnlineState>,
-    mut characters: Query<(
-        &Transform,
-        &mut AnimatedCharacter,
-        Option<&super::entities::RemoteEntity>,
-        Has<super::Player>,
-    )>,
+    mut characters: Animated,
     mut held_items: HeldItems,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    for (transform, mut character, remote, own) in &mut characters {
+    for (transform, mut character, remote, own, corpse) in &mut characters {
         let id = remote.map(|entity| entity.id).or_else(|| {
             own.then(|| online.world().player().map(|player| player.spawn_id))
                 .flatten()
@@ -285,10 +300,10 @@ pub(super) fn animate(
             continue;
         }
         character.since_pose = 0.0;
-        let selected = posture_clip(posture, character.moving_for > 0.0);
+        let (selected, start) = chosen_clip(corpse, posture, character.moving_for > 0.0);
         if selected != character.clip {
             character.clip = selected;
-            character.elapsed = 0.0;
+            character.elapsed = start;
         }
         let (clip, held) = selected;
         let (mut poses, attachments) =
@@ -325,6 +340,21 @@ pub(super) fn animate(
     }
 }
 
+/// The clip a character shows, and where in it a newly chosen clip starts:
+/// a corpse lies as it fell, in the death clip's last frame, rather than
+/// falling each time it is drawn (a held clip stays on its last frame).
+fn chosen_clip(
+    corpse: bool,
+    posture: Option<eq_client_core::PostureState>,
+    moving: bool,
+) -> ((&'static str, bool), f32) {
+    if corpse {
+        (DEATH, 1.0e6)
+    } else {
+        (posture_clip(posture, moving), 0.0)
+    }
+}
+
 /// WLD clip names documented by `EQEmu`; presentation never changes network position.
 fn posture_clip(
     posture: Option<eq_client_core::PostureState>,
@@ -345,6 +375,19 @@ fn posture_clip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_corpse_lies_in_the_death_clips_last_frame_whatever_its_posture() {
+        use eq_client_core::PostureState;
+        let (clip, start) = chosen_clip(true, Some(PostureState::Standing), true);
+        assert_eq!(clip, ("D05", true));
+        assert!(start > 1000.0);
+        assert_eq!(
+            chosen_clip(false, Some(PostureState::Sitting), false),
+            (("P02", true), 0.0)
+        );
+    }
+
     #[test]
     fn posture_overrides_walk_and_transition_clips_hold_their_final_pose() {
         use eq_client_core::PostureState;

@@ -4,12 +4,7 @@
 //! enters and seeds characters that have none yet.
 use super::layout::{Layouts, Saved};
 use bevy::prelude::*;
-use std::{
-    collections::BTreeMap,
-    fmt::Write as _,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::BTreeMap, fmt::Write as _, path::PathBuf, time::Duration};
 
 /// Changed placements are written at most this often, and never mid-drag.
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
@@ -78,12 +73,12 @@ pub(super) fn persist(
         // the official client last put them.
         if seeded
             && let Some((world, character)) = &store.profile
-            && let Some(install) = settings.0.eq_directory.as_deref()
+            && let Some(official) = settings.0.official_settings()
             && let Ok(window) = windows.single()
         {
             seed(
                 &mut layouts.0,
-                &eq_client_assets::ui::window_positions(install, character, world),
+                &official.window_positions(character, world),
                 Vec2::new(window.width(), window.height()),
             );
         }
@@ -165,7 +160,7 @@ fn save(store: &mut Store, layouts: &Layouts) {
         return;
     }
     let path = directory.join(file_name(store.profile.as_ref()));
-    match write(directory, &path, &text) {
+    match crate::profile_files::write(directory, &path, &text) {
         Ok(()) => store.written = text,
         Err(error) => {
             warn!(
@@ -178,32 +173,9 @@ fn save(store: &mut Store, layouts: &Layouts) {
     }
 }
 
-/// Replaces the file in one step, so a crash never leaves half a layout.
-fn write(directory: &Path, path: &Path, text: &str) -> std::io::Result<()> {
-    std::fs::create_dir_all(directory)?;
-    let partial = path.with_extension("tmp");
-    std::fs::write(&partial, text)?;
-    std::fs::rename(&partial, path)
-}
-
-/// The shared file, or `windows-<world>-<character>.txt` with anything but
-/// letters, digits, `-` and `_` replaced.
+/// The shared file, or the profile's own.
 fn file_name(profile: Option<&(String, String)>) -> String {
-    let clean = |text: &str| -> String {
-        text.chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect()
-    };
-    profile.map_or_else(
-        || SHARED.to_owned(),
-        |(world, character)| format!("windows-{}-{}.txt", clean(world), clean(character)),
-    )
+    crate::profile_files::name("windows", SHARED, profile)
 }
 
 /// One line per window: four edges, four margins, positioning, whether it is
@@ -339,7 +311,7 @@ mod tests {
                 at("PlayerWindow", (2560, 1600), 2000, 400),
                 at("TargetWindow", (2560, 1600), 1200, 20),
                 at("TargetWindow", (1280, 800), 500, 16),
-                at("ChatWindow", (1280, 800), 9, 9),
+                at("MainChat", (1280, 800), 9, 9),
                 at("CastingWindow", (1280, 800), 9, 9),
             ],
             Vec2::new(1280.0, 800.0),
@@ -354,6 +326,27 @@ mod tests {
         assert_eq!(layouts[&WindowId::Chat], chat);
         // Windows whose placement is never kept are left where they open.
         assert!(!layouts.contains_key(&WindowId::CastBar));
+    }
+
+    #[test]
+    fn the_main_chat_starts_where_the_chat_manager_put_it() {
+        use super::super::WindowId;
+        use eq_client_assets::ui::WindowPosition;
+        let at = |window: &str, x, y| WindowPosition {
+            window: window.into(),
+            screen: (1280, 800),
+            x,
+            y,
+        };
+        let mut layouts = BTreeMap::new();
+        // The main chat's place is the chat manager's, not the section named
+        // after the skin's chat window.
+        seed(
+            &mut layouts,
+            &[at("ChatWindow", 9, 9), at("MainChat", 640, 600)],
+            Vec2::new(1280.0, 800.0),
+        );
+        assert_eq!(layouts[&WindowId::Chat].edges[..2], [px(640), px(600)]);
     }
 
     fn saved(left: Val, minimized: bool) -> Saved {
@@ -448,6 +441,7 @@ mod tests {
             mana: 0,
             endurance: None,
             skills: None,
+            practice_points: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,
@@ -455,6 +449,8 @@ mod tests {
             run_speed: 0.0,
             hp_percent: None,
             appearance: eq_client_core::outfit::Appearance::default(),
+            listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
         }
     }
 

@@ -79,6 +79,26 @@ impl OnlineState {
         self.world.open_shop(merchant_id);
     }
 
+    /// The player answered the resurrection offered.
+    pub(super) fn answer_resurrection(&mut self) {
+        self.world.answer_resurrection();
+    }
+
+    /// The player closed the book or note they were reading.
+    pub(super) fn close_reading(&mut self) {
+        self.world.close_reading();
+    }
+
+    /// The player asked to open a world container.
+    pub(super) fn ask_container(&mut self, drop_id: u32) {
+        self.world.ask_container(drop_id);
+    }
+
+    /// The player closed the world container open for them.
+    pub(super) fn close_container(&mut self) {
+        self.world.close_container();
+    }
+
     /// The player closed the merchant window.
     pub(super) fn close_shop(&mut self) {
         self.world.close_shop();
@@ -351,6 +371,9 @@ pub(super) fn receive(
     // the session here, instead of leaving it looking connected.
     let lost = (ended && !state.world.ended())
         .then_some(WorldUpdate::Connection(eq_client_core::world::Link::Ended));
+    if lost.is_some() {
+        warn!("The session stopped without saying why");
+    }
     // The player entity spawned by zone entry in this batch, not yet in the world.
     let mut entered = None;
     for update in batch.into_iter().chain(lost) {
@@ -404,8 +427,15 @@ pub(super) fn receive(
 
 /// Logs what diagnosing a session needs from its news.
 fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: &ClientWorld) {
-    let WorldUpdate::Game(event) = update else {
-        return;
+    let event = match update {
+        WorldUpdate::Game(event) => event,
+        // Every change of connection is logged, so a session that ends
+        // leaves its reason behind.
+        WorldUpdate::Connection(link) => {
+            info!(?link, dead = world.ended(), "Session connection changed");
+            return;
+        }
+        _ => return,
     };
     match event {
         WorldEvent::ItemDetails(item) => debug!("Item definition received: ID {}", item.id),
@@ -439,6 +469,19 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
             effect_flag = effect.effect_flag,
             "Own spell effect"
         ),
+        // Hunger and thirst, and each bite the session takes for them.
+        WorldEvent::Nourishment(nourishment) => debug!(
+            food = nourishment.food,
+            water = nourishment.water,
+            "Stamina report"
+        ),
+        WorldEvent::NothingToEat { food, water } => debug!(?food, ?water, "Nothing to eat"),
+        WorldEvent::Inventory(eq_client_core::inventory::InventoryUpdate::Deduct {
+            slot,
+            quantity,
+        }) => {
+            debug!(slot = slot.0, quantity, "Inventory deduction");
+        }
         _ => (),
     }
 }
@@ -488,6 +531,7 @@ pub(crate) mod testing {
             mana: 0,
             endurance: Some(0),
             skills: None,
+            practice_points: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 6.0,
@@ -495,6 +539,31 @@ pub(crate) mod testing {
             run_speed: 0.0,
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
+            listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
+        }
+    }
+
+    /// The player's pet: a level 1 earth elemental with this spawn ID, at
+    /// the origin, owned by this spawn.
+    pub(crate) fn pet(spawn_id: u16, owner: u16) -> SpawnState {
+        SpawnState {
+            class: Some(1),
+            spawn_id,
+            name: "Gabober000".into(),
+            kind: eq_client_core::SpawnKind::Npc,
+            race: 75,
+            gender: 2,
+            position: WorldPosition::default(),
+            velocity: [0.0; 3],
+            size: 0.0,
+            invisible: false,
+            appearance: eq_client_core::outfit::Appearance::default(),
+            level: 1,
+            listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
+            pet_owner: Some(owner),
+            hp_percent: Some(100),
         }
     }
 
@@ -675,6 +744,7 @@ mod tests {
             mana: 0,
             endurance: Some(0),
             skills: None,
+            practice_points: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,
@@ -682,6 +752,8 @@ mod tests {
             run_speed: 0.0,
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
+            listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
         };
         let spawn = eq_client_core::SpawnState {
             class: None,
@@ -695,6 +767,11 @@ mod tests {
             size: 0.0,
             invisible: false,
             appearance: eq_client_core::outfit::Appearance::default(),
+            level: 0,
+            listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
+            pet_owner: None,
+            hp_percent: None,
         };
         let door = Door {
             id: 3,
@@ -918,6 +995,7 @@ mod tests {
             mana: 0,
             endurance: Some(0),
             skills: Some(vec![0; 100]),
+            practice_points: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,
@@ -925,6 +1003,8 @@ mod tests {
             run_speed: 0.0,
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
+            listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
         };
         let admitted = std::time::Instant::now();
         for update in [

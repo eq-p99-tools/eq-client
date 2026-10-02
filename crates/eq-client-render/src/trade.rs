@@ -229,6 +229,12 @@ pub(super) fn input(
         let banker = targeted.as_ref().is_some_and(|(_, kind, class, ..)| {
             *kind == SpawnKind::Npc && *class == Some(BANKER_CLASS)
         });
+        let guildmaster = targeted
+            .as_ref()
+            .filter(|(_, kind, class, invisible, _)| {
+                *kind == SpawnKind::Npc && !invisible && super::training::is_guildmaster(*class)
+            })
+            .map(|(trainer, ..)| *trainer);
         if trade.merchant.is_some() {
             clicked.push(Action::EndShop);
         } else if let Some((merchant_id, _, _, _, name)) =
@@ -252,6 +258,16 @@ pub(super) fn input(
                 trade.merchant = Some(MerchantWindow { name });
                 trade.changed();
             }
+        } else if let Some(trainer) = guildmaster {
+            // A guildmaster's answer opens the Training window.
+            send(
+                online.world(),
+                ClientCommand::Training {
+                    session_id,
+                    request: eq_client_core::training::TrainingRequest::Open { trainer },
+                    created: now,
+                },
+            );
         } else if banker {
             // A banker opens the bank, drawn from the skin, while in reach.
             shown.open(windows::WindowId::Bank);
@@ -650,7 +666,7 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
     };
     theme::button_with(
         parent,
-        (action, crate::outbox::Needs(needs)),
+        (action, crate::outbox::Needs::Capability(needs)),
         label,
         Size::Label,
     );
@@ -947,6 +963,7 @@ mod tests {
                 mana: 0,
                 endurance: None,
                 skills: None,
+                practice_points: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],
                 size: 6.0,
@@ -954,6 +971,8 @@ mod tests {
                 run_speed: 0.0,
                 hp_percent: Some(100),
                 appearance: eq_client_core::outfit::Appearance::default(),
+                listing: eq_client_core::listing::Listing::default(),
+                name_parts: eq_client_core::names::NameParts::default(),
             },
         );
         // A command queue that can no longer take anything.

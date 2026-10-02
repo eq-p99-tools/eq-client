@@ -324,6 +324,7 @@ impl InventoryState {
         // An NPC takes NO DROP items; another player never does.
         let trade_no_drop = exchange
             .is_none_or(|exchange| exchange.partner == eq_client_core::exchange::Partner::Npc);
+        let world_container = online.world().container().is_some();
         if self.demo {
             return Ok(InventoryActor {
                 bank_access: self.bank_open,
@@ -334,6 +335,7 @@ impl InventoryState {
                 level: 60,
                 trade_slots,
                 trade_no_drop,
+                world_container,
             });
         }
         let player = online
@@ -353,6 +355,7 @@ impl InventoryState {
             level: player.level,
             trade_slots,
             trade_no_drop,
+            world_container,
         })
     }
 
@@ -400,7 +403,8 @@ impl InventoryState {
                 || slot.is_carried()
                 || slot == InventorySlot::CURSOR
                 || (self.bank_open && slot.is_personal_bank())
-                || (slot.is_trade() && slot.0 - 3000 < i32::from(trade_slots)),
+                || (slot.is_trade() && slot.0 - 3000 < i32::from(trade_slots))
+                || (slot.is_world() && online.world().container().is_some()),
             "This slot is view only"
         );
         let cursor_item = inventory.items().get(&InventorySlot::CURSOR);
@@ -889,6 +893,11 @@ mod tests {
                 size: 6.0,
                 invisible: false,
                 appearance: eq_client_core::outfit::Appearance::default(),
+                level: 0,
+                listing: eq_client_core::listing::Listing::default(),
+                name_parts: eq_client_core::names::NameParts::default(),
+                pet_owner: None,
+                hp_percent: None,
             },
         );
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
@@ -937,6 +946,7 @@ mod tests {
             mana: 0,
             endurance: Some(0),
             skills: None,
+            practice_points: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,
@@ -944,6 +954,8 @@ mod tests {
             run_speed: 0.0,
             hp_percent: Some(100),
             appearance: eq_client_core::outfit::Appearance::default(),
+            listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
         }
     }
 }

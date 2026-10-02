@@ -5,7 +5,7 @@ mod session;
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-use eq_client_assets::ZoneAsset;
+use eq_client_assets::{ZoneAsset, ui::InstalledClient};
 use eq_client_core::WorldPosition;
 use eq_client_render::{
     Preview, ProjectionStyle, Source, ValidationAction, ViewerConfig, script::Step,
@@ -67,15 +67,18 @@ struct Arguments {
     #[arg(long, default_value = "200")]
     entity_distance: f32,
 
-    /// Hide your own character's helm, as the official client's show-helm
-    /// option does; other characters always show theirs.
+    /// Hide your own character's helm, as the official client's Show My Helm
+    /// option does; other characters always show theirs. A character's own
+    /// choice in the Options window's Display page wins over this.
     #[arg(long)]
     hide_own_helm: bool,
 
     /// The most frames a second the client draws; 0 leaves it to vsync, which
-    /// is the monitor's refresh rate.
-    #[arg(long, default_value = "60")]
-    max_fps: u32,
+    /// is the monitor's refresh rate. Wins over `eqclient.ini`'s `MaxFPS`;
+    /// the Options window's Max FPS wins over both once the character sets
+    /// it. Without either, 60.
+    #[arg(long)]
+    max_fps: Option<u32>,
 
     /// Add coordinates, the movement mode and the nearby-entity count to the
     /// status box, for development and live checks.
@@ -130,13 +133,20 @@ struct Arguments {
     #[arg(long, requires = "online")]
     session_seconds: Option<u64>,
 
+    /// When hungry or thirsty, eat and drink whatever comes first, as the
+    /// official client does. By default food and drink with modifiers are
+    /// left to eat or drink by hand. A character's own choice in the Options
+    /// window's Client page wins over this.
+    #[arg(long, requires = "online")]
+    auto_eat_anything: bool,
+
     /// Hide placed objects to inspect terrain and material transitions.
     #[arg(long)]
     terrain_only: bool,
 
     /// Attended key script (press/hold/wait/report/screenshot/quit), run only
     /// while the client window is focused, except offline or on a local
-    /// `EQEmu` server.
+    /// `EQEmu` or TAKP server.
     /// Screenshots are saved beside it.
     #[arg(long, conflicts_with = "screenshot")]
     script: Option<PathBuf>,
@@ -216,26 +226,43 @@ fn online_protocol(online: bool) -> Result<Option<ServerProtocol>, String> {
         .map_err(|error| format!("EQ_PROTOCOL={value:?}: {error}"))
 }
 
-/// Refuses `gm` script steps unless the session is local-only (see
-/// [`local_session`]), so `#` commands can never reach P99, Quarm or a public server.
-fn check_gm_steps(steps: Option<&[Step]>, local: bool) -> Result<(), &'static str> {
-    let gm = steps.is_some_and(|steps| steps.iter().any(|step| matches!(step, Step::Gm(_))));
-    if gm && !local {
-        return Err("gm script steps need --online with EQ_PROTOCOL=eqemu (a local EQEmu server)");
+/// Refuses a script with local-only steps, `gm` and `chat`, unless the
+/// session is local-only (see [`local_session`]), so `#` commands and a
+/// script's chat can never reach P99, Quarm or a public server. Such a script
+/// fails at launch rather than when it reaches the step.
+fn check_local_steps(steps: Option<&[Step]>, local: bool) -> Result<(), &'static str> {
+    let local_only = steps.is_some_and(|steps| {
+        steps
+            .iter()
+            .any(|step| matches!(step, Step::Gm(_) | Step::Chat(_)))
+    });
+    if local_only && !local {
+        return Err(concat!(
+            "gm and chat script steps need --online with EQ_PROTOCOL=eqemu or takp ",
+            "(a local EQEmu or TAKP server)"
+        ));
     }
     Ok(())
 }
 
-/// A script on `EQEmu` is a local test run: its session refuses every server
-/// outside this machine's network, and only then may it send `gm` steps and run
-/// without anyone watching the window. P99 and Quarm scripts stay attended.
+/// A script on a stock server (`EQEmu` or TAKP) is a local test run: its
+/// session refuses every server outside this machine's network, and only then
+/// may it send `gm` steps and run without anyone watching the window. P99 and
+/// Quarm scripts stay attended.
 fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
-    script && protocol == Some(ServerProtocol::EqEmu)
+    script && protocol.is_some_and(ServerProtocol::is_stock)
 }
 
 /// Startup problems print to stderr before the viewer exists; once it
 /// runs, the session logs through `tracing` like the viewer.
 fn main() {
+    // A panic reaches the log, and with it the log file, as well as the
+    // standard error stream.
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        tracing::error!("The client panicked: {panic}");
+        report(panic);
+    }));
     let mut arguments = Arguments::parse();
     let calibration = arguments
         .movement_calibration
@@ -248,7 +275,7 @@ fn main() {
         std::process::exit(2);
     });
     let local = local_session(script.is_some(), protocol);
-    if let Err(error) = check_gm_steps(script.as_deref(), local) {
+    if let Err(error) = check_local_steps(script.as_deref(), local) {
         eprintln!("error: {error}");
         std::process::exit(2);
     }
@@ -299,6 +326,11 @@ fn main() {
             arguments.session_seconds,
             calibration,
             local,
+            if arguments.auto_eat_anything {
+                eq_client_core::food::AutoEat::Anything
+            } else {
+                eq_client_core::food::AutoEat::Plain
+            },
         ) {
             Ok((worker, updates)) => {
                 let commands = worker.commands();
@@ -321,6 +353,7 @@ fn main() {
         local,
     );
     let exit = eq_client_render::run(zone, character, config, source);
+    tracing::info!("The client ends with status {exit}");
     // Close the session before exiting with the viewer's status.
     drop(worker);
     std::process::exit(exit);
@@ -355,9 +388,16 @@ fn viewer_config(
         camera_distance: arguments.camera_distance,
         terrain_only: arguments.terrain_only,
         eq_directory: Some(eq_directory),
+        installed_client: installed_client(protocol),
         entity_distance: Some(arguments.entity_distance),
-        hide_own_helm: arguments.hide_own_helm,
-        frame_rate_cap: (arguments.max_fps > 0).then_some(arguments.max_fps),
+        option_defaults: eq_client_core::options::Options {
+            show_helm: !arguments.hide_own_helm,
+            skip_modified_food: !arguments.auto_eat_anything,
+            ..eq_client_core::options::Options::default()
+        },
+        max_fps: arguments
+            .max_fps
+            .map(|cap| u16::try_from(cap.min(1000)).unwrap_or(1000)),
         validation: if arguments.target_nearest_player_once {
             Some(ValidationAction::TargetNearestPlayer)
         } else if arguments.inspect_first_chat_item_once {
@@ -372,6 +412,17 @@ fn viewer_config(
         settings_directory: arguments.settings_dir.or_else(default_settings_directory),
         window_position: arguments.window_position,
         debug_overlay: arguments.debug_overlay,
+    }
+}
+
+/// The official client a server's players install, whose own settings files
+/// the viewer reads by that client's rules. Offline, the installation is
+/// taken to be Titanium's, as the default `--eq-dir` is.
+fn installed_client(protocol: Option<ServerProtocol>) -> InstalledClient {
+    if protocol.is_none_or(ServerProtocol::is_titanium) {
+        InstalledClient::Titanium
+    } else {
+        InstalledClient::EqMac
     }
 }
 
@@ -489,14 +540,30 @@ fn print_summary(zone: &ZoneAsset) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ServerProtocol, Step, check_gm_steps, distance, finite, load_script, local_session,
-        parse_window_position, seconds,
+        InstalledClient, ServerProtocol, Step, check_local_steps, distance, finite,
+        installed_client, load_script, local_session, parse_window_position, seconds,
     };
 
     #[test]
-    fn only_eqemu_scripts_are_local_sessions() {
+    fn titanium_servers_and_offline_runs_read_a_titanium_installation() {
+        for protocol in [
+            None,
+            Some(ServerProtocol::EqEmu),
+            Some(ServerProtocol::Project1999),
+        ] {
+            assert_eq!(installed_client(protocol), InstalledClient::Titanium);
+        }
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+            assert_eq!(installed_client(Some(protocol)), InstalledClient::EqMac);
+        }
+    }
+
+    #[test]
+    fn only_scripts_on_stock_servers_are_local_sessions() {
         assert!(local_session(true, Some(ServerProtocol::EqEmu)));
+        assert!(local_session(true, Some(ServerProtocol::Takp)));
         assert!(!local_session(true, Some(ServerProtocol::Project1999)));
+        assert!(!local_session(true, Some(ServerProtocol::Quarm)));
         assert!(!local_session(false, Some(ServerProtocol::EqEmu)));
         assert!(!local_session(true, None));
     }
@@ -523,12 +590,14 @@ mod tests {
     }
 
     #[test]
-    fn gm_steps_are_refused_outside_a_local_eqemu_session() {
-        let gm = [Step::Gm("summon".into())];
-        assert!(check_gm_steps(Some(&gm), false).is_err());
-        assert!(check_gm_steps(Some(&gm), true).is_ok());
-        assert!(check_gm_steps(Some(&[Step::Face]), false).is_ok());
-        assert!(check_gm_steps(None, false).is_ok());
+    fn gm_and_chat_steps_are_refused_outside_a_local_session() {
+        let chat = Step::Chat(eq_client_core::OutboundChat::Say("Hail".into()));
+        for steps in [[Step::Gm("summon".into())], [chat]] {
+            assert!(check_local_steps(Some(&steps), false).is_err());
+            assert!(check_local_steps(Some(&steps), true).is_ok());
+        }
+        assert!(check_local_steps(Some(&[Step::Face]), false).is_ok());
+        assert!(check_local_steps(None, false).is_ok());
     }
 
     #[test]

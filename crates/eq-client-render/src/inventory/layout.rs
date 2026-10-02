@@ -313,7 +313,7 @@ fn square(
         .spawn((
             Button,
             SlotButton(slot),
-            crate::outbox::Needs(eq_client_core::Capability::Inventory),
+            crate::outbox::Needs::Capability(eq_client_core::Capability::Inventory),
             Node {
                 width: px(CELL),
                 height: px(CELL),

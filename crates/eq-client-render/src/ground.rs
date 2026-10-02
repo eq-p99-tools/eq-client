@@ -80,7 +80,8 @@ pub(super) fn reconcile(
         } else {
             continue;
         };
-        let pick = if item {
+        // Items and world containers such as forges take clicks.
+        let pick = if item || object.is_tradeskill_container() {
             let (min, max) = bounds.unwrap_or((Vec3::ZERO, Vec3::ZERO));
             let (min, max) = eq_client_core::ground::pick_box(min, max);
             Some((min, max))
@@ -122,25 +123,43 @@ pub(super) fn hit<'a>(
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-/// Asks to pick an item up; the session checks the cursor and reach and
-/// answers with the result. The chat line the player reads when they cannot
-/// pick anything up now; the outbox shows its own refusals.
-pub(super) fn pick_up(
+/// Uses an object: asks to pick an item up, or to open a world container
+/// such as a forge; the session checks the cursor and reach and answers with
+/// the result. The chat line the player reads when they cannot use anything
+/// now; the outbox shows its own refusals.
+pub(super) fn use_object(
     drop_id: u32,
-    state: &super::online::OnlineState,
+    state: &mut super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
 ) -> Option<String> {
     if !state.in_world() {
         return Some("You can't pick anything up right now.".into());
     }
+    let container = state
+        .world()
+        .objects()
+        .entries()
+        .get(&drop_id)
+        .is_some_and(GroundObject::is_tradeskill_container);
     // A refusal shows in the feedback line.
-    let _ = outbox.post(state.world(), |stamp| {
-        eq_client_core::ClientCommand::PickUp {
-            session_id: stamp.session_id,
-            drop_id,
-            created: stamp.created,
+    let posted = outbox.post(state.world(), |stamp| {
+        if container {
+            eq_client_core::ClientCommand::OpenContainer {
+                session_id: stamp.session_id,
+                drop_id,
+                created: stamp.created,
+            }
+        } else {
+            eq_client_core::ClientCommand::PickUp {
+                session_id: stamp.session_id,
+                drop_id,
+                created: stamp.created,
+            }
         }
     });
+    if container && posted.is_ok() {
+        state.ask_container(drop_id);
+    }
     None
 }
 
@@ -178,6 +197,7 @@ mod tests {
                 class: None,
                 deity: None,
                 skills: None,
+                practice_points: None,
                 gender: 0,
                 level: 1,
                 position: default(),
@@ -190,6 +210,8 @@ mod tests {
                 run_speed: 0.0,
                 hp_percent: None,
                 appearance: eq_client_core::outfit::Appearance::default(),
+                listing: eq_client_core::listing::Listing::default(),
+                name_parts: eq_client_core::names::NameParts::default(),
             },
         );
         state
