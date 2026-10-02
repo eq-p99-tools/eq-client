@@ -176,6 +176,18 @@ impl Layer {
     }
 }
 
+/// Where a window opens while neither the player nor the official client's
+/// UI file has placed it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Opening {
+    /// Where the skin puts it, when the skin draws it, as the official
+    /// client opens it; at its own placement otherwise. Every window opens
+    /// so unless its description says otherwise.
+    Skin,
+    /// At its own placement, even when the skin draws it.
+    Own,
+}
+
 /// What the client knows about a window before it is drawn.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Description {
@@ -190,6 +202,9 @@ pub(crate) struct Description {
     pub closes_on_escape: bool,
     /// Whether its placement is kept between runs.
     pub persists: bool,
+    /// Where it opens while neither the player nor the official client's UI
+    /// file has placed it.
+    pub opening: Opening,
     /// The names its placement was saved under before windows had ids.
     pub saved_as: &'static [&'static str],
 }
@@ -225,6 +240,7 @@ const fn hud(
         toggled: false,
         closes_on_escape: false,
         persists: true,
+        opening: Opening::Skin,
         saved_as,
     }
 }
@@ -242,6 +258,7 @@ const fn floating(
         toggled,
         closes_on_escape: true,
         persists: true,
+        opening: Opening::Skin,
         saved_as,
     }
 }
@@ -453,8 +470,14 @@ impl WindowId {
             // the banker stays in view; a banker's window opens and closes
             // with the banker's reach.
             Self::Bank => floating("BANK", Placement::TopLeft(666.0, 100.0), false, &[]),
-            // Each bag keeps its own place, as in the official client.
-            Self::Bag(slot) => floating("", bag_placement(slot), false, &[]),
+            // Each bag keeps its own place, as in the official client. The
+            // skin's container window has one place, which would stack every
+            // bag never placed on the others; where the official client
+            // opens such a bag is not checked yet.
+            Self::Bag(slot) => Description {
+                opening: Opening::Own,
+                ..floating("", bag_placement(slot), false, &[])
+            },
             Self::Spellbook => Description {
                 ..floating(
                     "SPELLBOOK",
@@ -523,6 +546,7 @@ impl WindowId {
                 layer: Layer::Screen,
                 closes_on_escape: false,
                 persists: false,
+                opening: Opening::Own,
                 ..floating("", Placement::Fill, false, &[])
             },
         }

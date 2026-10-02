@@ -235,10 +235,10 @@ pub(crate) fn apply(
     }
 }
 
-/// Sizes the frame as the skin does. A HUD window the player has not placed
-/// opens where the skin puts it, as the official client opens it; the
-/// windows the player opens keep the client's places, laid out to stay
-/// clear of each other.
+/// Sizes the frame as the skin does. A window placed neither by the player
+/// nor by the official client's UI file opens where the skin puts it, as
+/// the official client opens it, unless its description declares a place of
+/// its own (`Description::opening`).
 fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
     node.width = px(screen.area.width);
     node.height = px(screen.area.height);
@@ -251,7 +251,7 @@ fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
     node.padding = UiRect::ZERO;
     node.border = UiRect::ZERO;
     node.row_gap = Val::ZERO;
-    if !placed && id.describe().layer == super::windows::Layer::Hud {
+    if !placed && id.describe().opening == super::windows::Opening::Skin {
         node.position_type = PositionType::Absolute;
         node.left = px(screen.area.x);
         node.top = px(screen.area.y);
@@ -1941,6 +1941,43 @@ fn target_health(world: &eq_client_core::world::ClientWorld) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unplaced_window_opens_where_the_skin_puts_it_unless_it_says_otherwise() {
+        let screen = Screen {
+            name: "Window".into(),
+            area: Area {
+                x: 120.0,
+                y: 80.0,
+                width: 200.0,
+                height: 150.0,
+            },
+            template: None,
+            titlebar: false,
+            border: false,
+            tooltip: None,
+            pieces: Vec::new(),
+        };
+        let skin = (px(120.0), px(80.0));
+        let at = |id, placed| {
+            let mut node = super::super::windows::placed(id, Node::default());
+            reshape(&mut node, &screen, placed, id);
+            (node.left, node.top)
+        };
+        // Pop-ups open at the skin's place as the HUD does.
+        for id in [
+            WindowId::Give,
+            WindowId::Merchant,
+            WindowId::Inventory,
+            WindowId::Player,
+        ] {
+            assert_eq!(at(id, false), skin, "{id:?}");
+        }
+        // A window the player or the UI file placed stays there.
+        assert_ne!(at(WindowId::Give, true), skin);
+        // A bag keeps its own place until the official client's is known.
+        assert_ne!(at(WindowId::Bag(22), false), skin);
+    }
 
     #[test]
     fn the_hot_button_windows_buttons_hold_the_action_bars_slots() {
