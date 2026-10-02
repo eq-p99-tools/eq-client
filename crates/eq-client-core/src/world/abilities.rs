@@ -1,7 +1,10 @@
 //! The player's abilities: which they have, by the skills the server counts,
 //! and the recovery timers the session started for them.
 use super::{Changes, ClientWorld, Notice};
-use crate::abilities::Ability;
+use crate::{
+    abilities::{Ability, Recovery},
+    bind_wound::BindWoundUpdate,
+};
 use std::time::{Duration, Instant};
 
 /// The compass point a heading faces, clockwise from north (0) to
@@ -70,14 +73,35 @@ impl ClientWorld {
         }
     }
 
-    /// The session refused an ability, and why.
-    pub(super) fn ability_refused(&self, session_id: u64, reason: &str, changes: &mut Changes) {
+    /// The session refused an ability, and why: in its words, and the
+    /// official client's string with what it names where it has one.
+    pub(super) fn ability_refused(
+        &self,
+        session_id: u64,
+        (reason, string_id, arguments): (&str, Option<u32>, &[String]),
+        changes: &mut Changes,
+    ) {
         if self.session_id == Some(session_id) {
-            changes
-                .notices
-                .push(Notice::AbilityRefused(reason.to_owned()));
+            changes.notices.push(Notice::AbilityRefused {
+                reason: reason.to_owned(),
+                string_id,
+                arguments: arguments.to_vec(),
+            });
         } else {
             changes.ignored = true;
         }
+    }
+
+    /// A bandaging started or ended: the player hears which, and one that
+    /// ended frees Bind Wound at once, as the session does.
+    pub(super) fn bind_wound(&mut self, update: &BindWoundUpdate, changes: &mut Changes) {
+        match update {
+            BindWoundUpdate::Unlocked => return,
+            BindWoundUpdate::Ended(_) => {
+                self.ability_timers.remove(&Recovery::BindWound);
+            }
+            BindWoundUpdate::Started { .. } => (),
+        }
+        changes.notices.push(Notice::BindWound(update.clone()));
     }
 }

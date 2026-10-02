@@ -71,8 +71,18 @@ pub enum Notice {
     ZoneLineRefused(String),
     /// A target request was refused, and why.
     TargetRefused(String),
-    /// An ability was not used, and why.
-    AbilityRefused(String),
+    /// An ability was not used, and why: in the official client's own words
+    /// where the session names its string, else in the session's.
+    AbilityRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+        /// What the official string names, in order.
+        arguments: Vec<String>,
+    },
+    /// A bandaging started or ended.
+    BindWound(crate::bind_wound::BindWoundUpdate),
     /// Sense Heading: the compass point the player faces, clockwise from
     /// north (0) to north-west (7).
     Heading(u8),

@@ -499,9 +499,13 @@ impl ClientWorld {
                 ability,
                 ready_in,
             } => self.ability_used((*session_id, *ability, *ready_in), now, news),
-            WorldEvent::AbilityRefused { session_id, reason } => {
-                self.ability_refused(*session_id, reason, news);
-            }
+            WorldEvent::AbilityRefused {
+                session_id,
+                reason,
+                string_id,
+                arguments,
+            } => self.ability_refused(*session_id, (reason, *string_id, arguments), news),
+            WorldEvent::BindWound(update) => self.bind_wound(update, news),
             WorldEvent::WhoList(list) => news.notices.push(Notice::WhoList(list.clone())),
 
             // Food and drink: the session eats and drinks for the player.
