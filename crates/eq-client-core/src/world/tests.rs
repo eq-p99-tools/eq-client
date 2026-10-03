@@ -2630,8 +2630,8 @@ fn a_raid_member_moved_but_not_listed_yet_joins_the_list_without_a_word() {
         group_leader: false,
     };
     let mut world = admitted();
-    // The player moved while listed again comes back as moved, unlisted
-    // till then.
+    // A member moved that the roster does not hold, which no EQEmu order
+    // sends, joins it as the session's roster does.
     raid_news(
         &mut world,
         RaidUpdate::Created {

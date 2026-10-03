@@ -205,9 +205,9 @@ impl ClientWorld {
                 // nothing.
                 (before.as_ref() != Some(name)).then(|| RaidNotice::Leader(self.raid_party(name)))
             }
-            // A member moved takes their new place; one the raid has not
-            // listed yet, as the player moved while listed again, joins the
-            // list without a word.
+            // A member moved takes their new place; one the roster does not
+            // hold joins it without a word, as the session's own roster
+            // does (no EQEmu order sends one).
             RaidUpdate::Moved(member) => {
                 let members = &mut self.raid.get_or_insert_with(Raid::default).members;
                 match members.iter_mut().find(|known| known.name == member.name) {
