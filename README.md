@@ -118,7 +118,12 @@ Robes, helmets, weapons in hand and later race-specific armor still draw as
 the base look. HP, mana, endurance,
 experience updates, memorized spell IDs, and communication text feed the HUD.
 Unknown values remain blank. Chat has All and channel tabs, unread counts, and
-independent scroll positions. It retains 200 messages per channel group, preserving
+independent scroll positions. Each line reads in the official client's words,
+as its log writes them without the time: a player's speech and a tell the
+player sent by the installed client's string for them (in this client's words
+for who spoke and where, without the installation's string table), and the
+game's own lines as the server sends them. Item links in a line stay
+clickable, and each channel keeps its colour. It retains 200 messages per channel group, preserving
 quiet guild/tell history during busy auction traffic. The exact default colors
 come from the mobile client's `src/App.css`; structured item-link data stays in
 memory for the item inspection panel. Scroll over chat to

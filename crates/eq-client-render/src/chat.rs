@@ -600,6 +600,10 @@ pub(super) fn refresh(
     mut input_labels: Query<(&mut Text, Has<Bare>), (With<InputLabel>, Without<TabLabel>)>,
     mut input_boxes: Query<&mut BorderColor, (With<InputBox>, Without<TabButton>, Without<Bare>)>,
     look: Option<Res<ChatLook>>,
+    (online, messages): (
+        Res<super::online::OnlineState>,
+        Option<Res<crate::hud::messages::Messages>>,
+    ),
 ) {
     let active = state.active;
     let revision = state.history.revision();
@@ -695,11 +699,18 @@ pub(super) fn refresh(
         };
         content.revision = revision;
         let lines = state.history.lines(active);
+        // A line reads in its log's words, which tell the player's own
+        // speech from others'.
+        let player = online
+            .world()
+            .player()
+            .map_or("", |player| player.name.as_str());
         sync_lines(
             &mut commands,
             (column, content.bare),
             children,
             (&lines, look.as_deref().filter(|_| content.bare)),
+            (player, messages.as_deref()),
             &rendered,
         );
     }
@@ -712,6 +723,7 @@ fn sync_lines(
     (column, bare): (Entity, bool),
     children: Option<&Children>,
     (lines, look): (&[(u64, &ChatLine)], Option<&ChatLook>),
+    reading: (&str, Option<&crate::hud::messages::Messages>),
     rendered: &Query<(Option<&LineId>, Has<Placeholder>)>,
 ) {
     let kept: HashSet<u64> = lines.iter().map(|(id, _)| *id).collect();
@@ -740,17 +752,20 @@ fn sync_lines(
     // History ids only grow, so every line newer than the last one shown is new.
     commands.entity(column).with_children(|parent| {
         for (id, line) in lines.iter().filter(|(id, _)| *id > newest) {
-            spawn_line(parent, *id, (line, look));
+            spawn_line(parent, *id, (line, look), reading);
         }
     });
 }
 
-/// Appends one chat line: its channel, sender and text, with item links
-/// clickable; in the player's colours and font where the chat has them.
+/// Appends one chat line in the official client's words, as its log
+/// writes it without the time (`logs::shown`), with item links clickable;
+/// in its channel's colour, the player's and in the player's font where the
+/// chat has them.
 fn spawn_line(
     parent: &mut ChildSpawnerCommands,
     id: u64,
     (line, look): (&ChatLine, Option<&ChatLook>),
+    (player, messages): (&str, Option<&crate::hud::messages::Messages>),
 ) {
     let color = look.map_or_else(
         || {
@@ -762,20 +777,11 @@ fn spawn_line(
     let size = look
         .and_then(|look| look.font)
         .map_or(Size::Label, |font| super::skinned::font(Some(font)));
-    // The echo of a tell the player sent says whom they told.
-    let sender = match (line.channel, line.target.as_deref()) {
-        (ChannelName::TellEcho, Some(target)) => format!("To {target}: "),
-        _ => line
-            .sender
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map_or(String::new(), |s| format!("{s}: ")),
-    };
-    let prefix = format!("[{}] {sender}", ChatTab::for_channel(line.channel).label());
-    if line.message.item_links.is_empty() {
+    let message = crate::logs::shown(line, player, messages);
+    if message.item_links.is_empty() {
         parent.spawn((
             LineId(id),
-            Text::new(format!("{prefix}{}", line.message.text)),
+            Text::new(message.text),
             theme::font(size),
             TextColor(color),
             Node {
@@ -785,7 +791,7 @@ fn spawn_line(
             },
         ));
     } else {
-        let message = super::items::spawn_message(parent, prefix, &line.message, color);
+        let message = super::items::spawn_message(parent, &message, color, size);
         parent.commands().entity(message).insert(LineId(id));
     }
 }
@@ -1185,6 +1191,7 @@ mod tests {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
+            .insert_resource(crate::online::OnlineState::new(false))
             .add_systems(Update, refresh);
         app.world_mut().spawn(Content::default());
         app.update();
@@ -1525,6 +1532,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ChatState>()
             .init_resource::<crate::keys::Typing>()
+            .insert_resource(crate::online::OnlineState::new(false))
             .add_systems(Update, refresh);
         let bare = app
             .world_mut()
@@ -1658,16 +1666,31 @@ mod tests {
         }
         app.update();
         assert_eq!(app.world().resource::<ChatState>().active, ChatTab::Guild);
+        // Each line reads in its log's words: without the installed table,
+        // in this client's words for who spoke and where.
         let messages = shown(&mut app);
-        assert_eq!(messages.len(), 1);
-        assert!(messages[0].contains("Meet by the tunnel"));
+        assert_eq!(
+            messages,
+            ["Preview (guild): Meet by the tunnel when everyone is ready."]
+        );
         app.world_mut()
             .entity_mut(button)
             .insert((TabButton(ChatTab::Auction), Interaction::Pressed));
         app.update();
         let messages = shown(&mut app);
-        assert_eq!(messages.len(), 1);
-        assert!(messages[0].contains("Fine Steel"));
+        assert_eq!(
+            messages,
+            ["Preview (auction): WTS Fine Steel Long Sword - send a tell."]
+        );
+        // Its link is still the item's words.
+        let mut links = app
+            .world_mut()
+            .query::<(&TextSpan, &super::super::items::ItemButton)>();
+        let spans: Vec<_> = links
+            .iter(app.world())
+            .map(|(span, link)| (span.0.clone(), link.0.item_id))
+            .collect();
+        assert_eq!(spans, [("Fine Steel Long Sword".to_owned(), 42)]);
         assert_eq!(
             app.world()
                 .resource::<ChatState>()
@@ -1682,6 +1705,7 @@ mod tests {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
+            .insert_resource(crate::online::OnlineState::new(false))
             .add_systems(Update, refresh);
         app.world_mut().spawn(Content::default());
         {
