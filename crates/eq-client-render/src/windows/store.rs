@@ -34,31 +34,21 @@ pub(super) fn persist(
         Query<&Window, With<bevy::window::PrimaryWindow>>,
     ),
     settings: Res<crate::ViewerSettings>,
-    online: Res<crate::online::OnlineState>,
+    profile: Res<crate::profile_files::Profile>,
     drag: Res<super::DragState>,
     mut exits: MessageReader<AppExit>,
     mut layouts: ResMut<Layouts>,
     mut store: Local<Store>,
 ) {
-    let current = online
-        .world()
-        .player()
-        .zip(online.world().world_name())
-        .map(|(player, world)| (world, player.name.as_str()));
     let exiting = exits.read().count() > 0;
-    let switched = store
-        .profile
-        .as_ref()
-        .map(|(world, character)| (world.as_str(), character.as_str()))
-        != current;
-    if !store.loaded || switched {
+    if !store.loaded || profile.is_changed() {
         if store.loaded {
             save(&mut store, &layouts);
         } else {
             store.directory.clone_from(&settings.0.settings_directory);
             store.loaded = true;
         }
-        store.profile = current.map(|(world, character)| (world.to_owned(), character.to_owned()));
+        store.profile = profile.key();
         let own = store.directory.as_ref().and_then(|directory| {
             std::fs::read_to_string(directory.join(file_name(store.profile.as_ref()))).ok()
         });
@@ -476,12 +466,13 @@ mod tests {
         app.init_resource::<Time<Real>>()
             .init_resource::<Layouts>()
             .init_resource::<super::super::DragState>()
+            .init_resource::<crate::profile_files::Profile>()
             .insert_resource(online)
             .insert_resource(crate::ViewerSettings(crate::ViewerConfig {
                 settings_directory: Some(directory.clone()),
                 ..Default::default()
             }))
-            .add_systems(Update, persist);
+            .add_systems(Update, (crate::profile_files::follow, persist).chain());
         app.update();
         let loaded = app.world().resource::<Layouts>().0.clone();
         // The player moves the chat window; closing the client saves it.

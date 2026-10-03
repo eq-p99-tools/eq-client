@@ -38,16 +38,11 @@ pub(crate) struct Store {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn persist(
     settings: Res<crate::ViewerSettings>,
-    online: Res<crate::online::OnlineState>,
+    profile: Res<crate::profile_files::Profile>,
     mut bindings: ResMut<Bindings>,
     mut store: Local<Store>,
 ) {
-    let current = online
-        .world()
-        .player()
-        .zip(online.world().world_name())
-        .map(|(player, world)| (world.to_owned(), player.name.clone()));
-    if store.loaded && store.profile == current {
+    if store.loaded && !profile.is_changed() {
         if bindings.is_changed() {
             save(&mut store, &bindings);
         }
@@ -59,7 +54,7 @@ pub(crate) fn persist(
         store.directory.clone_from(&settings.0.settings_directory);
         store.loaded = true;
     }
-    store.profile = current;
+    store.profile = profile.key();
     let Some((world, character)) = store.profile.clone() else {
         bindings.0 = Hotbar::default().0;
         store.written.clear();
@@ -660,7 +655,8 @@ mod persist_tests {
             .resource_mut::<crate::ViewerSettings>()
             .0
             .settings_directory = Some(directory.clone());
-        app.init_resource::<Bindings>().add_systems(Update, persist);
+        app.init_resource::<Bindings>()
+            .add_systems(Update, (crate::profile_files::follow, persist).chain());
         enter(&mut app, "Example");
         app.update();
         // Nothing is written until the player changes something.
