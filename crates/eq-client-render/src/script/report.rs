@@ -393,7 +393,12 @@ pub(super) fn game_messages(seen: &mut u64, chat: &crate::chat::ChatState) {
                 .iter()
                 .map(|link| (link.text.as_str(), link.item_id))
                 .collect();
-            info!(text = line.message.text, ?links, "Script game message");
+            info!(
+                text = line.message.text,
+                ?links,
+                message_type = ?line.message_type,
+                "Script game message"
+            );
         }
         *seen = (*seen).max(id);
     }

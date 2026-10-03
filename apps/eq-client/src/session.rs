@@ -31,6 +31,7 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
         return Some(WorldUpdate::ServerMessage {
             string_id,
             arguments: vec![speaker.clone(), message.text.clone()],
+            message_type: event.message_type,
         });
     }
     if let Some(string_id) = event.string_id {
@@ -42,6 +43,7 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
                 .into_iter()
                 .map(|argument| argument.text)
                 .collect(),
+            message_type: event.message_type,
         });
     }
     event
@@ -58,6 +60,7 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
                 target: event.target,
                 message,
                 source: eq_client_core::chat::Source::Server,
+                message_type: event.message_type,
             })
         })
 }
@@ -290,7 +293,12 @@ mod tests {
             Some(WorldUpdate::ServerMessage {
                 string_id,
                 arguments,
-            }) => Some((string_id, arguments)),
+                message_type,
+            }) => {
+                // The type the server gave the line comes with it.
+                assert_eq!(message_type, Some(10));
+                Some((string_id, arguments))
+            }
             _ => None,
         };
         let named = |id| Some((id, vec!["Quest giver".into(), "Welcome, traveler.".into()]));

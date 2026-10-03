@@ -244,7 +244,12 @@ impl Panels<'_> {
         use super::notices::Place;
         for (place, said) in super::notices::wording(notice, messages) {
             match place {
-                Place::Chat => chat.history.push(super::chat::system_line(said)),
+                Place::Chat => {
+                    // The line takes the colour of the type the server gave it.
+                    let mut line = super::chat::system_line(said);
+                    line.message_type = notice.message_type();
+                    chat.history.push(line);
+                }
                 Place::Status => self.lines.status.set(said.text),
             }
         }

@@ -172,10 +172,12 @@ impl ClientWorld {
             WorldUpdate::ServerMessage {
                 string_id,
                 arguments,
+                message_type,
             } => Changes {
                 notices: vec![Notice::ServerString {
                     id: *string_id,
                     arguments: arguments.clone(),
+                    message_type: *message_type,
                 }],
                 ..Changes::default()
             },

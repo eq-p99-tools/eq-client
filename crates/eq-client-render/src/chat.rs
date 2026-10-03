@@ -56,6 +56,7 @@ pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
     let Said { text, source } = said.into();
     ChatLine {
         channel: ChannelName::System,
+        message_type: None,
         sender: None,
         target: None,
         message: Message {
@@ -543,11 +544,20 @@ pub(super) struct ChatLook {
 }
 
 impl ChatLook {
-    /// A line's colour: the player's for its kind of text, else the client's.
-    fn color(&self, channel: ChannelName) -> Color {
-        let [red, green, blue] = eq_client_core::chat::color_kind(channel)
+    /// A line's colour: the player's for the message type the server gave
+    /// it, else the player's for its channel's kind of text, else the
+    /// client's. A type below the Colors page's kinds (a fixed colour in the
+    /// official client, not checked) takes its channel's.
+    fn color(&self, line: &ChatLine) -> Color {
+        let [red, green, blue] = line
+            .message_type
+            .and_then(|kind| u16::try_from(kind).ok())
             .and_then(|kind| self.colors.get(&kind).copied())
-            .unwrap_or_else(|| channel_rgb(channel));
+            .or_else(|| {
+                eq_client_core::chat::color_kind(line.channel)
+                    .and_then(|kind| self.colors.get(&kind).copied())
+            })
+            .unwrap_or_else(|| channel_rgb(line.channel));
         Color::srgb_u8(red, green, blue)
     }
 }
@@ -772,7 +782,7 @@ fn spawn_line(
             let [r, g, b] = channel_rgb(line.channel);
             Color::srgb_u8(r, g, b)
         },
-        |look| look.color(line.channel),
+        |look| look.color(line),
     );
     let size = look
         .and_then(|look| look.font)
@@ -1515,15 +1525,44 @@ mod tests {
     #[test]
     fn the_skinned_chat_takes_the_players_colour_for_a_kind_of_text() {
         let look = ChatLook {
-            colors: [(256, [1, 2, 3])].into(),
+            colors: [(256, [1, 2, 3]), (289, [4, 5, 6])].into(),
             font: None,
         };
-        assert_eq!(look.color(ChannelName::Say), Color::srgb_u8(1, 2, 3));
+        let line = |channel, message_type| ChatLine {
+            channel,
+            message_type,
+            ..system_line("Synthetic line")
+        };
+        let client = |channel| {
+            let [red, green, blue] = channel_rgb(channel);
+            Color::srgb_u8(red, green, blue)
+        };
+        assert_eq!(
+            look.color(&line(ChannelName::Say, None)),
+            Color::srgb_u8(1, 2, 3)
+        );
         // A kind the player set no colour for, and the system lines, which
         // are of many kinds, keep the client's.
         for channel in [ChannelName::Shout, ChannelName::System] {
-            let [red, green, blue] = channel_rgb(channel);
-            assert_eq!(look.color(channel), Color::srgb_u8(red, green, blue));
+            assert_eq!(look.color(&line(channel, None)), client(channel));
+        }
+        // A line the server gave a message type takes the player's colour
+        // for that type, whatever its channel.
+        assert_eq!(
+            look.color(&line(ChannelName::System, Some(289))),
+            Color::srgb_u8(4, 5, 6)
+        );
+        // A type with no colour set, or below the Colors page's kinds, takes
+        // its channel's.
+        for message_type in [290, 15] {
+            assert_eq!(
+                look.color(&line(ChannelName::Say, Some(message_type))),
+                Color::srgb_u8(1, 2, 3)
+            );
+            assert_eq!(
+                look.color(&line(ChannelName::System, Some(message_type))),
+                client(ChannelName::System)
+            );
         }
     }
 
