@@ -307,9 +307,13 @@ chosen spell, with no question first, as the official client's words describe;
 only while no box has the keyboard, so a Delete typed in the chat deletes
 nothing, and the chat then says whether the server deleted it. Moving and
 deleting need the session to offer them (`MovingSpells`, `DeletingSpells`),
-which servers do only where each has been checked: EQEmu, not P99 yet. The
-skin's gauges fill while a memorization or a scribe is under way. Without the
-skin, the client's own list below stands in.
+which servers do only where each has been checked: EQEmu, not P99 yet; a move
+or a deletion waits while another change to the book is under way. The skin's
+gauges fill while a memorization or a scribe is under way, and the chat says
+in the official words when one begins (once the player sits for it), ends (once
+the server answers) or stops (moving, casting or the like cancels it), with or
+without the skin, so the chat log keeps those lines too. Without the skin, the
+client's own list below stands in.
 
 The client's own list shows the admitted character's spellbook, eight known
 spells per page. Labels come from `spells_us.txt` in the configured
