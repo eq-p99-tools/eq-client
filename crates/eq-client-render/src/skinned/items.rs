@@ -252,6 +252,7 @@ pub(crate) const fn framed_while_open(id: WindowId) -> bool {
             | WindowId::Book
             | WindowId::WorldContainer
             | WindowId::Map
+            | WindowId::CharacterSelect
     )
 }
 

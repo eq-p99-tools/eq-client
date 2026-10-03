@@ -513,7 +513,7 @@ fn schedule(app: &mut App) {
                 spellbook::book_clicks,
                 spellbook::say_book_lines,
             ),
-            character_select::update,
+            (character_select::update, character_select::names),
             windows::input,
             move_player,
             motion::input,

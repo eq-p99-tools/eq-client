@@ -51,6 +51,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Item => "EQUI_ItemDisplay.xml",
         WindowId::Quantity => "EQUI_QuantityWnd.xml",
         WindowId::Spellbook => "EQUI_SpellBookWnd.xml",
+        WindowId::CharacterSelect => "EQUI_CharacterSelect.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
         WindowId::Selector => "EQUI_SelectorWnd.xml",
@@ -66,7 +67,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Map => "EQUI_MapViewWnd.xml",
         WindowId::Actions => "EQUI_HotButtonWnd.xml",
         WindowId::Chat => "EQUI_ChatWindow.xml",
-        _ => return None,
+        WindowId::Status => return None,
     };
     Some((file, id.official()?))
 }
@@ -1253,6 +1254,13 @@ enum Does {
     BookPlace(u8),
     /// Turns the spellbook's pages forward (true) or back.
     TurnsSpellbook(bool),
+    /// Shows the character in this slot of the character list, which a
+    /// click chooses.
+    CharacterSlot(u8),
+    /// Enters the world with the chosen character.
+    EntersWorld,
+    /// Leaves the game, from the character list.
+    Quits,
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -1304,13 +1312,8 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     ) {
         return Some(Does::Closes);
     }
-    match owner {
-        WindowId::PetInfo => return Some(pet_button(id)),
-        WindowId::Spellbook => return spellbook_button(id),
-        _ => (),
-    }
-    if owner == WindowId::Selector {
-        return Some(selector_button(id).map_or(Does::Nothing, Does::Toggles));
+    if has_own_buttons(owner) {
+        return own_button(id, owner);
     }
     // An effects window's buttons, `Buff0` on, are its slots in order.
     if let Some(window) = effect_window(owner) {
@@ -1402,6 +1405,45 @@ fn spellbook_button(id: &str) -> Option<Does> {
             .filter(|place| usize::from(*place) < crate::spellbook::PLACES)
             .map_or(Does::Nothing, Does::BookPlace),
     })
+}
+
+/// Whether a window's buttons are its own (`own_button`): the pet window's,
+/// the spellbook's, the character list's and the selector's.
+const fn has_own_buttons(owner: WindowId) -> bool {
+    matches!(
+        owner,
+        WindowId::PetInfo | WindowId::Spellbook | WindowId::CharacterSelect | WindowId::Selector
+    )
+}
+
+/// What a button does in a window whose buttons are its own; None for one
+/// the client leaves out.
+fn own_button(id: &str, owner: WindowId) -> Option<Does> {
+    match owner {
+        WindowId::PetInfo => Some(pet_button(id)),
+        WindowId::Spellbook => spellbook_button(id),
+        WindowId::CharacterSelect => Some(character_button(id)),
+        WindowId::Selector => Some(selector_button(id).map_or(Does::Nothing, Does::Toggles)),
+        _ => None,
+    }
+}
+
+/// What a button of the skin's character list does: its eight character
+/// buttons show the slots of the server's list in order, Enter World enters
+/// with the chosen one and Quit leaves the game. Creating, deleting and
+/// rotating characters, the tutorial, exploring and returning home are not
+/// in this client yet.
+fn character_button(id: &str) -> Does {
+    match id {
+        "Enter_World_Button" => Does::EntersWorld,
+        "Quit_Button" => Does::Quits,
+        _ => id
+            .strip_prefix("Char")
+            .and_then(|rest| rest.strip_suffix("_Button"))
+            .and_then(|number| number.parse::<u8>().ok())
+            .filter(|number| (1..=8).contains(number))
+            .map_or(Does::Nothing, |number| Does::CharacterSlot(number - 1)),
+    }
 }
 
 /// A coin box's count, right of its coin's picture.
@@ -1765,16 +1807,13 @@ fn behave(
             let (x, y, size) = decal_place(button);
             drawn.insert(super::items::ItemIcon { x, y, size })
         }
-        // Hovering a place names its spell (`spellbook::book_tooltips`).
-        Does::BookPlace(place) => drawn.insert((
-            Button,
-            crate::spellbook::BookPlace(place),
-            skin(),
-            crate::outbox::Needs::Capability(Capability::Spellbook),
-            crate::tooltip::Tooltip::default(),
-        )),
-        Does::TurnsSpellbook(forward) => {
-            drawn.insert((Button, crate::spellbook::TurnsPages(forward), skin()))
+        Does::BookPlace(_)
+        | Does::TurnsSpellbook(_)
+        | Does::CharacterSlot(_)
+        | Does::EntersWorld
+        | Does::Quits => {
+            listed(drawn, does, skin());
+            &mut *drawn
         }
         Does::Offered(_) | Does::BagIcon => drawn,
         Does::Nothing => drawn.insert(missing()),
@@ -1790,6 +1829,31 @@ fn behave(
     {
         drawn.insert(crate::tooltip::Tooltip(tooltip.clone()));
     }
+}
+
+/// A spellbook's or the character list's button: a place on the book's
+/// open pages, which hovering names (`spellbook::book_present`), an arrow
+/// that turns the pages, a character's button, which hovering says the level
+/// of (`character_select::names`), Enter World or Quit.
+fn listed(drawn: &mut EntityCommands, does: Does, skin: SkinButton) {
+    use crate::character_select::Action;
+    let tooltip = crate::tooltip::Tooltip::default;
+    match does {
+        Does::BookPlace(place) => drawn.insert((
+            Button,
+            crate::spellbook::BookPlace(place),
+            skin,
+            crate::outbox::Needs::Capability(eq_client_core::Capability::Spellbook),
+            tooltip(),
+        )),
+        Does::TurnsSpellbook(forward) => {
+            drawn.insert((Button, crate::spellbook::TurnsPages(forward), skin))
+        }
+        Does::CharacterSlot(slot) => drawn.insert((Button, Action::Choose(slot), skin, tooltip())),
+        Does::EntersWorld => drawn.insert((Button, Action::Enter, skin)),
+        Does::Quits => drawn.insert((Button, Action::Quit, skin)),
+        _ => drawn,
+    };
 }
 
 /// A loot or merchant window's button that does this; the skin keeps the
@@ -1908,6 +1972,7 @@ fn caption(
         // The item's picture is drawn over it (`trade::picture`,
         // `items::icon`).
         Does::Chosen | Does::ItemIcon => (),
+        Does::CharacterSlot(slot) => slot_name(inner, slot, (button, area), ink),
         Does::Nothing if button.decal.is_some() => (),
         Does::Toggles(_)
         | Does::Closes
@@ -1923,6 +1988,8 @@ fn caption(
         | Does::Picks(_)
         | Does::Trades(_)
         | Does::TurnsSpellbook(_)
+        | Does::EntersWorld
+        | Does::Quits
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 && area.width < area.height * 1.5 {
@@ -1938,6 +2005,26 @@ fn caption(
             }
         }
     }
+}
+
+/// A character button's words: the character's name, or the skin's words
+/// for an empty slot (`character_select::names`).
+fn slot_name(
+    inner: &mut ChildSpawnerCommands,
+    slot: u8,
+    (button, area): (&eq_client_assets::sidl::Button, Area),
+    ink: Color,
+) {
+    let empty = button.text.clone().unwrap_or_default();
+    aligned(
+        inner,
+        at(0.0, (area.height - 12.0) / 2.0, area.width, 12.0),
+        Align::Center,
+        (
+            theme::text(empty.as_str(), Size::Small, ink),
+            crate::character_select::SlotName { slot, empty, ink },
+        ),
+    );
 }
 
 /// The skin's melee attack button, lit while the player attacks.
@@ -1975,34 +2062,53 @@ type Stateful<'w, 's> = Query<
         Option<&'static super::windows::SelectorButton>,
         Has<AttackButton>,
         Option<&'static super::options::OptionCheckbox>,
-        (Has<Greyed>, Has<scrollbar::ScrollArrow>),
+        (
+            Has<Greyed>,
+            Has<scrollbar::ScrollArrow>,
+            Option<&'static crate::character_select::Action>,
+        ),
         &'static Interaction,
         &'static mut ImageNode,
     ),
 >;
 
 /// Draws each skin button in its state: on while its window is open, the
-/// player attacks or its option is on, lit under the pointer, and in its
-/// disabled look while greyed.
+/// player attacks, its option is on or its character is chosen, lit under
+/// the pointer, and in its disabled look while greyed.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
-    (shown, options): (
+    (shown, options, online): (
         Res<super::windows::Shown>,
         Res<super::options::OptionsState>,
+        Res<super::online::OnlineState>,
     ),
     combat: Res<super::combat::CombatState>,
     mut art: crate::sheets::Art,
     mut buttons: Stateful,
 ) {
-    for (SkinButton(look), selector, attack, checkbox, (greyed, arrow), interaction, mut image) in
-        &mut buttons
+    let chosen = online
+        .selection
+        .as_ref()
+        .and_then(crate::character_select::Selection::chosen);
+    for (
+        SkinButton(look),
+        selector,
+        attack,
+        checkbox,
+        (greyed, arrow, character),
+        interaction,
+        mut image,
+    ) in &mut buttons
     {
-        let on = match (selector, checkbox) {
-            (Some(selector), _) => shown.displayed(selector.0),
-            (None, Some(checkbox)) => options.on(checkbox.0),
+        let on = match (selector, checkbox, character) {
+            (Some(selector), ..) => shown.displayed(selector.0),
+            (None, Some(checkbox), _) => options.on(checkbox.0),
+            (None, None, Some(crate::character_select::Action::Choose(slot))) => {
+                chosen == Some(*slot)
+            }
             // A scrollbar's arrow is down while it is held.
-            (None, None) if arrow => *interaction == Interaction::Pressed,
-            (None, None) => attack && combat.auto_attack,
+            (None, None, _) if arrow => *interaction == Interaction::Pressed,
+            (None, None, _) => attack && combat.auto_attack,
         };
         let hovered = *interaction != Interaction::None;
         let piece = match (greyed, on, hovered) {
@@ -3273,6 +3379,37 @@ mod tests {
             Some(Shows::Corpse)
         );
         assert_eq!(window_label(WindowId::Merchant, "MW_Other"), None);
+    }
+
+    #[test]
+    fn the_character_lists_buttons_are_its_slots_and_its_way_in_and_out() {
+        let list = WindowId::CharacterSelect;
+        assert!(matches!(
+            does("Char1_Button", list),
+            Some(Does::CharacterSlot(0))
+        ));
+        assert!(matches!(
+            does("Char8_Button", list),
+            Some(Does::CharacterSlot(7))
+        ));
+        assert!(matches!(does("Char9_Button", list), Some(Does::Nothing)));
+        assert!(matches!(
+            does("Enter_World_Button", list),
+            Some(Does::EntersWorld)
+        ));
+        assert!(matches!(does("Quit_Button", list), Some(Does::Quits)));
+        // What this client lacks yet is greyed.
+        for lacking in [
+            "Delete_Button",
+            "Rotate_Button",
+            "Explore_Button",
+            "Go_Home_Button",
+        ] {
+            assert!(
+                matches!(does(lacking, list), Some(Does::Nothing)),
+                "{lacking}"
+            );
+        }
     }
 
     #[test]
