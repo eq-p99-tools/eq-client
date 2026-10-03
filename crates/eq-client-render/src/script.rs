@@ -246,6 +246,7 @@ type Buttons<'w, 's> = Query<
                 (
                     Option<&'static super::raid::RaidRow>,
                     Option<&'static super::raid::RaidAction>,
+                    Option<&'static super::skinned::Shows>,
                 ),
             ),
         ),
@@ -790,7 +791,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         (give, character, chat_tab),
         (coins, pick, arrow, amount),
         (selector, tab, ability, attack, slash, checkbox),
-        (slider, drop_down, choice, (dialog, page, combine, map, (raid_row, raid_action))),
+        (slider, drop_down, choice, (dialog, page, combine, map, (raid_row, raid_action, shows))),
     ) in buttons
     {
         let matches = match target {
@@ -826,6 +827,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::RaidRow(grouped, index) => raid_row.is_some_and(|row| {
                 row.index == index && (row.list == super::raid::RaidList::Grouped) == grouped
             }),
+            ClickTarget::Buff(long, index) => effects_button(shows, long, index),
             ClickTarget::Scroll(key, up) => {
                 arrow.is_some_and(|arrow| arrow.window.key() == key && arrow.up == up)
             }
@@ -875,6 +877,18 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         }
     }
     None
+}
+
+/// Whether a control is this button of the skin's effects windows: the
+/// lasting one, or the short one.
+fn effects_button(shows: Option<&super::skinned::Shows>, long: bool, index: u32) -> bool {
+    use eq_client_core::buffs::EffectWindow;
+    let window = if long {
+        EffectWindow::Long
+    } else {
+        EffectWindow::Short
+    };
+    shows == Some(&super::skinned::Shows::Buff(window, index))
 }
 
 /// What a slider a script names sets.
