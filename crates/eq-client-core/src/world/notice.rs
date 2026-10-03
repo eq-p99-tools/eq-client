@@ -159,4 +159,10 @@ pub enum Notice {
         /// Why.
         reason: String,
     },
+    /// The player's cast was interrupted. The server names why by a string
+    /// that takes no arguments.
+    CastInterrupted {
+        /// The official client's string for why, in `eqstr_us.txt`.
+        string_id: u32,
+    },
 }

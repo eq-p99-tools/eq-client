@@ -316,6 +316,12 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::CastRefused { spell_id, reason } => {
             chat(format!("Cast rejected (spell {spell_id}): {reason}").into())
         }
+        // The official client says why in the chat; the HUD keeps it on its
+        // casting label as well.
+        Notice::CastInterrupted { string_id } => chat(match messages {
+            Some(messages) => messages.interruption(*string_id),
+            None => Messages::default().interruption(*string_id),
+        }),
     }
 }
 
@@ -454,6 +460,33 @@ mod tests {
             wording(&notice, None),
             [(Place::Chat, "Empty the cursor first.".into())]
         );
+    }
+
+    #[test]
+    fn an_interrupted_cast_says_why_in_the_chat() {
+        let notice = |string_id| Notice::CastInterrupted { string_id };
+        let messages = Messages::parse(
+            "EQST0002
+0 2
+73 Synthetic interruption.
+74 %1 interrupted.
+",
+        );
+        assert_eq!(
+            wording(&notice(73), Some(&messages)),
+            [(Place::Chat, Said::official("Synthetic interruption."))]
+        );
+        // Without the string, or with one that needs what the server never
+        // sends, the client says it in its own words.
+        for (id, messages) in [(74, Some(&messages)), (73, None)] {
+            assert_eq!(
+                wording(&notice(id), messages),
+                [(
+                    Place::Chat,
+                    Said::own(format!("Casting interrupted (server reason {id})"))
+                )]
+            );
+        }
     }
 
     #[test]

@@ -6,8 +6,9 @@ use std::time::Instant;
 
 impl ClientWorld {
     /// A spell notice: the book and gems change, and the player's own casts
-    /// move along while they are connected and alive.
-    pub(super) fn spell(&mut self, update: &SpellUpdate, now: Instant) -> Option<CastNews> {
+    /// move along while they are connected and alive. An interruption also
+    /// tells the player why, in the server's words.
+    pub(super) fn spell(&mut self, update: &SpellUpdate, now: Instant, changes: &mut Changes) {
         // Forgetting a gem is answered only by the gem emptying.
         if matches!(update, SpellUpdate::Slot { mode: 2, .. })
             && matches!(self.book_action, Some(BookActionStatus::Submitted))
@@ -18,13 +19,21 @@ impl ClientWorld {
             book.apply(update);
         }
         let active = self.connected && self.death.is_none();
-        let player = self.player.as_mut()?;
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
         update.apply_gems(&mut player.memorized_spells);
         if !active {
-            return None;
+            return;
         }
-        self.casting
-            .observe(player.spawn_id, &player.memorized_spells, update, now)
+        changes.cast = self
+            .casting
+            .observe(player.spawn_id, &player.memorized_spells, update, now);
+        if let (Some(CastNews::Interrupted), Some((_, string_id))) =
+            (changes.cast, self.casting.interrupted)
+        {
+            changes.notices.push(Notice::CastInterrupted { string_id });
+        }
     }
 
     /// The server took the player's cast request and has not begun it yet.

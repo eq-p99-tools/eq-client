@@ -144,7 +144,7 @@ pub(super) fn update(
                         .interrupted
                         .filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(3))
                     {
-                        messages.interruption(reason)
+                        messages.interruption(reason).text
                     } else {
                         String::new()
                     }

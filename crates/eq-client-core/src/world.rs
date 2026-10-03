@@ -634,7 +634,7 @@ impl ClientWorld {
             }
 
             // The player's spells.
-            WorldEvent::Spell(update) => news.cast = self.spell(update, now),
+            WorldEvent::Spell(update) => self.spell(update, now, news),
             WorldEvent::CastPending {
                 session_id,
                 spell_id,
