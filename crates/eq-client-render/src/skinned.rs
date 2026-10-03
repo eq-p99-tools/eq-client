@@ -299,6 +299,12 @@ impl Skinned {
     pub(crate) fn has(&self, id: WindowId) -> bool {
         self.0.contains(&id)
     }
+
+    /// These windows drawn from the skin, for a test.
+    #[cfg(test)]
+    pub(crate) fn of(ids: &[WindowId]) -> Self {
+        Self(ids.iter().copied().collect())
+    }
 }
 
 /// A button drawn from the skin, with its piece for each state.
@@ -1865,13 +1871,24 @@ fn caption(
                 area.height.min(area.width) - 4.0,
             ));
         }
-        // The spell's picture, where the skin puts its sample.
+        // The spell's picture, where the skin puts its sample, and the
+        // mark that shows a right click chose it (`spellbook::present`).
         Does::BookPlace(place) => {
             let (x, y, size) = decal_place(button);
             inner.spawn(super::spell_icons::artwork_at(
                 super::spell_icons::Source::BookPlace(place),
                 (x, y),
                 size,
+            ));
+            inner.spawn((
+                crate::spellbook::ChosenMark(place),
+                Node {
+                    border: UiRect::all(px(2)),
+                    display: Display::None,
+                    ..at(0.0, 0.0, area.width, area.height)
+                },
+                BorderColor::all(theme::EDGE_HOVER),
+                bevy::ui::FocusPolicy::Pass,
             ));
         }
         Does::Buff(window, index) => {

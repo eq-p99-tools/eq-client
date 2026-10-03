@@ -37,10 +37,17 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands) {
                 (Action::Confirm, "Confirm"),
                 (Action::Cancel, "Cancel"),
             ] {
+                // Moving and deleting each need the session to offer them.
+                let needs = match action {
+                    Action::Earlier | Action::Later => eq_client_core::Capability::MovingSpells,
+                    Action::Select | Action::Confirm | Action::Cancel => {
+                        eq_client_core::Capability::DeletingSpells
+                    }
+                };
                 row.spawn((
                     Button,
                     action,
-                    crate::outbox::Needs::Capability(eq_client_core::Capability::Spellbook),
+                    crate::outbox::Needs::Capability(needs),
                     Node {
                         padding: UiRect::all(px(5)),
                         ..default()

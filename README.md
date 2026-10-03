@@ -298,8 +298,18 @@ on a gem then memorizes it there (a spell in a gem already is refused in the
 official words); a left click on an empty place takes it off the cursor. With
 a scroll on the cursor, a left click on an empty place scribes it there, and a
 place that holds a spell or a spell the book has already is refused in the
-official words. The skin's gauges fill while a memorization or a scribe is
-under way. Without the skin, the client's own list below stands in.
+official words. Taking an item or coins onto the cursor drops a spell held
+from the book. A right click chooses a spell, marked by the client, and the
+chat says how to move and delete it in the official words; a right click on
+another place moves the chosen spell there, swapping it with any spell there,
+and a right click on the chosen spell unchooses it. The Delete key deletes the
+chosen spell, with no question first, as the official client's words describe;
+only while no box has the keyboard, so a Delete typed in the chat deletes
+nothing, and the chat then says whether the server deleted it. Moving and
+deleting need the session to offer them (`MovingSpells`, `DeletingSpells`),
+which servers do only where each has been checked: EQEmu, not P99 yet. The
+skin's gauges fill while a memorization or a scribe is under way. Without the
+skin, the client's own list below stands in.
 
 The client's own list shows the admitted character's spellbook, eight known
 spells per page. Labels come from `spells_us.txt` in the configured
@@ -356,7 +366,9 @@ Timer expiry alone displays
 an awaiting-result state. Gem notifications refresh the memorized slots. Successful
 Titanium deletion replies remove only the reported book slot; failed replies retain
 it. This decoder follows EQEmu's layout and has synthetic coverage, not a P99 capture.
-To delete a book entry, select it, click **Delete spell**, then **Confirm** or **Cancel**.
+In the client's own list, to delete a book entry, select it, click **Delete spell**, then
+**Confirm** or **Cancel**; like **Earlier** and **Later** below, it is greyed out where the
+session does not offer it.
 Changing the selected entry or admission invalidates confirmation. Queued requests
 leave the book unchanged until the reply; the worker rejects stale or changed slots.
 Select a spell and use **Earlier** or **Later** to exchange it with the adjacent
@@ -600,7 +612,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...`, `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
-`click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar),
+`click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `press delete`,
 `give` (asks the target to take the cursor item, as clicking it does),
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
 `click slider clip_plane|max_fps|mouse_sensitivity|quantity <percent>` (an Options window slider, or the quantity window's, pressed that far along),
