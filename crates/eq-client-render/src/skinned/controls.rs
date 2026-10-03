@@ -425,31 +425,12 @@ pub(crate) fn drop_downs(
             GlobalZIndex(100),
             ChildOf(entity),
         ));
-        match &drop_down.look {
-            Some(look) => {
-                if let Some(image) = look
-                    .background
-                    .as_deref()
-                    .and_then(|file| art.texture(file))
-                {
-                    list.insert(ImageNode {
-                        image,
-                        image_mode: NodeImageMode::Tiled {
-                            tile_x: true,
-                            tile_y: true,
-                            stretch_value: 1.0,
-                        },
-                        ..default()
-                    });
-                }
-                list.with_children(|list| {
-                    border(list, &mut art, &look.border, (width, list_height));
-                });
-            }
-            None => {
-                list.insert((BackgroundColor(theme::INSET), BorderColor::all(theme::EDGE)));
-            }
-        }
+        dress(
+            &mut list,
+            &mut art,
+            drop_down.look.as_ref(),
+            (width, list_height),
+        );
         let list = list.id();
         for (index, choice) in drop_down.choices.iter().enumerate() {
             commands.spawn((
@@ -476,6 +457,41 @@ pub(crate) fn drop_downs(
         }
         drop_down.open = Some(list);
     }
+}
+
+/// Draws an open drop-down's list in its box's skin, background and
+/// border, over the client's fill: a skin's background may let what lies
+/// beneath show through, as the Velious skin's do, and an open list covers
+/// other words. Without the skin's box it keeps the client's own look.
+fn dress(
+    list: &mut EntityCommands,
+    art: &mut crate::sheets::Art,
+    look: Option<&eq_client_assets::sidl::WindowTemplate>,
+    size: (f32, f32),
+) {
+    list.insert(BackgroundColor(theme::INSET));
+    let Some(look) = look else {
+        list.insert(BorderColor::all(theme::EDGE));
+        return;
+    };
+    if let Some(image) = look
+        .background
+        .as_deref()
+        .and_then(|file| art.texture(file))
+    {
+        list.insert(ImageNode {
+            image,
+            image_mode: NodeImageMode::Tiled {
+                tile_x: true,
+                tile_y: true,
+                stretch_value: 1.0,
+            },
+            ..default()
+        });
+    }
+    list.with_children(|list| {
+        border(list, art, &look.border, size);
+    });
 }
 
 /// Lights the choice under the pointer in an open drop-down.
