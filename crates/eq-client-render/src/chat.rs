@@ -163,7 +163,7 @@ pub(super) struct LineId(u64);
 #[derive(Component)]
 pub(super) struct Placeholder;
 #[derive(Component)]
-pub(super) struct TabButton(ChatTab);
+pub(super) struct TabButton(pub(super) ChatTab);
 #[derive(Component)]
 pub(super) struct TabLabel(ChatTab);
 #[derive(Component)]
