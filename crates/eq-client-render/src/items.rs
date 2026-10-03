@@ -13,6 +13,20 @@ pub(super) struct ItemPanel;
 pub(super) struct ItemText;
 #[derive(Component)]
 pub(super) struct CloseItem;
+/// The skin's item display's title bar words: the item's name.
+#[derive(Component)]
+pub(crate) struct ItemTitle;
+/// The skin's item display's box for the item's picture, with where in it
+/// the picture goes.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct ItemIcon {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) size: f32,
+}
+/// The item's picture in its box.
+#[derive(Component)]
+pub(crate) struct ItemIconPicture;
 /// The item panel: the item chosen, and the definition on screen, which
 /// stays while it shows whatever the world's cache forgets.
 #[derive(Resource, Default)]
@@ -22,6 +36,10 @@ pub(super) struct ItemState {
     shown: Option<ItemDetails>,
     pending: Option<Instant>,
     status: String,
+    /// The item's picture, when it was opened from an item held, whose slot
+    /// gives it; one opened from a link has none, as the networking
+    /// session's item replies carry no picture yet.
+    icon: Option<u32>,
 }
 
 impl ItemState {
@@ -31,6 +49,18 @@ impl ItemState {
         self.shown = Some(item);
         self.pending = None;
         self.status.clear();
+        self.icon = None;
+    }
+
+    /// Opens an item held, in a slot or a trade, with its picture.
+    pub(super) fn open_held(&mut self, item: &eq_client_core::inventory::InventoryItem) {
+        self.open_received(item.details.clone());
+        self.icon = Some(item.icon);
+    }
+
+    /// The shown item's picture, when it has one.
+    fn icon(&self) -> Option<u32> {
+        self.icon.filter(|_| self.definition().is_some())
     }
 
     /// The item the panel shows or waits for.
@@ -144,6 +174,7 @@ pub(super) fn input(
             continue;
         }
         state.selected = Some((link.item_id, link.text.clone()));
+        state.icon = None;
         if let Some(item) = online.world().item(link.item_id) {
             state.shown = Some(item.clone());
             continue;
@@ -167,6 +198,7 @@ pub(super) fn update(
     state: Res<ItemState>,
     mut panels: Query<&mut Node, With<ItemPanel>>,
     mut texts: Query<&mut Text, With<ItemText>>,
+    mut titles: Query<&mut Text, (With<ItemTitle>, Without<ItemText>)>,
 ) {
     for mut panel in &mut panels {
         panel.display = if state.selected.is_some() {
@@ -178,6 +210,13 @@ pub(super) fn update(
     let Some((_, name)) = &state.selected else {
         return;
     };
+    // The skin's window names the item on its title bar (inferred: the
+    // skin gives the window no words of its own there).
+    for mut title in &mut titles {
+        if title.0 != *name {
+            title.0.clone_from(name);
+        }
+    }
     let text = state.definition().map_or_else(
         || format!("{name}\n\n{}", state.status),
         |item| {
@@ -242,6 +281,49 @@ pub(super) fn update(
         label.0.clone_from(&text);
     }
 }
+/// The picture the item's box last showed, if any.
+type Shown<'s> = Local<'s, Option<Option<u32>>>;
+
+/// Draws the shown item's picture in the skin's box, when the item or its
+/// picture changes.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn icon(
+    mut commands: Commands,
+    state: Res<ItemState>,
+    mut art: crate::sheets::Art,
+    (mut last, added): (Shown, Query<(), Added<ItemIcon>>),
+    boxes: Query<(Entity, &ItemIcon, Option<&Children>)>,
+    old: Query<(), With<ItemIconPicture>>,
+) {
+    let shown = state.icon();
+    if *last == Some(shown) && added.is_empty() {
+        return;
+    }
+    *last = Some(shown);
+    for (entity, place, children) in &boxes {
+        for child in children.into_iter().flatten() {
+            if old.contains(*child) {
+                commands.entity(*child).despawn();
+            }
+        }
+        if let Some(image) = shown.and_then(|icon| art.item(icon)) {
+            commands.spawn((
+                ItemIconPicture,
+                image,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(place.x),
+                    top: px(place.y),
+                    width: px(place.size),
+                    height: px(place.size),
+                    ..default()
+                },
+                ChildOf(entity),
+            ));
+        }
+    }
+}
+
 fn mask(bits: u32, labels: &[&str]) -> String {
     let known = (1u32 << labels.len()) - 1;
     if bits & known == known {
@@ -421,6 +503,17 @@ mod tests {
         let mut item = crate::preview::items()[0].details.clone();
         item.id = id;
         item
+    }
+
+    #[test]
+    fn an_item_held_shows_its_picture_and_one_from_a_link_none() {
+        let mut state = ItemState::default();
+        let mut held = crate::preview::items().remove(0);
+        held.icon = 640;
+        state.open_held(&held);
+        assert_eq!(state.icon(), Some(640));
+        state.open_received(item(2));
+        assert_eq!(state.icon(), None);
     }
 
     #[test]
