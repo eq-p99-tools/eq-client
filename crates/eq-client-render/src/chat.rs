@@ -970,6 +970,49 @@ fn group_command(
     }
 }
 
+/// The range `/random` rolls in: 0 to 100 without words, 0 to one number,
+/// or between two.
+fn random_range(words: &str) -> Result<(u32, u32), String> {
+    let numbers = words
+        .split_whitespace()
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Use /random, /random high or /random low high".to_owned())?;
+    match numbers[..] {
+        [] => Ok((0, 100)),
+        [high] => Ok((0, high)),
+        [low, high] => Ok((low, high)),
+        _ => Err("Use /random, /random high or /random low high".to_owned()),
+    }
+}
+
+/// Whose target `/assist` takes: the player named, among those in the zone,
+/// or else the player's target.
+fn assisted(words: &str, online: &super::online::OnlineState) -> Result<u16, String> {
+    let world = online.world();
+    let Some(name) = words.split_whitespace().next() else {
+        return world
+            .target()
+            .selected
+            .ok_or_else(|| "Target someone to assist first.".to_owned());
+    };
+    if let Some(player) = world
+        .player()
+        .filter(|player| player.name.eq_ignore_ascii_case(name))
+    {
+        return Ok(player.spawn_id);
+    }
+    world
+        .spawns()
+        .values()
+        .find(|spawn| {
+            spawn.state.kind == eq_client_core::SpawnKind::Player
+                && spawn.state.name.eq_ignore_ascii_case(name)
+        })
+        .map(|spawn| spawn.state.spawn_id)
+        .ok_or_else(|| format!("No one named {name} is in the zone."))
+}
+
 /// The player corpse the player targets.
 fn targeted_corpse(online: &super::online::OnlineState) -> Result<u16, String> {
     let world = online.world();
@@ -1003,6 +1046,62 @@ pub(super) fn zone_who_request(
     }
 }
 
+/// Slash commands about the player and those around them: how `/who`
+/// lists the player, dice, emotes, assisting and groups. None for any other
+/// line.
+fn social_commands(
+    name: &str,
+    words: &str,
+    online: &super::online::OnlineState,
+    stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
+) -> Option<Result<Vec<ClientCommand>, String>> {
+    Some(match name {
+        // How `/who` lists the player: away, which takes a message the client
+        // does not keep yet, anonymous or roleplaying.
+        "afk" => stamp().map(|stamp| {
+            vec![ClientCommand::ToggleAway {
+                session_id: stamp.session_id,
+            }]
+        }),
+        "anonymous" | "anon" | "roleplay" if words.is_empty() => stamp().map(|stamp| {
+            let session_id = stamp.session_id;
+            vec![if name == "roleplay" {
+                ClientCommand::ToggleRoleplay { session_id }
+            } else {
+                ClientCommand::ToggleAnonymous { session_id }
+            }]
+        }),
+        // A die from 0 to 100, from 0 to the number given, or between the
+        // two given; the server orders them.
+        "random" => random_range(words).and_then(|(low, high)| {
+            Ok(vec![ClientCommand::Random {
+                session_id: stamp()?.session_id,
+                low,
+                high,
+            }])
+        }),
+        // An emote, in the player's words after their name.
+        "emote" | "em" if !words.is_empty() => stamp().map(|stamp| {
+            vec![ClientCommand::Emote {
+                session_id: stamp.session_id,
+                text: words.to_owned(),
+            }]
+        }),
+        // The target of the player named, or else of the player's target.
+        "assist" => assisted(words, online).and_then(|spawn_id| {
+            Ok(vec![ClientCommand::Assist {
+                session_id: stamp()?.session_id,
+                spawn_id,
+            }])
+        }),
+        // Groups: an invitation takes a name, the rest no words.
+        "invite" | "follow" | "disband" if name == "invite" || words.is_empty() => {
+            stamp().map(|stamp| vec![group_command(name, words, online, stamp.session_id)])
+        }
+        _ => return None,
+    })
+}
+
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
     input: &str,
@@ -1029,6 +1128,9 @@ fn game_commands(
             created: stamp.created,
         })
     };
+    if let Some(commands) = social_commands(&name, words, online, &stamp) {
+        return Some(commands);
+    }
     Some(match name.as_str() {
         "who" => eq_client_core::who::parse(words).and_then(|request| {
             if !request.everywhere {
@@ -1057,25 +1159,6 @@ fn game_commands(
                     target: online.world().target().selected,
                 }])
             }),
-        // How `/who` lists the player: away, which takes a message the client
-        // does not keep yet, anonymous or roleplaying.
-        "afk" => stamp().map(|stamp| {
-            vec![ClientCommand::ToggleAway {
-                session_id: stamp.session_id,
-            }]
-        }),
-        "anonymous" | "anon" | "roleplay" if words.is_empty() => stamp().map(|stamp| {
-            let session_id = stamp.session_id;
-            vec![if name == "roleplay" {
-                ClientCommand::ToggleRoleplay { session_id }
-            } else {
-                ClientCommand::ToggleAnonymous { session_id }
-            }]
-        }),
-        // Groups: an invitation takes a name, the rest no words.
-        "invite" | "follow" | "disband" if name == "invite" || words.is_empty() => {
-            stamp().map(|stamp| vec![group_command(&name, words, online, stamp.session_id)])
-        }
         // The rest take no words; with words, they are chat.
         _ if !words.is_empty() => return None,
         // A player's corpse the player targets, pulled close or dragged.
@@ -1183,6 +1266,15 @@ pub(super) fn scroll(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn random_rolls_to_100_to_one_number_or_between_two() {
+        assert_eq!(random_range(""), Ok((0, 100)));
+        assert_eq!(random_range("6"), Ok((0, 6)));
+        assert_eq!(random_range(" 10  20 "), Ok((10, 20)));
+        assert!(random_range("1 2 3").is_err());
+        assert!(random_range("six").is_err());
+    }
 
     #[test]
     fn a_refusal_repeated_at_once_is_said_once() {

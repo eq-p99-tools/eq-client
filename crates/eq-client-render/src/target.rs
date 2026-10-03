@@ -102,6 +102,11 @@ pub(super) fn input(
     ),
 ) {
     let requested = chat.requested_target.take();
+    // The server's answer to an assist names a spawn it knows near the one
+    // assisted, which may lie past the drawn ones.
+    let assisted = online
+        .take_assisted()
+        .filter(|id| online.world().spawn(*id).is_some() || online.world().is_player(*id));
     // The world forgets the target when the connection drops or the player dies.
     if !online.world().connected() || online.world().death().is_some() {
         return;
@@ -144,6 +149,8 @@ pub(super) fn input(
             Some(id) => proposal = Some(Some(id)),
             None => chat.refuse(format!("No nearby target named {name}")),
         }
+    } else if let Some(id) = assisted {
+        proposal = Some(Some(id));
     } else if *escape == super::escape::Escape::Target {
         proposal = Some(None);
     } else if keys.pressed(Act::TargetSelf) {

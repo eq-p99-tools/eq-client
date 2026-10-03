@@ -2321,3 +2321,28 @@ fn the_players_own_listing_changes_and_says_which() {
     assert!(set(&mut world, 9, ListingChange::Away(false)).ignored);
     assert!(world.player().unwrap().listing.away);
 }
+
+#[test]
+fn a_roll_is_said_and_an_assist_answer_is_taken_once() {
+    use crate::socials::{Assisted, Roll};
+    let mut world = admitted();
+    let roll = Roll {
+        name: "Friend".into(),
+        low: 1,
+        high: 6,
+        result: 4,
+    };
+    assert_eq!(
+        game(&mut world, WorldEvent::Roll(roll.clone())).notices,
+        [Notice::Roll(roll)]
+    );
+    game(
+        &mut world,
+        WorldEvent::Assisted(Assisted { target: Some(5) }),
+    );
+    assert_eq!(world.take_assisted(), Some(5));
+    assert_eq!(world.take_assisted(), None);
+    // An answer naming no one leaves the target as it was.
+    game(&mut world, WorldEvent::Assisted(Assisted { target: None }));
+    assert_eq!(world.take_assisted(), None);
+}

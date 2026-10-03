@@ -59,6 +59,11 @@ impl OnlineState {
         (self.selection.as_mut(), &self.world)
     }
 
+    /// The target the server's answer to an assist names, taken once.
+    pub(super) fn take_assisted(&mut self) -> Option<u16> {
+        self.world.take_assisted()
+    }
+
     /// The player chose a target, or none; the world waits for the server.
     pub(super) fn select_target(&mut self, spawn: Option<u16>) {
         self.world.select_target(spawn);
