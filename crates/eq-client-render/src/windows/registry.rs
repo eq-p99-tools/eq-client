@@ -599,6 +599,8 @@ impl WindowId {
             },
             // Drawn from the skin, where the skin places it, over the
             // client's cover; without the skin, the client draws its own list.
+            // It can be dragged within a run, but its place is not kept: no
+            // character is chosen yet whose files could hold it.
             Self::CharacterSelect => Description {
                 layer: Layer::Screen,
                 closes_on_escape: false,

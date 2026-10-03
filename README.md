@@ -87,9 +87,12 @@ installation it is the skin's character select window (`CharacterSelectWindow`):
 its eight character buttons show the server list's slots in order, each with
 its character's name, the level on hover, and the chosen one pressed; **Quit**
 leaves the game. An empty slot shows the skin's words for creating a character,
-dimmed, and the skin's buttons for creating, deleting and rotating characters,
-the tutorial, exploring and returning home are greyed, as this client has none
-of them yet.
+dimmed, and says on hover that this client cannot make one yet; the skin's
+buttons for creating, deleting and rotating characters, the tutorial, exploring
+and returning home are greyed with the same reason, as this client has none of
+them yet. The window opens where the skin puts it and can be dragged, but its
+place is not kept between runs: no character is chosen yet whose files could
+hold it.
 `EQ_CHARACTER` is optional and retains automatic entry for existing launchers.
 An empty account displays guidance instead of entering a made-up character.
 Use a secret manager or a private launcher;

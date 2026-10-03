@@ -231,9 +231,16 @@ pub(super) fn names(
         let Action::Choose(slot) = action else {
             continue;
         };
-        let wanted = entry(*slot)
-            .and_then(|entry| entry.level)
-            .map_or_else(String::new, |level| format!("Level {level}"));
+        let wanted = match (&online.selection, entry(*slot)) {
+            (_, Some(entry)) => entry
+                .level
+                .map_or_else(String::new, |level| format!("Level {level}")),
+            // A slot the server's list leaves empty does nothing: making a
+            // character is not in this client yet. Before the list comes,
+            // no slot says so.
+            (Some(_), None) => crate::outbox::MISSING.to_owned(),
+            (None, None) => String::new(),
+        };
         if tip.0 != wanted {
             tip.0 = wanted;
         }
@@ -418,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn the_skins_character_buttons_name_their_slots_and_say_the_level() {
+    fn the_skins_character_buttons_name_their_slots_and_say_the_level_or_why_not() {
         let mut state = OnlineState::new(true);
         state.selection = Some(Selection::new(
             7,
@@ -462,7 +469,20 @@ mod tests {
             world.get::<crate::tooltip::Tooltip>(tips[0]).unwrap().0,
             "Level 5"
         );
-        assert_eq!(world.get::<crate::tooltip::Tooltip>(tips[1]).unwrap().0, "");
+        // An empty slot gives the reason it does nothing, once the list came.
+        assert_eq!(
+            world.get::<crate::tooltip::Tooltip>(tips[1]).unwrap().0,
+            crate::outbox::MISSING
+        );
+        app.world_mut().resource_mut::<OnlineState>().selection = None;
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<crate::tooltip::Tooltip>(tips[1])
+                .unwrap()
+                .0,
+            ""
+        );
     }
 
     #[test]
