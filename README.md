@@ -574,11 +574,24 @@ offer is greyed, with the reason on hover. The settings:
 
 Always on:
 
-- Controls for what the server type does not offer, or what this client does
-  not have yet, are greyed, with the reason on hover.
-- The action bar counts down a camp's 30-second preparation.
-- The same refusal is said at most once every 3 seconds, so a held key does
-  not fill the chat.
+- **Cap Frames at 60**: the client draws at most 60 frames a second until the
+  Options window's Max FPS slider or the installation's `eqclient.ini` sets
+  another cap.
+- **Grey Out What Is Unavailable**: controls for what the server type does
+  not offer are greyed, and a control that is unavailable says why on hover.
+- **Count Down Camping**: the action bar counts down a camp's 30-second
+  preparation, with the skin too.
+- **Say Each Refusal Once**: the same refusal is said at most once every 3
+  seconds, so a held key does not fill the chat.
+- **Keep Hotbar Items to Their Item**: a hotbar item button uses only the item
+  it was made with, never another item later put in its place.
+- **Show Buff Time Left**: a buff's tooltip counts down about how long it has
+  left, from the ticks the server last gave its slot. For a buff the server
+  has given no slot, it counts down the spell's own duration for the
+  caster's level, as the installed spell file and `EQEmu`'s formulas reckon
+  it, from when the buff landed.
+- **Show Weapon Ratio**: the item display shows a weapon's damage divided by
+  its delay under those two.
 
 ## Combat, looting, merchants, giving and camping
 

@@ -248,9 +248,10 @@ impl Default for Options {
     /// player's helm and everyone's names show, the mouse is not inverted and its wheel
     /// zooms, the chat is logged, each quality-of-life fix starts as it is
     /// defined, players' names show in full, spawns draw as far as the zone
-    /// allows, at most 60 frames a second, and the camera turns at the
-    /// client's own speed.
+    /// allows, at most 60 frames a second ([`Fix::FrameCap`]), and the
+    /// camera turns at the client's own speed.
     fn default() -> Self {
+        let qol = qol::Settings::default();
         Self {
             pet_window_popup: true,
             target_ring: true,
@@ -260,10 +261,10 @@ impl Default for Options {
             invert_y: false,
             wheel_zoom: true,
             log: true,
-            qol: qol::Settings::default(),
+            qol,
             show_names: ShowNames::Everything,
             clip_plane: 100,
-            max_fps: 60,
+            max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
             mouse_sensitivity: 50,
         }
     }

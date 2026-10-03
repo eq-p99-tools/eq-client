@@ -319,16 +319,21 @@ pub(crate) fn veil(mut commands: Commands, added: Query<(Entity, &Needs), Added<
     }
 }
 
-/// Shows each control's veil while the session does not offer what it needs.
-/// Offline, the preview offers everything.
+/// Shows each control's veil while the session does not offer what it needs
+/// ([`eq_client_core::qol::Fix::GreyedControls`]). Offline, the preview
+/// offers everything.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn grey_out(
-    online: Res<super::online::OnlineState>,
+    (online, options): (
+        Res<super::online::OnlineState>,
+        Res<super::options::OptionsState>,
+    ),
     controls: Query<(&Needs, &Children)>,
     mut veils: Query<&mut Node, With<Veil>>,
 ) {
+    let greys = greys(&options);
     for (needs, children) in &controls {
-        let display = if needs.offered(online.world()) {
+        let display = if !greys || needs.offered(online.world()) {
             Display::None
         } else {
             Display::Flex
@@ -341,6 +346,15 @@ pub(crate) fn grey_out(
             }
         }
     }
+}
+
+/// Whether a control for what the session does not offer is greyed out,
+/// with the reason on hover.
+pub(crate) const fn greys(options: &super::options::OptionsState) -> bool {
+    options
+        .options
+        .qol
+        .on(eq_client_core::qol::Fix::GreyedControls)
 }
 
 /// Whether the session lets the player do this; before any admission the

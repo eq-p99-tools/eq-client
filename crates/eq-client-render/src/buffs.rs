@@ -2,7 +2,8 @@
 use super::{online::OnlineState, spell_icons, spellbook::SpellNames, windows};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
-use std::collections::BTreeMap;
+use eq_client_core::{buffs::TimeLeft, qol::Fix};
+use std::{collections::BTreeMap, time::Instant};
 
 #[derive(Component)]
 pub(super) struct Panel;
@@ -179,27 +180,33 @@ fn content(
     });
 }
 
-/// Labels the server's duration without pretending it is a synchronized countdown.
+/// Says what the hovered buff is and how long it has left, about, where the
+/// quality-of-life fix counts it down ([`Fix::BuffTimeLeft`]), and otherwise
+/// the duration the server gave without pretending it is a countdown.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn hover(
-    online: Res<OnlineState>,
+    (online, options): (Res<OnlineState>, Res<crate::options::OptionsState>),
     names: Res<SpellNames>,
     entries: Query<(&Entry, &Interaction)>,
     effects: Query<(&Unplaced, &Interaction)>,
     mut hints: Query<&mut Text, With<Hint>>,
 ) {
+    let now = Instant::now();
+    let qol = &options.options.qol;
+    let buffs = online.world().buffs();
     let hovered = entries
         .iter()
         .find(|(_, interaction)| **interaction != Interaction::None)
-        .and_then(|(entry, _)| online.world().buffs().slots()?.get(&entry.0));
+        .and_then(|(entry, _)| Some((entry.0, buffs.slots()?.get(&entry.0)?)));
     let text = hovered.map_or_else(
         || {
             if let Some((entry, _)) = effects
                 .iter()
                 .find(|(_, interaction)| **interaction != Interaction::None)
             {
-                let effect = online.world().buffs().effects().get(&entry.0);
-                return effect_details(entry.0, effect, &names);
+                let effect = buffs.effects().get(&entry.0);
+                let landed = buffs.landed(entry.0);
+                return effect_details(entry.0, (effect, landed), &names, (qol, now));
             }
             if online
                 .world()
@@ -213,7 +220,7 @@ pub(super) fn hover(
                 "Hover an effect for details".into()
             }
         },
-        |buff| details(buff, &names),
+        |(slot, buff)| details(buff, buffs.time_left(slot, now), &names, qol),
     );
     for mut hint in &mut hints {
         if hint.0 != text {
@@ -222,32 +229,48 @@ pub(super) fn hover(
     }
 }
 
-/// What an effect without a slot is: its spell, its duration and its
-/// bonuses as the spell file has them for the caster's level.
+/// What an effect without a slot is: its spell, its duration, counted down
+/// from when it landed where the quality-of-life fix counts buffs down, and
+/// its bonuses as the spell file has them for the caster's level.
 fn effect_details(
     spell: u16,
-    effect: Option<&eq_client_core::SpellEffect>,
+    (effect, landed): (Option<&eq_client_core::SpellEffect>, Option<Instant>),
     names: &SpellNames,
+    (qol, now): (&eq_client_core::qol::Settings, Instant),
 ) -> String {
     let spell = u32::from(spell);
     let duration =
         effect.and_then(|effect| names.mechanics(spell)?.base_duration(effect.caster_level));
     let level = effect.map(|effect| effect.caster_level);
+    let duration = match duration.zip(landed) {
+        Some((duration, landed)) if qol.on(Fix::BuffTimeLeft) => {
+            time_left_label(base_time_left(duration, landed, now))
+        }
+        _ => base_duration_label(duration),
+    };
     format!(
-        "{}\n{}{}",
+        "{}\n{duration}{}",
         names.label(spell),
-        base_duration_label(duration),
         resource_hint(names.mechanics(spell), level)
     )
 }
 
-/// What a buff in a slot is: its spell, the duration the server last gave
-/// and its bonuses as the spell file has them.
-fn details(buff: &eq_client_core::Buff, names: &SpellNames) -> String {
+/// What a buff in a slot is: its spell, how long it has left where the
+/// quality-of-life fix counts buffs down, or else the duration the server
+/// last gave, and its bonuses as the spell file has them.
+fn details(
+    buff: &eq_client_core::Buff,
+    left: Option<TimeLeft>,
+    names: &SpellNames,
+    qol: &eq_client_core::qol::Settings,
+) -> String {
+    let duration = match left {
+        Some(left) if qol.on(Fix::BuffTimeLeft) => time_left_label(left),
+        _ => format!("Server duration: {} ticks", buff.duration_ticks),
+    };
     format!(
-        "{}\nServer duration: {} ticks{}",
+        "{}\n{duration}{}",
         names.label(buff.spell_id),
-        buff.duration_ticks,
         resource_hint(
             names.mechanics(buff.spell_id),
             Some(u16::from(buff.caster_level))
@@ -255,11 +278,46 @@ fn details(buff: &eq_client_core::Buff, names: &SpellNames) -> String {
     )
 }
 
+/// What is left at `now` of a spell's own duration, counted from when it
+/// landed: the spell file's formula, as `EQEmu` reckons it, which the
+/// server keeps to unless it gives the buff a slot of its own.
+fn base_time_left(
+    duration: eq_client_assets::spells::BaseDuration,
+    landed: Instant,
+    now: Instant,
+) -> TimeLeft {
+    use eq_client_assets::spells::BaseDuration;
+    match duration {
+        BaseDuration::Ticks(ticks) => TimeLeft::of_ticks(i64::from(ticks), landed, now),
+        BaseDuration::Permanent | BaseDuration::Aura => TimeLeft::Lasting,
+    }
+}
+
+/// How long a buff has left, in this client's words: about, since the
+/// server's ticks do not keep to the client's clock.
+fn time_left_label(left: TimeLeft) -> String {
+    match left {
+        TimeLeft::Lasting => "No time limit".into(),
+        TimeLeft::About(left) if left.is_zero() => "About to fade".into(),
+        TimeLeft::About(left) => {
+            let seconds = left.as_secs();
+            let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+            if hours > 0 {
+                format!("About {hours}h {minutes}m left")
+            } else if minutes > 0 {
+                format!("About {minutes}m {seconds}s left")
+            } else {
+                format!("About {seconds}s left")
+            }
+        }
+    }
+}
+
 /// Names the buff under the pointer in the skin's effects windows, as the
 /// client's own window does.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn skinned_details(
-    online: Res<OnlineState>,
+    (online, options): (Res<OnlineState>, Res<crate::options::OptionsState>),
     names: Res<SpellNames>,
     mut buttons: Query<(
         &crate::skinned::Shows,
@@ -267,6 +325,9 @@ pub(super) fn skinned_details(
         &mut crate::tooltip::Tooltip,
     )>,
 ) {
+    let now = Instant::now();
+    let qol = &options.options.qol;
+    let buffs = online.world().buffs();
     for (shows, interaction, mut tooltip) in &mut buttons {
         let crate::skinned::Shows::Buff(window, button) = *shows else {
             continue;
@@ -274,11 +335,16 @@ pub(super) fn skinned_details(
         if *interaction == Interaction::None {
             continue;
         }
-        let text = match online.world().buffs().in_window(window, button) {
-            Some(eq_client_core::buffs::Shown::Slot(buff)) => details(buff, &names),
-            Some(eq_client_core::buffs::Shown::Unplaced(effect)) => {
-                effect_details(effect.spell_id, Some(effect), &names)
+        let text = match buffs.in_window(window, button) {
+            Some(eq_client_core::buffs::Shown::Slot(slot, buff)) => {
+                details(buff, buffs.time_left(slot, now), &names, qol)
             }
+            Some(eq_client_core::buffs::Shown::Unplaced(effect)) => effect_details(
+                effect.spell_id,
+                (Some(effect), buffs.landed(effect.spell_id)),
+                &names,
+                (qol, now),
+            ),
             None => String::new(),
         };
         if tooltip.0 != text {
@@ -374,6 +440,45 @@ fn base_duration_label(duration: Option<eq_client_assets::spells::BaseDuration>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_buff_says_about_how_long_it_has_left() {
+        use std::time::Duration;
+        let about = |seconds| time_left_label(TimeLeft::About(Duration::from_secs(seconds)));
+        assert_eq!(about(42), "About 42s left");
+        assert_eq!(about(270), "About 4m 30s left");
+        assert_eq!(about(4385), "About 1h 13m left");
+        assert_eq!(about(0), "About to fade");
+        assert_eq!(time_left_label(TimeLeft::Lasting), "No time limit");
+        // A buff in a slot counts down from the server's ticks.
+        let names = SpellNames::default();
+        let qol = eq_client_core::qol::Settings::default();
+        let buff = eq_client_core::Buff {
+            spell_id: 42,
+            caster_level: 0,
+            effect_type: 2,
+            bard_modifier: 10,
+            duration_ticks: 10,
+            counters: 0,
+            caster_id: 7,
+        };
+        let left = Some(TimeLeft::About(Duration::from_secs(45)));
+        let text = details(&buff, left, &names, &qol);
+        assert_eq!(text.lines().nth(1), Some("About 45s left"));
+        // An effect without a slot counts down its spell's own duration
+        // from when it landed.
+        let now = Instant::now();
+        let landed = now.checked_sub(Duration::from_secs(20)).unwrap();
+        let ticks = |count| eq_client_assets::spells::BaseDuration::Ticks(count);
+        assert_eq!(
+            base_time_left(ticks(10), landed, now),
+            TimeLeft::About(Duration::from_secs(40))
+        );
+        assert_eq!(
+            base_time_left(eq_client_assets::spells::BaseDuration::Aura, landed, now),
+            TimeLeft::Lasting
+        );
+    }
 
     #[test]
     fn bonus_hint_distinguishes_estimates_partial_effects_and_missing_levels() {

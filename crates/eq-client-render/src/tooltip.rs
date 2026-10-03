@@ -49,7 +49,10 @@ type Controls<'w, 's> = Query<
 /// over the window, as a script hovers one, has it beside its middle.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
-    online: Res<super::online::OnlineState>,
+    (online, options): (
+        Res<super::online::OnlineState>,
+        Res<super::options::OptionsState>,
+    ),
     windows: Query<&Window, With<PrimaryWindow>>,
     scale: Option<Res<UiScale>>,
     controls: Controls,
@@ -59,12 +62,15 @@ pub(crate) fn show(
         return;
     };
     let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
+    let greys = super::outbox::greys(&options);
     let hovered = controls
         .iter()
         .filter(|(interaction, ..)| **interaction != Interaction::None)
         .find_map(|(_, tooltip, needs, placed)| {
             let line = match needs {
-                Some(needs) if !needs.offered(online.world()) => Some(needs.reason(online.world())),
+                Some(needs) if greys && !needs.offered(online.world()) => {
+                    Some(needs.reason(online.world()))
+                }
                 _ => tooltip.map(|tooltip| tooltip.0.clone()),
             }?;
             let middle =

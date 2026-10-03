@@ -765,9 +765,9 @@ impl ClientWorld {
                 spell_id,
                 reason,
             } => self.cast_refused((*session_id, *spell_id), reason, news),
-            WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs),
-            WorldEvent::Buff(update) => self.buff(update, news),
-            WorldEvent::SpellEffect(effect) => self.spell_effect(effect, spells, news),
+            WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
+            WorldEvent::Buff(update) => self.buff(update, now, news),
+            WorldEvent::SpellEffect(effect) => self.spell_effect(effect, (now, spells), news),
             WorldEvent::SpellBook(book) => self.spell_book = Some(book.clone()),
             WorldEvent::BookAction(status) => self.book_action_news(status),
         }

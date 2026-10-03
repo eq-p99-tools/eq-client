@@ -8,6 +8,7 @@ use bevy::{
 use eq_client_core::{
     ClientCommand, OutboundChat,
     chat::{ChannelName, ChatHistory, ChatLine, ChatTab, Message, Source, channel_rgb},
+    qol::Fix,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -107,9 +108,19 @@ pub(super) struct ChatState {
     /// Raid window, waiting for the toggle.
     pub toggled: Option<super::windows::WindowId>,
     draft: String,
-    /// The last refusal said and when, so one repeated every frame, as a
-    /// held key's is, is said once.
-    last_refusal: Option<(String, std::time::Instant)>,
+    refusals: Refusals,
+}
+
+/// The refusals said, so the same one again, as a held key repeats it each
+/// frame, is not said too soon.
+#[derive(Default)]
+struct Refusals {
+    /// The last refusal said and when.
+    last: Option<(String, std::time::Instant)>,
+    /// Whether the same refusal is said again however soon, as it is unless
+    /// the quality-of-life fix keeps repeats quiet ([`Fix::QuietRepeats`]);
+    /// kept in step with the options.
+    says_repeats: bool,
 }
 
 /// How soon the same refusal again goes unsaid.
@@ -127,12 +138,15 @@ impl ChatState {
         if said.text.is_empty() {
             return;
         }
-        if self.last_refusal.as_ref().is_some_and(|(text, at)| {
-            *text == said.text && now.saturating_duration_since(*at) < REPEATED
-        }) {
+        let refusals = &mut self.refusals;
+        if !refusals.says_repeats
+            && refusals.last.as_ref().is_some_and(|(text, at)| {
+                *text == said.text && now.saturating_duration_since(*at) < REPEATED
+            })
+        {
             return;
         }
-        self.last_refusal = Some((said.text.clone(), now));
+        refusals.last = Some((said.text.clone(), now));
         self.history.push(system_line(said));
     }
 }
@@ -564,6 +578,19 @@ impl ChatLook {
             })
             .unwrap_or_else(|| channel_rgb(line.channel));
         Color::srgb_u8(red, green, blue)
+    }
+}
+
+/// Keeps whether the same refusal is said again however soon in step with
+/// the options ([`Fix::QuietRepeats`]).
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn follow_options(
+    options: Res<super::options::OptionsState>,
+    mut state: ResMut<ChatState>,
+) {
+    let says = !options.options.qol.on(Fix::QuietRepeats);
+    if state.refusals.says_repeats != says {
+        state.refusals.says_repeats = says;
     }
 }
 

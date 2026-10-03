@@ -2,7 +2,7 @@
 //! normal command validators.
 use crate::theme::{self, Size};
 use bevy::prelude::*;
-use eq_client_core::hotbar::Hotbar;
+use eq_client_core::{hotbar::Hotbar, qol::Fix};
 use std::path::PathBuf;
 mod item_art;
 #[cfg(test)]
@@ -265,13 +265,17 @@ type SlotButtons<'w, 's> = Query<
 pub(crate) fn presentation(
     mut commands: Commands,
     bindings: Res<Bindings>,
-    online: Res<crate::online::OnlineState>,
+    (online, options): (
+        Res<crate::online::OnlineState>,
+        Res<crate::options::OptionsState>,
+    ),
     (names, map): (Res<crate::spellbook::SpellNames>, Res<crate::keys::KeyMap>),
     mut slots: SlotButtons,
     mut labels: Query<(&mut Text, Option<&Caption>, Option<&Hint>)>,
 ) {
     let now = std::time::Instant::now();
     let inventory = online.world().inventory();
+    let qol = &options.options.qol;
     let hovered = slots
         .iter()
         .find(|(_, interaction, ..)| **interaction != Interaction::None)
@@ -279,7 +283,7 @@ pub(crate) fn presentation(
     for (entity, interaction, slot, color, skinned, greyed) in &mut slots {
         let spell = bindings.gem(slot.0).and_then(|gem| online.world().gem(gem));
         let missing_item = match bindings.0[slot.0] {
-            Some(Action::Item { slot, id }) => bound_item(inventory, slot, id).is_none(),
+            Some(Action::Item { slot, id }) => bound_item(inventory, (slot, id), qol).is_none(),
             _ => false,
         };
         let empty = missing_item
@@ -330,7 +334,13 @@ pub(crate) fn presentation(
             };
         }
         if hint.is_some() {
-            text.0 = hovered_detail(&bindings, hovered, online.world(), (&names, &map), now);
+            text.0 = hovered_detail(
+                &bindings,
+                hovered,
+                (online.world(), qol),
+                (&names, &map),
+                now,
+            );
         }
     }
 }
@@ -339,7 +349,10 @@ pub(crate) fn presentation(
 fn hovered_detail(
     bindings: &Bindings,
     hovered: Option<usize>,
-    world: &eq_client_core::world::ClientWorld,
+    (world, qol): (
+        &eq_client_core::world::ClientWorld,
+        &eq_client_core::qol::Settings,
+    ),
     (names, map): (&crate::spellbook::SpellNames, &crate::keys::KeyMap),
     now: std::time::Instant,
 ) -> String {
@@ -373,7 +386,7 @@ fn hovered_detail(
             ),
             None => format!("{}\nReady", ability.name()),
         },
-        Some(Action::Item { slot, id }) => bound_item(inventory, slot, id).map_or_else(
+        Some(Action::Item { slot, id }) => bound_item(inventory, (slot, id), qol).map_or_else(
             || {
                 format!(
                     "Bound item unavailable\n{}; rebind after moving it",
@@ -393,16 +406,19 @@ fn hovered_detail(
     }
 }
 
-/// A slot binding never silently activates a different item placed into that slot.
-fn bound_item(
-    inventory: &eq_client_core::inventory::Inventory,
-    slot: eq_client_core::inventory::InventorySlot,
-    id: u32,
-) -> Option<&eq_client_core::inventory::InventoryItem> {
+/// The item a slot binding uses: what its place holds, if that has a click
+/// effect, and never a different item later put in that place
+/// ([`Fix::HotbarItemGuard`]).
+fn bound_item<'a>(
+    inventory: &'a eq_client_core::inventory::Inventory,
+    (slot, id): (eq_client_core::inventory::InventorySlot, u32),
+    qol: &eq_client_core::qol::Settings,
+) -> Option<&'a eq_client_core::inventory::InventoryItem> {
+    let guards = qol.on(Fix::HotbarItemGuard);
     inventory
         .items()
         .get(&slot)
-        .filter(|item| item.details.id == id && item.activation.effect.is_some())
+        .filter(|item| (!guards || item.details.id == id) && item.activation.effect.is_some())
 }
 
 /// What a slot needs of the session for what it holds, as the command it
@@ -438,7 +454,10 @@ pub(crate) fn item_actions(
     keys: crate::keys::Keys,
     bindings: Res<Bindings>,
     clicks: Query<(&Interaction, &Slot), Changed<Interaction>>,
-    online: Res<crate::online::OnlineState>,
+    (online, options): (
+        Res<crate::online::OnlineState>,
+        Res<crate::options::OptionsState>,
+    ),
     sender: Res<crate::outbox::Outbox>,
     mut chat: ResMut<crate::chat::ChatState>,
     mut inventory: ResMut<crate::inventory::InventoryState>,
@@ -450,7 +469,7 @@ pub(crate) fn item_actions(
         return;
     };
     // The inventory says its own refusals.
-    if bound_item(online.world().inventory(), slot, id).is_none() {
+    if bound_item(online.world().inventory(), (slot, id), &options.options.qol).is_none() {
         chat.refuse("Bound item unavailable; rebind after moving it");
     } else {
         inventory.activate_shortcut(
@@ -505,6 +524,7 @@ mod tests {
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
         app.init_resource::<Bindings>()
+            .init_resource::<crate::options::OptionsState>()
             .insert_resource(online)
             .insert_resource(crate::spellbook::SpellNames::parse(&fields.join("^")))
             .add_systems(Update, presentation);

@@ -1682,6 +1682,11 @@ fn with_qol_page(
 /// A checkbox cut from the skin's own for each quality-of-life setting, in
 /// their order, one under another down a page this tall and then on down
 /// the next column.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a page holds few rows"
+)]
 fn qol_checkboxes(
     checkbox: &eq_client_assets::sidl::Button,
     room: f32,
@@ -1692,13 +1697,9 @@ fn qol_checkboxes(
     const GAP: f32 = 6.0;
     let row = checkbox.area.height + GAP;
     let width = checkbox.area.width.max(190.0);
-    // As many rows as fit, and at least one.
-    let fits = |rows: u16| 2.0 * MARGIN + f32::from(rows) * row - GAP <= room;
-    let rows = (2..=u16::MAX)
-        .take_while(|rows| fits(*rows))
-        .last()
-        .unwrap_or(1);
-    (0u16..)
+    // As many rows as fit inside the margins, and at least one.
+    let rows = (((room - 2.0 * MARGIN + GAP) / row).floor() as u32).max(1);
+    (0u32..)
         .zip(eq_client_core::qol::Fix::settings())
         .map(|(index, fix)| {
             let mut checkbox = checkbox.clone();
@@ -1706,8 +1707,8 @@ fn qol_checkboxes(
             checkbox.id = Some(id.clone());
             checkbox.text = Some(fix.label().to_owned());
             checkbox.tooltip = Some(fix.tooltip().to_owned());
-            checkbox.area.x = MARGIN + f32::from(index / rows) * (width + MARGIN);
-            checkbox.area.y = MARGIN + f32::from(index % rows) * row;
+            checkbox.area.x = MARGIN + to_f32(index / rows) * (width + MARGIN);
+            checkbox.area.y = MARGIN + to_f32(index % rows) * row;
             checkbox.area.width = width;
             (id, eq_client_assets::sidl::Element::Button(checkbox))
         })
