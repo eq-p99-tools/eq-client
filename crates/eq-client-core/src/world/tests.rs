@@ -2516,3 +2516,102 @@ fn entering_a_zone_lists_the_player_in_their_raid_group_and_ranks_everyone() {
     );
     assert!(!world.leads_raid());
 }
+
+#[test]
+fn a_raid_locked_moved_or_led_again_says_only_what_changed() {
+    use crate::raid::{RaidMember, RaidUpdate};
+    let raid_news = |world: &mut ClientWorld, update| game(world, WorldEvent::Raid(update)).notices;
+    let member = |name: &str, group| RaidMember {
+        name: name.into(),
+        group,
+        class: 1,
+        level: 10,
+        group_leader: false,
+    };
+    let locked = |locked, by: &str| RaidUpdate::Locked {
+        locked,
+        by: by.into(),
+    };
+    let mut world = admitted();
+    for update in [
+        RaidUpdate::Created {
+            leader: "Leader".into(),
+        },
+        RaidUpdate::Added(member("Leader", None)),
+        RaidUpdate::Added(member("Example", None)),
+        RaidUpdate::Leader {
+            name: "Leader".into(),
+        },
+    ] {
+        raid_news(&mut world, update);
+    }
+    // A member joining or entering a zone while the raid is locked is told
+    // so under their own name, which says nothing.
+    assert_eq!(raid_news(&mut world, locked(true, "Example")), []);
+    assert!(world.raid().is_some_and(|raid| raid.locked));
+    assert_eq!(
+        raid_news(&mut world, locked(false, "Leader")),
+        [Notice::Raid(RaidNotice::Locked(false))]
+    );
+    assert_eq!(raid_news(&mut world, locked(false, "Leader")), []);
+    assert_eq!(
+        raid_news(&mut world, locked(true, "Leader")),
+        [Notice::Raid(RaidNotice::Locked(true))]
+    );
+    // A move updates the member's place, and the leader named again after
+    // it says nothing.
+    assert_eq!(
+        raid_news(&mut world, RaidUpdate::Moved(member("Leader", Some(0)))),
+        []
+    );
+    assert_eq!(
+        raid_news(
+            &mut world,
+            RaidUpdate::Leader {
+                name: "Leader".into()
+            }
+        ),
+        []
+    );
+    assert_eq!(
+        world.raid().map(|raid| raid.members[0].group),
+        Some(Some(0))
+    );
+    // The player moved is listed again, and the raid stays locked.
+    raid_news(
+        &mut world,
+        RaidUpdate::Created {
+            leader: "Leader".into(),
+        },
+    );
+    assert!(world.raid().is_some_and(|raid| raid.locked));
+    assert_eq!(raid_news(&mut world, locked(true, "Example")), []);
+    // A new leader still says so.
+    raid_news(
+        &mut world,
+        RaidUpdate::Leader {
+            name: "Leader".into(),
+        },
+    );
+    assert_eq!(
+        raid_news(
+            &mut world,
+            RaidUpdate::Leader {
+                name: "Example".into()
+            }
+        ),
+        [Notice::Raid(RaidNotice::Leader(Party::Player))]
+    );
+    // Leading it, the player hears their own name as they enter a zone while
+    // it is locked, which says nothing, and again as the server answers
+    // their request, which does.
+    assert_eq!(raid_news(&mut world, locked(false, "Example")), []);
+    assert_eq!(
+        raid_news(&mut world, RaidUpdate::Locking { locked: true }),
+        []
+    );
+    assert_eq!(
+        raid_news(&mut world, locked(true, "Example")),
+        [Notice::Raid(RaidNotice::Locked(true))]
+    );
+}
