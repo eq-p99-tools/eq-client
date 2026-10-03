@@ -2541,6 +2541,7 @@ mod tests {
                 ("ring".into(), checkbox("ODP_ShowTargetRingCheckbox", 30.0)),
                 ("keys".into(), keys),
             ],
+            tab_frame: None,
         };
         let mut app = App::new();
         app.init_resource::<crate::sheets::Sheets>()
@@ -2554,9 +2555,13 @@ mod tests {
                         id: WindowId::Options,
                         paperdoll: None,
                         depth: 0,
+                        tab_frame: None,
                     };
                     commands.spawn(Node::default()).with_children(|window| {
                         draw(window, &screen, &mut art, &context);
+                        // A node that only reacts to the pointer, as the
+                        // chat's lines do.
+                        window.spawn((Node::default(), Interaction::default()));
                     });
                 },
             )
@@ -2564,14 +2569,15 @@ mod tests {
         app.update();
         // A skinned window's frame drags under a press that reaches it: every
         // part that reacts to the pointer, and the list with its rows and
-        // headings, keeps the press. Here: the two checkboxes, the list, and
-        // its scrollbar's arrows, gutter and thumb.
+        // headings, keeps the press. Here: the two checkboxes, the list, its
+        // scrollbar's arrows, gutter and thumb, and the node that reacts to the
+        // pointer.
         let mut parts = app.world_mut().query_filtered::<&FocusPolicy, Or<(
             With<Interaction>,
             With<crate::windows::KeepsPress>,
         )>>();
         let policies: Vec<_> = parts.iter(app.world()).copied().collect();
-        assert_eq!(policies, [FocusPolicy::Block; 7]);
+        assert_eq!(policies, [FocusPolicy::Block; 8]);
     }
 
     #[test]
