@@ -12,8 +12,6 @@ use std::{collections::BTreeMap, time::Duration};
 /// Each window's background as the character saved it.
 #[derive(Resource, Default)]
 pub(crate) struct Looks {
-    /// The character and world they were read for.
-    read_for: Option<(String, String)>,
     looks: BTreeMap<WindowId, WindowLook>,
 }
 
@@ -25,25 +23,15 @@ pub(crate) struct Backdrop(pub(crate) WindowId);
 /// changes, and only then.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn load(
-    online: Res<crate::online::OnlineState>,
+    profile: Res<crate::profile_files::Profile>,
     settings: Res<crate::ViewerSettings>,
     mut looks: ResMut<Looks>,
 ) {
-    let current = online
-        .world()
-        .player()
-        .map(|player| player.name.as_str())
-        .zip(online.world().world_name());
-    if looks
-        .read_for
-        .as_ref()
-        .map(|(character, world)| (character.as_str(), world.as_str()))
-        == current
-    {
+    if !profile.is_changed() {
         return;
     }
-    looks.read_for = current.map(|(character, world)| (character.to_owned(), world.to_owned()));
-    let saved = current
+    let saved = profile
+        .names()
         .zip(settings.0.official_settings())
         .map(|((character, world), official)| official.window_looks(character, world))
         .unwrap_or_default();
@@ -112,12 +100,16 @@ pub(crate) fn dress(
                 } else {
                     Some(now.saturating_sub(*left.entry(*id).or_insert(now)))
                 };
-                let [red, green, blue] = look.tint;
-                let tinted = Color::srgba_u8(red, green, blue, opacity(look, away));
+                let alpha = opacity(look, away);
+                // The tint colours the flat fill. Whether it also colours the
+                // skin's texture is not known: two windows on the PC this was
+                // written on keep a tint with the texture (counted), so the
+                // texture keeps its own colours until a recording says.
                 if look.flat {
-                    (Color::NONE, tinted)
+                    let [red, green, blue] = look.tint;
+                    (Color::NONE, Color::srgba_u8(red, green, blue, alpha))
                 } else {
-                    (tinted, Color::NONE)
+                    (Color::srgba_u8(255, 255, 255, alpha), Color::NONE)
                 }
             }
             None => (Color::WHITE, Color::NONE),

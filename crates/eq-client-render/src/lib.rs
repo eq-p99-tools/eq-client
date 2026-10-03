@@ -335,6 +335,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<skinned::looks::Looks>()
         .init_resource::<skinned::KeyFilter>()
         .init_resource::<chat::ChatState>()
+        .init_resource::<chat::ChatLook>()
+        .init_resource::<profile_files::Profile>()
         .init_resource::<notices::Lines>()
         .init_resource::<items::ItemState>()
         .init_resource::<inventory::InventoryState>()
@@ -517,7 +519,7 @@ fn schedule(app: &mut App) {
                 inventory::feedback,
                 inventory::scroll,
                 inventory::cursor::update,
-                chat::refresh,
+                (chat::look, chat::refresh).chain(),
                 items::update,
                 items::scroll,
                 target::update,
@@ -632,6 +634,12 @@ fn install_overlays(app: &mut App) {
     app.add_systems(Startup, tooltip::spawn);
     windows::register_layout(app);
     paperdoll::register(app);
+    app.add_systems(
+        Update,
+        profile_files::follow
+            .after(Stage::Receive)
+            .before(Stage::Scene),
+    );
     skin::register(app);
     app.add_systems(PostUpdate, chat::scroll.after(bevy::ui::UiSystems::Layout));
 }

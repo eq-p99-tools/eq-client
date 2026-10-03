@@ -526,6 +526,49 @@ pub(super) fn input(
     }
 }
 
+/// The chat's colours for its kinds of text, and its font, as the player
+/// set them in the official client: drawn in the skinned chat only.
+#[derive(Resource, Default)]
+pub(super) struct ChatLook {
+    /// Each kind of text's colour, by the kind's number
+    /// (`eq_client_core::chat::color_kind`).
+    colors: std::collections::BTreeMap<u16, [u8; 3]>,
+    /// The main chat window's font, by the client's font number.
+    font: Option<u8>,
+}
+
+impl ChatLook {
+    /// A line's colour: the player's for its kind of text, else the client's.
+    fn color(&self, channel: ChannelName) -> Color {
+        let [red, green, blue] = eq_client_core::chat::color_kind(channel)
+            .and_then(|kind| self.colors.get(&kind).copied())
+            .unwrap_or_else(|| channel_rgb(channel));
+        Color::srgb_u8(red, green, blue)
+    }
+}
+
+/// Reads the chat's colours and font from the official settings again when
+/// the character or world changes, and only then.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn look(
+    profile: Res<super::profile_files::Profile>,
+    settings: Res<super::ViewerSettings>,
+    mut look: ResMut<ChatLook>,
+) {
+    if !profile.is_changed() {
+        return;
+    }
+    let current = profile.names();
+    let official = settings.0.official_settings();
+    look.colors = official
+        .as_ref()
+        .map(|official| official.text_colors().into_iter().collect())
+        .unwrap_or_default();
+    look.font = current
+        .zip(official)
+        .and_then(|((character, world), official)| official.chat_font(character, world));
+}
+
 /// Keeps the shown lines in step with the active tab's history.
 #[allow(
     clippy::too_many_arguments,
@@ -551,6 +594,7 @@ pub(super) fn refresh(
     >,
     mut input_labels: Query<(&mut Text, Has<Bare>), (With<InputLabel>, Without<TabLabel>)>,
     mut input_boxes: Query<&mut BorderColor, (With<InputBox>, Without<TabButton>, Without<Bare>)>,
+    look: Option<Res<ChatLook>>,
 ) {
     let active = state.active;
     let revision = state.history.revision();
@@ -627,7 +671,13 @@ pub(super) fn refresh(
     }
     // Only the active tab's lines exist, as laying out every tab's lines each frame
     // would cost more than redrawing one tab when it is chosen.
+    // The skinned chat's lines take the player's colours and font, which
+    // can arrive after its first lines: those are drawn again.
+    let restyled = look.as_ref().is_some_and(Res::is_changed);
     for (column, mut content, children) in &mut contents {
+        if restyled && content.bare {
+            content.tab = None;
+        }
         let children = if content.tab == Some(active) {
             if content.revision == revision {
                 continue;
@@ -644,7 +694,7 @@ pub(super) fn refresh(
             &mut commands,
             (column, content.bare),
             children,
-            &lines,
+            (&lines, look.as_deref().filter(|_| content.bare)),
             &rendered,
         );
     }
@@ -656,7 +706,7 @@ fn sync_lines(
     commands: &mut Commands,
     (column, bare): (Entity, bool),
     children: Option<&Children>,
-    lines: &[(u64, &ChatLine)],
+    (lines, look): (&[(u64, &ChatLine)], Option<&ChatLook>),
     rendered: &Query<(Option<&LineId>, Has<Placeholder>)>,
 ) {
     let kept: HashSet<u64> = lines.iter().map(|(id, _)| *id).collect();
@@ -685,15 +735,28 @@ fn sync_lines(
     // History ids only grow, so every line newer than the last one shown is new.
     commands.entity(column).with_children(|parent| {
         for (id, line) in lines.iter().filter(|(id, _)| *id > newest) {
-            spawn_line(parent, *id, line);
+            spawn_line(parent, *id, (line, look));
         }
     });
 }
 
-/// Appends one chat line: its channel, sender and text, with item links clickable.
-fn spawn_line(parent: &mut ChildSpawnerCommands, id: u64, line: &ChatLine) {
-    let [r, g, b] = channel_rgb(line.channel);
-    let color = Color::srgb_u8(r, g, b);
+/// Appends one chat line: its channel, sender and text, with item links
+/// clickable; in the player's colours and font where the chat has them.
+fn spawn_line(
+    parent: &mut ChildSpawnerCommands,
+    id: u64,
+    (line, look): (&ChatLine, Option<&ChatLook>),
+) {
+    let color = look.map_or_else(
+        || {
+            let [r, g, b] = channel_rgb(line.channel);
+            Color::srgb_u8(r, g, b)
+        },
+        |look| look.color(line.channel),
+    );
+    let size = look
+        .and_then(|look| look.font)
+        .map_or(Size::Label, |font| super::skinned::font(Some(font)));
     // The echo of a tell the player sent says whom they told.
     let sender = match (line.channel, line.target.as_deref()) {
         (ChannelName::TellEcho, Some(target)) => format!("To {target}: "),
@@ -708,7 +771,7 @@ fn spawn_line(parent: &mut ChildSpawnerCommands, id: u64, line: &ChatLine) {
         parent.spawn((
             LineId(id),
             Text::new(format!("{prefix}{}", line.message.text)),
-            theme::font(Size::Label),
+            theme::font(size),
             TextColor(color),
             Node {
                 width: percent(100),
@@ -1401,6 +1464,21 @@ mod tests {
             Some((ChannelName::System, "Use /tell Name message"))
         );
         assert!(app.world().resource::<crate::keys::Typing>().composing);
+    }
+
+    #[test]
+    fn the_skinned_chat_takes_the_players_colour_for_a_kind_of_text() {
+        let look = ChatLook {
+            colors: [(256, [1, 2, 3])].into(),
+            font: None,
+        };
+        assert_eq!(look.color(ChannelName::Say), Color::srgb_u8(1, 2, 3));
+        // A kind the player set no colour for, and the system lines, which
+        // are of many kinds, keep the client's.
+        for channel in [ChannelName::Shout, ChannelName::System] {
+            let [red, green, blue] = channel_rgb(channel);
+            assert_eq!(look.color(channel), Color::srgb_u8(red, green, blue));
+        }
     }
 
     #[test]
