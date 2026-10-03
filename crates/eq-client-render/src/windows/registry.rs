@@ -365,7 +365,8 @@ impl WindowId {
             Self::Book => Some("BookWindow"),
             Self::Map => Some("MapViewWnd"),
             Self::Selector => Some("SelectorWindow"),
-            _ => None,
+            Self::CharacterSelect => Some("CharacterSelectWindow"),
+            Self::Status => None,
         }
     }
 
@@ -596,11 +597,13 @@ impl WindowId {
                     &["ITEM"],
                 )
             },
+            // Drawn from the skin, where the skin places it, over the
+            // client's cover; without the skin, the client draws its own list.
             Self::CharacterSelect => Description {
                 layer: Layer::Screen,
                 closes_on_escape: false,
                 persists: false,
-                opening: Opening::Own,
+                opening: Opening::Skin,
                 ..floating("", Placement::Fill, false, &[])
             },
         }

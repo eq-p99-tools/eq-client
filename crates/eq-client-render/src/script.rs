@@ -11,7 +11,8 @@ mod parse;
 mod report;
 
 pub use parse::{
-    AbilityPage, ClickTarget, PickButton, SliderClick, Step, TradeClick, TrainingClick, parse,
+    AbilityPage, CharacterClick, ClickTarget, PickButton, SliderClick, Step, TradeClick,
+    TrainingClick, parse,
 };
 
 use std::collections::VecDeque;
@@ -208,7 +209,10 @@ type Buttons<'w, 's> = Query<
         Option<&'static super::spellbook::GemChoice>,
         Option<&'static super::trade::Action>,
         Option<&'static super::inventory::colors::Action>,
-        Has<super::give::GiveButton>,
+        (
+            Has<super::give::GiveButton>,
+            Option<&'static super::character_select::Action>,
+        ),
         (
             Option<&'static super::coins::CoinBox>,
             Option<&'static super::inventory::SplitAction>,
@@ -742,7 +746,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         gem,
         trade,
         tint,
-        give,
+        (give, character),
         (coins, pick, arrow, amount),
         (selector, tab, ability, attack, slash, checkbox),
         (slider, drop_down, choice, (dialog, page, combine, map)),
@@ -812,6 +816,15 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                 }
             }),
             ClickTarget::Give => give,
+            ClickTarget::CharacterList(click) => character.is_some_and(|action| {
+                use super::character_select::Action;
+                match (click, action) {
+                    (CharacterClick::Slot(slot), Action::Choose(chosen)) => slot == *chosen,
+                    (CharacterClick::Enter, Action::Enter)
+                    | (CharacterClick::Quit, Action::Quit) => true,
+                    _ => false,
+                }
+            }),
             ClickTarget::Coins(place, coin) => {
                 coins.is_some_and(|coins| coins.place == place && coins.coin == coin)
             }

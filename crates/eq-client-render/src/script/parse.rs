@@ -135,6 +135,9 @@ pub enum ClickTarget {
     Tint(i32, Option<usize>),
     /// The give window's Give button.
     Give,
+    /// A button of the skin's character list: a character's, by its slot
+    /// from zero, Enter World or Quit.
+    CharacterList(CharacterClick),
     /// A coin box: the purse's, the bank's or the give window's.
     Coins(
         eq_client_core::money::CoinPlace,
@@ -188,6 +191,17 @@ pub enum ClickTarget {
     BookPage(bool),
     /// A spell gem of the skin's spell bar, from zero.
     SpellGem(u8),
+}
+
+/// The skin's character list's buttons.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CharacterClick {
+    /// A character's, by its slot from zero.
+    Slot(u8),
+    /// Enter World.
+    Enter,
+    /// Quit.
+    Quit,
 }
 
 /// The Training window's controls.
@@ -412,6 +426,9 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["buy_chosen"] => ClickTarget::Trade(TradeClick::BuyChosen),
         ["sell_chosen"] => ClickTarget::Trade(TradeClick::SellChosen),
         ["give"] => ClickTarget::Give,
+        ["character", number] => character(number)?,
+        ["enter_world"] => ClickTarget::CharacterList(CharacterClick::Enter),
+        ["quit_game"] => ClickTarget::CharacterList(CharacterClick::Quit),
         ["actions"] => ClickTarget::ActionsWindow,
         ["window", key] => ClickTarget::Toggle(window_key(key)?),
         ["close_box", key] => ClickTarget::TitleBox(window_key(key)?, true),
@@ -483,6 +500,16 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["book_page", "back"] => ClickTarget::BookPage(false),
         _ => return Err("unknown or malformed step".into()),
     })
+}
+
+/// A character's button of the skin's character list, from 1 to 8.
+fn character(number: &str) -> Result<ClickTarget, String> {
+    number
+        .parse::<u8>()
+        .ok()
+        .filter(|number| (1..=8).contains(number))
+        .map(|number| ClickTarget::CharacterList(CharacterClick::Slot(number - 1)))
+        .ok_or_else(|| String::from("expected a character from 1 to 8"))
 }
 
 /// A spell gem a script names, from 1 to 8, as a gem from zero.

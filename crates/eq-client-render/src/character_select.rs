@@ -1,5 +1,7 @@
-//! Pre-zone character selection uses occupied server slots, never typed names.
-use super::{online::OnlineState, outbox::Outbox};
+//! Pre-zone character selection uses occupied server slots, never typed
+//! names: in the skin's character list where the installation has one, or
+//! else in the client's own list.
+use super::{online::OnlineState, outbox::Outbox, windows::WindowId};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{CharacterChoice, ClientCommand};
@@ -26,6 +28,11 @@ impl Selection {
     /// Identity the server list was published with.
     pub(super) const fn id(&self) -> u64 {
         self.id
+    }
+
+    /// The slot of the character chosen, if any.
+    pub(crate) const fn chosen(&self) -> Option<u8> {
+        self.selected
     }
 
     /// Highlights a listed character by exact server spelling, ignoring case.
@@ -73,9 +80,22 @@ pub(super) struct Root;
 pub(super) enum Action {
     Choose(u8),
     Enter,
+    /// Leaves the game, as the skin's Quit does.
+    Quit,
 }
 
-/// Applies selection input and rebuilds the small panel only when its state changes.
+/// The words on a skin's character button: the name of the character in its
+/// slot, in the skin's colour, or the skin's own words for an empty slot.
+#[derive(Component)]
+pub(crate) struct SlotName {
+    pub(crate) slot: u8,
+    pub(crate) empty: String,
+    pub(crate) ink: Color,
+}
+
+/// Applies selection input, shows the skin's list while the character list
+/// is up, and rebuilds the cover and the client's own panel only when their
+/// state changes.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
     mut commands: Commands,
@@ -87,12 +107,33 @@ pub(super) fn update(
     buttons: Query<(Ref<Interaction>, &Action)>,
     roots: Query<Entity, With<Root>>,
     mut previous: Local<String>,
+    (mut shown, skinned, mut exit): (
+        ResMut<super::windows::Shown>,
+        Res<crate::skinned::Skinned>,
+        MessageWriter<AppExit>,
+    ),
 ) {
     let focused = keys.focused();
     let keys = navigation.sample(&keys.input);
     // A session, or the preview's characters, until a character is in.
     let visible =
         (online.enabled || online.selection.is_some()) && online.world().session_id().is_none();
+    if visible != shown.is_open(WindowId::CharacterSelect) {
+        if visible {
+            shown.open(WindowId::CharacterSelect);
+        } else {
+            shown.close(WindowId::CharacterSelect);
+        }
+    }
+    let pressed = |action: fn(&Action) -> bool| {
+        buttons.iter().any(|(interaction, button)| {
+            interaction.is_changed() && *interaction == Interaction::Pressed && action(button)
+        })
+    };
+    // Quit leaves the game from the list, whatever it shows.
+    if visible && focused && pressed(|action| matches!(action, Action::Quit)) {
+        exit.write(AppExit::Success);
+    }
     let (choosing, world) = online.choosing();
     if visible
         && focused
@@ -104,8 +145,14 @@ pub(super) fn update(
                 continue;
             }
             match action {
-                Action::Choose(slot) => selection.selected = Some(*slot),
+                // An empty slot of the skin's list chooses nothing.
+                Action::Choose(slot) => {
+                    if selection.entries.iter().any(|entry| entry.slot == *slot) {
+                        selection.selected = Some(*slot);
+                    }
+                }
                 Action::Enter => selection.enter(&outbox, world),
+                Action::Quit => (),
             }
         }
         if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::ArrowUp) {
@@ -130,12 +177,16 @@ pub(super) fn update(
         }
     }
     let status = lines.status.text();
+    let skinned = skinned.has(WindowId::CharacterSelect);
     let signature = format!(
-        "{visible}:{status}:{:?}",
-        online
-            .selection
-            .as_ref()
-            .map(|s| (s.id, s.selected, s.submitted, &s.message))
+        "{visible}:{skinned}:{status}:{:?}",
+        online.selection.as_ref().map(|s| (
+            s.id,
+            s.selected,
+            s.submitted,
+            &s.message,
+            s.entries.len()
+        ))
     );
     if *previous == signature {
         return;
@@ -145,17 +196,95 @@ pub(super) fn update(
         commands.entity(root).despawn();
     }
     if visible {
-        spawn(&mut commands, online.selection.as_ref(), status);
+        spawn(&mut commands, online.selection.as_ref(), status, skinned);
     }
 }
 
-/// Covers the zone preview until a character has completed zone admission.
-fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
+/// Writes each character's name on the skin's character buttons, and the
+/// skin's own words, dimmed, on an empty slot's, as this client creates no
+/// characters yet; hovering a character says its level, where the server
+/// gives it.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn names(
+    online: Res<OnlineState>,
+    mut words: Query<(&SlotName, &mut Text, &mut TextColor)>,
+    mut tips: Query<(&Action, &mut crate::tooltip::Tooltip)>,
+) {
+    let entries = online
+        .selection
+        .as_ref()
+        .map_or(&[][..], |selection| &selection.entries[..]);
+    let entry = |slot: u8| entries.iter().find(|entry| entry.slot == slot);
+    for (name, mut text, mut color) in &mut words {
+        let (wanted, ink) = entry(name.slot)
+            .map_or((name.empty.as_str(), theme::INK_DIM), |entry| {
+                (entry.name.as_str(), name.ink)
+            });
+        if text.0 != wanted {
+            wanted.clone_into(&mut text.0);
+        }
+        if color.0 != ink {
+            color.0 = ink;
+        }
+    }
+    for (action, mut tip) in &mut tips {
+        let Action::Choose(slot) = action else {
+            continue;
+        };
+        let wanted = entry(*slot)
+            .and_then(|entry| entry.level)
+            .map_or_else(String::new, |level| format!("Level {level}"));
+        if tip.0 != wanted {
+            tip.0 = wanted;
+        }
+    }
+}
+
+/// What the list says under it: the session's state, its messages, or how
+/// to use it.
+fn guidance<'a>(selection: Option<&'a Selection>, status: &'a str) -> &'a str {
+    match selection {
+        None => status,
+        Some(selection) if selection.entries.is_empty() => {
+            "No characters on this server. Create one with the official client first."
+        }
+        Some(selection) if !selection.message.is_empty() => &selection.message,
+        Some(_) => "Select a character | Up/Down: browse | Enter: connect",
+    }
+}
+
+/// Covers the zone preview until a character has completed zone admission:
+/// under the skin's list, with the list's guidance at its foot, or with the
+/// client's own panel on it.
+fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str, skinned: bool) {
+    if skinned {
+        commands
+            .spawn((
+                Root,
+                Button,
+                // Under the skin's list, which is drawn at the screen's layer.
+                GlobalZIndex(super::windows::Layer::Screen.base() - 1),
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: percent(100),
+                    height: percent(100),
+                    align_items: AlignItems::FlexEnd,
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::bottom(px(40)),
+                    ..default()
+                },
+                BackgroundColor(theme::COVER),
+            ))
+            .with_children(|root| {
+                theme::label(root, guidance(selection, status), Size::Label);
+            });
+        return;
+    }
     commands
         .spawn((
             Root,
             Button,
-            GlobalZIndex(500),
+            GlobalZIndex(super::windows::Layer::Screen.base() - 1),
             Node {
                 position_type: PositionType::Absolute,
                 width: percent(100),
@@ -181,18 +310,11 @@ fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
             ))
             .with_children(|panel| {
                 theme::label(panel, "CHARACTER SELECT", Size::Display);
-                let Some(selection) = selection else {
-                    theme::label(panel, status, Size::Large);
+                let Some(selection) = selection.filter(|selection| !selection.entries.is_empty())
+                else {
+                    theme::label(panel, guidance(selection, status), Size::Large);
                     return;
                 };
-                if selection.entries.is_empty() {
-                    theme::label(
-                        panel,
-                        "No characters on this server. Create one with the official client first.",
-                        Size::Large,
-                    );
-                    return;
-                }
                 for entry in &selection.entries {
                     let detail = entry
                         .level
@@ -207,15 +329,7 @@ fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str) {
                 if selection.selected.is_some() && !selection.submitted {
                     button(panel, Action::Enter, "Enter World", true);
                 }
-                theme::label(
-                    panel,
-                    if selection.message.is_empty() {
-                        "Select a character | Up/Down: browse | Enter: connect"
-                    } else {
-                        &selection.message
-                    },
-                    Size::Label,
-                );
+                theme::label(panel, guidance(Some(selection), status), Size::Label);
             });
         });
 }
@@ -254,6 +368,9 @@ mod tests {
             .init_resource::<crate::notices::Lines>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::navigation::NavigationKeys>()
+            .init_resource::<crate::windows::Shown>()
+            .init_resource::<crate::skinned::Skinned>()
+            .add_message::<AppExit>()
             .add_systems(Update, update);
         app.world_mut().spawn((
             Window {
