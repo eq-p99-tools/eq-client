@@ -3,8 +3,10 @@
 use crate::hud::action_bar::BookChange;
 use crate::theme::{self, Size};
 use bevy::prelude::*;
+mod lines;
 mod scribe;
 mod skinned;
+pub(super) use lines::say as say_book_lines;
 pub(super) use scribe::presentation as scribe_presentation;
 #[cfg(test)]
 pub(crate) use skinned::Entry;
@@ -314,8 +316,8 @@ pub(super) fn update(
                 Ok(spell) => {
                     note(
                         requests.as_deref_mut(),
+                        (BookChange::Scribe, spell),
                         format!("Scribing {}", names.label(spell)),
-                        BookChange::Scribe,
                     );
                     String::new()
                 }
@@ -371,7 +373,11 @@ pub(super) fn update(
         selection.message = match queued {
             Ok(spell) => {
                 let label = format!("Memorizing {} into gem {}", names.label(spell), gem + 1);
-                note(requests.as_deref_mut(), label, BookChange::Memorize);
+                note(
+                    requests.as_deref_mut(),
+                    (BookChange::Memorize, spell),
+                    label,
+                );
                 String::new()
             }
             Err(error) => crate::outbox::window_line(&error),
@@ -382,17 +388,18 @@ pub(super) fn update(
 }
 
 /// Names the queued book change for the action bar, and says what it does
-/// for the skin's book's gauges.
+/// and to which spell, for the skin's book's gauges and the chat's lines.
 fn note(
     requests: Option<&mut super::hud::action_bar::ActionRequests>,
+    (change, spell): (BookChange, u32),
     label: String,
-    change: BookChange,
 ) {
     if let Some(requests) = requests {
         requests.book = Some(super::hud::action_bar::BookRequest {
             since: std::time::Instant::now(),
             label,
             change,
+            spell,
         });
     }
 }

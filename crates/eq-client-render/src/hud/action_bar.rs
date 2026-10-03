@@ -32,13 +32,14 @@ pub(crate) enum BookChange {
     Scribe,
 }
 
-/// A spellbook request: when it was queued, its words for the bar and what
-/// it does.
+/// A spellbook request: when it was queued, its words for the bar, what it
+/// does and the spell it does it to.
 #[derive(Clone, Debug)]
 pub(crate) struct BookRequest {
     pub(crate) since: Instant,
     pub(crate) label: String,
     pub(crate) change: BookChange,
+    pub(crate) spell: u32,
 }
 
 #[derive(Component)]
@@ -395,6 +396,7 @@ mod tests {
             since: now.checked_sub(Duration::from_secs(1)).unwrap(),
             label: "Memorizing Courage into gem 2".into(),
             change: BookChange::Memorize,
+            spell: 202,
         });
         let book = current(online.world(), &requests, (&names, &messages), now, false).unwrap();
         assert_eq!(book.label, "Memorizing Courage into gem 2");
