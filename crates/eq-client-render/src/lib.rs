@@ -330,6 +330,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<spellbook::BookSelection>()
         .init_resource::<sheets::Sheets>()
         .init_resource::<skinned::Screens>()
+        .init_resource::<skinned::CursorLook>()
         .init_resource::<skinned::Skinned>()
         .init_resource::<skinned::Tabs>()
         .init_resource::<skinned::looks::Looks>()
@@ -519,7 +520,7 @@ fn schedule(app: &mut App) {
                 inventory::update,
                 inventory::feedback,
                 inventory::scroll,
-                inventory::cursor::update,
+                (skinned::cursor_look, inventory::cursor::update).chain(),
                 (chat::look, chat::refresh).chain(),
                 items::update,
                 items::scroll,

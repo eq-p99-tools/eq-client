@@ -578,7 +578,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `click actions` (opens the skin's Actions window), `click tab <n>`, `click ability combat|abilities <n>`, `click attack`,
 `click window <key>` (a button that opens and closes the window, or hides and shows it, such as its selector button or the inventory's Skills button, by the window's key such as `skills`), `click close_box <window>` and `click minimize_box <window>` (a skinned window's title-bar boxes), `click scroll_up <window>` and `click scroll_down <window>` (a skinned window's scrollbar arrows),
 `right_click` with the same targets (a bag's slot opens its window),
-`hover` with the same targets (rests the pointer there, so its tooltip shows, until the next click or hover),
+`hover` with the same targets (rests the pointer there, so its tooltip shows and what rides the cursor hangs there, until the next click or hover),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
 window is focused (except offline, or on a local `EQEmu` or TAKP server), stop if focus is lost while a key is held, cap each hold, wait
@@ -658,7 +658,10 @@ calibration under the continuity checks described above.
 Press **I** or select **Inventory** to open one combined view of equipment,
 carried slots, bags, their contents, and the real EQ cursor. A non-interactive
 item icon, name, and stack count follow the pointer while the cursor is occupied,
-including when the inventory is closed. P99 snapshots include
+including when the inventory is closed. With an installation, the skin's cursor
+attachment (`CursorAttachment`) draws it instead: the item's icon where the skin
+places its picture, with the stack's count, or the skin's picture of the coins
+with their count, hanging from the pointer. P99 snapshots include
 all of those locations. Stack counts and finite charges are shown separately.
 The **Bank** tab appears while connected and alive within 20 EQ units of a visible
 NPC whose server class is Banker (40). It shows the eight classic personal-bank
