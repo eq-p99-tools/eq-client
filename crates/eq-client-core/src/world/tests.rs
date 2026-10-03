@@ -2372,7 +2372,10 @@ fn a_raid_formed_joined_and_left_says_what_happened() {
             player: "Friend".into(),
         },
     );
-    assert_eq!(raid_news(&mut leader, created("Example")), said(RaidNotice::Formed));
+    assert_eq!(
+        raid_news(&mut leader, created("Example")),
+        said(RaidNotice::Formed)
+    );
     assert_eq!(raid_news(&mut leader, member("Example")), []);
     assert_eq!(
         raid_news(&mut leader, member("Friend")),
