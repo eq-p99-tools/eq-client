@@ -237,8 +237,9 @@ pub(super) fn spawn(commands: &mut Commands) {
 }
 
 /// The skin's output box, filled with the chat's tabs along its top and the
-/// active tab's lines below them.
-pub(super) fn skinned_output(parent: &mut ChildSpawnerCommands, node: Node) {
+/// active tab's lines below them, which it returns: they scroll.
+pub(super) fn skinned_output(parent: &mut ChildSpawnerCommands, node: Node) -> Entity {
+    let mut viewport = Entity::PLACEHOLDER;
     parent
         .spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -248,8 +249,9 @@ pub(super) fn skinned_output(parent: &mut ChildSpawnerCommands, node: Node) {
         })
         .with_children(|output| {
             tab_row(output);
-            lines(output);
+            viewport = lines(output);
         });
+    viewport
 }
 
 /// The skin's input box, filled with the line the player types into.
@@ -303,7 +305,7 @@ fn tab_row(parent: &mut ChildSpawnerCommands) {
 }
 
 /// The active tab's lines, which scroll on their own.
-fn lines(parent: &mut ChildSpawnerCommands) {
+fn lines(parent: &mut ChildSpawnerCommands) -> Entity {
     parent
         .spawn((
             Viewport,
@@ -328,7 +330,8 @@ fn lines(parent: &mut ChildSpawnerCommands) {
                     ..default()
                 },
             ));
-        });
+        })
+        .id()
 }
 
 /// The line the player types into, which shows the draft.

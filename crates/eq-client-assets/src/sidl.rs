@@ -60,6 +60,24 @@ pub struct WindowTemplate {
     pub close_box: Option<ButtonLook>,
     /// The title bar's minimize box, in each of its states.
     pub minimize_box: Option<ButtonLook>,
+    /// The vertical scrollbar of a box drawn with it that scrolls.
+    pub scrollbar: Option<ScrollbarLook>,
+}
+
+/// How a vertical scrollbar is drawn: its two arrows, its thumb and the
+/// gutter the thumb runs in between them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScrollbarLook {
+    /// The arrow at the top, in each of its states.
+    pub up: ButtonLook,
+    /// The arrow at the bottom, in each of its states.
+    pub down: ButtonLook,
+    /// The thumb's top, its middle, stretched, and its bottom.
+    pub thumb: [Option<Piece>; 3],
+    /// The texture stretched along the gutter, in the skin's directory.
+    pub gutter: Option<String>,
+    /// The colour the gutter's texture is tinted with.
+    pub gutter_tint: Option<[u8; 3]>,
 }
 
 /// How a gauge is drawn: its empty bar, its fill, the lines over it and its
@@ -348,6 +366,9 @@ pub struct Listbox {
     pub template: Option<WindowTemplate>,
     /// Its columns, from the left.
     pub columns: Vec<Column>,
+    /// Its vertical scrollbar, where the skin gives it one
+    /// (`Style_VScroll`).
+    pub scrollbar: Option<ScrollbarLook>,
 }
 
 /// Where a label's text sits in its box.
@@ -438,6 +459,9 @@ pub struct TextBox {
     pub template: Option<WindowTemplate>,
     /// The colour of its text, where the skin sets one.
     pub color: Option<[u8; 3]>,
+    /// Its vertical scrollbar, where the skin gives it one
+    /// (`Style_VScroll`).
+    pub scrollbar: Option<ScrollbarLook>,
 }
 
 /// A window's title bar, and the boxes on it.
@@ -627,7 +651,33 @@ impl Library {
             ],
             close_box: child(node, "CloseBox").map(|look| self.button_look(Some(look))),
             minimize_box: child(node, "MinimizeBox").map(|look| self.button_look(Some(look))),
+            scrollbar: child(node, "VSBTemplate").map(|look| self.scrollbar_look(look)),
         }
+    }
+
+    /// A vertical scrollbar's pictures, from a template's `VSBTemplate`.
+    fn scrollbar_look(&self, node: roxmltree::Node<'_, '_>) -> ScrollbarLook {
+        let thumb = child(node, "Thumb");
+        let part = |name: &str| self.piece(thumb.and_then(|thumb| text_of(thumb, name)));
+        ScrollbarLook {
+            up: self.button_look(child(node, "UpButton")),
+            down: self.button_look(child(node, "DownButton")),
+            thumb: [part("Top"), part("Middle"), part("Bottom")],
+            gutter: text_of(node, "MiddleTextureInfo").map(str::to_owned),
+            gutter_tint: color(node, "MiddleTint"),
+        }
+    }
+
+    /// The scrollbar a box asks for (`Style_VScroll`), as its template draws
+    /// it, though the box may draw none of its frame.
+    fn scrollbar(&self, node: roxmltree::Node<'_, '_>) -> Option<ScrollbarLook> {
+        if !flag(node, "Style_VScroll") {
+            return None;
+        }
+        self.templates
+            .get(text_of(node, "DrawTemplate")?)?
+            .scrollbar
+            .clone()
     }
 
     /// What a screen or page lists as its pieces, in drawing order. A piece
@@ -824,6 +874,7 @@ impl Library {
                         width: number(column, "Width").unwrap_or(80.0),
                     })
                     .collect(),
+                scrollbar: self.scrollbar(node),
             }),
             other => Element::Other(other.to_owned()),
         }
@@ -883,6 +934,7 @@ impl Library {
                     })
                     .and_then(|template| self.templates.get(template).cloned()),
                 color: color(node, "TextColor"),
+                scrollbar: self.scrollbar(node),
             }),
             // Pages and windows within windows nest; skins go a few deep.
             "TabBox" if depth < 4 => Element::Tabs(TabBox {
@@ -1046,6 +1098,13 @@ mod tests {
             <Border><TopLeft>A_Corner</TopLeft><Top>A_Missing</Top></Border>
             <Titlebar><Middle>A_Back</Middle></Titlebar>
             <CloseBox><Normal>A_Corner</Normal><Pressed>A_Fill</Pressed></CloseBox>
+            <VSBTemplate>
+                <UpButton><Normal>A_Corner</Normal><Pressed>A_Fill</Pressed></UpButton>
+                <DownButton><Normal>A_Back</Normal></DownButton>
+                <Thumb><Top>A_Corner</Top><Middle>A_Fill</Middle><Bottom>A_Back</Bottom></Thumb>
+                <MiddleTextureInfo>gutter.tga</MiddleTextureInfo>
+                <MiddleTint><Alpha>255</Alpha><R>128</R><G>128</G><B>128</B></MiddleTint>
+            </VSBTemplate>
         </WindowDrawTemplate>
         <SliderDrawTemplate item="SDT_Plain">
             <Thumb><Normal>A_Fill</Normal><Disabled>A_Corner</Disabled></Thumb>
@@ -1075,6 +1134,7 @@ mod tests {
             <BottomAnchorToTop>false</BottomAnchorToTop><BottomAnchorOffset>5</BottomAnchorOffset>
             <Columns><Width>180</Width><Heading>Command</Heading></Columns>
             <Columns><Width>75</Width><Heading>Keypress</Heading></Columns>
+            <Style_VScroll>true</Style_VScroll>
         </Listbox>
         <Screen item="Options"><Size><CX>400</CX><CY>300</CY></Size>
             <Pieces>Clip</Pieces><Pieces>Sky</Pieces><Pieces>Keys</Pieces>
@@ -1123,6 +1183,20 @@ mod tests {
                 }
             ]
         );
+        // The list asks for a scrollbar and gets its template's.
+        let scrollbar = keys.scrollbar.as_ref().unwrap();
+        assert_eq!(scrollbar.up.normal.as_ref().unwrap().texture, "frame.tga");
+        assert_eq!(scrollbar.up.pressed.as_ref().unwrap().y, 18);
+        assert_eq!(scrollbar.down.normal.as_ref().unwrap().y, 7);
+        assert_eq!(
+            scrollbar
+                .thumb
+                .each_ref()
+                .map(|piece| piece.as_ref().map(|piece| piece.y)),
+            [Some(0), Some(18), Some(7)]
+        );
+        assert_eq!(scrollbar.gutter.as_deref(), Some("gutter.tga"));
+        assert_eq!(scrollbar.gutter_tint, Some([128, 128, 128]));
     }
 
     const WINDOW: &str = r#"<?xml version="1.0" encoding="us-ascii"?>

@@ -461,7 +461,13 @@ fn schedule(app: &mut App) {
             )
                 .chain()
                 .in_set(Stage::Scene),
-            (windows::pointer::wheel, navigation::update, chat::input)
+            (
+                windows::pointer::wheel,
+                // A scrollbar's press scrolls its box as the wheel does.
+                skinned::scrollbar::scroll,
+                navigation::update,
+                chat::input,
+            )
                 .chain()
                 .in_set(Stage::Typing),
             escape::route.in_set(Stage::Route),
@@ -573,6 +579,7 @@ fn schedule(app: &mut App) {
                         reading::show,
                         tradeskills::show,
                         map::draw,
+                        skinned::scrollbar::place,
                     ),
                 ),
                 skinned::close,

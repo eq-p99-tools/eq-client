@@ -562,6 +562,10 @@ pub(super) fn listbox(
         } else {
             theme::INK_DIM
         };
+        // A list the client fills scrolls, with the skin's scrollbar down
+        // its right where the skin gives it one.
+        let bar = list.scrollbar.as_ref().filter(|_| listing.is_some());
+        let bar_width = bar.map_or(0.0, super::scrollbar::width);
         let mut x = client.x + 2.0;
         for column in &list.columns {
             frame.spawn((
@@ -578,12 +582,13 @@ pub(super) fn listbox(
                 ..at(
                     client.x + 2.0,
                     client.y + ROW_HEIGHT + 2.0,
-                    (client.width - 4.0).max(0.0),
+                    (client.width - 4.0 - bar_width).max(0.0),
                     (client.height - ROW_HEIGHT - 4.0).max(0.0),
                 )
             },
             ScrollPosition::default(),
         ));
+        let scrolled = rows.id();
         let columns = list.columns.iter().map(|column| column.width).collect();
         match listing {
             Some(Listing::Keys) => {
@@ -610,6 +615,9 @@ pub(super) fn listbox(
                 ));
             }
             None => (),
+        }
+        if let Some(look) = bar {
+            super::scrollbar::spawn(frame, art, look, &client, (scrolled, owner));
         }
     });
 }
