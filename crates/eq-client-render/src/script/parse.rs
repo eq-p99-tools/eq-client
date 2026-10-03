@@ -400,7 +400,8 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         // itself; and how `/who` lists the player.
         [
             command @ ("corpse" | "corpsedrag" | "corpsedrop" | "follow" | "disband" | "loc"
-            | "time" | "afk" | "anonymous" | "roleplay"),
+            | "time" | "afk" | "anonymous" | "roleplay" | "raidaccept" | "raiddecline"
+            | "raiddisband"),
         ] => Step::Slash(format!("/{command}")),
         // A die, an emote, or another's target.
         ["random", numbers @ ..]
@@ -420,6 +421,15 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         }
         ["assist", name @ ..] if name.len() <= 1 => Step::Slash(
             ["/assist"]
+                .iter()
+                .chain(name)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        // A raid invitation, by name or for the target, and its answers.
+        ["raidinvite", name @ ..] if name.len() <= 1 => Step::Slash(
+            ["/raidinvite"]
                 .iter()
                 .chain(name)
                 .copied()

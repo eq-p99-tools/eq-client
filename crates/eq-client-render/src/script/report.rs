@@ -115,6 +115,11 @@ pub(super) fn state(
         listing = ?online.world().player().map(|player| player.listing),
         group = ?group(online),
         group_invitation = ?online.world().group_invitation(),
+        raid = ?online.world().raid().map(|raid| (
+            raid.leader.clone(),
+            raid.members.iter().map(|member| member.name.clone()).collect::<Vec<_>>(),
+        )),
+        raid_invitation = ?online.world().raid_invitation(),
         "Script report"
     );
 }

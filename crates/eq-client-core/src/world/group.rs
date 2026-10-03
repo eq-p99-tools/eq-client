@@ -96,7 +96,7 @@ impl ClientWorld {
     }
 
     /// Whether a name is the player's.
-    fn is_named(&self, name: &str) -> bool {
+    pub(super) fn is_named(&self, name: &str) -> bool {
         self.player
             .as_ref()
             .is_some_and(|player| player.name.eq_ignore_ascii_case(name))
@@ -176,10 +176,9 @@ impl ClientWorld {
                 }
                 Some(GroupNotice::Leader(self.group_party(name)))
             }
-            GroupUpdate::Disbanded => {
-                self.group = None;
-                Some(GroupNotice::Disbanded)
-            }
+            // The server ends a group the player is not in as they leave a
+            // raid: that says nothing.
+            GroupUpdate::Disbanded => self.group.take().map(|_| GroupNotice::Disbanded),
         };
         // Being in a group answers any invitation, and leaving one ends any
         // joining.

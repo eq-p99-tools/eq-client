@@ -20,7 +20,8 @@ pub enum ListingNotice {
     Roleplaying(bool),
 }
 
-/// Who took part in a death the player saw, or in news of their group.
+/// Who took part in a death the player saw, or in news of their group or
+/// raid.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Party {
     /// The player.
@@ -223,6 +224,17 @@ pub enum Notice {
     /// the server sends no line with it, so the official client words it
     /// itself (inferred from its strings).
     Roll(crate::socials::Roll),
+    /// News of the player's raid, which the official client words itself
+    /// (inferred from its strings).
+    Raid(super::RaidNotice),
+    /// A raid request was not sent, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    RaidRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
     /// A roll, emote or assist was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     SocialRefused {
