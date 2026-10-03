@@ -46,6 +46,41 @@ pub struct Border {
     pub left: Option<Piece>,
 }
 
+/// A frame drawn around a box from pieces (`FrameTemplate`), as a tab's,
+/// a page's or a list's column heading's: its corners and edges, and the
+/// caps at the ends of its sides. A frame open at the bottom, as a tab's,
+/// has no bottom pieces; a heading's is its left end, its middle,
+/// stretched, and its right end.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FrameLook {
+    /// The top left corner.
+    pub top_left: Option<Piece>,
+    /// The top edge, stretched between the corners.
+    pub top: Option<Piece>,
+    /// The top right corner.
+    pub top_right: Option<Piece>,
+    /// The left side's top end, below the top left corner.
+    pub left_top: Option<Piece>,
+    /// The left side, stretched between its ends; a heading's left end.
+    pub left: Option<Piece>,
+    /// The left side's bottom end.
+    pub left_bottom: Option<Piece>,
+    /// The right side's top end.
+    pub right_top: Option<Piece>,
+    /// The right side, stretched between its ends; a heading's right end.
+    pub right: Option<Piece>,
+    /// The right side's bottom end.
+    pub right_bottom: Option<Piece>,
+    /// The bottom left corner.
+    pub bottom_left: Option<Piece>,
+    /// The bottom edge, stretched between the corners.
+    pub bottom: Option<Piece>,
+    /// The bottom right corner.
+    pub bottom_right: Option<Piece>,
+    /// A heading's middle, stretched between its ends.
+    pub middle: Option<Piece>,
+}
+
 /// How a window is drawn: its tiled background, its border and its title
 /// bar's left, middle and right pieces.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -212,6 +247,10 @@ pub struct TabBox {
     pub area: Option<Area>,
     /// Its pages, the first shown until another is chosen.
     pub pages: Vec<Page>,
+    /// The frame around each tab (`TabBorderTemplate`).
+    pub tab_frame: Option<FrameLook>,
+    /// The frame around the page shown (`PageBorderTemplate`).
+    pub page_frame: Option<FrameLook>,
 }
 
 /// A window inside a window, such as the inventory's character view or the
@@ -369,6 +408,9 @@ pub struct Listbox {
     /// Its vertical scrollbar, where the skin gives it one
     /// (`Style_VScroll`).
     pub scrollbar: Option<ScrollbarLook>,
+    /// How its columns' headings are drawn: the skin's `Header_Listbox`
+    /// frame, which no list names but every list's headings take.
+    pub header: Option<Box<FrameLook>>,
 }
 
 /// Where a label's text sits in its box.
@@ -507,6 +549,7 @@ pub struct Library {
     templates: HashMap<String, WindowTemplate>,
     sliders: HashMap<String, SliderLook>,
     buttons: HashMap<String, ButtonLook>,
+    frames: HashMap<String, FrameLook>,
 }
 
 impl Library {
@@ -546,6 +589,10 @@ impl Library {
                 "ButtonDrawTemplate" => {
                     let look = library.button_look(Some(node));
                     library.buttons.insert(name.to_owned(), look);
+                }
+                "FrameTemplate" => {
+                    let look = library.frame_look(node);
+                    library.frames.insert(name.to_owned(), look);
                 }
                 _ => (),
             }
@@ -653,6 +700,31 @@ impl Library {
             minimize_box: child(node, "MinimizeBox").map(|look| self.button_look(Some(look))),
             scrollbar: child(node, "VSBTemplate").map(|look| self.scrollbar_look(look)),
         }
+    }
+
+    /// A frame's pictures, from a `FrameTemplate`.
+    fn frame_look(&self, node: roxmltree::Node<'_, '_>) -> FrameLook {
+        let part = |name: &str| self.piece(text_of(node, name));
+        FrameLook {
+            top_left: part("TopLeft"),
+            top: part("Top"),
+            top_right: part("TopRight"),
+            left_top: part("LeftTop"),
+            left: part("Left"),
+            left_bottom: part("LeftBottom"),
+            right_top: part("RightTop"),
+            right: part("Right"),
+            right_bottom: part("RightBottom"),
+            bottom_left: part("BottomLeft"),
+            bottom: part("Bottom"),
+            bottom_right: part("BottomRight"),
+            middle: part("Middle"),
+        }
+    }
+
+    /// The frame a tab box names for its tabs or pages.
+    fn named_frame(&self, node: roxmltree::Node<'_, '_>, name: &str) -> Option<FrameLook> {
+        self.frames.get(text_of(node, name)?).cloned()
     }
 
     /// A vertical scrollbar's pictures, from a template's `VSBTemplate`.
@@ -875,6 +947,7 @@ impl Library {
                     })
                     .collect(),
                 scrollbar: self.scrollbar(node),
+                header: self.frames.get("Header_Listbox").cloned().map(Box::new),
             }),
             other => Element::Other(other.to_owned()),
         }
@@ -941,6 +1014,8 @@ impl Library {
                 name: node.attribute("item").unwrap_or_default().to_owned(),
                 area: area(node).filter(|_| !flag(node, "AutoStretch")),
                 pages: self.pages(node, elements, depth),
+                tab_frame: self.named_frame(node, "TabBorderTemplate"),
+                page_frame: self.named_frame(node, "PageBorderTemplate"),
             }),
             "Screen" => Element::View(Box::new(View {
                 name: node.attribute("item").unwrap_or_default().to_owned(),
@@ -1114,6 +1189,16 @@ mod tests {
         <ButtonDrawTemplate item="BDT_Down">
             <Normal>A_Corner</Normal><Pressed>A_Fill</Pressed>
         </ButtonDrawTemplate>
+        <FrameTemplate item="FT_Tab">
+            <TopLeft>A_Corner</TopLeft><Top>A_Fill</Top><TopRight>A_Corner</TopRight>
+            <LeftTop>A_Back</LeftTop><Left>A_Fill</Left><LeftBottom>A_Corner</LeftBottom>
+        </FrameTemplate>
+        <FrameTemplate item="FT_Page">
+            <BottomLeft>A_Corner</BottomLeft><Bottom>A_Back</Bottom>
+        </FrameTemplate>
+        <FrameTemplate item="Header_Listbox">
+            <Left>A_Corner</Left><Middle>A_Back</Middle><Right>A_Corner</Right>
+        </FrameTemplate>
     </XML>"#;
 
     const CONTROLS: &str = r#"<XML>
@@ -1197,6 +1282,11 @@ mod tests {
         );
         assert_eq!(scrollbar.gutter.as_deref(), Some("gutter.tga"));
         assert_eq!(scrollbar.gutter_tint, Some([128, 128, 128]));
+        // Its headings take the skin's list heading frame, though it names
+        // none.
+        let header = keys.header.as_ref().unwrap();
+        assert_eq!(header.middle.as_ref().unwrap().y, 7);
+        assert_eq!(header.left.as_ref().unwrap().texture, "frame.tga");
     }
 
     const WINDOW: &str = r#"<?xml version="1.0" encoding="us-ascii"?>
@@ -1241,7 +1331,10 @@ mod tests {
             <Location><X>0</X><Y>22</Y></Location><Size><CX>388</CX><CY>401</CY></Size>
             <Pieces>Ear</Pieces><Pieces>Screen:Figure</Pieces>
         </Page>
-        <TabBox item="Tabs"><Pages>Page:FirstPage</Pages></TabBox>
+        <TabBox item="Tabs"><Pages>Page:FirstPage</Pages>
+            <TabBorderTemplate>FT_Tab</TabBorderTemplate>
+            <PageBorderTemplate>FT_Page</PageBorderTemplate>
+        </TabBox>
         <Button item="Platinum"><ScreenID>IW_Money0</ScreenID>
             <Location><X>303</X><Y>121</Y></Location><Size><CX>70</CX><CY>24</CY></Size>
             <Text>9999</Text><TextColor><R>255</R><G>255</G><B>255</B></TextColor>
@@ -1517,6 +1610,15 @@ mod tests {
             panic!("tabs")
         };
         assert_eq!((tabs.name.as_str(), tabs.area), ("Tabs", None));
+        // Its tabs and its page take the frames it names.
+        let tab = tabs.tab_frame.as_ref().unwrap();
+        assert_eq!(tab.top.as_ref().unwrap().y, 18);
+        assert_eq!(tab.left_top.as_ref().unwrap().y, 7);
+        assert!(tab.bottom.is_none());
+        assert_eq!(
+            tabs.page_frame.as_ref().unwrap().bottom.as_ref().unwrap().y,
+            7
+        );
         let page = &tabs.pages[0];
         assert_eq!(page.title.as_deref(), Some("Inventory"));
         assert_eq!(page.title_colors, [None, Some([255, 255, 0])]);

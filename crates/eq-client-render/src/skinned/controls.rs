@@ -255,6 +255,8 @@ pub(crate) struct DropDown {
     list_height: f32,
     /// The open list.
     open: Option<Entity>,
+    /// How the skin draws its box, which its open list is drawn in too.
+    look: Option<eq_client_assets::sidl::WindowTemplate>,
 }
 
 /// The words a drop-down shows: what is chosen.
@@ -307,6 +309,7 @@ pub(super) fn combobox(
                 choices: combobox.choices.clone(),
                 list_height: combobox.list_height,
                 open: None,
+                look: combobox.template.clone(),
             },
         ));
     } else {
@@ -362,10 +365,13 @@ pub(super) fn combobox(
     });
 }
 
-/// Opens and closes drop-downs, and takes a choice from an open one.
+/// Opens and closes drop-downs, and takes a choice from an open one. An
+/// open list is drawn in its box's skin: its background and border, with
+/// the choices inside.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn drop_downs(
     mut commands: Commands,
+    mut art: crate::sheets::Art,
     mut drop_downs: Query<(Entity, Ref<Interaction>, &mut DropDown, &ComputedNode)>,
     choices: Query<(&Interaction, &DropDownChoice), Changed<Interaction>>,
     mut filter: ResMut<KeyFilter>,
@@ -391,29 +397,60 @@ pub(crate) fn drop_downs(
             commands.entity(list).despawn();
             continue;
         }
-        let height = node.size().y * node.inverse_scale_factor();
+        let (width, height) = (node.size() * node.inverse_scale_factor()).into();
         let rows = f32::from(u16::try_from(drop_down.choices.len()).unwrap_or(u16::MAX));
-        let list = commands
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(0),
-                    top: px(height),
-                    width: percent(100),
-                    max_height: px(drop_down.list_height),
-                    height: px(rows * ROW_HEIGHT + 4.0),
-                    flex_direction: FlexDirection::Column,
-                    padding: UiRect::all(px(2)),
-                    border: UiRect::all(px(1)),
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-                BackgroundColor(theme::INSET),
-                BorderColor::all(theme::EDGE),
-                GlobalZIndex(100),
-                ChildOf(entity),
-            ))
-            .id();
+        let list_height = (rows * ROW_HEIGHT + 4.0).min(drop_down.list_height);
+        let insets = drop_down
+            .look
+            .as_ref()
+            .map(|look| super::border_insets(&look.border));
+        let padding = insets.map_or(UiRect::all(px(2)), |insets| UiRect {
+            left: px(insets.left + 2.0),
+            right: px(insets.right + 2.0),
+            top: px(insets.top + 2.0),
+            bottom: px(insets.bottom + 2.0),
+        });
+        let mut list = commands.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: px(height),
+                width: percent(100),
+                height: px(list_height),
+                flex_direction: FlexDirection::Column,
+                padding,
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            GlobalZIndex(100),
+            ChildOf(entity),
+        ));
+        match &drop_down.look {
+            Some(look) => {
+                if let Some(image) = look
+                    .background
+                    .as_deref()
+                    .and_then(|file| art.texture(file))
+                {
+                    list.insert(ImageNode {
+                        image,
+                        image_mode: NodeImageMode::Tiled {
+                            tile_x: true,
+                            tile_y: true,
+                            stretch_value: 1.0,
+                        },
+                        ..default()
+                    });
+                }
+                list.with_children(|list| {
+                    border(list, &mut art, &look.border, (width, list_height));
+                });
+            }
+            None => {
+                list.insert((BackgroundColor(theme::INSET), BorderColor::all(theme::EDGE)));
+            }
+        }
+        let list = list.id();
         for (index, choice) in drop_down.choices.iter().enumerate() {
             commands.spawn((
                 Button,
@@ -566,24 +603,16 @@ pub(super) fn listbox(
         // its right where the skin gives it one.
         let bar = list.scrollbar.as_ref().filter(|_| listing.is_some());
         let bar_width = bar.map_or(0.0, super::scrollbar::width);
-        let mut x = client.x + 2.0;
-        for column in &list.columns {
-            frame.spawn((
-                theme::text(column.heading.as_str(), Size::Small, ink),
-                TextLayout::new(Justify::Left, LineBreak::NoWrap),
-                at(x, client.y + 1.0, column.width, ROW_HEIGHT),
-            ));
-            x += column.width;
-        }
+        let heading = headings(frame, art, list, (&client, ink));
         let mut rows = frame.spawn((
             Node {
                 flex_direction: FlexDirection::Column,
                 overflow: Overflow::scroll_y(),
                 ..at(
                     client.x + 2.0,
-                    client.y + ROW_HEIGHT + 2.0,
+                    client.y + heading + 2.0,
                     (client.width - 4.0 - bar_width).max(0.0),
-                    (client.height - ROW_HEIGHT - 4.0).max(0.0),
+                    (client.height - heading - 4.0).max(0.0),
                 )
             },
             ScrollPosition::default(),
@@ -620,6 +649,43 @@ pub(super) fn listbox(
             super::scrollbar::spawn(frame, art, look, &client, (scrolled, owner));
         }
     });
+}
+
+/// Each of a list's column headings across the top of its inside, on the
+/// skin's heading frame where it has one; returns how high they are, which
+/// is the frame's height.
+fn headings(
+    frame: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    list: &Listbox,
+    (client, ink): (&Area, Color),
+) -> f32 {
+    let header = list.header.as_deref();
+    let height = header
+        .and_then(super::frame::heading_height)
+        .unwrap_or(ROW_HEIGHT);
+    let mut x = client.x;
+    for column in &list.columns {
+        frame
+            .spawn(at(x, client.y, column.width, height))
+            .with_children(|cell| {
+                if let Some(look) = header {
+                    super::frame::heading(cell, art, look);
+                }
+                cell.spawn((
+                    theme::text(column.heading.as_str(), Size::Small, ink),
+                    TextLayout::new(Justify::Left, LineBreak::NoWrap),
+                    at(
+                        2.0,
+                        (height - ROW_HEIGHT) / 2.0 + 1.0,
+                        column.width - 4.0,
+                        ROW_HEIGHT,
+                    ),
+                ));
+            });
+        x += column.width;
+    }
+    height
 }
 
 /// Fills each list the client fills, again whenever what it shows changes:
