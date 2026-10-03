@@ -733,7 +733,7 @@ fn text_box(
             ));
             match (owner, text.id.as_deref()) {
                 (WindowId::Confirmation, _) => {
-                    words.insert(super::resurrection::QuestionText);
+                    words.insert(super::confirm::QuestionText);
                 }
                 (WindowId::Note, _) => {
                     words.insert(super::reading::Text::Note);
@@ -2050,12 +2050,10 @@ fn behave(
             skin(),
             crate::outbox::Needs::Capability(Capability::Training),
         )),
-        Does::Answers(accept) => drawn.insert((
-            Button,
-            super::resurrection::AnswerButton(accept),
-            skin(),
-            crate::outbox::Needs::Capability(Capability::Resurrection),
-        )),
+        // A question shows only where the session offers what it is about.
+        Does::Answers(accept) => {
+            drawn.insert((Button, super::confirm::AnswerButton(accept), skin()))
+        }
         Does::TurnsPage(forward) => {
             drawn.insert((Button, super::reading::PageButton(forward), skin()))
         }

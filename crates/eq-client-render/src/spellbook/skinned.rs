@@ -6,13 +6,17 @@
 //! the cursor, a left click on an empty place scribes it there. A right
 //! click chooses a spell, a right click on another place then swaps the
 //! two, and the Delete key deletes the chosen spell, each where the session
-//! offers it.
+//! offers it; the client asks first unless the player turned that off
+//! ([`Fix::AskBeforeDeletingSpells`]).
 use super::{BookView, SpellNames, action_pending, note, prepare_scribe};
 use crate::chat::{ChatState, Said, system_line};
+use crate::confirm::{Asked, Question};
 use crate::hud::action_bar::{ActionRequests, BookChange};
 use crate::windows::WindowId;
 use bevy::prelude::*;
-use eq_client_core::{BookActionStatus, Capability, ClientCommand, inventory::InventorySlot};
+use eq_client_core::{
+    BookActionStatus, Capability, ClientCommand, inventory::InventorySlot, qol::Fix,
+};
 
 /// The places on the two open pages: eight on each.
 pub(crate) const PLACES: usize = 16;
@@ -61,6 +65,14 @@ enum Edit {
 }
 
 impl Entry {
+    /// The question whether to delete it.
+    const fn deleting(self) -> Question {
+        Question::DeleteSpell {
+            slot: self.slot,
+            spell: self.spell,
+        }
+    }
+
     /// Whether the book still keeps this spell in this place.
     fn kept(self, book: Option<&eq_client_core::SpellBook>) -> bool {
         book.and_then(|book| book.slots().get(self.slot))
@@ -94,7 +106,8 @@ type Arrows<'w, 's> =
 /// place takes it off, and with a scroll on the cursor a left click on an
 /// empty place scribes the scroll there. A right click chooses a spell or
 /// swaps the chosen one with the place clicked, and the Delete key deletes
-/// the chosen spell, only while no box takes the keyboard.
+/// the chosen spell, asking first where the player wants that, only while
+/// no box takes the keyboard.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn clicks(
     (keys, mouse): (crate::keys::Keys, Res<ButtonInput<MouseButton>>),
@@ -102,24 +115,32 @@ pub(crate) fn clicks(
     (online, outbox): (Res<crate::online::OnlineState>, Res<crate::outbox::Outbox>),
     (names, messages): (Res<SpellNames>, Res<crate::hud::messages::Messages>),
     (mut view, mut hand, mut chat): (ResMut<BookView>, ResMut<BookHand>, ResMut<ChatState>),
-    mut requests: Option<ResMut<ActionRequests>>,
+    (mut requests, mut asked, options): (
+        Option<ResMut<ActionRequests>>,
+        ResMut<Asked>,
+        Res<crate::options::OptionsState>,
+    ),
     (places, arrows): (Places, Arrows),
 ) {
     let world = online.world();
     let book = world.spell_book();
     answer(&mut hand, world, &messages, &mut chat);
-    if !(skinned.has(WindowId::Spellbook) && shown.is_open(WindowId::Spellbook)) {
-        hand.held = None;
-        hand.chosen = None;
-        return;
-    }
+    let open = skinned.has(WindowId::Spellbook) && shown.is_open(WindowId::Spellbook);
     // A spell the book no longer keeps in its place leaves the cursor, and
-    // is no longer chosen.
-    if hand.held.is_some_and(|held| !held.kept(book)) {
+    // is no longer chosen, as both do when the book closes.
+    if !open || hand.held.is_some_and(|held| !held.kept(book)) {
         hand.held = None;
     }
-    if hand.chosen.is_some_and(|chosen| !chosen.kept(book)) {
+    if !open || hand.chosen.is_some_and(|chosen| !chosen.kept(book)) {
         hand.chosen = None;
+    }
+    follow_deleting(
+        (&mut hand, &mut asked),
+        (world, &outbox),
+        (requests.as_deref_mut(), &mut chat),
+    );
+    if !open {
+        return;
     }
     // An item or coins taken onto the cursor take the place of a spell from
     // the book, so a gem can no longer memorize it; what the official client
@@ -146,10 +167,13 @@ pub(crate) fn clicks(
             };
         }
     }
-    if keys.input.just_pressed(KeyCode::Delete)
-        && let Some(refusal) = delete(&mut hand, world, &outbox, requests.as_deref_mut())
-    {
-        chat.refuse(refusal);
+    if keys.input.just_pressed(KeyCode::Delete) {
+        delete_key(
+            (&mut hand, &mut asked),
+            (world, &outbox),
+            (requests.as_deref_mut(), &mut chat),
+            &options.options.qol,
+        );
     }
     // A right click lands on the place under the pointer.
     if mouse.just_pressed(MouseButton::Right)
@@ -305,6 +329,73 @@ fn choose(
             }
             said
         }
+    }
+}
+
+/// The Delete key: asks whether to delete the chosen spell where the player
+/// wants to be asked and the session deletes spells at all, or else deletes
+/// it. The chat says why either waits, and the outbox why a deletion it
+/// holds back did not go.
+fn delete_key(
+    (hand, asked): (&mut BookHand, &mut Asked),
+    (world, outbox): (&eq_client_core::world::ClientWorld, &crate::outbox::Outbox),
+    (requests, chat): (Option<&mut ActionRequests>, &mut ChatState),
+    qol: &eq_client_core::qol::Settings,
+) {
+    let refusal = if qol.on(Fix::AskBeforeDeletingSpells)
+        && crate::outbox::offered(world, Capability::DeletingSpells)
+    {
+        ask_deleting(hand, world, asked)
+    } else {
+        delete(hand, world, outbox, requests)
+    };
+    if let Some(refusal) = refusal {
+        chat.refuse(refusal);
+    }
+}
+
+/// The Delete key where the player is asked first: asks whether to delete
+/// the spell a right click chose, unless another change to the book is
+/// under way; what the chat says if it waits.
+fn ask_deleting(
+    hand: &BookHand,
+    world: &eq_client_core::world::ClientWorld,
+    asked: &mut Asked,
+) -> Option<Said> {
+    let chosen = hand.chosen?;
+    if action_pending(world) {
+        return Some(Said::own(BUSY));
+    }
+    asked.ask(chosen.deleting());
+    None
+}
+
+/// Follows the question whether to delete the chosen spell: takes it back
+/// once that spell is no longer the chosen one, as when the book closes,
+/// and once it is answered, Yes deletes the spell, unless another change to
+/// the book is under way, which the chat then says, and No keeps it, no
+/// longer chosen.
+fn follow_deleting(
+    (hand, asked): (&mut BookHand, &mut Asked),
+    (world, outbox): (&eq_client_core::world::ClientWorld, &crate::outbox::Outbox),
+    (requests, chat): (Option<&mut ActionRequests>, &mut ChatState),
+) {
+    if let Some(question @ Question::DeleteSpell { .. }) = asked.question()
+        && hand.chosen.map(Entry::deleting) != Some(question)
+    {
+        asked.withdraw();
+    }
+    match hand
+        .chosen
+        .and_then(|chosen| asked.answer(chosen.deleting()))
+    {
+        Some(true) => {
+            if let Some(refusal) = delete(hand, world, outbox, requests) {
+                chat.refuse(refusal);
+            }
+        }
+        Some(false) => hand.chosen = None,
+        None => (),
     }
 }
 
@@ -653,8 +744,9 @@ mod tests {
         assert!(sent.try_recv().is_err());
     }
 
-    #[test]
-    fn the_delete_key_deletes_only_while_no_box_has_the_keyboard() {
+    /// An app with the skin's book open, a spell chosen in place 1, and the
+    /// confirmation dialog's buttons answering before the book's clicks.
+    fn book_app() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
         let mut app = crate::testing::app();
         let (queue, sent) = std::sync::mpsc::sync_channel(4);
         let hand = BookHand {
@@ -668,21 +760,54 @@ mod tests {
             .insert_resource(crate::skinned::Skinned::of(&[WindowId::Spellbook]))
             .insert_resource(shown)
             .insert_resource(hand)
-            .add_systems(Update, clicks);
-        // A Delete typed in the chat box deletes nothing.
+            .add_systems(Update, (crate::confirm::buttons, clicks).chain());
+        (app, sent)
+    }
+
+    /// Presses the Delete key afresh.
+    fn press_delete(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset(KeyCode::Delete);
+        keys.press(KeyCode::Delete);
+    }
+
+    /// Answers the confirmation dialog, with the key let go.
+    fn answer_dialog(app: &mut App, yes: bool) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset(KeyCode::Delete);
+        app.world_mut()
+            .spawn((Interaction::Pressed, crate::confirm::AnswerButton(yes)));
+    }
+
+    #[test]
+    fn the_delete_key_asks_first_and_only_while_no_box_has_the_keyboard() {
+        let (mut app, sent) = book_app();
+        let question = Question::DeleteSpell { slot: 1, spell: 42 };
+        // A Delete typed in the chat box asks nothing.
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = true;
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Delete);
+        press_delete(&mut app);
         app.update();
-        assert!(sent.try_recv().is_err());
-        assert!(app.world().resource::<BookHand>().chosen.is_some());
-        // With the game holding the keyboard, it deletes the chosen spell.
+        assert_eq!(app.world().resource::<Asked>().question(), None);
+        // With the game holding the keyboard, it asks first.
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = false;
+        app.update();
+        assert!(sent.try_recv().is_err());
+        assert_eq!(app.world().resource::<Asked>().question(), Some(question));
+        // No keeps the spell, no longer chosen.
+        answer_dialog(&mut app, false);
+        app.update();
+        assert!(sent.try_recv().is_err());
+        assert!(app.world().resource::<BookHand>().chosen.is_none());
+        // Chosen again, Yes deletes it.
+        app.world_mut().resource_mut::<BookHand>().chosen = Some(Entry { slot: 1, spell: 42 });
+        press_delete(&mut app);
+        app.update();
+        answer_dialog(&mut app, true);
         app.update();
         assert!(matches!(
             sent.try_recv().unwrap(),
@@ -693,6 +818,39 @@ mod tests {
             }
         ));
         assert!(app.world().resource::<BookHand>().chosen.is_none());
+        // Closing the book takes a question back.
+        app.world_mut().resource_mut::<BookHand>().chosen = Some(Entry { slot: 1, spell: 42 });
+        press_delete(&mut app);
+        app.update();
+        assert_eq!(app.world().resource::<Asked>().question(), Some(question));
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .close(WindowId::Spellbook);
+        app.update();
+        assert_eq!(app.world().resource::<Asked>().question(), None);
+    }
+
+    #[test]
+    fn with_asking_turned_off_the_delete_key_deletes_at_once() {
+        let (mut app, sent) = book_app();
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .set(
+                eq_client_core::options::Toggle::Qol(Fix::AskBeforeDeletingSpells),
+                false,
+            );
+        press_delete(&mut app);
+        app.update();
+        assert!(matches!(
+            sent.try_recv().unwrap(),
+            ClientCommand::DeleteSpell {
+                slot: 1,
+                spell_id: 42,
+                ..
+            }
+        ));
+        assert_eq!(app.world().resource::<Asked>().question(), None);
     }
 
     #[test]

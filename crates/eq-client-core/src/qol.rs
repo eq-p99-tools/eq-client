@@ -52,6 +52,9 @@ pub enum Fix {
     /// Draws a window the UI skin sizes to nothing, as the Velious skin does
     /// its windows from later expansions, as the default skin draws it.
     HiddenWindows,
+    /// Asks Yes or No before a spell leaves the spell book for good; the
+    /// official client's Delete key deletes the chosen spell at once.
+    AskBeforeDeletingSpells,
     /// Starts the Options window's Max FPS at 60 frames a second rather than
     /// as fast as vsync allows; the slider and the installation's
     /// `eqclient.ini` still set another cap. What the official client does
@@ -82,9 +85,10 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
+        Self::AskBeforeDeletingSpells,
         Self::FrameCap,
         Self::GreyedControls,
         Self::CampCountdown,
@@ -100,6 +104,7 @@ impl Fix {
         match self {
             Self::SkipModifiedFood => "skip_modified_food",
             Self::HiddenWindows => "hidden_windows",
+            Self::AskBeforeDeletingSpells => "ask_before_deleting_spells",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -123,6 +128,7 @@ impl Fix {
         match self {
             Self::SkipModifiedFood => "Skip Food With Modifiers",
             Self::HiddenWindows => "Draw Windows the Skin Hides",
+            Self::AskBeforeDeletingSpells => "Ask Before Deleting Spells",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -142,6 +148,9 @@ impl Fix {
             }
             Self::HiddenWindows => {
                 "Draw the windows your UI skin hides, such as the Velious skin's Raid window, as the default skin draws them."
+            }
+            Self::AskBeforeDeletingSpells => {
+                "Ask Yes or No before a spell is deleted from your spell book for good."
             }
             Self::FrameCap => {
                 "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
@@ -167,7 +176,9 @@ impl Fix {
     #[must_use]
     pub const fn kind(self) -> Kind {
         match self {
-            Self::SkipModifiedFood | Self::HotbarItemGuard => Kind::Guards,
+            Self::SkipModifiedFood | Self::AskBeforeDeletingSpells | Self::HotbarItemGuard => {
+                Kind::Guards
+            }
             Self::HiddenWindows
             | Self::FrameCap
             | Self::GreyedControls
@@ -179,11 +190,13 @@ impl Fix {
     }
 
     /// What the session must offer for the fix to matter, if anything:
-    /// eating on its own comes with the inventory.
+    /// eating on its own comes with the inventory, and only a session that
+    /// deletes spells has one to ask about.
     #[must_use]
     pub const fn needs(self) -> Option<Capability> {
         match self {
             Self::SkipModifiedFood => Some(Capability::Inventory),
+            Self::AskBeforeDeletingSpells => Some(Capability::DeletingSpells),
             Self::HiddenWindows
             | Self::FrameCap
             | Self::GreyedControls
@@ -202,7 +215,9 @@ impl Fix {
     #[must_use]
     pub const fn availability(self) -> Availability {
         match self {
-            Self::SkipModifiedFood => Availability::Setting { default: true },
+            Self::SkipModifiedFood | Self::AskBeforeDeletingSpells => {
+                Availability::Setting { default: true }
+            }
             Self::HiddenWindows => Availability::Setting { default: false },
             Self::FrameCap
             | Self::GreyedControls
@@ -306,7 +321,11 @@ mod tests {
         assert!(!settings.on(Fix::SkipModifiedFood));
         assert_eq!(
             Fix::settings().collect::<Vec<_>>(),
-            [Fix::SkipModifiedFood, Fix::HiddenWindows]
+            [
+                Fix::SkipModifiedFood,
+                Fix::HiddenWindows,
+                Fix::AskBeforeDeletingSpells
+            ]
         );
         // A fix that is always on stays on whatever is asked.
         for fix in Fix::ALL.into_iter().filter(|fix| !fix.is_setting()) {

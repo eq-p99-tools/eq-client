@@ -91,13 +91,15 @@ impl Confirmation {
         }
     }
 
-    /// Only a separate confirmation click can return a fresh deletion command.
+    /// Only a separate confirmation click can return a fresh deletion
+    /// command, unless the player turned asking off
+    /// ([`eq_client_core::qol::Fix::AskBeforeDeletingSpells`]): then Delete
+    /// spell returns it at once.
     pub fn act(
         &mut self,
         action: Action,
-        session: Option<u64>,
-        spell: Option<u32>,
-        book: Option<&SpellBook>,
+        (session, spell, book): (Option<u64>, Option<u32>, Option<&SpellBook>),
+        asks: bool,
     ) -> anyhow::Result<Option<ClientCommand>> {
         use anyhow::{Context, ensure};
         self.validate(session, spell, book);
@@ -120,20 +122,28 @@ impl Confirmation {
                     .iter()
                     .position(|entry| *entry == Some(id))
                     .context("Selected spell is no longer scribed")?;
-                self.selected = Some((session, u16::try_from(slot)?, id));
+                let chosen = (session, u16::try_from(slot)?, id);
+                if !asks {
+                    return Ok(Some(deletion(chosen)));
+                }
+                self.selected = Some(chosen);
                 Ok(None)
             }
             Action::Confirm => {
-                let (session_id, slot, spell_id) =
-                    self.selected.take().context("Click Delete spell first")?;
-                Ok(Some(ClientCommand::DeleteSpell {
-                    session_id,
-                    slot,
-                    spell_id,
-                    created: std::time::Instant::now(),
-                }))
+                let chosen = self.selected.take().context("Click Delete spell first")?;
+                Ok(Some(deletion(chosen)))
             }
         }
+    }
+}
+
+/// The command that deletes a spell from its place, in a session.
+fn deletion((session_id, slot, spell_id): (u64, u16, u32)) -> ClientCommand {
+    ClientCommand::DeleteSpell {
+        session_id,
+        slot,
+        spell_id,
+        created: std::time::Instant::now(),
     }
 }
 
@@ -212,45 +222,45 @@ mod tests {
         let mut state = Confirmation::default();
         assert!(
             state
-                .act(Action::Confirm, Some(7), Some(42), Some(&book))
+                .act(Action::Confirm, (Some(7), Some(42), Some(&book)), true)
                 .is_err()
         );
         assert!(
             state
-                .act(Action::Select, Some(7), Some(42), Some(&book))
+                .act(Action::Select, (Some(7), Some(42), Some(&book)), true)
                 .unwrap()
                 .is_none()
         );
         assert!(
             state
-                .act(Action::Confirm, Some(8), Some(42), Some(&book))
+                .act(Action::Confirm, (Some(8), Some(42), Some(&book)), true)
                 .is_err()
         );
         state
-            .act(Action::Select, Some(7), Some(42), Some(&book))
+            .act(Action::Select, (Some(7), Some(42), Some(&book)), true)
             .unwrap();
         assert!(
             state
-                .act(Action::Confirm, Some(7), Some(73), Some(&book))
+                .act(Action::Confirm, (Some(7), Some(73), Some(&book)), true)
                 .is_err()
         );
         state
-            .act(Action::Select, Some(7), Some(42), Some(&book))
+            .act(Action::Select, (Some(7), Some(42), Some(&book)), true)
             .unwrap();
         state
-            .act(Action::Cancel, Some(7), Some(42), Some(&book))
+            .act(Action::Cancel, (Some(7), Some(42), Some(&book)), true)
             .unwrap();
         assert!(
             state
-                .act(Action::Confirm, Some(7), Some(42), Some(&book))
+                .act(Action::Confirm, (Some(7), Some(42), Some(&book)), true)
                 .is_err()
         );
         state
-            .act(Action::Select, Some(7), Some(42), Some(&book))
+            .act(Action::Select, (Some(7), Some(42), Some(&book)), true)
             .unwrap();
         assert!(matches!(
             state
-                .act(Action::Confirm, Some(7), Some(42), Some(&book))
+                .act(Action::Confirm, (Some(7), Some(42), Some(&book)), true)
                 .unwrap(),
             Some(ClientCommand::DeleteSpell {
                 session_id: 7,
@@ -262,14 +272,38 @@ mod tests {
         assert_eq!(book.slots()[3], Some(42));
         assert!(
             state
-                .act(Action::Confirm, Some(7), Some(42), Some(&book))
+                .act(Action::Confirm, (Some(7), Some(42), Some(&book)), true)
                 .is_err()
         );
         state.queued = true;
         assert!(
             state
-                .act(Action::Select, Some(7), Some(42), Some(&book))
+                .act(Action::Select, (Some(7), Some(42), Some(&book)), true)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn with_asking_turned_off_delete_spell_deletes_at_once() {
+        let mut book = SpellBook::default();
+        book.apply(&eq_client_core::SpellUpdate::Slot {
+            slot: 3,
+            spell_id: 42,
+            mode: 0,
+        });
+        let mut state = Confirmation::default();
+        assert!(matches!(
+            state
+                .act(Action::Select, (Some(7), Some(42), Some(&book)), false)
+                .unwrap(),
+            Some(ClientCommand::DeleteSpell {
+                session_id: 7,
+                slot: 3,
+                spell_id: 42,
+                ..
+            })
+        ));
+        // Nothing waits for a Confirm.
+        assert!(state.visible(Action::Select));
     }
 }

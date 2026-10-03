@@ -237,7 +237,7 @@ type Buttons<'w, 's> = Query<
                     Option<&'static super::training::SkillRow>,
                     Has<super::training::TrainButton>,
                     Option<&'static super::skinned::Closes>,
-                    Option<&'static super::resurrection::AnswerButton>,
+                    Option<&'static super::confirm::AnswerButton>,
                     Option<&'static super::skinned::TitleBox>,
                 ),
                 Option<&'static super::reading::PageButton>,
@@ -754,7 +754,7 @@ fn dialog_control(
         Option<&super::training::SkillRow>,
         bool,
         Option<&super::skinned::Closes>,
-        Option<&super::resurrection::AnswerButton>,
+        Option<&super::confirm::AnswerButton>,
         Option<&super::skinned::TitleBox>,
     ),
 ) -> bool {
