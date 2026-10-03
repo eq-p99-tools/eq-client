@@ -371,12 +371,32 @@ type Frames<'w, 's> = Query<
     ),
 >;
 
+/// The skin a window is drawn from: the player's, or the default skin where
+/// the player's sizes the window to nothing and the player asks to see the
+/// windows their skin hides.
+fn drawn_from(
+    screens: &mut Screens,
+    directory: &std::path::Path,
+    (skin, id): (&str, WindowId),
+    hidden_too: bool,
+) -> String {
+    let default = eq_client_assets::ui::DEFAULT_SKIN;
+    let hidden = hidden_too
+        && skin != default
+        && screens
+            .get(directory, skin, id)
+            .is_some_and(|screen| screen.area.width <= 0.0 || screen.area.height <= 0.0);
+    if hidden { default } else { skin }.to_owned()
+}
+
 /// Draws each skinned window from the skin: a frame just built, or one
-/// drawn in another skin, is drawn again.
+/// drawn in another skin, is drawn again. A window the skin sizes to
+/// nothing is drawn as the default skin draws it while the player asks for
+/// such windows ([`eq_client_core::options::Toggle::HiddenWindows`]).
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn apply(
     mut commands: Commands,
-    skin: Res<super::skin::UiSkin>,
+    (skin, options): (Res<super::skin::UiSkin>, Res<super::options::OptionsState>),
     settings: Res<super::ViewerSettings>,
     mut screens: ResMut<Screens>,
     mut frames: Frames,
@@ -389,14 +409,19 @@ pub(crate) fn apply(
     let Some(directory) = settings.0.eq_directory.as_deref() else {
         return;
     };
+    let hidden_too = options
+        .options
+        .get(eq_client_core::options::Toggle::HiddenWindows);
     for (frame, id, mut node, mut background, mut border, drawn, mut state) in &mut frames {
-        if drawn.is_some_and(|drawn| drawn.0 == skin.0) {
+        let from = drawn_from(&mut screens, directory, (&skin.0, *id), hidden_too);
+        if drawn.is_some_and(|drawn| drawn.0 == from) {
             continue;
         }
-        let Some(screen) = screens.get(directory, &skin.0, *id) else {
+        let Some(screen) = screens.get(directory, &from, *id) else {
             continue;
         };
-        commands.entity(frame).insert(Drawn(skin.0.clone()));
+        commands.entity(frame).insert(Drawn(from.clone()));
+        art.draw_in((from != skin.0).then(|| from.clone()));
         skinned.0.insert(*id);
         reshape(&mut node, screen, state.placed(), *id);
         super::windows::drag_anywhere(&mut commands, frame, *id);
@@ -413,6 +438,7 @@ pub(crate) fn apply(
             };
             title_bottom = draw(window, screen, &mut art, &context);
         });
+        art.draw_in(None);
         state.drawn_from_skin(&mut node, title_bottom);
     }
 }
@@ -1562,7 +1588,7 @@ fn hot_button(id: &str) -> Option<usize> {
 
 /// The Options window's checkboxes for the options this client keeps, by
 /// screen ID; the Client page's is this client's own.
-const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 8] = {
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 9] = {
     use eq_client_core::options::Toggle;
     [
         ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
@@ -1573,12 +1599,14 @@ const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 8] = {
         ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
         ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
         (CLIENT_FOOD_CHECKBOX, Toggle::SkipModifiedFood),
+        (CLIENT_HIDDEN_CHECKBOX, Toggle::HiddenWindows),
     ]
 };
 
 /// The Client page's checkbox, which this client adds to the skin's
 /// Options window.
 const CLIENT_FOOD_CHECKBOX: &str = "EQC_SkipModifiedFoodCheckbox";
+const CLIENT_HIDDEN_CHECKBOX: &str = "EQC_HiddenWindowsCheckbox";
 
 /// The skin's pages of a tab box, and for the Options window a last page
 /// of the options only this client has, drawn with the skin's own
@@ -1599,24 +1627,41 @@ fn with_client_page(
                 Element::Button(button) if button.checkbox => Some(button.clone()),
                 _ => None,
             });
-    let (Some(mut checkbox), Some(first)) = (checkbox, pages.first()) else {
+    let (Some(checkbox), Some(first)) = (checkbox, pages.first()) else {
         return std::borrow::Cow::Borrowed(pages);
     };
-    checkbox.id = Some(CLIENT_FOOD_CHECKBOX.to_owned());
-    checkbox.text = Some("Skip Food With Modifiers".to_owned());
-    checkbox.tooltip = Some(
-        "Leave food and drink with modifiers for you to eat or drink by hand when you get hungry or thirsty."
-            .to_owned(),
-    );
-    checkbox.area.x = 10.0;
-    checkbox.area.y = 10.0;
-    checkbox.area.width = checkbox.area.width.max(170.0);
+    // Each of the client's options in the skin's checkbox, one under another.
+    let options = [
+        (
+            CLIENT_FOOD_CHECKBOX,
+            "Skip Food With Modifiers",
+            "Leave food and drink with modifiers for you to eat or drink by hand when you get hungry or thirsty.",
+        ),
+        (
+            CLIENT_HIDDEN_CHECKBOX,
+            "Draw Windows the Skin Hides",
+            "Draw the windows your UI skin hides, such as the Velious skin's Raid window, as the default skin draws them.",
+        ),
+    ];
+    let pieces = (0u8..)
+        .zip(options)
+        .map(|(row, (id, text, tooltip))| {
+            let mut checkbox = checkbox.clone();
+            checkbox.id = Some(id.to_owned());
+            checkbox.text = Some(text.to_owned());
+            checkbox.tooltip = Some(tooltip.to_owned());
+            checkbox.area.x = 10.0;
+            checkbox.area.y = 10.0 + f32::from(row) * (checkbox.area.height + 6.0);
+            checkbox.area.width = checkbox.area.width.max(190.0);
+            (id.to_owned(), Element::Button(checkbox))
+        })
+        .collect();
     let client = eq_client_assets::sidl::Page {
         name: "EQC_ClientPage".to_owned(),
         title: Some("Client".to_owned()),
         area: first.area,
         template: first.template.clone(),
-        pieces: vec![(CLIENT_FOOD_CHECKBOX.to_owned(), Element::Button(checkbox))],
+        pieces,
         icon: [None, None],
         title_colors: first.title_colors,
         tooltip: Some("Options only this client has.".to_owned()),
@@ -3824,11 +3869,53 @@ mod tests {
             does(food.id.as_deref().unwrap(), WindowId::Options),
             Some(Does::Option(Toggle::SkipModifiedFood))
         ));
+        // The switch for windows the skin hides sits under it.
+        let Element::Button(hidden) = &pages[1].pieces[1].1 else {
+            panic!("a checkbox")
+        };
+        assert!(matches!(
+            does(hidden.id.as_deref().unwrap(), WindowId::Options),
+            Some(Does::Option(Toggle::HiddenWindows))
+        ));
+        assert!(hidden.area.y >= food.area.y + food.area.height);
         // Other windows keep the skin's pages as they are.
         assert_eq!(
             with_client_page(std::slice::from_ref(&general), WindowId::ActionsWindow).len(),
             1
         );
+    }
+
+    #[test]
+    fn a_window_the_skin_hides_is_drawn_from_the_default_skin_when_asked() {
+        let install =
+            std::env::temp_dir().join(format!("eq-hidden-windows-{}", std::process::id()));
+        let raid = |width: u32| {
+            format!(
+                "<XML><Screen item=\"RaidWindow\"><Location><X>100</X><Y>78</Y></Location>                 <Size><CX>{width}</CX><CY>{width}</CY></Size></Screen></XML>"
+            )
+        };
+        for (skin, width) in [(eq_client_assets::ui::DEFAULT_SKIN, 333), ("hiding", 0)] {
+            let folder = install.join("uifiles").join(skin);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("EQUI_RaidWindow.xml"), raid(width)).unwrap();
+        }
+        let folder = install
+            .join("uifiles")
+            .join(eq_client_assets::ui::DEFAULT_SKIN);
+        std::fs::write(folder.join("EQUI_Animations.xml"), "<XML></XML>").unwrap();
+        std::fs::write(folder.join("EQUI_Templates.xml"), "<XML></XML>").unwrap();
+        let mut screens = Screens::default();
+        let from = |screens: &mut Screens, skin, hidden_too| {
+            drawn_from(screens, &install, (skin, WindowId::Raid), hidden_too)
+        };
+        let hidden_off = from(&mut screens, "hiding", false);
+        let hidden_on = from(&mut screens, "hiding", true);
+        let default_on = from(&mut screens, eq_client_assets::ui::DEFAULT_SKIN, true);
+        std::fs::remove_dir_all(&install).unwrap();
+        // The skin's own nothing, unless the player asks for such windows.
+        assert_eq!(hidden_off, "hiding");
+        assert_eq!(hidden_on, eq_client_assets::ui::DEFAULT_SKIN);
+        assert_eq!(default_on, eq_client_assets::ui::DEFAULT_SKIN);
     }
 
     #[test]

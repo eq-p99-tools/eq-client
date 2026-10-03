@@ -9,7 +9,12 @@ use std::collections::BTreeMap;
 /// Sheets read so far, by skin and file. A sheet that could not be read is
 /// remembered as missing, so it is not read again every frame.
 #[derive(Resource, Default)]
-pub(crate) struct Sheets(BTreeMap<(String, String), Option<Handle<Image>>>);
+pub(crate) struct Sheets {
+    read: BTreeMap<(String, String), Option<Handle<Image>>>,
+    /// The skin a window is being drawn from, where it is not the player's:
+    /// the default skin, for a window the player's skin hides.
+    drawing: Option<String>,
+}
 
 /// Cuts icons out of the skin's sheets.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -44,15 +49,22 @@ impl Art<'_> {
         )
     }
 
+    /// Draws from this skin's textures until told otherwise, rather than the
+    /// player's skin's: the default skin's, for a window drawn as the default
+    /// skin draws it.
+    pub(crate) fn draw_in(&mut self, skin: Option<String>) {
+        self.sheets.drawing = skin;
+    }
+
     /// One of the skin's textures, whole, such as a window's background.
     pub(crate) fn texture(&mut self, file: &str) -> Option<Handle<Image>> {
         let directory = self.settings.0.eq_directory.as_deref()?;
-        let skin = &self.skin.0;
+        let skin = self.sheets.drawing.as_ref().unwrap_or(&self.skin.0).clone();
         let images = &mut self.images;
         self.sheets
-            .0
+            .read
             .entry((skin.clone(), file.to_owned()))
-            .or_insert_with(|| match texture(directory, skin, file) {
+            .or_insert_with(|| match texture(directory, &skin, file) {
                 Ok(pixels) => Some(images.add(image(pixels))),
                 Err(error) => {
                     warn!("UI texture unavailable: {error}");
@@ -125,7 +137,9 @@ pub(crate) mod testing {
             .map(|sheet| format!("dragitem{sheet}.tga"))
             .chain((1..=4).map(|sheet| format!("spells{sheet:02}.tga")))
         {
-            sheets.0.insert((skin.clone(), file), Some(handle.clone()));
+            sheets
+                .read
+                .insert((skin.clone(), file), Some(handle.clone()));
         }
         app.insert_resource(sheets)
             .init_resource::<super::super::skin::UiSkin>();
