@@ -117,6 +117,40 @@ fn read(words: logs::Words, messages: Option<&crate::hud::messages::Messages>) -
     }
 }
 
+/// A chat line as the chat window shows it: in the words its log writes,
+/// without the time, with its item links moved to where its message lands
+/// in those words. A line in this client's own words, which the log leaves
+/// out, shows as it reads.
+pub(crate) fn shown(
+    line: &eq_client_core::chat::ChatLine,
+    player: &str,
+    messages: Option<&crate::hud::messages::Messages>,
+) -> eq_client_core::chat::Message {
+    // The words are read with a mark in the message's place, so its links
+    // can follow it wherever the installed string puts it.
+    const MARK: &str = "\u{1}";
+    let mut marked = line.clone();
+    MARK.clone_into(&mut marked.message.text);
+    marked.message.item_links.clear();
+    let mut message = line.message.clone();
+    let Some(words) = logs::words(&marked, player) else {
+        return message;
+    };
+    let words = read(words, messages);
+    if let Some((before, after)) = words.split_once(MARK) {
+        message.text = format!("{before}{}{after}", line.message.text);
+        for link in &mut message.item_links {
+            link.text_start += before.len();
+            link.text_end += before.len();
+        }
+    } else {
+        // A string that leaves the message out leaves its links out too.
+        message.text = words;
+        message.item_links.clear();
+    }
+    message
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +177,63 @@ mod tests {
             ..words()
         };
         assert_eq!(read(missing, Some(&messages)), "Examplar (say): Hail");
+    }
+
+    #[test]
+    fn the_chat_shows_a_line_in_its_logs_words_with_its_links() {
+        use eq_client_core::chat::{ChannelName, ChatLine, Message, Source};
+        let messages = crate::hud::messages::Messages::parse(
+            "EQST0002
+0 1
+1410 %1 speaks%2: %3
+",
+        );
+        let dagger = eq_client_core::ItemLink {
+            body: "synthetic".into(),
+            text: "Rusty Dagger".into(),
+            item_id: 7,
+            start: 0,
+            end: 0,
+            text_start: 4,
+            text_end: 16,
+        };
+        let line = |channel, sender: Option<&str>, source| ChatLine {
+            channel,
+            sender: sender.map(str::to_owned),
+            target: None,
+            message: Message {
+                message: None,
+                message_hex: None,
+                text: "WTS Rusty Dagger".into(),
+                item_links: vec![dagger.clone()],
+            },
+            source,
+        };
+        // The link's words, wherever the line's words put them.
+        let linked = |message: &Message| {
+            let [only] = &message.item_links[..] else {
+                panic!("one link");
+            };
+            message.text[only.text_start..only.text_end].to_owned()
+        };
+        let say = line(ChannelName::Say, Some("Examplar"), Source::Server);
+        let heard = shown(&say, "Other", Some(&messages));
+        assert_eq!(heard.text, "Examplar speaks: WTS Rusty Dagger");
+        assert_eq!(linked(&heard), "Rusty Dagger");
+        // Without the table, the line is in this client's words.
+        let fallback = shown(&say, "Other", None);
+        assert_eq!(fallback.text, "Examplar (say): WTS Rusty Dagger");
+        assert_eq!(linked(&fallback), "Rusty Dagger");
+        // The game's lines and this client's own read as they are.
+        for source in [Source::Server, Source::Client] {
+            let system = shown(
+                &line(ChannelName::System, None, source),
+                "Other",
+                Some(&messages),
+            );
+            assert_eq!(system.text, "WTS Rusty Dagger");
+            assert_eq!(linked(&system), "Rusty Dagger");
+        }
     }
 
     #[test]

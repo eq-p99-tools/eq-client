@@ -423,8 +423,9 @@ fn synthetic(id: u16, race: u32, size: f32, position: WorldPosition) -> eq_clien
     }
 }
 
-/// The preview's chat: a synthetic line on each channel; the auction names
-/// an item by link.
+/// The preview's chat: a synthetic line on each channel, spoken by
+/// "Preview" where a player speaks, and the game's own lines and an emote
+/// whole, as a server sends them; the auction names an item by link.
 pub(crate) fn chat_lines() -> Vec<eq_client_core::chat::ChatLine> {
     use eq_client_core::chat::{ChannelName, ChatLine, Message};
     [
@@ -443,12 +444,13 @@ pub(crate) fn chat_lines() -> Vec<eq_client_core::chat::ChatLine> {
         ),
         (ChannelName::Ooc, "Anyone heading toward the inn?"),
         (ChannelName::Tell, "I will wait here."),
-        (ChannelName::Emote, "waves hello."),
+        (ChannelName::Emote, "Preview waves hello."),
     ]
     .into_iter()
     .map(|(channel, text)| ChatLine {
         channel,
-        sender: Some("Preview".into()),
+        sender: (!matches!(channel, ChannelName::System | ChannelName::Emote))
+            .then(|| "Preview".into()),
         target: None,
         source: eq_client_core::chat::Source::Server,
         message: Message {

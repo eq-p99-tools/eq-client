@@ -20,6 +20,19 @@ use std::{
 
 /// Chat lines keep their text; string-table messages are resolved by presentation.
 fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
+    use eq_client_core::chat::Spoken;
+    let spoken =
+        eq_client_core::chat::spoken(event.speak_mode, event.language, event.sender.as_deref());
+    // An NPC's special say, shout or emote reads as the server's own
+    // formatted NPC line of that kind, so the chat and the log word it alike.
+    if let (Some(Spoken::String(string_id)), Some(speaker), Some(message)) =
+        (spoken, &event.sender, &event.message)
+    {
+        return Some(WorldUpdate::ServerMessage {
+            string_id,
+            arguments: vec![speaker.clone(), message.text.clone()],
+        });
+    }
     if let Some(string_id) = event.string_id {
         return Some(WorldUpdate::ServerMessage {
             string_id,
@@ -36,7 +49,11 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
         .filter(|message| !message.text.is_empty())
         .map(|message| {
             WorldUpdate::Chat(eq_client_core::chat::ChatLine {
-                channel: event.channel_name,
+                // A special word to the group reads as a group line.
+                channel: match spoken {
+                    Some(Spoken::Channel(channel)) => channel,
+                    _ => event.channel_name,
+                },
                 sender: event.sender,
                 target: event.target,
                 message,
@@ -244,6 +261,67 @@ impl Drop for SessionWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_npcs_special_message_reads_as_its_kind_of_npc_line() {
+        use eq_client_core::chat::{NPC_EMOTE, NPC_SAY, NPC_SHOUT};
+        // A Titanium special message: the speak mode, the journal mode and
+        // the language, the type, the target, the speaker, twelve unused
+        // bytes, then the text.
+        let special = |mode: u8, speaker: &[u8]| {
+            let mut body = vec![mode, 0, 0];
+            body.extend_from_slice(&10u32.to_le_bytes());
+            body.extend_from_slice(&0u32.to_le_bytes());
+            body.extend_from_slice(speaker);
+            body.push(0);
+            body.extend_from_slice(&[0; 12]);
+            body.extend_from_slice(b"Welcome, traveler.\0");
+            let event = eq_network::chat::parse_for(
+                eq_network::GameDialect::Titanium,
+                0x2372,
+                &body,
+                false,
+            )
+            .unwrap()
+            .unwrap();
+            chat_update(event)
+        };
+        let worded = |update| match update {
+            Some(WorldUpdate::ServerMessage {
+                string_id,
+                arguments,
+            }) => Some((string_id, arguments)),
+            _ => None,
+        };
+        let named = |id| Some((id, vec!["Quest giver".into(), "Welcome, traveler.".into()]));
+        assert_eq!(worded(special(1, b"Quest giver")), named(NPC_SAY));
+        assert_eq!(worded(special(2, b"Quest giver")), named(NPC_SHOUT));
+        assert_eq!(worded(special(4, b"Quest giver")), named(NPC_EMOTE));
+        // A word to the group is a group line under its speaker's name.
+        let Some(WorldUpdate::Chat(group)) = special(5, b"Quest giver") else {
+            panic!("a group line");
+        };
+        assert_eq!(
+            (group.channel, group.sender.as_deref()),
+            (
+                eq_client_core::chat::ChannelName::Group,
+                Some("Quest giver")
+            )
+        );
+        // A plain server line reads as its text.
+        let Some(WorldUpdate::Chat(plain)) = special(0, b"") else {
+            panic!("a plain line");
+        };
+        assert_eq!(
+            (plain.channel, plain.sender, plain.message.text.as_str()),
+            (
+                eq_client_core::chat::ChannelName::System,
+                None,
+                "Welcome, traveler."
+            )
+        );
+    }
+
     #[test]
     fn ready_progress_keeps_the_just_delivered_admission_snapshot() {
         use eq_network::client::ConnectionStage;

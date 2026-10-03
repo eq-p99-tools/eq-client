@@ -118,7 +118,17 @@ Robes, helmets, weapons in hand and later race-specific armor still draw as
 the base look. HP, mana, endurance,
 experience updates, memorized spell IDs, and communication text feed the HUD.
 Unknown values remain blank. Chat has All and channel tabs, unread counts, and
-independent scroll positions. It retains 200 messages per channel group, preserving
+independent scroll positions. Each line reads in the official client's words,
+as its log writes them without the time: a player's speech and a tell the
+player sent by the installed client's string for them (in this client's words
+for who spoke and where, without the installation's string table), and the
+game's own lines as the server sends them. An NPC's line that a Titanium
+server sends with its speaker apart reads by its speak mode: a say, a shout
+or an emote as the installed client's string for that kind of NPC line, the
+one the server's own NPC lines use, and a word to the group as a group line
+(inferred from EQEmu's notes on those modes, not checked); a plain server
+line, or one in a tongue other than the common one, reads as its text. Item links in a line
+stay clickable, and each channel keeps its colour. It retains 200 messages per channel group, preserving
 quiet guild/tell history during busy auction traffic. The exact default colors
 come from the mobile client's `src/App.css`; structured item-link data stays in
 memory for the item inspection panel. Scroll over chat to
@@ -627,7 +637,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...` (`click loot <place>` takes the item at a place on the corpse, from 0), `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
-`click character <1-8>`, `click enter_world` and `click quit_game` (the skin's character list), `click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `press delete`,
+`click character <1-8>`, `click enter_world` and `click quit_game` (the skin's character list), `click chat_tab <tab>` (a chat tab by its label, such as `say` or `ooc`), `click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `press delete`,
 `give` (asks the target to take the cursor item, as clicking it does),
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
 `click slider clip_plane|max_fps|mouse_sensitivity|quantity <percent>` (an Options window slider, or the quantity window's, pressed that far along),

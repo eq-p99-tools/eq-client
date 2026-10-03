@@ -212,6 +212,7 @@ type Buttons<'w, 's> = Query<
         (
             Has<super::give::GiveButton>,
             Option<&'static super::character_select::Action>,
+            Option<&'static super::chat::TabButton>,
         ),
         (
             Option<&'static super::coins::CoinBox>,
@@ -705,6 +706,31 @@ fn local_chat(
     Ok(chat.clone())
 }
 
+/// Whether a button of the skin's character list or a chat tab is the one
+/// a click names.
+fn listed_control(
+    target: ClickTarget,
+    (character, chat_tab): (
+        Option<&super::character_select::Action>,
+        Option<&super::chat::TabButton>,
+    ),
+) -> bool {
+    use super::character_select::Action;
+    match target {
+        ClickTarget::ChatTab(tab) => chat_tab.is_some_and(|button| button.0 == tab),
+        ClickTarget::CharacterList(click) => {
+            character.is_some_and(|action| match (click, action) {
+                (CharacterClick::Slot(slot), Action::Choose(chosen)) => slot == *chosen,
+                (CharacterClick::Enter, Action::Enter) | (CharacterClick::Quit, Action::Quit) => {
+                    true
+                }
+                _ => false,
+            })
+        }
+        _ => false,
+    }
+}
+
 /// Whether a control of the Training window, the confirmation dialog or a
 /// skinned window's title bar is the one a click names.
 fn dialog_control(
@@ -746,7 +772,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         gem,
         trade,
         tint,
-        (give, character),
+        (give, character, chat_tab),
         (coins, pick, arrow, amount),
         (selector, tab, ability, attack, slash, checkbox),
         (slider, drop_down, choice, (dialog, page, combine, map)),
@@ -816,15 +842,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                 }
             }),
             ClickTarget::Give => give,
-            ClickTarget::CharacterList(click) => character.is_some_and(|action| {
-                use super::character_select::Action;
-                match (click, action) {
-                    (CharacterClick::Slot(slot), Action::Choose(chosen)) => slot == *chosen,
-                    (CharacterClick::Enter, Action::Enter)
-                    | (CharacterClick::Quit, Action::Quit) => true,
-                    _ => false,
-                }
-            }),
+            ClickTarget::ChatTab(_) | ClickTarget::CharacterList(_) => {
+                listed_control(target, (character, chat_tab))
+            }
             ClickTarget::Coins(place, coin) => {
                 coins.is_some_and(|coins| coins.place == place && coins.coin == coin)
             }

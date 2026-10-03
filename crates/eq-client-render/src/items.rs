@@ -336,14 +336,14 @@ fn mask(bits: u32, labels: &[&str]) -> String {
 /// returning the paragraph.
 pub(super) fn spawn_message(
     parent: &mut ChildSpawnerCommands,
-    prefix: String,
     message: &eq_client_core::chat::Message,
     color: Color,
+    size: Size,
 ) -> Entity {
     parent
         .spawn((
-            Text::new(prefix),
-            theme::font(Size::Label),
+            Text::default(),
+            theme::font(size),
             TextColor(color),
             Node {
                 width: percent(100),
@@ -362,12 +362,12 @@ pub(super) fn spawn_message(
                 }
                 text.spawn((
                     TextSpan::new(&message.text[end..link.text_start]),
-                    theme::font(Size::Label),
+                    theme::font(size),
                     TextColor(color),
                 ));
                 text.spawn((
                     TextSpan::new(&message.text[link.text_start..link.text_end]),
-                    theme::font(Size::Label),
+                    theme::font(size),
                     TextColor(theme::LINK),
                     ItemButton(link.clone()),
                     Interaction::None,
@@ -376,7 +376,7 @@ pub(super) fn spawn_message(
             }
             text.spawn((
                 TextSpan::new(&message.text[end..]),
-                theme::font(Size::Label),
+                theme::font(size),
                 TextColor(color),
             ));
         })
@@ -557,7 +557,6 @@ mod tests {
             commands.spawn(Node::default()).with_children(|parent| {
                 spawn_message(
                     parent,
-                    "[Auc] ".into(),
                     &eq_client_core::chat::Message {
                         message: None,
                         message_hex: None,
@@ -573,6 +572,7 @@ mod tests {
                         }],
                     },
                     Color::WHITE,
+                    Size::Label,
                 );
             });
         });
@@ -584,7 +584,7 @@ mod tests {
         for child in children {
             combined.push_str(&world.get::<TextSpan>(*child).unwrap().0);
         }
-        assert_eq!(combined, "[Auc] WTS Épée now");
+        assert_eq!(combined, "WTS Épée now");
         let mut links = world.query::<(&ItemButton, &TextColor)>();
         let (link, color) = links.single(world).unwrap();
         assert_eq!(link.0.item_id, 42);

@@ -12,7 +12,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 23] = [
+const GM_COMMANDS: [&str; 24] = [
     // GM mode on or off: off, the server lets the player go hungry.
     "gm",
     // A rule changed in this zone only, such as how fast hunger comes, or
@@ -46,6 +46,8 @@ const GM_COMMANDS: [&str; 23] = [
     "unfreeze",
     // Shows the target (or the GM) in another material, without changing gear.
     "wc",
+    // The targeted NPC says a line, as its quest dialogue would.
+    "npcsay",
 ];
 
 /// One scripted action.
@@ -138,6 +140,8 @@ pub enum ClickTarget {
     /// A button of the skin's character list: a character's, by its slot
     /// from zero, Enter World or Quit.
     CharacterList(CharacterClick),
+    /// One of the chat window's channel tabs.
+    ChatTab(eq_client_core::chat::ChatTab),
     /// A coin box: the purse's, the bank's or the give window's.
     Coins(
         eq_client_core::money::CoinPlace,
@@ -430,6 +434,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["give"] => ClickTarget::Give,
         ["character", number] => character(number)?,
         ["enter_world"] => ClickTarget::CharacterList(CharacterClick::Enter),
+        ["chat_tab", tab] => chat_tab(tab)?,
         ["quit_game"] => ClickTarget::CharacterList(CharacterClick::Quit),
         ["actions"] => ClickTarget::ActionsWindow,
         ["window", key] => ClickTarget::Toggle(window_key(key)?),
@@ -502,6 +507,15 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["book_page", "back"] => ClickTarget::BookPage(false),
         _ => return Err("unknown or malformed step".into()),
     })
+}
+
+/// One of the chat window's tabs, by its label in any case.
+fn chat_tab(label: &str) -> Result<ClickTarget, String> {
+    eq_client_core::chat::ChatTab::ALL
+        .into_iter()
+        .find(|tab| tab.label().eq_ignore_ascii_case(label))
+        .map(ClickTarget::ChatTab)
+        .ok_or_else(|| String::from("expected a chat tab by its label"))
 }
 
 /// A character's button of the skin's character list, from 1 to 8.
@@ -1050,6 +1064,23 @@ chat tell Friend inc now
         for bad in ["click tint x", "click tint 23 x", "click tint 23 4 5"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn parses_a_chat_tab_by_its_label() {
+        use eq_client_core::chat::ChatTab;
+        assert_eq!(
+            parse(
+                "click chat_tab say\nclick chat_tab OOC\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::ChatTab(ChatTab::Say)),
+                Step::Click(ClickTarget::ChatTab(ChatTab::Ooc)),
+            ]
+        );
+        assert!(parse("click chat_tab nowhere\n", Path::new("private")).is_err());
     }
 
     #[test]
