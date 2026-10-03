@@ -55,6 +55,7 @@ pub(crate) struct Asked {
 
 impl Asked {
     /// Asks the question, unless another waits: false then.
+    #[must_use = "another question may be waiting"]
     pub(crate) fn ask(&mut self, question: Question) -> bool {
         if self.question.is_some() {
             return false;

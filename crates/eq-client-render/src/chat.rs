@@ -7,7 +7,7 @@ use bevy::{
 };
 use eq_client_core::{
     ClientCommand, OutboundChat,
-    chat::{ChannelName, ChatHistory, ChatLine, ChatTab, Message, Source, channel_rgb},
+    chat::{Arrival, ChannelName, ChatHistory, ChatLine, ChatTab, Message, Source, channel_rgb},
     qol::Fix,
 };
 use std::collections::{BTreeMap, HashSet};
@@ -175,6 +175,9 @@ pub(super) struct Content {
     revision: u64,
     /// Drawn in the skin: an empty tab is an empty box.
     bare: bool,
+    /// Whether the lines start with the time they arrived
+    /// ([`Fix::ShowTimesInChat`]).
+    times: bool,
 }
 /// The history entry a chat line shows.
 #[derive(Component)]
@@ -641,7 +644,7 @@ pub(super) fn refresh(
     >,
     mut input_labels: Query<(&mut Text, Has<Bare>), (With<InputLabel>, Without<TabLabel>)>,
     mut input_boxes: Query<&mut BorderColor, (With<InputBox>, Without<TabButton>, Without<Bare>)>,
-    look: Option<Res<ChatLook>>,
+    (look, options): (Option<Res<ChatLook>>, Res<super::options::OptionsState>),
     (online, messages): (
         Res<super::online::OnlineState>,
         Option<Res<crate::hud::messages::Messages>>,
@@ -725,8 +728,15 @@ pub(super) fn refresh(
     // The skinned chat's lines take the player's colours and font, which
     // can arrive after its first lines: those are drawn again.
     let restyled = look.as_ref().is_some_and(Res::is_changed);
+    // Lines drawn with their times, or without, are drawn again once the
+    // player turns the times on or off.
+    let times = options.options.qol.on(Fix::ShowTimesInChat);
     for (column, mut content, children) in &mut contents {
         if restyled && content.bare {
+            content.tab = None;
+        }
+        if content.times != times {
+            content.times = times;
             content.tab = None;
         }
         let children = if content.tab == Some(active) {
@@ -740,7 +750,7 @@ pub(super) fn refresh(
             None
         };
         content.revision = revision;
-        let lines = state.history.lines(active);
+        let lines = state.history.arrivals(active);
         // A line reads in its log's words, which tell the player's own
         // speech from others'.
         let player = online
@@ -751,7 +761,7 @@ pub(super) fn refresh(
             &mut commands,
             (column, content.bare),
             children,
-            (&lines, look.as_deref().filter(|_| content.bare)),
+            (&lines, look.as_deref().filter(|_| content.bare), times),
             (player, messages.as_deref()),
             &rendered,
         );
@@ -764,11 +774,11 @@ fn sync_lines(
     commands: &mut Commands,
     (column, bare): (Entity, bool),
     children: Option<&Children>,
-    (lines, look): (&[(u64, &ChatLine)], Option<&ChatLook>),
+    (lines, look, times): (&[Arrival], Option<&ChatLook>, bool),
     reading: (&str, Option<&crate::hud::messages::Messages>),
     rendered: &Query<(Option<&LineId>, Has<Placeholder>)>,
 ) {
-    let kept: HashSet<u64> = lines.iter().map(|(id, _)| *id).collect();
+    let kept: HashSet<u64> = lines.iter().map(|arrival| arrival.id).collect();
     let mut newest = 0;
     let mut placeholder = None;
     for &child in children.into_iter().flatten() {
@@ -793,20 +803,21 @@ fn sync_lines(
     }
     // History ids only grow, so every line newer than the last one shown is new.
     commands.entity(column).with_children(|parent| {
-        for (id, line) in lines.iter().filter(|(id, _)| *id > newest) {
-            spawn_line(parent, *id, (line, look), reading);
+        for arrival in lines.iter().filter(|arrival| arrival.id > newest) {
+            spawn_line(parent, arrival, (look, times), reading);
         }
     });
 }
 
 /// Appends one chat line in the official client's words, as its log
-/// writes it without the time (`logs::shown`), with item links clickable;
-/// in its channel's colour, the player's and in the player's font where the
-/// chat has them.
+/// writes it without the time (`logs::shown`) unless the player wants the
+/// time ([`Fix::ShowTimesInChat`]), with item links clickable; in its
+/// channel's colour, the player's and in the player's font where the chat
+/// has them.
 fn spawn_line(
     parent: &mut ChildSpawnerCommands,
-    id: u64,
-    (line, look): (&ChatLine, Option<&ChatLook>),
+    &Arrival { id, at, line }: &Arrival,
+    (look, times): (Option<&ChatLook>, bool),
     (player, messages): (&str, Option<&crate::hud::messages::Messages>),
 ) {
     let color = look.map_or_else(
@@ -819,7 +830,10 @@ fn spawn_line(
     let size = look
         .and_then(|look| look.font)
         .map_or(Size::Label, |font| super::skinned::font(Some(font)));
-    let message = crate::logs::shown(line, player, messages);
+    let mut message = crate::logs::shown(line, player, messages);
+    if times {
+        stamp(&mut message, at);
+    }
     if message.item_links.is_empty() {
         parent.spawn((
             LineId(id),
@@ -836,6 +850,18 @@ fn spawn_line(
         let message = super::items::spawn_message(parent, &message, color, size);
         parent.commands().entity(message).insert(LineId(id));
     }
+}
+
+/// Starts a line's words with the time it arrived, by the computer's clock,
+/// as the chat log writes the time of day ([`Fix::ShowTimesInChat`]); its
+/// item links move along with the words.
+fn stamp(message: &mut Message, at: chrono::NaiveDateTime) {
+    let time = at.format("[%H:%M:%S] ").to_string();
+    for link in &mut message.item_links {
+        link.text_start += time.len();
+        link.text_end += time.len();
+    }
+    message.text.insert_str(0, &time);
 }
 
 /// Why a draft did not go: a mistake in it, or a refusal, which the outbox
@@ -1399,6 +1425,7 @@ mod tests {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
+            .init_resource::<crate::options::OptionsState>()
             .insert_resource(crate::online::OnlineState::new(false))
             .add_systems(Update, refresh);
         app.world_mut().spawn(Content::default());
@@ -1442,6 +1469,53 @@ mod tests {
         let after = column(&mut app);
         assert_eq!(after.len(), 200);
         assert_eq!(after[..199], lines[1..]);
+    }
+
+    #[test]
+    fn with_times_on_each_line_starts_with_the_time_it_arrived() {
+        use eq_client_core::options::Toggle;
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ChatState>()
+            .init_resource::<crate::options::OptionsState>()
+            .insert_resource(crate::online::OnlineState::new(false))
+            .add_systems(Update, refresh);
+        app.world_mut().spawn(Content::default());
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 10, 3)
+            .and_then(|day| day.and_hms_opt(17, 42, 5))
+            .unwrap();
+        let auction = crate::preview::chat_lines()
+            .into_iter()
+            .find(|line| line.channel == ChannelName::Auction)
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .history
+            .push_at(auction, at);
+        app.update();
+        let line = "Preview (auction): WTS Fine Steel Long Sword - send a tell.";
+        assert_eq!(shown(&mut app), [line]);
+        let times = |app: &mut App, on| {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .set(Toggle::Qol(Fix::ShowTimesInChat), on);
+            app.update();
+            shown(app)
+        };
+        // Turned on, the lines already shown are drawn again with their
+        // times, and a link keeps the item's words.
+        assert_eq!(times(&mut app, true), [format!("[17:42:05] {line}")]);
+        let mut links = app
+            .world_mut()
+            .query::<(&TextSpan, &super::super::items::ItemButton)>();
+        let spans: Vec<_> = links
+            .iter(app.world())
+            .map(|(span, link)| (span.0.clone(), link.0.item_id))
+            .collect();
+        assert_eq!(spans, [("Fine Steel Long Sword".to_owned(), 42)]);
+        // Turned off, they read as the official client's do.
+        assert_eq!(times(&mut app, false), [line]);
     }
 
     #[test]
@@ -1768,6 +1842,7 @@ mod tests {
     fn the_skinned_input_shows_only_the_line_and_the_caret() {
         let mut app = App::new();
         app.init_resource::<ChatState>()
+            .init_resource::<crate::options::OptionsState>()
             .init_resource::<crate::keys::Typing>()
             .insert_resource(crate::online::OnlineState::new(false))
             .add_systems(Update, refresh);
@@ -1885,6 +1960,7 @@ mod tests {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
+            .init_resource::<crate::options::OptionsState>()
             .init_resource::<super::super::windows::pointer::Wheel>()
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(false))
@@ -1942,6 +2018,7 @@ mod tests {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
         app.init_resource::<ChatState>()
+            .init_resource::<crate::options::OptionsState>()
             .insert_resource(crate::online::OnlineState::new(false))
             .add_systems(Update, refresh);
         app.world_mut().spawn(Content::default());
