@@ -36,8 +36,9 @@ pub(super) fn contents(
     storage_columns(parent, view, paperdoll, art);
 }
 
-/// Keeps the quantity picker available for carried and bank stacks alike.
-pub(crate) fn quantity_picker(parent: &mut ChildSpawnerCommands, view: View<'_>) {
+/// Keeps the quantity picker available for carried and bank stacks alike, in
+/// the client's own inventory; the skin has a window of its own for it.
+fn quantity_picker(parent: &mut ChildSpawnerCommands, view: View<'_>) {
     if let Some(selection) = &view.state.actions.split {
         use super::interaction::SplitAction;
         parent

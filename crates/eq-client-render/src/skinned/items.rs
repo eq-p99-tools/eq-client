@@ -153,6 +153,7 @@ pub(crate) const fn framed_while_open(id: WindowId) -> bool {
             | WindowId::Bag(_)
             | WindowId::Give
             | WindowId::Trade
+            | WindowId::Quantity
             | WindowId::ActionsWindow
             | WindowId::PetInfo
             | WindowId::ShortEffects
@@ -170,9 +171,9 @@ pub(crate) const fn framed_while_open(id: WindowId) -> bool {
 
 /// Opens and closes the windows that have no frame of their own until then:
 /// a bag's, while it is open and still a bag, the bank's, while it is open
-/// and a banker is in reach, and the give, Actions, Pet Info, short effects,
-/// casting, Options, Training, Skills, confirmation, note and book windows
-/// while they are open and not hidden.
+/// and a banker is in reach, and the give, quantity, Actions, Pet Info, short
+/// effects, casting, Options, Training, Skills, confirmation, note and book
+/// windows while they are open and not hidden.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn frames(
     mut commands: Commands,
@@ -430,64 +431,28 @@ pub(crate) fn close(
     }
 }
 
-/// The quantity picker, over the bottom of the skinned inventory.
-#[derive(Component)]
-pub(crate) struct Picker;
-
-/// Shows the quantity picker while a stack is being split, over the skinned
-/// inventory, which has no place of its own for it.
+/// Opens the skin's quantity window while the player chooses how many of a
+/// stack or of a kind of coins to pick up from the skinned inventory, and
+/// closes it once they have; closing it, as its close box does, takes
+/// nothing. The client's own inventory keeps its own picker.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn picker(
-    mut commands: Commands,
-    state: Res<crate::inventory::InventoryState>,
-    online: Res<crate::online::OnlineState>,
+pub(crate) fn quantity(
+    mut shown: ResMut<Shown>,
+    mut state: ResMut<crate::inventory::InventoryState>,
     skinned: Res<Skinned>,
-    frames: Query<(Entity, &WindowId)>,
-    pickers: Query<Entity, With<Picker>>,
-    mut last: Local<Option<(u64, u64)>>,
+    mut opened: Local<bool>,
 ) {
-    if !skinned.has(WindowId::Inventory) {
-        return;
+    let open = shown.is_open(WindowId::Quantity);
+    if *opened && !open {
+        state.cancel_split();
     }
-    let inventory = online.world().inventory();
-    let now = (state.revision(), inventory.revision());
-    if *last == Some(now) {
-        return;
+    let wanted = state.splitting() && skinned.has(WindowId::Inventory);
+    if wanted && !open {
+        shown.open(WindowId::Quantity);
+    } else if !wanted && open {
+        shown.close(WindowId::Quantity);
     }
-    *last = Some(now);
-    for picker in &pickers {
-        commands.entity(picker).despawn();
-    }
-    if !state.splitting() {
-        return;
-    }
-    let Some((frame, _)) = frames.iter().find(|(_, id)| **id == WindowId::Inventory) else {
-        return;
-    };
-    commands.entity(frame).with_children(|window| {
-        window
-            .spawn((
-                Picker,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(8),
-                    right: px(8),
-                    bottom: px(8),
-                    ..default()
-                },
-                theme::surface(),
-                GlobalZIndex(crate::windows::Layer::Popup.base()),
-            ))
-            .with_children(|picker| {
-                crate::inventory::quantity_picker(
-                    picker,
-                    crate::inventory::View {
-                        state: &state,
-                        inventory,
-                    },
-                );
-            });
-    });
+    *opened = wanted;
 }
 
 #[cfg(test)]
@@ -530,6 +495,45 @@ mod tests {
         app.insert_resource(online)
             .add_systems(Update, (frames, contents).chain());
         app
+    }
+
+    #[test]
+    fn the_quantity_window_opens_while_the_player_picks_and_closing_it_takes_nothing() {
+        use crate::inventory::InventoryState;
+        use eq_client_core::money::{Coin, CoinPlace};
+        let mut app = crate::testing::app();
+        app.add_systems(Update, quantity);
+        app.world_mut()
+            .resource_mut::<Skinned>()
+            .0
+            .insert(WindowId::Inventory);
+        let pick = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<InventoryState>()
+                .select_coins(CoinPlace::Purse, Coin::Gold, 12);
+            app.update();
+        };
+        let open = |app: &App| app.world().resource::<Shown>().is_open(WindowId::Quantity);
+        pick(&mut app);
+        assert!(open(&app));
+        // Picking up, or cancelling, closes it.
+        app.world_mut()
+            .resource_mut::<InventoryState>()
+            .cancel_split();
+        app.update();
+        assert!(!open(&app));
+        // Closing it, as its close box does, takes nothing.
+        pick(&mut app);
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .dismiss(WindowId::Quantity);
+        app.update();
+        assert!(app.world().resource::<InventoryState>().picked().is_none());
+        assert!(!open(&app));
+        // The client's own inventory keeps its own picker.
+        app.world_mut().resource_mut::<Skinned>().0.clear();
+        pick(&mut app);
+        assert!(!open(&app));
     }
 
     fn bag_frames(app: &mut App) -> Vec<WindowId> {

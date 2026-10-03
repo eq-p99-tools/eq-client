@@ -11,11 +11,12 @@ pub(crate) mod looks;
 pub(crate) mod scrollbar;
 
 pub(crate) use controls::{
-    Choosing, DropDown, DropDownChoice, KeyFilter, LevelSlider, drop_downs, fill_lists,
-    light_choices, scroll_lists, show_choices, show_levels, slide,
+    AmountBox, Choosing, DropDown, DropDownChoice, KeyFilter, Sets, SkinSlider, drop_downs,
+    fill_lists, light_choices, scroll_lists, show_amount, show_choices, show_sliders, slide,
+    type_amount,
 };
 
-pub(crate) use items::{Closes, TheirSlot, close, contents, frames, picker, theirs, toggle_bag};
+pub(crate) use items::{Closes, TheirSlot, close, contents, frames, quantity, theirs, toggle_bag};
 
 use super::windows::WindowId;
 use crate::theme::{self, Size};
@@ -43,6 +44,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Bag(_) | WindowId::WorldContainer => "EQUI_Container.xml",
         WindowId::Give => "EQUI_GiveWnd.xml",
         WindowId::Trade => "EQUI_TradeWnd.xml",
+        WindowId::Quantity => "EQUI_QuantityWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
         WindowId::Selector => "EQUI_SelectorWnd.xml",
@@ -452,7 +454,8 @@ fn pieces(
 }
 
 /// A box of text the client fills: the confirmation dialog's question,
-/// wrapped inside the box's frame.
+/// wrapped inside the box's frame, or the quantity window's number, which a
+/// click on the box lets the player type.
 fn text_box(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
@@ -463,50 +466,68 @@ fn text_box(
     let area = text.anchors.map_or(text.area, |anchors| {
         anchors.within(inside.width, inside.height)
     });
-    window
-        .spawn(at(
-            inside.x + area.x,
-            inside.y + area.y,
-            area.width,
-            area.height,
-        ))
-        .with_children(|frame| {
-            let mut client = Area {
-                x: 0.0,
-                y: 0.0,
-                width: area.width,
-                height: area.height,
+    let number = owner == WindowId::Quantity && text.id.as_deref() == Some(controls::AMOUNT_BOX);
+    let mut boxed = window.spawn(at(
+        inside.x + area.x,
+        inside.y + area.y,
+        area.width,
+        area.height,
+    ));
+    if number {
+        boxed.insert((Button, controls::AmountBox));
+    }
+    boxed.with_children(|frame| {
+        let mut client = Area {
+            x: 0.0,
+            y: 0.0,
+            width: area.width,
+            height: area.height,
+        };
+        if let Some(template) = &text.template {
+            client = border(frame, art, &template.border, (area.width, area.height));
+        }
+        let ink = text.color.map_or(theme::INK_BRIGHT, rgb);
+        // The number stays on one line, in the middle of the box's height.
+        if number {
+            let node = Node {
+                align_items: AlignItems::Center,
+                ..at(
+                    client.x + 3.0,
+                    client.y,
+                    (client.width - 6.0).max(0.0),
+                    client.height,
+                )
             };
-            if let Some(template) = &text.template {
-                client = border(frame, art, &template.border, (area.width, area.height));
+            let words = (controls::Amount, theme::text("", Size::Body, ink));
+            aligned(frame, node, Align::Left, words);
+            return;
+        }
+        let mut words = frame.spawn((
+            theme::text("", Size::Body, ink),
+            TextLayout::new(Justify::Left, LineBreak::WordBoundary),
+            at(
+                client.x + 4.0,
+                client.y + 4.0,
+                (client.width - 8.0).max(0.0),
+                (client.height - 8.0).max(0.0),
+            ),
+        ));
+        match (owner, text.id.as_deref()) {
+            (WindowId::Confirmation, _) => {
+                words.insert(super::resurrection::QuestionText);
             }
-            let ink = text.color.map_or(theme::INK_BRIGHT, rgb);
-            let mut words = frame.spawn((
-                theme::text("", Size::Body, ink),
-                TextLayout::new(Justify::Left, LineBreak::WordBoundary),
-                at(
-                    client.x + 4.0,
-                    client.y + 4.0,
-                    (client.width - 8.0).max(0.0),
-                    (client.height - 8.0).max(0.0),
-                ),
-            ));
-            match (owner, text.id.as_deref()) {
-                (WindowId::Confirmation, _) => {
-                    words.insert(super::resurrection::QuestionText);
-                }
-                (WindowId::Note, _) => {
-                    words.insert(super::reading::Text::Note);
-                }
-                (WindowId::Book, Some("Page0")) => {
-                    words.insert(super::reading::Text::Page(0));
-                }
-                (WindowId::Book, Some("Page1")) => {
-                    words.insert(super::reading::Text::Page(1));
-                }
-                _ => (),
+            (WindowId::Note, _) => {
+                words.insert(super::reading::Text::Note);
             }
-        });
+            (WindowId::Book, Some("Page0")) => {
+                words.insert(super::reading::Text::Page(0));
+            }
+            (WindowId::Book, Some("Page1")) => {
+                words.insert(super::reading::Text::Page(1));
+            }
+            _ => (),
+        }
+    });
 }
 
 /// One of the chat window's boxes, filled with the client's chat: its tabs
@@ -975,6 +996,8 @@ enum Does {
     Maps(super::map::MapButton),
     /// Uses the action bound to this slot of the action bar, and shows it.
     HotButton(usize),
+    /// Does this to the quantity window's amount, as Accept takes it.
+    Picks(crate::inventory::SplitAction),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -1029,6 +1052,12 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
             "RightButton" => return Some(Does::TurnsPage(true)),
             _ => (),
         }
+    }
+    if owner == WindowId::Quantity {
+        return Some(match id {
+            "QTYW_Accept_Button" => Does::Picks(crate::inventory::SplitAction::Confirm),
+            _ => Does::Nothing,
+        });
     }
     // The dialog asks only Yes-or-No questions so far; its OK stays hidden.
     if owner == WindowId::Confirmation {
@@ -1407,6 +1436,7 @@ fn behave(
             skin(),
             crate::outbox::Needs::Nothing,
         )),
+        Does::Picks(action) => drawn.insert((Button, action, skin())),
         Does::Offered(_) | Does::BagIcon => drawn,
         Does::Nothing => drawn.insert(missing()),
     };
@@ -1489,6 +1519,7 @@ fn caption(
         | Does::TurnsPage(_)
         | Does::Combines(_)
         | Does::Maps(_)
+        | Does::Picks(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 && area.width < area.height * 1.5 {

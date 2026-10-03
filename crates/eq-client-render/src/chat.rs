@@ -451,6 +451,11 @@ pub(super) fn input(
     }
     if input_box.iter().any(|value| *value == Interaction::Pressed) {
         typing.composing = true;
+        typing.counting = false;
+    }
+    // The quantity window's number has the keyboard: its keys are its own.
+    if typing.counting {
+        keyboard.clear();
     }
     let mut submit = send.iter().any(|value| *value == Interaction::Pressed);
     for event in keyboard.read() {
@@ -1464,6 +1469,40 @@ mod tests {
             Some((ChannelName::System, "Use /tell Name message"))
         );
         assert!(app.world().resource::<crate::keys::Typing>().composing);
+    }
+
+    #[test]
+    fn the_chat_leaves_the_keys_to_the_quantity_windows_number() {
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ChatState>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
+            .add_message::<KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(None))
+            .add_systems(Update, input);
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .counting = true;
+        for (key_code, logical_key) in [
+            (KeyCode::Digit5, Key::Character("5".into())),
+            (KeyCode::Enter, Key::Enter),
+        ] {
+            app.world_mut().write_message(KeyboardInput {
+                key_code,
+                logical_key,
+                state: bevy::input::ButtonState::Pressed,
+                text: None,
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            });
+        }
+        app.update();
+        let typing = app.world().resource::<crate::keys::Typing>();
+        assert!(typing.counting && !typing.composing);
+        assert_eq!(app.world().resource::<ChatState>().draft, "");
     }
 
     #[test]

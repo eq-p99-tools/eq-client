@@ -1,10 +1,11 @@
 //! The skin's sliders, drop-downs and lists, drawn with its own pieces and
 //! tied to what the client keeps: the Options window's Far Clip Plane, Max
-//! FPS and Mouselook Sensitivity sliders, and its key list with the filter
-//! above it. A control the client keeps nothing for is drawn greyed out, as
-//! its buttons are.
+//! FPS and Mouselook Sensitivity sliders, its key list with the filter above
+//! it, and the quantity window's slider and number box. A control the client
+//! keeps nothing for is drawn greyed out, as its buttons are.
 use super::{Area, WindowId, at, border, picture, to_f32};
-use crate::keys::{KeyGroup, KeyMap};
+use crate::inventory::{InventoryState, SplitAction};
+use crate::keys::{KeyGroup, KeyMap, Typing};
 use crate::options::OptionsState;
 use crate::theme::{self, Size};
 use bevy::{prelude::*, ui::RelativeCursorPosition};
@@ -36,16 +37,33 @@ const LEVEL_SLIDERS: [(&str, &str, Level); 3] = [
 const KEY_LIST: &str = "OKP_KeyboardAssignmentList";
 const KEY_FILTER: &str = "OKP_KeyboardFilterCombobox";
 
+/// The quantity window's slider, and the box that shows its number.
+const QUANTITY_SLIDER: &str = "QTYW_Slider";
+pub(super) const AMOUNT_BOX: &str = "QTYW_SliderInput";
+
 /// How tall a list's heading and each of its rows are.
 const ROW_HEIGHT: f32 = 15.0;
 
-/// The setting a slider sets, if the client keeps one for it.
-fn slider_level(id: Option<&str>, owner: WindowId) -> Option<Level> {
+/// What a skin's slider sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Sets {
+    /// One of the Options window's settings.
+    Level(Level),
+    /// How many the quantity window picks up.
+    Quantity,
+}
+
+/// What a slider sets, if the client keeps something for it.
+fn slider_sets(id: Option<&str>, owner: WindowId) -> Option<Sets> {
     let id = id?;
-    (owner == WindowId::Options)
-        .then(|| LEVEL_SLIDERS.iter().find(|(slider, _, _)| *slider == id))
-        .flatten()
-        .map(|(_, _, level)| *level)
+    match owner {
+        WindowId::Options => LEVEL_SLIDERS
+            .iter()
+            .find(|(slider, _, _)| *slider == id)
+            .map(|(_, _, level)| Sets::Level(*level)),
+        WindowId::Quantity => (id == QUANTITY_SLIDER).then_some(Sets::Quantity),
+        _ => None,
+    }
 }
 
 /// What a slider's value label shows: the setting, if the client keeps one
@@ -70,18 +88,18 @@ pub(super) fn value_label(name: &str, owner: WindowId) -> Option<ValueLabel> {
     )
 }
 
-/// A slider the client keeps a setting for: pressing or dragging along it
+/// A slider the client keeps something for: pressing or dragging along it
 /// sets it.
 #[derive(Component, Clone, Copy, Debug)]
-pub(crate) struct LevelSlider {
-    pub(crate) level: Level,
+pub(crate) struct SkinSlider {
+    pub(crate) sets: Sets,
     /// The slider's width.
     width: f32,
     /// The thumb's width.
     thumb: f32,
 }
 
-impl LevelSlider {
+impl SkinSlider {
     /// The setting's place along the slider for the pointer at this point
     /// across it, from -0.5 at its left edge to 0.5 at its right: the
     /// thumb's middle follows the pointer.
@@ -101,7 +119,7 @@ impl LevelSlider {
 /// A slider's thumb, which sits where its setting does along the track.
 #[derive(Component, Clone, Copy, Debug)]
 pub(crate) struct SliderThumb {
-    level: Level,
+    sets: Sets,
     /// How far the thumb travels from the track's left.
     travel: f32,
 }
@@ -121,13 +139,13 @@ pub(super) fn slider(
 ) {
     let area = slider.area;
     let look = &slider.look;
-    let level = slider_level(slider.id.as_deref(), owner);
+    let sets = slider_sets(slider.id.as_deref(), owner);
     let size = |piece: Option<&eq_client_assets::sidl::Piece>| {
         piece.map_or((0.0, 0.0), |piece| {
             (to_f32(piece.width), to_f32(piece.height))
         })
     };
-    let thumb_piece = if level.is_some() {
+    let thumb_piece = if sets.is_some() {
         look.thumb.normal.as_ref()
     } else {
         look.thumb.disabled.as_ref().or(look.thumb.normal.as_ref())
@@ -140,11 +158,11 @@ pub(super) fn slider(
         area.width,
         area.height,
     ));
-    if let Some(level) = level {
+    if let Some(sets) = sets {
         node.insert((
             Button,
-            LevelSlider {
-                level,
+            SkinSlider {
+                sets,
                 width: area.width,
                 thumb: thumb_width,
             },
@@ -188,8 +206,8 @@ pub(super) fn slider(
                 image,
                 at(0.0, middle(thumb_height), thumb_width, thumb_height),
             ));
-            if let Some(level) = level {
-                thumb.insert(SliderThumb { level, travel });
+            if let Some(sets) = sets {
+                thumb.insert(SliderThumb { sets, travel });
             }
         }
     });
@@ -198,16 +216,23 @@ pub(super) fn slider(
 /// Sets a slider's setting from where the pointer presses or drags it.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn slide(
-    sliders: Query<(&Interaction, &LevelSlider, &RelativeCursorPosition)>,
+    sliders: Query<(&Interaction, &SkinSlider, &RelativeCursorPosition)>,
     mut state: ResMut<OptionsState>,
+    mut inventory: ResMut<InventoryState>,
 ) {
     for (interaction, slider, cursor) in &sliders {
         let (Interaction::Pressed, Some(at)) = (interaction, cursor.normalized) else {
             continue;
         };
-        let value = slider.level.at(slider.fraction(at.x));
-        if state.options.level(slider.level) != value {
-            state.options.set_level(slider.level, value);
+        let along = slider.fraction(at.x);
+        match slider.sets {
+            Sets::Level(level) => {
+                let value = level.at(along);
+                if state.options.level(level) != value {
+                    state.options.set_level(level, value);
+                }
+            }
+            Sets::Quantity => inventory.slide_amount(along),
         }
     }
 }
@@ -215,13 +240,18 @@ pub(crate) fn slide(
 /// Puts each slider's thumb where its setting is, and each value label's
 /// words to it.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn show_levels(
+pub(crate) fn show_sliders(
     state: Res<OptionsState>,
+    inventory: Res<InventoryState>,
     mut thumbs: Query<(&SliderThumb, &mut Node)>,
     mut labels: Query<(&LevelValue, &mut Text)>,
 ) {
     for (thumb, mut node) in &mut thumbs {
-        let left = px(thumb.level.fraction(state.options.level(thumb.level)) * thumb.travel);
+        let along = match thumb.sets {
+            Sets::Level(level) => level.fraction(state.options.level(level)),
+            Sets::Quantity => inventory.amount_along().unwrap_or(0.0),
+        };
+        let left = px(along * thumb.travel);
         if node.left != left {
             node.left = left;
         }
@@ -230,6 +260,106 @@ pub(crate) fn show_levels(
         let words = level.words(state.options.level(*level));
         if text.0 != words {
             text.0 = words;
+        }
+    }
+}
+
+/// The quantity window's number box, which a click gives the keyboard.
+#[derive(Component)]
+pub(crate) struct AmountBox;
+
+/// The quantity window's number, in its box.
+#[derive(Component)]
+pub(crate) struct Amount;
+
+/// The digit a key types, from the row above the letters or the keypad.
+const fn digit(key: KeyCode) -> Option<u32> {
+    Some(match key {
+        KeyCode::Digit0 | KeyCode::Numpad0 => 0,
+        KeyCode::Digit1 | KeyCode::Numpad1 => 1,
+        KeyCode::Digit2 | KeyCode::Numpad2 => 2,
+        KeyCode::Digit3 | KeyCode::Numpad3 => 3,
+        KeyCode::Digit4 | KeyCode::Numpad4 => 4,
+        KeyCode::Digit5 | KeyCode::Numpad5 => 5,
+        KeyCode::Digit6 | KeyCode::Numpad6 => 6,
+        KeyCode::Digit7 | KeyCode::Numpad7 => 7,
+        KeyCode::Digit8 | KeyCode::Numpad8 => 8,
+        KeyCode::Digit9 | KeyCode::Numpad9 => 9,
+        _ => return None,
+    })
+}
+
+/// The quantity window's number box: a click gives it the keyboard, and
+/// then it takes typing as an edit box does, with the caret at the number's
+/// end: a digit adds to the number and Backspace takes the last one away.
+/// Enter accepts the number, and Escape gives the keyboard back. It reads
+/// keys as they are pressed, so a script's keys type too. How the official
+/// box takes typing is not checked yet.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn type_amount(
+    input: Res<ButtonInput<KeyCode>>,
+    (online, outbox): (Res<crate::online::OnlineState>, Res<crate::outbox::Outbox>),
+    mut typing: ResMut<Typing>,
+    mut state: ResMut<InventoryState>,
+    boxes: Query<&Interaction, (With<AmountBox>, Changed<Interaction>)>,
+) {
+    if state.picked().is_none() {
+        if typing.counting {
+            typing.counting = false;
+        }
+        return;
+    }
+    if boxes
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        typing.counting = true;
+        typing.composing = false;
+    }
+    if !typing.counting {
+        return;
+    }
+    for key in input.get_just_pressed() {
+        if let Some(digit) = digit(*key) {
+            state.type_digit(digit);
+        }
+        match key {
+            KeyCode::Backspace => state.erase_digit(),
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                typing.counting = false;
+                state.split_action(SplitAction::Confirm, &online, &outbox);
+            }
+            KeyCode::Escape => {
+                typing.counting = false;
+                typing.escape_consumed = true;
+            }
+            _ => (),
+        }
+    }
+}
+
+/// Writes the quantity window's number in its box, with the caret after it
+/// while the box has the keyboard; a number typed away leaves the box empty.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn show_amount(
+    state: Res<InventoryState>,
+    typing: Res<Typing>,
+    mut numbers: Query<&mut Text, With<Amount>>,
+) {
+    let Some((amount, _)) = state.picked() else {
+        return;
+    };
+    let mut words = if amount == 0 {
+        String::new()
+    } else {
+        amount.to_string()
+    };
+    if typing.counting {
+        words.push('|');
+    }
+    for mut text in &mut numbers {
+        if text.0 != words {
+            text.0.clone_from(&words);
         }
     }
 }
@@ -823,8 +953,8 @@ mod tests {
 
     #[test]
     fn a_scripted_press_lands_where_the_setting_is() {
-        let slider = LevelSlider {
-            level: Level::MaxFps,
+        let slider = SkinSlider {
+            sets: Sets::Level(Level::MaxFps),
             width: 100.0,
             thumb: 10.0,
         };
@@ -835,8 +965,8 @@ mod tests {
 
     #[test]
     fn the_thumbs_middle_follows_the_pointer() {
-        let slider = LevelSlider {
-            level: Level::ClipPlane,
+        let slider = SkinSlider {
+            sets: Sets::Level(Level::ClipPlane),
             width: 100.0,
             thumb: 10.0,
         };
@@ -849,19 +979,24 @@ mod tests {
     }
 
     #[test]
-    fn only_the_options_windows_controls_are_wired() {
+    fn only_the_controls_the_client_keeps_something_for_are_wired() {
         assert_eq!(
-            slider_level(Some("ODP_MaxFPSSlider"), WindowId::Options),
-            Some(Level::MaxFps)
+            slider_sets(Some("ODP_MaxFPSSlider"), WindowId::Options),
+            Some(Sets::Level(Level::MaxFps))
         );
         assert_eq!(
-            slider_level(Some("ODP_GammaSlider"), WindowId::Options),
+            slider_sets(Some("ODP_GammaSlider"), WindowId::Options),
             None
         );
         assert_eq!(
-            slider_level(Some("ODP_MaxFPSSlider"), WindowId::Inventory),
+            slider_sets(Some("ODP_MaxFPSSlider"), WindowId::Inventory),
             None
         );
+        assert_eq!(
+            slider_sets(Some(QUANTITY_SLIDER), WindowId::Quantity),
+            Some(Sets::Quantity)
+        );
+        assert_eq!(slider_sets(Some(QUANTITY_SLIDER), WindowId::Options), None);
         assert!(matches!(
             value_label("OMP_MouseSensitivityValueLabel", WindowId::Options),
             Some(ValueLabel::Shows(Level::MouseSensitivity))
@@ -881,6 +1016,70 @@ mod tests {
             Some(Listing::Keys)
         );
         assert_eq!(listing(Some("OFP_FilterList"), WindowId::Options), None);
+    }
+
+    #[test]
+    fn a_click_on_the_number_box_lets_the_player_type_the_amount() {
+        use eq_client_core::money::{Coin, CoinPlace};
+        let mut app = crate::testing::app();
+        app.add_systems(Update, (type_amount, show_amount).chain());
+        let number_box = app
+            .world_mut()
+            .spawn((Button, AmountBox, Interaction::None))
+            .id();
+        let number = app.world_mut().spawn((Amount, Text::default())).id();
+        app.world_mut()
+            .resource_mut::<InventoryState>()
+            .select_coins(CoinPlace::Purse, Coin::Gold, 40);
+        let press = |app: &mut App, key: KeyCode| {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(key);
+            app.update();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+        };
+        let click = |app: &mut App| {
+            *app.world_mut().get_mut::<Interaction>(number_box).unwrap() = Interaction::Pressed;
+            app.update();
+        };
+        let shown = |app: &App| app.world().get::<Text>(number).unwrap().0.clone();
+        let picked = |app: &App| app.world().resource::<InventoryState>().picked();
+        let counting = |app: &App| app.world().resource::<Typing>().counting;
+        // Keys belong to the game until the box is clicked.
+        press(&mut app, KeyCode::Digit1);
+        assert_eq!(picked(&app), Some((40, 40)));
+        assert_eq!(shown(&app), "40");
+        click(&mut app);
+        assert!(counting(&app));
+        let mut keys = bevy::ecs::system::SystemState::<crate::keys::Keys>::new(app.world_mut());
+        assert!(!keys.get(app.world()).unwrap().focused());
+        assert_eq!(shown(&app), "40|");
+        // Typing goes on from the number's end.
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(shown(&app), "|");
+        press(&mut app, KeyCode::Numpad1);
+        press(&mut app, KeyCode::Digit2);
+        assert_eq!(picked(&app), Some((12, 40)));
+        assert_eq!(shown(&app), "12|");
+        // Escape gives the keyboard back, and nothing else takes it.
+        press(&mut app, KeyCode::Escape);
+        assert!(!counting(&app));
+        assert!(app.world().resource::<Typing>().escape_consumed);
+        assert_eq!(shown(&app), "12");
+        // Enter accepts the number: the coins go to the cursor.
+        click(&mut app);
+        press(&mut app, KeyCode::Enter);
+        assert!(!counting(&app));
+        assert!(picked(&app).is_none());
+        let taken = app
+            .world_mut()
+            .resource_mut::<InventoryState>()
+            .take_coins()
+            .unwrap();
+        assert_eq!((taken.coin, taken.amount), (Coin::Gold, 12));
     }
 
     #[test]

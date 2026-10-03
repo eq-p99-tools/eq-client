@@ -374,13 +374,17 @@ impl KeyMap {
     }
 }
 
-/// Whether the chat has the keyboard. Only the chat's input changes it;
+/// Whether a box the player types in has the keyboard: the chat's line or
+/// the quantity window's number, never both. Only those boxes change it;
 /// everything else that takes keys asks it, through [`Keys`].
 #[derive(Resource, Default, Debug)]
 pub(crate) struct Typing {
     /// The player is typing a chat line.
     pub composing: bool,
-    /// This frame's Escape closed the chat line, so nothing else takes it.
+    /// The player is typing a number in the quantity window.
+    pub counting: bool,
+    /// This frame's Escape closed the chat line or left the quantity
+    /// window's number, so nothing else takes it.
     pub escape_consumed: bool,
 }
 
@@ -412,7 +416,7 @@ impl Keys<'_, '_> {
 
     /// Whether the game has the keyboard.
     pub(crate) fn focused(&self) -> bool {
-        !self.typing.composing && self.window_focused()
+        !self.typing.composing && !self.typing.counting && self.window_focused()
     }
 
     /// Whether this frame's Escape belongs to the game, not to closing the chat.

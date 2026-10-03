@@ -10,7 +10,9 @@
 mod parse;
 mod report;
 
-pub use parse::{AbilityPage, ClickTarget, PickButton, Step, TradeClick, TrainingClick, parse};
+pub use parse::{
+    AbilityPage, ClickTarget, PickButton, SliderClick, Step, TradeClick, TrainingClick, parse,
+};
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -206,6 +208,7 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::coins::CoinBox>,
             Option<&'static super::inventory::SplitAction>,
             Option<&'static super::skinned::scrollbar::ScrollArrow>,
+            Has<super::skinned::AmountBox>,
         ),
         (
             Option<&'static super::windows::SelectorButton>,
@@ -216,7 +219,7 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::options::OptionCheckbox>,
         ),
         (
-            Option<&'static super::skinned::LevelSlider>,
+            Option<&'static super::skinned::SkinSlider>,
             Option<&'static super::skinned::DropDown>,
             Option<&'static super::skinned::DropDownChoice>,
             (
@@ -735,7 +738,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         trade,
         tint,
         give,
-        (coins, pick, arrow),
+        (coins, pick, arrow, amount),
         (selector, tab, ability, attack, slash, checkbox),
         (slider, drop_down, choice, (dialog, page, combine, map)),
     ) in buttons
@@ -758,7 +761,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Attack => attack,
             ClickTarget::Pet(command) => slash.is_some_and(|button| button.0 == command),
             ClickTarget::Option(toggle) => checkbox.is_some_and(|checkbox| checkbox.0 == toggle),
-            ClickTarget::Slider(level, _) => slider.is_some_and(|slider| slider.level == level),
+            ClickTarget::Slider(name, _) => slider.is_some_and(|slider| slider.sets == sets(name)),
             ClickTarget::KeyFilter => drop_down.is_some_and(|drop_down| {
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
@@ -801,24 +804,38 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Coins(place, coin) => {
                 coins.is_some_and(|coins| coins.place == place && coins.coin == coin)
             }
-            ClickTarget::Pick(button) => pick.is_some_and(|action| {
-                use super::inventory::SplitAction;
-                *action
-                    == match button {
-                        PickButton::Less => SplitAction::Less,
-                        PickButton::More => SplitAction::More,
-                        PickButton::Min => SplitAction::Minimum,
-                        PickButton::Max => SplitAction::Maximum,
-                        PickButton::Confirm => SplitAction::Confirm,
-                        PickButton::Cancel => SplitAction::Cancel,
-                    }
-            }),
+            ClickTarget::Pick(PickButton::Amount) => amount,
+            ClickTarget::Pick(button) => pick.is_some_and(|action| Some(*action) == picks(button)),
         };
         if matches && visibility.get() && displayed(entity, layout) {
             return Some(entity);
         }
     }
     None
+}
+
+/// What a slider a script names sets.
+const fn sets(name: SliderClick) -> super::skinned::Sets {
+    use super::skinned::Sets;
+    match name {
+        SliderClick::Level(level) => Sets::Level(level),
+        SliderClick::Quantity => Sets::Quantity,
+    }
+}
+
+/// What a quantity picker's button a script names does to the amount; the
+/// number box does nothing to it.
+const fn picks(button: PickButton) -> Option<super::inventory::SplitAction> {
+    use super::inventory::SplitAction;
+    Some(match button {
+        PickButton::Less => SplitAction::Less,
+        PickButton::More => SplitAction::More,
+        PickButton::Min => SplitAction::Minimum,
+        PickButton::Max => SplitAction::Maximum,
+        PickButton::Confirm => SplitAction::Confirm,
+        PickButton::Cancel => SplitAction::Cancel,
+        PickButton::Amount => return None,
+    })
 }
 
 /// Marks a found control pressed, a slider where the setting is to go; the
