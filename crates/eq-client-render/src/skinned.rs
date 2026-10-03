@@ -2462,6 +2462,100 @@ mod tests {
     }
 
     #[test]
+    fn every_part_of_a_skinned_window_a_press_lands_on_keeps_it_from_the_frame() {
+        use bevy::ui::FocusPolicy;
+        use eq_client_assets::sidl::{Button, ButtonLook, Column, Element, Listbox, ScrollbarLook};
+        let checkbox = |id: &str, x| {
+            Element::Button(Button {
+                id: Some(id.into()),
+                area: Area {
+                    x,
+                    y: 0.0,
+                    width: 20.0,
+                    height: 20.0,
+                },
+                placed: true,
+                anchors: None,
+                look: ButtonLook::default(),
+                checkbox: true,
+                text: None,
+                text_color: None,
+                decal: None,
+                decal_area: None,
+                tooltip: None,
+            })
+        };
+        let keys = Element::Listbox(Listbox {
+            id: Some("OKP_KeyboardAssignmentList".into()),
+            area: Some(Area {
+                x: 0.0,
+                y: 30.0,
+                width: 200.0,
+                height: 100.0,
+            }),
+            anchors: None,
+            template: None,
+            columns: vec![Column {
+                heading: "Command".into(),
+                width: 120.0,
+            }],
+            scrollbar: Some(ScrollbarLook::default()),
+            header: None,
+        });
+        let screen = Screen {
+            name: "OptionsWindow".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 220.0,
+                height: 140.0,
+            },
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![
+                ("missing".into(), checkbox("ODP_LevelOfDetailCheckbox", 0.0)),
+                ("ring".into(), checkbox("ODP_ShowTargetRingCheckbox", 30.0)),
+                ("keys".into(), keys),
+            ],
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id: WindowId::Options,
+                        paperdoll: None,
+                        depth: 0,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            )
+            .add_systems(PostUpdate, crate::windows::block_clicks);
+        app.update();
+        // A skinned window's frame drags under a press that reaches it: every
+        // part that reacts to the pointer, and the list with its rows and
+        // headings, keeps the press. Here: the two checkboxes, the list, and
+        // its scrollbar's arrows, gutter and thumb.
+        let mut parts = app.world_mut().query_filtered::<&FocusPolicy, Or<(
+            With<Interaction>,
+            With<crate::windows::KeepsPress>,
+        )>>();
+        let policies: Vec<_> = parts.iter(app.world()).copied().collect();
+        assert_eq!(policies, [FocusPolicy::Block; 7]);
+    }
+
+    #[test]
     fn the_options_window_checkboxes_turn_its_options_on_and_off() {
         use eq_client_assets::sidl::{Button, ButtonLook, Element, Page};
         use eq_client_core::options::Toggle;

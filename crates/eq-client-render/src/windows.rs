@@ -15,6 +15,12 @@ pub(crate) use registry::{Layer, Opening, Toggle, WindowId};
 pub(crate) use stack::toggle;
 pub(crate) use stack::{SelectorButton, Shown, Stack, spawn_selector};
 
+/// A part of a window a press lands on and stays on, though it is no button
+/// and reacts to no pointer: a list, so a press on its rows or headings never
+/// drags its window.
+#[derive(Component)]
+pub(crate) struct KeepsPress;
+
 /// Restores saved positions before layout and constrains measured frames afterward;
 /// placements persist between runs per character. Orders the floating windows,
 /// opens and closes the toggled ones and hides the ones the player hid.
@@ -354,12 +360,19 @@ pub(super) fn input(
     }
 }
 
-type NewSurface = Or<(Added<Frame>, Added<Button>)>;
+type NewSurface = Or<(
+    Added<Frame>,
+    Added<Button>,
+    Added<Interaction>,
+    Added<KeepsPress>,
+)>;
 
 /// Window frames and controls keep the clicks that land on them, so nothing drawn
-/// beneath (such as another window's buttons) is pressed through them. A node
-/// passes clicks on by default, and a button added to an existing node keeps that.
-fn block_clicks(mut policies: Query<&mut FocusPolicy, NewSurface>) {
+/// beneath (such as another window's buttons, or a skinned window's frame, which a
+/// press drags) is pressed through them. Every node that reacts to the pointer is
+/// a control, as is a part marked to keep its press. A node passes clicks on by
+/// default, and a button added to an existing node keeps that.
+pub(crate) fn block_clicks(mut policies: Query<&mut FocusPolicy, NewSurface>) {
     for mut policy in &mut policies {
         if *policy != FocusPolicy::Block {
             *policy = FocusPolicy::Block;

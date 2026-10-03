@@ -419,6 +419,12 @@ pub(crate) fn drop_downs(
                 height: px(list_height),
                 flex_direction: FlexDirection::Column,
                 padding,
+                // Without the skin's box, the client's own edge.
+                border: if drop_down.look.is_none() {
+                    UiRect::all(px(1))
+                } else {
+                    UiRect::ZERO
+                },
                 overflow: Overflow::clip(),
                 ..default()
             },
@@ -588,6 +594,8 @@ pub(super) fn listbox(
             height: inside.height,
         });
     let listing = listing(list.id.as_deref(), owner);
+    // A press anywhere on the list stays on it, its rows and headings
+    // included, rather than dragging its window.
     let mut drawn = window.spawn((
         at(
             inside.x + area.x,
@@ -596,6 +604,7 @@ pub(super) fn listbox(
             area.height,
         ),
         BackgroundColor(theme::INSET),
+        crate::windows::KeepsPress,
     ));
     if listing.is_none() {
         drawn.insert(super::missing());
