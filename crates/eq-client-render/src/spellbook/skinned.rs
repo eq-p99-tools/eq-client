@@ -860,6 +860,7 @@ mod tests {
             &mut online,
             [eq_client_core::WorldEvent::Entered {
                 capabilities: vec![Capability::Spellbook],
+                choices: Vec::new(),
                 session_id: 7,
                 zone: "qeytoqrg".into(),
                 player: Box::new(crate::online::testing::player(1)),

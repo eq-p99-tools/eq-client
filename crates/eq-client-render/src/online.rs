@@ -49,6 +49,12 @@ impl OnlineState {
         self.world.tick(now, spells);
     }
 
+    /// The player's choice, from their options, of what a session may leave
+    /// to them to turn on.
+    pub(super) fn choose(&mut self, chosen: Vec<eq_client_core::Capability>) {
+        self.world.choose(chosen);
+    }
+
     /// The character choice in progress, with the world it is made in.
     pub(super) fn choosing(
         &mut self,
@@ -579,6 +585,7 @@ pub(crate) mod testing {
             state,
             [WorldEvent::Entered {
                 capabilities: eq_client_core::Capability::ALL.to_vec(),
+                choices: Vec::new(),
                 session_id,
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),
@@ -772,6 +779,7 @@ mod tests {
         for update in [
             WorldEvent::Entered {
                 capabilities: Vec::new(),
+                choices: Vec::new(),
                 session_id: 2,
                 zone: "example".into(),
                 player: Box::new(player),
@@ -831,6 +839,7 @@ mod tests {
         sender
             .send(WorldUpdate::Game(WorldEvent::Entered {
                 capabilities: Vec::new(),
+                choices: Vec::new(),
                 session_id: 2,
                 zone: "qeytoqrg".into(),
                 player: Box::new(testing::player(7)),
@@ -920,6 +929,7 @@ mod tests {
         sender
             .send(WorldUpdate::Game(WorldEvent::Entered {
                 capabilities: Vec::new(),
+                choices: Vec::new(),
                 session_id: 2,
                 zone: "qeynos2".into(),
                 player: Box::new(testing::player(7)),
@@ -982,6 +992,7 @@ mod tests {
         for update in [
             WorldUpdate::Game(WorldEvent::Entered {
                 capabilities: Vec::new(),
+                choices: Vec::new(),
                 session_id: 1,
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),
@@ -1068,6 +1079,7 @@ mod tests {
                 [
                     WorldEvent::Entered {
                         capabilities: Vec::new(),
+                        choices: Vec::new(),
                         session_id: 1,
                         zone: "qeytoqrg".into(),
                         player: Box::new(timed_player),
@@ -1357,6 +1369,7 @@ mod tests {
         sender
             .send(WorldUpdate::Game(WorldEvent::Entered {
                 capabilities: Vec::new(),
+                choices: Vec::new(),
                 session_id: 2,
                 zone: "freportw".into(),
                 player: Box::new(player),
