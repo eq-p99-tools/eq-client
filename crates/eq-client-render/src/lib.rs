@@ -508,7 +508,11 @@ fn schedule(app: &mut App) {
             hud::actions,
             (hud::hotbar::update, hud::hotbar::persist).chain(),
             hud::hotbar::item_actions,
-            (spellbook::update, spellbook::book_clicks),
+            (
+                spellbook::update,
+                spellbook::book_clicks,
+                spellbook::say_book_lines,
+            ),
             character_select::update,
             windows::input,
             move_player,

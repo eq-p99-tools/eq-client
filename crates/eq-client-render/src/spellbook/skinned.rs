@@ -48,8 +48,16 @@ pub(crate) struct BookHand {
     /// The spell a right click chose, which a right click on another place
     /// swaps with that place and the Delete key deletes.
     pub(crate) chosen: Option<Entry>,
-    /// The book's reply count when a deletion went, until it is answered.
-    deleting: Option<u64>,
+    /// A deletion or a move the server has not answered yet, with the
+    /// book's reply count when it went.
+    editing: Option<(Edit, u64)>,
+}
+
+/// A change to the book's entries in flight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edit {
+    Deleting,
+    Moving,
 }
 
 impl Entry {
@@ -138,8 +146,10 @@ pub(crate) fn clicks(
             };
         }
     }
-    if keys.input.just_pressed(KeyCode::Delete) {
-        delete(&mut hand, world, &outbox, requests.as_deref_mut());
+    if keys.input.just_pressed(KeyCode::Delete)
+        && let Some(refusal) = delete(&mut hand, world, &outbox, requests.as_deref_mut())
+    {
+        chat.refuse(refusal);
     }
     // A right click lands on the place under the pointer.
     if mouse.just_pressed(MouseButton::Right)
@@ -148,19 +158,18 @@ pub(crate) fn clicks(
             .find(|(interaction, _)| **interaction != Interaction::None)
     {
         let entry = (view.slot(place.0), view.spell(book, place.0));
-        let said = choose(entry, &mut hand, (world, &outbox), &messages);
+        let said = choose(
+            entry,
+            &mut hand,
+            (world, &outbox),
+            (&messages, requests.as_deref_mut()),
+        );
         for said in said {
             if said.1 {
                 chat.refuse(said.0);
             } else {
                 chat.history.push(system_line(said.0));
             }
-        }
-        if hand.chosen.is_none()
-            && let Some(requests) = requests.as_deref_mut()
-        {
-            // A move leaves no memorization or scribe for the gauges.
-            requests.book = None;
         }
         return;
     }
@@ -226,20 +235,30 @@ pub(crate) fn present(
     }
 }
 
+/// What the chat says while a memorization, a scribe or another change to
+/// the book is under way, which a move or a deletion waits for, as the
+/// session refuses one meanwhile.
+const BUSY: &str = "Wait for the current spell action";
+
 /// A right click on a place: with no spell chosen, chooses the place's
 /// spell, as the official client says how to swap and delete it; on the
 /// chosen spell, unchooses it; on another place, swaps the chosen spell with
-/// whatever is there. What the chat says, each line marked when it refuses.
+/// whatever is there, unless another change to the book is under way. What
+/// the chat says, each line marked when it refuses.
 fn choose(
     (slot, in_place): (usize, Option<u32>),
     hand: &mut BookHand,
     (world, outbox): (&eq_client_core::world::ClientWorld, &crate::outbox::Outbox),
-    messages: &crate::hud::messages::Messages,
+    (messages, requests): (&crate::hud::messages::Messages, Option<&mut ActionRequests>),
 ) -> Vec<(Said, bool)> {
     let offered = |capability| crate::outbox::offered(world, capability);
     match hand.chosen.take() {
         Some(chosen) if chosen.slot == slot => Vec::new(),
         Some(chosen) => {
+            if action_pending(world) {
+                hand.chosen = Some(chosen);
+                return vec![(Said::own(BUSY), true)];
+            }
             let (Ok(from), Ok(to)) = (u16::try_from(chosen.slot), u16::try_from(slot)) else {
                 return Vec::new();
             };
@@ -252,10 +271,16 @@ fn choose(
                 to_spell: in_place,
                 created: stamp.created,
             });
-            sent.map_or_else(
-                |_| Vec::new(),
-                |()| vec![(messages.said_text(1388, "Moving the spell."), false)],
-            )
+            if sent.is_err() {
+                return Vec::new();
+            }
+            hand.editing = Some((Edit::Moving, world.book_action_revision()));
+            if let Some(requests) = requests {
+                // The move is the book's change now, not a memorization or a
+                // scribe for the gauges and the chat's lines to follow.
+                requests.book = None;
+            }
+            vec![(messages.said_text(1388, "Moving the spell."), false)]
         }
         None => {
             let Some(spell) = in_place else {
@@ -283,20 +308,21 @@ fn choose(
     }
 }
 
-/// The Delete key: deletes the spell a right click chose. Its answer is
-/// said once the server gives it (`answer`).
+/// The Delete key: deletes the spell a right click chose, unless another
+/// change to the book is under way; what the chat says if it waits. Its
+/// answer is said once the server gives it (`answer`).
 fn delete(
     hand: &mut BookHand,
     world: &eq_client_core::world::ClientWorld,
     outbox: &crate::outbox::Outbox,
     requests: Option<&mut ActionRequests>,
-) {
-    let Some(chosen) = hand.chosen.take() else {
-        return;
-    };
-    let Ok(slot) = u16::try_from(chosen.slot) else {
-        return;
-    };
+) -> Option<Said> {
+    let chosen = hand.chosen?;
+    if action_pending(world) {
+        return Some(Said::own(BUSY));
+    }
+    hand.chosen = None;
+    let slot = u16::try_from(chosen.slot).ok()?;
     // The outbox says why a deletion it holds back did not go.
     let sent = outbox.post(world, |stamp| ClientCommand::DeleteSpell {
         session_id: stamp.session_id,
@@ -305,40 +331,58 @@ fn delete(
         created: stamp.created,
     });
     if sent.is_ok() {
-        hand.deleting = Some(world.book_action_revision());
+        hand.editing = Some((Edit::Deleting, world.book_action_revision()));
         if let Some(requests) = requests {
-            // A deletion leaves no memorization or scribe for the gauges.
+            // The deletion is the book's change now, not a memorization or a
+            // scribe for the gauges and the chat's lines to follow.
             requests.book = None;
         }
     }
+    None
 }
 
-/// Says how the server answered a deletion, once it has: the spell is
-/// deleted, or it stays.
+/// Says how the server answered a deletion or a move, once it has: a
+/// deletion is done or the spell stays, in the official words; a move the
+/// session refused says why, in its words, as the official client's line
+/// for a move was said as it went.
 fn answer(
     hand: &mut BookHand,
     world: &eq_client_core::world::ClientWorld,
     messages: &crate::hud::messages::Messages,
     chat: &mut ChatState,
 ) {
-    let Some(sent) = hand.deleting else {
+    let Some((edit, sent)) = hand.editing else {
         return;
     };
     if world.book_action_revision() == sent {
         return;
     }
-    let said = match world.book_action() {
+    let status = world.book_action();
+    if matches!(
+        status,
         Some(
             BookActionStatus::Preparing
-            | BookActionStatus::Submitted
-            | BookActionStatus::AwaitingReply,
-        ) => return,
+                | BookActionStatus::Submitted
+                | BookActionStatus::AwaitingReply
+        )
+    ) {
+        return;
+    }
+    hand.editing = None;
+    match (edit, status) {
         // The session clears a change the server confirmed.
-        None => messages.said_text(4028, "The spell is gone from the book."),
-        Some(_) => messages.said_text(4029, "The spell stays in the book."),
-    };
-    hand.deleting = None;
-    chat.history.push(system_line(said));
+        (Edit::Deleting, None) => chat.history.push(system_line(
+            messages.said_text(4028, "The spell is gone from the book."),
+        )),
+        (Edit::Deleting, Some(_)) => chat.history.push(system_line(
+            messages.said_text(4029, "The spell stays in the book."),
+        )),
+        (
+            Edit::Moving,
+            Some(BookActionStatus::Rejected(reason) | BookActionStatus::Cancelled(reason)),
+        ) => chat.refuse(Said::own(reason.clone())),
+        (Edit::Moving, _) => (),
+    }
 }
 
 /// Scribes the scroll on the cursor into this empty place of the book; what
@@ -373,8 +417,8 @@ fn scribe(
     outbox.send(world, command).ok()?;
     note(
         requests,
+        (BookChange::Scribe, scroll),
         format!("Scribing {}", names.label(scroll)),
-        BookChange::Scribe,
     );
     None
 }
@@ -407,8 +451,8 @@ pub(crate) fn memorize(
     .ok()?;
     note(
         requests,
+        (BookChange::Memorize, spell),
         format!("Memorizing {} into gem {}", names.label(spell), gem + 1),
-        BookChange::Memorize,
     );
     None
 }
@@ -525,7 +569,12 @@ mod tests {
         let messages = crate::hud::messages::Messages::default();
         let mut hand = BookHand::default();
         // An empty place chooses nothing.
-        let said = choose((0, None), &mut hand, (online.world(), &outbox), &messages);
+        let said = choose(
+            (0, None),
+            &mut hand,
+            (online.world(), &outbox),
+            (&messages, None),
+        );
         assert_eq!(said, Vec::new());
         assert_eq!(hand.chosen, None);
         // A spell is chosen, with how to swap it and how to delete it.
@@ -533,7 +582,7 @@ mod tests {
             (1, Some(42)),
             &mut hand,
             (online.world(), &outbox),
-            &messages,
+            (&messages, None),
         );
         assert_eq!(said.len(), 2);
         assert!(said.iter().all(|(_, refused)| !refused));
@@ -543,7 +592,7 @@ mod tests {
             (1, Some(42)),
             &mut hand,
             (online.world(), &outbox),
-            &messages,
+            (&messages, None),
         );
         assert_eq!(said, Vec::new());
         assert!(hand.chosen.is_none());
@@ -552,9 +601,14 @@ mod tests {
             (1, Some(42)),
             &mut hand,
             (online.world(), &outbox),
-            &messages,
+            (&messages, None),
         );
-        let said = choose((9, None), &mut hand, (online.world(), &outbox), &messages);
+        let said = choose(
+            (9, None),
+            &mut hand,
+            (online.world(), &outbox),
+            (&messages, None),
+        );
         assert_eq!(said.len(), 1);
         assert!(matches!(
             sent.try_recv().unwrap(),
@@ -573,7 +627,7 @@ mod tests {
             (1, Some(42)),
             &mut hand,
             (online.world(), &outbox),
-            &messages,
+            (&messages, None),
         );
         delete(&mut hand, online.world(), &outbox, None);
         assert!(matches!(
@@ -661,7 +715,7 @@ mod tests {
             (1, Some(42)),
             &mut hand,
             (online.world(), &outbox),
-            &messages,
+            (&messages, None),
         );
         assert_eq!(said.len(), 1);
         assert!(said[0].1);
