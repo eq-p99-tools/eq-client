@@ -11,6 +11,7 @@ mod character_select;
 mod chat;
 mod coins;
 mod combat;
+mod confirm;
 mod daylight;
 mod doors;
 mod entities;
@@ -358,6 +359,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<keys::Typing>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()
+        .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
         .init_resource::<map::MapView>();
 }
@@ -506,7 +508,7 @@ fn schedule(app: &mut App) {
                 give::buttons,
                 give::inspect_theirs,
                 training::buttons,
-                resurrection::buttons,
+                confirm::buttons,
                 reading::buttons,
                 tradeskills::buttons,
                 map::buttons,
@@ -554,7 +556,7 @@ fn schedule(app: &mut App) {
                     give::window,
                     skinned::quantity,
                     training::window,
-                    resurrection::window,
+                    confirm::window,
                     reading::window,
                     tradeskills::world_window,
                     map::load,
@@ -612,7 +614,7 @@ fn schedule(app: &mut App) {
                         training::fill,
                         skills::fill,
                         raid::fill,
-                        resurrection::show,
+                        confirm::show,
                         reading::show,
                         tradeskills::show,
                         map::draw,

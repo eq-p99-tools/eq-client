@@ -60,6 +60,9 @@ pub enum Fix {
     /// Lets the player open the in-game map where the server type leaves it
     /// to them, as P99's own client keeps the map off.
     MapWhereOff,
+    /// Asks Yes or No before a spell leaves the spell book for good; the
+    /// official client's Delete key deletes the chosen spell at once.
+    AskBeforeDeletingSpells,
     /// Starts the Options window's Max FPS at 60 frames a second rather than
     /// as fast as vsync allows; the slider and the installation's
     /// `eqclient.ini` still set another cap. What the official client does
@@ -90,10 +93,11 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::MapWhereOff,
+        Self::AskBeforeDeletingSpells,
         Self::FrameCap,
         Self::GreyedControls,
         Self::CampCountdown,
@@ -110,6 +114,7 @@ impl Fix {
             Self::SkipModifiedFood => "skip_modified_food",
             Self::HiddenWindows => "hidden_windows",
             Self::MapWhereOff => "map_where_off",
+            Self::AskBeforeDeletingSpells => "ask_before_deleting_spells",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -134,6 +139,7 @@ impl Fix {
             Self::SkipModifiedFood => "Skip Food With Modifiers",
             Self::HiddenWindows => "Draw Windows the Skin Hides",
             Self::MapWhereOff => "Use the Map Where It's Off",
+            Self::AskBeforeDeletingSpells => "Ask Before Deleting Spells",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -156,6 +162,9 @@ impl Fix {
             }
             Self::MapWhereOff => {
                 "Open the in-game map on servers whose own client keeps it off, such as Project 1999."
+            }
+            Self::AskBeforeDeletingSpells => {
+                "Ask Yes or No before a spell is deleted from your spell book for good."
             }
             Self::FrameCap => {
                 "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
@@ -181,7 +190,9 @@ impl Fix {
     #[must_use]
     pub const fn kind(self) -> Kind {
         match self {
-            Self::SkipModifiedFood | Self::HotbarItemGuard => Kind::Guards,
+            Self::SkipModifiedFood | Self::AskBeforeDeletingSpells | Self::HotbarItemGuard => {
+                Kind::Guards
+            }
             Self::HiddenWindows
             | Self::FrameCap
             | Self::GreyedControls
@@ -194,13 +205,15 @@ impl Fix {
     }
 
     /// What the session must offer for the fix to matter, if anything:
-    /// eating on its own comes with the inventory. For a fix that unlocks,
-    /// what it turns on, which the session must leave to the player.
+    /// eating on its own comes with the inventory, and only a session that
+    /// deletes spells has one to ask about. For a fix that unlocks, what it
+    /// turns on, which the session must leave to the player.
     #[must_use]
     pub const fn needs(self) -> Option<Capability> {
         match self {
             Self::SkipModifiedFood => Some(Capability::Inventory),
             Self::MapWhereOff => Some(Capability::Map),
+            Self::AskBeforeDeletingSpells => Some(Capability::DeletingSpells),
             Self::HiddenWindows
             | Self::FrameCap
             | Self::GreyedControls
@@ -238,7 +251,9 @@ impl Fix {
     #[must_use]
     pub const fn availability(self) -> Availability {
         match self {
-            Self::SkipModifiedFood => Availability::Setting { default: true },
+            Self::SkipModifiedFood | Self::AskBeforeDeletingSpells => {
+                Availability::Setting { default: true }
+            }
             Self::HiddenWindows | Self::MapWhereOff => Availability::Setting { default: false },
             Self::FrameCap
             | Self::GreyedControls
@@ -363,7 +378,12 @@ mod tests {
         assert!(!settings.on(Fix::SkipModifiedFood));
         assert_eq!(
             Fix::settings().collect::<Vec<_>>(),
-            [Fix::SkipModifiedFood, Fix::HiddenWindows, Fix::MapWhereOff]
+            [
+                Fix::SkipModifiedFood,
+                Fix::HiddenWindows,
+                Fix::MapWhereOff,
+                Fix::AskBeforeDeletingSpells
+            ]
         );
         // A fix that is always on stays on whatever is asked.
         for fix in Fix::ALL.into_iter().filter(|fix| !fix.is_setting()) {

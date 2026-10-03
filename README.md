@@ -328,9 +328,12 @@ from the book. A right click chooses a spell, marked by the client, and the
 chat says how to move and delete it in the official words; a right click on
 another place moves the chosen spell there, swapping it with any spell there,
 and a right click on the chosen spell unchooses it. The Delete key deletes the
-chosen spell, with no question first, as the official client's words describe;
-only while no box has the keyboard, so a Delete typed in the chat deletes
-nothing, and the chat then says whether the server deleted it. Moving and
+chosen spell, which the official client's words describe as with no question
+first; this client asks Yes or No in the skin's confirmation dialog first
+unless Ask Before Deleting Spells is off on the QoL page, and No keeps the
+spell, no longer chosen. The key works only while no box has the keyboard, so
+a Delete typed in the chat deletes nothing, and the chat then says whether
+the server deleted it. Moving and
 deleting need the session to offer them (`MovingSpells`, `DeletingSpells`),
 which servers do only where each has been checked: EQEmu, not P99 yet; a move
 or a deletion is refused while another change to the book is under way, and
@@ -397,8 +400,9 @@ an awaiting-result state. Gem notifications refresh the memorized slots. Success
 Titanium deletion replies remove only the reported book slot; failed replies retain
 it. This decoder follows EQEmu's layout and has synthetic coverage, not a P99 capture.
 In the client's own list, to delete a book entry, select it, click **Delete spell**, then
-**Confirm** or **Cancel**; like **Earlier** and **Later** below, it is greyed out where the
-session does not offer it.
+**Confirm** or **Cancel** (with Ask Before Deleting Spells off, **Delete spell** deletes at
+once); like **Earlier** and **Later** below, it is greyed out where the session does not
+offer it.
 Changing the selected entry or admission invalidates confirmation. Queued requests
 leave the book unchanged until the reply; the worker rejects stale or changed slots.
 Select a spell and use **Earlier** or **Later** to exchange it with the adjacent
@@ -571,6 +575,11 @@ offer is greyed, with the reason on hover. The settings:
   map where the server's own client keeps it off, as on Project 1999. Until
   it is on, the Map window stays greyed there, and hovering over it names
   this setting. It is greyed on servers that offer the map anyway.
+- **Ask Before Deleting Spells** (`ask_before_deleting_spells`, on): the skin's
+  confirmation dialog asks Yes or No before the Delete key deletes a spell
+  from the skin's book, where the official client deletes it at once, and
+  the client's own list waits for its **Confirm**. Greyed where the session
+  does not delete spells (`DeletingSpells`).
 
 Always on:
 

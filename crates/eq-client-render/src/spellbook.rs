@@ -292,7 +292,14 @@ pub(super) fn update(
     mut selection: ResMut<BookSelection>,
     actions: BookActions,
 ) {
-    let (scribe, mut deletion, mut requests) = actions;
+    let (scribe, mut deletion, mut requests, options) = actions;
+    // Asking before a deletion, unless the player turned it off.
+    let asks = options.is_none_or(|options| {
+        options
+            .options
+            .qol
+            .on(eq_client_core::qol::Fix::AskBeforeDeletingSpells)
+    });
     let world = super::online::world(online.as_deref());
     selection.receive_reply(world.book_action_revision());
     let accepts_input = keys.focused();
@@ -348,10 +355,9 @@ pub(super) fn update(
     delete_input(
         &deletion,
         &mut selection,
-        world,
-        outbox.as_deref(),
+        (world, outbox.as_deref()),
         &names,
-        accepts_input && !pending,
+        (accepts_input && !pending, asks),
     );
     refresh_actions(&mut deletion, &selection.deletion);
     let (requested, gem_hint) = refresh_gems(
@@ -439,6 +445,7 @@ type BookActions<'w, 's> = (
     Query<'w, 's, &'static Interaction, (With<ScribeCursor>, Changed<Interaction>)>,
     DeleteControls<'w, 's>,
     Option<ResMut<'w, super::hud::action_bar::ActionRequests>>,
+    Option<Res<'w, crate::options::OptionsState>>,
 );
 
 type DeleteControls<'w, 's> = Query<
@@ -463,14 +470,14 @@ fn refresh_actions(buttons: &mut DeleteControls, confirmation: &super::book_dele
     }
 }
 
-/// Processes deletion confirmation separately from gem assignment and scribing.
+/// Processes deletion confirmation separately from gem assignment and
+/// scribing; Delete spell asks for it unless the player turned that off.
 fn delete_input(
     buttons: &DeleteControls,
     selection: &mut BookSelection,
-    world: &ClientWorld,
-    outbox: Option<&crate::outbox::Outbox>,
+    (world, outbox): (&ClientWorld, Option<&crate::outbox::Outbox>),
     names: &SpellNames,
-    enabled: bool,
+    (enabled, asks): (bool, bool),
 ) {
     let session = outbox
         .and_then(|outbox| outbox.peek(world))
@@ -491,9 +498,11 @@ fn delete_input(
     }) else {
         return;
     };
-    let result = selection
-        .deletion
-        .act(*action, session, selection.selected, world.spell_book());
+    let result = selection.deletion.act(
+        *action,
+        (session, selection.selected, world.spell_book()),
+        asks,
+    );
     selection.message = match result {
         Err(error) => error.to_string(),
         // A change sent says nothing until the server answers; the outbox
