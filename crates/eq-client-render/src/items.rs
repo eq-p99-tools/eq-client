@@ -278,7 +278,9 @@ pub(super) fn update(
         },
     );
     for mut label in &mut texts {
-        label.0.clone_from(&text);
+        if label.0 != text {
+            label.0.clone_from(&text);
+        }
     }
 }
 /// The picture the item's box last showed, if any.
