@@ -7,6 +7,17 @@ use crate::{
     loot::LootResponse,
 };
 
+/// Who took part in a death the player saw.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Party {
+    /// The player.
+    Player,
+    /// Another spawn, by the name players see.
+    Named(String),
+    /// No one the player can name: no killer, or one not in view.
+    Unseen,
+}
+
 impl Notice {
     /// The message type the server gave what the notice says, by which the
     /// official client colours its line; None for what the world says
@@ -180,6 +191,15 @@ pub enum Notice {
     CastInterrupted {
         /// The official client's string for why, in `eqstr_us.txt`.
         string_id: u32,
+    },
+    /// The player, or a spawn the player knows, died. No line comes from
+    /// the server with the death, so the official client words it itself
+    /// (inferred): who died, and who killed them.
+    Slain {
+        /// Who died: the player, or another spawn by name.
+        victim: Party,
+        /// Who killed them.
+        killer: Party,
     },
     /// Another caster nearby had a cast interrupted. The server names it by
     /// a string that takes the caster's name, which it sends with it.

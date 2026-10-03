@@ -28,7 +28,7 @@ pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTim
 pub use changes::{Changes, Moved, Reply, Reset};
 pub use items::ItemCache;
 pub use link::Link;
-pub use notice::Notice;
+pub use notice::{Notice, Party};
 pub use target::Target;
 pub use trade::{Asker, Exchange, Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
@@ -659,22 +659,53 @@ impl ClientWorld {
     /// A death: a spawn becomes a corpse, and the player's own death holds
     /// them until the server offers to return them home.
     fn died(&mut self, death: &Death) -> Changes {
+        // Who died and who killed them, named before the corpse takes its
+        // name; a death of no one the player knows says nothing.
+        let slain = match self.party(death.spawn_id) {
+            Party::Unseen => None,
+            victim => Some(Notice::Slain {
+                victim,
+                killer: self.party(death.killer_id),
+            }),
+        };
         if let Ok(id) = u16::try_from(death.spawn_id) {
             self.zone
                 .corpse(id, death.corpse_name.as_deref(), &mut self.revision);
         }
-        if self
+        let mut changes = if self
             .player
             .as_ref()
             .is_none_or(|player| u32::from(player.spawn_id) != death.spawn_id)
         {
-            return Changes::default();
+            Changes::default()
+        } else {
+            self.own_health(0);
+            self.death = Some(death.clone());
+            // The server closes a window the player dies with.
+            self.zone.trade.exchange = None;
+            self.reset(Reset::Died)
+        };
+        changes.notices.splice(0..0, slain);
+        changes
+    }
+
+    /// Who a spawn ID names in a death: the player, a spawn by the name
+    /// players see, or no one the player can name.
+    fn party(&self, spawn_id: u32) -> Party {
+        if self
+            .player
+            .as_ref()
+            .is_some_and(|player| u32::from(player.spawn_id) == spawn_id)
+        {
+            return Party::Player;
         }
-        self.own_health(0);
-        self.death = Some(death.clone());
-        // The server closes a window the player dies with.
-        self.zone.trade.exchange = None;
-        self.reset(Reset::Died)
+        u16::try_from(spawn_id)
+            .ok()
+            .filter(|id| *id != 0)
+            .and_then(|id| self.zone.name(id))
+            .map_or(Party::Unseen, |name| {
+                Party::Named(crate::entities::display_name(&name))
+            })
     }
 
     /// Forgets what the reason makes stale, and says so.
