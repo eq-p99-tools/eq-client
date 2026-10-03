@@ -35,6 +35,8 @@ pub(super) enum Picked {
 pub(super) struct SplitSelection {
     pub picked: Picked,
     pub revision: u64,
+    /// How many to take; none while a number typed in the quantity window
+    /// has been erased.
     pub amount: u32,
     pub available: u32,
 }
@@ -233,8 +235,86 @@ impl InventoryState {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Adjusts or submits a selected quantity without replaying stale selections.
-    pub(super) fn split_action(
+    /// How many the quantity picker takes, of how many there are, while it
+    /// is open.
+    pub(crate) fn picked(&self) -> Option<(u32, u32)> {
+        self.actions
+            .split
+            .as_ref()
+            .map(|split| (split.amount, split.available))
+    }
+
+    /// Sets how many the picker takes from a place along its slider, from
+    /// 0.0 for one to 1.0 for all of them; a place beyond either end is that
+    /// end.
+    pub(crate) fn slide_amount(&mut self, along: f32) {
+        let Some(split) = &mut self.actions.split else {
+            return;
+        };
+        let span = split.available.saturating_sub(1);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            reason = "a place along the slider, between none and all of a pile"
+        )]
+        let past_one = (along.clamp(0.0, 1.0) * span as f32).round() as u32;
+        let amount = past_one.min(span) + 1;
+        if split.amount != amount {
+            split.amount = amount;
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// Where the picker's amount sits along its slider, from 0.0 for one to
+    /// 1.0 for all of them, while it is open.
+    pub(crate) fn amount_along(&self) -> Option<f32> {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "a place along the slider, between none and all of a pile"
+        )]
+        self.picked().map(|(amount, available)| {
+            if available > 1 {
+                amount.saturating_sub(1) as f32 / (available - 1) as f32
+            } else {
+                1.0
+            }
+        })
+    }
+
+    /// A digit typed at the end of the picker's number; a number over how
+    /// many there are becomes all of them.
+    pub(crate) fn type_digit(&mut self, digit: u32) {
+        let Some(split) = &mut self.actions.split else {
+            return;
+        };
+        split.amount = split
+            .amount
+            .saturating_mul(10)
+            .saturating_add(digit)
+            .min(split.available);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Takes the last digit off the picker's number.
+    pub(crate) fn erase_digit(&mut self) {
+        let Some(split) = &mut self.actions.split else {
+            return;
+        };
+        split.amount /= 10;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Closes the quantity picker without taking anything.
+    pub(crate) fn cancel_split(&mut self) {
+        if self.actions.split.take().is_some() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// Adjusts or submits a selected quantity without replaying stale
+    /// selections. Accepting none, a number typed away, takes nothing.
+    pub(crate) fn split_action(
         &mut self,
         action: SplitAction,
         online: &OnlineState,
@@ -260,6 +340,7 @@ impl InventoryState {
             SplitAction::Minimum => selection.amount = 1,
             SplitAction::Maximum => selection.amount = selection.available,
             SplitAction::Cancel => return,
+            SplitAction::Confirm if selection.amount == 0 => return,
             SplitAction::Confirm => {
                 match selection.picked {
                     Picked::Stack(slot) => {
@@ -713,6 +794,44 @@ mod tests {
         bench.split(SplitAction::Confirm);
         assert_eq!(bench.data(), &before);
         assert!(bench.state.actions.split.is_none());
+    }
+
+    #[test]
+    fn the_quantity_windows_slider_and_number_set_the_amount() {
+        let mut bench = Bench::demo(7);
+        bench.select_split(251);
+        let state = &mut bench.state;
+        assert_eq!(state.picked(), Some((1, 20)));
+        assert_eq!(state.amount_along(), Some(0.0));
+        // The slider runs from one at its left end to all at its right.
+        state.slide_amount(1.0);
+        assert_eq!(state.picked(), Some((20, 20)));
+        state.slide_amount(0.5);
+        assert_eq!(state.picked(), Some((11, 20)));
+        state.slide_amount(-3.0);
+        assert_eq!(state.picked(), Some((1, 20)));
+        state.slide_amount(9.0);
+        assert_eq!(state.amount_along(), Some(1.0));
+        // Typing goes on from the number's end; Backspace takes the last
+        // digit, and a number over the stack is all of it.
+        state.erase_digit();
+        state.erase_digit();
+        assert_eq!(state.picked(), Some((0, 20)));
+        state.type_digit(1);
+        state.type_digit(5);
+        assert_eq!(state.picked(), Some((15, 20)));
+        state.type_digit(4);
+        assert_eq!(state.picked(), Some((20, 20)));
+        // Accepting a number typed away takes nothing.
+        state.erase_digit();
+        state.erase_digit();
+        let before = bench.data().clone();
+        bench.split(SplitAction::Confirm);
+        assert_eq!(bench.data(), &before);
+        assert!(bench.state.picked().is_none());
+        bench.select_split(251);
+        bench.state.cancel_split();
+        assert!(bench.state.picked().is_none());
     }
 
     #[test]

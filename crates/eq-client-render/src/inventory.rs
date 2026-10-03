@@ -5,7 +5,6 @@ mod interaction;
 mod layout;
 
 pub(crate) use interaction::SplitAction;
-pub(crate) use layout::quantity_picker;
 
 use crate::theme::{self, Size};
 use bevy::prelude::*;
@@ -59,11 +58,6 @@ impl InventoryState {
             String::new()
         };
         self.tab = if bank { Tab::Bank } else { Tab::Inventory };
-    }
-
-    /// Changes whenever the window must be drawn again.
-    pub(crate) const fn revision(&self) -> u64 {
-        self.revision
     }
 
     /// Whether a stack is being split, so the quantity picker shows.

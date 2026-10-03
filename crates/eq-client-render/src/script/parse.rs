@@ -164,8 +164,8 @@ pub enum ClickTarget {
     Pet(&'static str),
     /// An Options window checkbox, by the option's name in a file.
     Option(eq_client_core::options::Toggle),
-    /// An Options window slider, pressed this far along it, in percent.
-    Slider(eq_client_core::options::Level, u8),
+    /// A slider, pressed this far along it, in percent.
+    Slider(SliderClick, u8),
     /// The Keyboard page's filter drop-down, which opens or closes its list.
     KeyFilter,
     /// A choice in the open drop-down's list, from zero.
@@ -203,6 +203,15 @@ pub enum AbilityPage {
     Abilities,
 }
 
+/// The sliders a script presses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SliderClick {
+    /// An Options window slider, by its setting.
+    Level(eq_client_core::options::Level),
+    /// The quantity window's slider.
+    Quantity,
+}
+
 /// The quantity picker's buttons.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PickButton {
@@ -218,6 +227,9 @@ pub enum PickButton {
     Confirm,
     /// Take nothing.
     Cancel,
+    /// The skin's quantity window's number box, which takes typing once
+    /// clicked.
+    Amount,
 }
 
 /// Loot and merchant window buttons.
@@ -415,10 +427,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["answer", "no"] => ClickTarget::Answer(false),
         ["training_done"] => ClickTarget::Training(TrainingClick::Done),
         ["slider", name, percent] => ClickTarget::Slider(
-            eq_client_core::options::Level::ALL
-                .into_iter()
-                .find(|level| level.key() == *name)
-                .ok_or_else(|| String::from("expected clip_plane, max_fps or mouse_sensitivity"))?,
+            slider(name)?,
             percent
                 .parse::<u8>()
                 .ok()
@@ -437,15 +446,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
             ordinal(place, "an ability button")?,
         ),
         ["coins", place, coin] => ClickTarget::Coins(coin_place(place)?, coin_kind(coin)?),
-        ["pick", button] => ClickTarget::Pick(match *button {
-            "less" => PickButton::Less,
-            "more" => PickButton::More,
-            "min" => PickButton::Min,
-            "max" => PickButton::Max,
-            "confirm" => PickButton::Confirm,
-            "cancel" => PickButton::Cancel,
-            _ => return Err("expected less, more, min, max, confirm or cancel".into()),
-        }),
+        ["pick", button] => ClickTarget::Pick(pick_button(button)?),
         ["tint", slot] => ClickTarget::Tint(value(slot, "a bag slot")?, None),
         ["tint", slot, color] => ClickTarget::Tint(
             value(slot, "a bag slot")?,
@@ -459,6 +460,33 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                 .ok_or_else(|| String::from("expected a gem from 1 to 8"))?,
         ),
         _ => return Err("unknown or malformed step".into()),
+    })
+}
+
+/// The slider a script names: an Options window setting's, or the
+/// quantity window's.
+fn slider(name: &str) -> Result<SliderClick, String> {
+    if name == "quantity" {
+        return Ok(SliderClick::Quantity);
+    }
+    eq_client_core::options::Level::ALL
+        .into_iter()
+        .find(|level| level.key() == name)
+        .map(SliderClick::Level)
+        .ok_or_else(|| "expected clip_plane, max_fps, mouse_sensitivity or quantity".into())
+}
+
+/// The quantity picker's control a script names.
+fn pick_button(name: &str) -> Result<PickButton, String> {
+    Ok(match name {
+        "less" => PickButton::Less,
+        "more" => PickButton::More,
+        "min" => PickButton::Min,
+        "max" => PickButton::Max,
+        "confirm" => PickButton::Confirm,
+        "cancel" => PickButton::Cancel,
+        "amount" => PickButton::Amount,
+        _ => return Err("expected less, more, min, max, confirm, cancel or amount".into()),
     })
 }
 
@@ -675,6 +703,7 @@ fn key(name: &str) -> Option<KeyCode> {
         "SPACE" => Some(KeyCode::Space),
         "ESCAPE" => Some(KeyCode::Escape),
         "ENTER" => Some(KeyCode::Enter),
+        "BACKSPACE" => Some(KeyCode::Backspace),
         "TAB" => Some(KeyCode::Tab),
         "UP" => Some(KeyCode::ArrowUp),
         "DOWN" => Some(KeyCode::ArrowDown),
@@ -958,6 +987,38 @@ chat tell Friend inc now
             ]
         );
         for bad in ["click tint x", "click tint 23 x", "click tint 23 4 5"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parses_the_quantity_windows_slider_and_number_box() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "click slider quantity 50
+click slider max_fps 10
+click pick amount
+press backspace
+",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Slider(SliderClick::Quantity, 50)),
+                Step::Click(ClickTarget::Slider(
+                    SliderClick::Level(eq_client_core::options::Level::MaxFps),
+                    10
+                )),
+                Step::Click(ClickTarget::Pick(PickButton::Amount)),
+                Step::Press(vec![KeyCode::Backspace]),
+            ]
+        );
+        for bad in [
+            "click slider quantity 101",
+            "click slider amount 5",
+            "click pick all",
+        ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }

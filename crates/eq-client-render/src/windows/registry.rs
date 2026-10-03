@@ -49,6 +49,9 @@ pub(crate) enum WindowId {
     Give,
     /// The trade window between two players, drawn from the skin.
     Trade,
+    /// The skin's quantity window: how many of a stack, or of a kind of
+    /// coins, to pick up, open while the player chooses.
+    Quantity,
     /// The skin's Actions window: its Main page's sit, stand and camp, and
     /// the abilities on its Combat and Abilities pages.
     ActionsWindow,
@@ -290,7 +293,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 29] = [
+    pub(crate) const ALL: [Self; 30] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -308,6 +311,7 @@ impl WindowId {
         Self::Merchant,
         Self::Give,
         Self::Trade,
+        Self::Quantity,
         Self::ActionsWindow,
         Self::PetInfo,
         Self::Options,
@@ -350,6 +354,7 @@ impl WindowId {
             Self::Merchant => Some("MerchantWnd"),
             Self::Give => Some("GiveWnd"),
             Self::Trade => Some("TradeWnd"),
+            Self::Quantity => Some("QuantityWnd"),
             Self::ActionsWindow => Some("ActionsWindow"),
             Self::PetInfo => Some("PetInfoWindow"),
             Self::Options => Some("OptionsWindow"),
@@ -405,6 +410,7 @@ impl WindowId {
             Self::Merchant => "merchant",
             Self::Give => "give",
             Self::Trade => "trade",
+            Self::Quantity => "quantity",
             Self::ActionsWindow => "actions-window",
             Self::PetInfo => "pet-info",
             Self::Options => "options",
@@ -543,6 +549,9 @@ impl WindowId {
             Self::Give => floating("GIVE", Placement::TopRight(220.0, 100.0), false, &[]),
             // Where the give window opens: the two never show at once.
             Self::Trade => floating("TRADE", Placement::TopRight(220.0, 100.0), false, &[]),
+            // Where the skin places it (EQUI_QuantityWnd.xml); it opens while
+            // the player chooses how many to pick up.
+            Self::Quantity => floating("", Placement::TopLeft(300.0, 10.0), false, &[]),
             // Where the skin places it, right of the player and target windows.
             Self::ActionsWindow => floating("ACTIONS", Placement::TopLeft(516.0, 292.0), true, &[]),
             // Where the skin places it, right of the hotbar; it opens with a

@@ -573,7 +573,8 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...`,
 `give` (asks the target to take the cursor item, as clicking it does),
-`click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel`,
+`click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
+`click slider clip_plane|max_fps|mouse_sensitivity|quantity <percent>` (an Options window slider, or the quantity window's, pressed that far along),
 `click actions` (opens the skin's Actions window), `click tab <n>`, `click ability combat|abilities <n>`, `click attack`,
 `click window <key>` (a button that opens and closes the window, or hides and shows it, such as its selector button or the inventory's Skills button, by the window's key such as `skills`), `click close_box <window>` and `click minimize_box <window>` (a skinned window's title-bar boxes), `click scroll_up <window>` and `click scroll_down <window>` (a skinned window's scrollbar arrows),
 `right_click` with the same targets (a bag's slot opens its window),
@@ -678,7 +679,12 @@ class field remains unavailable, so it cannot enable banking.
   stack limit. Any excess remains on the cursor; unknown limits disable merging.
 - Click a stack's **count**, or **Shift-click** its icon, to choose a quantity, then **Pick up** to place that
   amount on the cursor. Min/Max and +/- controls adjust the amount; Cancel closes
-  the picker. Inventory changes invalidate the selection.
+  the picker. Inventory changes invalidate the selection. With the skin's
+  inventory, the skin's quantity window (`QuantityWnd`) asks instead: drag its
+  slider (one at the left end, all at the right), or click its number box and
+  type the number (Backspace takes the last digit away), then click **Accept**
+  or press Enter. Its close box or Escape takes nothing. How the official box
+  takes typing is not checked yet.
 - **Auto inventory** fills matching carried stacks, then stores any remainder in
   an empty compatible slot. It waits for each worker result and rechecks the current
   inventory before continuing. Escape, closing inventory, a manual move, or an error

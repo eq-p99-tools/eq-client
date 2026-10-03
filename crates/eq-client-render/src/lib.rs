@@ -470,6 +470,7 @@ fn schedule(app: &mut App) {
                 skinned::scrollbar::scroll,
                 navigation::update,
                 chat::input,
+                skinned::type_amount,
             )
                 .chain()
                 .in_set(Stage::Typing),
@@ -530,10 +531,11 @@ fn schedule(app: &mut App) {
                 motion::interpolate,
                 orbit_camera,
                 update_hud,
-                // Opens the give and training windows before their frames
-                // are drawn.
+                // Opens the give, quantity and training windows before their
+                // frames are drawn.
                 (
                     give::window,
+                    skinned::quantity,
                     training::window,
                     resurrection::window,
                     reading::window,
@@ -573,7 +575,8 @@ fn schedule(app: &mut App) {
                         skinned::slide,
                         skinned::drop_downs,
                         skinned::light_choices,
-                        skinned::show_levels,
+                        skinned::show_sliders,
+                        skinned::show_amount,
                         skinned::show_choices,
                         skinned::fill_lists,
                         training::fill,
@@ -586,7 +589,6 @@ fn schedule(app: &mut App) {
                     ),
                 ),
                 skinned::close,
-                skinned::picker,
             )
                 .chain(),
             (
