@@ -506,6 +506,17 @@ mod tests {
     }
 
     #[test]
+    fn an_item_held_shows_its_picture_and_one_from_a_link_none() {
+        let mut state = ItemState::default();
+        let mut held = crate::preview::items().remove(0);
+        held.icon = 640;
+        state.open_held(&held);
+        assert_eq!(state.icon(), Some(640));
+        state.open_received(item(2));
+        assert_eq!(state.icon(), None);
+    }
+
+    #[test]
     fn the_definition_on_screen_belongs_to_the_chosen_item() {
         let mut state = ItemState::default();
         state.open_received(item(1));

@@ -3060,6 +3060,15 @@ mod tests {
     }
 
     #[test]
+    fn the_item_displays_icon_box_shows_the_items_picture() {
+        assert!(matches!(
+            does("IconButton", WindowId::Item),
+            Some(Does::ItemIcon)
+        ));
+        assert!(matches!(does("Other", WindowId::Item), Some(Does::Nothing)));
+    }
+
+    #[test]
     fn the_options_window_checkboxes_turn_its_options_on_and_off() {
         use eq_client_assets::sidl::{Button, ButtonLook, Element, Page};
         use eq_client_core::options::Toggle;
