@@ -333,7 +333,7 @@ fn square(
         ))
         .with_children(|cell| {
             if let Some(item) = item {
-                if let Some(icon) = art.item(item.icon) {
+                if let Some(icon) = item.details.icon.and_then(|icon| art.item(icon)) {
                     cell.spawn((
                         icon,
                         Node {

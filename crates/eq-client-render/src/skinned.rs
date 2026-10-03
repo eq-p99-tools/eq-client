@@ -3349,8 +3349,6 @@ mod tests {
             does("DoneButton", WindowId::Training),
             Some(Does::Closes)
         ));
-        assert_eq!(crate::trade::corpse_slot(0), 22);
-        assert_eq!(crate::trade::corpse_slot(30), 52);
     }
 
     #[test]

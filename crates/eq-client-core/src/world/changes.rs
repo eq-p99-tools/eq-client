@@ -60,8 +60,8 @@ pub enum Reply {
     },
     /// The server answered a request for an item on the corpse.
     LootTaken {
-        /// The corpse slot asked for.
-        slot: u16,
+        /// The corpse's place asked for, from 0.
+        place: u16,
         /// Whether the item was handed over.
         accepted: bool,
     },

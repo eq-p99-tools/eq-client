@@ -45,9 +45,9 @@ impl ClientWorld {
         if self.zone.trade.loot(update) {
             changes.trade = true;
             changes.notices.extend(trade::loot_notice(update));
-            if let LootUpdate::Taken { slot, accepted } = update {
+            if let LootUpdate::Taken { place, accepted } = update {
                 changes.replies.push(Reply::LootTaken {
-                    slot: *slot,
+                    place: *place,
                     accepted: *accepted,
                 });
             }

@@ -133,7 +133,7 @@ fn loot_slot(window: &mut ChildSpawnerCommands, art: &mut Art, slot: &InvSlot, i
         .spawn((
             Button,
             LootSlot(place),
-            crate::trade::Action::Take(crate::trade::corpse_slot(place)),
+            crate::trade::Action::Take(place),
             crate::outbox::Needs::Capability(eq_client_core::Capability::Looting),
             at(
                 inside.x + area.x,
@@ -167,7 +167,7 @@ pub(crate) fn loot(
     let shown: Vec<_> = items
         .into_iter()
         .flatten()
-        .map(|(slot, item)| (*slot, item.details.id, item.stack_count))
+        .map(|(place, item)| (*place, item.details.id, item.stack_count))
         .collect();
     if last.as_ref() == Some(&shown) && added.is_empty() {
         return;
@@ -184,7 +184,7 @@ pub(crate) fn loot(
             &mut art,
             cell,
             node,
-            items.and_then(|items| items.get(&crate::trade::corpse_slot(place.0))),
+            items.and_then(|items| items.get(&place.0)),
         );
     }
 }
@@ -379,7 +379,7 @@ pub(crate) fn contents(
     }
     for (part, mut image) in &mut icons {
         let icon = match part {
-            BagPart::Icon(bag) => items.get(bag).map(|bag| bag.icon),
+            BagPart::Icon(bag) => items.get(bag).and_then(|bag| bag.details.icon),
             // Servers may send no icon (0) for a world container.
             BagPart::WorldIcon => container.map(|view| view.icon).filter(|icon| *icon != 0),
             BagPart::Name(_) | BagPart::WorldName => None,
@@ -412,7 +412,7 @@ fn draw(
         _ => (40.0, 40.0),
     };
     commands.entity(cell).with_children(|cell| {
-        if let Some(icon) = art.item(item.icon) {
+        if let Some(icon) = item.details.icon.and_then(|icon| art.item(icon)) {
             cell.spawn((Content, icon, at(1.0, 1.0, width - 2.0, height - 2.0)));
         } else {
             let initials: String = item
@@ -629,10 +629,13 @@ mod tests {
         let mut online = OnlineState::new(false);
         online.open_loot(9);
         let mut item = crate::preview::items().into_iter().next().unwrap();
-        // The corpse's second slot, the window's second place.
+        // The corpse's second place, the window's second place.
         item.slot = InventorySlot(23);
         for event in [
-            LootUpdate::Item(Box::new(item.clone())),
+            LootUpdate::Item {
+                place: 1,
+                item: Box::new(item.clone()),
+            },
             LootUpdate::Listed { corpse_id: 9 },
         ] {
             online.tell(

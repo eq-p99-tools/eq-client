@@ -132,14 +132,6 @@ impl OnlineState {
             enabled,
         }
     }
-
-    /// The session speaks this game generation: its world follows what that
-    /// generation's official client does on its own.
-    #[must_use]
-    pub fn speaking(mut self, generation: eq_client_core::Generation) -> Self {
-        self.world = ClientWorld::new(generation);
-        self
-    }
 }
 
 /// The world the session reports, or an empty one where no session runs.
@@ -226,7 +218,7 @@ impl Panels<'_> {
                     error.clone(),
                     state.world.inventory(),
                 ),
-                Reply::LootTaken { slot, accepted } => self.trade.taken(*slot, *accepted),
+                Reply::LootTaken { place, accepted } => self.trade.taken(*place, *accepted),
                 // The refused crossing no longer holds the player's motion.
                 Reply::ZoneLineRefused => self.motion.accepted(),
             }
@@ -431,6 +423,7 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
         WorldEvent::Spell(eq_client_core::SpellUpdate::Interrupted {
             caster_id,
             message_id,
+            ..
         }) if world
             .player()
             .is_some_and(|player| u32::from(player.spawn_id) == *caster_id) =>
@@ -1289,6 +1282,7 @@ mod tests {
             killer_id: 9,
             corpse_id: 8,
             bind_zone_id: 9,
+            corpse_name: None,
         };
         sender
             .send(WorldUpdate::Game(WorldEvent::BookAction(

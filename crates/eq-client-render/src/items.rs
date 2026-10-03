@@ -36,10 +36,6 @@ pub(super) struct ItemState {
     shown: Option<ItemDetails>,
     pending: Option<Instant>,
     status: String,
-    /// The item's picture, when it was opened from an item held, whose slot
-    /// gives it; one opened from a link has none, as the networking
-    /// session's item replies carry no picture yet.
-    icon: Option<u32>,
 }
 
 impl ItemState {
@@ -49,18 +45,11 @@ impl ItemState {
         self.shown = Some(item);
         self.pending = None;
         self.status.clear();
-        self.icon = None;
     }
 
-    /// Opens an item held, in a slot or a trade, with its picture.
-    pub(super) fn open_held(&mut self, item: &eq_client_core::inventory::InventoryItem) {
-        self.open_received(item.details.clone());
-        self.icon = Some(item.icon);
-    }
-
-    /// The shown item's picture, when it has one.
+    /// The shown item's picture, when its definition carries one.
     fn icon(&self) -> Option<u32> {
-        self.icon.filter(|_| self.definition().is_some())
+        self.definition().and_then(|item| item.icon)
     }
 
     /// The item the panel shows or waits for.
@@ -174,7 +163,6 @@ pub(super) fn input(
             continue;
         }
         state.selected = Some((link.item_id, link.text.clone()));
-        state.icon = None;
         if let Some(item) = online.world().item(link.item_id) {
             state.shown = Some(item.clone());
             continue;
@@ -508,13 +496,15 @@ mod tests {
     }
 
     #[test]
-    fn an_item_held_shows_its_picture_and_one_from_a_link_none() {
+    fn an_item_shows_the_picture_its_definition_carries() {
         let mut state = ItemState::default();
-        let mut held = crate::preview::items().remove(0);
-        held.icon = 640;
-        state.open_held(&held);
+        let mut held = item(1);
+        held.icon = Some(640);
+        state.open_received(held);
         assert_eq!(state.icon(), Some(640));
-        state.open_received(item(2));
+        let mut linked = item(2);
+        linked.icon = None;
+        state.open_received(linked);
         assert_eq!(state.icon(), None);
     }
 

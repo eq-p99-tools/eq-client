@@ -1072,6 +1072,7 @@ mod tests {
                 killer_id: 0,
                 corpse_id: 0,
                 bind_zone_id: 0,
+                corpse_name: None,
             })],
         );
         app.world_mut().resource_mut::<Controls>().reset(Some(6.0));

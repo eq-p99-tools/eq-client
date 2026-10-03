@@ -35,7 +35,8 @@ pub(crate) fn update(
     for (mut shown, mut image, mut node) in &mut artwork {
         let icon = match bindings.0[shown.slot] {
             Some(super::Action::Item { slot, id }) => {
-                super::bound_item(online.world().inventory(), slot, id).map(|item| item.icon)
+                super::bound_item(online.world().inventory(), slot, id)
+                    .and_then(|item| item.details.icon)
             }
             _ => None,
         };

@@ -796,7 +796,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                 use super::trade::Action;
                 *action
                     == match click {
-                        TradeClick::Take(slot) => Action::Take(slot),
+                        TradeClick::Take(place) => Action::Take(place),
                         TradeClick::TakeAll => Action::TakeAll,
                         TradeClick::EndLoot => Action::EndLoot,
                         TradeClick::Buy(slot) => Action::Buy(slot),

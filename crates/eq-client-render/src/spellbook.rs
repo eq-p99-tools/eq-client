@@ -948,6 +948,8 @@ mod tests {
             races: 1,
             flags: Vec::new(),
             stats: Vec::new(),
+            price: None,
+            icon: None,
         };
         let book = eq_client_core::SpellBook::titanium_profile(&vec![0; 19592]).unwrap();
         let mut online = super::super::online::OnlineState::new(true);
@@ -961,7 +963,6 @@ mod tests {
                 rules: ItemPlacement::default(),
                 slot: InventorySlot::CURSOR,
                 details,
-                icon: 0,
                 stack_count: None,
                 charges: 1,
                 bag_slots: 0,

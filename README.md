@@ -535,9 +535,9 @@ The target panel lists the keys that apply to the current target:
   **Loot all** takes one item at a time, waiting for each acknowledgement. Killed
   creatures become corpses in place, keeping their spawn ID. With an
   installation, the skin's loot window (`LootWnd`) shows the corpse instead: its
-  name, and each item in the slot for its corpse slot (the first place is corpse
-  slot 22, as Titanium servers number them), scrolling where the skin gives the
-  slots a scrollbar. Clicking an item takes it into the inventory, and **Done**
+  name, and each item in the slot for its place on the corpse (the networking
+  crate numbers the places from 0, out of the server's corpse slots),
+  scrolling where the skin gives the slots a scrollbar. Clicking an item takes it into the inventory, and **Done**
   or its close box ends the loot. The skin has no Loot all, and Link all is
   greyed out.
 - **U** opens the targeted merchant: stock with the server's prices, one-click
@@ -626,7 +626,7 @@ official client. These paths have synthetic tests; live verification is pending.
 repeatable live or offline checks. One step per line, `#` starts a comment:
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
-`camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...`, `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
+`camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...` (`click loot <place>` takes the item at a place on the corpse, from 0), `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
 `click character <1-8>`, `click enter_world` and `click quit_game` (the skin's character list), `click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `press delete`,
 `give` (asks the target to take the cursor item, as clicking it does),
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
@@ -751,8 +751,8 @@ class field remains unavailable, so it cannot enable banking.
 - **Right-click** an item to inspect its already received definition. With an
   installation, the skin's item display (`ItemDisplayWindow`) shows it: the
   item's name on its title bar, its picture in the skin's box (an item opened
-  from a chat link has none yet), its details in the skin's text box, and its
-  close box closes it. Details longer than the box scroll in it, with the
+  from a chat link too, where the server's reply carries its picture), its
+  details in the skin's text box, and its close box closes it. Details longer than the box scroll in it, with the
   wheel and with the skin's scrollbar where the skin gives one, and each item
   shows from the top; the skin's other text boxes, such as a book's pages,
   do the same.

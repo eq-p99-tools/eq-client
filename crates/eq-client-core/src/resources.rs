@@ -252,7 +252,6 @@ mod tests {
             book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot: InventorySlot(slot),
-            icon: 0,
             stack_count: None,
             charges: 0,
             bag_slots: 0,
@@ -271,6 +270,8 @@ mod tests {
                 races: 1 << 12,
                 flags: Vec::new(),
                 stats: Vec::new(),
+                price: None,
+                icon: None,
             },
         };
         let mut inventory = Inventory::default();
@@ -367,6 +368,8 @@ mod tests {
             races: 1,
             flags: Vec::new(),
             stats: Vec::new(),
+            price: None,
+            icon: None,
         };
         assert!(eqemu_equipment_by_level(&item, 0).is_none());
         assert_eq!(

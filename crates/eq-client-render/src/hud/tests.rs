@@ -173,6 +173,7 @@ fn interruption_label_uses_local_text_then_expires() {
     let interrupted = |message_id| SpellUpdate::Interrupted {
         caster_id: 12,
         message_id,
+        caster_name: None,
     };
     let mut state = admitted();
     testing::spell(&mut state, interrupted(73));

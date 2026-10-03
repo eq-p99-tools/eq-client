@@ -162,6 +162,7 @@ fn a_new_zone_entry_forgets_the_old_zone_and_death() {
             killer_id: 0,
             corpse_id: 10,
             bind_zone_id: 2,
+            corpse_name: None,
         }),
     );
     game(&mut world, entered(2));
@@ -205,15 +206,22 @@ fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
         killer_id: 9,
         corpse_id: 5,
         bind_zone_id: 0,
+        corpse_name: Some("a_rat`s_corpse5".into()),
     };
     assert_eq!(game(&mut world, WorldEvent::Death(rat.clone())).reset, None);
     let corpse = world.spawn(5).unwrap();
     assert_eq!(corpse.state.kind, SpawnKind::NpcCorpse);
     assert_eq!(corpse.health, Some(0));
     assert!(corpse.revision > revision);
-    // It takes the name a corpse first seen dead carries, once.
+    // It takes the name the death gives its corpse, once.
     assert_eq!(corpse.state.name, "a_rat`s_corpse5");
-    game(&mut world, WorldEvent::Death(rat));
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            corpse_name: Some("another".into()),
+            ..rat
+        }),
+    );
     assert_eq!(world.spawn(5).unwrap().state.name, "a_rat`s_corpse5");
     assert!(world.in_world());
     let own = Death {
@@ -221,6 +229,7 @@ fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
         killer_id: 5,
         corpse_id: 10,
         bind_zone_id: 2,
+        corpse_name: None,
     };
     assert_eq!(
         game(&mut world, WorldEvent::Death(own)).reset,
@@ -250,11 +259,22 @@ fn a_corpse_seen_dying_is_named_as_one_first_seen_dead() {
     let mut examplar = spawn(4);
     examplar.name = "Examplar".into();
     examplar.kind = SpawnKind::Player;
-    game(&mut world, WorldEvent::Spawns(vec![gnoll, examplar]));
-    for (id, server_name, kind) in [
-        (12, b"a_gnoll`s_corpse12".as_slice(), 3),
-        (4, b"Examplar's corpse4".as_slice(), 2),
+    game(
+        &mut world,
+        WorldEvent::Spawns(vec![gnoll.clone(), examplar.clone()]),
+    );
+    for (living, server_name, kind) in [
+        (gnoll, b"a_gnoll`s_corpse12".as_slice(), 3),
+        (examplar, b"Examplar's corpse4".as_slice(), 2),
     ] {
+        let id = living.spawn_id;
+        // The session names the corpse by the Titanium rule.
+        let corpse_name = eq_network_game::world::corpse_name(
+            eq_network_game::GameDialect::Titanium,
+            &living.name,
+            living.kind,
+            id,
+        );
         game(
             &mut world,
             WorldEvent::Death(Death {
@@ -262,14 +282,16 @@ fn a_corpse_seen_dying_is_named_as_one_first_seen_dead() {
                 killer_id: 9,
                 corpse_id: u32::from(id),
                 bind_zone_id: 0,
+                corpse_name,
             }),
         );
         let seen = fresh(server_name, kind, u32::from(id));
         let corpse = &world.spawn(id).unwrap().state;
         assert_eq!((&corpse.name, corpse.kind), (&seen.name, seen.kind));
     }
-    // An EqMac world keeps the living name until TAKP is checked.
-    let mut world = ClientWorld::new(crate::Generation::new(crate::GameDialect::EqMac));
+    // A death that names no corpse (an EqMac session's, until TAKP is
+    // checked) leaves the living name.
+    let mut world = admitted();
     game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
     game(
         &mut world,
@@ -278,6 +300,7 @@ fn a_corpse_seen_dying_is_named_as_one_first_seen_dead() {
             killer_id: 9,
             corpse_id: 5,
             bind_zone_id: 0,
+            corpse_name: None,
         }),
     );
     assert_eq!(world.spawn(5).unwrap().state.name, "a_rat");
@@ -517,6 +540,7 @@ fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     let interrupted = |caster_id| SpellUpdate::Interrupted {
         caster_id,
         message_id: 439,
+        caster_name: None,
     };
     let others = spell(&mut world, interrupted(8));
     assert_eq!((others.cast, others.notices), (None, Vec::new()));
@@ -654,8 +678,9 @@ fn chest() -> crate::inventory::InventoryItem {
             races: u32::MAX,
             flags: Vec::new(),
             stats: Vec::new(),
+            price: None,
+            icon: None,
         },
-        icon: 0,
         stack_count: None,
         charges: 0,
         bag_slots: 0,
@@ -704,6 +729,7 @@ fn the_dead_show_no_hp_and_a_new_admission_forgets_the_report() {
             killer_id: 0,
             corpse_id: 10,
             bind_zone_id: 2,
+            corpse_name: None,
         }),
     );
     assert_eq!(world.hit_points(), Some((0, 150)));
@@ -804,6 +830,7 @@ fn every_reset_forgets_the_target() {
             killer_id: 0,
             corpse_id: 10,
             bind_zone_id: 2,
+            corpse_name: None,
         }),
     );
     assert_eq!(world.target().selected, None);
@@ -852,14 +879,20 @@ fn a_corpse_fills_while_open_and_closes_when_the_server_says() {
     world.open_loot(9);
     let mut item = chest();
     item.slot = crate::inventory::InventorySlot(22);
-    game(&mut world, loot(LootUpdate::Item(Box::new(item))));
+    game(
+        &mut world,
+        loot(LootUpdate::Item {
+            place: 0,
+            item: Box::new(item),
+        }),
+    );
     game(&mut world, loot(LootUpdate::Listed { corpse_id: 8 }));
     assert!(!world.loot().unwrap().listed, "another corpse's listing");
     game(&mut world, loot(LootUpdate::Listed { corpse_id: 9 }));
     assert!(world.loot().unwrap().listed);
-    let taken = |accepted| loot(LootUpdate::Taken { slot: 22, accepted });
+    let taken = |accepted| loot(LootUpdate::Taken { place: 0, accepted });
     game(&mut world, taken(false));
-    assert!(world.loot().unwrap().items.contains_key(&22));
+    assert!(world.loot().unwrap().items.contains_key(&0));
     game(&mut world, taken(true));
     assert!(world.loot().unwrap().items.is_empty());
     game(&mut world, loot(LootUpdate::Closed));
@@ -1231,6 +1264,7 @@ fn the_give_window_opens_on_the_npcs_answer_and_closes_on_the_servers_word() {
             killer_id: 0,
             corpse_id: 0,
             bind_zone_id: 0,
+            corpse_name: None,
         }),
     );
     assert!(world.exchange().is_none());
@@ -1328,6 +1362,7 @@ fn camping_progress_follows_the_session_and_only_death_leaves_it() {
             killer_id: 0,
             corpse_id: 10,
             bind_zone_id: 2,
+            corpse_name: None,
         }),
     );
     assert!(world.camp().is_some());
@@ -1434,7 +1469,7 @@ fn loot_and_shop_replies_say_what_the_player_got_or_was_refused() {
         game(
             &mut world,
             WorldEvent::Loot(LootUpdate::Taken {
-                slot: 22,
+                place: 0,
                 accepted: false
             })
         )
