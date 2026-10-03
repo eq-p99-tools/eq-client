@@ -286,6 +286,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             reason,
             string_id,
             arguments,
+        }
+        | Notice::RaidRefused {
+            reason,
+            string_id,
+            arguments,
         } => chat(official(*string_id, arguments, reason, messages)),
         Notice::ConsumeRefused { reason, string_id }
         | Notice::CorpseRefused { reason, string_id }
@@ -293,8 +298,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::CombineRefused { reason, string_id }
         | Notice::GroupRefused { reason, string_id }
         | Notice::ListingRefused { reason, string_id }
-        | Notice::SocialRefused { reason, string_id }
-        | Notice::RaidRefused { reason, string_id } => {
+        | Notice::SocialRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
         Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
@@ -411,6 +415,12 @@ fn raid_lines(notice: &RaidNotice, messages: Option<&Messages>) -> Vec<Said> {
         }
         RaidNotice::Leader(_) => vec![line(5069, None, "You lead the raid now.")],
         RaidNotice::Disbanded => vec![line(5071, None, "The raid has ended.")],
+        RaidNotice::Locked(true) => vec![line(
+            8870,
+            None,
+            "Your raid is locked; invitations wait until it is unlocked.",
+        )],
+        RaidNotice::Locked(false) => vec![line(8871, None, "Your raid is unlocked.")],
     }
 }
 

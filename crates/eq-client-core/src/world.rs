@@ -564,11 +564,13 @@ impl ClientWorld {
                 session_id,
                 reason,
                 string_id,
+                arguments,
             } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::RaidRefused {
                         reason: reason.clone(),
                         string_id: *string_id,
+                        arguments: arguments.clone(),
                     });
                 } else {
                     news.ignored = true;
