@@ -10,6 +10,8 @@ pub(super) enum Source {
     Window(eq_client_core::buffs::EffectWindow, u32),
     Gem(usize),
     Book(usize),
+    /// The spell in this place on the skin's spellbook's open pages.
+    BookPlace(u8),
     Action(usize),
 }
 
@@ -22,6 +24,11 @@ pub(super) struct Artwork {
 
 /// Child artwork never participates in hit testing; the owning button handles input.
 pub(super) fn artwork(source: Source, size: f32) -> impl Bundle {
+    artwork_at(source, (3.0, 2.0), size)
+}
+
+/// Artwork at this place in the button that owns it.
+pub(super) fn artwork_at(source: Source, (left, top): (f32, f32), size: f32) -> impl Bundle {
     (
         Artwork {
             source,
@@ -31,8 +38,8 @@ pub(super) fn artwork(source: Source, size: f32) -> impl Bundle {
         ImageNode::default(),
         Node {
             position_type: PositionType::Absolute,
-            left: px(3),
-            top: px(2),
+            left: px(left),
+            top: px(top),
             width: px(size),
             height: px(size),
             ..default()
@@ -77,6 +84,7 @@ pub(super) fn update(
                 .map(eq_client_core::buffs::Shown::spell_id),
             Source::Gem(index) => online.world().gem(index),
             Source::Action(index) => bindings.gem(index).and_then(|gem| online.world().gem(gem)),
+            Source::BookPlace(place) => book.spell(online.world().spell_book(), place),
             Source::Book(index) => online.world().spell_book().and_then(|spells| {
                 spells
                     .slots()

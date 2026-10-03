@@ -286,9 +286,24 @@ including cast acknowledgement and cooldown status. Empty gems and cleared bindi
 remain visibly empty; rememorizing updates the action without rebinding it.
 It has a title bar for dragging and minimizing.
 
-Press B to browse the admitted character's spellbook, eight known spells per
-page. Labels come from `spells_us.txt` in the configured installation, with an
-ID fallback for missing definitions. Select a spell, then a gem button to request
+Press B to open the spellbook. With an installation, the skin's spellbook
+window (`SpellBookWnd`) shows it as the official client does: two pages at a
+time, eight places to a page, each spell in its own place in the book with
+empty places left blank, the pages' numbers, and the skin's arrows to turn the
+pages. Hovering a place names its spell with its base mana, cast time and
+range. It is used through the cursor and the gems, as the installed client's
+own strings describe it (inferred; a recording of the official client will
+confirm): a left click on a spell puts the spell on the cursor, and a click
+on a gem then memorizes it there (a spell in a gem already is refused in the
+official words); a left click on an empty place takes it off the cursor. With
+a scroll on the cursor, a left click on an empty place scribes it there, and a
+place that holds a spell or a spell the book has already is refused in the
+official words. The skin's gauges fill while a memorization or a scribe is
+under way. Without the skin, the client's own list below stands in.
+
+The client's own list shows the admitted character's spellbook, eight known
+spells per page. Labels come from `spells_us.txt` in the configured
+installation, with an ID fallback for missing definitions. Select a spell, then a gem button to request
 memorization. Selected spells are highlighted, unused rows are hidden, and queued
 requests show their destination gem. Pending book actions suppress repeated
 scribe/memorize clicks. New admissions reset the selection and page.
@@ -585,6 +600,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...`, `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
+`click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar),
 `give` (asks the target to take the cursor item, as clicking it does),
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
 `click slider clip_plane|max_fps|mouse_sensitivity|quantity <percent>` (an Options window slider, or the quantity window's, pressed that far along),

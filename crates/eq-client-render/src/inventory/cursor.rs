@@ -29,8 +29,15 @@ pub(super) fn spawn(commands: &mut Commands) {
 }
 
 /// What the overlay was last drawn for: its entity, the window's and the
-/// inventory's revisions, and the coins on the cursor.
-type Drawn = (Entity, u64, u64, Option<(eq_client_core::money::Coin, u32)>);
+/// inventory's revisions, the coins on the cursor and the spell picked up
+/// from the skin's book.
+type Drawn = (
+    Entity,
+    u64,
+    u64,
+    Option<(eq_client_core::money::Coin, u32)>,
+    Option<u32>,
+);
 
 /// Follows the pointer using confirmed/predicted inventory state, never a selected slot.
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -40,6 +47,10 @@ pub(crate) fn update(
     online: Res<crate::online::OnlineState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     (scale, look): (Option<Res<UiScale>>, Res<crate::skinned::CursorLook>),
+    (hand, names): (
+        Res<crate::spellbook::BookHand>,
+        Res<crate::spellbook::SpellNames>,
+    ),
     controls: Query<(&Interaction, &ComputedNode, &UiGlobalTransform)>,
     mut root: Query<(Entity, &mut Node, &mut BackgroundColor), With<Overlay>>,
     mut stamp: Local<Option<Drawn>>,
@@ -51,6 +62,11 @@ pub(crate) fn update(
     let inventory = online.world().inventory();
     let item = inventory.items().get(&InventorySlot::CURSOR);
     let coins = crate::coins::on_cursor(online.world());
+    // A spell from the skin's book rides the cursor while nothing else does.
+    let spell = hand
+        .held
+        .map(|held| held.spell)
+        .filter(|_| item.is_none() && coins.is_none());
     let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
     // A control hovered with no pointer over the window, as a script hovers
     // one, stands in for the pointer at its middle, as for a tooltip.
@@ -67,7 +83,7 @@ pub(crate) fn update(
         }?;
         Some((pointer, window.size() / factor))
     });
-    node.display = if (item.is_some() || coins.is_some()) && pointer.is_some() {
+    node.display = if (item.is_some() || coins.is_some() || spell.is_some()) && pointer.is_some() {
         Display::Flex
     } else {
         Display::None
@@ -79,7 +95,7 @@ pub(crate) fn update(
             place(&mut node, pointer, viewport);
         }
     }
-    let current = (entity, state.revision, inventory.revision(), coins);
+    let current = (entity, state.revision, inventory.revision(), coins, spell);
     if *stamp == Some(current) && !look.is_changed() {
         return;
     }
@@ -87,16 +103,7 @@ pub(crate) fn update(
     commands.entity(entity).despawn_children();
     dress(&mut node, &mut background, look.0.as_ref());
     if let Some(place) = &look.0 {
-        let picture = match (item, coins) {
-            (Some(item), _) => art
-                .item(item.icon)
-                .map(|icon| (icon, Vec2::new(place.icon.width, place.icon.height))),
-            (None, Some((coin, _))) => place.coin(coin).and_then(|piece| {
-                let size = Vec2::new(to_f32(piece.width), to_f32(piece.height));
-                art.cut(piece).map(|image| (image, size))
-            }),
-            (None, None) => None,
-        };
+        let picture = picture(place, (item, coins, spell), &names, &mut art);
         let count = item.map_or(coins.map(|(_, count)| count), |item| {
             item.stack_count.filter(|count| *count > 1)
         });
@@ -106,10 +113,14 @@ pub(crate) fn update(
         return;
     }
     let Some(item) = item else {
-        // Coins ride the cursor on their own, as in the official client.
-        if let Some((coin, count)) = coins {
+        // Coins ride the cursor on their own, as in the official client, and
+        // so does a spell from the skin's book.
+        let words = coins
+            .map(|(coin, count)| format!("{count} {}", coin_name(coin)))
+            .or_else(|| spell.map(|spell| names.label(spell)));
+        if let Some(words) = words {
             commands.entity(entity).with_child((
-                Text::new(format!("{count} {}", coin_name(coin))),
+                Text::new(words),
                 theme::font(Size::Body),
                 TextColor(theme::INK_WARM),
                 FocusPolicy::Pass,
@@ -146,6 +157,33 @@ pub(crate) fn update(
             FocusPolicy::Pass,
         ));
     });
+}
+
+/// The picture of what rides the cursor, in the skin's attachment: the
+/// item's icon, or the spell's, where the skin puts its picture, or the
+/// skin's picture of the coins at its own size.
+fn picture(
+    place: &CursorPlace,
+    (item, coins, spell): (
+        Option<&eq_client_core::inventory::InventoryItem>,
+        Option<(eq_client_core::money::Coin, u32)>,
+        Option<u32>,
+    ),
+    names: &crate::spellbook::SpellNames,
+    art: &mut crate::sheets::Art,
+) -> Option<(ImageNode, Vec2)> {
+    let whole = Vec2::new(place.icon.width, place.icon.height);
+    match (item, coins) {
+        (Some(item), _) => art.item(item.icon).map(|icon| (icon, whole)),
+        (None, Some((coin, _))) => place.coin(coin).and_then(|piece| {
+            let size = Vec2::new(to_f32(piece.width), to_f32(piece.height));
+            art.cut(piece).map(|image| (image, size))
+        }),
+        (None, None) => spell
+            .and_then(|spell| names.icon(spell))
+            .and_then(|icon| art.spell(icon))
+            .map(|icon| (icon, whole)),
+    }
 }
 
 /// Dresses the overlay as the skin's cursor attachment, a box without a

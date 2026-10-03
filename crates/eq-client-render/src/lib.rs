@@ -331,6 +331,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<spellbook::BookView>()
         .init_resource::<spellbook::BookSelection>()
+        .init_resource::<spellbook::BookHand>()
         .init_resource::<sheets::Sheets>()
         .init_resource::<skinned::Screens>()
         .init_resource::<skinned::CursorLook>()
@@ -507,7 +508,7 @@ fn schedule(app: &mut App) {
             hud::actions,
             (hud::hotbar::update, hud::hotbar::persist).chain(),
             hud::hotbar::item_actions,
-            spellbook::update,
+            (spellbook::update, spellbook::book_clicks),
             character_select::update,
             windows::input,
             move_player,
@@ -574,7 +575,12 @@ fn schedule(app: &mut App) {
                     skinned::contents,
                     skinned::theirs,
                     skinned::loot,
-                    (trade::fill_wares, trade::picture, items::icon),
+                    (
+                        trade::fill_wares,
+                        trade::picture,
+                        items::icon,
+                        spellbook::book_tooltips,
+                    ),
                     skinned::tabs,
                     abilities::present,
                     (

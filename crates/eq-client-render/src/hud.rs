@@ -417,6 +417,10 @@ pub(super) fn actions(
     bar_clicks: Query<(&Interaction, &hotbar::Slot), Changed<Interaction>>,
     bindings: Res<hotbar::Bindings>,
     definitions: (Res<super::spellbook::SpellNames>, Res<messages::Messages>),
+    (mut hand, mut requests): (
+        ResMut<super::spellbook::BookHand>,
+        Option<ResMut<action_bar::ActionRequests>>,
+    ),
 ) {
     use super::keys::Act;
     if !online.world().connected() || online.world().death().is_some() || !keys.focused() {
@@ -429,6 +433,23 @@ pub(super) fn actions(
         .iter()
         .find(|(interaction, _)| **interaction == Interaction::Pressed)
         .map(|(_, gem)| gem.0);
+    // A spell picked up from the skin's book goes into the gem clicked.
+    if let Some(gem) = clicked
+        && let Some(held) = hand.held.take()
+    {
+        let (names, messages) = &definitions;
+        let refusal = super::spellbook::memorize_held(
+            held,
+            gem,
+            (&online, &outbox),
+            (names, messages),
+            requests.as_deref_mut(),
+        );
+        if let Some(said) = refusal {
+            chat.refuse(said);
+        }
+        return;
+    }
     // Shift-click forgets the gem; its key only casts.
     let forgetting = clicked.is_some()
         && keys

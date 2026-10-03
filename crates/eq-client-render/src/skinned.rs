@@ -50,6 +50,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Merchant => "EQUI_MerchantWnd.xml",
         WindowId::Item => "EQUI_ItemDisplay.xml",
         WindowId::Quantity => "EQUI_QuantityWnd.xml",
+        WindowId::Spellbook => "EQUI_SpellBookWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
         WindowId::Selector => "EQUI_SelectorWnd.xml",
@@ -120,6 +121,10 @@ pub(crate) enum Shows {
     /// The merchant window's Sell button (true) or its Buy button: the skin
     /// keeps one over the other, and the one for what is chosen shows.
     WhileSelling(bool),
+    /// The name of the spell in this place on the spellbook's open pages.
+    BookName(u8),
+    /// The number of the spellbook's right page (true) or its left.
+    BookPage(bool),
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -1232,6 +1237,11 @@ enum Does {
     Chosen,
     /// Shows the picture of the item the item display shows.
     ItemIcon,
+    /// Shows the spell in this place on the spellbook's open pages, which a
+    /// click picks up or scribes into.
+    BookPlace(u8),
+    /// Turns the spellbook's pages forward (true) or back.
+    TurnsSpellbook(bool),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -1283,8 +1293,10 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     ) {
         return Some(Does::Closes);
     }
-    if owner == WindowId::PetInfo {
-        return Some(pet_button(id));
+    match owner {
+        WindowId::PetInfo => return Some(pet_button(id)),
+        WindowId::Spellbook => return spellbook_button(id),
+        _ => (),
     }
     if owner == WindowId::Selector {
         return Some(selector_button(id).map_or(Does::Nothing, Does::Toggles));
@@ -1362,6 +1374,22 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
             _ => return None,
         },
         _ => Does::Nothing,
+    })
+}
+
+/// What a button of the skin's spellbook does: its places show the open
+/// pages' spells and its arrows turn the pages. Its Mem. This Page and
+/// Meditate buttons, which the skin parks at a pixel's size, are left out.
+fn spellbook_button(id: &str) -> Option<Does> {
+    Some(match id {
+        "SBW_PageUp_Button" => Does::TurnsSpellbook(true),
+        "SBW_PageDown_Button" => Does::TurnsSpellbook(false),
+        "SBW_MemPage0_Button" | "SBW_MemPage1_Button" | "MeditateButton" => return None,
+        _ => id
+            .strip_prefix("SBW_Spell")
+            .and_then(|place| place.parse::<u8>().ok())
+            .filter(|place| usize::from(*place) < crate::spellbook::PLACES)
+            .map_or(Does::Nothing, Does::BookPlace),
     })
 }
 
@@ -1579,8 +1607,17 @@ fn button(
             .or(button.look.normal.as_ref()),
         _ => button.look.normal.as_ref(),
     };
+    // A button the skin draws only under the pointer, as the default
+    // spellbook's close mark, starts unseen (`buttons`).
+    let unseen = look.is_none() && !matches!(does, Does::Nothing);
+    let look = look.or_else(|| button.look.flyby.as_ref().filter(|_| unseen));
     let mut drawn = match look.and_then(|piece| art.cut(piece)) {
-        Some(image) => window.spawn((image, node)),
+        Some(mut image) => {
+            if unseen {
+                image.color.set_alpha(0.0);
+            }
+            window.spawn((image, node))
+        }
         None => window.spawn(node),
     };
     behave(&mut drawn, does, button, owner);
@@ -1593,7 +1630,11 @@ fn button(
         if let (Some(decal), Some(place)) = (&button.decal, button.decal_area)
             && !matches!(
                 does,
-                Does::PetBuff(_) | Does::Buff(..) | Does::Chosen | Does::ItemIcon
+                Does::PetBuff(_)
+                    | Does::Buff(..)
+                    | Does::Chosen
+                    | Does::ItemIcon
+                    | Does::BookPlace(_)
             )
         {
             picture(
@@ -1645,7 +1686,7 @@ fn behave(
                 None => drawn,
             }
         }
-        Does::Closes => drawn.insert((Button, items::Closes(owner))),
+        Does::Closes => drawn.insert((Button, items::Closes(owner), skin())),
         Does::Gives => drawn.insert((Button, super::give::GiveButton)),
         Does::Coins(place, coin) => drawn.insert((Button, super::coins::CoinBox { place, coin })),
         Does::Attack => drawn.insert((
@@ -1712,6 +1753,17 @@ fn behave(
         Does::ItemIcon => {
             let (x, y, size) = decal_place(button);
             drawn.insert(super::items::ItemIcon { x, y, size })
+        }
+        // Hovering a place names its spell (`spellbook::book_tooltips`).
+        Does::BookPlace(place) => drawn.insert((
+            Button,
+            crate::spellbook::BookPlace(place),
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Spellbook),
+            crate::tooltip::Tooltip::default(),
+        )),
+        Does::TurnsSpellbook(forward) => {
+            drawn.insert((Button, crate::spellbook::TurnsPages(forward), skin()))
         }
         Does::Offered(_) | Does::BagIcon => drawn,
         Does::Nothing => drawn.insert(missing()),
@@ -1813,6 +1865,15 @@ fn caption(
                 area.height.min(area.width) - 4.0,
             ));
         }
+        // The spell's picture, where the skin puts its sample.
+        Does::BookPlace(place) => {
+            let (x, y, size) = decal_place(button);
+            inner.spawn(super::spell_icons::artwork_at(
+                super::spell_icons::Source::BookPlace(place),
+                (x, y),
+                size,
+            ));
+        }
         Does::Buff(window, index) => {
             inner.spawn(super::spell_icons::artwork(
                 super::spell_icons::Source::Window(window, index),
@@ -1839,6 +1900,7 @@ fn caption(
         | Does::Maps(_)
         | Does::Picks(_)
         | Does::Trades(_)
+        | Does::TurnsSpellbook(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 && area.width < area.height * 1.5 {
@@ -1929,10 +1991,18 @@ pub(crate) fn buttons(
             (false, false, false) => None,
         }
         .or(look.normal.as_ref());
-        if let Some(wanted) = piece.and_then(|piece| art.cut(piece))
-            && image.rect != wanted.rect
-        {
-            image.rect = wanted.rect;
+        match piece.and_then(|piece| art.cut(piece)) {
+            Some(wanted) => {
+                if image.rect != wanted.rect {
+                    image.rect = wanted.rect;
+                }
+                if image.color.alpha() == 0.0 {
+                    image.color.set_alpha(1.0);
+                }
+            }
+            // A button the skin draws only under the pointer.
+            None if image.color.alpha() != 0.0 => image.color.set_alpha(0.0),
+            None => (),
         }
     }
 }
@@ -2202,9 +2272,21 @@ fn gauge(
     });
 }
 
-/// What a loot or merchant window's label shows: the corpse's or the
-/// merchant's name, or the chosen item's name or price.
-fn trading_label(owner: WindowId, name: &str) -> Option<Shows> {
+/// What a loot, merchant or spellbook window's label shows: the corpse's
+/// or the merchant's name, the chosen item's name or price, or a spell's
+/// name or a page's number on the spellbook's open pages.
+fn window_label(owner: WindowId, name: &str) -> Option<Shows> {
+    if owner == WindowId::Spellbook {
+        return match name {
+            "SBW_LeftPageNum" => Some(Shows::BookPage(false)),
+            "SBW_RightPageNum" => Some(Shows::BookPage(true)),
+            _ => name
+                .strip_prefix("SBW_SpellName")
+                .and_then(|place| place.parse::<u8>().ok())
+                .filter(|place| usize::from(*place) < crate::spellbook::PLACES)
+                .map(Shows::BookName),
+        };
+    }
     Some(match (owner, name) {
         (WindowId::Loot, "LW_CorpseName") => Shows::Corpse,
         (WindowId::Merchant, "MW_MerchantName") => Shows::Merchant,
@@ -2240,7 +2322,7 @@ fn label(
     );
     // The player's own name in the trade window, lit once they click Trade.
     let trader = owner == WindowId::Trade && name == "TRDW_MyName";
-    let trading = trading_label(owner, name);
+    let named = window_label(owner, name);
     // The Training window's practice points and the coins the player carries.
     let counted = match name {
         "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
@@ -2262,7 +2344,7 @@ fn label(
         || banker
         || partner
         || trader
-        || trading.is_some()
+        || named.is_some()
         || counted.is_some()
         || page_number.is_some();
     let words = if filled { "" } else { label.text.as_str() };
@@ -2301,7 +2383,7 @@ fn label(
         }
         (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
         (None, None) if trader => aligned(window, node, label.align, (text, Shows::Trader)),
-        (None, None) if let Some(shows) = trading => {
+        (None, None) if let Some(shows) = named => {
             aligned(window, node, label.align, (text, shows));
         }
         (None, None) => match controls::value_label(name, owner) {
@@ -2388,9 +2470,11 @@ pub(crate) fn show(
         Res<super::inventory::InventoryState>,
         Res<super::spellbook::SpellNames>,
     ),
-    (combat, trade): (
+    (combat, trade, book, requests): (
         Res<super::combat::CombatState>,
         Res<super::trade::TradeState>,
+        Res<super::spellbook::BookView>,
+        Res<super::hud::action_bar::ActionRequests>,
     ),
     mut fills: Query<(&Shows, &mut Node), Without<Text>>,
     mut texts: Query<(&Shows, &mut Text, &mut TextColor)>,
@@ -2425,7 +2509,7 @@ pub(crate) fn show(
         let Shows::Fill(kind) = *shows else {
             continue;
         };
-        let fraction = fraction(world, hud.resource_estimate, kind).unwrap_or(0.0);
+        let fraction = filled(world, (hud.resource_estimate, &requests), kind);
         let width = percent(fraction.clamp(0.0, 1.0) * 100.0);
         if node.width != width {
             node.width = width;
@@ -2459,6 +2543,15 @@ pub(crate) fn show(
             Shows::PracticePoints => (super::training::practice_points(world), None),
             Shows::Corpse | Shows::Merchant | Shows::ChosenName | Shows::ChosenPrice => {
                 (trading_text(*shows, &trade, world), None)
+            }
+            Shows::BookName(place) => (
+                book.spell(world.spell_book(), place)
+                    .map_or_else(String::new, |spell| names.label(spell)),
+                None,
+            ),
+            // Two pages to a spread, counted from one.
+            Shows::BookPage(right) => {
+                ((book.spread * 2 + 1 + usize::from(right)).to_string(), None)
             }
             Shows::Partner => (
                 super::give::partner(world),
@@ -2511,6 +2604,24 @@ fn trading_text(
             }),
         _ => String::new(),
     }
+}
+
+/// How full a gauge is drawn: as `fraction` says, or the spellbook's
+/// memorization (9) and scribe (10), as their gauges' names say; empty
+/// where nothing says.
+fn filled(
+    world: &eq_client_core::world::ClientWorld,
+    (estimate, requests): (Option<(u32, u32)>, &super::hud::action_bar::ActionRequests),
+    kind: u32,
+) -> f32 {
+    use super::hud::action_bar::{BookChange, book_progress};
+    let now = std::time::Instant::now();
+    match kind {
+        9 => book_progress(world, requests, BookChange::Memorize, now),
+        10 => book_progress(world, requests, BookChange::Scribe, now),
+        _ => fraction(world, estimate, kind),
+    }
+    .unwrap_or(0.0)
 }
 
 /// How full a gauge is, by the official client's numbering.
@@ -3094,14 +3205,50 @@ mod tests {
             Some(Does::Chosen)
         ));
         assert_eq!(
-            trading_label(WindowId::Merchant, "MW_SelectedPriceLabel"),
+            window_label(WindowId::Merchant, "MW_SelectedPriceLabel"),
             Some(Shows::ChosenPrice)
         );
         assert_eq!(
-            trading_label(WindowId::Loot, "LW_CorpseName"),
+            window_label(WindowId::Loot, "LW_CorpseName"),
             Some(Shows::Corpse)
         );
-        assert_eq!(trading_label(WindowId::Merchant, "MW_Other"), None);
+        assert_eq!(window_label(WindowId::Merchant, "MW_Other"), None);
+    }
+
+    #[test]
+    fn the_spellbooks_places_arrows_and_labels_are_its_open_pages() {
+        let book = WindowId::Spellbook;
+        assert!(matches!(does("SBW_Spell0", book), Some(Does::BookPlace(0))));
+        assert!(matches!(
+            does("SBW_Spell15", book),
+            Some(Does::BookPlace(15))
+        ));
+        assert!(matches!(does("SBW_Spell16", book), Some(Does::Nothing)));
+        assert!(matches!(
+            does("SBW_PageUp_Button", book),
+            Some(Does::TurnsSpellbook(true))
+        ));
+        assert!(matches!(
+            does("SBW_PageDown_Button", book),
+            Some(Does::TurnsSpellbook(false))
+        ));
+        assert!(matches!(does("DoneButton", book), Some(Does::Closes)));
+        // The skin parks these at a pixel's size.
+        assert!(does("SBW_MemPage0_Button", book).is_none());
+        assert!(does("MeditateButton", book).is_none());
+        assert_eq!(
+            window_label(book, "SBW_SpellName7"),
+            Some(Shows::BookName(7))
+        );
+        assert_eq!(
+            window_label(book, "SBW_LeftPageNum"),
+            Some(Shows::BookPage(false))
+        );
+        assert_eq!(
+            window_label(book, "SBW_RightPageNum"),
+            Some(Shows::BookPage(true))
+        );
+        assert_eq!(window_label(book, "SBW_SpellName16"), None);
     }
 
     #[test]

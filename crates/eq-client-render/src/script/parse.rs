@@ -181,6 +181,13 @@ pub enum ClickTarget {
     Combine(i32),
     /// A button of the map's toolbar.
     Map(crate::map::MapButton),
+    /// A place on the skin's spellbook's open pages, from zero
+    /// (`SBW_Spell0` to `SBW_Spell15`).
+    BookPlace(u8),
+    /// The skin's spellbook's arrow: forward (true) or back.
+    BookPage(bool),
+    /// A spell gem of the skin's spell bar, from zero.
+    SpellGem(u8),
 }
 
 /// The Training window's controls.
@@ -463,15 +470,28 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
             value(slot, "a bag slot")?,
             Some(value(color, "a palette color")?),
         ),
-        ["memorize", gem] => ClickTarget::MemorizeGem(
-            gem.parse::<u8>()
+        ["memorize", gem] => ClickTarget::MemorizeGem(gem_number(gem)?),
+        ["spell_gem", gem] => ClickTarget::SpellGem(gem_number(gem)?),
+        ["book_place", place] => ClickTarget::BookPlace(
+            place
+                .parse::<u8>()
                 .ok()
-                .filter(|gem| (1..=8).contains(gem))
-                .map(|gem| gem - 1)
-                .ok_or_else(|| String::from("expected a gem from 1 to 8"))?,
+                .filter(|place| usize::from(*place) < crate::spellbook::PLACES)
+                .ok_or_else(|| String::from("expected a book place from 0 to 15"))?,
         ),
+        ["book_page", "next"] => ClickTarget::BookPage(true),
+        ["book_page", "back"] => ClickTarget::BookPage(false),
         _ => return Err("unknown or malformed step".into()),
     })
+}
+
+/// A spell gem a script names, from 1 to 8, as a gem from zero.
+fn gem_number(gem: &str) -> Result<u8, String> {
+    gem.parse::<u8>()
+        .ok()
+        .filter(|gem| (1..=8).contains(gem))
+        .map(|gem| gem - 1)
+        .ok_or_else(|| String::from("expected a gem from 1 to 8"))
 }
 
 /// The slider a script names: an Options window setting's, or the

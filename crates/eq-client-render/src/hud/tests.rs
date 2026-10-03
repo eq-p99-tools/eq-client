@@ -55,6 +55,58 @@ fn online(app: &mut App) -> Mut<'_, OnlineState> {
 }
 
 #[test]
+fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
+    let mut app = App::new();
+    crate::keys::testing::install(&mut app);
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let mut state = admitted();
+    let mut book = eq_client_core::SpellBook::default();
+    book.apply(&SpellUpdate::Slot {
+        slot: 3,
+        spell_id: 74,
+        mode: 0,
+    });
+    testing::news(&mut state, [eq_client_core::WorldEvent::SpellBook(book)]);
+    let held = crate::spellbook::Held { slot: 3, spell: 74 };
+    app.insert_resource(state)
+        .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+        .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<ChatState>()
+        .init_resource::<HudState>()
+        .init_resource::<hotbar::Bindings>()
+        .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<messages::Messages>()
+        .init_resource::<action_bar::ActionRequests>()
+        .insert_resource(crate::spellbook::BookHand { held: Some(held) })
+        .add_systems(Update, actions);
+    app.world_mut().spawn((
+        Window {
+            focused: true,
+            ..default()
+        },
+        bevy::window::PrimaryWindow,
+    ));
+    // The gem holds spell 73, which a click would cast.
+    app.world_mut().spawn((SpellGem(0), Interaction::Pressed));
+    app.update();
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::MemorizeSpell {
+            gem: 0,
+            spell_id: 74,
+            ..
+        }
+    ));
+    assert!(rx.try_recv().is_err());
+    assert!(
+        app.world()
+            .resource::<crate::spellbook::BookHand>()
+            .held
+            .is_none()
+    );
+}
+
+#[test]
 fn estimated_resource_bars_fill_and_clear_with_their_maxima() {
     let mut app = App::new();
     let mut state = OnlineState::new(true);
@@ -287,6 +339,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         .init_resource::<hotbar::Bindings>()
         .init_resource::<crate::spellbook::SpellNames>()
         .init_resource::<messages::Messages>()
+        .init_resource::<crate::spellbook::BookHand>()
         .add_systems(Update, actions);
     app.world_mut().spawn((
         Window {
