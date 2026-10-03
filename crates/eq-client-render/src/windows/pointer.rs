@@ -9,7 +9,7 @@ use bevy::{
 };
 
 /// Pixels one wheel line scrolls.
-const LINE_PIXELS: f32 = 24.0;
+pub(crate) const LINE_PIXELS: f32 = 24.0;
 
 /// A surface the mouse wheel scrolls when it is the topmost under the pointer:
 /// a scrolling list, a window that scrolls as a whole, or the chat.

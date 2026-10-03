@@ -575,7 +575,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `give` (asks the target to take the cursor item, as clicking it does),
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel`,
 `click actions` (opens the skin's Actions window), `click tab <n>`, `click ability combat|abilities <n>`, `click attack`,
-`click window <key>` (a button that opens and closes the window, or hides and shows it, such as its selector button or the inventory's Skills button, by the window's key such as `skills`), `click close_box <window>` and `click minimize_box <window>` (a skinned window's title-bar boxes),
+`click window <key>` (a button that opens and closes the window, or hides and shows it, such as its selector button or the inventory's Skills button, by the window's key such as `skills`), `click close_box <window>` and `click minimize_box <window>` (a skinned window's title-bar boxes), `click scroll_up <window>` and `click scroll_down <window>` (a skinned window's scrollbar arrows),
 `right_click` with the same targets (a bag's slot opens its window),
 `hover` with the same targets (rests the pointer there, so its tooltip shows, until the next click or hover),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.

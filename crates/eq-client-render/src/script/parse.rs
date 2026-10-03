@@ -150,6 +150,9 @@ pub enum ClickTarget {
     /// A box on a skinned window's title bar, by the window's key: its
     /// close box (true) or its minimize box.
     TitleBox(&'static str, bool),
+    /// An arrow of a skinned window's scrollbar, by the window's key: the
+    /// one that scrolls up (true) or down.
+    Scroll(&'static str, bool),
     /// A tab of the open tabbed window, from zero.
     Tab(usize),
     /// An ability button of the Actions window: its page and place, from
@@ -383,6 +386,8 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["window", key] => ClickTarget::Toggle(window_key(key)?),
         ["close_box", key] => ClickTarget::TitleBox(window_key(key)?, true),
         ["minimize_box", key] => ClickTarget::TitleBox(window_key(key)?, false),
+        ["scroll_up", key] => ClickTarget::Scroll(window_key(key)?, true),
+        ["scroll_down", key] => ClickTarget::Scroll(window_key(key)?, false),
         ["pet", words @ ..] => {
             let line = format!("/pet {}", words.join(" "));
             ClickTarget::Pet(
@@ -694,6 +699,23 @@ fn key(name: &str) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scrollbar_arrow_is_reached_by_its_windows_key() {
+        let steps = parse(
+            "click scroll_up chat\nclick scroll_down skills\n",
+            Path::new("private"),
+        )
+        .unwrap();
+        assert_eq!(
+            steps,
+            [
+                Step::Click(ClickTarget::Scroll("chat", true)),
+                Step::Click(ClickTarget::Scroll("skills", false)),
+            ]
+        );
+        assert!(parse("click scroll_up nowhere\n", Path::new("private")).is_err());
+    }
 
     #[test]
     fn parses_bounded_steps_and_rejects_unsafe_input() {

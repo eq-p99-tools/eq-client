@@ -6,6 +6,7 @@
 //! without an installation, keeps the client's own chrome.
 mod controls;
 mod items;
+pub(crate) mod scrollbar;
 
 pub(crate) use controls::{
     Choosing, DropDown, DropDownChoice, KeyFilter, LevelSlider, drop_downs, fill_lists,
@@ -528,10 +529,24 @@ fn chat_box(
                 },
                 |template| border(frame, art, &template.border, (area.width, area.height)),
             );
-            let node = at(client.x, client.y, client.width, client.height);
             match text.id.as_deref() {
-                Some("CWChatOutput") => super::chat::skinned_output(frame, node),
-                Some("CWChatInput") => super::chat::skinned_input(frame, node),
+                // The output scrolls, with the skin's scrollbar beside its
+                // lines where the skin gives it one.
+                Some("CWChatOutput") => {
+                    let bar = text.scrollbar.as_ref();
+                    let width = bar.map_or(0.0, scrollbar::width);
+                    let lines = super::chat::skinned_output(
+                        frame,
+                        at(client.x, client.y, client.width - width, client.height),
+                    );
+                    if let Some(look) = bar {
+                        scrollbar::spawn(frame, art, look, &client, (lines, WindowId::Chat));
+                    }
+                }
+                Some("CWChatInput") => super::chat::skinned_input(
+                    frame,
+                    at(client.x, client.y, client.width, client.height),
+                ),
                 _ => (),
             }
         });
@@ -1467,7 +1482,7 @@ type Stateful<'w, 's> = Query<
         Option<&'static super::windows::SelectorButton>,
         Has<AttackButton>,
         Option<&'static super::options::OptionCheckbox>,
-        Has<Greyed>,
+        (Has<Greyed>, Has<scrollbar::ScrollArrow>),
         &'static Interaction,
         &'static mut ImageNode,
     ),
@@ -1486,12 +1501,14 @@ pub(crate) fn buttons(
     mut art: crate::sheets::Art,
     mut buttons: Stateful,
 ) {
-    for (SkinButton(look), selector, attack, checkbox, greyed, interaction, mut image) in
+    for (SkinButton(look), selector, attack, checkbox, (greyed, arrow), interaction, mut image) in
         &mut buttons
     {
         let on = match (selector, checkbox) {
             (Some(selector), _) => shown.displayed(selector.0),
             (None, Some(checkbox)) => options.on(checkbox.0),
+            // A scrollbar's arrow is down while it is held.
+            (None, None) if arrow => *interaction == Interaction::Pressed,
             (None, None) => attack && combat.auto_attack,
         };
         let hovered = *interaction != Interaction::None;

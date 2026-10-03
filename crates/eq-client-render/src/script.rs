@@ -205,6 +205,7 @@ type Buttons<'w, 's> = Query<
         (
             Option<&'static super::coins::CoinBox>,
             Option<&'static super::inventory::SplitAction>,
+            Option<&'static super::skinned::scrollbar::ScrollArrow>,
         ),
         (
             Option<&'static super::windows::SelectorButton>,
@@ -734,7 +735,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         trade,
         tint,
         give,
-        (coins, pick),
+        (coins, pick, arrow),
         (selector, tab, ability, attack, slash, checkbox),
         (slider, drop_down, choice, (dialog, page, combine, map)),
     ) in buttons
@@ -768,6 +769,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
             ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),
             ClickTarget::Map(action) => map.is_some_and(|button| *button == action),
+            ClickTarget::Scroll(key, up) => {
+                arrow.is_some_and(|arrow| arrow.window.key() == key && arrow.up == up)
+            }
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
