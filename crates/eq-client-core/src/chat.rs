@@ -1,5 +1,5 @@
 //! Typed chat presentation and bounded per-tab history.
-pub use eq_network_game::chat::{ChannelName, Message};
+pub use eq_network_game::chat::{ChannelName, Message, SpeakMode};
 use std::collections::{BTreeMap, VecDeque};
 
 /// Whose words a chat line holds, which decides whether the official
@@ -106,6 +106,33 @@ impl ChatTab {
     }
 }
 
+/// The channel a server's special message reads in, by how its speaker
+/// speaks: an NPC's quest say as a say, a shout as a shout, a word to the
+/// group as the group's and an emote as an emote, so it is worded as a line
+/// of that channel is, by the installed client's string for it. None, so it
+/// stays a System line that reads as its text, for a plain server line, an
+/// emote shown as its text alone, a mode not known, a line with no speaker,
+/// and a line in a tongue other than the common one, whose form waits for a
+/// recording. That the official client shows each mode so is inferred from
+/// `EQEmu`'s notes on its speak modes, not checked.
+#[must_use]
+pub fn spoken_channel(
+    mode: Option<SpeakMode>,
+    language: Option<u8>,
+    speaker: Option<&str>,
+) -> Option<ChannelName> {
+    if speaker.is_none_or(str::is_empty) || language.is_some_and(|language| language != 0) {
+        return None;
+    }
+    match mode? {
+        SpeakMode::Say => Some(ChannelName::Say),
+        SpeakMode::Shout => Some(ChannelName::Shout),
+        SpeakMode::Group => Some(ChannelName::Group),
+        SpeakMode::Emote => Some(ChannelName::Emote),
+        SpeakMode::Raw | SpeakMode::EmoteAlt | SpeakMode::Other(_) => None,
+    }
+}
+
 /// The number servers give the kind of text a channel's lines are, which
 /// the official client keys its Colors page by: 256 for what is said, 257
 /// for tells, and on. None for a channel whose lines are of many kinds, as
@@ -209,6 +236,38 @@ mod tests {
             source: Source::Server,
         }
     }
+    #[test]
+    fn a_special_message_reads_in_the_channel_its_speaker_speaks_in() {
+        let named = Some("a guard");
+        assert_eq!(
+            [
+                SpeakMode::Say,
+                SpeakMode::Shout,
+                SpeakMode::Group,
+                SpeakMode::Emote
+            ]
+            .map(|mode| spoken_channel(Some(mode), Some(0), named)),
+            [
+                Some(ChannelName::Say),
+                Some(ChannelName::Shout),
+                Some(ChannelName::Group),
+                Some(ChannelName::Emote)
+            ]
+        );
+        // The rest stay System lines that read as their text.
+        for mode in [SpeakMode::Raw, SpeakMode::EmoteAlt, SpeakMode::Other(9)] {
+            assert_eq!(spoken_channel(Some(mode), Some(0), named), None);
+        }
+        assert_eq!(spoken_channel(Some(SpeakMode::Say), Some(0), None), None);
+        assert_eq!(
+            spoken_channel(Some(SpeakMode::Say), Some(0), Some("")),
+            None
+        );
+        assert_eq!(spoken_channel(Some(SpeakMode::Say), Some(4), named), None);
+        // A message without a speak mode keeps its own channel.
+        assert_eq!(spoken_channel(None, None, named), None);
+    }
+
     #[test]
     fn busy_channels_do_not_evict_quiet_channels_and_all_preserves_order() {
         let mut history = ChatHistory::default();

@@ -36,7 +36,13 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
         .filter(|message| !message.text.is_empty())
         .map(|message| {
             WorldUpdate::Chat(eq_client_core::chat::ChatLine {
-                channel: event.channel_name,
+                // A special message reads in the channel its speaker speaks in.
+                channel: eq_client_core::chat::spoken_channel(
+                    event.speak_mode,
+                    event.language,
+                    event.sender.as_deref(),
+                )
+                .unwrap_or(event.channel_name),
                 sender: event.sender,
                 target: event.target,
                 message,
