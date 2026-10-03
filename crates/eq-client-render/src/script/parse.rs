@@ -181,6 +181,12 @@ pub enum ClickTarget {
     /// A row of the Training window's list, its Train button or its Done
     /// button.
     Training(TrainingClick),
+    /// A Raid window button that acts for the member chosen, or for the
+    /// raid.
+    Raid(RaidClick),
+    /// A row of a Raid window list: the list of members in a raid group
+    /// (true) or of the rest, and the row from zero.
+    RaidRow(bool, usize),
     /// The confirmation dialog's Yes (true) or No.
     Answer(bool),
     /// The book window's arrow: forward (true) or back.
@@ -218,6 +224,20 @@ pub enum TrainingClick {
     Train,
     /// Done.
     Done,
+}
+
+/// The Raid window's buttons that act for the member chosen, or for the
+/// raid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RaidClick {
+    /// Disband: removes the member chosen, or else leaves.
+    Disband,
+    /// Lock (true) or Unlock.
+    Lock(bool),
+    /// A group button, from 0, or No Group.
+    Move(Option<u8>),
+    /// Make Leader.
+    MakeLeader,
 }
 
 /// The Actions window's pages that hold ability buttons.
@@ -403,6 +423,15 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
             | "time" | "afk" | "anonymous" | "roleplay" | "raidaccept" | "raiddecline"
             | "raiddisband" | "raidwindow"),
         ] => Step::Slash(format!("/{command}")),
+        // The raid's lead, handed on by name or to the target.
+        ["makeraidleader", name @ ..] if name.len() <= 1 => Step::Slash(
+            ["/makeraidleader"]
+                .iter()
+                .chain(name)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
         // A die, an emote, or another's target.
         ["random", numbers @ ..]
             if numbers.len() <= 2 && numbers.iter().all(|number| number.parse::<u32>().is_ok()) =>
@@ -468,13 +497,31 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
 /// either name reaches the one showing.
 fn slash_click(window: &str, words: &[&str]) -> Result<ClickTarget, String> {
     if window == "raid" {
-        return Ok(ClickTarget::Slash(match words {
-            ["invite"] => "/raidinvite",
-            ["disband"] => "/raiddisband",
-            ["accept"] => "/raidaccept",
-            ["decline"] => "/raiddecline",
-            _ => return Err("expected invite, disband, accept or decline".into()),
-        }));
+        return Ok(match words {
+            ["invite"] => ClickTarget::Slash("/raidinvite"),
+            ["accept"] => ClickTarget::Slash("/raidaccept"),
+            ["decline"] => ClickTarget::Slash("/raiddecline"),
+            ["disband"] => ClickTarget::Raid(RaidClick::Disband),
+            ["lock"] => ClickTarget::Raid(RaidClick::Lock(true)),
+            ["unlock"] => ClickTarget::Raid(RaidClick::Lock(false)),
+            ["nogroup"] => ClickTarget::Raid(RaidClick::Move(None)),
+            ["makeleader"] => ClickTarget::Raid(RaidClick::MakeLeader),
+            ["group", number] => ClickTarget::Raid(RaidClick::Move(Some(
+                number
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|number| (1..=12).contains(number))
+                    .ok_or("expected a raid group from 1 to 12")?
+                    - 1,
+            ))),
+            _ => {
+                return Err(concat!(
+                    "expected invite, accept, decline, disband, lock, unlock, ",
+                    "nogroup, makeleader or group and its number"
+                )
+                .into());
+            }
+        });
     }
     if window == "pet" {
         let line = format!("/pet {}", words.join(" "));
@@ -529,6 +576,9 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["scroll_up", key] => ClickTarget::Scroll(window_key(key)?, true),
         ["scroll_down", key] => ClickTarget::Scroll(window_key(key)?, false),
         [window @ ("pet" | "group" | "raid"), words @ ..] => slash_click(window, words)?,
+        ["raid_row", list @ ("grouped" | "ungrouped"), row] => {
+            ClickTarget::RaidRow(*list == "grouped", ordinal(row, "a row")?)
+        }
         ["option", name] => ClickTarget::Option(
             eq_client_core::options::Toggle::all()
                 .find(|toggle| toggle.key() == *name)

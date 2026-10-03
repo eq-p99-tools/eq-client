@@ -11,7 +11,7 @@ mod parse;
 mod report;
 
 pub use parse::{
-    AbilityPage, CharacterClick, ClickTarget, PickButton, SliderClick, Step, TradeClick,
+    AbilityPage, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step, TradeClick,
     TrainingClick, parse,
 };
 
@@ -243,6 +243,10 @@ type Buttons<'w, 's> = Query<
                 Option<&'static super::reading::PageButton>,
                 Option<&'static super::tradeskills::CombineButton>,
                 Option<&'static super::map::MapButton>,
+                (
+                    Option<&'static super::raid::RaidRow>,
+                    Option<&'static super::raid::RaidAction>,
+                ),
             ),
         ),
     ),
@@ -731,6 +735,17 @@ fn listed_control(
     }
 }
 
+/// The Raid window's action a scripted click names.
+const fn raid(click: RaidClick) -> super::raid::RaidAction {
+    use super::raid::RaidAction;
+    match click {
+        RaidClick::Disband => RaidAction::Disband,
+        RaidClick::Lock(locked) => RaidAction::Lock(locked),
+        RaidClick::Move(group) => RaidAction::Move(group),
+        RaidClick::MakeLeader => RaidAction::MakeLeader,
+    }
+}
+
 /// Whether a control of the Training window, the confirmation dialog or a
 /// skinned window's title bar is the one a click names.
 fn dialog_control(
@@ -775,7 +790,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         (give, character, chat_tab),
         (coins, pick, arrow, amount),
         (selector, tab, ability, attack, slash, checkbox),
-        (slider, drop_down, choice, (dialog, page, combine, map)),
+        (slider, drop_down, choice, (dialog, page, combine, map, (raid_row, raid_action))),
     ) in buttons
     {
         let matches = match target {
@@ -807,6 +822,10 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
             ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),
             ClickTarget::Map(action) => map.is_some_and(|button| *button == action),
+            ClickTarget::Raid(click) => raid_action.is_some_and(|action| *action == raid(click)),
+            ClickTarget::RaidRow(grouped, index) => raid_row.is_some_and(|row| {
+                row.index == index && (row.list == super::raid::RaidList::Grouped) == grouped
+            }),
             ClickTarget::Scroll(key, up) => {
                 arrow.is_some_and(|arrow| arrow.window.key() == key && arrow.up == up)
             }

@@ -6,7 +6,13 @@
 //!
 //! The server lists every member as one joins or as the player enters a
 //! zone: after the raid's leader, each member in turn, then the leader
-//! again. Only a member added after that list says they joined.
+//! again. Only a member added after that list says they joined. A member
+//! moved between raid groups says nothing (inferred), nor does the leader
+//! named again as someone moves. Locking and unlocking say so as the leader
+//! does it, not as the server tells a member who joins or enters a zone
+//! while the raid is locked (inferred: the line names the leader): the
+//! server's word names the leader as they lock it and the member as they
+//! enter, and the leader's own answer follows their request.
 use super::{Changes, ClientWorld, Notice, Party};
 use crate::raid::{RaidMember, RaidUpdate};
 
@@ -18,6 +24,9 @@ pub struct Raid {
     /// Its members, the player among them, in the order the server added
     /// them.
     pub members: Vec<RaidMember>,
+    /// Whether it is locked, so that its leader may move members between
+    /// raid groups.
+    pub locked: bool,
 }
 
 /// A member's rank in the raid, as the official client's notes on raids
@@ -102,6 +111,8 @@ pub enum RaidNotice {
     Leader(Party),
     /// The player is out of their raid as it ended.
     Disbanded,
+    /// The raid's leader locked the raid (true) or unlocked it.
+    Locked(bool),
 }
 
 /// What the world remembers of raid news on the way: an invitation the
@@ -114,6 +125,9 @@ pub(super) struct RaidFlow {
     joining: bool,
     /// The server is listing the raid's members, until it names the leader.
     listing: bool,
+    /// The player asked to lock the raid (true) or unlock it, and the server
+    /// has not answered yet.
+    locking: Option<bool>,
 }
 
 impl ClientWorld {
@@ -184,12 +198,41 @@ impl ClientWorld {
             // The end of a raid the player already left says nothing more.
             RaidUpdate::Disbanded => self.raid.take().map(|_| RaidNotice::Disbanded),
             RaidUpdate::Leader { name } => {
-                if let Some(raid) = self.raid.as_mut() {
-                    raid.leader = Some(name.clone());
-                }
-                // The leader named after a list ends it, and says nothing.
-                (!std::mem::take(&mut self.raid_flow.listing))
+                let before = self
+                    .raid
+                    .as_mut()
+                    .and_then(|raid| raid.leader.replace(name.clone()));
+                // The leader named after a list ends it, and the leader named
+                // again says nothing.
+                (!std::mem::take(&mut self.raid_flow.listing) && before.as_ref() != Some(name))
                     .then(|| RaidNotice::Leader(self.raid_party(name)))
+            }
+            // A member moved takes their new place; one the raid has not
+            // listed yet, as the player moved while listed again, joins the
+            // list without a word.
+            RaidUpdate::Moved(member) => {
+                let members = &mut self.raid.get_or_insert_with(Raid::default).members;
+                match members.iter_mut().find(|known| known.name == member.name) {
+                    Some(known) => known.clone_from(member),
+                    None => members.push(member.clone()),
+                }
+                None
+            }
+            RaidUpdate::Locking { locked } => {
+                self.raid_flow.locking = Some(*locked);
+                None
+            }
+            RaidUpdate::Locked { locked, by } => {
+                let asked = self.raid_flow.locking.take() == Some(*locked);
+                let named_player = self.is_named(by);
+                self.raid.as_mut().and_then(|raid| {
+                    let changed = raid.locked != *locked;
+                    raid.locked = *locked;
+                    // The leader's word to every member, or the answer to the
+                    // player's own request; not the word on entering a zone.
+                    let told = asked || (!named_player && raid.leader.as_ref() == Some(by));
+                    (changed && told).then_some(RaidNotice::Locked(*locked))
+                })
             }
         };
         // Being in a raid answers any invitation.
@@ -200,11 +243,15 @@ impl ClientWorld {
     }
 
     /// The player is in a raid: one they formed by inviting, one they
-    /// joined, or theirs again as they enter a zone, whose members follow.
+    /// joined, or theirs again as they enter a zone or move, whose members
+    /// follow. A raid listed again as the player moves stays as locked as it
+    /// was.
     fn raid_created(&mut self, leader: &str) -> Option<RaidNotice> {
+        let locked = self.raid.as_ref().is_some_and(|raid| raid.locked);
         self.raid = Some(Raid {
             leader: Some(leader.to_owned()),
             members: Vec::new(),
+            locked,
         });
         let flow = std::mem::take(&mut self.raid_flow);
         if flow.inviting && self.is_named(leader) {

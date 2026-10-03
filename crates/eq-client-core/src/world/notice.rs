@@ -234,6 +234,8 @@ pub enum Notice {
         reason: String,
         /// The official client's string for it, in `eqstr_us.txt`.
         string_id: Option<u32>,
+        /// What the string names, in its order: a member's name.
+        arguments: Vec<String>,
     },
     /// A roll, emote or assist was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
