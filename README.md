@@ -710,6 +710,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
 `click slider clip_plane|max_fps|mouse_sensitivity|quantity <percent>` (an Options window slider, or the quantity window's, pressed that far along),
 `click actions` (opens the skin's Actions window), `click tab <n>`, `click ability combat|abilities <n>`, `click attack`,
+`click buff <n>` and `click song <n>` (a button of the skin's effects windows, the lasting one or the short one, counted from 1; with `hover`, a buff's tooltip),
 `click window <key>` (a button that opens and closes the window, or hides and shows it, such as its selector button or the inventory's Skills button, by the window's key such as `skills`), `click close_box <window>` and `click minimize_box <window>` (a skinned window's title-bar boxes), `click scroll_up <window>` and `click scroll_down <window>` (a skinned window's scrollbar arrows),
 `right_click` with the same targets (a bag's slot opens its window),
 `hover` with the same targets (rests the pointer there, so its tooltip shows and what rides the cursor hangs there, until the next click or hover),

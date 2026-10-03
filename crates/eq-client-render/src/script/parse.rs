@@ -187,6 +187,9 @@ pub enum ClickTarget {
     /// A row of a Raid window list: the list of members in a raid group
     /// (true) or of the rest, and the row from zero.
     RaidRow(bool, usize),
+    /// A button of the skin's effects windows: the lasting one (true) or the
+    /// short one, and the button from zero.
+    Buff(bool, u32),
     /// The confirmation dialog's Yes (true) or No.
     Answer(bool),
     /// The book window's arrow: forward (true) or back.
@@ -579,6 +582,10 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["raid_row", list @ ("grouped" | "ungrouped"), row] => {
             ClickTarget::RaidRow(*list == "grouped", ordinal(row, "a row")?)
         }
+        [window @ ("buff" | "song"), button] => ClickTarget::Buff(
+            *window == "buff",
+            u32::try_from(ordinal(button, "a button")?).map_err(|_| "button out of range")?,
+        ),
         ["option", name] => ClickTarget::Option(
             eq_client_core::options::Toggle::all()
                 .find(|toggle| toggle.key() == *name)
@@ -1214,6 +1221,24 @@ chat tell Friend inc now
             ]
         );
         assert!(parse("click chat_tab nowhere\n", Path::new("private")).is_err());
+    }
+
+    #[test]
+    fn parses_the_skins_effects_window_buttons() {
+        assert_eq!(
+            parse(
+                "hover buff 1
+hover song 2
+",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Hover(ClickTarget::Buff(true, 0)),
+                Step::Hover(ClickTarget::Buff(false, 1)),
+            ]
+        );
+        assert!(parse("hover buff 0\n", Path::new("private")).is_err());
     }
 
     #[test]
