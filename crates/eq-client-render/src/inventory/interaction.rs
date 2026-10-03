@@ -313,7 +313,10 @@ impl InventoryState {
     }
 
     /// Adjusts or submits a selected quantity without replaying stale
-    /// selections. Accepting none, a number typed away, takes nothing.
+    /// selections. Accepting none, a number typed away, takes nothing; nor
+    /// does accepting more coins than their place now holds, as when a
+    /// purchase spent some while the picker was open: the player chooses
+    /// again, as for a stack that changed.
     pub(crate) fn split_action(
         &mut self,
         action: SplitAction,
@@ -351,13 +354,21 @@ impl InventoryState {
                         }
                     }
                     Picked::Coins(place, coin) => {
-                        self.actions.coins = Some(CoinTransfer {
-                            from: place,
-                            to: CoinPlace::Cursor,
-                            coin,
-                            into: coin,
-                            amount: selection.amount,
-                        });
+                        let held = online
+                            .world()
+                            .coins_in(place)
+                            .map_or(0, |coins| coins.of(coin));
+                        if held < selection.amount {
+                            self.refuse("The coins changed; choose them again".into());
+                        } else {
+                            self.actions.coins = Some(CoinTransfer {
+                                from: place,
+                                to: CoinPlace::Cursor,
+                                coin,
+                                into: coin,
+                                amount: selection.amount,
+                            });
+                        }
                     }
                 }
                 return;
@@ -794,6 +805,35 @@ mod tests {
         bench.split(SplitAction::Confirm);
         assert_eq!(bench.data(), &before);
         assert!(bench.state.actions.split.is_none());
+    }
+
+    #[test]
+    fn coins_accepted_after_their_place_holds_fewer_are_chosen_again() {
+        use eq_client_core::{Coins, WorldEvent};
+        let mut bench = Bench::demo(7);
+        let purse = |gold| {
+            WorldEvent::Coins(Coins {
+                gold,
+                ..Coins::default()
+            })
+        };
+        testing::news(&mut bench.online, [purse(40)]);
+        bench.state.select_coins(CoinPlace::Purse, Coin::Gold, 40);
+        bench.state.slide_amount(1.0);
+        // A purchase spends some of the gold while the window is open.
+        testing::news(&mut bench.online, [purse(25)]);
+        bench.split(SplitAction::Confirm);
+        assert!(bench.state.take_coins().is_none());
+        assert_eq!(
+            bench.state.refused,
+            ["The coins changed; choose them again"]
+        );
+        assert!(bench.state.picked().is_none());
+        // What the purse still holds can be taken.
+        bench.state.select_coins(CoinPlace::Purse, Coin::Gold, 25);
+        bench.split(SplitAction::Confirm);
+        let taken = bench.state.take_coins().unwrap();
+        assert_eq!((taken.coin, taken.amount), (Coin::Gold, 25));
     }
 
     #[test]
