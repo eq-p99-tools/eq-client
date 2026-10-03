@@ -63,6 +63,7 @@ pub(super) fn state(
         label,
         zone = online.world().zone(),
         capabilities = ?online.world().capabilities(),
+        choices = ?online.world().choices(),
         world = ?online.world().world_name(),
         far_clip = ?online.world().far_clip(),
         connected = online.world().connected(),

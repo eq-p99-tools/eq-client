@@ -227,6 +227,7 @@ mod tests {
         for event in [
             WorldEvent::Entered {
                 capabilities: Vec::new(),
+                choices: Vec::new(),
                 session_id: 1,
                 zone: "qeytoqrg".into(),
                 player: Box::new(player()),

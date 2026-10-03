@@ -2038,8 +2038,8 @@ fn behave(
         Does::Option(toggle) => {
             drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()));
             // Greyed where the session does not offer what it is for.
-            match toggle.needs() {
-                Some(needs) => drawn.insert(crate::outbox::Needs::Capability(needs)),
+            match crate::outbox::Needs::of(toggle) {
+                Some(needs) => drawn.insert(needs),
                 None => drawn,
             }
         }

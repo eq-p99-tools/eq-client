@@ -68,9 +68,8 @@ pub(crate) fn toggle(
     for (interaction, OptionCheckbox(toggle)) in &clicks {
         // A greyed checkbox, for what the session does not offer, stays
         // as it is.
-        let offered = toggle
-            .needs()
-            .is_none_or(|needs| crate::outbox::offered(online.world(), needs));
+        let offered =
+            crate::outbox::Needs::of(*toggle).is_none_or(|needs| needs.offered(online.world()));
         if *interaction == Interaction::Pressed && offered {
             let on = state.on(*toggle);
             state.options.set(*toggle, !on);
@@ -137,6 +136,15 @@ fn save(state: &mut OptionsState) {
 /// The shared file, or the profile's own.
 fn file_name(profile: Option<&(String, String)>) -> String {
     crate::profile_files::name("options", SHARED, profile)
+}
+
+/// Gives the world the player's choice of what a session may leave to them
+/// to turn on, as their options change.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn choose(state: Res<OptionsState>, mut online: ResMut<crate::online::OnlineState>) {
+    if state.is_changed() {
+        online.choose(state.options.qol.unlocked());
+    }
 }
 
 /// Tells each admission what the session may eat and drink on its own, and
@@ -246,6 +254,7 @@ mod tests {
             &mut online,
             [WorldEvent::Entered {
                 capabilities: vec![Capability::Talking],
+                choices: Vec::new(),
                 session_id: 1,
                 zone: "qeytoqrg".into(),
                 player: Box::new(testing::player(7)),

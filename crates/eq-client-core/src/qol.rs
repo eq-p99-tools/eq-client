@@ -26,6 +26,11 @@ pub enum Kind {
     /// not. Like every feature that sends, the session offers it only where
     /// the server type lists it ([`Fix::needs`]).
     Acts,
+    /// Turns on what a server type leaves to the player ([`Fix::needs`]),
+    /// where its own client keeps it off. It works only where the session
+    /// lists it among the player's choices, and only once the player turns
+    /// it on.
+    Unlocks,
 }
 
 /// Whether the player can turn a fix off.
@@ -52,11 +57,18 @@ pub enum Fix {
     /// Draws a window the UI skin sizes to nothing, as the Velious skin does
     /// its windows from later expansions, as the default skin draws it.
     HiddenWindows,
+    /// Lets the player open the in-game map where the server type leaves it
+    /// to them, as P99's own client keeps the map off.
+    MapWhereOff,
 }
 
 impl Fix {
     /// Every fix, in the order the quality-of-life page lists the settings.
-    pub const ALL: [Self; 2] = [Self::SkipModifiedFood, Self::HiddenWindows];
+    pub const ALL: [Self; 3] = [
+        Self::SkipModifiedFood,
+        Self::HiddenWindows,
+        Self::MapWhereOff,
+    ];
 
     /// The name an options file keeps it under.
     #[must_use]
@@ -64,6 +76,7 @@ impl Fix {
         match self {
             Self::SkipModifiedFood => "skip_modified_food",
             Self::HiddenWindows => "hidden_windows",
+            Self::MapWhereOff => "map_where_off",
         }
     }
 
@@ -79,6 +92,7 @@ impl Fix {
         match self {
             Self::SkipModifiedFood => "Skip Food With Modifiers",
             Self::HiddenWindows => "Draw Windows the Skin Hides",
+            Self::MapWhereOff => "Use the Map Where It's Off",
         }
     }
 
@@ -92,6 +106,9 @@ impl Fix {
             Self::HiddenWindows => {
                 "Draw the windows your UI skin hides, such as the Velious skin's Raid window, as the default skin draws them."
             }
+            Self::MapWhereOff => {
+                "Open the in-game map on servers whose own client keeps it off, such as Project 1999."
+            }
         }
     }
 
@@ -101,26 +118,48 @@ impl Fix {
         match self {
             Self::SkipModifiedFood => Kind::Guards,
             Self::HiddenWindows => Kind::Shows,
+            Self::MapWhereOff => Kind::Unlocks,
         }
     }
 
     /// What the session must offer for the fix to matter, if anything:
-    /// eating on its own comes with the inventory.
+    /// eating on its own comes with the inventory. For a fix that unlocks,
+    /// what it turns on, which the session must leave to the player.
     #[must_use]
     pub const fn needs(self) -> Option<Capability> {
         match self {
             Self::SkipModifiedFood => Some(Capability::Inventory),
             Self::HiddenWindows => None,
+            Self::MapWhereOff => Some(Capability::Map),
         }
     }
 
+    /// What the fix turns on where the session leaves it to the player, if
+    /// it unlocks anything.
+    #[must_use]
+    pub const fn unlocks(self) -> Option<Capability> {
+        match self.kind() {
+            Kind::Unlocks => self.needs(),
+            Kind::Shows | Kind::Guards | Kind::Acts => None,
+        }
+    }
+
+    /// The fix that turns this on where the session leaves it to the player.
+    #[must_use]
+    pub fn unlocking(capability: Capability) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|fix| fix.unlocks() == Some(capability))
+    }
+
     /// Whether it is always on or the player's choice: windows the skin
-    /// hides stay hidden unless the player asks for them, as Adam chose.
+    /// hides stay hidden, and the map stays off where the server's own
+    /// client keeps it off, unless the player asks for them, as Adam chose.
     #[must_use]
     pub const fn availability(self) -> Availability {
         match self {
             Self::SkipModifiedFood => Availability::Setting { default: true },
-            Self::HiddenWindows => Availability::Setting { default: false },
+            Self::HiddenWindows | Self::MapWhereOff => Availability::Setting { default: false },
         }
     }
 
@@ -167,6 +206,17 @@ impl Settings {
             self.0[fix as usize] = on;
         }
     }
+
+    /// What the fixes that are on turn on where the session leaves it to
+    /// the player.
+    #[must_use]
+    pub fn unlocked(&self) -> Vec<Capability> {
+        Fix::ALL
+            .into_iter()
+            .filter(|fix| self.on(*fix))
+            .filter_map(Fix::unlocks)
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -183,6 +233,16 @@ mod tests {
             // session offers only where its server type lists it.
             if fix.kind() == Kind::Acts {
                 assert!(fix.needs().is_some(), "{fix:?} names no feature");
+            }
+            // A fix that unlocks names what it turns on, and is off until
+            // the player turns it on.
+            if fix.kind() == Kind::Unlocks {
+                assert!(fix.unlocks().is_some(), "{fix:?} unlocks nothing");
+                assert_eq!(
+                    fix.availability(),
+                    Availability::Setting { default: false },
+                    "{fix:?}"
+                );
             }
         }
         let mut keys: Vec<_> = Fix::ALL.iter().map(|fix| fix.key()).collect();
@@ -203,12 +263,23 @@ mod tests {
         assert!(!settings.on(Fix::SkipModifiedFood));
         assert_eq!(
             Fix::settings().collect::<Vec<_>>(),
-            [Fix::SkipModifiedFood, Fix::HiddenWindows]
+            [Fix::SkipModifiedFood, Fix::HiddenWindows, Fix::MapWhereOff]
         );
         // A fix that is always on stays on whatever is asked.
         for fix in Fix::ALL.into_iter().filter(|fix| !fix.is_setting()) {
             settings.set(fix, false);
             assert!(settings.on(fix), "{fix:?} turned off");
         }
+    }
+
+    #[test]
+    fn the_map_setting_unlocks_the_map_once_it_is_on() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.unlocked(), []);
+        settings.set(Fix::MapWhereOff, true);
+        assert_eq!(settings.unlocked(), [Capability::Map]);
+        assert_eq!(Fix::unlocking(Capability::Map), Some(Fix::MapWhereOff));
+        assert_eq!(Fix::unlocking(Capability::Inventory), None);
+        assert_eq!(Fix::SkipModifiedFood.unlocks(), None);
     }
 }

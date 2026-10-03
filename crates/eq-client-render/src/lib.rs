@@ -575,7 +575,13 @@ fn schedule(app: &mut App) {
                 (
                     spell_icons::update,
                     logs::write,
-                    (options::toggle, options::persist, options::tell_session).chain(),
+                    (
+                        options::toggle,
+                        options::persist,
+                        options::choose,
+                        options::tell_session,
+                    )
+                        .chain(),
                 ),
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),

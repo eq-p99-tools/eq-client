@@ -79,6 +79,10 @@ pub(crate) fn window_line(error: &anyhow::Error) -> String {
 /// The reason a control is greyed out, and the line a refused key shows.
 pub(crate) const UNAVAILABLE: &str = "Not available on this server";
 
+/// The reason a setting that turns on what a session may leave to the player
+/// is greyed out where the session does not, in the client's own words.
+pub(crate) const NOT_LEFT: &str = "Only for servers that keep this off";
+
 /// The reason a skin's control this client does not have yet is greyed out,
 /// in the client's own words.
 pub(crate) const MISSING: &str = "Not in this client yet";
@@ -220,6 +224,9 @@ pub(crate) fn show(outbox: Res<Outbox>, mut chat: ResMut<super::chat::ChatState>
 pub(crate) enum Needs {
     /// Something the session lets the player do, such as casting.
     Capability(Capability),
+    /// A setting that turns on what the session leaves to the player, which
+    /// matters only where the session does.
+    Choice(Capability),
     /// An ability, which the server type must also list.
     Ability(eq_client_core::abilities::Ability),
     /// Nothing of the session, as an empty action bar slot needs: never
@@ -232,10 +239,23 @@ pub(crate) enum Needs {
 }
 
 impl Needs {
+    /// What an Options window checkbox needs of the session, if anything.
+    pub(crate) fn of(toggle: eq_client_core::options::Toggle) -> Option<Self> {
+        let unlocks = match toggle {
+            eq_client_core::options::Toggle::Qol(fix) => fix.unlocks(),
+            _ => None,
+        };
+        match unlocks {
+            Some(capability) => Some(Self::Choice(capability)),
+            None => toggle.needs().map(Self::Capability),
+        }
+    }
+
     /// Whether the session offers what the control needs.
     pub(crate) fn offered(self, world: &ClientWorld) -> bool {
         match self {
             Self::Capability(capability) => offered(world, capability),
+            Self::Choice(capability) => world.session_id().is_none() || world.leaves(capability),
             Self::Ability(ability) => {
                 offered(world, Capability::Abilities) && world.ability_offered(ability)
             }
@@ -245,10 +265,25 @@ impl Needs {
     }
 
     /// Why the control is greyed out while it is not offered: shown on hover.
-    pub(crate) const fn reason(self) -> &'static str {
-        match self {
-            Self::Missing => MISSING,
-            Self::Capability(_) | Self::Ability(_) | Self::Nothing => UNAVAILABLE,
+    /// What the session leaves to the player names the setting that turns it
+    /// on.
+    pub(crate) fn reason(self, world: &ClientWorld) -> String {
+        let setting = match self {
+            Self::Capability(capability) if world.leaves(capability) => {
+                eq_client_core::qol::Fix::unlocking(capability)
+            }
+            _ => None,
+        };
+        match (self, setting) {
+            (_, Some(fix)) => format!(
+                "Turn on \"{}\" on the Options window's QoL page",
+                fix.label()
+            ),
+            (Self::Missing, None) => MISSING.to_owned(),
+            (Self::Choice(_), None) => NOT_LEFT.to_owned(),
+            (Self::Capability(_) | Self::Ability(_) | Self::Nothing, None) => {
+                UNAVAILABLE.to_owned()
+            }
         }
     }
 }
@@ -320,10 +355,16 @@ mod tests {
     use eq_client_core::{OutboundChat, WorldEvent, WorldUpdate, world::NoSpells};
 
     fn admitted(capabilities: Vec<Capability>) -> ClientWorld {
+        admitted_with(capabilities, Vec::new())
+    }
+
+    /// An admission that offers some things and leaves others to the player.
+    fn admitted_with(capabilities: Vec<Capability>, choices: Vec<Capability>) -> ClientWorld {
         let mut world = ClientWorld::default();
         for update in [
             WorldUpdate::Game(WorldEvent::Entered {
                 capabilities,
+                choices,
                 session_id: 4,
                 zone: "qeytoqrg".into(),
                 player: Box::new(crate::preview::player(
@@ -462,8 +503,50 @@ mod tests {
         // No session offers it, nor the preview offline.
         assert!(!Needs::Missing.offered(&ClientWorld::default()));
         assert!(!Needs::Missing.offered(&admitted(Capability::ALL.to_vec())));
-        assert_eq!(Needs::Missing.reason(), MISSING);
-        assert_eq!(Needs::Capability(Capability::Casting).reason(), UNAVAILABLE);
+        let world = ClientWorld::default();
+        assert_eq!(Needs::Missing.reason(&world), MISSING);
+        assert_eq!(
+            Needs::Capability(Capability::Casting).reason(&world),
+            UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn what_the_session_leaves_to_the_player_waits_for_their_setting() {
+        use eq_client_core::{
+            options::Toggle,
+            qol::{Fix, Settings},
+        };
+        let mut world = admitted_with(vec![Capability::Talking], vec![Capability::Map]);
+        // The map is greyed, with the setting that turns it on named.
+        let map = Needs::Capability(Capability::Map);
+        assert!(!map.offered(&world));
+        assert_eq!(
+            map.reason(&world),
+            "Turn on \"Use the Map Where It's Off\" on the Options window's QoL page"
+        );
+        // The setting itself is offered where the session leaves the map to
+        // the player.
+        let setting = Needs::of(Toggle::Qol(Fix::MapWhereOff));
+        assert_eq!(setting, Some(Needs::Choice(Capability::Map)));
+        assert!(setting.is_some_and(|needs| needs.offered(&world)));
+        // Turned on, the map is the player's.
+        let mut settings = Settings::default();
+        settings.set(Fix::MapWhereOff, true);
+        world.choose(settings.unlocked());
+        assert!(map.offered(&world));
+        // Where the session offers the map, or nothing, the setting is
+        // greyed, with its own reason.
+        let offering = admitted(vec![Capability::Map]);
+        assert!(!Needs::Choice(Capability::Map).offered(&offering));
+        assert_eq!(Needs::Choice(Capability::Map).reason(&offering), NOT_LEFT);
+        assert!(Needs::Capability(Capability::Map).offered(&offering));
+        // Other checkboxes need what they always did.
+        assert_eq!(
+            Needs::of(Toggle::Qol(Fix::SkipModifiedFood)),
+            Some(Needs::Capability(Capability::Inventory))
+        );
+        assert_eq!(Needs::of(Toggle::Qol(Fix::HiddenWindows)), None);
     }
 }
 
@@ -482,6 +565,7 @@ mod hud_tests {
         for update in [
             eq_client_core::WorldUpdate::Game(eq_client_core::WorldEvent::Entered {
                 capabilities: vec![Capability::Talking],
+                choices: Vec::new(),
                 session_id: 4,
                 zone: "qeytoqrg".into(),
                 player: Box::new(crate::preview::player(

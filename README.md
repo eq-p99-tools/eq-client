@@ -540,7 +540,7 @@ For explicit stationary live checks, `--online --target-nearest-player-once` sel
 The client copies the official client and each server's defaults, except
 where a quality-of-life fix departs from them on purpose to be friendlier to
 the player. Each fix is defined once, in `eq_client_core::qol`, with one of
-three kinds:
+four kinds:
 
 - **Shows** changes only what the player sees or hears, and never shows what
   the official client keeps from the player. It sends nothing different, so
@@ -551,6 +551,9 @@ three kinds:
 - **Acts** sends something on the player's behalf that the official client
   would not. Like any feature that sends, the session offers it only where
   the server type lists it. None exists yet.
+- **Unlocks** turns on what a server type leaves to the player because its
+  own client keeps it off. It works only where the session lists it among
+  the player's choices, and it is off until the player turns it on.
 
 A fix is always on when it only adds information or blocks a plain mistake,
 takes no extra step, and nobody would want it off. Every other fix is a
@@ -564,6 +567,10 @@ offer is greyed, with the reason on hover. The settings:
 - **Draw Windows the Skin Hides** (`hidden_windows`, off): draws a window the
   UI skin sizes to nothing, such as the Velious skin's Raid and casting
   windows, as the default skin draws it.
+- **Use the Map Where It's Off** (`map_where_off`, off): opens the in-game
+  map where the server's own client keeps it off, as on Project 1999. Until
+  it is on, the Map window stays greyed there, and hovering over it names
+  this setting. It is greyed on servers that offer the map anyway.
 
 Always on:
 
