@@ -592,6 +592,7 @@ fn schedule(app: &mut App) {
                         tradeskills::show,
                         map::draw,
                         skinned::scrollbar::place,
+                        skinned::rewind,
                     ),
                 ),
                 skinned::close,

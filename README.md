@@ -709,7 +709,10 @@ class field remains unavailable, so it cannot enable banking.
   installation, the skin's item display (`ItemDisplayWindow`) shows it: the
   item's name on its title bar, its picture in the skin's box (an item opened
   from a chat link has none yet), its details in the skin's text box, and its
-  close box closes it.
+  close box closes it. Details longer than the box scroll in it, with the
+  wheel and with the skin's scrollbar where the skin gives one, and each item
+  shows from the top; the skin's other text boxes, such as a book's pages,
+  do the same.
 - **Escape** does not discard an item held on the cursor.
 
 Slots use the original 40-pixel item icons from `uifiles/default/dragitem*.tga`

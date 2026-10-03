@@ -935,16 +935,17 @@ pub(crate) fn fill_lists(
     }
 }
 
-/// The lists the wheel scrolls: those the client fills.
+/// The lists the wheel scrolls: those the client fills, and the text boxes.
 type ScrolledList = Or<(
     With<ListRows>,
     With<crate::training::SkillRows>,
     With<crate::skills::SkillsList>,
     With<crate::trade::MerchantRows>,
     With<super::ScrolledView>,
+    With<super::ScrolledText>,
 )>;
 
-/// Scrolls the list the wheel turns.
+/// Scrolls the list or text box the wheel turns.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn scroll_lists(
     wheel: Res<crate::windows::pointer::Wheel>,

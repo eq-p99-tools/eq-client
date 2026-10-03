@@ -583,7 +583,8 @@ fn pieces(
 
 /// A box of text the client fills: the confirmation dialog's question,
 /// wrapped inside the box's frame, or the quantity window's number, which a
-/// click on the box lets the player type.
+/// click on the box lets the player type. Words longer than the box scroll
+/// in it, with the skin's scrollbar beside them where it gives one.
 fn text_box(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
@@ -630,35 +631,79 @@ fn text_box(
             aligned(frame, node, Align::Left, words);
             return;
         }
-        let mut words = frame.spawn((
-            theme::text("", Size::Body, ink),
-            TextLayout::new(Justify::Left, LineBreak::WordBoundary),
-            at(
-                client.x + 4.0,
-                client.y + 4.0,
-                (client.width - 8.0).max(0.0),
-                (client.height - 8.0).max(0.0),
-            ),
+        let bar = text.scrollbar.as_ref();
+        let bar_width = bar.map_or(0.0, scrollbar::width);
+        // The wheel scrolls the words even where the skin gives no bar.
+        let mut scroller = frame.spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow::scroll_y(),
+                ..at(
+                    client.x + 4.0,
+                    client.y + 4.0,
+                    client.width - 8.0 - bar_width,
+                    client.height - 8.0,
+                )
+            },
+            ScrollPosition::default(),
+            ScrolledText,
+            crate::windows::pointer::TakesWheel,
         ));
-        match (owner, text.id.as_deref()) {
-            (WindowId::Confirmation, _) => {
-                words.insert(super::resurrection::QuestionText);
+        let words_box = scroller.id();
+        scroller.with_children(|scroller| {
+            let mut words = scroller.spawn((
+                theme::text("", Size::Body, ink),
+                TextLayout::new(Justify::Left, LineBreak::WordBoundary),
+                // As tall as its words, which scroll when the box is shorter.
+                Node {
+                    width: percent(100),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+            ));
+            match (owner, text.id.as_deref()) {
+                (WindowId::Confirmation, _) => {
+                    words.insert(super::resurrection::QuestionText);
+                }
+                (WindowId::Note, _) => {
+                    words.insert(super::reading::Text::Note);
+                }
+                (WindowId::Book, Some("Page0")) => {
+                    words.insert(super::reading::Text::Page(0));
+                }
+                (WindowId::Book, Some("Page1")) => {
+                    words.insert(super::reading::Text::Page(1));
+                }
+                (WindowId::Item, Some("ItemDescription")) => {
+                    words.insert(super::items::ItemText);
+                }
+                _ => (),
             }
-            (WindowId::Note, _) => {
-                words.insert(super::reading::Text::Note);
-            }
-            (WindowId::Book, Some("Page0")) => {
-                words.insert(super::reading::Text::Page(0));
-            }
-            (WindowId::Book, Some("Page1")) => {
-                words.insert(super::reading::Text::Page(1));
-            }
-            (WindowId::Item, Some("ItemDescription")) => {
-                words.insert(super::items::ItemText);
-            }
-            _ => (),
+        });
+        if let Some(look) = bar {
+            scrollbar::spawn(frame, art, look, &client, (words_box, owner));
         }
     });
+}
+
+/// A text box's words, which scroll inside it.
+#[derive(Component)]
+pub(crate) struct ScrolledText;
+
+/// Shows the start of a text box's words whenever they change, as when the
+/// item display shows another item or a book turns its page.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn rewind(
+    changed: Query<&ChildOf, Changed<Text>>,
+    mut boxes: Query<&mut ScrollPosition, With<ScrolledText>>,
+) {
+    for parent in &changed {
+        if let Ok(mut position) = boxes.get_mut(parent.parent())
+            && position.y != 0.0
+        {
+            position.y = 0.0;
+        }
+    }
 }
 
 /// One of the chat window's boxes, filled with the client's chat: its tabs
@@ -3066,6 +3111,69 @@ mod tests {
             Some(Does::ItemIcon)
         ));
         assert!(matches!(does("Other", WindowId::Item), Some(Does::Nothing)));
+    }
+
+    #[test]
+    fn a_text_box_scrolls_its_words_and_shows_new_words_from_the_top() {
+        use eq_client_assets::sidl::{ScrollbarLook, TextBox};
+        let description = TextBox {
+            id: Some("ItemDescription".into()),
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 60.0,
+            },
+            anchors: None,
+            template: None,
+            color: None,
+            scrollbar: Some(ScrollbarLook::default()),
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Startup,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let inside = Area {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 200.0,
+                        height: 60.0,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        text_box(window, &mut art, &description, &inside, WindowId::Item);
+                    });
+                },
+            )
+            .add_systems(Update, rewind);
+        app.update();
+        // The item's words sit in a box the wheel and the skin's scrollbar
+        // scroll.
+        let (words, parent) = app
+            .world_mut()
+            .query_filtered::<(Entity, &ChildOf), With<crate::items::ItemText>>()
+            .single(app.world())
+            .map(|(words, parent)| (words, parent.parent()))
+            .unwrap();
+        let world = app.world();
+        assert!(world.get::<ScrolledText>(parent).is_some());
+        assert!(
+            world
+                .get::<crate::windows::pointer::TakesWheel>(parent)
+                .is_some()
+        );
+        let mut bars = app.world_mut().query::<&scrollbar::Scrollbar>();
+        assert_eq!(bars.iter(app.world()).count(), 1);
+        // Scrolled down, it shows the top of the next item's words.
+        app.world_mut().get_mut::<ScrollPosition>(parent).unwrap().y = 40.0;
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(parent).unwrap().y, 40.0);
+        app.world_mut().get_mut::<Text>(words).unwrap().0 = "Another item".into();
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(parent).unwrap().y, 0.0);
     }
 
     #[test]
