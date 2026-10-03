@@ -247,6 +247,12 @@ pub trait OfficialSettings {
     fn window_positions(&self, _character: &str, _world: &str) -> Vec<WindowPosition> {
         Vec::new()
     }
+
+    /// How the client last drew a character's windows' backgrounds on a
+    /// world, and how they fade.
+    fn window_looks(&self, _character: &str, _world: &str) -> Vec<WindowLook> {
+        Vec::new()
+    }
 }
 
 /// An installed Titanium client's settings files, in its installation.
@@ -293,6 +299,17 @@ impl OfficialSettings for Titanium<'_> {
         }
         std::fs::read(self.0.join(format!("UI_{character}_{world}.ini")))
             .map(|bytes| positions_from_ini(&String::from_utf8_lossy(&bytes)))
+            .unwrap_or_default()
+    }
+
+    /// The same sections' backgrounds and fading; none when the file is
+    /// missing.
+    fn window_looks(&self, character: &str, world: &str) -> Vec<WindowLook> {
+        if !plain_name(character) || !plain_name(world) {
+            return Vec::new();
+        }
+        std::fs::read(self.0.join(format!("UI_{character}_{world}.ini")))
+            .map(|bytes| looks_from_ini(&String::from_utf8_lossy(&bytes)))
             .unwrap_or_default()
     }
 }
@@ -411,6 +428,113 @@ fn positions_from_ini(text: &str) -> Vec<WindowPosition> {
             })
         })
         .collect()
+}
+
+/// How the official client draws a window's background, and how the
+/// background fades while the pointer is away: the keys of the window's
+/// section in `UI_<character>_<world>.ini`. What each key means is inferred
+/// from the client's window settings and the values it writes, not checked
+/// against a recording.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowLook {
+    /// The window, by its section's name, such as `MainChat`.
+    pub window: String,
+    /// The background's opacity while the window is in use, from 0 to 255
+    /// (`Alpha`).
+    pub alpha: u8,
+    /// Whether the background fades while the pointer is away (`Fades`).
+    pub fades: bool,
+    /// The opacity it fades to (`FadeToAlpha`).
+    pub fade_to_alpha: u8,
+    /// How long the pointer is away before it fades, in milliseconds
+    /// (`Delay`).
+    pub delay_ms: u32,
+    /// How long the fade takes, in milliseconds (`Duration`).
+    pub duration_ms: u32,
+    /// Whether the background is a flat colour, its tint (`BGType` 2),
+    /// rather than the skin's own (`BGType` 1).
+    pub flat: bool,
+    /// The background's tint (`BGTint.red`, `BGTint.green`, `BGTint.blue`).
+    pub tint: [u8; 3],
+}
+
+impl WindowLook {
+    /// A window as the client draws one it saved nothing for: the skin's
+    /// background, opaque, faded to opaque after two seconds in half a
+    /// second, as it writes for most windows.
+    fn new(window: &str) -> Self {
+        Self {
+            window: window.to_owned(),
+            alpha: u8::MAX,
+            fades: true,
+            fade_to_alpha: u8::MAX,
+            delay_ms: 2000,
+            duration_ms: 500,
+            flat: false,
+            tint: [u8::MAX; 3],
+        }
+    }
+}
+
+/// Each section's background and fading keys; a section without any is no
+/// window look.
+fn looks_from_ini(text: &str) -> Vec<WindowLook> {
+    let mut looks: Vec<WindowLook> = Vec::new();
+    let mut section = "";
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            section = name.trim();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        let number = || value.parse::<u32>().ok();
+        let byte = || value.parse::<u8>().ok();
+        let known = matches!(
+            key,
+            "Alpha"
+                | "Fades"
+                | "FadeToAlpha"
+                | "Delay"
+                | "Duration"
+                | "BGType"
+                | "BGTint.red"
+                | "BGTint.green"
+                | "BGTint.blue"
+        );
+        if !known {
+            continue;
+        }
+        if looks.last().is_none_or(|look| look.window != section) {
+            looks.push(WindowLook::new(section));
+        }
+        let Some(look) = looks.last_mut() else {
+            continue;
+        };
+        match key {
+            "Alpha" => look.alpha = byte().unwrap_or(look.alpha),
+            "Fades" => {
+                look.fades = match value.to_ascii_lowercase().as_str() {
+                    "true" | "1" => true,
+                    "false" | "0" => false,
+                    _ => look.fades,
+                };
+            }
+            "FadeToAlpha" => look.fade_to_alpha = byte().unwrap_or(look.fade_to_alpha),
+            "Delay" => look.delay_ms = number().unwrap_or(look.delay_ms),
+            "Duration" => look.duration_ms = number().unwrap_or(look.duration_ms),
+            "BGType" => look.flat = number() == Some(2),
+            "BGTint.red" => look.tint[0] = byte().unwrap_or(look.tint[0]),
+            "BGTint.green" => look.tint[1] = byte().unwrap_or(look.tint[1]),
+            _ => look.tint[2] = byte().unwrap_or(look.tint[2]),
+        }
+    }
+    looks
 }
 
 /// Reads the equipment layout of a skin's inventory window, from the default
@@ -598,6 +722,32 @@ fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_windows_section_gives_its_background_and_fading() {
+        let looks = looks_from_ini(
+            "[Main]\nUISkin=default\n[MainChat]\nXPos1280x720=10\nAlpha=230\nFades=false\n\
+             FadeToAlpha=200\nDelay=1000\nDuration=250\nBGType=2\nBGTint.red=0\n\
+             BGTint.green=0\nBGTint.blue=0\n[PlayerWindow]\nAlpha=255\nBGType=1\n",
+        );
+        assert_eq!(
+            looks,
+            [
+                WindowLook {
+                    window: "MainChat".into(),
+                    alpha: 230,
+                    fades: false,
+                    fade_to_alpha: 200,
+                    delay_ms: 1000,
+                    duration_ms: 250,
+                    flat: true,
+                    tint: [0, 0, 0],
+                },
+                // What a window does not say is the client's default.
+                WindowLook::new("PlayerWindow"),
+            ]
+        );
+    }
 
     #[test]
     fn eqclient_ini_says_whether_the_chat_is_logged() {

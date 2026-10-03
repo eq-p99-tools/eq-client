@@ -544,7 +544,8 @@ pub struct Screen {
     pub pieces: Vec<(String, Element)>,
     /// The skin's frame for tabs the client draws in it that its file
     /// defines none of, as the chat's channel tabs: `FT_DefTabBorder`, the
-    /// frame every tab box in the official skins names.
+    /// frame every tab box names in the six skins installed on the PC this
+    /// was written on (counted); unchecked against the official client.
     pub tab_frame: Option<Box<FrameLook>>,
 }
 

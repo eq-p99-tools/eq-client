@@ -7,6 +7,7 @@
 mod controls;
 mod frame;
 mod items;
+pub(crate) mod looks;
 pub(crate) mod scrollbar;
 
 pub(crate) use controls::{
@@ -297,25 +298,26 @@ fn draw(
         width,
         height,
     };
+    // The window's background: the skin's texture, which the character's
+    // saved look tints and fades, or a flat colour of that look's instead.
+    let mut backdrop = window.spawn((looks::Backdrop(context.id), at(0.0, 0.0, width, height)));
+    if let Some(image) = screen
+        .template
+        .as_ref()
+        .and_then(|template| template.background.as_deref())
+        .and_then(|file| art.texture(file))
+    {
+        backdrop.insert(ImageNode {
+            image,
+            image_mode: NodeImageMode::Tiled {
+                tile_x: true,
+                tile_y: true,
+                stretch_value: 1.0,
+            },
+            ..default()
+        });
+    }
     if let Some(template) = &screen.template {
-        if let Some(image) = template
-            .background
-            .as_deref()
-            .and_then(|file| art.texture(file))
-        {
-            window.spawn((
-                ImageNode {
-                    image,
-                    image_mode: NodeImageMode::Tiled {
-                        tile_x: true,
-                        tile_y: true,
-                        stretch_value: 1.0,
-                    },
-                    ..default()
-                },
-                at(0.0, 0.0, width, height),
-            ));
-        }
         if screen.border {
             inside = border(window, art, &template.border, (width, height));
         }
