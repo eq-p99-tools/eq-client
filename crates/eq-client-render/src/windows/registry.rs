@@ -199,9 +199,9 @@ pub(crate) struct Description {
     pub title: &'static str,
     pub placement: Placement,
     pub layer: Layer,
-    /// Whether the player opens and closes it, from the selector and its key
-    /// in the key map.
-    pub toggled: bool,
+    /// What the player does with it from the selector and its key in the
+    /// key map.
+    pub toggle: Toggle,
     /// Whether Escape closes it, the top one first.
     pub closes_on_escape: bool,
     /// Whether its placement is kept between runs.
@@ -211,6 +211,21 @@ pub(crate) struct Description {
     pub opening: Opening,
     /// The names its placement was saved under before windows had ids.
     pub saved_as: &'static [&'static str],
+}
+
+/// What the player does with a window from the selector and its key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Toggle {
+    /// Nothing: the client or the server opens and closes it.
+    Never,
+    /// Opens and closes it.
+    Opens,
+    /// Hides it and shows it again, though something else opens it: the
+    /// hotbar and spell gems are always there, the pet window opens with a
+    /// pet and the short effects window with a short effect. Its close box,
+    /// Done button and Escape hide it too, and hidden, it stays hidden until
+    /// the player shows it.
+    Hides,
 }
 
 /// Where a bag opens until it is moved: carried bags side by side right of
@@ -241,7 +256,7 @@ const fn hud(
         title,
         placement,
         layer: Layer::Hud,
-        toggled: false,
+        toggle: Toggle::Never,
         closes_on_escape: false,
         persists: true,
         opening: Opening::Skin,
@@ -259,7 +274,11 @@ const fn floating(
         title,
         placement,
         layer: Layer::Floating,
-        toggled,
+        toggle: if toggled {
+            Toggle::Opens
+        } else {
+            Toggle::Never
+        },
         closes_on_escape: true,
         persists: true,
         opening: Opening::Skin,
@@ -438,10 +457,16 @@ impl WindowId {
                 &["TARGET"],
             ),
             Self::Player => hud("", Placement::Docked, &["CHARACTER"]),
-            Self::Spells => hud("SPELLS", Placement::Docked, &["SPELLS"]),
+            Self::Spells => Description {
+                toggle: Toggle::Hides,
+                ..hud("SPELLS", Placement::Docked, &["SPELLS"])
+            },
             // Named apart from the skin's Actions window; placements saved
             // under its old title still find it.
-            Self::Actions => hud("HOTBAR", Placement::Docked, &["ACTIONS"]),
+            Self::Actions => Description {
+                toggle: Toggle::Hides,
+                ..hud("HOTBAR", Placement::Docked, &["ACTIONS"])
+            },
             Self::CastBar => Description {
                 persists: false,
                 ..hud(
@@ -470,6 +495,7 @@ impl WindowId {
             // effects window; it opens with the first short effect and
             // closes with the last.
             Self::ShortEffects => Description {
+                toggle: Toggle::Hides,
                 closes_on_escape: false,
                 ..floating("", Placement::TopRight(340.0, 400.0), false, &[])
             },
@@ -521,7 +547,10 @@ impl WindowId {
             Self::ActionsWindow => floating("ACTIONS", Placement::TopLeft(516.0, 292.0), true, &[]),
             // Where the skin places it, right of the hotbar; it opens with a
             // pet and closes when the pet is gone.
-            Self::PetInfo => floating("PET", Placement::TopLeft(56.0, 160.0), false, &[]),
+            Self::PetInfo => Description {
+                toggle: Toggle::Hides,
+                ..floating("PET", Placement::TopLeft(56.0, 160.0), false, &[])
+            },
             // Where the skin places it; Alt+O opens and closes it, as in the
             // official client.
             Self::Options => floating("OPTIONS", Placement::TopLeft(90.0, 47.0), true, &[]),

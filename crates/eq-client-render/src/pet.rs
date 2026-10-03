@@ -1,10 +1,12 @@
-//! The Pet Info window opens as the player gets a pet, unless the player
-//! turned the Options window's Pet Window Popup off, and closes when the pet
-//! is gone; the player may close it in between.
+//! The Pet Info window opens as the player gets a pet and closes when the
+//! pet is gone. A new pet shows it unless the player turned the Options
+//! window's Pet Window Popup off; the player may hide it and show it again
+//! from the selector in between.
 use super::windows::{Shown, WindowId};
 use bevy::prelude::*;
 
-/// Opens the pet window for a new pet and closes it after the last one.
+/// Opens the pet window for a new pet, shown as the Pet Window Popup option
+/// says, and closes it after the last one.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn window(
     online: Res<super::online::OnlineState>,
@@ -17,9 +19,8 @@ pub(super) fn window(
         return;
     }
     if pet.is_some() {
-        if options.options.pet_window_popup {
-            shown.open(WindowId::PetInfo);
-        }
+        shown.open(WindowId::PetInfo);
+        shown.hide(WindowId::PetInfo, !options.options.pet_window_popup);
     } else {
         shown.close(WindowId::PetInfo);
     }
@@ -98,6 +99,38 @@ mod tests {
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [WorldEvent::Despawn(8)],
         );
+        app.update();
+        assert_eq!(pet_frames(&mut app), 0);
+    }
+
+    #[test]
+    fn without_the_popup_a_new_pets_window_waits_for_the_player() {
+        use crate::windows::Shown;
+        let mut app = crate::testing::app();
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .eq_directory = Some("installation".into());
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .pet_window_popup = false;
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::spawn_entry(&mut online, 8, testing::pet(8, 7));
+        app.insert_resource(online)
+            .add_systems(Update, (super::window, crate::skinned::frames).chain());
+        app.update();
+        assert_eq!(pet_frames(&mut app), 0);
+        // The selector shows it, and its close box hides it again.
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .hide(WindowId::PetInfo, false);
+        app.update();
+        assert_eq!(pet_frames(&mut app), 1);
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .dismiss(WindowId::PetInfo);
         app.update();
         assert_eq!(pet_frames(&mut app), 0);
     }
