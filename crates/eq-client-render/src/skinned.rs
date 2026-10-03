@@ -2513,9 +2513,9 @@ mod tests {
         assert!(drawn.contains(&(Needs::Nothing, true, true, true)));
     }
 
-    #[test]
-    fn every_part_of_a_skinned_window_a_press_lands_on_keeps_it_from_the_frame() {
-        use bevy::ui::FocusPolicy;
+    /// An Options window with a checkbox the client keeps nothing for, one it
+    /// keeps, and the key list with its scrollbar.
+    fn options_fixture() -> Screen {
         use eq_client_assets::sidl::{Button, ButtonLook, Column, Element, Listbox, ScrollbarLook};
         let checkbox = |id: &str, x| {
             Element::Button(Button {
@@ -2554,7 +2554,7 @@ mod tests {
             scrollbar: Some(ScrollbarLook::default()),
             header: None,
         });
-        let screen = Screen {
+        Screen {
             name: "OptionsWindow".into(),
             title: None,
             title_color: None,
@@ -2575,7 +2575,49 @@ mod tests {
                 ("keys".into(), keys),
             ],
             tab_frame: None,
+        }
+    }
+
+    /// A quantity window with its slider and number box.
+    fn quantity_fixture() -> Screen {
+        use eq_client_assets::sidl::{Element, Slider, SliderLook, TextBox};
+        let piece = |x| Area {
+            x,
+            y: 0.0,
+            width: 60.0,
+            height: 20.0,
         };
+        Screen {
+            name: "QuantityWnd".into(),
+            pieces: vec![
+                (
+                    "QTYW_Slider".into(),
+                    Element::Slider(Slider {
+                        id: Some("QTYW_Slider".into()),
+                        area: piece(0.0),
+                        look: SliderLook::default(),
+                    }),
+                ),
+                (
+                    "QTYW_SliderInput".into(),
+                    Element::TextBox(TextBox {
+                        id: Some("QTYW_SliderInput".into()),
+                        area: piece(70.0),
+                        anchors: None,
+                        template: None,
+                        color: None,
+                        scrollbar: None,
+                    }),
+                ),
+            ],
+            ..options_fixture()
+        }
+    }
+
+    #[test]
+    fn every_part_of_a_skinned_window_a_press_lands_on_keeps_it_from_the_frame() {
+        use bevy::ui::FocusPolicy;
+        let (screen, quantity) = (options_fixture(), quantity_fixture());
         let mut app = App::new();
         app.init_resource::<crate::sheets::Sheets>()
             .init_resource::<Assets<Image>>()
@@ -2596,6 +2638,13 @@ mod tests {
                         // chat's lines do.
                         window.spawn((Node::default(), Interaction::default()));
                     });
+                    let context = Context {
+                        id: WindowId::Quantity,
+                        ..context
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &quantity, &mut art, &context);
+                    });
                 },
             )
             .add_systems(PostUpdate, crate::windows::block_clicks);
@@ -2603,14 +2652,18 @@ mod tests {
         // A skinned window's frame drags under a press that reaches it: every
         // part that reacts to the pointer, and the list with its rows and
         // headings, keeps the press. Here: the two checkboxes, the list, its
-        // scrollbar's arrows, gutter and thumb, and the node that reacts to the
-        // pointer.
+        // scrollbar's arrows, gutter and thumb, the node that reacts to the
+        // pointer, and the quantity window's slider and number box.
         let mut parts = app.world_mut().query_filtered::<&FocusPolicy, Or<(
             With<Interaction>,
             With<crate::windows::KeepsPress>,
         )>>();
         let policies: Vec<_> = parts.iter(app.world()).copied().collect();
-        assert_eq!(policies, [FocusPolicy::Block; 8]);
+        assert_eq!(policies, [FocusPolicy::Block; 10]);
+        let mut wired = app
+            .world_mut()
+            .query_filtered::<(), Or<(With<SkinSlider>, With<controls::AmountBox>)>>();
+        assert_eq!(wired.iter(app.world()).count(), 2);
     }
 
     #[test]

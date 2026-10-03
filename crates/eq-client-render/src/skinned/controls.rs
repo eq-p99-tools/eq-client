@@ -1028,6 +1028,13 @@ mod tests {
             .spawn((Button, AmountBox, Interaction::None))
             .id();
         let number = app.world_mut().spawn((Amount, Text::default())).id();
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [eq_client_core::WorldEvent::Coins(eq_client_core::Coins {
+                gold: 40,
+                ..Default::default()
+            })],
+        );
         app.world_mut()
             .resource_mut::<InventoryState>()
             .select_coins(CoinPlace::Purse, Coin::Gold, 40);
