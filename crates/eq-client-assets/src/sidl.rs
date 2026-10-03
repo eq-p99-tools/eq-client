@@ -544,6 +544,10 @@ pub struct Screen {
     pub title_bar: Option<TitleBar>,
     /// Whether it has a border.
     pub border: bool,
+    /// Whether the skin draws no background for it (`Style_Transparent`),
+    /// so what lies behind shows between its pieces: inferred from the
+    /// setting's name, not checked against the official client.
+    pub transparent: bool,
     /// The tooltip the skin gives it.
     pub tooltip: Option<String>,
     /// What it shows, in drawing order, by element name.
@@ -666,6 +670,7 @@ impl Library {
                 minimize_box: flag(*screen, "Style_Minimizebox"),
             }),
             border: flag(*screen, "Style_Border"),
+            transparent: flag(*screen, "Style_Transparent"),
             tooltip: text_of(*screen, "TooltipReference").map(str::to_owned),
             pieces,
             tab_frame: local.frames.get("FT_DefTabBorder").cloned().map(Box::new),
@@ -1447,6 +1452,18 @@ mod tests {
             (area.x, area.y, area.width, area.height),
             (1.0, 2.0, 101.0, 12.0)
         );
+    }
+
+    #[test]
+    fn a_window_the_skin_makes_transparent_says_so() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let window = r#"<XML>
+            <Screen item="Clear"><Size><CX>10</CX><CY>10</CY></Size>
+                <Style_Transparent>true</Style_Transparent></Screen>
+            <Screen item="Solid"><Size><CX>10</CX><CY>10</CY></Size></Screen>
+        </XML>"#;
+        assert!(library.screen(window, "Clear").unwrap().transparent);
+        assert!(!library.screen(window, "Solid").unwrap().transparent);
     }
 
     #[test]
