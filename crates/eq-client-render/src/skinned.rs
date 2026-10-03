@@ -5,6 +5,7 @@
 //! official client's numbering. A skin without the window, or a viewer
 //! without an installation, keeps the client's own chrome.
 mod controls;
+mod frame;
 mod items;
 pub(crate) mod scrollbar;
 
@@ -692,7 +693,7 @@ fn tabbed(
         })
         .with_children(|row| {
             for (index, page) in pages.iter().enumerate() {
-                tab_cell(row, art, page, tab(index));
+                tab_cell(row, art, (page, tabs.tab_frame.as_ref()), tab(index));
             }
         });
     let area = Area {
@@ -715,16 +716,33 @@ fn tabbed(
                     ..at(inside.x, inside.y + strip, area.width, area.height)
                 },
             ))
-            .with_children(|page_area| pieces(page_area, art, &page.pieces, &area, &within));
+            .with_children(|page_area| {
+                // The skin's page frame, where it names one, with the page's
+                // pieces inside it.
+                let inside = tabs.page_frame.as_ref().map_or(area, |look| {
+                    let insets = frame::around(page_area, art, look);
+                    Area {
+                        x: insets.left,
+                        y: insets.top,
+                        width: area.width - insets.left - insets.right,
+                        height: area.height - insets.top - insets.bottom,
+                    }
+                });
+                pieces(page_area, art, &page.pieces, &inside, &within);
+            });
     }
 }
 
 /// One tab in a tab box's row: its page's picture, or its words in a box
-/// as wide as they lay out.
+/// as wide as they lay out, in the skin's tab frame where the tab box names
+/// one.
 fn tab_cell(
     row: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
-    page: &eq_client_assets::sidl::Page,
+    (page, tab_frame): (
+        &eq_client_assets::sidl::Page,
+        Option<&eq_client_assets::sidl::FrameLook>,
+    ),
     tab: SkinTab,
 ) {
     let mut cell = row.spawn((Button, tab.clone()));
@@ -761,18 +779,41 @@ fn tab_cell(
                 rest.map_or(theme::INK, rgb),
                 chosen.map_or(theme::INK_BRIGHT, rgb),
             ];
-            cell.insert((
-                BackgroundColor(theme::INSET),
-                BorderColor::all(theme::EDGE),
-                Node {
-                    height: px(WORD_TAB_HEIGHT),
-                    padding: UiRect::horizontal(px(5)),
-                    border: UiRect::all(px(1)),
-                    align_items: AlignItems::Center,
-                    flex_shrink: 0.0,
-                    ..default()
-                },
-            ));
+            let node = Node {
+                height: px(WORD_TAB_HEIGHT),
+                align_items: AlignItems::Center,
+                flex_shrink: 0.0,
+                ..default()
+            };
+            match tab_frame {
+                // The skin's frame around the words, with their room inside.
+                Some(look) => {
+                    let insets = frame::insets(look);
+                    cell.insert(Node {
+                        padding: UiRect {
+                            left: px(insets.left + 4.0),
+                            right: px(insets.right + 4.0),
+                            top: px(insets.top),
+                            bottom: px(insets.bottom),
+                        },
+                        ..node
+                    });
+                    cell.with_children(|cell| {
+                        frame::around(cell, art, look);
+                    });
+                }
+                None => {
+                    cell.insert((
+                        BackgroundColor(theme::INSET),
+                        BorderColor::all(theme::EDGE),
+                        Node {
+                            padding: UiRect::horizontal(px(5)),
+                            border: UiRect::all(px(1)),
+                            ..node
+                        },
+                    ));
+                }
+            }
             cell.with_child((
                 TabWords { tab, colors },
                 theme::text(words.as_str(), Size::Small, colors[0]),
@@ -1530,6 +1571,22 @@ pub(crate) fn buttons(
     }
 }
 
+/// How far a window border reaches in from each edge: its sides' widths
+/// and its top's and bottom's heights.
+fn border_insets(border: &eq_client_assets::sidl::Border) -> frame::Insets {
+    let size = |piece: &Option<Piece>| {
+        piece.as_ref().map_or((0.0, 0.0), |piece| {
+            (to_f32(piece.width), to_f32(piece.height))
+        })
+    };
+    frame::Insets {
+        left: size(&border.left).0,
+        top: size(&border.top).1,
+        right: size(&border.right).0,
+        bottom: size(&border.bottom).1,
+    }
+}
+
 /// The border's corners and its edges stretched between them; what lies
 /// inside it is the window's.
 fn border(
@@ -1538,15 +1595,12 @@ fn border(
     border: &eq_client_assets::sidl::Border,
     (width, height): (f32, f32),
 ) -> Area {
-    let size = |piece: &Option<Piece>| {
-        piece.as_ref().map_or((0.0, 0.0), |piece| {
-            (to_f32(piece.width), to_f32(piece.height))
-        })
-    };
-    let (left, _) = size(&border.left);
-    let (right, _) = size(&border.right);
-    let (_, top) = size(&border.top);
-    let (_, bottom) = size(&border.bottom);
+    let frame::Insets {
+        left,
+        top,
+        right,
+        bottom,
+    } = border_insets(border);
     let (across, down) = (width - left - right, height - top - bottom);
     for (piece, (x, y, stretch_x, stretch_y)) in [
         (&border.top_left, (0.0, 0.0, None, None)),
