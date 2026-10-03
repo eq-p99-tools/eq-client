@@ -167,8 +167,9 @@ pub enum ClickTarget {
     Ability(AbilityPage, usize),
     /// The Actions window's melee attack button.
     Attack,
-    /// A Pet Info window button, by the `/pet` line it gives.
-    Pet(&'static str),
+    /// A button by the slash command it runs: a Pet Info window button, by
+    /// the `/pet` line it gives, or a group window button.
+    Slash(&'static str),
     /// An Options window checkbox, by the option's name in a file.
     Option(eq_client_core::options::Toggle),
     /// A slider, pressed this far along it, in percent.
@@ -425,6 +426,28 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
     })
 }
 
+/// A button by the slash command it runs: a Pet Info window button, by its
+/// `/pet` words, or a group window button, by its name. Decline is in
+/// Disband's place and runs the same command, so either name reaches the
+/// one showing.
+fn slash_click(window: &str, words: &[&str]) -> Result<ClickTarget, String> {
+    if window == "pet" {
+        let line = format!("/pet {}", words.join(" "));
+        return crate::skinned::PET_COMMANDS
+            .iter()
+            .map(|(_, command)| *command)
+            .find(|command| *command == line)
+            .map(ClickTarget::Slash)
+            .ok_or_else(|| "expected a Pet Info window button, by its /pet words".into());
+    }
+    Ok(ClickTarget::Slash(match words {
+        ["invite"] => "/invite",
+        ["follow"] => "/follow",
+        ["disband" | "decline"] => "/disband",
+        _ => return Err("expected invite, follow, disband or decline".into()),
+    }))
+}
+
 /// `click <target>` or `right_click <target>`: a slot, spellbook, trade or
 /// bag tint button.
 fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
@@ -460,16 +483,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["minimize_box", key] => ClickTarget::TitleBox(window_key(key)?, false),
         ["scroll_up", key] => ClickTarget::Scroll(window_key(key)?, true),
         ["scroll_down", key] => ClickTarget::Scroll(window_key(key)?, false),
-        ["pet", words @ ..] => {
-            let line = format!("/pet {}", words.join(" "));
-            ClickTarget::Pet(
-                crate::skinned::PET_COMMANDS
-                    .iter()
-                    .map(|(_, command)| *command)
-                    .find(|command| *command == line)
-                    .ok_or("expected a Pet Info window button, by its /pet words")?,
-            )
-        }
+        [window @ ("pet" | "group"), words @ ..] => slash_click(window, words)?,
         ["option", name] => ClickTarget::Option(
             eq_client_core::options::Toggle::ALL
                 .into_iter()
@@ -1049,7 +1063,7 @@ chat tell Friend inc now
             [
                 Step::Gm("makepet SumEarthR2".into()),
                 Step::Slash("/pet back off".into()),
-                Step::Click(ClickTarget::Pet("/pet sit down")),
+                Step::Click(ClickTarget::Slash("/pet sit down")),
             ]
         );
         assert_eq!(

@@ -58,6 +58,10 @@ pub(crate) enum WindowId {
     /// The skin's Pet Info window: the pet's health, its commands and its
     /// buffs, open while the player has a pet.
     PetInfo,
+    /// The skin's Group window: the other members' names and health, and
+    /// buttons to invite, follow, decline and disband, open while the player
+    /// is in a group or invited to one.
+    Group,
     /// The skin's Options window: the options the player sets, on its pages,
     /// and a page of the options only this client has.
     Options,
@@ -293,7 +297,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 30] = [
+    pub(crate) const ALL: [Self; 31] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -314,6 +318,7 @@ impl WindowId {
         Self::Quantity,
         Self::ActionsWindow,
         Self::PetInfo,
+        Self::Group,
         Self::Options,
         Self::Training,
         Self::Skills,
@@ -357,6 +362,7 @@ impl WindowId {
             Self::Quantity => Some("QuantityWnd"),
             Self::ActionsWindow => Some("ActionsWindow"),
             Self::PetInfo => Some("PetInfoWindow"),
+            Self::Group => Some("GroupWindow"),
             Self::Options => Some("OptionsWindow"),
             Self::Training => Some("TrainWindow"),
             Self::Skills => Some("SkillsWindow"),
@@ -414,6 +420,7 @@ impl WindowId {
             Self::Quantity => "quantity",
             Self::ActionsWindow => "actions-window",
             Self::PetInfo => "pet-info",
+            Self::Group => "group",
             Self::Options => "options",
             Self::Training => "training",
             Self::Skills => "skills",
@@ -560,6 +567,13 @@ impl WindowId {
             Self::PetInfo => Description {
                 toggle: Toggle::Hides,
                 ..floating("PET", Placement::TopLeft(56.0, 160.0), false, &[])
+            },
+            // Where the skin places it, which gives it no close box; it opens
+            // with an invitation or a group and closes when neither is left,
+            // so Escape leaves it (inferred).
+            Self::Group => Description {
+                closes_on_escape: false,
+                ..floating("GROUP", Placement::TopLeft(516.0, 78.0), false, &[])
             },
             // Where the skin places it; Alt+O opens and closes it, as in the
             // official client.

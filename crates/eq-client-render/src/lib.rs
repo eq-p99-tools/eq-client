@@ -19,6 +19,7 @@ mod exit_log;
 mod frame_limit;
 mod give;
 mod ground;
+mod group;
 mod hud;
 mod interact;
 mod inventory;
@@ -489,7 +490,7 @@ fn schedule(app: &mut App) {
             inventory::colors::input,
             interact::input,
             target::input,
-            (who::zone_list, pet::window),
+            (who::zone_list, pet::window, group::window),
             combat::input,
             trade::input,
             (
