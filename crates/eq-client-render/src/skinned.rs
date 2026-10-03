@@ -178,9 +178,11 @@ pub(crate) struct TitleBox {
 pub(crate) struct Greyed;
 
 /// What a skin's control this client does not have yet carries, over the
-/// skin's disabled look: the same reason on hover in every window.
-fn missing() -> (crate::outbox::Needs, Interaction) {
-    (crate::outbox::Needs::Missing, Interaction::default())
+/// skin's disabled look: the same reason on hover in every window. It is a
+/// button that does nothing, so a press on it stays there rather than
+/// dragging its window.
+fn missing() -> (crate::outbox::Needs, Button) {
+    (crate::outbox::Needs::Missing, Button)
 }
 
 /// Window frames, with what the skin changes on them and the skin they are
@@ -2386,19 +2388,23 @@ mod tests {
                 },
             );
         app.update();
-        let mut controls = app
-            .world_mut()
-            .query::<(&Needs, Has<Interaction>, Has<crate::tooltip::Tooltip>)>();
+        let mut controls = app.world_mut().query::<(
+            &Needs,
+            Has<Interaction>,
+            Has<crate::tooltip::Tooltip>,
+            Has<bevy::prelude::Button>,
+        )>();
         let drawn: Vec<_> = controls
             .iter(app.world())
-            .map(|(needs, hovers, tooltip)| (*needs, hovers, tooltip))
+            .map(|(needs, hovers, tooltip, button)| (*needs, hovers, tooltip, button))
             .collect();
         // The page button the client lacks gives its reason on hover in
-        // place of the skin's tooltip; the slot beside it works and keeps
-        // its own.
+        // place of the skin's tooltip, and is a button, which keeps a press
+        // from dragging its window; the slot beside it works and keeps its
+        // own tooltip.
         assert_eq!(drawn.len(), 2);
-        assert!(drawn.contains(&(Needs::Missing, true, false)));
-        assert!(drawn.contains(&(Needs::Nothing, true, true)));
+        assert!(drawn.contains(&(Needs::Missing, true, false, true)));
+        assert!(drawn.contains(&(Needs::Nothing, true, true, true)));
     }
 
     #[test]

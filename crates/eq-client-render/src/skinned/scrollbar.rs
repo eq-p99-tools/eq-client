@@ -1,7 +1,9 @@
 //! The skin's vertical scrollbars, beside the boxes that scroll: the chat's
 //! output and the lists. Its arrows, its gutter and its thumb scroll the box
 //! as the wheel does: each press becomes this frame's wheel for the surface
-//! that takes the wheel for the box, which scrolls it its own way.
+//! that takes the wheel for the box, which scrolls it its own way. Each is a
+//! button, so it keeps the press: the window frame beneath, which a press
+//! drags, never gets it.
 use super::{Area, SkinButton, WindowId, at, to_f32};
 use crate::windows::pointer::{LINE_PIXELS, TakesWheel, Wheel};
 use bevy::{prelude::*, ui::RelativeCursorPosition, window::PrimaryWindow};
@@ -123,7 +125,7 @@ fn gutter(
     let height = |piece: Option<&Piece>| piece.map_or(width, |piece| to_f32(piece.height));
     let mut gutter = bar.spawn((
         Gutter { bar: id },
-        Interaction::default(),
+        Button,
         RelativeCursorPosition::default(),
         at(0.0, top, width, length),
     ));
@@ -147,7 +149,7 @@ fn gutter(
         gutter
             .spawn((
                 Thumb { bar: id, ends },
-                Interaction::default(),
+                Button,
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(0),
@@ -504,6 +506,36 @@ mod tests {
             },
             UiGlobalTransform::from_xy(6.0, 100.0),
         )
+    }
+
+    #[test]
+    fn every_part_of_a_scrollbar_keeps_its_press_from_the_window_beneath() {
+        use bevy::ui::FocusPolicy;
+        let mut app = crate::testing::app();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<super::super::super::skin::UiSkin>()
+            .add_systems(
+                Update,
+                |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let look = ScrollbarLook::default();
+                    let inside = Area {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 100.0,
+                        height: 100.0,
+                    };
+                    let scrolled = commands.spawn(Node::default()).id();
+                    commands.spawn(Node::default()).with_children(|frame| {
+                        spawn(frame, &mut art, &look, &inside, (scrolled, WindowId::Chat));
+                    });
+                },
+            );
+        app.update();
+        let mut parts = app
+            .world_mut()
+            .query_filtered::<&FocusPolicy, Or<(With<ScrollArrow>, With<Gutter>, With<Thumb>)>>();
+        let policies: Vec<_> = parts.iter(app.world()).copied().collect();
+        assert_eq!(policies, [FocusPolicy::Block; 4]);
     }
 
     #[test]
