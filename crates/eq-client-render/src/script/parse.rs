@@ -247,6 +247,12 @@ pub enum TradeClick {
     Sell(i32),
     /// Close the merchant window.
     EndShop,
+    /// Choose a ware in the skin's merchant window, by its merchant slot.
+    Choose(u32),
+    /// The skin's merchant window's Buy, for the ware chosen.
+    BuyChosen,
+    /// The skin's merchant window's Sell, for the carried item chosen.
+    SellChosen,
 }
 
 /// Parses a script: one step per line, `#` starts a comment.
@@ -393,6 +399,11 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["buy", slot] => ClickTarget::Trade(TradeClick::Buy(value(slot, "a merchant slot")?)),
         ["sell", slot] => ClickTarget::Trade(TradeClick::Sell(value(slot, "an inventory slot")?)),
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
+        ["merchant_row", slot] => {
+            ClickTarget::Trade(TradeClick::Choose(value(slot, "a merchant slot")?))
+        }
+        ["buy_chosen"] => ClickTarget::Trade(TradeClick::BuyChosen),
+        ["sell_chosen"] => ClickTarget::Trade(TradeClick::SellChosen),
         ["give"] => ClickTarget::Give,
         ["actions"] => ClickTarget::ActionsWindow,
         ["window", key] => ClickTarget::Toggle(window_key(key)?),
@@ -989,6 +1000,25 @@ chat tell Friend inc now
         for bad in ["click tint x", "click tint 23 x", "click tint 23 4 5"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn parses_the_skins_merchant_window_clicks() {
+        assert_eq!(
+            parse(
+                "click merchant_row 3
+click buy_chosen
+click sell_chosen
+",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Trade(TradeClick::Choose(3))),
+                Step::Click(ClickTarget::Trade(TradeClick::BuyChosen)),
+                Step::Click(ClickTarget::Trade(TradeClick::SellChosen)),
+            ]
+        );
     }
 
     #[test]

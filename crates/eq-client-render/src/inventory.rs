@@ -312,7 +312,11 @@ pub(super) fn input(
     mouse: Res<ButtonInput<MouseButton>>,
     online: Res<super::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
-    (mut shown, skinned): (ResMut<super::windows::Shown>, Res<crate::skinned::Skinned>),
+    (mut shown, skinned, mut trade): (
+        ResMut<super::windows::Shown>,
+        Res<crate::skinned::Skinned>,
+        ResMut<crate::trade::TradeState>,
+    ),
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
     slots: Query<(&Interaction, &SlotButton)>,
     store: Query<&Interaction, (With<StoreCursor>, Changed<Interaction>)>,
@@ -405,6 +409,18 @@ pub(super) fn input(
                 .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
             {
                 state.select_split(slot.0, online.world().inventory());
+            } else if skinned.has(super::windows::WindowId::Merchant)
+                && !online
+                    .world()
+                    .inventory()
+                    .items()
+                    .contains_key(&InventorySlot::CURSOR)
+                && trade.offer(slot.0.0)
+            {
+                // With the skin's merchant window open, a click on a
+                // carried item chooses it to sell, as its one place for a
+                // chosen item and its Sell button suggest; the official
+                // client's click there is not checked yet.
             } else {
                 state.click_slot(slot.0, false, &online, &sender);
             }

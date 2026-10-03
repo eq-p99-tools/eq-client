@@ -9,6 +9,9 @@ use eq_client_core::{ClientCommand, SpawnKind, inventory::InventoryItem, world::
 
 use super::windows;
 
+mod merchant;
+pub(crate) use merchant::{ChosenPicture, MerchantRows, chosen, fill as fill_wares, picture};
+
 /// The NPC class that answers ordinary shop requests; servers ignore other classes.
 const MERCHANT_CLASS: u8 = 41;
 
@@ -44,12 +47,45 @@ struct LootWindow {
 
 struct MerchantWindow {
     name: String,
+    /// What the skin's merchant window has chosen to buy or to sell.
+    chosen: Option<Chosen>,
+}
+
+/// An item chosen in the skin's merchant window: one of the merchant's
+/// wares, by list slot, or one of the player's carried items to sell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Chosen {
+    Ware(u32),
+    Carried(i32),
 }
 
 impl TradeState {
     /// The name of the corpse the loot window is open on.
     pub(crate) fn corpse(&self) -> Option<&str> {
         self.loot.as_ref().map(|window| window.name.as_str())
+    }
+
+    /// The name of the merchant the merchant window is open at.
+    pub(crate) fn merchant(&self) -> Option<&str> {
+        self.merchant.as_ref().map(|window| window.name.as_str())
+    }
+
+    /// What the skin's merchant window has chosen, if anything.
+    pub(crate) fn chosen(&self) -> Option<Chosen> {
+        self.merchant.as_ref().and_then(|window| window.chosen)
+    }
+
+    /// Chooses one of the player's carried items to sell, as a click on it
+    /// does while the skin's merchant window is open; false, leaving the
+    /// click to the inventory, when no merchant is open or the slot is not
+    /// one a merchant buys from.
+    pub(crate) fn offer(&mut self, slot: i32) -> bool {
+        let Some(window) = self.merchant.as_mut().filter(|_| sellable_slot(slot)) else {
+            return false;
+        };
+        window.chosen = Some(Chosen::Carried(slot));
+        self.changed();
+        true
     }
 
     /// Something the windows show changed: draw them again.
@@ -67,6 +103,7 @@ impl TradeState {
         });
         self.merchant = Some(MerchantWindow {
             name: merchant.into(),
+            chosen: None,
         });
         self.changed();
     }
@@ -160,6 +197,26 @@ pub(super) enum Action {
     Buy(u32),
     Sell(i32),
     EndShop,
+    /// Chooses one of the merchant's wares in the skin's merchant window.
+    Choose(u32),
+    /// Buys the ware chosen in the skin's merchant window.
+    BuyChosen,
+    /// Sells the carried item chosen in the skin's merchant window.
+    SellChosen,
+}
+
+/// What the session must offer for a loot or merchant button to work.
+pub(crate) const fn needs(action: Action) -> eq_client_core::Capability {
+    use eq_client_core::Capability;
+    match action {
+        Action::Take(_) | Action::TakeAll | Action::EndLoot => Capability::Looting,
+        Action::Buy(_)
+        | Action::Sell(_)
+        | Action::EndShop
+        | Action::Choose(_)
+        | Action::BuyChosen
+        | Action::SellChosen => Capability::Trading,
+    }
 }
 
 /// Opens, drives and closes sessions from keys and window buttons.
@@ -271,7 +328,7 @@ pub(super) fn input(
                 },
             ) {
                 online.open_shop(merchant_id);
-                trade.merchant = Some(MerchantWindow { name });
+                trade.merchant = Some(MerchantWindow { name, chosen: None });
                 trade.changed();
             }
         } else if let Some(trainer) = guildmaster {
@@ -299,6 +356,20 @@ pub(super) fn input(
         .merchant()
         .map(|merchant| merchant.merchant_id);
     for action in clicked {
+        // The skin's Buy and Sell act on what its window has chosen.
+        let chosen = trade.chosen();
+        let action = match (action, chosen) {
+            (Action::BuyChosen, Some(Chosen::Ware(slot))) => Action::Buy(slot),
+            (Action::SellChosen, Some(Chosen::Carried(slot))) => {
+                if let Some(window) = trade.merchant.as_mut() {
+                    window.chosen = None;
+                }
+                trade.changed();
+                Action::Sell(slot)
+            }
+            (Action::BuyChosen | Action::SellChosen, _) => continue,
+            (other, _) => other,
+        };
         match action {
             Action::Take(slot) => {
                 if let Some(window) = trade
@@ -387,6 +458,13 @@ pub(super) fn input(
                     );
                 }
             }
+            Action::Choose(slot) => {
+                if let Some(window) = trade.merchant.as_mut() {
+                    window.chosen = Some(Chosen::Ware(slot));
+                    trade.changed();
+                }
+            }
+            Action::BuyChosen | Action::SellChosen => (),
             Action::EndShop => {
                 if let Some(merchant_id) = merchant.filter(|_| trade.merchant.is_some())
                     && send(
@@ -523,37 +601,14 @@ pub(super) fn present(
             &[(Action::TakeAll, "Loot all"), (Action::EndLoot, "Done")],
         );
     }
-    if let Some((window, stock)) = merchant {
-        let mut rows: Vec<(Action, String)> = stock
-            .stock
-            .values()
-            .map(|entry| {
-                (
-                    Action::Buy(entry.slot),
-                    format!(
-                        "Buy  {}  {}",
-                        item_label(&entry.item),
-                        coin_text(u64::from(entry.price))
-                    ),
-                )
-            })
-            .collect();
-        rows.extend(
-            inventory
-                .items()
-                .values()
-                .filter(|item| {
-                    sellable_slot(item.slot.0)
-                        && !no_drop(item)
-                        && !holds_items(item, inventory.items())
-                })
-                .map(|item| {
-                    (
-                        Action::Sell(item.slot.0),
-                        format!("Sell {}", item_label(item)),
-                    )
-                }),
-        );
+    // As the loot window, the skin's merchant window needs only its frame.
+    if merchant.is_some() && skinned.has(windows::WindowId::Merchant) {
+        if merchant_frame.is_none() {
+            let frame = windows::frame(&mut commands, windows::WindowId::Merchant, Node::default());
+            commands.entity(frame).insert(Panel(Rows::Merchant));
+        }
+    } else if let Some((window, stock)) = merchant {
+        let rows = merchant_rows(stock, inventory);
         let coins = online
             .world()
             .coins()
@@ -566,6 +621,37 @@ pub(super) fn present(
             &[(Action::EndShop, "Done")],
         );
     }
+}
+
+/// The client's own merchant window's rows: a Buy row for each ware, then a
+/// Sell row for each carried item a merchant takes.
+fn merchant_rows(
+    stock: &eq_client_core::world::Merchant,
+    inventory: &eq_client_core::inventory::Inventory,
+) -> Vec<(Action, String)> {
+    let wares = stock.stock.values().map(|entry| {
+        (
+            Action::Buy(entry.slot),
+            format!(
+                "Buy  {}  {}",
+                item_label(&entry.item),
+                coin_text(u64::from(entry.price))
+            ),
+        )
+    });
+    let sales = inventory
+        .items()
+        .values()
+        .filter(|item| {
+            sellable_slot(item.slot.0) && !no_drop(item) && !holds_items(item, inventory.items())
+        })
+        .map(|item| {
+            (
+                Action::Sell(item.slot.0),
+                format!("Sell {}", item_label(item)),
+            )
+        });
+    wares.chain(sales).collect()
 }
 
 /// Scrolls the loot or merchant list the wheel turns.
@@ -682,14 +768,9 @@ fn show_panel(
 }
 
 fn button(parent: &mut ChildSpawnerCommands, action: Action, label: &str) {
-    use eq_client_core::Capability;
-    let needs = match action {
-        Action::Take(_) | Action::TakeAll | Action::EndLoot => Capability::Looting,
-        Action::Buy(_) | Action::Sell(_) | Action::EndShop => Capability::Trading,
-    };
     theme::button_with(
         parent,
-        (action, crate::outbox::Needs::Capability(needs)),
+        (action, crate::outbox::Needs::Capability(needs(action))),
         label,
         Size::Label,
     );
@@ -889,6 +970,7 @@ mod tests {
         app.insert_resource(TradeState {
             merchant: Some(MerchantWindow {
                 name: "Merchant".into(),
+                chosen: None,
             }),
             ..TradeState::default()
         })
@@ -1033,6 +1115,93 @@ mod tests {
             .spawn((Button, Action::EndLoot, Interaction::Pressed));
         app.update();
         assert!(app.world().resource::<TradeState>().loot.is_some());
+    }
+
+    #[test]
+    fn the_skins_merchant_window_buys_and_sells_what_it_has_chosen() {
+        use eq_client_core::{WorldEvent, WorldUpdate, inventory::InventorySlot, world::NoSpells};
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        let mut items = crate::preview::items();
+        items.truncate(1);
+        items[0].slot = InventorySlot(23);
+        items[0].details.flags.clear();
+        crate::online::testing::inventory(
+            &mut online,
+            eq_client_core::inventory::InventoryUpdate::Snapshot(items.clone()),
+        );
+        online.open_shop(8);
+        online.tell(
+            &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Item(Box::new(
+                MerchantItem {
+                    slot: 3,
+                    price: 10,
+                    quantity: 0,
+                    item: items[0].clone(),
+                },
+            )))),
+            std::time::Instant::now(),
+            &NoSpells,
+        );
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        app.init_resource::<windows::Shown>();
+        crate::keys::testing::install(&mut app);
+        app.insert_resource(online)
+            .insert_resource(TradeState {
+                merchant: Some(MerchantWindow {
+                    name: "Merchant".into(),
+                    chosen: None,
+                }),
+                ..TradeState::default()
+            })
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::escape::Escape>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, input);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        let press = |app: &mut App, action| {
+            let button = app
+                .world_mut()
+                .spawn((Button, action, Interaction::Pressed))
+                .id();
+            app.update();
+            app.world_mut().despawn(button);
+        };
+        // Buy and Sell do nothing until something is chosen.
+        press(&mut app, Action::BuyChosen);
+        assert!(receiver.try_recv().is_err());
+        press(&mut app, Action::Choose(3));
+        assert_eq!(
+            app.world().resource::<TradeState>().chosen(),
+            Some(Chosen::Ware(3))
+        );
+        press(&mut app, Action::BuyChosen);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::Buy {
+                slot: 3,
+                quantity: 1,
+                ..
+            })
+        ));
+        // A carried item chosen, as a click on it chooses it, is sold.
+        assert!(app.world_mut().resource_mut::<TradeState>().offer(23));
+        assert!(!app.world_mut().resource_mut::<TradeState>().offer(13));
+        press(&mut app, Action::SellChosen);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::Sell { slot: 23, .. })
+        ));
+        assert_eq!(app.world().resource::<TradeState>().chosen(), None);
     }
 
     #[test]

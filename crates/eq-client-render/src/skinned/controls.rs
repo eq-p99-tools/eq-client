@@ -681,6 +681,8 @@ pub(crate) enum Listing {
     Training,
     /// The player's skills.
     Skills,
+    /// A merchant's wares.
+    Merchant,
 }
 
 /// A list's rows, which the client fills and the wheel scrolls.
@@ -701,6 +703,7 @@ fn listing(id: Option<&str>, owner: WindowId) -> Option<Listing> {
         (WindowId::Options, Some(KEY_LIST)) => Some(Listing::Keys),
         (WindowId::Training, Some("SkillList")) => Some(Listing::Training),
         (WindowId::Skills, Some("SkillList")) => Some(Listing::Skills),
+        (WindowId::Merchant, Some("ItemList")) => Some(Listing::Merchant),
         _ => None,
     }
 }
@@ -798,6 +801,12 @@ pub(super) fn listbox(
                     crate::windows::pointer::TakesWheel,
                 ));
             }
+            Some(Listing::Merchant) => {
+                rows.insert((
+                    crate::trade::MerchantRows::new(columns),
+                    crate::windows::pointer::TakesWheel,
+                ));
+            }
             None => (),
         }
         if let Some(look) = bar {
@@ -827,6 +836,23 @@ fn headings(
                 if let Some(look) = header {
                     super::frame::heading(cell, art, look);
                 }
+                // A column headed by a picture, as a price's coins are,
+                // shows it in the middle of its heading.
+                if let Some(piece) = column.header.as_ref().and_then(|look| look.middle.as_ref()) {
+                    let (wide, tall) = (to_f32(piece.width), to_f32(piece.height));
+                    picture(
+                        cell,
+                        art,
+                        piece,
+                        at(
+                            ((column.width - wide) / 2.0).max(0.0),
+                            ((height - tall) / 2.0).max(0.0),
+                            wide.min(column.width),
+                            tall.min(height),
+                        ),
+                    );
+                    return;
+                }
                 cell.spawn((
                     theme::text(column.heading.as_str(), Size::Small, ink),
                     TextLayout::new(Justify::Left, LineBreak::NoWrap),
@@ -855,8 +881,9 @@ pub(crate) fn fill_lists(
     for (entity, mut rows, children) in &mut lists {
         let wanted = match rows.listing {
             Listing::Keys => filter.0.clone(),
-            // The Training and Skills windows' lists fill themselves.
-            Listing::Training | Listing::Skills => continue,
+            // The Training, Skills and merchant windows' lists fill
+            // themselves.
+            Listing::Training | Listing::Skills | Listing::Merchant => continue,
         };
         if rows.filled && rows.filter == wanted && !keys.is_changed() {
             continue;
@@ -913,6 +940,7 @@ type ScrolledList = Or<(
     With<ListRows>,
     With<crate::training::SkillRows>,
     With<crate::skills::SkillsList>,
+    With<crate::trade::MerchantRows>,
     With<super::ScrolledView>,
 )>;
 
