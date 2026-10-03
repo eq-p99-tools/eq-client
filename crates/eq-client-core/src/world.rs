@@ -96,6 +96,10 @@ pub struct MotionGrant {
 /// character's, and the zone's, which leaving the zone forgets in one step.
 #[derive(Default)]
 pub struct ClientWorld {
+    /// What the player turned on of what a session may leave to them, as
+    /// their options say; it outlasts every connection.
+    chosen: Vec<crate::Capability>,
+
     // The connection to the servers.
     connected: bool,
     ended: bool,
@@ -114,6 +118,9 @@ pub struct ClientWorld {
     session_id: Option<u64>,
     /// What the admission lets the player do.
     capabilities: Vec<crate::Capability>,
+    /// What the admission leaves to the player, which they may do once they
+    /// turn it on.
+    choices: Vec<crate::Capability>,
     zone_name: String,
     far_clip: Option<f32>,
     death: Option<Death>,
@@ -216,6 +223,12 @@ impl ClientWorld {
             self.zone.doors.close_due(now);
         }
         self.casting.cooldowns.resolve(spells, now);
+    }
+
+    /// The player's choice, from their options, of what a session may leave
+    /// to them to turn on.
+    pub fn choose(&mut self, chosen: Vec<crate::Capability>) {
+        self.chosen = chosen;
     }
 
     /// The player's own choice of target, which the client tells the session
@@ -345,12 +358,18 @@ impl ClientWorld {
             } => self.offered(*selection_id, characters, news),
             WorldEvent::Entered {
                 capabilities,
+                choices,
                 session_id,
                 zone,
                 player,
                 far_clip,
             } => {
-                return self.entered((capabilities, *session_id), (zone, *far_clip), player, now);
+                return self.entered(
+                    (capabilities, choices, *session_id),
+                    (zone, *far_clip),
+                    player,
+                    now,
+                );
             }
             WorldEvent::MotionState {
                 session_id,
@@ -841,6 +860,7 @@ impl ClientWorld {
                 self.buffs.clear();
                 self.session_id = None;
                 self.capabilities.clear();
+                self.choices.clear();
                 self.player = None;
                 self.connected = false;
             }

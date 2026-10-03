@@ -69,7 +69,7 @@ pub(crate) fn show(
         .find_map(|(_, tooltip, needs, placed)| {
             let line = match needs {
                 Some(needs) if greys && !needs.offered(online.world()) => {
-                    Some(needs.reason().to_owned())
+                    Some(needs.reason(online.world()))
                 }
                 _ => tooltip.map(|tooltip| tooltip.0.clone()),
             }?;

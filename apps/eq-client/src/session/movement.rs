@@ -205,6 +205,7 @@ mod tests {
     fn entered(session_id: u64, run_speed: f32) -> WorldEvent {
         WorldEvent::Entered {
             capabilities: vec![Capability::Moving],
+            choices: Vec::new(),
             session_id,
             zone: "example".into(),
             far_clip: None,
@@ -270,6 +271,7 @@ mod tests {
         };
         let still = WorldEvent::Entered {
             capabilities: vec![Capability::Talking],
+            choices: Vec::new(),
             session_id,
             player,
             zone,
