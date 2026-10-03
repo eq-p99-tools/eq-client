@@ -73,6 +73,28 @@ impl ClientWorld {
         })
     }
 
+    /// The other member in a place of the player's group, counted from 0.
+    #[must_use]
+    pub fn group_place(&self, place: usize) -> Option<&str> {
+        self.group.as_ref()?.members.get(place).map(String::as_str)
+    }
+
+    /// The health in percent of the member in a place of the player's
+    /// group, while they are in view and it has been reported.
+    #[must_use]
+    pub fn group_health(&self, place: usize) -> Option<u8> {
+        let member = self.group_member(self.group_place(place)?)?;
+        self.health(member.state.spawn_id)
+    }
+
+    /// The pet of the member in a place of the player's group, while both
+    /// are in view.
+    #[must_use]
+    pub fn group_pet(&self, place: usize) -> Option<&super::Spawn> {
+        let member = self.group_member(self.group_place(place)?)?;
+        self.pet_of(member.state.spawn_id)
+    }
+
     /// Whether a name is the player's.
     fn is_named(&self, name: &str) -> bool {
         self.player

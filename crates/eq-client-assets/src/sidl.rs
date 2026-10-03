@@ -148,7 +148,8 @@ pub struct Gauge {
     pub text_color: Option<[u8; 3]>,
     /// The text's offset from the gauge's top left.
     pub text_offset: (f32, f32),
-    /// How far down the gauge the bar sits.
+    /// How far down the gauge the bar sits (`GaugeOffsetY`), 16 where the
+    /// skin leaves it out.
     pub bar_offset: f32,
     /// Where the bar starts from the gauge's left (`GaugeOffsetX`); it runs
     /// to the gauge's right edge, and its fill grows from here. Skins set it
@@ -917,7 +918,9 @@ impl Library {
                 number(node, "TextOffsetX").unwrap_or(0.0),
                 number(node, "TextOffsetY").unwrap_or(0.0),
             ),
-            bar_offset: number(node, "GaugeOffsetY").unwrap_or(0.0),
+            // The skin schema's default (SIDL.xml), which the default skin's
+            // group window gauges leave to it.
+            bar_offset: number(node, "GaugeOffsetY").unwrap_or(16.0),
             bar_left: number(node, "GaugeOffsetX").unwrap_or(0.0),
         })
     }
@@ -1365,7 +1368,7 @@ mod tests {
         <StaticAnimation item="BoxPicture"><Animation>A_Box</Animation></StaticAnimation>
         <Gauge item="Health">
             <Location><X>5</X><Y>2</Y></Location><Size><CX>108</CX><CY>27</CY></Size>
-            <TextOffsetX>8</TextOffsetX><GaugeOffsetY>16</GaugeOffsetY><GaugeOffsetX>20</GaugeOffsetX>
+            <TextOffsetX>8</TextOffsetX><GaugeOffsetX>20</GaugeOffsetX>
             <FillTint><R>240</R><G>0</G><B>0</B></FillTint>
             <EQType>6</EQType>
             <GaugeDrawTemplate><Background>A_Back</Background><Fill>A_Fill</Fill></GaugeDrawTemplate>
@@ -1518,6 +1521,7 @@ mod tests {
         assert_eq!(gauge.eq_type, Some(6));
         assert_eq!(gauge.fill_tint, Some([240, 0, 0]));
         assert_eq!(gauge.look.fill.as_ref().unwrap().y, 18);
+        // Without its own offset, the bar sits 16 down, as the schema says.
         assert_eq!(
             (gauge.text_offset, gauge.bar_offset, gauge.bar_left),
             ((8.0, 0.0), 16.0, 20.0)

@@ -54,6 +54,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::CharacterSelect => "EQUI_CharacterSelect.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
+        WindowId::Group => "EQUI_GroupWindow.xml",
         WindowId::Selector => "EQUI_SelectorWnd.xml",
         WindowId::CastBar => "EQUI_CastingWindow.xml",
         WindowId::Effects => "EQUI_BuffWindow.xml",
@@ -126,6 +127,19 @@ pub(crate) enum Shows {
     BookName(u8),
     /// The number of the spellbook's right page (true) or its left.
     BookPage(bool),
+    /// A group member's gauge, shown only while their place in the group
+    /// window, counted from 0, holds a member.
+    Member(usize),
+    /// A group member's pet's gauge, shown only while the member in this
+    /// place has a pet in view.
+    MemberPet(usize),
+    /// The sign after a group member's health, said only while their health
+    /// shows.
+    MemberPercent(usize),
+    /// The group window's Follow and Decline buttons (true) or its Invite
+    /// and Disband: the skin keeps each pair in the other's places, and the
+    /// one for whether an invitation waits shows.
+    WhileInvited(bool),
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -1200,6 +1214,34 @@ fn spell_gem(
         });
 }
 
+/// A group button, in the group window or on the Actions window's Main page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GroupButton {
+    Invite,
+    Follow,
+    Disband,
+    Decline,
+}
+
+impl GroupButton {
+    /// The slash command it runs: Invite invites the target, and Decline
+    /// disbands, which with an invitation waiting declines it, as the
+    /// installed string for an invitation says.
+    const fn command(self) -> &'static str {
+        match self {
+            Self::Invite => "/invite",
+            Self::Follow => "/follow",
+            Self::Disband | Self::Decline => "/disband",
+        }
+    }
+
+    /// Whether it answers an invitation, and so shows in the group window
+    /// only while one waits.
+    const fn answers(self) -> bool {
+        matches!(self, Self::Follow | Self::Decline)
+    }
+}
+
 /// What a skin's button does in the client.
 #[derive(Clone, Copy)]
 enum Does {
@@ -1222,6 +1264,9 @@ enum Does {
     Ability(super::abilities::AbilityButton),
     /// Runs a game slash command, as the Actions window's sit does.
     Slash(&'static str),
+    /// Invites, follows, disbands or declines, as the group window's and the
+    /// Actions window's group buttons do.
+    Group(GroupButton),
     /// Shows the pet's buff in this slot.
     PetBuff(usize),
     /// Shows the player's buff on this button of an effects window.
@@ -1375,6 +1420,9 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
         "AMP_SitButton" => Does::Slash("/sit"),
         "AMP_StandButton" => Does::Slash("/stand"),
         "AMP_CampButton" => Does::Slash("/camp"),
+        "AMP_InviteButton" => Does::Group(GroupButton::Invite),
+        "AMP_FollowButton" => Does::Group(GroupButton::Follow),
+        "AMP_DisbandButton" => Does::Group(GroupButton::Disband),
         "Container_Icon" if matches!(owner, WindowId::Bag(_) | WindowId::WorldContainer) => {
             Does::BagIcon
         }
@@ -1412,7 +1460,11 @@ fn spellbook_button(id: &str) -> Option<Does> {
 const fn has_own_buttons(owner: WindowId) -> bool {
     matches!(
         owner,
-        WindowId::PetInfo | WindowId::Spellbook | WindowId::CharacterSelect | WindowId::Selector
+        WindowId::PetInfo
+            | WindowId::Group
+            | WindowId::Spellbook
+            | WindowId::CharacterSelect
+            | WindowId::Selector
     )
 }
 
@@ -1421,6 +1473,7 @@ const fn has_own_buttons(owner: WindowId) -> bool {
 fn own_button(id: &str, owner: WindowId) -> Option<Does> {
     match owner {
         WindowId::PetInfo => Some(pet_button(id)),
+        WindowId::Group => group_button(id),
         WindowId::Spellbook => spellbook_button(id),
         WindowId::CharacterSelect => Some(character_button(id)),
         WindowId::Selector => Some(selector_button(id).map_or(Does::Nothing, Does::Toggles)),
@@ -1614,6 +1667,19 @@ fn pet_button(id: &str) -> Does {
         .map_or(Does::Nothing, |(_, command)| Does::Slash(command))
 }
 
+/// The group window's buttons. The skin parks Looking For Group at a
+/// pixel's size.
+fn group_button(id: &str) -> Option<Does> {
+    Some(Does::Group(match id {
+        "InviteButton" => GroupButton::Invite,
+        "FollowButton" => GroupButton::Follow,
+        "DisbandButton" => GroupButton::Disband,
+        "DeclineButton" => GroupButton::Decline,
+        "LFGButton" => return None,
+        _ => return Some(Does::Nothing),
+    }))
+}
+
 /// The Actions window's ability buttons: the Combat page's first to fourth
 /// and the Abilities page's first to sixth.
 fn ability_button(id: &str) -> Option<super::abilities::AbilityButton> {
@@ -1674,6 +1740,9 @@ fn button(
         None => window.spawn(node),
     };
     behave(&mut drawn, does, button, owner);
+    if let Some(shows) = paired(does, owner) {
+        drawn.insert((shows, Visibility::Hidden));
+    }
     let ink = match does {
         Does::Nothing => theme::INK_DIM,
         _ => button.text_color.map_or(theme::INK_BRIGHT, rgb),
@@ -1721,6 +1790,19 @@ fn stacked(area: Area, index: u32, inside: &Area) -> Area {
     }
 }
 
+/// When a button the skin keeps in another's place shows: the pet's Stand
+/// under its Sit, and the group window's Follow and Decline over Invite and
+/// Disband. One of each pair shows at a time.
+fn paired(does: Does, owner: WindowId) -> Option<Shows> {
+    match does {
+        Does::Slash(command) => pet_posture_button(command).map(Shows::WhilePetSits),
+        Does::Group(group) if owner == WindowId::Group => {
+            Some(Shows::WhileInvited(group.answers()))
+        }
+        _ => None,
+    }
+}
+
 /// What a pressed skin button does, and the state it shows.
 fn behave(
     drawn: &mut EntityCommands,
@@ -1755,6 +1837,12 @@ fn behave(
             crate::outbox::Needs::Capability(Capability::Abilities),
         )),
         Does::Slash(command) => drawn.insert((Button, SlashButton(command), skin())),
+        Does::Group(group) => drawn.insert((
+            Button,
+            SlashButton(group.command()),
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Grouping),
+        )),
         Does::PetBuff(slot) => drawn.insert((Shows::PetBuff(slot), Visibility::Hidden)),
         // Hovering a buff names it, as the client's own window does.
         Does::Buff(window, index) => drawn.insert((
@@ -1818,12 +1906,6 @@ fn behave(
         Does::Offered(_) | Does::BagIcon => drawn,
         Does::Nothing => drawn.insert(missing()),
     };
-    // The skin keeps the pet's Stand under its Sit; one shows at a time.
-    if let Does::Slash(command) = does
-        && let Some(sits) = pet_posture_button(command)
-    {
-        drawn.insert((Shows::WhilePetSits(sits), Visibility::Hidden));
-    }
     if let Some(tooltip) = &button.tooltip
         && !matches!(does, Does::Nothing)
     {
@@ -1979,6 +2061,7 @@ fn caption(
         | Does::Gives
         | Does::Attack
         | Does::Slash(_)
+        | Does::Group(_)
         | Does::Option(_)
         | Does::Trains
         | Does::Answers(_)
@@ -2320,6 +2403,16 @@ fn title_boxes(
     }
 }
 
+/// Whose a group window's gauge is, by its number (`EQType`): 11 to 15
+/// the members' in their places, 17 to 21 their pets'.
+const fn member_gauge(kind: u32) -> Option<Shows> {
+    match kind {
+        11..=15 => Some(Shows::Member((kind - 11) as usize)),
+        17..=21 => Some(Shows::MemberPet((kind - 17) as usize)),
+        _ => None,
+    }
+}
+
 /// A gauge: its text, then its bar below it, filled as far as its fraction.
 fn gauge(
     window: &mut ChildSpawnerCommands,
@@ -2346,6 +2439,9 @@ fn gauge(
         area.width,
         area.height,
     ));
+    if let Some(shows) = gauge.eq_type.and_then(member_gauge) {
+        root.insert((shows, Visibility::Hidden));
+    }
     root.with_children(|root| {
         if let Some(kind) = gauge.eq_type {
             let ink = gauge.text_color.map_or(theme::INK_BRIGHT, rgb);
@@ -2414,6 +2510,13 @@ fn window_label(owner: WindowId, name: &str) -> Option<Shows> {
                 .filter(|place| usize::from(*place) < crate::spellbook::PLACES)
                 .map(Shows::BookName),
         };
+    }
+    if owner == WindowId::Group {
+        return name
+            .strip_prefix("GW_HPPercLabel")
+            .and_then(|place| place.parse::<usize>().ok())
+            .filter(|place| (1..=5).contains(place))
+            .map(|place| Shows::MemberPercent(place - 1));
     }
     Some(match (owner, name) {
         (WindowId::Loot, "LW_CorpseName") => Shows::Corpse,
@@ -2589,6 +2692,38 @@ const fn to_f32(value: u32) -> f32 {
     value as f32
 }
 
+/// Whether a piece that shows only at times shows now; None for one that
+/// always shows.
+fn shown_now(
+    shows: Shows,
+    world: &eq_client_core::world::ClientWorld,
+    combat: &super::combat::CombatState,
+    trade: &super::trade::TradeState,
+) -> Option<bool> {
+    Some(match shows {
+        Shows::Attacking => combat.auto_attack,
+        Shows::WhilePetSits(sits) => {
+            let pet_sits = world
+                .pet()
+                .and_then(|pet| world.posture(pet.state.spawn_id))
+                == Some(eq_client_core::PostureState::Sitting);
+            sits == pet_sits
+        }
+        Shows::WhileSelling(selling) => {
+            matches!(trade.chosen(), Some(crate::trade::Chosen::Carried(_))) == selling
+        }
+        Shows::PetBuff(slot) => world
+            .pet_buffs()
+            .and_then(|buffs| buffs.slots.get(slot).copied().flatten())
+            .is_some(),
+        Shows::Buff(window, index) => world.buffs().in_window(window, index).is_some(),
+        Shows::Member(place) => world.group_place(place).is_some(),
+        Shows::MemberPet(place) => world.group_pet(place).is_some(),
+        Shows::WhileInvited(invited) => world.group_invitation().is_some() == invited,
+        _ => return None,
+    })
+}
+
 /// Shows the world in the skinned windows' gauges and labels.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
@@ -2609,23 +2744,9 @@ pub(crate) fn show(
     mut boxes: Query<(&Shows, &mut Visibility)>,
 ) {
     let world = online.world();
-    let pet_sits = world
-        .pet()
-        .and_then(|pet| world.posture(pet.state.spawn_id))
-        == Some(eq_client_core::PostureState::Sitting);
     for (shows, mut visibility) in &mut boxes {
-        let shown = match *shows {
-            Shows::Attacking => combat.auto_attack,
-            Shows::WhilePetSits(sits) => sits == pet_sits,
-            Shows::WhileSelling(selling) => {
-                matches!(trade.chosen(), Some(crate::trade::Chosen::Carried(_))) == selling
-            }
-            Shows::PetBuff(slot) => world
-                .pet_buffs()
-                .and_then(|buffs| buffs.slots.get(slot).copied().flatten())
-                .is_some(),
-            Shows::Buff(window, index) => world.buffs().in_window(window, index).is_some(),
-            _ => continue,
+        let Some(shown) = shown_now(*shows, world, &combat, &trade) else {
+            continue;
         };
         visibility.set_if_neq(if shown {
             Visibility::Inherited
@@ -2681,6 +2802,15 @@ pub(crate) fn show(
             Shows::BookPage(right) => {
                 ((book.spread * 2 + 1 + usize::from(right)).to_string(), None)
             }
+            // The sign shows with the number before it.
+            Shows::MemberPercent(place) => (
+                if world.group_health(place).is_some() {
+                    "%".to_owned()
+                } else {
+                    String::new()
+                },
+                None,
+            ),
             Shows::Partner => (
                 super::give::partner(world),
                 Some(super::give::ink(world, super::give::Side::Theirs)),
@@ -2696,7 +2826,10 @@ pub(crate) fn show(
             | Shows::WhilePetSits(_)
             | Shows::PetBuff(_)
             | Shows::Buff(..)
-            | Shows::WhileSelling(_) => {
+            | Shows::WhileSelling(_)
+            | Shows::Member(_)
+            | Shows::MemberPet(_)
+            | Shows::WhileInvited(_) => {
                 continue;
             }
         };
@@ -2775,12 +2908,21 @@ fn fraction(
             .pet()
             .and_then(|pet| world.health(pet.state.spawn_id))
             .map(|percent| f32::from(percent) / 100.0),
+        // The group's other members, and their pets, in their places.
+        11..=15 => world
+            .group_health((kind - 11) as usize)
+            .map(|percent| f32::from(percent) / 100.0),
+        17..=21 => world
+            .group_pet((kind - 17) as usize)
+            .and_then(|pet| world.health(pet.state.spawn_id))
+            .map(|percent| f32::from(percent) / 100.0),
         _ => None,
     }
 }
 
 /// A gauge's text: the player's name over their hit points, the target's,
-/// in its consider colour, over theirs.
+/// in its consider colour, over theirs, the pet's over its own, and each
+/// group member's over theirs.
 fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String, Option<Color>) {
     match kind {
         1 => (
@@ -2804,6 +2946,14 @@ fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String,
             let color = theme::con(target.and_then(|id| world.considered(id)));
             (name, Some(color))
         }
+        // A group member's name over their health (inferred).
+        11..=15 => (
+            world
+                .group_place((kind - 11) as usize)
+                .unwrap_or_default()
+                .to_owned(),
+            None,
+        ),
         // The pet's name, or the skin's own words without one.
         16 => (
             world.pet().map_or_else(
@@ -2817,7 +2967,8 @@ fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String,
 }
 
 /// A label's text, by the official client's numbering: percentages of the
-/// player's hit points, mana and stamina, and of the target's hit points.
+/// player's hit points, mana and stamina, of the target's hit points and
+/// of each group member's, and the members' names.
 fn label_text(
     world: &eq_client_core::world::ClientWorld,
     estimate: Option<(u32, u32)>,
@@ -2864,6 +3015,14 @@ fn label_text(
         20 => percent(fraction(world, estimate, 2)),
         21 => percent(fraction(world, estimate, 3)),
         29 => target_health(world).map_or_else(String::new, |health| health.to_string()),
+        // The group's other members' names and health, in their places.
+        30..=34 => world
+            .group_place((kind - 30) as usize)
+            .unwrap_or_default()
+            .to_owned(),
+        35..=39 => world
+            .group_health((kind - 35) as usize)
+            .map_or_else(String::new, |health| health.to_string()),
         124 => number(vitals.mana),
         125 => number(estimate.map(|(mana, _)| mana)),
         126 => number(vitals.endurance),
@@ -3726,6 +3885,108 @@ mod tests {
         // With no target, the target's gauge is empty.
         assert_eq!(gauge_text(world, 6).0, "");
         assert_eq!(fraction(world, None, 6), None);
+    }
+
+    #[test]
+    fn the_group_window_shows_each_other_member_in_their_place() {
+        use eq_client_core::group::GroupUpdate;
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        // A member in view at 60%, with a pet; another member elsewhere.
+        let mut friend = testing::pet(9, 7);
+        friend.name = "Friend".into();
+        friend.kind = eq_client_core::SpawnKind::Player;
+        friend.pet_owner = None;
+        testing::spawn_entry(&mut state, 9, friend);
+        testing::spawn_entry(&mut state, 10, testing::pet(10, 9));
+        testing::news(
+            &mut state,
+            [
+                WorldEvent::HealthPercent {
+                    spawn_id: 9,
+                    percent: 60,
+                },
+                WorldEvent::Group(GroupUpdate::Members {
+                    leader: "Friend".into(),
+                    members: vec!["Friend".into(), "Other".into()],
+                }),
+            ],
+        );
+        let world = state.world();
+        assert_eq!(gauge_text(world, 11).0, "Friend");
+        assert_eq!(gauge_text(world, 12).0, "Other");
+        assert_eq!(gauge_text(world, 13).0, "");
+        assert_eq!(fraction(world, None, 11), Some(0.6));
+        assert_eq!(fraction(world, None, 12), None);
+        assert_eq!(label_text(world, None, 30), "Friend");
+        assert_eq!(label_text(world, None, 35), "60");
+        assert_eq!(label_text(world, None, 36), "");
+        // The first member's pet shows under them.
+        assert_eq!(fraction(world, None, 17), Some(1.0));
+        assert_eq!(fraction(world, None, 18), None);
+        // Empty places, and the pet of a member out of view, are hidden;
+        // Invite and Disband show while no invitation waits.
+        let shown = |shows| {
+            shown_now(
+                shows,
+                world,
+                &crate::combat::CombatState::default(),
+                &crate::trade::TradeState::default(),
+            )
+        };
+        assert_eq!(shown(Shows::Member(1)), Some(true));
+        assert_eq!(shown(Shows::Member(2)), Some(false));
+        assert_eq!(shown(Shows::MemberPet(0)), Some(true));
+        assert_eq!(shown(Shows::MemberPet(1)), Some(false));
+        assert_eq!(shown(Shows::WhileInvited(false)), Some(true));
+        assert_eq!(shown(Shows::WhileInvited(true)), Some(false));
+        // Which piece is whose.
+        assert_eq!(member_gauge(15), Some(Shows::Member(4)));
+        assert_eq!(member_gauge(17), Some(Shows::MemberPet(0)));
+        assert_eq!(member_gauge(16), None);
+        assert_eq!(
+            window_label(WindowId::Group, "GW_HPPercLabel3"),
+            Some(Shows::MemberPercent(2))
+        );
+        assert_eq!(window_label(WindowId::Group, "GW_HPPercLabel6"), None);
+    }
+
+    #[test]
+    fn group_buttons_run_the_group_commands_and_answer_in_their_places() {
+        let group = |id, owner| match does(id, owner) {
+            Some(Does::Group(button)) => Some(button),
+            _ => None,
+        };
+        assert_eq!(
+            group("InviteButton", WindowId::Group),
+            Some(GroupButton::Invite)
+        );
+        assert_eq!(
+            group("DeclineButton", WindowId::Group),
+            Some(GroupButton::Decline)
+        );
+        assert_eq!(
+            group("AMP_FollowButton", WindowId::ActionsWindow),
+            Some(GroupButton::Follow)
+        );
+        // Looking For Group is left out.
+        assert!(does("LFGButton", WindowId::Group).is_none());
+        // Decline disbands, which declines the invitation waiting.
+        assert_eq!(GroupButton::Decline.command(), "/disband");
+        // In the group window, Follow and Decline take Invite's and
+        // Disband's places while an invitation waits.
+        assert_eq!(
+            paired(Does::Group(GroupButton::Follow), WindowId::Group),
+            Some(Shows::WhileInvited(true))
+        );
+        assert_eq!(
+            paired(Does::Group(GroupButton::Disband), WindowId::Group),
+            Some(Shows::WhileInvited(false))
+        );
+        assert_eq!(
+            paired(Does::Group(GroupButton::Follow), WindowId::ActionsWindow),
+            None
+        );
     }
 
     #[test]

@@ -115,7 +115,12 @@ impl ClientWorld {
     /// The player's pet: the spawn the player owns.
     #[must_use]
     pub fn pet(&self) -> Option<&Spawn> {
-        let owner = self.player.as_ref()?.spawn_id;
+        self.pet_of(self.player.as_ref()?.spawn_id)
+    }
+
+    /// The pet a spawn owns, while it is in view.
+    #[must_use]
+    pub fn pet_of(&self, owner: u16) -> Option<&Spawn> {
         self.zone
             .spawns
             .values()
