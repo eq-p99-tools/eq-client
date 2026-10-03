@@ -322,9 +322,58 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         // The official client says why in the chat; the HUD keeps it on its
         // casting label as well.
         Notice::CastInterrupted { string_id } => chat(own_interruption(*string_id, messages)),
+        Notice::Slain { victim, killer } => chat(slain(victim, killer, messages)),
         Notice::OtherCastInterrupted { string_id, caster } => {
             chat(other_interruption(*string_id, caster, messages))
         }
+    }
+}
+
+/// A death the player saw, in the installed client's string for it: 12107
+/// for the player slain by someone and 12108 by no one they can name, 12113
+/// for someone the player slew, 12114 for someone slain by someone else
+/// and 12115 by no one the player can name; this client's words without
+/// the string. That the official client words a death notice so is
+/// inferred from what each string says.
+fn slain(
+    victim: &eq_client_core::world::Party,
+    killer: &eq_client_core::world::Party,
+    messages: Option<&Messages>,
+) -> Said {
+    use eq_client_core::world::Party;
+    let (id, arguments, fallback) = match (victim, killer) {
+        (Party::Player, Party::Named(killer)) => (
+            12107,
+            vec![killer.clone()],
+            format!("You died at the hands of {killer}."),
+        ),
+        (Party::Player, _) => (12108, Vec::new(), "You died.".to_owned()),
+        (victim, Party::Player) => {
+            let victim = party_name(victim);
+            (12113, vec![victim.clone()], format!("You killed {victim}."))
+        }
+        (victim, Party::Named(killer)) => {
+            let victim = party_name(victim);
+            (
+                12114,
+                vec![victim.clone(), killer.clone()],
+                format!("{victim} died at the hands of {killer}."),
+            )
+        }
+        (victim, Party::Unseen) => {
+            let victim = party_name(victim);
+            (12115, vec![victim.clone()], format!("{victim} died."))
+        }
+    };
+    official(Some(id), &arguments, &fallback, messages)
+}
+
+/// A party's name in a death line; the world never names an unseen victim,
+/// so it reads as no one in particular.
+fn party_name(party: &eq_client_core::world::Party) -> String {
+    match party {
+        eq_client_core::world::Party::Named(name) => name.clone(),
+        _ => "someone".to_owned(),
     }
 }
 
@@ -540,6 +589,51 @@ mod tests {
                     Said::own(format!("Casting interrupted (server reason {id})"))
                 )]
             );
+        }
+    }
+
+    #[test]
+    fn a_death_in_view_reads_in_the_installed_strings_for_whom_it_names() {
+        use eq_client_core::world::Party;
+        let messages = Messages::parse(
+            "EQST0002
+0 5
+12107 Felled by %1.
+12108 Felled.
+12113 You felled %1.
+12114 %1 felled by %2.
+12115 %1 felled.
+",
+        );
+        let (player, bear, rat) = (
+            Party::Player,
+            Party::Named("a bear".into()),
+            Party::Named("a rat".into()),
+        );
+        for ((victim, killer), official, own) in [
+            (
+                (&player, &bear),
+                "Felled by a bear.",
+                "You died at the hands of a bear.",
+            ),
+            ((&player, &Party::Unseen), "Felled.", "You died."),
+            ((&rat, &player), "You felled a rat.", "You killed a rat."),
+            (
+                (&rat, &bear),
+                "a rat felled by a bear.",
+                "a rat died at the hands of a bear.",
+            ),
+            ((&rat, &Party::Unseen), "a rat felled.", "a rat died."),
+        ] {
+            let notice = Notice::Slain {
+                victim: victim.clone(),
+                killer: killer.clone(),
+            };
+            assert_eq!(
+                wording(&notice, Some(&messages)),
+                [(Place::Chat, Said::official(official))]
+            );
+            assert_eq!(wording(&notice, None), [(Place::Chat, own.into())]);
         }
     }
 

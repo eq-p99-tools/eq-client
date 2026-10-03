@@ -242,6 +242,63 @@ fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
 }
 
 #[test]
+fn a_death_in_view_names_who_died_and_who_killed_them() {
+    use crate::world::Party;
+    let mut world = admitted();
+    let named = |spawn_id, name: &str| SpawnState {
+        name: name.into(),
+        ..spawn(spawn_id)
+    };
+    game(
+        &mut world,
+        WorldEvent::Spawns(vec![
+            named(6, "Guard_Example01"),
+            named(7, "a_gnoll02"),
+            named(8, "a_bear03"),
+        ]),
+    );
+    let death = |spawn_id, killer_id| {
+        WorldEvent::Death(Death {
+            spawn_id,
+            killer_id,
+            corpse_id: spawn_id,
+            bind_zone_id: 0,
+            corpse_name: None,
+        })
+    };
+    let slain = |victim, killer| [Notice::Slain { victim, killer }];
+    // Whose line it is goes by spawn ID: the player (9) slew the rat.
+    assert_eq!(
+        game(&mut world, death(5, 9)).notices,
+        slain(Party::Named("a rat".into()), Party::Player)
+    );
+    // Someone slew someone else, each named as players see them.
+    assert_eq!(
+        game(&mut world, death(7, 6)).notices,
+        slain(
+            Party::Named("a gnoll".into()),
+            Party::Named("Guard Example".into())
+        )
+    );
+    // No killer (0) is no one the player can name.
+    assert_eq!(
+        game(&mut world, death(6, 0)).notices,
+        slain(Party::Named("Guard Example".into()), Party::Unseen)
+    );
+    // A death of no one the player knows says nothing.
+    assert_eq!(game(&mut world, death(77, 9)).notices, []);
+    // The player's own death names their killer, first of what it says.
+    let own = game(&mut world, death(9, 8));
+    assert_eq!(
+        own.notices.first(),
+        Some(&Notice::Slain {
+            victim: Party::Player,
+            killer: Party::Named("a bear".into()),
+        })
+    );
+}
+
+#[test]
 fn a_corpse_seen_dying_is_named_as_one_first_seen_dead() {
     // A Titanium spawn record as the server sends a corpse it names.
     let fresh = |name: &[u8], kind: u8, id: u32| {
