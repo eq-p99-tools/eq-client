@@ -418,6 +418,54 @@ mod tests {
     }
 
     #[test]
+    fn the_skins_character_buttons_name_their_slots_and_say_the_level() {
+        let mut state = OnlineState::new(true);
+        state.selection = Some(Selection::new(
+            7,
+            vec![CharacterChoice {
+                slot: 0,
+                name: "Example".into(),
+                level: Some(5),
+                zone_id: None,
+            }],
+        ));
+        let mut app = App::new();
+        app.insert_resource(state).add_systems(Update, names);
+        let ink = Color::WHITE;
+        let button_words = |slot| {
+            (
+                SlotName {
+                    slot,
+                    empty: "Empty slot".into(),
+                    ink,
+                },
+                Text::new(""),
+                TextColor(ink),
+            )
+        };
+        let (taken, empty) = (
+            app.world_mut().spawn(button_words(0)).id(),
+            app.world_mut().spawn(button_words(1)).id(),
+        );
+        let tips = [0, 1].map(|slot| {
+            app.world_mut()
+                .spawn((Action::Choose(slot), crate::tooltip::Tooltip::default()))
+                .id()
+        });
+        app.update();
+        let world = app.world();
+        assert_eq!(world.get::<Text>(taken).unwrap().0, "Example");
+        assert_eq!(world.get::<TextColor>(taken).unwrap().0, ink);
+        assert_eq!(world.get::<Text>(empty).unwrap().0, "Empty slot");
+        assert_eq!(world.get::<TextColor>(empty).unwrap().0, theme::INK_DIM);
+        assert_eq!(
+            world.get::<crate::tooltip::Tooltip>(tips[0]).unwrap().0,
+            "Level 5"
+        );
+        assert_eq!(world.get::<crate::tooltip::Tooltip>(tips[1]).unwrap().0, "");
+    }
+
+    #[test]
     fn entry_requires_selection_and_never_duplicates_or_discards_a_full_queue() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let queue = tx.clone();

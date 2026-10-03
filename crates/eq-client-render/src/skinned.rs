@@ -3382,6 +3382,37 @@ mod tests {
     }
 
     #[test]
+    fn the_character_lists_buttons_are_its_slots_and_its_way_in_and_out() {
+        let list = WindowId::CharacterSelect;
+        assert!(matches!(
+            does("Char1_Button", list),
+            Some(Does::CharacterSlot(0))
+        ));
+        assert!(matches!(
+            does("Char8_Button", list),
+            Some(Does::CharacterSlot(7))
+        ));
+        assert!(matches!(does("Char9_Button", list), Some(Does::Nothing)));
+        assert!(matches!(
+            does("Enter_World_Button", list),
+            Some(Does::EntersWorld)
+        ));
+        assert!(matches!(does("Quit_Button", list), Some(Does::Quits)));
+        // What this client lacks yet is greyed.
+        for lacking in [
+            "Delete_Button",
+            "Rotate_Button",
+            "Explore_Button",
+            "Go_Home_Button",
+        ] {
+            assert!(
+                matches!(does(lacking, list), Some(Does::Nothing)),
+                "{lacking}"
+            );
+        }
+    }
+
+    #[test]
     fn the_spellbooks_places_arrows_and_labels_are_its_open_pages() {
         let book = WindowId::Spellbook;
         assert!(matches!(does("SBW_Spell0", book), Some(Does::BookPlace(0))));
