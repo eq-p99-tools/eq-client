@@ -7,7 +7,9 @@ use std::time::Instant;
 impl ClientWorld {
     /// A spell notice: the book and gems change, and the player's own casts
     /// move along while they are connected and alive. An interruption also
-    /// tells the player why, in the server's words.
+    /// tells the player why, in the server's words, and another caster's,
+    /// which the server sends with the caster's name, says whose it was.
+    /// Whose cast it was goes by spawn ID; the name only fills the line.
     pub(super) fn spell(&mut self, update: &SpellUpdate, now: Instant, changes: &mut Changes) {
         // Forgetting a gem is answered only by the gem emptying.
         if matches!(update, SpellUpdate::Slot { mode: 2, .. })
@@ -25,6 +27,19 @@ impl ClientWorld {
         update.apply_gems(&mut player.memorized_spells);
         if !active {
             return;
+        }
+        if let SpellUpdate::Interrupted {
+            caster_id,
+            message_id,
+            caster_name: Some(caster),
+        } = update
+            && *caster_id != u32::from(player.spawn_id)
+            && !caster.is_empty()
+        {
+            changes.notices.push(Notice::OtherCastInterrupted {
+                string_id: *message_id,
+                caster: caster.clone(),
+            });
         }
         changes.cast = self
             .casting

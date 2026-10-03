@@ -181,4 +181,12 @@ pub enum Notice {
         /// The official client's string for why, in `eqstr_us.txt`.
         string_id: u32,
     },
+    /// Another caster nearby had a cast interrupted. The server names it by
+    /// a string that takes the caster's name, which it sends with it.
+    OtherCastInterrupted {
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: u32,
+        /// The caster's name, as the server sent it.
+        caster: String,
+    },
 }
