@@ -1,8 +1,17 @@
-//! Paged view of the server's indexed spellbook.
+//! Paged view of the server's indexed spellbook: the skin's book where the
+//! installation has one (`skinned`), or else the client's own list.
+use crate::hud::action_bar::BookChange;
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 mod scribe;
+mod skinned;
 pub(super) use scribe::presentation as scribe_presentation;
+#[cfg(test)]
+pub(crate) use skinned::Held;
+pub(crate) use skinned::{BookHand, BookPlace, PLACES, TurnsPages};
+pub(super) use skinned::{
+    clicks as book_clicks, memorize as memorize_held, tooltips as book_tooltips,
+};
 
 /// Keeps an open book above the bottom HUD at the default viewport size.
 pub(super) const ROWS_PER_PAGE: usize = 8;
@@ -24,7 +33,10 @@ pub(super) struct ScribeCursor;
 
 #[derive(Resource, Default)]
 pub(super) struct BookView {
+    /// The client's own list's page.
     pub(super) page: usize,
+    /// The skin's book's open pages: the first two are 0, the next two 1.
+    pub(crate) spread: usize,
 }
 
 type BookRows<'w, 's> = Query<
@@ -300,7 +312,11 @@ pub(super) fn update(
         selection.message =
             match request_scribe(online.as_deref(), world.spell_book(), outbox.as_deref()) {
                 Ok(spell) => {
-                    let _ = note(&mut requests, format!("Scribing {}", names.label(spell)));
+                    note(
+                        requests.as_deref_mut(),
+                        format!("Scribing {}", names.label(spell)),
+                        BookChange::Scribe,
+                    );
                     String::new()
                 }
                 Err(error) => crate::outbox::window_line(&error),
@@ -355,7 +371,7 @@ pub(super) fn update(
         selection.message = match queued {
             Ok(spell) => {
                 let label = format!("Memorizing {} into gem {}", names.label(spell), gem + 1);
-                let _ = note(&mut requests, label);
+                note(requests.as_deref_mut(), label, BookChange::Memorize);
                 String::new()
             }
             Err(error) => crate::outbox::window_line(&error),
@@ -365,13 +381,20 @@ pub(super) fn update(
     refresh_labels(&mut text, &label, gem_hint.as_deref());
 }
 
-/// Names the queued book change for the action bar.
+/// Names the queued book change for the action bar, and says what it does
+/// for the skin's book's gauges.
 fn note(
-    requests: &mut Option<ResMut<super::hud::action_bar::ActionRequests>>,
+    requests: Option<&mut super::hud::action_bar::ActionRequests>,
     label: String,
-) -> Option<()> {
-    requests.as_mut()?.book = Some((std::time::Instant::now(), label));
-    Some(())
+    change: BookChange,
+) {
+    if let Some(requests) = requests {
+        requests.book = Some(super::hud::action_bar::BookRequest {
+            since: std::time::Instant::now(),
+            label,
+            change,
+        });
+    }
 }
 
 /// Updates book status and hover details without rebuilding the controls.
@@ -749,7 +772,7 @@ fn request_scribe(
     use anyhow::Context;
     let (state, outbox) = online.zip(outbox).context("Connect to scribe a scroll")?;
     let stamp = outbox.stamp(state.world())?;
-    let command = prepare_scribe(online, book, Some(stamp))?;
+    let command = prepare_scribe(online, book, Some(stamp), None)?;
     let eq_client_core::ClientCommand::ScribeSpell { spell_id, .. } = command else {
         anyhow::bail!("Scribe request was not a scribe");
     };
@@ -758,11 +781,13 @@ fn request_scribe(
 }
 
 /// Shares admission, cursor and book validation between presentation and
-/// submission; the stamp is the one the outbox gives a command made now.
+/// submission; the stamp is the one the outbox gives a command made now. The
+/// scroll goes into the book's first empty place, or into the place given.
 fn prepare_scribe(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
     stamp: Option<crate::outbox::Stamp>,
+    place: Option<usize>,
 ) -> anyhow::Result<eq_client_core::ClientCommand> {
     use anyhow::{Context, ensure};
     let online = online.context("Connect to scribe a scroll")?;
@@ -779,12 +804,14 @@ fn prepare_scribe(
         .context("Put a scroll on the cursor first")?
         .scroll_spell
         .context("The cursor item is not a spell scroll")?;
-    let slot = u16::try_from(
-        book.slots()
+    let slot = u16::try_from(match place {
+        Some(place) => place,
+        None => book
+            .slots()
             .iter()
             .position(Option::is_none)
             .context("Spellbook is full")?,
-    )?;
+    })?;
     book.scribe_packet(inventory, inventory.revision(), slot, spell_id)?;
     Ok(eq_client_core::ClientCommand::ScribeSpell {
         session_id: stamp.session_id,
@@ -1000,7 +1027,7 @@ mod tests {
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .init_resource::<crate::hud::HudState>()
             .init_resource::<BookSelection>()
-            .insert_resource(BookView { page: 0 })
+            .insert_resource(BookView::default())
             .insert_resource({
                 let mut shown = crate::windows::Shown::default();
                 shown.open(crate::windows::WindowId::Spellbook);
@@ -1129,7 +1156,7 @@ mod tests {
             .insert_resource(crate::online::OnlineState::new(false))
             .init_resource::<SpellNames>()
             .init_resource::<BookSelection>()
-            .insert_resource(BookView { page: 0 })
+            .insert_resource(BookView::default())
             .insert_resource({
                 let mut shown = crate::windows::Shown::default();
                 shown.open(crate::windows::WindowId::Spellbook);

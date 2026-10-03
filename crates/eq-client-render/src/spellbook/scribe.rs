@@ -19,7 +19,7 @@ pub(crate) fn presentation(
         Err(anyhow::anyhow!("Wait for the current spell action"))
     } else {
         let stamp = outbox.as_deref().and_then(|outbox| outbox.peek(world));
-        prepare_scribe(online.as_deref(), world.spell_book(), stamp)
+        prepare_scribe(online.as_deref(), world.spell_book(), stamp, None)
     };
     let enabled = available.is_ok();
     let label = match available {

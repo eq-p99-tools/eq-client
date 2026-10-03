@@ -269,6 +269,7 @@ impl Panels<'_> {
             }
             if let Some(view) = self.book_view.as_mut() {
                 view.page = 0;
+                view.spread = 0;
             }
         }
         match reason {

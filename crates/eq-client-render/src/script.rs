@@ -199,7 +199,12 @@ type Buttons<'w, 's> = Query<
         Option<&'static super::inventory::SlotButton>,
         Has<super::spellbook::ScribeCursor>,
         Has<super::inventory::StoreCursor>,
-        Option<&'static super::spellbook::BookEntry>,
+        (
+            Option<&'static super::spellbook::BookEntry>,
+            Option<&'static super::spellbook::BookPlace>,
+            Option<&'static super::spellbook::TurnsPages>,
+            Option<&'static super::hud::SpellGem>,
+        ),
         Option<&'static super::spellbook::GemChoice>,
         Option<&'static super::trade::Action>,
         Option<&'static super::inventory::colors::Action>,
@@ -733,7 +738,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         slot,
         scribe,
         store,
-        row,
+        (row, place, turns, spell_gem),
         gem,
         trade,
         tint,
@@ -779,6 +784,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
             ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
+            ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
+            ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
+            ClickTarget::SpellGem(number) => spell_gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::Trade(click) => trade.is_some_and(|action| {
                 use super::trade::Action;

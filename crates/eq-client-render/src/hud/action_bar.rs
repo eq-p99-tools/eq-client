@@ -21,8 +21,24 @@ const INTERRUPTED: Duration = Duration::from_secs(3);
 /// Labels for requests whose progress is reported only as a generic status.
 #[derive(Resource, Default)]
 pub(crate) struct ActionRequests {
-    /// The latest spellbook request and when it was queued.
-    pub(crate) book: Option<(Instant, String)>,
+    /// The latest spellbook request.
+    pub(crate) book: Option<BookRequest>,
+}
+
+/// What a spellbook request does: memorize a spell or scribe a scroll.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BookChange {
+    Memorize,
+    Scribe,
+}
+
+/// A spellbook request: when it was queued, its words for the bar and what
+/// it does.
+#[derive(Clone, Debug)]
+pub(crate) struct BookRequest {
+    pub(crate) since: Instant,
+    pub(crate) label: String,
+    pub(crate) change: BookChange,
 }
 
 #[derive(Component)]
@@ -107,6 +123,26 @@ fn fraction(since: Instant, total: Duration, now: Instant) -> f32 {
     (now.saturating_duration_since(since).as_secs_f32() / total.as_secs_f32()).min(1.0)
 }
 
+/// How far the spellbook's memorization or scribe has come, from 0 to 1,
+/// for the gauge that shows that change: the sitting before it goes out,
+/// then all of it while the server answers. None while none is under way.
+pub(crate) fn book_progress(
+    world: &eq_client_core::world::ClientWorld,
+    requests: &ActionRequests,
+    change: BookChange,
+    now: Instant,
+) -> Option<f32> {
+    let request = requests
+        .book
+        .as_ref()
+        .filter(|request| request.change == change)?;
+    match world.book_action()? {
+        BookActionStatus::Preparing => Some(fraction(request.since, BOOK_PREPARATION, now)),
+        BookActionStatus::AwaitingReply => Some(1.0),
+        _ => None,
+    }
+}
+
 /// How far the player's cast has come, from 0 to 1: nothing while the
 /// server has not begun it.
 pub(crate) fn cast_progress(
@@ -161,11 +197,11 @@ pub(super) fn current(
     };
     let book = || {
         let book = requests.book.as_ref();
-        let book_label = || book.map_or("Changing spells", |(_, label)| label.as_str());
+        let book_label = || book.map_or("Changing spells", |request| request.label.as_str());
         match world.book_action() {
             Some(BookActionStatus::Preparing) => Some(Shown {
                 label: book_label().into(),
-                progress: book.map(|(since, _)| fraction(*since, BOOK_PREPARATION, now)),
+                progress: book.map(|request| fraction(request.since, BOOK_PREPARATION, now)),
             }),
             Some(BookActionStatus::Submitted | BookActionStatus::AwaitingReply) => Some(Shown {
                 label: format!("{} (waiting for server)", book_label()),
@@ -355,19 +391,28 @@ mod tests {
         assert!((camping.progress.unwrap() - 0.5).abs() < 0.01);
 
         testing::book_action(&mut online, BookActionStatus::Preparing);
-        requests.book = Some((
-            now.checked_sub(Duration::from_secs(1)).unwrap(),
-            "Memorizing Courage into gem 2".into(),
-        ));
+        requests.book = Some(BookRequest {
+            since: now.checked_sub(Duration::from_secs(1)).unwrap(),
+            label: "Memorizing Courage into gem 2".into(),
+            change: BookChange::Memorize,
+        });
         let book = current(online.world(), &requests, (&names, &messages), now, false).unwrap();
         assert_eq!(book.label, "Memorizing Courage into gem 2");
         assert!((book.progress.unwrap() - 0.2).abs() < 0.01);
+        // The skin's book fills the memorization's gauge, not the scribe's.
+        let gauge = |change| book_progress(online.world(), &requests, change, now);
+        assert!((gauge(BookChange::Memorize).unwrap() - 0.2).abs() < 0.01);
+        assert_eq!(gauge(BookChange::Scribe), None);
         testing::book_action(&mut online, BookActionStatus::AwaitingReply);
         assert_eq!(
             current(online.world(), &requests, (&names, &messages), now, false)
                 .unwrap()
                 .progress,
             None
+        );
+        assert_eq!(
+            book_progress(online.world(), &requests, BookChange::Memorize, now),
+            Some(1.0)
         );
 
         // A cast that began a second ago and takes four.
