@@ -106,31 +106,50 @@ impl ChatTab {
     }
 }
 
-/// The channel a server's special message reads in, by how its speaker
-/// speaks: an NPC's quest say as a say, a shout as a shout, a word to the
-/// group as the group's and an emote as an emote, so it is worded as a line
-/// of that channel is, by the installed client's string for it. None, so it
+/// The installed client's string for an NPC's say, naming the speaker,
+/// then the text: the one a server's own formatted NPC say uses.
+pub const NPC_SAY: u32 = 1032;
+/// Its string for an NPC's shout, in the same form.
+pub const NPC_SHOUT: u32 = 1034;
+/// Its string for an NPC's emote, the speaker, then the text.
+pub const NPC_EMOTE: u32 = 1036;
+
+/// How a server's special message reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spoken {
+    /// As the installed client's string with this id, naming the speaker,
+    /// then the text, as the server's own formatted NPC line of that kind
+    /// reads.
+    String(u32),
+    /// As a line of this channel is worded.
+    Channel(ChannelName),
+}
+
+/// How a server's special message reads, by how its speaker speaks: an
+/// NPC's say, shout or emote in the common tongue as the installed client's
+/// string for that kind of NPC line ([`NPC_SAY`], [`NPC_SHOUT`],
+/// [`NPC_EMOTE`]), and a word to the group as a group line. None, so it
 /// stays a System line that reads as its text, for a plain server line, an
 /// emote shown as its text alone, a mode not known, a line with no speaker,
 /// and a line in a tongue other than the common one, whose form waits for a
 /// recording. That the official client shows each mode so is inferred from
 /// `EQEmu`'s notes on its speak modes, not checked.
 #[must_use]
-pub fn spoken_channel(
+pub fn spoken(
     mode: Option<SpeakMode>,
     language: Option<u8>,
     speaker: Option<&str>,
-) -> Option<ChannelName> {
+) -> Option<Spoken> {
     if speaker.is_none_or(str::is_empty) || language.is_some_and(|language| language != 0) {
         return None;
     }
-    match mode? {
-        SpeakMode::Say => Some(ChannelName::Say),
-        SpeakMode::Shout => Some(ChannelName::Shout),
-        SpeakMode::Group => Some(ChannelName::Group),
-        SpeakMode::Emote => Some(ChannelName::Emote),
-        SpeakMode::Raw | SpeakMode::EmoteAlt | SpeakMode::Other(_) => None,
-    }
+    Some(match mode? {
+        SpeakMode::Say => Spoken::String(NPC_SAY),
+        SpeakMode::Shout => Spoken::String(NPC_SHOUT),
+        SpeakMode::Emote => Spoken::String(NPC_EMOTE),
+        SpeakMode::Group => Spoken::Channel(ChannelName::Group),
+        SpeakMode::Raw | SpeakMode::EmoteAlt | SpeakMode::Other(_) => return None,
+    })
 }
 
 /// The number servers give the kind of text a channel's lines are, which
@@ -237,35 +256,32 @@ mod tests {
         }
     }
     #[test]
-    fn a_special_message_reads_in_the_channel_its_speaker_speaks_in() {
+    fn a_special_message_reads_as_an_npc_line_of_its_kind() {
         let named = Some("a guard");
         assert_eq!(
             [
                 SpeakMode::Say,
                 SpeakMode::Shout,
-                SpeakMode::Group,
-                SpeakMode::Emote
+                SpeakMode::Emote,
+                SpeakMode::Group
             ]
-            .map(|mode| spoken_channel(Some(mode), Some(0), named)),
+            .map(|mode| spoken(Some(mode), Some(0), named)),
             [
-                Some(ChannelName::Say),
-                Some(ChannelName::Shout),
-                Some(ChannelName::Group),
-                Some(ChannelName::Emote)
+                Some(Spoken::String(NPC_SAY)),
+                Some(Spoken::String(NPC_SHOUT)),
+                Some(Spoken::String(NPC_EMOTE)),
+                Some(Spoken::Channel(ChannelName::Group))
             ]
         );
         // The rest stay System lines that read as their text.
         for mode in [SpeakMode::Raw, SpeakMode::EmoteAlt, SpeakMode::Other(9)] {
-            assert_eq!(spoken_channel(Some(mode), Some(0), named), None);
+            assert_eq!(spoken(Some(mode), Some(0), named), None);
         }
-        assert_eq!(spoken_channel(Some(SpeakMode::Say), Some(0), None), None);
-        assert_eq!(
-            spoken_channel(Some(SpeakMode::Say), Some(0), Some("")),
-            None
-        );
-        assert_eq!(spoken_channel(Some(SpeakMode::Say), Some(4), named), None);
+        assert_eq!(spoken(Some(SpeakMode::Say), Some(0), None), None);
+        assert_eq!(spoken(Some(SpeakMode::Say), Some(0), Some("")), None);
+        assert_eq!(spoken(Some(SpeakMode::Say), Some(4), named), None);
         // A message without a speak mode keeps its own channel.
-        assert_eq!(spoken_channel(None, None, named), None);
+        assert_eq!(spoken(None, None, named), None);
     }
 
     #[test]

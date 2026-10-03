@@ -123,10 +123,11 @@ as its log writes them without the time: a player's speech and a tell the
 player sent by the installed client's string for them (in this client's words
 for who spoke and where, without the installation's string table), and the
 game's own lines as the server sends them. An NPC's line that a Titanium
-server sends with its speaker apart reads as a line of the channel its
-speak mode names (a say, a shout, a word to the group or an emote; inferred
-from EQEmu's notes on those modes, not checked), and a plain server line, or
-one in a tongue other than the common one, as its text. Item links in a line
+server sends with its speaker apart reads by its speak mode: a say, a shout
+or an emote as the installed client's string for that kind of NPC line, the
+one the server's own NPC lines use, and a word to the group as a group line
+(inferred from EQEmu's notes on those modes, not checked); a plain server
+line, or one in a tongue other than the common one, reads as its text. Item links in a line
 stay clickable, and each channel keeps its colour. It retains 200 messages per channel group, preserving
 quiet guild/tell history during busy auction traffic. The exact default colors
 come from the mobile client's `src/App.css`; structured item-link data stays in
