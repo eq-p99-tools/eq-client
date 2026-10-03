@@ -92,6 +92,8 @@ pub struct MotionGrant {
 /// character's, and the zone's, which leaving the zone forgets in one step.
 #[derive(Default)]
 pub struct ClientWorld {
+    /// The game generation the session speaks, given as it starts.
+    generation: crate::Generation,
     // The connection to the servers.
     connected: bool,
     ended: bool,
@@ -151,6 +153,15 @@ pub struct ClientWorld {
 }
 
 impl ClientWorld {
+    /// The world of a session that speaks this generation.
+    #[must_use]
+    pub fn new(generation: crate::Generation) -> Self {
+        Self {
+            generation,
+            ..Self::default()
+        }
+    }
+
     /// Applies one update from the session and says what a front end must redo.
     /// The installed client's spell data tells lasting effects from instant ones.
     pub fn apply(
@@ -657,7 +668,7 @@ impl ClientWorld {
     /// them until the server offers to return them home.
     fn died(&mut self, death: &Death) -> Changes {
         if let Ok(id) = u16::try_from(death.spawn_id) {
-            self.zone.corpse(id, &mut self.revision);
+            self.zone.corpse(id, self.generation, &mut self.revision);
         }
         if self
             .player

@@ -368,6 +368,11 @@ fn viewer_config(
     local: bool,
 ) -> ViewerConfig {
     ViewerConfig {
+        generation: eq_client_core::Generation::new(
+            protocol
+                .map(eq_network::GameDialect::from)
+                .unwrap_or_default(),
+        ),
         estimate_titanium_resources: protocol.is_some_and(ServerProtocol::is_titanium),
         projection: match arguments.camera {
             CameraStyle::Perspective => ProjectionStyle::Perspective,

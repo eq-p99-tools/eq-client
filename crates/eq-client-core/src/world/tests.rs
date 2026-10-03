@@ -206,11 +206,15 @@ fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
         corpse_id: 5,
         bind_zone_id: 0,
     };
-    assert_eq!(game(&mut world, WorldEvent::Death(rat)).reset, None);
+    assert_eq!(game(&mut world, WorldEvent::Death(rat.clone())).reset, None);
     let corpse = world.spawn(5).unwrap();
     assert_eq!(corpse.state.kind, SpawnKind::NpcCorpse);
     assert_eq!(corpse.health, Some(0));
     assert!(corpse.revision > revision);
+    // It takes the name a corpse first seen dead carries, once.
+    assert_eq!(corpse.state.name, "a_rat`s_corpse5");
+    game(&mut world, WorldEvent::Death(rat));
+    assert_eq!(world.spawn(5).unwrap().state.name, "a_rat`s_corpse5");
     assert!(world.in_world());
     let own = Death {
         spawn_id: 9,
@@ -226,6 +230,57 @@ fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
     assert_eq!(world.health(9), Some(0));
     // The zone stays drawn around the corpse.
     assert!(world.spawn(5).is_some());
+}
+
+#[test]
+fn a_corpse_seen_dying_is_named_as_one_first_seen_dead() {
+    // A Titanium spawn record as the server sends a corpse it names.
+    let fresh = |name: &[u8], kind: u8, id: u32| {
+        let mut record = [0u8; 385];
+        record[7..7 + name.len()].copy_from_slice(name);
+        record[83] = kind;
+        record[340..344].copy_from_slice(&id.to_le_bytes());
+        eq_network_game::world::titanium_spawns(&record)
+            .unwrap()
+            .remove(0)
+    };
+    let mut world = admitted();
+    let mut gnoll = spawn(12);
+    gnoll.name = "a_gnoll00".into();
+    let mut examplar = spawn(4);
+    examplar.name = "Examplar".into();
+    examplar.kind = SpawnKind::Player;
+    game(&mut world, WorldEvent::Spawns(vec![gnoll, examplar]));
+    for (id, server_name, kind) in [
+        (12, b"a_gnoll`s_corpse12".as_slice(), 3),
+        (4, b"Examplar's corpse4".as_slice(), 2),
+    ] {
+        game(
+            &mut world,
+            WorldEvent::Death(Death {
+                spawn_id: u32::from(id),
+                killer_id: 9,
+                corpse_id: u32::from(id),
+                bind_zone_id: 0,
+            }),
+        );
+        let seen = fresh(server_name, kind, u32::from(id));
+        let corpse = &world.spawn(id).unwrap().state;
+        assert_eq!((&corpse.name, corpse.kind), (&seen.name, seen.kind));
+    }
+    // An EqMac world keeps the living name until TAKP is checked.
+    let mut world = ClientWorld::new(crate::Generation::new(crate::GameDialect::EqMac));
+    game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 5,
+            killer_id: 9,
+            corpse_id: 5,
+            bind_zone_id: 0,
+        }),
+    );
+    assert_eq!(world.spawn(5).unwrap().state.name, "a_rat");
 }
 
 #[test]

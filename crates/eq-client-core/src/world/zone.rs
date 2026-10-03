@@ -111,13 +111,21 @@ impl Zone {
         }
     }
 
-    /// A spawn died: it becomes a corpse, drawn anew. Titanium corpses keep
-    /// the spawn ID.
-    pub(super) fn corpse(&mut self, id: u16, revision: &mut u64) {
+    /// A spawn died: it becomes a corpse, drawn anew, named as the
+    /// generation names a corpse that dies in view
+    /// ([`crate::Generation::corpse_name`]). Titanium corpses keep the spawn
+    /// ID.
+    pub(super) fn corpse(&mut self, id: u16, generation: crate::Generation, revision: &mut u64) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
             *revision = revision.wrapping_add(1);
             spawn.health = Some(0);
-            spawn.state.kind = spawn.state.kind.corpse();
+            let kind = spawn.state.kind.corpse();
+            if kind != spawn.state.kind
+                && let Some(name) = generation.corpse_name(&spawn.state.name, kind, id)
+            {
+                spawn.state.name = name;
+            }
+            spawn.state.kind = kind;
             spawn.revision = *revision;
         }
     }
