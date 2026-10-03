@@ -2148,3 +2148,147 @@ fn abilities_the_server_does_not_offer_are_told_apart() {
     // The player still has fishing; it shows greyed rather than missing.
     assert!(world.abilities().contains(&Ability::Fishing));
 }
+
+#[test]
+fn a_group_follows_the_servers_word_and_says_what_happened() {
+    use crate::group::GroupUpdate;
+    let mut world = admitted();
+    let news = |world: &mut ClientWorld, update| game(world, WorldEvent::Group(update)).notices;
+    let said = |notice| [Notice::Group(notice)];
+    let friend = || Party::Named("Friend".into());
+    // An invitation waits until the player answers it.
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Invited {
+                inviter: "Leader".into()
+            }
+        ),
+        said(GroupNotice::Invited("Leader".into()))
+    );
+    assert_eq!(world.group_invitation(), Some("Leader"));
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Following {
+                inviter: "Leader".into()
+            }
+        ),
+        said(GroupNotice::Following("Leader".into()))
+    );
+    assert_eq!(world.group_invitation(), None);
+    // The list that follows joining says the player joined; the leader is
+    // among the others.
+    let list = || GroupUpdate::Members {
+        leader: "Leader".into(),
+        members: vec!["Leader".into(), "Friend".into()],
+    };
+    assert_eq!(
+        news(&mut world, list()),
+        said(GroupNotice::Joined(Party::Player))
+    );
+    let group = world.group().cloned().unwrap();
+    assert_eq!(
+        (group.leader.as_deref(), group.members.len()),
+        (Some("Leader"), 2)
+    );
+    assert!(!world.leads_group());
+    // Another list, as after zoning, says nothing.
+    assert_eq!(news(&mut world, list()), []);
+    // Others leave, and the player is made the leader.
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Left {
+                member: "Friend".into()
+            }
+        ),
+        said(GroupNotice::Left(friend()))
+    );
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Leader {
+                name: "Example".into()
+            }
+        ),
+        said(GroupNotice::Leader(Party::Player))
+    );
+    assert!(world.leads_group());
+    assert_eq!(
+        world.group().map(|group| group.members.clone()),
+        Some(vec!["Leader".to_owned()])
+    );
+    // The player leaving ends their group.
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Left {
+                member: "Example".into()
+            }
+        ),
+        said(GroupNotice::Left(Party::Player))
+    );
+    assert!(world.group().is_none());
+}
+
+#[test]
+fn a_group_the_player_formed_is_theirs_to_lead_until_it_ends() {
+    use crate::group::GroupUpdate;
+    let mut world = admitted();
+    let news = |world: &mut ClientWorld, update| game(world, WorldEvent::Group(update)).notices;
+    let said = |notice| [Notice::Group(notice)];
+    let friend = || Party::Named("Friend".into());
+    // Forming one makes the player its leader; others join it.
+    assert_eq!(
+        news(&mut world, GroupUpdate::Formed),
+        said(GroupNotice::Formed)
+    );
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Joined {
+                member: "Friend".into()
+            }
+        ),
+        said(GroupNotice::Joined(friend()))
+    );
+    // The invitee's acceptance, which follows their join, says nothing.
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Accepted {
+                member: "Friend".into()
+            }
+        ),
+        []
+    );
+    assert!(world.leads_group());
+    assert_eq!(
+        news(&mut world, GroupUpdate::Disbanded),
+        said(GroupNotice::Disbanded)
+    );
+    assert!(world.group().is_none());
+    // A new admission forgets the group, which the server lists again.
+    news(&mut world, GroupUpdate::Formed);
+    game(&mut world, entered(2));
+    assert!(world.group().is_none());
+}
+
+#[test]
+fn a_group_request_refused_is_said_for_its_admission_alone() {
+    let mut world = admitted();
+    let refused = |session_id| WorldEvent::GroupRefused {
+        session_id,
+        reason: "No".into(),
+        string_id: Some(12267),
+    };
+    assert_eq!(
+        game(&mut world, refused(1)).notices,
+        [Notice::GroupRefused {
+            reason: "No".into(),
+            string_id: Some(12267),
+        }]
+    );
+    assert!(game(&mut world, refused(9)).ignored);
+}

@@ -330,34 +330,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("create", arguments) => parse_create(arguments)?,
         ("wait_online", []) => Step::WaitOnline,
         ("wait_zone", [zone]) => Step::WaitZone(zone.to_ascii_lowercase()),
-        ("slash", [command]) if matches!(*command, "camp" | "sit" | "stand") => {
-            Step::Slash(format!("/{command}"))
-        }
-        ("slash", ["target", name @ ..]) if !name.is_empty() => {
-            Step::Slash(format!("/target {}", name.join(" ")))
-        }
-        // Corpses: consent, summon and drag; a test death leaves one.
-        ("slash", [command @ ("consent" | "deny"), name]) => {
-            Step::Slash(format!("/{command} {name}"))
-        }
-        ("slash", ["log"]) => Step::Slash("/log".into()),
-        ("slash", ["shownames", level]) => Step::Slash(format!("/shownames {level}")),
-        ("slash", [command @ ("corpse" | "corpsedrag" | "corpsedrop")]) => {
-            Step::Slash(format!("/{command}"))
-        }
-        // A command to the pet, as typed.
-        ("slash", ["pet", words @ ..]) if !words.is_empty() => {
-            Step::Slash(format!("/pet {}", words.join(" ")))
-        }
-        // Asking who is online changes nothing.
-        ("slash", ["who", words @ ..]) => Step::Slash(
-            ["/who"]
-                .iter()
-                .chain(words)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
+        ("slash", words) => parse_slash(words)?,
         ("gm", words) => parse_gm(words)?,
         ("chat", words) => parse_chat(words)?,
         ("drag", [window, x, y]) => Step::Drag(
@@ -404,6 +377,51 @@ fn parse_step(line: &str) -> Result<Step, String> {
         }
         ("quit", []) => Step::Quit,
         _ => return Err("unknown or malformed step".into()),
+    })
+}
+
+/// `slash <command> [words]`: a slash command a script may type, among
+/// those that change nothing beyond the test characters.
+fn parse_slash(words: &[&str]) -> Result<Step, String> {
+    Ok(match words {
+        [command] if matches!(*command, "camp" | "sit" | "stand") => {
+            Step::Slash(format!("/{command}"))
+        }
+        ["target", name @ ..] if !name.is_empty() => {
+            Step::Slash(format!("/target {}", name.join(" ")))
+        }
+        // Corpses: consent, summon and drag; a test death leaves one.
+        [command @ ("consent" | "deny"), name] => Step::Slash(format!("/{command} {name}")),
+        ["log"] => Step::Slash("/log".into()),
+        ["shownames", level] => Step::Slash(format!("/shownames {level}")),
+        // Corpses summoned or dragged, and groups joined, left, disbanded
+        // or declined.
+        [command @ ("corpse" | "corpsedrag" | "corpsedrop" | "follow" | "disband")] => {
+            Step::Slash(format!("/{command}"))
+        }
+        // A group invitation, by name or for the target.
+        ["invite", name @ ..] if name.len() <= 1 => Step::Slash(
+            ["/invite"]
+                .iter()
+                .chain(name)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        // A command to the pet, as typed.
+        ["pet", words @ ..] if !words.is_empty() => {
+            Step::Slash(format!("/pet {}", words.join(" ")))
+        }
+        // Asking who is online changes nothing.
+        ["who", words @ ..] => Step::Slash(
+            ["/who"]
+                .iter()
+                .chain(words)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        _ => return Err("unknown or malformed slash command".into()),
     })
 }
 

@@ -7,12 +7,12 @@ use crate::{
     loot::LootResponse,
 };
 
-/// Who took part in a death the player saw.
+/// Who took part in a death the player saw, or in news of their group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Party {
     /// The player.
     Player,
-    /// Another spawn, by the name players see.
+    /// Another spawn, or a group member, by the name players see.
     Named(String),
     /// No one the player can name: no killer, or one not in view.
     Unseen,
@@ -200,6 +200,17 @@ pub enum Notice {
         victim: Party,
         /// Who killed them.
         killer: Party,
+    },
+    /// News of the player's group, which the official client words itself
+    /// (inferred from its strings).
+    Group(super::GroupNotice),
+    /// A group request was not sent, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    GroupRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
     },
     /// Another caster nearby had a cast interrupted. The server names it by
     /// a string that takes the caster's name, which it sends with it.

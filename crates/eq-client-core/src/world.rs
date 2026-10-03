@@ -13,6 +13,7 @@ mod belongings;
 mod casting;
 mod changes;
 mod character;
+mod group;
 mod items;
 mod link;
 mod notice;
@@ -26,6 +27,7 @@ mod zone;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
 pub use changes::{Changes, Moved, Reply, Reset};
+pub use group::{Group, GroupNotice};
 pub use items::ItemCache;
 pub use link::Link;
 pub use notice::{Notice, Party};
@@ -120,6 +122,14 @@ pub struct ClientWorld {
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
     combining: Option<crate::inventory::InventorySlot>,
+    /// The player's group, while they are in one. The server lists it again
+    /// after each admission.
+    group: Option<Group>,
+    /// Who invited the player to their group, until the player answers or
+    /// is in one; the session forgets it with the admission.
+    group_invitation: Option<String>,
+    /// Whether the player agreed to join a group whose list has not come.
+    joining_group: bool,
     /// Item definitions the server sent for inspection.
     items: ItemCache,
     // Until any reset: the target, the motion granted and camping.
@@ -610,6 +620,22 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // News of groups, and a group request the session would not send.
+            WorldEvent::Group(update) => self.group_news(update, news),
+            WorldEvent::GroupRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::GroupRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             // A resurrection to answer, and an answer the session would not send.
             WorldEvent::Resurrection(offer) => self.resurrection = Some(offer.clone()),
             WorldEvent::ResurrectionRefused { session_id, reason } => {
@@ -791,6 +817,9 @@ impl ClientWorld {
         self.resurrection = None;
         self.reading = None;
         self.combining = None;
+        self.group = None;
+        self.group_invitation = None;
+        self.joining_group = false;
         self.death = None;
         self.forget_zone();
     }
