@@ -272,6 +272,9 @@ pub struct View {
     pub tooltip: Option<String>,
     /// What it shows, in drawing order, by element name.
     pub pieces: Vec<(String, Element)>,
+    /// Its vertical scrollbar, where the skin gives it one
+    /// (`Style_VScroll`), as the loot window's slots scroll.
+    pub scrollbar: Option<ScrollbarLook>,
 }
 
 /// Where an element that stretches with its container sits: each edge's
@@ -1045,6 +1048,7 @@ impl Library {
                 } else {
                     Vec::new()
                 },
+                scrollbar: self.scrollbar(node),
             })),
             "SpellGem" => {
                 let look = child(node, "SpellGemDrawTemplate");
@@ -1086,6 +1090,12 @@ fn read_text(eq_directory: &Path, skin: &str, file: &str) -> Result<String, UiLa
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// An element's setting of this name. A setting an element gives twice
+/// counts as the first time: skins do that (the default skin's loot window
+/// says it has a title bar, then that it has none; Velious's Actions window
+/// right-aligns its stat numbers, then not; four elements in the default skin
+/// and thirteen in Velious on the PC this was written on, counted), and which
+/// of the two the official client uses is not checked yet.
 fn child<'a, 'input>(
     node: roxmltree::Node<'a, 'input>,
     name: &str,
@@ -1524,6 +1534,28 @@ mod tests {
             panic!("a button")
         };
         assert_eq!(platinum.anchors, None);
+    }
+
+    #[test]
+    fn a_setting_given_twice_counts_as_the_first_and_a_window_within_scrolls() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let text = r#"<XML>
+            <Screen item="Slots"><Style_VScroll>true</Style_VScroll>
+                <DrawTemplate>WDT_Plain</DrawTemplate></Screen>
+            <Screen item="LootWnd"><Size><CX>120</CX><CY>420</CY></Size>
+                <Style_Titlebar>true</Style_Titlebar><Style_Titlebar>false</Style_Titlebar>
+                <Pieces>Slots</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "LootWnd").unwrap();
+        assert!(screen.title_bar.is_some());
+        let Element::View(view) = &screen.pieces[0].1 else {
+            panic!("a view")
+        };
+        assert!(
+            view.scrollbar
+                .as_ref()
+                .is_some_and(|bar| bar.up.normal.is_some())
+        );
     }
 
     #[test]

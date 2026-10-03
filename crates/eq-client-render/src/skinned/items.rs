@@ -29,6 +29,14 @@ pub(crate) struct SkinSlot {
 #[derive(Component, Clone, Copy)]
 pub(crate) struct TheirSlot(pub(crate) u8);
 
+/// A place in the loot window, from 0, which shows the corpse's item there;
+/// a click takes it.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct LootSlot(pub(crate) u16);
+
+/// The loot window's first place's number (`EQType`); the rest follow.
+const FIRST_LOOT_PLACE: u32 = 5000;
+
 /// What a skinned slot shows of its item, drawn again when the inventory
 /// changes.
 #[derive(Component)]
@@ -75,6 +83,10 @@ pub(super) fn slot(
     inside: &Area,
     owner: WindowId,
 ) {
+    if owner == WindowId::Loot {
+        loot_slot(window, art, slot, inside);
+        return;
+    }
     let Some((number, in_bag)) = slot.slot.and_then(|number| slot_of(owner, number)) else {
         return;
     };
@@ -101,6 +113,80 @@ pub(super) fn slot(
             picture(cell, art, piece, at(0.0, 0.0, area.width, area.height));
         }
     });
+}
+
+/// A place in the loot window: the skin's empty picture, with the corpse's
+/// item there drawn over it (`loot`). A click takes the item into the packs,
+/// as the client's own loot window does; which click does what in the
+/// official window is not checked yet (its request can take an item to the
+/// cursor or into the packs).
+fn loot_slot(window: &mut ChildSpawnerCommands, art: &mut Art, slot: &InvSlot, inside: &Area) {
+    let Some(place) = slot
+        .slot
+        .and_then(|number| number.checked_sub(FIRST_LOOT_PLACE))
+        .and_then(|place| u16::try_from(place).ok())
+    else {
+        return;
+    };
+    let area = slot.area;
+    window
+        .spawn((
+            Button,
+            LootSlot(place),
+            crate::trade::Action::Take(crate::trade::corpse_slot(place)),
+            crate::outbox::Needs::Capability(eq_client_core::Capability::Looting),
+            at(
+                inside.x + area.x,
+                inside.y + area.y,
+                area.width,
+                area.height,
+            ),
+        ))
+        .with_children(|cell| {
+            if let Some(piece) = &slot.background {
+                picture(cell, art, piece, at(0.0, 0.0, area.width, area.height));
+            }
+        });
+}
+
+/// Draws the corpse's item in each place of the loot window, when the loot
+/// changes or a place is drawn.
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)] // Bevy system parameters.
+pub(crate) fn loot(
+    mut commands: Commands,
+    online: Res<crate::online::OnlineState>,
+    mut art: Art,
+    (mut last, added): (
+        Local<Option<Vec<(u16, u32, Option<u32>)>>>,
+        Query<(), Added<LootSlot>>,
+    ),
+    slots: Query<(Entity, &LootSlot, &Node, Option<&Children>)>,
+    old: Query<(), With<Content>>,
+) {
+    let items = online.world().loot().map(|loot| &loot.items);
+    let shown: Vec<_> = items
+        .into_iter()
+        .flatten()
+        .map(|(slot, item)| (*slot, item.details.id, item.stack_count))
+        .collect();
+    if last.as_ref() == Some(&shown) && added.is_empty() {
+        return;
+    }
+    *last = Some(shown);
+    for (cell, place, node, children) in &slots {
+        for child in children.into_iter().flatten() {
+            if old.contains(*child) {
+                commands.entity(*child).despawn();
+            }
+        }
+        draw(
+            &mut commands,
+            &mut art,
+            cell,
+            node,
+            items.and_then(|items| items.get(&crate::trade::corpse_slot(place.0))),
+        );
+    }
 }
 
 /// The inventory's figure: the paperdoll in the skin's frame. An item
@@ -534,6 +620,42 @@ mod tests {
         app.world_mut().resource_mut::<Skinned>().0.clear();
         pick(&mut app);
         assert!(!open(&app));
+    }
+
+    #[test]
+    fn a_loot_place_shows_the_corpses_item_in_its_slot() {
+        use eq_client_core::{WorldEvent, WorldUpdate, loot::LootUpdate, world::NoSpells};
+        let mut online = OnlineState::new(false);
+        online.open_loot(9);
+        let mut item = crate::preview::items().into_iter().next().unwrap();
+        // The corpse's second slot, the window's second place.
+        item.slot = InventorySlot(23);
+        for event in [
+            LootUpdate::Item(Box::new(item.clone())),
+            LootUpdate::Listed { corpse_id: 9 },
+        ] {
+            online.tell(
+                &WorldUpdate::Game(WorldEvent::Loot(event)),
+                std::time::Instant::now(),
+                &NoSpells,
+            );
+        }
+        let mut app = crate::testing::app();
+        app.insert_resource(online).add_systems(Update, loot);
+        let place = |app: &mut App, index| {
+            app.world_mut()
+                .spawn((LootSlot(index), at(0.0, 0.0, 40.0, 40.0)))
+                .id()
+        };
+        let (first, second) = (place(&mut app, 0), place(&mut app, 1));
+        app.update();
+        let named = |app: &App, place| {
+            app.world()
+                .get::<crate::tooltip::Tooltip>(place)
+                .map(|tooltip| tooltip.0.clone())
+        };
+        assert_eq!(named(&app, first), None);
+        assert_eq!(named(&app, second), Some(item.details.name));
     }
 
     fn bag_frames(app: &mut App) -> Vec<WindowId> {
