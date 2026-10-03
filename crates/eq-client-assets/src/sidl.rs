@@ -409,7 +409,9 @@ pub struct Listbox {
     /// (`Style_VScroll`).
     pub scrollbar: Option<ScrollbarLook>,
     /// How its columns' headings are drawn: the skin's `Header_Listbox`
-    /// frame, which no list names but every list's headings take.
+    /// frame. No list names it; that every list's headings take it is
+    /// inferred from the template's name, unchecked against the official
+    /// client.
     pub header: Option<Box<FrameLook>>,
 }
 
