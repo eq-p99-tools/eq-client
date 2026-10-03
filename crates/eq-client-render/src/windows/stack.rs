@@ -2,7 +2,7 @@
 //! in the order the player last clicked or opened them, Escape closes the top
 //! one, and the windows the player opens and closes do so from the selector
 //! or their key, the same way for each.
-use super::registry::{Layer, WindowId};
+use super::registry::{Layer, Toggle, WindowId};
 use crate::theme::{self, Size};
 use bevy::{prelude::*, window::PrimaryWindow};
 use std::collections::BTreeSet;
@@ -45,38 +45,80 @@ impl Stack {
     }
 }
 
-/// The windows the player opens and closes that are open now.
+/// The windows open now, whether the player or something else opened them,
+/// and those the player hid.
 #[derive(Resource)]
-pub(crate) struct Shown(BTreeSet<WindowId>);
+pub(crate) struct Shown {
+    open: BTreeSet<WindowId>,
+    /// Windows something else opens that the player hid ([`Toggle::Hides`]):
+    /// hidden, open or not, until the player shows them again.
+    hidden: BTreeSet<WindowId>,
+}
 
 impl Default for Shown {
-    /// The effects window starts open, as in the official client.
+    /// The effects window starts open, as in the official client, and the
+    /// hotbar and spell gems are always open.
     fn default() -> Self {
-        Self([WindowId::Effects].into())
+        Self {
+            open: [WindowId::Effects, WindowId::Spells, WindowId::Actions].into(),
+            hidden: BTreeSet::new(),
+        }
     }
 }
 
 impl Shown {
     pub(crate) fn is_open(&self, id: WindowId) -> bool {
-        self.0.contains(&id)
+        self.open.contains(&id)
+    }
+
+    /// Whether the window shows: open, and not hidden by the player.
+    pub(crate) fn displayed(&self, id: WindowId) -> bool {
+        self.is_open(id) && !self.hidden.contains(&id)
     }
 
     pub(crate) fn open(&mut self, id: WindowId) {
-        self.0.insert(id);
+        self.open.insert(id);
     }
 
     pub(crate) fn close(&mut self, id: WindowId) {
-        self.0.remove(&id);
+        self.open.remove(&id);
+    }
+
+    /// Hides a window something else opens, or shows it again, as a new pet
+    /// shows the pet window while the player wants it to pop up.
+    pub(crate) fn hide(&mut self, id: WindowId, hidden: bool) {
+        if hidden {
+            self.hidden.insert(id);
+        } else {
+            self.hidden.remove(&id);
+        }
+    }
+
+    /// The player closes a window, with its close box, its Done button or
+    /// Escape: one something else opens is hidden, any other closed.
+    pub(crate) fn dismiss(&mut self, id: WindowId) {
+        if id.describe().toggle == Toggle::Hides {
+            self.hidden.insert(id);
+        } else {
+            self.open.remove(&id);
+        }
     }
 
     /// The open windows.
     pub(crate) fn ids(&self) -> impl Iterator<Item = WindowId> + '_ {
-        self.0.iter().copied()
+        self.open.iter().copied()
     }
 
+    /// The selector or a key flips the window: one the player opens opens
+    /// or closes, one something else opens is hidden or shown.
     fn toggle(&mut self, id: WindowId) {
-        if !self.0.remove(&id) {
-            self.0.insert(id);
+        let windows = if id.describe().toggle == Toggle::Hides {
+            &mut self.hidden
+        } else {
+            &mut self.open
+        };
+        if !windows.remove(&id) {
+            windows.insert(id);
         }
     }
 }
@@ -164,8 +206,8 @@ pub(crate) fn restack(stack: Res<Stack>, mut frames: Query<(&WindowId, &mut Glob
 }
 
 /// Opens and closes the windows the player toggles, from the selector or
-/// their key, and closes one when Escape picks it; an opened window comes to
-/// the front.
+/// their key, and closes one when Escape picks it; hides and shows the ones
+/// something else opens the same way. A window shown comes to the front.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn toggle(
     keys: crate::keys::Keys,
@@ -175,12 +217,12 @@ pub(crate) fn toggle(
     online: Res<crate::online::OnlineState>,
 ) {
     if let crate::escape::Escape::Close(id) = *escape
-        && id.describe().toggled
+        && id.describe().toggle == Toggle::Opens
     {
         shown.close(id);
     }
     let pressed = WindowId::ALL.into_iter().filter(|id| {
-        id.describe().toggled
+        id.describe().toggle != Toggle::Never
             // A window the session does not offer stays shut.
             && id
                 .needs()
@@ -192,8 +234,32 @@ pub(crate) fn toggle(
     });
     for id in pressed.collect::<Vec<_>>() {
         shown.toggle(id);
-        if shown.is_open(id) {
+        if shown.displayed(id) {
             stack.raise(id);
+        }
+    }
+}
+
+/// Hides the HUD windows the player hid, such as the hotbar, and shows them
+/// again; a floating one has no frame while hidden (see
+/// [`crate::skinned::frames`]).
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn hide(
+    shown: Res<Shown>,
+    mut frames: Query<(&WindowId, &mut Node), With<super::Frame>>,
+) {
+    for (id, mut node) in &mut frames {
+        let description = id.describe();
+        if description.toggle != Toggle::Hides || description.layer != Layer::Hud {
+            continue;
+        }
+        let wanted = if shown.displayed(*id) {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != wanted {
+            node.display = wanted;
         }
     }
 }
@@ -222,7 +288,7 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
         .with_children(|row| {
             for window in WindowId::ALL
                 .into_iter()
-                .filter(|window| window.describe().toggled)
+                .filter(|window| window.describe().toggle == Toggle::Opens)
             {
                 let mut button = row.spawn((
                     Button,
@@ -274,7 +340,7 @@ pub(crate) fn light_selector(
         }
     }
     for (button, interaction, mut color) in &mut buttons {
-        let wanted = theme::button(true, shown.is_open(button.0), *interaction);
+        let wanted = theme::button(true, shown.displayed(button.0), *interaction);
         if color.0 != wanted {
             color.0 = wanted;
         }
@@ -425,5 +491,61 @@ mod tests {
             crate::escape::Escape::Close(WindowId::Spellbook);
         app.update();
         assert!(!app.world().resource::<Shown>().is_open(WindowId::Spellbook));
+    }
+
+    #[test]
+    fn the_selector_hides_and_shows_a_window_something_else_opens() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, (toggle, hide).chain());
+        let hotbar = app
+            .world_mut()
+            .spawn((
+                WindowId::Actions,
+                super::super::Frame::default(),
+                Node::default(),
+            ))
+            .id();
+        let press = |app: &mut App, window| {
+            let button = app
+                .world_mut()
+                .spawn((SelectorButton(window), Interaction::Pressed))
+                .id();
+            app.update();
+            app.world_mut().entity_mut(button).despawn();
+        };
+        let display = |app: &App| app.world().get::<Node>(hotbar).unwrap().display;
+        app.update();
+        assert_eq!(display(&app), Display::Flex);
+        // Hidden, the hotbar stays open but its frame is gone from view.
+        press(&mut app, WindowId::Actions);
+        let shown = app.world().resource::<Shown>();
+        assert!(shown.is_open(WindowId::Actions) && !shown.displayed(WindowId::Actions));
+        assert_eq!(display(&app), Display::None);
+        press(&mut app, WindowId::Actions);
+        assert_eq!(display(&app), Display::Flex);
+        // The pet window shows only while it is open and not hidden.
+        press(&mut app, WindowId::PetInfo);
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::PetInfo);
+        assert!(!app.world().resource::<Shown>().displayed(WindowId::PetInfo));
+        press(&mut app, WindowId::PetInfo);
+        assert!(app.world().resource::<Shown>().displayed(WindowId::PetInfo));
+    }
+
+    #[test]
+    fn closing_a_window_something_else_opens_hides_it() {
+        let mut shown = Shown::default();
+        shown.open(WindowId::PetInfo);
+        shown.dismiss(WindowId::PetInfo);
+        assert!(shown.is_open(WindowId::PetInfo) && !shown.displayed(WindowId::PetInfo));
+        // Its owner closing and opening it again leaves it hidden.
+        shown.close(WindowId::PetInfo);
+        shown.open(WindowId::PetInfo);
+        assert!(!shown.displayed(WindowId::PetInfo));
+        // Any other window is closed.
+        shown.open(WindowId::Inventory);
+        shown.dismiss(WindowId::Inventory);
+        assert!(!shown.is_open(WindowId::Inventory));
     }
 }

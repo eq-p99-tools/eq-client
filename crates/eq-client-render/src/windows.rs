@@ -10,20 +10,21 @@ mod registry;
 mod stack;
 mod store;
 pub(super) use layout::Layouts;
-pub(crate) use registry::{Layer, Opening, WindowId};
+pub(crate) use registry::{Layer, Opening, Toggle, WindowId};
 #[cfg(test)]
 pub(crate) use stack::toggle;
 pub(crate) use stack::{SelectorButton, Shown, Stack, spawn_selector};
 
 /// Restores saved positions before layout and constrains measured frames afterward;
-/// placements persist between runs per character. Orders the floating windows
-/// and opens and closes the toggled ones.
+/// placements persist between runs per character. Orders the floating windows,
+/// opens and closes the toggled ones and hides the ones the player hid.
 pub(super) fn register_layout(app: &mut App) {
     app.add_systems(
         Update,
         (
             stack::raise,
             stack::toggle,
+            stack::hide,
             stack::raise_opened,
             stack::light_selector,
             stack::restack,

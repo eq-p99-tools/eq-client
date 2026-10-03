@@ -1100,10 +1100,8 @@ pub(crate) const PET_COMMANDS: [(&str, &str); 8] = [
     ("LostButton", "/pet get lost"),
 ];
 
-/// The window an official selector button opens and closes, of those the
-/// player opens and closes here. The others, for the hotbar, the spell
-/// gems, the pet and the songs, which open no other way here yet, and for
-/// windows this client does not have, do nothing.
+/// The window an official selector button opens and closes, or hides and
+/// shows again; those for windows this client does not have do nothing.
 fn selector_button(id: &str) -> Option<WindowId> {
     Some(match id {
         "SELW_ActionsToggleButton" => WindowId::ActionsWindow,
@@ -1111,6 +1109,11 @@ fn selector_button(id: &str) -> Option<WindowId> {
         "SELW_OptionsToggleButton" => WindowId::Options,
         "SELW_BuffToggleButton" => WindowId::Effects,
         "SELW_MapToggleButton" => WindowId::Map,
+        // Windows something else opens, which these hide and show again.
+        "SELW_HotboxToggleButton" => WindowId::Actions,
+        "SELW_CastSpellToggleButton" => WindowId::Spells,
+        "SELW_PetInfoToggleButton" => WindowId::PetInfo,
+        "SELW_SDBuffToggleButton" => WindowId::ShortEffects,
         _ => return None,
     })
 }
@@ -1487,7 +1490,7 @@ pub(crate) fn buttons(
         &mut buttons
     {
         let on = match (selector, checkbox) {
-            (Some(selector), _) => shown.is_open(selector.0),
+            (Some(selector), _) => shown.displayed(selector.0),
             (None, Some(checkbox)) => options.on(checkbox.0),
             (None, None) => attack && combat.auto_attack,
         };
@@ -1621,7 +1624,8 @@ fn title_boxes(
     owner: WindowId,
 ) {
     let frame = window.target_entity();
-    let closes = owner.describe().toggled || items::framed_while_open(owner);
+    let closes =
+        owner.describe().toggle != crate::windows::Toggle::Never || items::framed_while_open(owner);
     let mut right = inside.x + inside.width;
     for (wanted, look, close) in [
         (bar.close_box, &template.close_box, true),
@@ -2472,6 +2476,7 @@ mod tests {
 
     #[test]
     fn the_skins_selector_toggles_the_windows_the_player_opens_and_closes() {
+        use crate::windows::Toggle;
         assert!(matches!(
             does("SELW_InventoryToggleButton", WindowId::Selector),
             Some(Does::Toggles(WindowId::Inventory))
@@ -2480,21 +2485,27 @@ mod tests {
             does("SELW_MapToggleButton", WindowId::Selector),
             Some(Does::Toggles(WindowId::Map))
         ));
-        // A window this client does not have, or opens no other way.
+        // A window this client does not have.
         assert!(matches!(
             does("SELW_FriendsToggleButton", WindowId::Selector),
             Some(Does::Nothing)
         ));
-        // Each button it maps opens a window the player toggles.
-        for button in [
-            "SELW_ActionsToggleButton",
-            "SELW_InventoryToggleButton",
-            "SELW_OptionsToggleButton",
-            "SELW_BuffToggleButton",
-            "SELW_MapToggleButton",
+        // Each button it maps opens a window the player toggles, or hides
+        // and shows one something else opens.
+        for (button, toggle) in [
+            ("SELW_ActionsToggleButton", Toggle::Opens),
+            ("SELW_InventoryToggleButton", Toggle::Opens),
+            ("SELW_OptionsToggleButton", Toggle::Opens),
+            ("SELW_BuffToggleButton", Toggle::Opens),
+            ("SELW_MapToggleButton", Toggle::Opens),
+            ("SELW_HotboxToggleButton", Toggle::Hides),
+            ("SELW_CastSpellToggleButton", Toggle::Hides),
+            ("SELW_PetInfoToggleButton", Toggle::Hides),
+            ("SELW_SDBuffToggleButton", Toggle::Hides),
         ] {
-            assert!(
-                selector_button(button).unwrap().describe().toggled,
+            assert_eq!(
+                selector_button(button).unwrap().describe().toggle,
+                toggle,
                 "{button}"
             );
         }

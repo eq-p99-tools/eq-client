@@ -172,7 +172,7 @@ pub(crate) const fn framed_while_open(id: WindowId) -> bool {
 /// a bag's, while it is open and still a bag, the bank's, while it is open
 /// and a banker is in reach, and the give, Actions, Pet Info, short effects,
 /// casting, Options, Training, Skills, confirmation, note and book windows
-/// while they are open.
+/// while they are open and not hidden.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn frames(
     mut commands: Commands,
@@ -204,7 +204,7 @@ pub(crate) fn frames(
     let mut drawn = BTreeSet::new();
     for (frame, id) in &frames {
         if framed_while_open(*id) {
-            if shown.is_open(*id) {
+            if shown.displayed(*id) {
                 drawn.insert(*id);
             } else {
                 commands.entity(frame).despawn();
@@ -213,7 +213,7 @@ pub(crate) fn frames(
     }
     let wanted: Vec<WindowId> = shown
         .ids()
-        .filter(|id| framed_while_open(*id) && !drawn.contains(id))
+        .filter(|id| framed_while_open(*id) && shown.displayed(*id) && !drawn.contains(id))
         .collect();
     // A window just opened comes to the front.
     for id in wanted {
@@ -407,8 +407,9 @@ fn world_name(
         .map_or_else(String::new, |(id, messages)| messages.text(id, ""))
 }
 
-/// Closes a window when its Done button is pressed, and a bag or the bank
-/// when Escape finds it in front.
+/// Closes a window when its Done button or close box is pressed, and a bag
+/// or the bank when Escape finds it in front; one something else opens, such
+/// as the pet window, is hidden instead.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn close(
     mut shown: ResMut<Shown>,
@@ -417,7 +418,7 @@ pub(crate) fn close(
 ) {
     for (interaction, Closes(window)) in &buttons {
         if *interaction == Interaction::Pressed {
-            shown.close(*window);
+            shown.dismiss(*window);
         }
     }
     // Closing the give or trade window cancels the exchange; see
@@ -425,7 +426,7 @@ pub(crate) fn close(
     if let crate::escape::Escape::Close(id) = *escape
         && framed_while_open(id)
     {
-        shown.close(id);
+        shown.dismiss(id);
     }
 }
 
