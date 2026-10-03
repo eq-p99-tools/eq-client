@@ -1057,6 +1057,21 @@ fn game_commands(
                     target: online.world().target().selected,
                 }])
             }),
+        // How `/who` lists the player: away, which takes a message the client
+        // does not keep yet, anonymous or roleplaying.
+        "afk" => stamp().map(|stamp| {
+            vec![ClientCommand::ToggleAway {
+                session_id: stamp.session_id,
+            }]
+        }),
+        "anonymous" | "anon" | "roleplay" if words.is_empty() => stamp().map(|stamp| {
+            let session_id = stamp.session_id;
+            vec![if name == "roleplay" {
+                ClientCommand::ToggleRoleplay { session_id }
+            } else {
+                ClientCommand::ToggleAnonymous { session_id }
+            }]
+        }),
         // Groups: an invitation takes a name, the rest no words.
         "invite" | "follow" | "disband" if name == "invite" || words.is_empty() => {
             stamp().map(|stamp| vec![group_command(&name, words, online, stamp.session_id)])

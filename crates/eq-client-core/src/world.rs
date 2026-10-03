@@ -30,7 +30,7 @@ pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
 pub use items::ItemCache;
 pub use link::Link;
-pub use notice::{Notice, Party};
+pub use notice::{ListingNotice, Notice, Party};
 pub use target::Target;
 pub use trade::{Asker, Exchange, Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
@@ -395,6 +395,23 @@ impl ClientWorld {
                     && let Some(player) = self.player.as_mut()
                 {
                     who::relist(*change, &mut player.level, &mut player.listing);
+                }
+            }
+            WorldEvent::ListingSet { session_id, change } => {
+                self.listing_set(*session_id, *change, news);
+            }
+            WorldEvent::ListingRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ListingRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
                 }
             }
             WorldEvent::GuildNames(names) => self.guild_names = names.iter().cloned().collect(),
