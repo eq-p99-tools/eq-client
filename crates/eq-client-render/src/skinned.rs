@@ -16,7 +16,9 @@ pub(crate) use controls::{
     type_amount,
 };
 
-pub(crate) use items::{Closes, TheirSlot, close, contents, frames, quantity, theirs, toggle_bag};
+pub(crate) use items::{
+    Closes, TheirSlot, close, contents, frames, loot, quantity, theirs, toggle_bag,
+};
 
 use super::windows::WindowId;
 use crate::theme::{self, Size};
@@ -44,6 +46,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Bag(_) | WindowId::WorldContainer => "EQUI_Container.xml",
         WindowId::Give => "EQUI_GiveWnd.xml",
         WindowId::Trade => "EQUI_TradeWnd.xml",
+        WindowId::Loot => "EQUI_LootWnd.xml",
         WindowId::Quantity => "EQUI_QuantityWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
@@ -104,6 +107,8 @@ pub(crate) enum Shows {
     BuffName(EffectWindow, u32),
     /// The player's practice points, which the Training window counts.
     PracticePoints,
+    /// The name of the corpse the loot window is open on.
+    Corpse,
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -725,20 +730,71 @@ fn view(
             if let Some(template) = view.template.as_ref().filter(|_| view.border) {
                 client = border(frame, art, &template.border, (area.width, area.height));
             }
-            frame
-                .spawn(Node {
-                    overflow: Overflow::clip(),
-                    ..at(client.x, client.y, client.width, client.height)
-                })
-                .with_children(|clipped| {
-                    let origin = Area {
-                        x: 0.0,
-                        y: 0.0,
-                        ..client
-                    };
-                    pieces(clipped, art, &view.pieces, &origin, context);
-                });
+            // One the skin gives a scrollbar scrolls its pieces beside it, as
+            // the loot window's slots do.
+            let bar = view.scrollbar.as_ref();
+            let width = client.width - bar.map_or(0.0, scrollbar::width);
+            let mut clipped = frame.spawn(Node {
+                overflow: if bar.is_some() {
+                    Overflow::scroll_y()
+                } else {
+                    Overflow::clip()
+                },
+                ..at(client.x, client.y, width.max(0.0), client.height)
+            });
+            if bar.is_some() {
+                clipped.insert((
+                    ScrollPosition::default(),
+                    ScrolledView,
+                    crate::windows::pointer::TakesWheel,
+                ));
+            }
+            let scrolled = clipped.id();
+            clipped.with_children(|clipped| {
+                let origin = Area {
+                    x: 0.0,
+                    y: 0.0,
+                    width,
+                    height: client.height,
+                };
+                pieces(clipped, art, &view.pieces, &origin, context);
+                if bar.is_some() {
+                    // As tall as its lowest piece, so all of them scroll into
+                    // view.
+                    let bottom = view
+                        .pieces
+                        .iter()
+                        .filter_map(|(_, element)| placed_area(element))
+                        .map(|area| area.y + area.height)
+                        .fold(0.0, f32::max);
+                    clipped.spawn(Node {
+                        width: px(1),
+                        height: px(bottom),
+                        flex_shrink: 0.0,
+                        ..default()
+                    });
+                }
+            });
+            if let Some(look) = bar {
+                scrollbar::spawn(frame, art, look, &client, (scrolled, context.id));
+            }
         });
+}
+
+/// A window within a window that scrolls its pieces.
+#[derive(Component)]
+pub(crate) struct ScrolledView;
+
+/// Where a piece sits in its container, when the skin places it.
+const fn placed_area(element: &Element) -> Option<Area> {
+    match element {
+        Element::InvSlot(slot) => Some(slot.area),
+        Element::Button(button) => Some(button.area),
+        Element::Label(label) => Some(label.area),
+        Element::Gauge(gauge) => Some(gauge.area),
+        Element::Image { area, .. } => Some(*area),
+        _ => None,
+    }
 }
 
 /// The height of a tab that shows its page's words.
@@ -1110,6 +1166,9 @@ enum Does {
     HotButton(usize),
     /// Does this to the quantity window's amount, as Accept takes it.
     Picks(crate::inventory::SplitAction),
+    /// Does this to the loot open on a corpse, as the loot window's Done
+    /// ends it.
+    Loots(crate::trade::Action),
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -1125,6 +1184,14 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if let Some(button) = ability_button(id) {
         return Some(Does::Ability(button));
+    }
+    // The loot window's Done ends the loot; Link all, and the Loot all some
+    // skins keep without a place, are not in this client.
+    if owner == WindowId::Loot {
+        return Some(match id {
+            "DoneButton" => Does::Loots(crate::trade::Action::EndLoot),
+            _ => Does::Nothing,
+        });
     }
     // A window's Done button, or the give or trade window's Cancel, closes
     // it; even in a window whose other buttons do nothing yet.
@@ -1549,6 +1616,12 @@ fn behave(
             crate::outbox::Needs::Nothing,
         )),
         Does::Picks(action) => drawn.insert((Button, action, skin())),
+        Does::Loots(action) => drawn.insert((
+            Button,
+            action,
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Looting),
+        )),
         Does::Offered(_) | Does::BagIcon => drawn,
         Does::Nothing => drawn.insert(missing()),
     };
@@ -1632,6 +1705,7 @@ fn caption(
         | Does::Combines(_)
         | Does::Maps(_)
         | Does::Picks(_)
+        | Does::Loots(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 && area.width < area.height * 1.5 {
@@ -1892,6 +1966,8 @@ fn title_boxes(
             },
         ));
         match (close, closes) {
+            // The loot window closes as its Done button does, ending the loot.
+            (true, _) if owner == WindowId::Loot => drawn.insert(crate::trade::Action::EndLoot),
             (true, true) => drawn.insert(items::Closes(owner)),
             // The client keeps this window open: its close box is one more
             // control the client does not have yet.
@@ -2007,6 +2083,7 @@ fn label(
     );
     // The player's own name in the trade window, lit once they click Trade.
     let trader = owner == WindowId::Trade && name == "TRDW_MyName";
+    let corpse = owner == WindowId::Loot && name == "LW_CorpseName";
     // The Training window's practice points and the coins the player carries.
     let counted = match name {
         "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
@@ -2028,6 +2105,7 @@ fn label(
         || banker
         || partner
         || trader
+        || corpse
         || counted.is_some()
         || page_number.is_some();
     let words = if filled { "" } else { label.text.as_str() };
@@ -2066,6 +2144,7 @@ fn label(
         }
         (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
         (None, None) if trader => aligned(window, node, label.align, (text, Shows::Trader)),
+        (None, None) if corpse => aligned(window, node, label.align, (text, Shows::Corpse)),
         (None, None) => match controls::value_label(name, owner) {
             Some(controls::ValueLabel::Shows(level)) => aligned(
                 window,
@@ -2150,7 +2229,10 @@ pub(crate) fn show(
         Res<super::inventory::InventoryState>,
         Res<super::spellbook::SpellNames>,
     ),
-    combat: Res<super::combat::CombatState>,
+    (combat, trade): (
+        Res<super::combat::CombatState>,
+        Res<super::trade::TradeState>,
+    ),
     mut fills: Query<(&Shows, &mut Node), Without<Text>>,
     mut texts: Query<(&Shows, &mut Text, &mut TextColor)>,
     mut boxes: Query<(&Shows, &mut Visibility)>,
@@ -2213,6 +2295,7 @@ pub(crate) fn show(
             ),
             Shows::Banker => (inventory.banker().to_owned(), None),
             Shows::PracticePoints => (super::training::practice_points(world), None),
+            Shows::Corpse => (trade.corpse().unwrap_or_default().to_owned(), None),
             Shows::Partner => (
                 super::give::partner(world),
                 Some(super::give::ink(world, super::give::Side::Theirs)),
@@ -2776,6 +2859,32 @@ mod tests {
             .world_mut()
             .query_filtered::<(), Or<(With<SkinSlider>, With<controls::AmountBox>)>>();
         assert_eq!(wired.iter(app.world()).count(), 2);
+    }
+
+    #[test]
+    fn the_loot_windows_done_ends_the_loot_and_its_places_are_the_corpses_slots() {
+        use crate::trade::Action;
+        assert!(matches!(
+            does("DoneButton", WindowId::Loot),
+            Some(Does::Loots(Action::EndLoot))
+        ));
+        // Link all, and the Loot all Velious keeps without a place, are not
+        // in this client.
+        assert!(matches!(
+            does("BroadcastButton", WindowId::Loot),
+            Some(Does::Nothing)
+        ));
+        assert!(matches!(
+            does("LootAllButton", WindowId::Loot),
+            Some(Does::Nothing)
+        ));
+        // Elsewhere a Done button closes its window.
+        assert!(matches!(
+            does("DoneButton", WindowId::Training),
+            Some(Does::Closes)
+        ));
+        assert_eq!(crate::trade::corpse_slot(0), 22);
+        assert_eq!(crate::trade::corpse_slot(30), 52);
     }
 
     #[test]

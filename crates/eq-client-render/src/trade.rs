@@ -11,6 +11,18 @@ use super::windows;
 
 /// The NPC class that answers ordinary shop requests; servers ignore other classes.
 const MERCHANT_CLASS: u8 = 41;
+
+/// The corpse slot the loot window's first place shows, as Titanium servers
+/// number a corpse's items: from the first carried slot, 22, on (`EQEmu`'s
+/// `CORPSE_BEGIN`; the first item of every live loot so far came in slot
+/// 22). That the official window shows them in that order is inferred, and
+/// `EqMac` sessions do not loot yet.
+const FIRST_CORPSE_SLOT: u16 = 22;
+
+/// The corpse slot a place in the loot window shows, from 0.
+pub(crate) const fn corpse_slot(place: u16) -> u16 {
+    FIRST_CORPSE_SLOT + place
+}
 /// The NPC class that keeps the player's bank.
 const BANKER_CLASS: u8 = 40;
 
@@ -35,6 +47,11 @@ struct MerchantWindow {
 }
 
 impl TradeState {
+    /// The name of the corpse the loot window is open on.
+    pub(crate) fn corpse(&self) -> Option<&str> {
+        self.loot.as_ref().map(|window| window.name.as_str())
+    }
+
     /// Something the windows show changed: draw them again.
     pub(super) fn changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
@@ -439,7 +456,7 @@ pub(super) fn input(
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn present(
     mut commands: Commands,
-    trade: Res<TradeState>,
+    (trade, skinned): (Res<TradeState>, Res<crate::skinned::Skinned>),
     online: Res<super::online::OnlineState>,
     panels: Query<(Entity, &Panel)>,
     lists: Query<(&Rows, &ScrollPosition)>,
@@ -478,7 +495,14 @@ pub(super) fn present(
     for (_, entity) in open {
         commands.entity(entity).despawn();
     }
-    if let Some((window, contents)) = loot {
+    // The skin's loot window, once the skin draws it, needs only its frame:
+    // its places show the corpse's items (`skinned::loot`).
+    if loot.is_some() && skinned.has(windows::WindowId::Loot) {
+        if loot_frame.is_none() {
+            let frame = windows::frame(&mut commands, windows::WindowId::Loot, Node::default());
+            commands.entity(frame).insert(Panel(Rows::Loot));
+        }
+    } else if let Some((window, contents)) = loot {
         let rows: Vec<(Action, String)> = contents
             .items
             .iter()
@@ -723,6 +747,7 @@ mod tests {
         .insert_resource(trading(Some(7), None))
         .init_resource::<ButtonInput<MouseButton>>()
         .init_resource::<windows::DragState>()
+        .init_resource::<crate::skinned::Skinned>()
         .add_systems(Update, (present, windows::input).chain());
         let mut window = Window {
             focused: true,
@@ -868,6 +893,7 @@ mod tests {
             ..TradeState::default()
         })
         .insert_resource(trading(None, Some((8, stock))))
+        .init_resource::<crate::skinned::Skinned>()
         .add_systems(Update, present);
         app.update();
         let world = app.world_mut();

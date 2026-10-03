@@ -913,6 +913,7 @@ type ScrolledList = Or<(
     With<ListRows>,
     With<crate::training::SkillRows>,
     With<crate::skills::SkillsList>,
+    With<super::ScrolledView>,
 )>;
 
 /// Scrolls the list the wheel turns.

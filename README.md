@@ -491,7 +491,13 @@ The target panel lists the keys that apply to the current target:
 - **L** opens the targeted corpse: coins received are reported in chat, items are
   listed in the LOOT window, clicking one takes it into the inventory, and
   **Loot all** takes one item at a time, waiting for each acknowledgement. Killed
-  creatures become corpses in place, keeping their spawn ID.
+  creatures become corpses in place, keeping their spawn ID. With an
+  installation, the skin's loot window (`LootWnd`) shows the corpse instead: its
+  name, and each item in the slot for its corpse slot (the first place is corpse
+  slot 22, as Titanium servers number them), scrolling where the skin gives the
+  slots a scrollbar. Clicking an item takes it into the inventory, and **Done**
+  or its close box ends the loot. The skin has no Loot all, and Link all is
+  greyed out.
 - **U** opens the targeted merchant: stock with the server's prices, one-click
   purchases, and a sell button for each carried item. The window shows the purse
   as the networking session keeps it: the server's last money update, with loot
