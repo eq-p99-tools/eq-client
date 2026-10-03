@@ -579,7 +579,7 @@ fn schedule(app: &mut App) {
                         trade::fill_wares,
                         trade::picture,
                         items::icon,
-                        spellbook::book_tooltips,
+                        spellbook::book_present,
                     ),
                     skinned::tabs,
                     abilities::present,

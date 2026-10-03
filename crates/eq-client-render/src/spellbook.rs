@@ -7,10 +7,10 @@ mod scribe;
 mod skinned;
 pub(super) use scribe::presentation as scribe_presentation;
 #[cfg(test)]
-pub(crate) use skinned::Held;
-pub(crate) use skinned::{BookHand, BookPlace, PLACES, TurnsPages};
+pub(crate) use skinned::Entry;
+pub(crate) use skinned::{BookHand, BookPlace, ChosenMark, PLACES, TurnsPages};
 pub(super) use skinned::{
-    clicks as book_clicks, memorize as memorize_held, tooltips as book_tooltips,
+    clicks as book_clicks, memorize as memorize_held, present as book_present,
 };
 
 /// Keeps an open book above the bottom HUD at the default viewport size.
