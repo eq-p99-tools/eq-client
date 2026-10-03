@@ -2352,15 +2352,17 @@ fn a_raid_formed_joined_and_left_says_what_happened() {
     use crate::raid::{RaidMember, RaidUpdate};
     let raid_news = |world: &mut ClientWorld, update| game(world, WorldEvent::Raid(update)).notices;
     let said = |notice| vec![Notice::Raid(notice)];
-    let member = |name: &str| {
-        RaidUpdate::Added(RaidMember {
-            name: name.into(),
-            group: None,
-            class: 1,
-            level: 1,
-            group_leader: false,
-        })
+    let record = |name: &str| RaidMember {
+        name: name.into(),
+        group: None,
+        class: 1,
+        level: 1,
+        group_leader: false,
     };
+    let member = |name: &str| RaidUpdate::Added(record(name));
+    // A member the server lists as the player joins or enters a zone, as
+    // the session tells them apart.
+    let listed = |name: &str| RaidUpdate::Listed(record(name));
     let created = |leader: &str| RaidUpdate::Created {
         leader: leader.into(),
     };
@@ -2402,8 +2404,8 @@ fn a_raid_formed_joined_and_left_says_what_happened() {
         raid_news(&mut joiner, created("Leader")),
         said(RaidNotice::Joined(Party::Player))
     );
-    assert_eq!(raid_news(&mut joiner, member("Leader")), []);
-    assert_eq!(raid_news(&mut joiner, member("Example")), []);
+    assert_eq!(raid_news(&mut joiner, listed("Leader")), []);
+    assert_eq!(raid_news(&mut joiner, listed("Example")), []);
     assert_eq!(
         raid_news(
             &mut joiner,
@@ -2454,7 +2456,7 @@ fn a_raid_formed_joined_and_left_says_what_happened() {
     game(&mut leader, entered(2));
     assert!(leader.raid().is_none());
     assert_eq!(raid_news(&mut leader, created("Example")), []);
-    assert_eq!(raid_news(&mut leader, member("Friend")), []);
+    assert_eq!(raid_news(&mut leader, listed("Friend")), []);
 }
 
 #[test]
@@ -2482,10 +2484,10 @@ fn entering_a_zone_lists_the_player_in_their_raid_group_and_ranks_everyone() {
     // As EQEmu lists the raid at a zone-in: the player's own entry, with
     // their raid group, then everyone else, then the raid's leader.
     for update in [
-        RaidUpdate::Added(member("Example", Some(2), 10, false)),
-        RaidUpdate::Added(member("Leader", Some(0), 20, true)),
-        RaidUpdate::Added(member("Other", Some(2), 12, true)),
-        RaidUpdate::Added(member("Loner", None, 31, false)),
+        RaidUpdate::Listed(member("Example", Some(2), 10, false)),
+        RaidUpdate::Listed(member("Leader", Some(0), 20, true)),
+        RaidUpdate::Listed(member("Other", Some(2), 12, true)),
+        RaidUpdate::Listed(member("Loner", None, 31, false)),
         RaidUpdate::Leader {
             name: "Leader".into(),
         },
@@ -2652,4 +2654,40 @@ fn a_raid_member_moved_but_not_listed_yet_joins_the_list_without_a_word() {
     );
     raid_news(&mut world, RaidUpdate::Added(member("Leader", None)));
     assert_eq!(world.raid().map(|raid| raid.members.len()), Some(2));
+}
+
+#[test]
+fn a_raid_listed_after_its_leader_says_nothing_and_a_later_member_joins() {
+    use crate::raid::{RaidMember, RaidUpdate};
+    let raid_news = |world: &mut ClientWorld, update| game(world, WorldEvent::Raid(update)).notices;
+    let member = |name: &str| RaidMember {
+        name: name.into(),
+        group: Some(0),
+        class: 1,
+        level: 10,
+        group_leader: false,
+    };
+    let mut world = admitted();
+    // As EQEmu lists the raid to a member moved in another zone, or to the
+    // last of a group whose leader left it: the leader named first.
+    for update in [
+        RaidUpdate::Created {
+            leader: "Leader".into(),
+        },
+        RaidUpdate::Leader {
+            name: "Leader".into(),
+        },
+        RaidUpdate::Listed(member("Leader")),
+        RaidUpdate::Listed(member("Other")),
+        RaidUpdate::Listed(member("Example")),
+    ] {
+        assert_eq!(raid_news(&mut world, update), []);
+    }
+    assert_eq!(world.raid().map(|raid| raid.members.len()), Some(3));
+    assert_eq!(
+        raid_news(&mut world, RaidUpdate::Added(member("Late"))),
+        [Notice::Raid(RaidNotice::Joined(Party::Named(
+            "Late".into()
+        )))]
+    );
 }
