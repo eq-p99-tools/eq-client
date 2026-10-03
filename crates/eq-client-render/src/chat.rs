@@ -94,6 +94,8 @@ pub(super) struct ChatState {
     pub requested_target: Option<String>,
     /// A plain `/who`, waiting to list the zone's players.
     pub zone_who: Option<eq_client_core::who::WhoFilter>,
+    /// A `/loc` or `/time`, waiting to be answered.
+    pub asked: Option<super::whereabouts::Asked>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
     /// A `/shownames`, waiting to set how much of players' names shows.
@@ -836,10 +838,6 @@ fn submit_draft(
         if let Some(request) = client_request(&draft, state) {
             return Ok(request?);
         }
-        if let Some(line) = location(state.draft.trim(), online) {
-            state.history.push(system_line(line?));
-            return Ok(());
-        }
         if let Some(commands) = game_commands(state.draft.trim(), online, outbox) {
             for command in commands? {
                 outbox.send(online.world(), command)?;
@@ -883,34 +881,16 @@ pub(super) fn submit_game_command(
     Ok(())
 }
 
-/// `/loc`: where the player stands, in this client's words, north-south
-/// first as the official client orders it.
-fn location(input: &str, online: &super::online::OnlineState) -> Option<Result<String, String>> {
-    let name = input.strip_prefix('/')?.trim();
-    if !name.eq_ignore_ascii_case("loc") {
-        return None;
-    }
-    Some(
-        online
-            .world()
-            .player()
-            .map(|player| {
-                let position = player.position;
-                format!(
-                    "You stand at {:.2}, {:.2}, {:.2}.",
-                    position.y, position.x, position.z
-                )
-            })
-            .ok_or_else(|| "Enter the world first".to_owned()),
-    )
-}
-
 /// A slash command the client answers itself, noted for the system that
-/// answers it: `/target Name`, a plain `/who`, `/log` or `/shownames`. None
-/// for any other line.
+/// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log` or
+/// `/shownames`. None for any other line.
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
     if let Some(request) = target_request(input) {
         return Some(request.map(|name| state.requested_target = Some(name)));
+    }
+    if let Some(asked) = super::whereabouts::Asked::typed(input) {
+        state.asked = Some(asked);
+        return Some(Ok(()));
     }
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));

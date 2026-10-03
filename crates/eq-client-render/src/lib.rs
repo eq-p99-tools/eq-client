@@ -58,6 +58,7 @@ mod tooltip;
 mod trade;
 mod tradeskills;
 mod training;
+mod whereabouts;
 mod who;
 mod windows;
 mod zone;
@@ -490,7 +491,12 @@ fn schedule(app: &mut App) {
             inventory::colors::input,
             interact::input,
             target::input,
-            (who::zone_list, pet::window, group::window),
+            (
+                who::zone_list,
+                whereabouts::answers,
+                pet::window,
+                group::window,
+            ),
             combat::input,
             trade::input,
             (
