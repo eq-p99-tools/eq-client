@@ -440,23 +440,28 @@ fn draw(
         height,
     };
     // The window's background: the skin's texture, which the character's
-    // saved look tints and fades, or a flat colour of that look's instead.
-    let mut backdrop = window.spawn((looks::Backdrop(context.id), at(0.0, 0.0, width, height)));
-    if let Some(image) = screen
-        .template
-        .as_ref()
-        .and_then(|template| template.background.as_deref())
-        .and_then(|file| art.texture(file))
-    {
-        backdrop.insert(ImageNode {
-            image,
-            image_mode: NodeImageMode::Tiled {
-                tile_x: true,
-                tile_y: true,
-                stretch_value: 1.0,
-            },
-            ..default()
-        });
+    // saved look tints and fades, or a flat colour of that look's instead. A
+    // window the skin makes transparent has none, so what lies behind shows
+    // between its pieces, and a look saved for it has nothing to tint or fade:
+    // the skin's setting wins (inferred, as is what the setting means).
+    if !screen.transparent {
+        let mut backdrop = window.spawn((looks::Backdrop(context.id), at(0.0, 0.0, width, height)));
+        if let Some(image) = screen
+            .template
+            .as_ref()
+            .and_then(|template| template.background.as_deref())
+            .and_then(|file| art.texture(file))
+        {
+            backdrop.insert(ImageNode {
+                image,
+                image_mode: NodeImageMode::Tiled {
+                    tile_x: true,
+                    tile_y: true,
+                    stretch_value: 1.0,
+                },
+                ..default()
+            });
+        }
     }
     if let Some(template) = &screen.template {
         if screen.border {
@@ -2829,6 +2834,7 @@ mod tests {
             tooltip: None,
             pieces: Vec::new(),
             tab_frame: None,
+            transparent: false,
         };
         // The words drawn in a window from this screen.
         let words = |screen: Screen| {
@@ -2894,6 +2900,7 @@ mod tests {
             tooltip: None,
             pieces: Vec::new(),
             tab_frame: None,
+            transparent: false,
         };
         let skin = (px(120.0), px(80.0));
         let at = |id, placed| {
@@ -2984,6 +2991,7 @@ mod tests {
                 ("slot".into(), button("HB_Button1", 20.0)),
             ],
             tab_frame: None,
+            transparent: false,
         };
         let mut app = App::new();
         app.init_resource::<crate::sheets::Sheets>()
@@ -3087,6 +3095,7 @@ mod tests {
                 ("keys".into(), keys),
             ],
             tab_frame: None,
+            transparent: false,
         }
     }
 
@@ -3124,6 +3133,40 @@ mod tests {
             ],
             ..options_fixture()
         }
+    }
+
+    #[test]
+    fn a_window_the_skin_makes_transparent_draws_no_background() {
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Startup,
+                |mut commands: Commands, mut art: crate::sheets::Art| {
+                    for transparent in [false, true] {
+                        let screen = Screen {
+                            transparent,
+                            ..options_fixture()
+                        };
+                        let context = Context {
+                            id: WindowId::Options,
+                            paperdoll: None,
+                            depth: 0,
+                            tab_frame: None,
+                        };
+                        commands.spawn(Node::default()).with_children(|window| {
+                            draw(window, &screen, &mut art, &context);
+                        });
+                    }
+                },
+            );
+        app.update();
+        // Only the window the skin leaves opaque has a background for the
+        // character's saved look to tint and fade.
+        let mut backdrops = app.world_mut().query::<&looks::Backdrop>();
+        assert_eq!(backdrops.iter(app.world()).count(), 1);
     }
 
     #[test]
@@ -3591,6 +3634,7 @@ mod tests {
             tooltip: None,
             pieces: vec![image("CA_Anim2", 9.0), image("CA_Anim", 5.0)],
             tab_frame: None,
+            transparent: false,
         };
         let gold = Some(piece.clone());
         let place = cursor_place(&screen, [None, gold.clone(), None, None]).unwrap();
