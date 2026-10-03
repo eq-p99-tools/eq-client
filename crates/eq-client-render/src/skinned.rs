@@ -47,6 +47,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Give => "EQUI_GiveWnd.xml",
         WindowId::Trade => "EQUI_TradeWnd.xml",
         WindowId::Loot => "EQUI_LootWnd.xml",
+        WindowId::Merchant => "EQUI_MerchantWnd.xml",
         WindowId::Quantity => "EQUI_QuantityWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
@@ -109,6 +110,15 @@ pub(crate) enum Shows {
     PracticePoints,
     /// The name of the corpse the loot window is open on.
     Corpse,
+    /// The name of the merchant the merchant window is open at.
+    Merchant,
+    /// The name of the item chosen in the merchant window.
+    ChosenName,
+    /// The price the merchant asks for the ware chosen in its window.
+    ChosenPrice,
+    /// The merchant window's Sell button (true) or its Buy button: the skin
+    /// keeps one over the other, and the one for what is chosen shows.
+    WhileSelling(bool),
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -1166,12 +1176,31 @@ enum Does {
     HotButton(usize),
     /// Does this to the quantity window's amount, as Accept takes it.
     Picks(crate::inventory::SplitAction),
-    /// Does this to the loot open on a corpse, as the loot window's Done
-    /// ends it.
-    Loots(crate::trade::Action),
+    /// Does this to the loot open on a corpse or the merchant open, as the
+    /// loot window's Done ends the loot and the merchant window's Buy buys.
+    Trades(crate::trade::Action),
+    /// Shows the item chosen in the merchant window.
+    Chosen,
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
+}
+
+/// What a loot or merchant window's button does: the loot window's Done
+/// ends the loot, and the merchant window's Buy and Sell act on what it has
+/// chosen. Their others are not in this client: Link all, and the Loot all
+/// some skins keep without a place.
+fn trading_button(id: &str, owner: WindowId) -> Option<Does> {
+    use crate::trade::Action;
+    Some(match (owner, id) {
+        (WindowId::Loot, "DoneButton") => Does::Trades(Action::EndLoot),
+        (WindowId::Merchant, "MW_Buy_Button") => Does::Trades(Action::BuyChosen),
+        (WindowId::Merchant, "MW_Sell_Button") => Does::Trades(Action::SellChosen),
+        (WindowId::Merchant, "MW_Done_Button" | "DoneButton") => Does::Trades(Action::EndShop),
+        (WindowId::Merchant, "MW_SelectedItem") => Does::Chosen,
+        (WindowId::Loot | WindowId::Merchant, _) => Does::Nothing,
+        _ => return None,
+    })
 }
 
 /// What the client does with a skin's button; None for one it leaves out.
@@ -1185,13 +1214,8 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     if let Some(button) = ability_button(id) {
         return Some(Does::Ability(button));
     }
-    // The loot window's Done ends the loot; Link all, and the Loot all some
-    // skins keep without a place, are not in this client.
-    if owner == WindowId::Loot {
-        return Some(match id {
-            "DoneButton" => Does::Loots(crate::trade::Action::EndLoot),
-            _ => Does::Nothing,
-        });
+    if let Some(does) = trading_button(id, owner) {
+        return Some(does);
     }
     // A window's Done button, or the give or trade window's Cancel, closes
     // it; even in a window whose other buttons do nothing yet.
@@ -1509,7 +1533,7 @@ fn button(
     drawn.with_children(|inner| {
         // A buff slot's decal is the buff's own icon, which the caption draws.
         if let (Some(decal), Some(place)) = (&button.decal, button.decal_area)
-            && !matches!(does, Does::PetBuff(_) | Does::Buff(..))
+            && !matches!(does, Does::PetBuff(_) | Does::Buff(..) | Does::Chosen)
         {
             picture(
                 inner,
@@ -1616,12 +1640,14 @@ fn behave(
             crate::outbox::Needs::Nothing,
         )),
         Does::Picks(action) => drawn.insert((Button, action, skin())),
-        Does::Loots(action) => drawn.insert((
-            Button,
-            action,
-            skin(),
-            crate::outbox::Needs::Capability(Capability::Looting),
-        )),
+        Does::Trades(action) => {
+            trades(drawn, action, skin());
+            &mut *drawn
+        }
+        Does::Chosen => {
+            chosen_picture(drawn, button);
+            &mut *drawn
+        }
         Does::Offered(_) | Does::BagIcon => drawn,
         Does::Nothing => drawn.insert(missing()),
     };
@@ -1636,6 +1662,42 @@ fn behave(
     {
         drawn.insert(crate::tooltip::Tooltip(tooltip.clone()));
     }
+}
+
+/// A loot or merchant window's button that does this; the skin keeps the
+/// merchant window's Sell over its Buy, and the one for what is chosen shows.
+fn trades(drawn: &mut EntityCommands, action: crate::trade::Action, skin: SkinButton) {
+    use crate::trade::Action;
+    drawn.insert((
+        Button,
+        action,
+        skin,
+        crate::outbox::Needs::Capability(crate::trade::needs(action)),
+    ));
+    match action {
+        Action::BuyChosen => drawn.insert((Shows::WhileSelling(false), Visibility::Hidden)),
+        Action::SellChosen => drawn.insert((Shows::WhileSelling(true), Visibility::Hidden)),
+        _ => drawn,
+    };
+}
+
+/// The merchant window's box for the chosen item, its picture where the
+/// skin's sample sits; hovering it names the item.
+fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::Button) {
+    let place = button.decal_area.unwrap_or(Area {
+        x: 1.0,
+        y: 1.0,
+        width: button.area.width - 2.0,
+        height: button.area.height - 2.0,
+    });
+    drawn.insert((
+        crate::trade::ChosenPicture {
+            x: place.x,
+            y: place.y,
+            size: place.width.min(place.height),
+        },
+        Interaction::default(),
+    ));
 }
 
 /// What a skin button shows on itself: its words, a count of coins, an
@@ -1692,6 +1754,8 @@ fn caption(
         // A box with a picture shows a value, such as the bank's coins;
         // the skin's text there is only a sample, so it stays blank until
         // the client has the value.
+        // The chosen item's picture is drawn over it (`trade::picture`).
+        Does::Chosen => (),
         Does::Nothing if button.decal.is_some() => (),
         Does::Toggles(_)
         | Does::Closes
@@ -1705,7 +1769,7 @@ fn caption(
         | Does::Combines(_)
         | Does::Maps(_)
         | Does::Picks(_)
-        | Does::Loots(_)
+        | Does::Trades(_)
         | Does::Nothing => {
             if let Some(text) = &button.text {
                 if area.height >= 30.0 && area.width < area.height * 1.5 {
@@ -1966,8 +2030,10 @@ fn title_boxes(
             },
         ));
         match (close, closes) {
-            // The loot window closes as its Done button does, ending the loot.
+            // The loot and merchant windows close as their Done buttons do,
+            // ending the loot or the shopping.
             (true, _) if owner == WindowId::Loot => drawn.insert(crate::trade::Action::EndLoot),
+            (true, _) if owner == WindowId::Merchant => drawn.insert(crate::trade::Action::EndShop),
             (true, true) => drawn.insert(items::Closes(owner)),
             // The client keeps this window open: its close box is one more
             // control the client does not have yet.
@@ -2057,6 +2123,18 @@ fn gauge(
     });
 }
 
+/// What a loot or merchant window's label shows: the corpse's or the
+/// merchant's name, or the chosen item's name or price.
+fn trading_label(owner: WindowId, name: &str) -> Option<Shows> {
+    Some(match (owner, name) {
+        (WindowId::Loot, "LW_CorpseName") => Shows::Corpse,
+        (WindowId::Merchant, "MW_MerchantName") => Shows::Merchant,
+        (WindowId::Merchant, "MW_SelectedItemLabel") => Shows::ChosenName,
+        (WindowId::Merchant, "MW_SelectedPriceLabel") => Shows::ChosenPrice,
+        _ => return None,
+    })
+}
+
 /// A label: fixed text, or what its number says it shows; a bag's window
 /// names its bag.
 fn label(
@@ -2083,7 +2161,7 @@ fn label(
     );
     // The player's own name in the trade window, lit once they click Trade.
     let trader = owner == WindowId::Trade && name == "TRDW_MyName";
-    let corpse = owner == WindowId::Loot && name == "LW_CorpseName";
+    let trading = trading_label(owner, name);
     // The Training window's practice points and the coins the player carries.
     let counted = match name {
         "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
@@ -2105,7 +2183,7 @@ fn label(
         || banker
         || partner
         || trader
-        || corpse
+        || trading.is_some()
         || counted.is_some()
         || page_number.is_some();
     let words = if filled { "" } else { label.text.as_str() };
@@ -2144,7 +2222,9 @@ fn label(
         }
         (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
         (None, None) if trader => aligned(window, node, label.align, (text, Shows::Trader)),
-        (None, None) if corpse => aligned(window, node, label.align, (text, Shows::Corpse)),
+        (None, None) if let Some(shows) = trading => {
+            aligned(window, node, label.align, (text, shows));
+        }
         (None, None) => match controls::value_label(name, owner) {
             Some(controls::ValueLabel::Shows(level)) => aligned(
                 window,
@@ -2246,6 +2326,9 @@ pub(crate) fn show(
         let shown = match *shows {
             Shows::Attacking => combat.auto_attack,
             Shows::WhilePetSits(sits) => sits == pet_sits,
+            Shows::WhileSelling(selling) => {
+                matches!(trade.chosen(), Some(crate::trade::Chosen::Carried(_))) == selling
+            }
             Shows::PetBuff(slot) => world
                 .pet_buffs()
                 .and_then(|buffs| buffs.slots.get(slot).copied().flatten())
@@ -2295,7 +2378,9 @@ pub(crate) fn show(
             ),
             Shows::Banker => (inventory.banker().to_owned(), None),
             Shows::PracticePoints => (super::training::practice_points(world), None),
-            Shows::Corpse => (trade.corpse().unwrap_or_default().to_owned(), None),
+            Shows::Corpse | Shows::Merchant | Shows::ChosenName | Shows::ChosenPrice => {
+                (trading_text(*shows, &trade, world), None)
+            }
             Shows::Partner => (
                 super::give::partner(world),
                 Some(super::give::ink(world, super::give::Side::Theirs)),
@@ -2310,7 +2395,8 @@ pub(crate) fn show(
             | Shows::Attacking
             | Shows::WhilePetSits(_)
             | Shows::PetBuff(_)
-            | Shows::Buff(..) => {
+            | Shows::Buff(..)
+            | Shows::WhileSelling(_) => {
                 continue;
             }
         };
@@ -2322,6 +2408,29 @@ pub(crate) fn show(
         {
             color.0 = tint;
         }
+    }
+}
+
+/// What a loot or merchant window's label says. What the merchant pays for
+/// a carried item is not known yet, so its price shows only for a ware.
+fn trading_text(
+    shows: Shows,
+    trade: &super::trade::TradeState,
+    world: &eq_client_core::world::ClientWorld,
+) -> String {
+    let chosen = || crate::trade::chosen(trade, world);
+    match shows {
+        Shows::Corpse => trade.corpse().unwrap_or_default().to_owned(),
+        Shows::Merchant => trade.merchant().unwrap_or_default().to_owned(),
+        Shows::ChosenName => {
+            chosen().map_or_else(String::new, |(item, _)| item.details.name.clone())
+        }
+        Shows::ChosenPrice => chosen()
+            .and_then(|(_, price)| price)
+            .map_or_else(String::new, |price| {
+                crate::trade::coin_text(u64::from(price))
+            }),
+        _ => String::new(),
     }
 }
 
@@ -2745,6 +2854,7 @@ mod tests {
             columns: vec![Column {
                 heading: "Command".into(),
                 width: 120.0,
+                header: None,
             }],
             scrollbar: Some(ScrollbarLook::default()),
             header: None,
@@ -2866,7 +2976,7 @@ mod tests {
         use crate::trade::Action;
         assert!(matches!(
             does("DoneButton", WindowId::Loot),
-            Some(Does::Loots(Action::EndLoot))
+            Some(Does::Trades(Action::EndLoot))
         ));
         // Link all, and the Loot all Velious keeps without a place, are not
         // in this client.
@@ -2885,6 +2995,34 @@ mod tests {
         ));
         assert_eq!(crate::trade::corpse_slot(0), 22);
         assert_eq!(crate::trade::corpse_slot(30), 52);
+    }
+
+    #[test]
+    fn the_merchant_windows_buttons_and_labels_act_on_what_it_has_chosen() {
+        use crate::trade::Action;
+        for (id, action) in [
+            ("MW_Buy_Button", Action::BuyChosen),
+            ("MW_Sell_Button", Action::SellChosen),
+            ("MW_Done_Button", Action::EndShop),
+        ] {
+            assert!(
+                matches!(does(id, WindowId::Merchant), Some(Does::Trades(found)) if found == action),
+                "{id}"
+            );
+        }
+        assert!(matches!(
+            does("MW_SelectedItem", WindowId::Merchant),
+            Some(Does::Chosen)
+        ));
+        assert_eq!(
+            trading_label(WindowId::Merchant, "MW_SelectedPriceLabel"),
+            Some(Shows::ChosenPrice)
+        );
+        assert_eq!(
+            trading_label(WindowId::Loot, "LW_CorpseName"),
+            Some(Shows::Corpse)
+        );
+        assert_eq!(trading_label(WindowId::Merchant, "MW_Other"), None);
     }
 
     #[test]

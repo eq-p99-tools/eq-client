@@ -790,6 +790,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                         TradeClick::Buy(slot) => Action::Buy(slot),
                         TradeClick::Sell(slot) => Action::Sell(slot),
                         TradeClick::EndShop => Action::EndShop,
+                        TradeClick::Choose(slot) => Action::Choose(slot),
+                        TradeClick::BuyChosen => Action::BuyChosen,
+                        TradeClick::SellChosen => Action::SellChosen,
                     }
             }),
             ClickTarget::Tint(number, color) => tint.is_some_and(|action| {

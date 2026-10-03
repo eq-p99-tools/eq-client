@@ -391,6 +391,9 @@ pub struct Column {
     pub heading: String,
     /// The column's width.
     pub width: f32,
+    /// A picture that heads the column instead of words, from a frame
+    /// template's middle, as each coin heads a price's columns.
+    pub header: Option<FrameLook>,
 }
 
 /// A list of rows in columns under headings, such as the Options window's
@@ -962,6 +965,7 @@ impl Library {
                     .map(|column| Column {
                         heading: text_of(column, "Heading").unwrap_or_default().to_owned(),
                         width: number(column, "Width").unwrap_or(80.0),
+                        header: self.named_frame(column, "Header"),
                     })
                     .collect(),
                 scrollbar: self.scrollbar(node),
@@ -1252,6 +1256,30 @@ mod tests {
     </XML>"#;
 
     #[test]
+    fn a_column_may_be_headed_by_a_picture() {
+        let templates = TEMPLATES.replace(
+            "</XML>",
+            "<FrameTemplate item=\"Header_Coin\"><Middle>A_Corner</Middle></FrameTemplate></XML>",
+        );
+        let library = Library::parse(ANIMATIONS, &templates).unwrap();
+        let text = r#"<XML>
+            <Listbox item="Wares"><Columns><Width>24</Width><Header>Header_Coin</Header></Columns>
+                <Columns><Width>150</Width><Heading>Item Name</Heading></Columns></Listbox>
+            <Screen item="MerchantWnd"><Pieces>Wares</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "MerchantWnd").unwrap();
+        let Element::Listbox(list) = &screen.pieces[0].1 else {
+            panic!("a list")
+        };
+        let middle = list.columns[0]
+            .header
+            .as_ref()
+            .and_then(|look| look.middle.as_ref());
+        assert_eq!(middle.map(|piece| piece.width), Some(4));
+        assert!(list.columns[1].header.is_none());
+    }
+
+    #[test]
     fn a_picture_is_found_by_its_animations_name() {
         let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
         let back = library.named_piece("A_Back").unwrap();
@@ -1293,11 +1321,13 @@ mod tests {
             [
                 Column {
                     heading: "Command".into(),
-                    width: 180.0
+                    width: 180.0,
+                    header: None,
                 },
                 Column {
                     heading: "Keypress".into(),
-                    width: 75.0
+                    width: 75.0,
+                    header: None,
                 }
             ]
         );

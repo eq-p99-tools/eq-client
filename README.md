@@ -502,7 +502,14 @@ The target panel lists the keys that apply to the current target:
   purchases, and a sell button for each carried item. The window shows the purse
   as the networking session keeps it: the server's last money update, with loot
   coins and purchases applied kind by kind as servers do. **Escape** closes the
-  window opened last first.
+  window opened last first. With an installation, the skin's merchant window
+  (`MerchantWnd`) shows the merchant instead: its wares in the skin's list, each
+  with its icon, how many are left where the merchant has only so many, and its
+  price under each coin. Clicking a ware chooses it, and **Buy** buys one;
+  clicking a carried item in the inventory or a bag chooses it instead of
+  picking it up, and **Sell** sells it. The chosen item shows with its name and,
+  for a ware, its price (what the merchant pays for a carried item is not known
+  yet). **Done** or the close box ends the shopping.
 - Clicking an NPC with an item on the cursor asks it to take the item, as the
   official client does. Its answer opens the skin's give window (`GiveWnd`)
   with the item in the first of its four slots; more items go in from the
@@ -577,7 +584,7 @@ official client. These paths have synthetic tests; live verification is pending.
 repeatable live or offline checks. One step per line, `#` starts a comment:
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
-`camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...`,
+`camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...`, `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
 `give` (asks the target to take the cursor item, as clicking it does),
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
 `click slider clip_plane|max_fps|mouse_sensitivity|quantity <percent>` (an Options window slider, or the quantity window's, pressed that far along),

@@ -571,6 +571,7 @@ fn schedule(app: &mut App) {
                     skinned::contents,
                     skinned::theirs,
                     skinned::loot,
+                    (trade::fill_wares, trade::picture),
                     skinned::tabs,
                     abilities::present,
                     (
