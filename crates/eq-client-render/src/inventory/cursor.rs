@@ -1,5 +1,8 @@
-//! Non-interactive display of the actual inventory cursor slot.
+//! Non-interactive display of the actual inventory cursor slot: the skin's
+//! cursor attachment where the skin has one, or else the client's own box
+//! with the item's name.
 use super::{InventorySlot, InventoryState};
+use crate::skinned::CursorPlace;
 use crate::theme::{self, Size};
 use bevy::{prelude::*, ui::FocusPolicy, window::PrimaryWindow};
 
@@ -36,41 +39,72 @@ pub(crate) fn update(
     state: Res<InventoryState>,
     online: Res<crate::online::OnlineState>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    scale: Option<Res<UiScale>>,
-    mut root: Query<(Entity, &mut Node), With<Overlay>>,
+    (scale, look): (Option<Res<UiScale>>, Res<crate::skinned::CursorLook>),
+    controls: Query<(&Interaction, &ComputedNode, &UiGlobalTransform)>,
+    mut root: Query<(Entity, &mut Node, &mut BackgroundColor), With<Overlay>>,
     mut stamp: Local<Option<Drawn>>,
     mut art: crate::sheets::Art,
 ) {
-    let Ok((entity, mut node)) = root.single_mut() else {
+    let Ok((entity, mut node, mut background)) = root.single_mut() else {
         return;
     };
     let inventory = online.world().inventory();
     let item = inventory.items().get(&InventorySlot::CURSOR);
     let coins = crate::coins::on_cursor(online.world());
-    let pointer = windows
-        .single()
-        .ok()
-        .filter(|window| window.focused)
-        .and_then(|window| {
-            window
-                .cursor_position()
-                .map(|pointer| (pointer, window.size()))
-        });
+    let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
+    // A control hovered with no pointer over the window, as a script hovers
+    // one, stands in for the pointer at its middle, as for a tooltip.
+    let hovered = || {
+        controls
+            .iter()
+            .find(|(interaction, ..)| **interaction != Interaction::None)
+            .map(|(_, computed, at)| at.translation * computed.inverse_scale_factor())
+    };
+    let pointer = windows.single().ok().and_then(|window| {
+        let pointer = match window.cursor_position() {
+            Some(pointer) => window.focused.then_some(pointer / factor),
+            None => hovered(),
+        }?;
+        Some((pointer, window.size() / factor))
+    });
     node.display = if (item.is_some() || coins.is_some()) && pointer.is_some() {
         Display::Flex
     } else {
         Display::None
     };
     if let Some((pointer, viewport)) = pointer {
-        let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
-        place(&mut node, pointer / factor, viewport / factor);
+        if look.0.is_some() {
+            hang(&mut node, pointer);
+        } else {
+            place(&mut node, pointer, viewport);
+        }
     }
     let current = (entity, state.revision, inventory.revision(), coins);
-    if *stamp == Some(current) {
+    if *stamp == Some(current) && !look.is_changed() {
         return;
     }
     *stamp = Some(current);
     commands.entity(entity).despawn_children();
+    dress(&mut node, &mut background, look.0.as_ref());
+    if let Some(place) = &look.0 {
+        let picture = match (item, coins) {
+            (Some(item), _) => art
+                .item(item.icon)
+                .map(|icon| (icon, Vec2::new(place.icon.width, place.icon.height))),
+            (None, Some((coin, _))) => place.coin(coin).and_then(|piece| {
+                let size = Vec2::new(to_f32(piece.width), to_f32(piece.height));
+                art.cut(piece).map(|image| (image, size))
+            }),
+            (None, None) => None,
+        };
+        let count = item.map_or(coins.map(|(_, count)| count), |item| {
+            item.stack_count.filter(|count| *count > 1)
+        });
+        commands
+            .entity(entity)
+            .with_children(|parent| attachment(parent, place, picture, count));
+        return;
+    }
     let Some(item) = item else {
         // Coins ride the cursor on their own, as in the official client.
         if let Some((coin, count)) = coins {
@@ -114,6 +148,82 @@ pub(crate) fn update(
     });
 }
 
+/// Dresses the overlay as the skin's cursor attachment, a box without a
+/// background of its own, or as the client's own box.
+fn dress(node: &mut Node, background: &mut BackgroundColor, skin: Option<&CursorPlace>) {
+    if let Some(place) = skin {
+        node.width = px(place.size.x);
+        node.height = px(place.size.y);
+        node.max_width = Val::Auto;
+        node.padding = UiRect::ZERO;
+        background.0 = Color::NONE;
+    } else {
+        node.width = Val::Auto;
+        node.height = Val::Auto;
+        node.padding = UiRect::all(px(4));
+        background.0 = theme::SCRIM;
+    }
+}
+
+/// What rides the cursor, in the skin's cursor attachment: the item's icon
+/// where the skin puts its picture, with its stack's count as a slot shows
+/// it, or the skin's picture of the coins with their count. Whether the
+/// official client shows a count there, and what it shows for coins, is not
+/// checked yet.
+fn attachment(
+    parent: &mut ChildSpawnerCommands,
+    place: &CursorPlace,
+    picture: Option<(ImageNode, Vec2)>,
+    count: Option<u32>,
+) {
+    let icon = place.icon;
+    let at = |x: f32, y: f32, width: f32, height: f32| Node {
+        position_type: PositionType::Absolute,
+        left: px(x),
+        top: px(y),
+        width: px(width),
+        height: px(height),
+        ..default()
+    };
+    if let Some((image, size)) = picture {
+        // A smaller picture, as a coin's, sits in the middle of the place.
+        let size = size.min(Vec2::new(icon.width, icon.height));
+        parent.spawn((
+            image,
+            FocusPolicy::Pass,
+            at(
+                icon.x + (icon.width - size.x) / 2.0,
+                icon.y + (icon.height - size.y) / 2.0,
+                size.x,
+                size.y,
+            ),
+        ));
+    }
+    if let Some(count) = count {
+        parent.spawn((
+            theme::text(count.to_string(), Size::Body, theme::INK_BRIGHT),
+            TextLayout::new(Justify::Right, LineBreak::NoWrap),
+            FocusPolicy::Pass,
+            at(icon.x, icon.y + icon.height - 14.0, icon.width - 3.0, 13.0),
+        ));
+    }
+}
+
+/// A picture's size in pixels, which fits a float exactly.
+#[allow(clippy::cast_precision_loss, reason = "a picture's pixels are few")]
+const fn to_f32(pixels: u32) -> f32 {
+    pixels as f32
+}
+
+/// Hangs the skin's cursor attachment from the pointer, its top left corner
+/// there; where the official client puts it is not checked yet.
+fn hang(node: &mut Node, pointer: Vec2) {
+    node.left = px(pointer.x);
+    node.top = px(pointer.y);
+    node.right = Val::Auto;
+    node.bottom = Val::Auto;
+}
+
 /// What a kind of coin is called.
 const fn coin_name(coin: eq_client_core::money::Coin) -> &'static str {
     use eq_client_core::money::Coin;
@@ -151,6 +261,63 @@ fn place(node: &mut Node, pointer: Vec2, viewport: Vec2) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_skins_attachment_hangs_from_the_pointer_with_the_stacks_count() {
+        let mut app = crate::testing::app();
+        app.add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
+            .add_systems(Update, update);
+        app.world_mut()
+            .resource_mut::<crate::skinned::CursorLook>()
+            .0 = Some(CursorPlace {
+            size: Vec2::splat(50.0),
+            icon: eq_client_assets::ui::Area {
+                x: 5.0,
+                y: 5.0,
+                width: 40.0,
+                height: 40.0,
+            },
+            coins: Default::default(),
+        });
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(100.0, 80.0)));
+        let mut items = crate::preview::items();
+        for item in &mut items {
+            if item.slot == InventorySlot::CURSOR {
+                item.stack_count = Some(5);
+            }
+        }
+        crate::online::testing::inventory(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::inventory::InventoryUpdate::Snapshot(items),
+        );
+        app.update();
+        let world = app.world_mut();
+        let mut overlays = world.query_filtered::<(&Node, &BackgroundColor), With<Overlay>>();
+        let (node, background) = overlays.single(world).unwrap();
+        // The box's top left corner is at the pointer, the skin's size, with
+        // no background of its own.
+        assert_eq!(
+            (node.left, node.top, node.width, node.height, node.display),
+            (px(100), px(80), px(50), px(50), Display::Flex)
+        );
+        assert_eq!(background.0, Color::NONE);
+        // The stack's count shows as a slot shows it; the name does not.
+        let mut texts = world.query::<&Text>();
+        let words: Vec<_> = texts.iter(world).map(|text| text.0.clone()).collect();
+        assert!(words.iter().any(|text| text == "5"), "{words:?}");
+        assert!(
+            !words.iter().any(|text| text.contains("lantern")),
+            "{words:?}"
+        );
+    }
 
     #[test]
     fn cursor_tracks_real_slot_when_inventory_is_closed_and_hides_after_clear() {

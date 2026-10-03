@@ -120,29 +120,32 @@ struct Context<'a> {
     tab_frame: Option<&'a eq_client_assets::sidl::FrameLook>,
 }
 
-/// The skin's windows as read, by skin: read once, whatever rebuilds the
-/// frames they are drawn in.
+/// The skin's windows as read, by skin and screen: read once, whatever
+/// rebuilds the frames they are drawn in.
 #[derive(Resource, Default)]
 pub(crate) struct Screens {
     libraries: HashMap<String, Option<Library>>,
-    screens: HashMap<(String, WindowId), Option<Screen>>,
+    screens: HashMap<(String, &'static str), Option<Screen>>,
 }
 
 impl Screens {
     /// A window as this skin defines it, if it does.
     fn get(&mut self, directory: &std::path::Path, skin: &str, id: WindowId) -> Option<&Screen> {
         let (file, name) = source(id)?;
-        let library = self
-            .libraries
-            .entry(skin.to_owned())
-            .or_insert_with(|| {
-                Library::read(directory, skin)
-                    .inspect_err(|error| warn!("UI skin {skin} unreadable: {error}"))
-                    .ok()
-            })
-            .as_ref();
+        self.screen(directory, skin, (file, name))
+    }
+
+    /// A screen of this skin's file, if the file defines it: a window's, or
+    /// one that is no window, as the cursor's attachment.
+    fn screen(
+        &mut self,
+        directory: &std::path::Path,
+        skin: &str,
+        (file, name): (&str, &'static str),
+    ) -> Option<&Screen> {
+        let library = Self::library(&mut self.libraries, directory, skin);
         self.screens
-            .entry((skin.to_owned(), id))
+            .entry((skin.to_owned(), name))
             .or_insert_with(|| {
                 library?
                     .window(directory, skin, file, name)
@@ -150,6 +153,115 @@ impl Screens {
                     .ok()
             })
             .as_ref()
+    }
+
+    /// One of the skin's pictures by its animation's name.
+    fn piece(&mut self, directory: &std::path::Path, skin: &str, name: &str) -> Option<Piece> {
+        Self::library(&mut self.libraries, directory, skin)?.named_piece(name)
+    }
+
+    /// The skin's animations and templates, read once.
+    fn library<'a>(
+        libraries: &'a mut HashMap<String, Option<Library>>,
+        directory: &std::path::Path,
+        skin: &str,
+    ) -> Option<&'a Library> {
+        libraries
+            .entry(skin.to_owned())
+            .or_insert_with(|| {
+                Library::read(directory, skin)
+                    .inspect_err(|error| warn!("UI skin {skin} unreadable: {error}"))
+                    .ok()
+            })
+            .as_ref()
+    }
+}
+
+/// The skin's file and screen for what rides the cursor.
+const CURSOR_ATTACHMENT: (&str, &str) = ("EQUI_CursorAttachment.xml", "CursorAttachment");
+
+/// What the skin draws for what rides the cursor (`EQUI_CursorAttachment.xml`);
+/// none where it draws none, as without an installation, so the client's own
+/// shows.
+#[derive(Resource, Default)]
+pub(crate) struct CursorLook(pub(crate) Option<CursorPlace>);
+
+/// The skin's cursor attachment: a box that follows the pointer, where the
+/// item's picture sits in it, and the skin's pictures of coins.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CursorPlace {
+    /// The box's size.
+    pub(crate) size: Vec2,
+    /// Where the picture sits in the box.
+    pub(crate) icon: Area,
+    /// Each kind of coin's picture, as the purse shows it: platinum, gold,
+    /// silver and copper.
+    pub(crate) coins: [Option<Piece>; 4],
+}
+
+impl CursorPlace {
+    /// The skin's picture of a kind of coin.
+    pub(crate) const fn coin(&self, coin: Coin) -> Option<&Piece> {
+        self.coins[coin_index(coin)].as_ref()
+    }
+}
+
+/// A kind of coin's place in the order of their pictures' names.
+const fn coin_index(coin: Coin) -> usize {
+    match coin {
+        Coin::Platinum => 0,
+        Coin::Gold => 1,
+        Coin::Silver => 2,
+        Coin::Copper => 3,
+    }
+}
+
+/// The skin's names for its pictures of each kind of coin, in that order.
+const COIN_PICTURES: [&str; 4] = [
+    "A_PlatinumCoin",
+    "A_GoldCoin",
+    "A_SilverCoin",
+    "A_CopperCoin",
+];
+
+/// The cursor attachment in a screen: its size and where its first picture
+/// (`CA_Anim`) sits, which the official client fills with what rides the
+/// cursor (inferred: the skin's sample there is a buff icon).
+fn cursor_place(screen: &Screen, coins: [Option<Piece>; 4]) -> Option<CursorPlace> {
+    let icon = screen
+        .pieces
+        .iter()
+        .find_map(|(name, element)| match element {
+            Element::Image { area, .. } if name == "CA_Anim" => Some(*area),
+            _ => None,
+        })?;
+    Some(CursorPlace {
+        size: Vec2::new(screen.area.width, screen.area.height),
+        icon,
+        coins,
+    })
+}
+
+/// Reads the skin's cursor attachment again when the skin changes.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn cursor_look(
+    skin: Res<super::skin::UiSkin>,
+    settings: Res<super::ViewerSettings>,
+    mut screens: ResMut<Screens>,
+    mut look: ResMut<CursorLook>,
+) {
+    if !skin.is_changed() {
+        return;
+    }
+    let Some(directory) = settings.0.eq_directory.as_deref() else {
+        return;
+    };
+    let coins = COIN_PICTURES.map(|name| screens.piece(directory, &skin.0, name));
+    let place = screens
+        .screen(directory, &skin.0, CURSOR_ATTACHMENT)
+        .and_then(|screen| cursor_place(screen, coins));
+    if look.0 != place {
+        look.0 = place;
     }
 }
 
@@ -2821,5 +2933,66 @@ mod tests {
         // With no target, the target's gauge is empty.
         assert_eq!(gauge_text(world, 6).0, "");
         assert_eq!(fraction(world, None, 6), None);
+    }
+
+    #[test]
+    fn the_cursor_attachment_is_its_box_and_its_first_pictures_place() {
+        let piece = Piece {
+            texture: "sample.tga".into(),
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 40,
+        };
+        let image = |name: &str, x: f32| {
+            (
+                name.to_owned(),
+                Element::Image {
+                    id: Some(name.to_owned()),
+                    area: Area {
+                        x,
+                        y: 5.0,
+                        width: 40.0,
+                        height: 40.0,
+                    },
+                    piece: piece.clone(),
+                },
+            )
+        };
+        let mut screen = Screen {
+            name: "CursorAttachment".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            },
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![image("CA_Anim2", 9.0), image("CA_Anim", 5.0)],
+            tab_frame: None,
+        };
+        let gold = Some(piece.clone());
+        let place = cursor_place(&screen, [None, gold.clone(), None, None]).unwrap();
+        assert_eq!(place.size, Vec2::splat(50.0));
+        assert_eq!(
+            place.icon,
+            Area {
+                x: 5.0,
+                y: 5.0,
+                width: 40.0,
+                height: 40.0,
+            }
+        );
+        assert_eq!(place.coin(Coin::Gold), gold.as_ref());
+        assert_eq!(place.coin(Coin::Copper), None);
+        // A screen without the picture's place draws no attachment.
+        screen.pieces.truncate(1);
+        assert_eq!(cursor_place(&screen, Default::default()), None);
     }
 }

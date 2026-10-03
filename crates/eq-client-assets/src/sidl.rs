@@ -682,6 +682,13 @@ impl Library {
         self.pieces.get(name?).cloned()
     }
 
+    /// One of the skin's pictures by its animation's name, as its first
+    /// frame, such as `A_PlatinumCoin`.
+    #[must_use]
+    pub fn named_piece(&self, name: &str) -> Option<Piece> {
+        self.piece(Some(name))
+    }
+
     fn template(&self, node: roxmltree::Node<'_, '_>) -> WindowTemplate {
         let border = child(node, "Border");
         let side = |name: &str| self.piece(border.and_then(|border| text_of(border, name)));
@@ -1233,6 +1240,14 @@ mod tests {
             <Pieces>Clip</Pieces><Pieces>Sky</Pieces><Pieces>Keys</Pieces>
         </Screen>
     </XML>"#;
+
+    #[test]
+    fn a_picture_is_found_by_its_animations_name() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let back = library.named_piece("A_Back").unwrap();
+        assert_eq!((back.x, back.y, back.width), (8, 7, 100));
+        assert!(library.named_piece("A_Missing").is_none());
+    }
 
     #[test]
     fn sliders_drop_downs_and_lists_carry_their_art_choices_and_columns() {
