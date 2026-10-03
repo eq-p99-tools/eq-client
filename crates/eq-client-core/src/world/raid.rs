@@ -20,6 +20,67 @@ pub struct Raid {
     pub members: Vec<RaidMember>,
 }
 
+/// A member's rank in the raid, as the official client's notes on raids
+/// (`raidsdoc.txt`) list the ranks: the raid's leader, a raid group's
+/// leader, or a member without a rank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RaidRank {
+    /// Leads the raid, whether or not they lead a raid group too.
+    Leader,
+    /// Leads a raid group.
+    GroupLeader,
+    /// Neither.
+    Member,
+}
+
+impl Raid {
+    /// The members in a raid group, by group from the first, each group's
+    /// in the order the server added them. In what order the official
+    /// client lists them is not checked yet.
+    #[must_use]
+    pub fn grouped(&self) -> Vec<&RaidMember> {
+        let mut grouped: Vec<&RaidMember> = self
+            .members
+            .iter()
+            .filter(|member| member.group.is_some())
+            .collect();
+        grouped.sort_by_key(|member| member.group);
+        grouped
+    }
+
+    /// The members in no raid group, in the order the server added them.
+    pub fn ungrouped(&self) -> impl Iterator<Item = &RaidMember> {
+        self.members.iter().filter(|member| member.group.is_none())
+    }
+
+    /// The members' average level, rounded down (inferred); None for a raid
+    /// the server has listed no one in yet.
+    #[must_use]
+    pub fn level_average(&self) -> Option<u32> {
+        let count = u32::try_from(self.members.len())
+            .ok()
+            .filter(|count| *count > 0)?;
+        let levels: u32 = self
+            .members
+            .iter()
+            .map(|member| u32::from(member.level))
+            .sum();
+        Some(levels / count)
+    }
+
+    /// A member's rank: the raid's leader ranks above a raid group's.
+    #[must_use]
+    pub fn rank(&self, member: &RaidMember) -> RaidRank {
+        if self.leader.as_deref() == Some(member.name.as_str()) {
+            RaidRank::Leader
+        } else if member.group_leader {
+            RaidRank::GroupLeader
+        } else {
+            RaidRank::Member
+        }
+    }
+}
+
 /// What news of raids tells the player.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RaidNotice {

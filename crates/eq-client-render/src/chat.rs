@@ -103,6 +103,9 @@ pub(super) struct ChatState {
     /// A `/shownames` the client could not read, answered with the usage
     /// line.
     pub show_names_usage: bool,
+    /// A window a slash command opens or closes, as `/raidwindow` does the
+    /// Raid window, waiting for the toggle.
+    pub toggled: Option<super::windows::WindowId>,
     draft: String,
     /// The last refusal said and when, so one repeated every frame, as a
     /// held key's is, is said once.
@@ -882,8 +885,8 @@ pub(super) fn submit_game_command(
 }
 
 /// A slash command the client answers itself, noted for the system that
-/// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log` or
-/// `/shownames`. None for any other line.
+/// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log`,
+/// `/shownames` or `/raidwindow`. None for any other line.
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
     if let Some(request) = target_request(input) {
         return Some(request.map(|name| state.requested_target = Some(name)));
@@ -897,6 +900,10 @@ pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Resul
     }
     if input.eq_ignore_ascii_case("/log") {
         state.log_toggle = true;
+        return Some(Ok(()));
+    }
+    if input.eq_ignore_ascii_case("/raidwindow") {
+        state.toggled = Some(super::windows::WindowId::Raid);
         return Some(Ok(()));
     }
     let (command, word) = input.split_once(' ').unwrap_or((input, ""));

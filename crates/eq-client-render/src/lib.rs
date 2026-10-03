@@ -42,6 +42,7 @@ mod preview;
 #[cfg(test)]
 mod probes;
 mod profile_files;
+mod raid;
 mod reading;
 mod resources;
 mod resurrection;
@@ -496,6 +497,7 @@ fn schedule(app: &mut App) {
                 whereabouts::answers,
                 pet::window,
                 group::window,
+                raid::window,
             ),
             combat::input,
             trade::input,
@@ -601,6 +603,7 @@ fn schedule(app: &mut App) {
                         skinned::fill_lists,
                         training::fill,
                         skills::fill,
+                        raid::fill,
                         resurrection::show,
                         reading::show,
                         tradeskills::show,

@@ -62,6 +62,9 @@ pub(crate) enum WindowId {
     /// buttons to invite, follow, decline and disband, open while the player
     /// is in a group or invited to one.
     Group,
+    /// The skin's Raid window: the raid's members, by raid group, and
+    /// buttons to invite, leave, accept and decline.
+    Raid,
     /// The skin's Options window: the options the player sets, on its pages,
     /// and a page of the options only this client has.
     Options,
@@ -297,7 +300,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 31] = [
+    pub(crate) const ALL: [Self; 32] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -319,6 +322,7 @@ impl WindowId {
         Self::ActionsWindow,
         Self::PetInfo,
         Self::Group,
+        Self::Raid,
         Self::Options,
         Self::Training,
         Self::Skills,
@@ -363,6 +367,7 @@ impl WindowId {
             Self::ActionsWindow => Some("ActionsWindow"),
             Self::PetInfo => Some("PetInfoWindow"),
             Self::Group => Some("GroupWindow"),
+            Self::Raid => Some("RaidWindow"),
             Self::Options => Some("OptionsWindow"),
             Self::Training => Some("TrainWindow"),
             Self::Skills => Some("SkillsWindow"),
@@ -421,6 +426,7 @@ impl WindowId {
             Self::ActionsWindow => "actions-window",
             Self::PetInfo => "pet-info",
             Self::Group => "group",
+            Self::Raid => "raid",
             Self::Options => "options",
             Self::Training => "training",
             Self::Skills => "skills",
@@ -575,6 +581,11 @@ impl WindowId {
                 closes_on_escape: false,
                 ..floating("GROUP", Placement::TopLeft(516.0, 78.0), false, &[])
             },
+            // Where the skin places it; Alt+R and `/raidwindow` open and
+            // close it, as the official client's notes on raids say
+            // (`raidsdoc.txt`), and an invitation opens it (inferred: the
+            // installed line for one points the player to its Accept button).
+            Self::Raid => floating("RAID", Placement::TopLeft(100.0, 78.0), true, &[]),
             // Where the skin places it; Alt+O opens and closes it, as in the
             // official client.
             Self::Options => floating("OPTIONS", Placement::TopLeft(90.0, 47.0), true, &[]),

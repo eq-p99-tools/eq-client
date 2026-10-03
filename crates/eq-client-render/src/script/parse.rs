@@ -401,7 +401,7 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         [
             command @ ("corpse" | "corpsedrag" | "corpsedrop" | "follow" | "disband" | "loc"
             | "time" | "afk" | "anonymous" | "roleplay" | "raidaccept" | "raiddecline"
-            | "raiddisband"),
+            | "raiddisband" | "raidwindow"),
         ] => Step::Slash(format!("/{command}")),
         // A die, an emote, or another's target.
         ["random", numbers @ ..]
@@ -463,10 +463,19 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
 }
 
 /// A button by the slash command it runs: a Pet Info window button, by its
-/// `/pet` words, or a group window button, by its name. Decline is in
-/// Disband's place and runs the same command, so either name reaches the
-/// one showing.
+/// `/pet` words, or a group or Raid window button, by its name. The group
+/// window's Decline is in Disband's place and runs the same command, so
+/// either name reaches the one showing.
 fn slash_click(window: &str, words: &[&str]) -> Result<ClickTarget, String> {
+    if window == "raid" {
+        return Ok(ClickTarget::Slash(match words {
+            ["invite"] => "/raidinvite",
+            ["disband"] => "/raiddisband",
+            ["accept"] => "/raidaccept",
+            ["decline"] => "/raiddecline",
+            _ => return Err("expected invite, disband, accept or decline".into()),
+        }));
+    }
     if window == "pet" {
         let line = format!("/pet {}", words.join(" "));
         return crate::skinned::PET_COMMANDS
@@ -519,7 +528,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["minimize_box", key] => ClickTarget::TitleBox(window_key(key)?, false),
         ["scroll_up", key] => ClickTarget::Scroll(window_key(key)?, true),
         ["scroll_down", key] => ClickTarget::Scroll(window_key(key)?, false),
-        [window @ ("pet" | "group"), words @ ..] => slash_click(window, words)?,
+        [window @ ("pet" | "group" | "raid"), words @ ..] => slash_click(window, words)?,
         ["option", name] => ClickTarget::Option(
             eq_client_core::options::Toggle::ALL
                 .into_iter()

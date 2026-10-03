@@ -2456,3 +2456,63 @@ fn a_raid_formed_joined_and_left_says_what_happened() {
     assert_eq!(raid_news(&mut leader, created("Example")), []);
     assert_eq!(raid_news(&mut leader, member("Friend")), []);
 }
+
+#[test]
+fn entering_a_zone_lists_the_player_in_their_raid_group_and_ranks_everyone() {
+    use crate::raid::{RaidMember, RaidUpdate};
+    let member = |name: &str, group, level, group_leader| RaidMember {
+        name: name.into(),
+        group,
+        class: 3,
+        level,
+        group_leader,
+    };
+    let mut world = admitted();
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::Raid(RaidUpdate::Created {
+                leader: "Leader".into()
+            })
+        )
+        .notices,
+        []
+    );
+    assert_eq!(world.raid().and_then(Raid::level_average), None);
+    // As EQEmu lists the raid at a zone-in: the player's own entry, with
+    // their raid group, then everyone else, then the raid's leader.
+    for update in [
+        RaidUpdate::Added(member("Example", Some(2), 10, false)),
+        RaidUpdate::Added(member("Leader", Some(0), 20, true)),
+        RaidUpdate::Added(member("Other", Some(2), 12, true)),
+        RaidUpdate::Added(member("Loner", None, 31, false)),
+        RaidUpdate::Leader {
+            name: "Leader".into(),
+        },
+    ] {
+        assert_eq!(game(&mut world, WorldEvent::Raid(update)).notices, []);
+    }
+    let raid = world.raid().expect("listed in a raid");
+    let names = |members: Vec<&RaidMember>| {
+        members
+            .into_iter()
+            .map(|member| member.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(raid.grouped()), ["Leader", "Example", "Other"]);
+    assert_eq!(names(raid.ungrouped().collect()), ["Loner"]);
+    assert_eq!(raid.members[0], member("Example", Some(2), 10, false));
+    // 73 levels over four members.
+    assert_eq!(raid.level_average(), Some(18));
+    let ranks: Vec<RaidRank> = raid.members.iter().map(|known| raid.rank(known)).collect();
+    assert_eq!(
+        ranks,
+        [
+            RaidRank::Member,
+            RaidRank::Leader,
+            RaidRank::GroupLeader,
+            RaidRank::Member
+        ]
+    );
+    assert!(!world.leads_raid());
+}

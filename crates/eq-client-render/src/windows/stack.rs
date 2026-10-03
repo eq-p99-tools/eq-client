@@ -109,8 +109,9 @@ impl Shown {
         self.open.iter().copied()
     }
 
-    /// The selector or a key flips the window: one the player opens opens
-    /// or closes, one something else opens is hidden or shown.
+    /// The selector, a key or a slash command flips the window: one the
+    /// player opens opens or closes, one something else opens is hidden or
+    /// shown.
     fn toggle(&mut self, id: WindowId) {
         let windows = if id.describe().toggle == Toggle::Hides {
             &mut self.hidden
@@ -205,13 +206,14 @@ pub(crate) fn restack(stack: Res<Stack>, mut frames: Query<(&WindowId, &mut Glob
     }
 }
 
-/// Opens and closes the windows the player toggles, from the selector or
-/// their key, and closes one when Escape picks it; hides and shows the ones
-/// something else opens the same way. A window shown comes to the front.
+/// Opens and closes the windows the player toggles, from the selector,
+/// their key or a slash command, and closes one when Escape picks it; hides
+/// and shows the ones something else opens the same way. A window shown
+/// comes to the front.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn toggle(
     keys: crate::keys::Keys,
-    escape: Res<crate::escape::Escape>,
+    (escape, mut chat): (Res<crate::escape::Escape>, ResMut<crate::chat::ChatState>),
     buttons: Query<(&Interaction, &SelectorButton), Changed<Interaction>>,
     (mut shown, mut stack): (ResMut<Shown>, ResMut<Stack>),
     online: Res<crate::online::OnlineState>,
@@ -221,6 +223,7 @@ pub(crate) fn toggle(
     {
         shown.close(id);
     }
+    let typed = chat.toggled.take();
     let pressed = WindowId::ALL.into_iter().filter(|id| {
         id.describe().toggle != Toggle::Never
             // A window the session does not offer stays shut.
@@ -228,6 +231,7 @@ pub(crate) fn toggle(
                 .needs()
                 .is_none_or(|needs| crate::outbox::offered(online.world(), needs))
             && (keys.pressed(crate::keys::Act::Toggle(*id))
+                || typed == Some(*id)
                 || buttons.iter().any(|(interaction, button)| {
                     *interaction == Interaction::Pressed && button.0 == *id
                 }))

@@ -253,6 +253,8 @@ impl Default for KeyMap {
             &[Chord::key(KeyCode::KeyB)],
         );
         bind(Act::Toggle(WindowId::Options), &[Chord::alt(KeyCode::KeyO)]);
+        // As the official client's notes on raids say (`raidsdoc.txt`).
+        bind(Act::Toggle(WindowId::Raid), &[Chord::alt(KeyCode::KeyR)]);
         bind(Act::TargetSelf, &[Chord::key(KeyCode::F1)]);
         bind(Act::TargetNext, &[Chord::key(KeyCode::Tab)]);
         bind(Act::TargetPrevious, &[Chord::shift(KeyCode::Tab)]);
