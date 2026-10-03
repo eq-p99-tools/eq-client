@@ -2292,3 +2292,32 @@ fn a_group_request_refused_is_said_for_its_admission_alone() {
     );
     assert!(game(&mut world, refused(9)).ignored);
 }
+
+#[test]
+fn the_players_own_listing_changes_and_says_which() {
+    use crate::listing::{Anonymity, ListingChange};
+    let mut world = admitted();
+    let set = |world: &mut ClientWorld, session_id, change| {
+        game(world, WorldEvent::ListingSet { session_id, change })
+    };
+    assert_eq!(
+        set(&mut world, 1, ListingChange::Away(true)).notices,
+        [Notice::Listing(ListingNotice::Away(true))]
+    );
+    assert!(world.player().unwrap().listing.away);
+    for (anonymity, said) in [
+        (Anonymity::Anonymous, ListingNotice::Anonymous(true)),
+        (Anonymity::Open, ListingNotice::Anonymous(false)),
+        (Anonymity::Roleplaying, ListingNotice::Roleplaying(true)),
+        (Anonymity::Open, ListingNotice::Roleplaying(false)),
+    ] {
+        assert_eq!(
+            set(&mut world, 1, ListingChange::Anonymity(anonymity)).notices,
+            [Notice::Listing(said)]
+        );
+        assert_eq!(world.player().unwrap().listing.anonymity, anonymity);
+    }
+    // A change made for an earlier admission says nothing.
+    assert!(set(&mut world, 9, ListingChange::Away(false)).ignored);
+    assert!(world.player().unwrap().listing.away);
+}

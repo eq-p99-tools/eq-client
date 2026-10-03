@@ -7,6 +7,19 @@ use crate::{
     loot::LootResponse,
 };
 
+/// The player's own listing changed, as they asked; the server says nothing
+/// of it, so the official client words it itself (inferred from its
+/// strings).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListingNotice {
+    /// Away from the keyboard (true), or back.
+    Away(bool),
+    /// Anonymous, or no longer.
+    Anonymous(bool),
+    /// Roleplaying, or no longer.
+    Roleplaying(bool),
+}
+
 /// Who took part in a death the player saw, or in news of their group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Party {
@@ -204,6 +217,16 @@ pub enum Notice {
     /// News of the player's group, which the official client words itself
     /// (inferred from its strings).
     Group(super::GroupNotice),
+    /// The player's own listing changed, as they asked.
+    Listing(ListingNotice),
+    /// A listing change was not sent, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    ListingRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
     /// A group request was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     GroupRefused {

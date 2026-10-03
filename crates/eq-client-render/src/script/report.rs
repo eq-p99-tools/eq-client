@@ -112,6 +112,7 @@ pub(super) fn state(
         tints = ?online.world().player().map(|player| player.appearance.tints),
         face = ?online.world().player().map(|player| player.appearance.face),
         show_helm = ?online.world().player().map(|player| player.appearance.show_helm),
+        listing = ?online.world().player().map(|player| player.listing),
         group = ?group(online),
         group_invitation = ?online.world().group_invitation(),
         "Script report"

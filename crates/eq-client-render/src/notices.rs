@@ -12,7 +12,7 @@ use eq_client_core::{
     entities::display_name,
     food::Shortage,
     loot::LootResponse,
-    world::{GroupNotice, Link, Notice, Party},
+    world::{GroupNotice, Link, ListingNotice, Notice, Party},
 };
 
 /// One line on screen besides the chat, which notices set.
@@ -287,7 +287,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::CorpseRefused { reason, string_id }
         | Notice::PetRefused { reason, string_id }
         | Notice::CombineRefused { reason, string_id }
-        | Notice::GroupRefused { reason, string_id } => {
+        | Notice::GroupRefused { reason, string_id }
+        | Notice::ListingRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
         Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
@@ -330,7 +331,25 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             chat(other_interruption(*string_id, caster, messages))
         }
         Notice::Group(notice) => in_chat(group_lines(notice, messages)),
+        Notice::Listing(notice) => chat(listing_line(*notice, messages)),
     }
+}
+
+/// The player's own listing changing, in the installed client's strings
+/// for it: 13199 and 13200 for away and back, 13236 and 13237 for anonymous
+/// and no longer, and 13233 and 13234 for roleplaying and no longer; this
+/// client's words without them. That the official client says these, and
+/// not the copies of the anonymous lines at 12034 and 12035, is inferred.
+fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
+    let (id, fallback) = match notice {
+        ListingNotice::Away(true) => (13199, "You are away from the keyboard now."),
+        ListingNotice::Away(false) => (13200, "You are back at the keyboard."),
+        ListingNotice::Anonymous(true) => (13236, "You hide from /who now."),
+        ListingNotice::Anonymous(false) => (13237, "You show in /who again."),
+        ListingNotice::Roleplaying(true) => (13233, "You are in character now."),
+        ListingNotice::Roleplaying(false) => (13234, "You are out of character again."),
+    };
+    official(Some(id), &[], fallback, messages)
 }
 
 /// News of the player's group, in the installed client's strings for it:
@@ -761,6 +780,31 @@ mod tests {
         assert_eq!(
             lines(GroupNotice::Disbanded, Some(&messages)),
             [Said::own("The group has disbanded.")]
+        );
+    }
+
+    #[test]
+    fn the_players_listing_reads_in_the_installed_strings() {
+        let messages = Messages::parse(
+            "EQST0002
+0 2
+13199 Gone.
+13234 In.
+",
+        );
+        let said = |notice| wording(&Notice::Listing(notice), Some(&messages));
+        assert_eq!(
+            said(ListingNotice::Away(true)),
+            [(Place::Chat, Said::official("Gone."))]
+        );
+        assert_eq!(
+            said(ListingNotice::Roleplaying(false)),
+            [(Place::Chat, Said::official("In."))]
+        );
+        // A string the installation lacks reads in this client's words.
+        assert_eq!(
+            said(ListingNotice::Away(false)),
+            [(Place::Chat, Said::own("You are back at the keyboard."))]
         );
     }
 

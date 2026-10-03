@@ -1,7 +1,7 @@
 //! The zone's own `/who`: the Titanium client lists the zone's players from
 //! what it knows of them, the guilds they belong to by the world's guild
 //! list, and how each wants to be listed.
-use super::ClientWorld;
+use super::{Changes, ClientWorld, ListingNotice, Notice};
 use crate::{
     SpawnKind,
     listing::{Anonymity, Listing, ListingChange},
@@ -63,6 +63,39 @@ pub(super) fn relist(change: ListingChange, level: &mut u8, listing: &mut Listin
 }
 
 impl ClientWorld {
+    /// The session changed how `/who` lists the player, as they asked: the
+    /// player's listing follows, and the player hears of it.
+    pub(super) fn listing_set(
+        &mut self,
+        session_id: u64,
+        change: ListingChange,
+        news: &mut Changes,
+    ) {
+        if self.session_id != Some(session_id) {
+            news.ignored = true;
+            return;
+        }
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        let before = player.listing.anonymity;
+        relist(change, &mut player.level, &mut player.listing);
+        let notice = match change {
+            ListingChange::Away(away) => Some(ListingNotice::Away(away)),
+            ListingChange::Anonymity(after) => match (before, after) {
+                (_, Anonymity::Anonymous) => Some(ListingNotice::Anonymous(true)),
+                (_, Anonymity::Roleplaying) => Some(ListingNotice::Roleplaying(true)),
+                (Anonymity::Anonymous, Anonymity::Open) => Some(ListingNotice::Anonymous(false)),
+                (Anonymity::Roleplaying, Anonymity::Open) => {
+                    Some(ListingNotice::Roleplaying(false))
+                }
+                (Anonymity::Open, Anonymity::Open) => None,
+            },
+            _ => None,
+        };
+        news.notices.extend(notice.map(Notice::Listing));
+    }
+
     /// Gives a character, by the name they spawned with, a new last name.
     pub(super) fn last_name(&mut self, name: &str, last_name: &str) {
         let spawns = self.zone.spawns.values_mut().map(|spawn| &mut spawn.state);
