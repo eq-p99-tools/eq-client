@@ -2615,3 +2615,41 @@ fn a_raid_locked_moved_or_led_again_says_only_what_changed() {
         [Notice::Raid(RaidNotice::Locked(true))]
     );
 }
+
+#[test]
+fn a_raid_member_moved_but_not_listed_yet_joins_the_list_without_a_word() {
+    use crate::raid::{RaidMember, RaidUpdate};
+    let raid_news = |world: &mut ClientWorld, update| game(world, WorldEvent::Raid(update)).notices;
+    let member = |name: &str, group| RaidMember {
+        name: name.into(),
+        group,
+        class: 1,
+        level: 10,
+        group_leader: false,
+    };
+    let mut world = admitted();
+    // The player moved while listed again comes back as moved, unlisted
+    // till then.
+    raid_news(
+        &mut world,
+        RaidUpdate::Created {
+            leader: "Example".into(),
+        },
+    );
+    raid_news(
+        &mut world,
+        RaidUpdate::Leader {
+            name: "Example".into(),
+        },
+    );
+    assert_eq!(
+        raid_news(&mut world, RaidUpdate::Moved(member("Example", Some(1)))),
+        []
+    );
+    assert_eq!(
+        world.raid().map(|raid| raid.members.clone()),
+        Some(vec![member("Example", Some(1))])
+    );
+    raid_news(&mut world, RaidUpdate::Added(member("Leader", None)));
+    assert_eq!(world.raid().map(|raid| raid.members.len()), Some(2));
+}

@@ -207,14 +207,14 @@ impl ClientWorld {
                 (!std::mem::take(&mut self.raid_flow.listing) && before.as_ref() != Some(name))
                     .then(|| RaidNotice::Leader(self.raid_party(name)))
             }
+            // A member moved takes their new place; one the raid has not
+            // listed yet, as the player moved while listed again, joins the
+            // list without a word.
             RaidUpdate::Moved(member) => {
-                if let Some(raid) = self.raid.as_mut()
-                    && let Some(known) = raid
-                        .members
-                        .iter_mut()
-                        .find(|known| known.name == member.name)
-                {
-                    known.clone_from(member);
+                let members = &mut self.raid.get_or_insert_with(Raid::default).members;
+                match members.iter_mut().find(|known| known.name == member.name) {
+                    Some(known) => known.clone_from(member),
+                    None => members.push(member.clone()),
                 }
                 None
             }
