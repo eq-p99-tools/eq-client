@@ -132,6 +132,14 @@ impl OnlineState {
             enabled,
         }
     }
+
+    /// The session speaks this game generation: its world follows what that
+    /// generation's official client does on its own.
+    #[must_use]
+    pub fn speaking(mut self, generation: eq_client_core::Generation) -> Self {
+        self.world = ClientWorld::new(generation);
+        self
+    }
 }
 
 /// The world the session reports, or an empty one where no session runs.

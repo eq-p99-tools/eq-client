@@ -6,6 +6,7 @@ pub mod classes;
 pub mod daylight;
 pub mod doors;
 pub mod entities;
+pub mod generation;
 pub mod ground;
 pub mod hotbar;
 pub mod logs;
@@ -189,6 +190,9 @@ pub fn world_position(position: [f32; 3], heading: f32) -> WorldPosition {
     }
 }
 
+/// The game generation a session speaks, and what its official client does
+/// on its own that the world follows.
+pub use eq_network_game::GameDialect;
 /// Server death notification retained during the bind-transfer lifecycle.
 pub use eq_network_game::zoning::Death;
 /// Preserved item link and server-supplied inspection result.
@@ -196,6 +200,7 @@ pub use eq_network_game::{
     chat::ItemLink,
     items::{EquipmentRules, ItemBonuses, ItemDetails},
 };
+pub use generation::Generation;
 
 #[cfg(test)]
 mod tests {

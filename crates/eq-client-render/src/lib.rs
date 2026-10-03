@@ -111,6 +111,9 @@ pub enum Source {
 #[derive(Clone, Debug, Default, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Independent display switches.
 pub struct ViewerConfig {
+    /// The game generation an online session speaks, by the networking
+    /// crate's own mapping from the server protocol.
+    pub generation: eq_client_core::Generation,
     /// Permit explicitly labeled pre-SoF resource estimates for the Titanium session.
     pub estimate_titanium_resources: bool,
     /// Initial camera projection.
@@ -274,8 +277,8 @@ pub fn run(
         zone: Some(zone),
         character,
     })
+    .insert_resource(online::OnlineState::new(online).speaking(config.generation))
     .insert_resource(ViewerSettings(config))
-    .insert_resource(online::OnlineState::new(online))
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
     .insert_resource(outbox::Outbox::new(commands));
     init_presentation(&mut app);
