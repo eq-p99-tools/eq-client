@@ -106,6 +106,29 @@ impl ChatTab {
     }
 }
 
+/// The number servers give the kind of text a channel's lines are, which
+/// the official client keys its Colors page by: 256 for what is said, 257
+/// for tells, and on. None for a channel whose lines are of many kinds, as
+/// the system lines are. The numbers are `EQEmu`'s; that the official
+/// client's colours follow them is inferred.
+#[must_use]
+pub const fn color_kind(channel: ChannelName) -> Option<u16> {
+    Some(match channel {
+        ChannelName::Say => 256,
+        ChannelName::Tell => 257,
+        ChannelName::Group => 258,
+        ChannelName::Guild | ChannelName::GuildMotd => 259,
+        ChannelName::Ooc => 260,
+        ChannelName::Auction => 261,
+        ChannelName::Shout => 262,
+        ChannelName::Emote => 263,
+        ChannelName::Broadcast => 269,
+        ChannelName::TellEcho => 308,
+        ChannelName::Raid => 327,
+        _ => return None,
+    })
+}
+
 /// Exact default palette from the mobile client's `src/App.css` (not its optional high-contrast override).
 pub fn channel_rgb(channel: ChannelName) -> [u8; 3] {
     match channel {

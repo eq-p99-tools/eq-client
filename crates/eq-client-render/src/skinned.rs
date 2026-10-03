@@ -1980,7 +1980,7 @@ fn at(x: f32, y: f32, width: f32, height: f32) -> Node {
 }
 
 /// The client's size for one of the official client's fonts.
-const fn font(number: Option<u8>) -> Size {
+pub(crate) const fn font(number: Option<u8>) -> Size {
     match number {
         None | Some(0..=1) => Size::Small,
         Some(2) => Size::Body,

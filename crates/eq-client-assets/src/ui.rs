@@ -253,6 +253,19 @@ pub trait OfficialSettings {
     fn window_looks(&self, _character: &str, _world: &str) -> Vec<WindowLook> {
         Vec::new()
     }
+
+    /// The colours the player chose for the chat's kinds of text on the
+    /// Options window's Colors page, by the number of the kind: 256 for
+    /// what is said, 257 for tells, and so on, as servers number them.
+    fn text_colors(&self) -> Vec<(u16, [u8; 3])> {
+        Vec::new()
+    }
+
+    /// The font size, by the client's font number, of a character's main
+    /// chat window on a world.
+    fn chat_font(&self, _character: &str, _world: &str) -> Option<u8> {
+        None
+    }
 }
 
 /// An installed Titanium client's settings files, in its installation.
@@ -311,6 +324,32 @@ impl OfficialSettings for Titanium<'_> {
         std::fs::read(self.0.join(format!("UI_{character}_{world}.ini")))
             .map(|bytes| looks_from_ini(&String::from_utf8_lossy(&bytes)))
             .unwrap_or_default()
+    }
+
+    /// `[TextColors]` of `eqclient.ini`: `User_<n>_Red`, `_Green` and
+    /// `_Blue` for the kind numbered 255 + n. That the numbers line up so
+    /// is inferred from the 86 colours the file keeps and the kinds servers
+    /// number from 256, not checked against the Colors page.
+    fn text_colors(&self) -> Vec<(u16, [u8; 3])> {
+        std::fs::read(self.0.join("eqclient.ini"))
+            .map(|bytes| text_colors_from_ini(&String::from_utf8_lossy(&bytes)))
+            .unwrap_or_default()
+    }
+
+    /// `ChatWindow0_FontStyle` in `[ChatManager]` of the character's UI
+    /// file: window 0 is the main chat, as its name there says.
+    fn chat_font(&self, character: &str, world: &str) -> Option<u8> {
+        if !plain_name(character) || !plain_name(world) {
+            return None;
+        }
+        let bytes = std::fs::read(self.0.join(format!("UI_{character}_{world}.ini"))).ok()?;
+        ini_value(
+            &String::from_utf8_lossy(&bytes),
+            "ChatManager",
+            "ChatWindow0_FontStyle",
+        )?
+        .parse()
+        .ok()
     }
 }
 
@@ -461,7 +500,9 @@ pub struct WindowLook {
 impl WindowLook {
     /// A window as the client draws one it saved nothing for: the skin's
     /// background, opaque, faded to opaque after two seconds in half a
-    /// second, as it writes for most windows.
+    /// second. The delay and duration are what it wrote for every window in
+    /// the 284 UI files on the PC this was written on (counted); the rest
+    /// is what it wrote for nearly all of them.
     fn new(window: &str) -> Self {
         Self {
             window: window.to_owned(),
@@ -535,6 +576,52 @@ fn looks_from_ini(text: &str) -> Vec<WindowLook> {
         }
     }
     looks
+}
+
+/// The colours `[TextColors]` keeps whole, red, green and blue, by the kind
+/// of text each is for (255 + n for `User_<n>`).
+fn text_colors_from_ini(text: &str) -> Vec<(u16, [u8; 3])> {
+    let mut colors: std::collections::BTreeMap<u16, [Option<u8>; 3]> =
+        std::collections::BTreeMap::new();
+    let mut section = "";
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            section = name.trim();
+            continue;
+        }
+        if !section.eq_ignore_ascii_case("TextColors") {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Some((number, part)) = key
+            .trim()
+            .strip_prefix("User_")
+            .and_then(|rest| rest.split_once('_'))
+        else {
+            continue;
+        };
+        let (Ok(number), Ok(value)) = (number.parse::<u16>(), value.trim().parse::<u8>()) else {
+            continue;
+        };
+        let index = match part {
+            "Red" => 0,
+            "Green" => 1,
+            "Blue" => 2,
+            _ => continue,
+        };
+        if let Some(kind) = number.checked_add(255) {
+            colors.entry(kind).or_default()[index] = Some(value);
+        }
+    }
+    colors
+        .into_iter()
+        .filter_map(|(kind, [red, green, blue])| Some((kind, [red?, green?, blue?])))
+        .collect()
 }
 
 /// Reads the equipment layout of a skin's inventory window, from the default
@@ -722,6 +809,17 @@ fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_colors_page_keeps_each_kinds_colour_whole() {
+        let colors = text_colors_from_ini(
+            "[Defaults]\nUser_1_Red=9\n[TextColors]\nUser_1_Red=255\nUser_1_Green=10\n\
+             User_1_Blue=0\nUser_2_Red=1\nUser_2_Green=2\nUser_80_Red=7\nUser_80_Green=8\n\
+             User_80_Blue=9\n[Next]\nUser_3_Red=1\n",
+        );
+        // Say is 256, and System 335; a colour missing a part is none.
+        assert_eq!(colors, [(256, [255, 10, 0]), (335, [7, 8, 9])]);
+    }
 
     #[test]
     fn a_windows_section_gives_its_background_and_fading() {
