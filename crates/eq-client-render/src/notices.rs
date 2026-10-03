@@ -144,13 +144,16 @@ fn connection_text(link: Link, dead: bool) -> String {
 }
 
 /// Why a corpse could not be looted: this client's words, and the official
-/// client's string where it has its own (eqstr 12390 for a corpse too far
-/// away).
+/// client's string for the server's answer where it has its own: 12073
+/// for someone else looting it, 12070 for a corpse not to be looted yet,
+/// 5154 for a hostile nearby and 12390 for a corpse too far away. That the
+/// official client shows these strings for those answers is inferred from
+/// what each says; a recording will check it.
 const fn loot_refusal(response: LootResponse) -> (&'static str, Option<u32>) {
     match response {
-        LootResponse::SomeoneElse => ("Someone else is looting that corpse.", None),
-        LootResponse::NotAtThisTime => ("You cannot loot that corpse at this time.", None),
-        LootResponse::Hostiles => ("You cannot loot while a hostile is nearby.", None),
+        LootResponse::SomeoneElse => ("Someone else is looting that corpse.", Some(12073)),
+        LootResponse::NotAtThisTime => ("You cannot loot that corpse at this time.", Some(12070)),
+        LootResponse::Hostiles => ("You cannot loot while a hostile is nearby.", Some(5154)),
         LootResponse::TooFar => ("That corpse is out of reach.", Some(12390)),
         LootResponse::Normal | LootResponse::Other(_) => ("You cannot loot that corpse.", None),
     }
@@ -403,6 +406,36 @@ mod tests {
         assert_eq!(
             line(Notice::LootRefused(LootResponse::TooFar)),
             [(Place::Chat, "That corpse is out of reach.".into())]
+        );
+        // With the installed strings, each refusal the official client has
+        // its own string for reads in it.
+        let refusals = Messages::parse(
+            "EQST0002
+0 4
+12073 Busy corpse.
+12070 Not yet.
+5154 Hostile near.
+12390 Too far.
+",
+        );
+        for (response, said) in [
+            (LootResponse::SomeoneElse, "Busy corpse."),
+            (LootResponse::NotAtThisTime, "Not yet."),
+            (LootResponse::Hostiles, "Hostile near."),
+            (LootResponse::TooFar, "Too far."),
+        ] {
+            assert_eq!(
+                wording(&Notice::LootRefused(response), Some(&refusals)),
+                [(Place::Chat, Said::official(said))]
+            );
+        }
+        // An answer it has no string for stays in this client's words.
+        assert_eq!(
+            wording(
+                &Notice::LootRefused(LootResponse::Other(9)),
+                Some(&refusals)
+            ),
+            [(Place::Chat, "You cannot loot that corpse.".into())]
         );
         assert_eq!(
             line(Notice::ShopRefused),
