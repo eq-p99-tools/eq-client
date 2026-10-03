@@ -38,6 +38,10 @@ pub enum Toggle {
     /// Leaves food and drink with modifiers for the player to eat or drink
     /// by hand; only this client has it.
     SkipModifiedFood,
+    /// Draws the windows the UI skin sizes to nothing, as the Velious skin
+    /// does its windows from later expansions, as the default skin draws
+    /// them; only this client has it.
+    HiddenWindows,
     /// Logs the chat, as the official client's `/log` does; it keeps the
     /// choice in `eqclient.ini`, this client per character.
     Log,
@@ -45,7 +49,7 @@ pub enum Toggle {
 
 impl Toggle {
     /// Every toggle, in the order a file lists them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::PetWindowPopup,
         Self::TargetRing,
         Self::ShowHelm,
@@ -54,6 +58,7 @@ impl Toggle {
         Self::InvertY,
         Self::WheelZoom,
         Self::SkipModifiedFood,
+        Self::HiddenWindows,
         Self::Log,
     ];
 
@@ -69,6 +74,7 @@ impl Toggle {
             Self::InvertY => "invert_y",
             Self::WheelZoom => "wheel_zoom",
             Self::SkipModifiedFood => "skip_modified_food",
+            Self::HiddenWindows => "hidden_windows",
             Self::Log => "log",
         }
     }
@@ -199,6 +205,8 @@ pub struct Options {
     pub wheel_zoom: bool,
     /// See [`Toggle::SkipModifiedFood`].
     pub skip_modified_food: bool,
+    /// See [`Toggle::HiddenWindows`].
+    pub hidden_windows: bool,
     /// See [`Toggle::Log`].
     pub log: bool,
     /// How much of a player's name shows over their head, as `/shownames`
@@ -216,7 +224,8 @@ pub struct Options {
 impl Default for Options {
     /// The client's defaults: the pet's window pops up, the target ring, the
     /// player's helm and everyone's names show, the mouse is not inverted and its wheel
-    /// zooms, food with modifiers waits for the player, the chat is logged,
+    /// zooms, food with modifiers waits for the player, windows the skin
+    /// hides stay hidden, the chat is logged,
     /// players' names show in full, spawns draw as far as the zone allows,
     /// at most 60 frames a second, and the camera turns at the client's own
     /// speed.
@@ -230,6 +239,7 @@ impl Default for Options {
             invert_y: false,
             wheel_zoom: true,
             skip_modified_food: true,
+            hidden_windows: false,
             log: true,
             show_names: ShowNames::Everything,
             clip_plane: 100,
@@ -252,6 +262,7 @@ impl Options {
             Toggle::InvertY => self.invert_y,
             Toggle::WheelZoom => self.wheel_zoom,
             Toggle::SkipModifiedFood => self.skip_modified_food,
+            Toggle::HiddenWindows => self.hidden_windows,
             Toggle::Log => self.log,
         }
     }
@@ -267,6 +278,7 @@ impl Options {
             Toggle::InvertY => &mut self.invert_y,
             Toggle::WheelZoom => &mut self.wheel_zoom,
             Toggle::SkipModifiedFood => &mut self.skip_modified_food,
+            Toggle::HiddenWindows => &mut self.hidden_windows,
             Toggle::Log => &mut self.log,
         };
         *option = on;
