@@ -332,6 +332,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<skinned::Screens>()
         .init_resource::<skinned::Skinned>()
         .init_resource::<skinned::Tabs>()
+        .init_resource::<skinned::looks::Looks>()
         .init_resource::<skinned::KeyFilter>()
         .init_resource::<chat::ChatState>()
         .init_resource::<notices::Lines>()
@@ -558,7 +559,7 @@ fn schedule(app: &mut App) {
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),
                 skinned::frames,
-                skinned::apply,
+                (skinned::apply, skinned::looks::load, skinned::looks::dress).chain(),
                 skinned::show,
                 skinned::buttons,
                 (
