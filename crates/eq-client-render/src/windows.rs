@@ -155,7 +155,8 @@ pub(crate) fn drag_anywhere(commands: &mut Commands, frame: Entity, id: WindowId
 }
 
 /// Windows a script moves as a drag moves them, each with where its top
-/// left corner goes, in logical pixels.
+/// left corner goes, in logical pixels. A move waits here until its window
+/// has a frame, so a drag of a window not open yet lands when it opens.
 #[derive(Resource, Default)]
 pub(crate) struct Moves(pub(crate) Vec<(WindowId, Vec2)>);
 
@@ -186,15 +187,18 @@ fn scripted_moves(
     let Ok(window) = windows.single() else {
         return;
     };
-    for (id, to) in std::mem::take(&mut moves.0) {
+    moves.0.retain(|(id, to)| {
+        let mut placed = false;
         for (_, mut node, computed, mut frame) in
-            frames.iter_mut().filter(|(frame, ..)| **frame == id)
+            frames.iter_mut().filter(|(frame, ..)| *frame == id)
         {
             let room = (window.physical_size().as_vec2() - computed.size())
                 * computed.inverse_scale_factor();
-            put(&mut node, &mut frame, to, room);
+            put(&mut node, &mut frame, *to, room);
+            placed = true;
         }
-    }
+        !placed
+    });
 }
 
 #[derive(Component)]
@@ -489,6 +493,13 @@ mod tests {
             },
             PrimaryWindow,
         ));
+        // A move of a window not open yet waits for it.
+        app.world_mut()
+            .resource_mut::<Moves>()
+            .0
+            .push((WindowId::Chat, Vec2::new(900.0, 40.0)));
+        app.update();
+        assert_eq!(app.world().resource::<Moves>().0.len(), 1);
         let frame = app
             .world_mut()
             .spawn((
@@ -506,12 +517,9 @@ mod tests {
         // its placement as a title bar does.
         drag_anywhere(&mut app.world_mut().commands(), frame, WindowId::Chat);
         app.world_mut().flush();
-        app.world_mut()
-            .resource_mut::<Moves>()
-            .0
-            .push((WindowId::Chat, Vec2::new(900.0, 40.0)));
         app.update();
-        // Kept on screen, as a drag keeps it.
+        // It lands once the window opens, kept on screen, as a drag keeps it.
+        assert_eq!(app.world().resource::<Moves>().0, []);
         let node = app.world().get::<Node>(frame).unwrap();
         assert_eq!((node.left, node.top), (px(700.0), px(40.0)));
         assert!(app.world().get::<Frame>(frame).unwrap().placed);
