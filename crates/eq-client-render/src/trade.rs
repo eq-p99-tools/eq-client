@@ -444,6 +444,13 @@ pub(super) fn input(
                     ));
                     continue;
                 }
+                // Servers take a bag with its contents and the contents are
+                // lost; the official client has the bag emptied first.
+                if holds_items(item, online.world().inventory().items()) {
+                    chat.history
+                        .push(super::chat::system_line("Empty the bag before selling it."));
+                    continue;
+                }
                 let quantity = item.stack_count.unwrap_or(1).max(1);
                 if let Some(merchant_id) = merchant.filter(|_| trade.merchant.is_some()) {
                     send(
@@ -1202,6 +1209,22 @@ mod tests {
             Ok(ClientCommand::Sell { slot: 23, .. })
         ));
         assert_eq!(app.world().resource::<TradeState>().chosen(), None);
+        // A bag with something in it is not sold, whichever button asks.
+        let mut bag = items[0].clone();
+        bag.slot = InventorySlot(24);
+        bag.bag_slots = 8;
+        let mut inside = items[0].clone();
+        inside.slot = InventorySlot(24).child(0).unwrap();
+        crate::online::testing::inventory(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            eq_client_core::inventory::InventoryUpdate::Snapshot(vec![bag, inside]),
+        );
+        assert!(app.world_mut().resource_mut::<TradeState>().offer(24));
+        press(&mut app, Action::SellChosen);
+        press(&mut app, Action::Sell(24));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]
