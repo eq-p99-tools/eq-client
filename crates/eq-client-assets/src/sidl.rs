@@ -542,6 +542,10 @@ pub struct Screen {
     pub tooltip: Option<String>,
     /// What it shows, in drawing order, by element name.
     pub pieces: Vec<(String, Element)>,
+    /// The skin's frame for tabs the client draws in it that its file
+    /// defines none of, as the chat's channel tabs: `FT_DefTabBorder`, the
+    /// frame every tab box in the official skins names.
+    pub tab_frame: Option<Box<FrameLook>>,
 }
 
 /// The pieces and window templates a skin's windows refer to by name.
@@ -657,6 +661,7 @@ impl Library {
             border: flag(*screen, "Style_Border"),
             tooltip: text_of(*screen, "TooltipReference").map(str::to_owned),
             pieces,
+            tab_frame: local.frames.get("FT_DefTabBorder").cloned().map(Box::new),
         })
     }
 

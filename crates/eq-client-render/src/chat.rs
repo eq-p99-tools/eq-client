@@ -153,6 +153,8 @@ pub(super) struct Content {
     tab: Option<ChatTab>,
     /// The history revision the lines match.
     revision: u64,
+    /// Drawn in the skin: an empty tab is an empty box.
+    bare: bool,
 }
 /// The history entry a chat line shows.
 #[derive(Component)]
@@ -172,6 +174,10 @@ pub(super) struct InputBox;
 pub(super) struct InputLabel;
 #[derive(Component)]
 pub(super) struct Send;
+/// A part of the chat drawn in the skin: it keeps the skin's look, with no
+/// fill, border or words of the client's own.
+#[derive(Component)]
+pub(super) struct Bare;
 
 /// Creates a clipped scrollback window; changing tabs never destroys stored
 /// messages. Where the installed skin has a chat window, it is drawn from
@@ -199,7 +205,7 @@ pub(super) fn spawn(commands: &mut Commands) {
     ));
     commands.entity(frame).with_children(|root| {
         tab_row(root);
-        lines(root);
+        lines(root, false);
         root.spawn(Node {
             column_gap: px(5),
             align_items: AlignItems::Center,
@@ -236,9 +242,17 @@ pub(super) fn spawn(commands: &mut Commands) {
     });
 }
 
-/// The skin's output box, filled with the chat's tabs along its top and the
-/// active tab's lines below them, which it returns: they scroll.
-pub(super) fn skinned_output(parent: &mut ChildSpawnerCommands, node: Node) -> Entity {
+/// The skin's output box, filled with the chat's tabs along its top, in
+/// the skin's tab frame where it has one, and the active tab's lines below
+/// them, which it returns: they scroll.
+pub(super) fn skinned_output(
+    parent: &mut ChildSpawnerCommands,
+    node: Node,
+    (art, tab_frame): (
+        &mut crate::sheets::Art,
+        Option<&eq_client_assets::sidl::FrameLook>,
+    ),
+) -> Entity {
     let mut viewport = Entity::PLACEHOLDER;
     parent
         .spawn(Node {
@@ -248,24 +262,79 @@ pub(super) fn skinned_output(parent: &mut ChildSpawnerCommands, node: Node) -> E
             ..node
         })
         .with_children(|output| {
-            tab_row(output);
-            viewport = lines(output);
+            match tab_frame {
+                Some(look) => skinned_tabs(output, art, look),
+                None => tab_row(output),
+            }
+            viewport = lines(output, true);
         });
     viewport
 }
 
-/// The skin's input box, filled with the line the player types into.
+/// The chat's tabs in the skin's tab frame, as a skinned window's tabs of
+/// words are drawn; the shown tab's words are lit.
+fn skinned_tabs(
+    parent: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    look: &eq_client_assets::sidl::FrameLook,
+) {
+    parent
+        .spawn(Node {
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: px(2),
+            row_gap: px(2),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|tabs| {
+            for tab in ChatTab::ALL {
+                let mut cell = tabs.spawn((Button, TabButton(tab), Bare));
+                super::skinned::frame_tab(
+                    &mut cell,
+                    art,
+                    look,
+                    Node {
+                        height: px(super::skinned::WORD_TAB_HEIGHT),
+                        align_items: AlignItems::Center,
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                );
+                cell.with_child((
+                    TabLabel(tab),
+                    Bare,
+                    Text::new(tab.label()),
+                    theme::font(Size::Small),
+                    TextColor(theme::INK),
+                ));
+            }
+        });
+}
+
+/// The skin's input box, with nothing of the client's own in it: the line
+/// the player types, and the caret alone while typing.
 pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node) {
-    typing_box(
-        parent,
-        Node {
-            padding: UiRect::axes(px(4), px(1)),
-            border: UiRect::all(px(1)),
-            align_items: AlignItems::Center,
-            overflow: Overflow::clip(),
-            ..node
-        },
-    );
+    parent
+        .spawn((
+            Button,
+            InputBox,
+            Bare,
+            Node {
+                padding: UiRect::axes(px(4), px(1)),
+                align_items: AlignItems::Center,
+                overflow: Overflow::clip(),
+                ..node
+            },
+        ))
+        .with_children(|input| {
+            input.spawn((
+                InputLabel,
+                Bare,
+                Text::new(""),
+                theme::font(Size::Body),
+                TextColor(theme::INK_BRIGHT),
+            ));
+        });
 }
 
 /// The chat's tabs, one for each group of channels, with their unread
@@ -304,8 +373,9 @@ fn tab_row(parent: &mut ChildSpawnerCommands) {
         });
 }
 
-/// The active tab's lines, which scroll on their own.
-fn lines(parent: &mut ChildSpawnerCommands) -> Entity {
+/// The active tab's lines, which scroll on their own; drawn in the skin
+/// (`bare`), an empty tab is an empty box.
+fn lines(parent: &mut ChildSpawnerCommands, bare: bool) -> Entity {
     parent
         .spawn((
             Viewport,
@@ -321,7 +391,7 @@ fn lines(parent: &mut ChildSpawnerCommands) -> Entity {
         ))
         .with_children(|viewport| {
             viewport.spawn((
-                Content::default(),
+                Content { bare, ..default() },
                 Node {
                     width: percent(100),
                     flex_direction: FlexDirection::Column,
@@ -469,7 +539,7 @@ pub(super) fn refresh(
     typing: Res<crate::keys::Typing>,
     mut contents: Query<(Entity, &mut Content, Option<&Children>)>,
     rendered: Query<(Option<&LineId>, Has<Placeholder>)>,
-    mut labels: Query<(&TabLabel, &mut Text), Without<InputLabel>>,
+    mut labels: Query<(&TabLabel, &mut Text, &mut TextColor, Has<Bare>), Without<InputLabel>>,
     mut buttons: Query<
         (
             &TabButton,
@@ -477,10 +547,10 @@ pub(super) fn refresh(
             &mut BackgroundColor,
             &mut BorderColor,
         ),
-        Without<InputBox>,
+        (Without<InputBox>, Without<Bare>),
     >,
-    mut input_labels: Query<&mut Text, (With<InputLabel>, Without<TabLabel>)>,
-    mut input_boxes: Query<&mut BorderColor, (With<InputBox>, Without<TabButton>)>,
+    mut input_labels: Query<(&mut Text, Has<Bare>), (With<InputLabel>, Without<TabLabel>)>,
+    mut input_boxes: Query<&mut BorderColor, (With<InputBox>, Without<TabButton>, Without<Bare>)>,
 ) {
     let active = state.active;
     let revision = state.history.revision();
@@ -494,7 +564,17 @@ pub(super) fn refresh(
             state.views.entry(active).or_default().seen = revision;
         }
     }
-    for (TabLabel(tab), mut text) in &mut labels {
+    for (TabLabel(tab), mut text, mut color, bare) in &mut labels {
+        // A skinned tab has no fill to show it is the one shown: its words
+        // are lit instead.
+        let wanted = if bare && *tab == active {
+            theme::INK_BRIGHT
+        } else {
+            theme::INK
+        };
+        if color.0 != wanted {
+            color.0 = wanted;
+        }
         let seen = state.views.get(tab).copied().unwrap_or_default().seen;
         let unread = state.history.unread(*tab, seen);
         let label = if unread == 0 {
@@ -522,10 +602,12 @@ pub(super) fn refresh(
             theme::EDGE
         });
     }
-    for mut text in &mut input_labels {
+    for (mut text, bare) in &mut input_labels {
         text.0 = if state.draft.is_empty() {
             if typing.composing {
                 "|"
+            } else if bare {
+                ""
             } else {
                 "Press Enter to chat"
             }
@@ -558,7 +640,13 @@ pub(super) fn refresh(
         };
         content.revision = revision;
         let lines = state.history.lines(active);
-        sync_lines(&mut commands, column, children, &lines, &rendered);
+        sync_lines(
+            &mut commands,
+            (column, content.bare),
+            children,
+            &lines,
+            &rendered,
+        );
     }
 }
 
@@ -566,7 +654,7 @@ pub(super) fn refresh(
 /// ones appended, so a busy channel never lays its kept lines out again.
 fn sync_lines(
     commands: &mut Commands,
-    column: Entity,
+    (column, bare): (Entity, bool),
     children: Option<&Children>,
     lines: &[(u64, &ChatLine)],
     rendered: &Query<(Option<&LineId>, Has<Placeholder>)>,
@@ -584,7 +672,7 @@ fn sync_lines(
     }
     match (placeholder, lines.is_empty()) {
         (Some(placeholder), false) => commands.entity(placeholder).despawn(),
-        (None, true) => {
+        (None, true) if !bare => {
             commands.entity(column).with_child((
                 Placeholder,
                 Text::new("No messages in this channel yet."),
@@ -1316,16 +1404,47 @@ mod tests {
     }
 
     #[test]
+    fn the_skinned_input_shows_only_the_line_and_the_caret() {
+        let mut app = App::new();
+        app.init_resource::<ChatState>()
+            .init_resource::<crate::keys::Typing>()
+            .add_systems(Update, refresh);
+        let bare = app
+            .world_mut()
+            .spawn((InputLabel, Bare, Text::new("x")))
+            .id();
+        let own = app.world_mut().spawn((InputLabel, Text::new("x"))).id();
+        let text = |app: &App, entity| app.world().get::<Text>(entity).unwrap().0.clone();
+        app.update();
+        // Idle, the skin's box is empty; the client's own asks for Enter.
+        assert_eq!(text(&app, bare), "");
+        assert_eq!(text(&app, own), "Press Enter to chat");
+        // Typing, the caret alone shows it.
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        app.update();
+        assert_eq!(text(&app, bare), "|");
+    }
+
+    #[test]
     fn the_skins_boxes_hold_the_tabs_lines_and_input() {
-        let mut world = World::new();
-        world
-            .commands()
-            .spawn(Node::default())
-            .with_children(|window| {
-                skinned_output(window, Node::default());
-                skinned_input(window, Node::default());
-            });
-        world.flush();
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<crate::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()));
+        app.world_mut()
+            .run_system_once(|mut commands: Commands, mut art: crate::sheets::Art| {
+                let tab_frame = eq_client_assets::sidl::FrameLook::default();
+                commands.spawn(Node::default()).with_children(|window| {
+                    skinned_output(window, Node::default(), (&mut art, Some(&tab_frame)));
+                    skinned_input(window, Node::default());
+                });
+            })
+            .unwrap();
+        let world = app.world_mut();
         let count = |world: &mut World, filter: fn(EntityRef) -> bool| {
             world
                 .iter_entities()
@@ -1333,8 +1452,26 @@ mod tests {
                 .count()
         };
         assert_eq!(
-            count(&mut world, |entity| entity.contains::<TabButton>()),
+            count(world, |entity| entity.contains::<TabButton>()),
             ChatTab::ALL.len()
+        );
+        // Drawn in the skin, with none of the client's own look: its tabs in
+        // the skin's tab frame, its input box bare, and an empty tab empty.
+        assert_eq!(
+            count(world, |entity| entity.contains::<TabButton>()
+                && entity.contains::<Bare>()),
+            ChatTab::ALL.len()
+        );
+        assert_eq!(
+            count(world, |entity| entity.contains::<InputBox>()
+                && entity.contains::<Bare>()),
+            1
+        );
+        assert_eq!(
+            count(world, |entity| entity
+                .get::<Content>()
+                .is_some_and(|content| content.bare)),
+            1
         );
         for part in [
             |entity: EntityRef| entity.contains::<Viewport>(),
@@ -1342,12 +1479,12 @@ mod tests {
             |entity: EntityRef| entity.contains::<InputBox>(),
             |entity: EntityRef| entity.contains::<InputLabel>(),
         ] {
-            assert_eq!(count(&mut world, part), 1);
+            assert_eq!(count(world, part), 1);
         }
         // Enter sends, as in the official client: the skin's window has no
         // Send button or footer.
-        assert_eq!(count(&mut world, |entity| entity.contains::<Send>()), 0);
-        assert_eq!(count(&mut world, |entity| entity.contains::<Latest>()), 0);
+        assert_eq!(count(world, |entity| entity.contains::<Send>()), 0);
+        assert_eq!(count(world, |entity| entity.contains::<Latest>()), 0);
     }
 
     #[test]

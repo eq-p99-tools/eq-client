@@ -112,6 +112,9 @@ struct Context<'a> {
     /// How many tab boxes the pieces lie in: a tab box on a page has its
     /// own tabs and its own page shown.
     depth: u8,
+    /// The skin's frame for tabs the client draws that the window's file
+    /// defines none of, as the chat's.
+    tab_frame: Option<&'a eq_client_assets::sidl::FrameLook>,
 }
 
 /// The skin's windows as read, by skin: read once, whatever rebuilds the
@@ -240,6 +243,7 @@ pub(crate) fn apply(
                 id: *id,
                 paperdoll: paperdoll.as_deref(),
                 depth: 0,
+                tab_frame: screen.tab_frame.as_deref(),
             };
             title_bottom = draw(window, screen, &mut art, &context);
         });
@@ -380,7 +384,7 @@ fn pieces(
             }
             Element::Listbox(list) => controls::listbox(window, art, list, &inside, context.id),
             Element::TextBox(text) if context.id == WindowId::Chat => {
-                chat_box(window, art, text, &inside);
+                chat_box(window, art, text, (&inside, context.tab_frame));
             }
             Element::TextBox(text) => text_box(window, art, text, &inside, context.id),
             Element::Tabs(tabs) if TABBED.contains(&context.id) => {
@@ -510,7 +514,7 @@ fn chat_box(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
     text: &eq_client_assets::sidl::TextBox,
-    inside: &Area,
+    (inside, tab_frame): (&Area, Option<&eq_client_assets::sidl::FrameLook>),
 ) {
     let area = text.anchors.map_or(text.area, |anchors| {
         anchors.within(inside.width, inside.height)
@@ -541,6 +545,7 @@ fn chat_box(
                     let lines = super::chat::skinned_output(
                         frame,
                         at(client.x, client.y, client.width - width, client.height),
+                        (art, tab_frame),
                     );
                     if let Some(look) = bar {
                         scrollbar::spawn(frame, art, look, &client, (lines, WindowId::Chat));
@@ -602,7 +607,7 @@ fn view(
 }
 
 /// The height of a tab that shows its page's words.
-const WORD_TAB_HEIGHT: f32 = 18.0;
+pub(crate) const WORD_TAB_HEIGHT: f32 = 18.0;
 
 /// Windows whose tab boxes show every page, a tab for each.
 const TABBED: [WindowId; 2] = [WindowId::ActionsWindow, WindowId::Options];
@@ -786,22 +791,7 @@ fn tab_cell(
                 ..default()
             };
             match tab_frame {
-                // The skin's frame around the words, with their room inside.
-                Some(look) => {
-                    let insets = frame::insets(look);
-                    cell.insert(Node {
-                        padding: UiRect {
-                            left: px(insets.left + 4.0),
-                            right: px(insets.right + 4.0),
-                            top: px(insets.top),
-                            bottom: px(insets.bottom),
-                        },
-                        ..node
-                    });
-                    cell.with_children(|cell| {
-                        frame::around(cell, art, look);
-                    });
-                }
+                Some(look) => frame_tab(&mut cell, art, look, node),
                 None => {
                     cell.insert((
                         BackgroundColor(theme::INSET),
@@ -829,6 +819,30 @@ fn tab_cell(
             });
         }
     }
+}
+
+/// Puts a tab of words in the skin's tab frame: the frame's pieces around
+/// it, and room for the words inside them. The chat's tabs are framed so
+/// too.
+pub(crate) fn frame_tab(
+    cell: &mut EntityCommands,
+    art: &mut crate::sheets::Art,
+    look: &eq_client_assets::sidl::FrameLook,
+    node: Node,
+) {
+    let insets = frame::insets(look);
+    cell.insert(Node {
+        padding: UiRect {
+            left: px(insets.left + 4.0),
+            right: px(insets.right + 4.0),
+            top: px(insets.top),
+            bottom: px(insets.bottom),
+        },
+        ..node
+    });
+    cell.with_children(|cell| {
+        frame::around(cell, art, look);
+    });
 }
 
 /// Shows the page each tabbed window has chosen, and its tab lit; a clicked
@@ -2270,6 +2284,7 @@ mod tests {
             border: false,
             tooltip: None,
             pieces: Vec::new(),
+            tab_frame: None,
         };
         // The words drawn in a window from this screen.
         let words = |screen: Screen| {
@@ -2285,6 +2300,7 @@ mod tests {
                             id: WindowId::ActionsWindow,
                             paperdoll: None,
                             depth: 0,
+                            tab_frame: None,
                         };
                         commands.spawn(Node::default()).with_children(|window| {
                             draw(window, &screen, &mut art, &context);
@@ -2333,6 +2349,7 @@ mod tests {
             border: false,
             tooltip: None,
             pieces: Vec::new(),
+            tab_frame: None,
         };
         let skin = (px(120.0), px(80.0));
         let at = |id, placed| {
@@ -2422,6 +2439,7 @@ mod tests {
                 ("page".into(), button("HB_PageLeftButton", 0.0)),
                 ("slot".into(), button("HB_Button1", 20.0)),
             ],
+            tab_frame: None,
         };
         let mut app = App::new();
         app.init_resource::<crate::sheets::Sheets>()
@@ -2435,6 +2453,7 @@ mod tests {
                         id: WindowId::Actions,
                         paperdoll: None,
                         depth: 0,
+                        tab_frame: None,
                     };
                     commands.spawn(Node::default()).with_children(|window| {
                         draw(window, &screen, &mut art, &context);
@@ -2522,6 +2541,7 @@ mod tests {
                 ("ring".into(), checkbox("ODP_ShowTargetRingCheckbox", 30.0)),
                 ("keys".into(), keys),
             ],
+            tab_frame: None,
         };
         let mut app = App::new();
         app.init_resource::<crate::sheets::Sheets>()
@@ -2535,9 +2555,13 @@ mod tests {
                         id: WindowId::Options,
                         paperdoll: None,
                         depth: 0,
+                        tab_frame: None,
                     };
                     commands.spawn(Node::default()).with_children(|window| {
                         draw(window, &screen, &mut art, &context);
+                        // A node that only reacts to the pointer, as the
+                        // chat's lines do.
+                        window.spawn((Node::default(), Interaction::default()));
                     });
                 },
             )
@@ -2545,14 +2569,15 @@ mod tests {
         app.update();
         // A skinned window's frame drags under a press that reaches it: every
         // part that reacts to the pointer, and the list with its rows and
-        // headings, keeps the press. Here: the two checkboxes, the list, and
-        // its scrollbar's arrows, gutter and thumb.
+        // headings, keeps the press. Here: the two checkboxes, the list, its
+        // scrollbar's arrows, gutter and thumb, and the node that reacts to the
+        // pointer.
         let mut parts = app.world_mut().query_filtered::<&FocusPolicy, Or<(
             With<Interaction>,
             With<crate::windows::KeepsPress>,
         )>>();
         let policies: Vec<_> = parts.iter(app.world()).copied().collect();
-        assert_eq!(policies, [FocusPolicy::Block; 7]);
+        assert_eq!(policies, [FocusPolicy::Block; 8]);
     }
 
     #[test]
