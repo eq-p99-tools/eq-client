@@ -76,7 +76,11 @@ frames a second, or the `MaxFPS` in the installation's `eqclient.ini`;
 vsync, which is the monitor's refresh rate. The Options window (Alt+O) sets
 the cap per character with its Max FPS slider, which wins once moved, and its
 Far Clip Plane and Mouselook Sensitivity sliders set how far the scene is
-drawn and how fast the camera turns; its Keyboard page lists the keys.
+drawn and how fast the camera turns; its Keyboard page lists the keys. Its
+Client page holds the options only this client has, kept per character:
+Skip Food With Modifiers, and Draw Windows the Skin Hides, which draws a
+window the UI skin sizes to nothing, such as the Velious skin's Raid and
+casting windows, as the default skin draws it.
 
 ## Stationary online preview
 
