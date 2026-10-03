@@ -1,8 +1,14 @@
 //! The player's options: those of the official Options window this client
-//! keeps itself, and the ones only this client has. A file keeps them as one
-//! `name = value` line each, so a file from an older client still reads.
+//! keeps itself, and its quality-of-life settings ([`crate::qol`]). A file
+//! keeps them as one `name = value` line each, so a file from an older
+//! client still reads.
 
-use crate::{food::AutoEat, names::ShowNames};
+use crate::{
+    Capability,
+    food::AutoEat,
+    names::ShowNames,
+    qol::{self, Fix},
+};
 
 /// The first line of an options file.
 pub const HEADER: &str = "# eq-client options v1";
@@ -35,21 +41,17 @@ pub enum Toggle {
     /// Zooms the camera with the mouse wheel (the Mouse page's Mouse Wheel
     /// Zoom).
     WheelZoom,
-    /// Leaves food and drink with modifiers for the player to eat or drink
-    /// by hand; only this client has it.
-    SkipModifiedFood,
-    /// Draws the windows the UI skin sizes to nothing, as the Velious skin
-    /// does its windows from later expansions, as the default skin draws
-    /// them; only this client has it.
-    HiddenWindows,
     /// Logs the chat, as the official client's `/log` does; it keeps the
     /// choice in `eqclient.ini`, this client per character.
     Log,
+    /// A quality-of-life setting, on the Options window's quality-of-life
+    /// page, which only this client has.
+    Qol(Fix),
 }
 
 impl Toggle {
-    /// Every toggle, in the order a file lists them.
-    pub const ALL: [Self; 10] = [
+    /// The official client's own toggles, in the order a file lists them.
+    pub const OFFICIAL: [Self; 8] = [
         Self::PetWindowPopup,
         Self::TargetRing,
         Self::ShowHelm,
@@ -57,10 +59,16 @@ impl Toggle {
         Self::NpcNames,
         Self::InvertY,
         Self::WheelZoom,
-        Self::SkipModifiedFood,
-        Self::HiddenWindows,
         Self::Log,
     ];
+
+    /// Every toggle, in the order a file lists them: the official client's,
+    /// then each quality-of-life setting.
+    pub fn all() -> impl Iterator<Item = Self> {
+        Self::OFFICIAL
+            .into_iter()
+            .chain(Fix::settings().map(Self::Qol))
+    }
 
     /// The name a file keeps it under.
     #[must_use]
@@ -73,9 +81,25 @@ impl Toggle {
             Self::NpcNames => "npc_names",
             Self::InvertY => "invert_y",
             Self::WheelZoom => "wheel_zoom",
-            Self::SkipModifiedFood => "skip_modified_food",
-            Self::HiddenWindows => "hidden_windows",
             Self::Log => "log",
+            Self::Qol(fix) => fix.key(),
+        }
+    }
+
+    /// What the session must offer for the toggle to matter, if anything; a
+    /// checkbox for one it does not offer is greyed out.
+    #[must_use]
+    pub const fn needs(self) -> Option<Capability> {
+        match self {
+            Self::PetWindowPopup
+            | Self::TargetRing
+            | Self::ShowHelm
+            | Self::PcNames
+            | Self::NpcNames
+            | Self::InvertY
+            | Self::WheelZoom
+            | Self::Log => None,
+            Self::Qol(fix) => fix.needs(),
         }
     }
 }
@@ -203,12 +227,10 @@ pub struct Options {
     pub invert_y: bool,
     /// See [`Toggle::WheelZoom`].
     pub wheel_zoom: bool,
-    /// See [`Toggle::SkipModifiedFood`].
-    pub skip_modified_food: bool,
-    /// See [`Toggle::HiddenWindows`].
-    pub hidden_windows: bool,
     /// See [`Toggle::Log`].
     pub log: bool,
+    /// Which quality-of-life fixes are on ([`Toggle::Qol`]).
+    pub qol: qol::Settings,
     /// How much of a player's name shows over their head, as `/shownames`
     /// sets it; the official client keeps it in `eqclient.ini`, this client
     /// per character.
@@ -224,11 +246,10 @@ pub struct Options {
 impl Default for Options {
     /// The client's defaults: the pet's window pops up, the target ring, the
     /// player's helm and everyone's names show, the mouse is not inverted and its wheel
-    /// zooms, food with modifiers waits for the player, windows the skin
-    /// hides stay hidden, the chat is logged,
-    /// players' names show in full, spawns draw as far as the zone allows,
-    /// at most 60 frames a second, and the camera turns at the client's own
-    /// speed.
+    /// zooms, the chat is logged, each quality-of-life fix starts as it is
+    /// defined, players' names show in full, spawns draw as far as the zone
+    /// allows, at most 60 frames a second, and the camera turns at the
+    /// client's own speed.
     fn default() -> Self {
         Self {
             pet_window_popup: true,
@@ -238,9 +259,8 @@ impl Default for Options {
             npc_names: true,
             invert_y: false,
             wheel_zoom: true,
-            skip_modified_food: true,
-            hidden_windows: false,
             log: true,
+            qol: qol::Settings::default(),
             show_names: ShowNames::Everything,
             clip_plane: 100,
             max_fps: 60,
@@ -261,9 +281,8 @@ impl Options {
             Toggle::NpcNames => self.npc_names,
             Toggle::InvertY => self.invert_y,
             Toggle::WheelZoom => self.wheel_zoom,
-            Toggle::SkipModifiedFood => self.skip_modified_food,
-            Toggle::HiddenWindows => self.hidden_windows,
             Toggle::Log => self.log,
+            Toggle::Qol(fix) => self.qol.on(fix),
         }
     }
 
@@ -277,9 +296,11 @@ impl Options {
             Toggle::NpcNames => &mut self.npc_names,
             Toggle::InvertY => &mut self.invert_y,
             Toggle::WheelZoom => &mut self.wheel_zoom,
-            Toggle::SkipModifiedFood => &mut self.skip_modified_food,
-            Toggle::HiddenWindows => &mut self.hidden_windows,
             Toggle::Log => &mut self.log,
+            Toggle::Qol(fix) => {
+                self.qol.set(fix, on);
+                return;
+            }
         };
         *option = on;
     }
@@ -338,7 +359,7 @@ impl Options {
     /// What the session may eat and drink on its own.
     #[must_use]
     pub const fn auto_eat(&self) -> AutoEat {
-        if self.skip_modified_food {
+        if self.qol.on(Fix::SkipModifiedFood) {
             AutoEat::Plain
         } else {
             AutoEat::Anything
@@ -374,10 +395,7 @@ impl Options {
                 "false" => false,
                 _ => continue,
             };
-            if let Some(toggle) = Toggle::ALL
-                .into_iter()
-                .find(|toggle| toggle.key() == key.trim())
-            {
+            if let Some(toggle) = Toggle::all().find(|toggle| toggle.key() == key.trim()) {
                 options.set(toggle, on);
             }
         }
@@ -388,7 +406,7 @@ impl Options {
     #[must_use]
     pub fn text(&self) -> String {
         let mut text = format!("{HEADER}\n");
-        for toggle in Toggle::ALL {
+        for toggle in Toggle::all() {
             text.push_str(toggle.key());
             text.push_str(if self.get(toggle) {
                 " = true\n"
@@ -416,13 +434,22 @@ mod tests {
     fn options_keep_to_their_file_and_old_files_still_read() {
         let mut options = Options::default();
         options.set(Toggle::InvertY, true);
-        options.set(Toggle::SkipModifiedFood, false);
+        options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
         options.show_names = ShowNames::Last;
         let text = options.text();
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
+        assert!(text.contains("skip_modified_food = false\n"));
+        assert!(text.contains("hidden_windows = false\n"));
         assert!(text.contains("show_names = 2\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
+        // A file from before the QoL page keeps its choices there.
+        let before = Options::read(
+            "# eq-client options v1\nskip_modified_food = false\nhidden_windows = true\n",
+            Options::default(),
+        );
+        assert!(!before.qol.on(Fix::SkipModifiedFood));
+        assert!(before.get(Toggle::Qol(Fix::HiddenWindows)));
         // Unknown names, bad values and missing options keep the defaults.
         let defaults = Options {
             pet_window_popup: false,
@@ -482,8 +509,39 @@ mod tests {
     fn skipping_modified_food_is_what_the_session_eats() {
         let mut options = Options::default();
         assert_eq!(options.auto_eat(), AutoEat::Plain);
-        options.set(Toggle::SkipModifiedFood, false);
+        options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
         assert_eq!(options.auto_eat(), AutoEat::Anything);
-        assert!(!options.get(Toggle::SkipModifiedFood));
+        assert!(!options.get(Toggle::Qol(Fix::SkipModifiedFood)));
+    }
+
+    #[test]
+    fn every_option_has_a_name_of_its_own() {
+        // Every fix's name counts, a fix that is always on too, so it can
+        // become a setting without taking another option's name.
+        let mut keys: Vec<_> = Toggle::OFFICIAL
+            .iter()
+            .map(|toggle| toggle.key())
+            .chain(Fix::ALL.iter().map(|fix| fix.key()))
+            .chain(Level::ALL.iter().map(|level| level.key()))
+            .chain([SHOW_NAMES])
+            .collect();
+        let count = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), count);
+        // Only a quality-of-life setting can need what the session offers.
+        assert!(
+            Toggle::OFFICIAL
+                .iter()
+                .all(|toggle| toggle.needs().is_none())
+        );
+        assert_eq!(
+            Toggle::Qol(Fix::SkipModifiedFood).needs(),
+            Some(Capability::Inventory)
+        );
+        assert_eq!(
+            Toggle::all().count(),
+            Toggle::OFFICIAL.len() + Fix::settings().count()
+        );
     }
 }

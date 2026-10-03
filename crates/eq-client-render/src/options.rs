@@ -62,10 +62,16 @@ pub(crate) struct OptionCheckbox(pub(crate) Toggle);
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn toggle(
     clicks: Query<(&Interaction, &OptionCheckbox), Changed<Interaction>>,
+    online: Res<crate::online::OnlineState>,
     mut state: ResMut<OptionsState>,
 ) {
     for (interaction, OptionCheckbox(toggle)) in &clicks {
-        if *interaction == Interaction::Pressed {
+        // A greyed checkbox, for what the session does not offer, stays
+        // as it is.
+        let offered = toggle
+            .needs()
+            .is_none_or(|needs| crate::outbox::offered(online.world(), needs));
+        if *interaction == Interaction::Pressed && offered {
             let on = state.on(*toggle);
             state.options.set(*toggle, !on);
         }
@@ -225,5 +231,41 @@ mod tests {
         app.update();
         assert!(!app.world().resource::<OptionsState>().options.wheel_zoom);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_setting_for_what_the_session_does_not_offer_stays_as_it_is() {
+        use eq_client_core::{Capability, WorldEvent, qol::Fix};
+        let mut app = crate::testing::app();
+        app.insert_resource(OptionsState::new(Options::default()))
+            .add_systems(Update, toggle);
+        // A session without the inventory eats nothing on its own, so the
+        // food setting is greyed out there.
+        let mut online = OnlineState::new(true);
+        testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities: vec![Capability::Talking],
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+            }],
+        );
+        testing::connect(&mut online, true);
+        app.insert_resource(online);
+        let food = Toggle::Qol(Fix::SkipModifiedFood);
+        app.world_mut()
+            .spawn((Interaction::Pressed, OptionCheckbox(food)));
+        app.update();
+        assert!(app.world().resource::<OptionsState>().on(food));
+        // Where the session offers it, a click turns it off.
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 2, testing::player(7));
+        app.insert_resource(online);
+        app.world_mut()
+            .spawn((Interaction::Pressed, OptionCheckbox(food)));
+        app.update();
+        assert!(!app.world().resource::<OptionsState>().on(food));
     }
 }

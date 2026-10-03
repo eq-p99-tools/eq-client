@@ -392,7 +392,7 @@ fn drawn_from(
 /// Draws each skinned window from the skin: a frame just built, or one
 /// drawn in another skin, is drawn again. A window the skin sizes to
 /// nothing is drawn as the default skin draws it while the player asks for
-/// such windows ([`eq_client_core::options::Toggle::HiddenWindows`]).
+/// such windows ([`eq_client_core::qol::Fix::HiddenWindows`]).
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn apply(
     mut commands: Commands,
@@ -411,7 +411,8 @@ pub(crate) fn apply(
     };
     let hidden_too = options
         .options
-        .get(eq_client_core::options::Toggle::HiddenWindows);
+        .qol
+        .on(eq_client_core::qol::Fix::HiddenWindows);
     for (frame, id, mut node, mut background, mut border, drawn, mut state) in &mut frames {
         let from = drawn_from(&mut screens, directory, (&skin.0, *id), hidden_too);
         if drawn.is_some_and(|drawn| drawn.0 == from) {
@@ -984,7 +985,7 @@ fn tabbed(
     inside: &Area,
     context: &Context,
 ) {
-    let pages = with_client_page(&tabs.pages, context.id);
+    let pages = with_qol_page(&tabs.pages, context.id, inside.height);
     let pages = pages.as_ref();
     let tab_box: std::sync::Arc<str> = tabs.name.as_str().into();
     let tab = |index| SkinTab {
@@ -993,13 +994,7 @@ fn tabbed(
         depth: context.depth,
         index,
     };
-    // A tab shows its page's picture, or else its words.
-    let height = |page: &eq_client_assets::sidl::Page| match (&page.icon[0], &page.title) {
-        (Some(piece), _) => to_f32(piece.height),
-        (None, Some(_)) => WORD_TAB_HEIGHT,
-        (None, None) => 24.0,
-    };
-    let strip = pages.iter().map(height).fold(0.0, f32::max) + 2.0;
+    let strip = tab_strip(pages.iter());
     window
         .spawn(Node {
             flex_direction: FlexDirection::Row,
@@ -1052,6 +1047,17 @@ fn tabbed(
                 pieces(page_area, art, &page.pieces, &inside, &within);
             });
     }
+}
+
+/// How tall a tab box's row of tabs is: its tallest tab, each showing its
+/// page's picture or else its words, and a little room.
+fn tab_strip<'a>(pages: impl Iterator<Item = &'a eq_client_assets::sidl::Page>) -> f32 {
+    let height = |page: &eq_client_assets::sidl::Page| match (&page.icon[0], &page.title) {
+        (Some(piece), _) => to_f32(piece.height),
+        (None, Some(_)) => WORD_TAB_HEIGHT,
+        (None, None) => 24.0,
+    };
+    pages.map(height).fold(0.0, f32::max) + 2.0
 }
 
 /// One tab in a tab box's row: its page's picture, or its words in a box
@@ -1469,12 +1475,7 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
         return None;
     }
     if owner == WindowId::Options {
-        return Some(
-            OPTION_CHECKBOXES
-                .iter()
-                .find(|(checkbox, _)| *checkbox == id)
-                .map_or(Does::Nothing, |(_, toggle)| Does::Option(*toggle)),
-        );
+        return Some(option_checkbox(id).map_or(Does::Nothing, Does::Option));
     }
     Some(match id {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
@@ -1586,9 +1587,9 @@ fn hot_button(id: &str) -> Option<usize> {
         .map(|number| number - 1)
 }
 
-/// The Options window's checkboxes for the options this client keeps, by
-/// screen ID; the Client page's is this client's own.
-const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 9] = {
+/// The skin's Options window checkboxes for the official client's options
+/// this client keeps, by screen ID.
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 7] = {
     use eq_client_core::options::Toggle;
     [
         ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
@@ -1598,22 +1599,44 @@ const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 9] = {
         ("ODP_NPCNamesCheckbox", Toggle::NpcNames),
         ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
         ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
-        (CLIENT_FOOD_CHECKBOX, Toggle::SkipModifiedFood),
-        (CLIENT_HIDDEN_CHECKBOX, Toggle::HiddenWindows),
     ]
 };
 
-/// The Client page's checkbox, which this client adds to the skin's
-/// Options window.
-const CLIENT_FOOD_CHECKBOX: &str = "EQC_SkipModifiedFoodCheckbox";
-const CLIENT_HIDDEN_CHECKBOX: &str = "EQC_HiddenWindowsCheckbox";
+/// The option an Options window checkbox turns on and off: one of the
+/// official client's options this client keeps, or a quality-of-life
+/// setting.
+fn option_checkbox(id: &str) -> Option<eq_client_core::options::Toggle> {
+    qol_checkbox(id)
+        .map(eq_client_core::options::Toggle::Qol)
+        .or_else(|| {
+            OPTION_CHECKBOXES
+                .iter()
+                .find(|(checkbox, _)| *checkbox == id)
+                .map(|(_, toggle)| *toggle)
+        })
+}
 
-/// The skin's pages of a tab box, and for the Options window a last page
-/// of the options only this client has, drawn with the skin's own
-/// checkbox.
-fn with_client_page(
+/// How the screen IDs of the quality-of-life page's checkboxes begin; each
+/// ends with its fix's file name.
+const QOL_CHECKBOX: &str = "EQC_QoL_";
+
+/// The screen ID of a quality-of-life setting's checkbox.
+fn qol_checkbox_id(fix: eq_client_core::qol::Fix) -> String {
+    format!("{QOL_CHECKBOX}{}", fix.key())
+}
+
+/// The quality-of-life setting a checkbox turns on and off.
+fn qol_checkbox(id: &str) -> Option<eq_client_core::qol::Fix> {
+    eq_client_core::qol::Fix::from_key(id.strip_prefix(QOL_CHECKBOX)?)
+}
+
+/// The skin's pages of a tab box, and for the Options window a last page,
+/// its quality-of-life page, with a checkbox for each setting, drawn with the
+/// skin's own checkbox, in the room a page has inside a window this tall.
+fn with_qol_page(
     pages: &[eq_client_assets::sidl::Page],
     owner: WindowId,
+    inside_height: f32,
 ) -> std::borrow::Cow<'_, [eq_client_assets::sidl::Page]> {
     use eq_client_assets::sidl::Element;
     if owner != WindowId::Options {
@@ -1630,45 +1653,59 @@ fn with_client_page(
     let (Some(checkbox), Some(first)) = (checkbox, pages.first()) else {
         return std::borrow::Cow::Borrowed(pages);
     };
-    // Each of the client's options in the skin's checkbox, one under another.
-    let options = [
-        (
-            CLIENT_FOOD_CHECKBOX,
-            "Skip Food With Modifiers",
-            "Leave food and drink with modifiers for you to eat or drink by hand when you get hungry or thirsty.",
-        ),
-        (
-            CLIENT_HIDDEN_CHECKBOX,
-            "Draw Windows the Skin Hides",
-            "Draw the windows your UI skin hides, such as the Velious skin's Raid window, as the default skin draws them.",
-        ),
-    ];
-    let pieces = (0u8..)
-        .zip(options)
-        .map(|(row, (id, text, tooltip))| {
-            let mut checkbox = checkbox.clone();
-            checkbox.id = Some(id.to_owned());
-            checkbox.text = Some(text.to_owned());
-            checkbox.tooltip = Some(tooltip.to_owned());
-            checkbox.area.x = 10.0;
-            checkbox.area.y = 10.0 + f32::from(row) * (checkbox.area.height + 6.0);
-            checkbox.area.width = checkbox.area.width.max(190.0);
-            (id.to_owned(), Element::Button(checkbox))
-        })
-        .collect();
-    let client = eq_client_assets::sidl::Page {
-        name: "EQC_ClientPage".to_owned(),
-        title: Some("Client".to_owned()),
+    let qol = eq_client_assets::sidl::Page {
+        name: "EQC_QoLPage".to_owned(),
+        title: Some("QoL".to_owned()),
         area: first.area,
         template: first.template.clone(),
-        pieces,
+        pieces: Vec::new(),
         icon: [None, None],
         title_colors: first.title_colors,
-        tooltip: Some("Options only this client has.".to_owned()),
+        tooltip: Some("Quality-of-life fixes only this client has.".to_owned()),
     };
+    // The page's room under the row of tabs, its own tab among them.
+    let room = inside_height - tab_strip(pages.iter().chain([&qol]));
     let mut all = pages.to_vec();
-    all.push(client);
+    all.push(eq_client_assets::sidl::Page {
+        pieces: qol_checkboxes(&checkbox, room),
+        ..qol
+    });
     std::borrow::Cow::Owned(all)
+}
+
+/// A checkbox cut from the skin's own for each quality-of-life setting, in
+/// their order, one under another down a page this tall and then on down
+/// the next column.
+fn qol_checkboxes(
+    checkbox: &eq_client_assets::sidl::Button,
+    room: f32,
+) -> Vec<(String, eq_client_assets::sidl::Element)> {
+    /// Room left around the checkboxes, and between columns.
+    const MARGIN: f32 = 10.0;
+    /// Room between one checkbox and the next one down.
+    const GAP: f32 = 6.0;
+    let row = checkbox.area.height + GAP;
+    let width = checkbox.area.width.max(190.0);
+    // As many rows as fit, and at least one.
+    let fits = |rows: u16| 2.0 * MARGIN + f32::from(rows) * row - GAP <= room;
+    let rows = (2..=u16::MAX)
+        .take_while(|rows| fits(*rows))
+        .last()
+        .unwrap_or(1);
+    (0u16..)
+        .zip(eq_client_core::qol::Fix::settings())
+        .map(|(index, fix)| {
+            let mut checkbox = checkbox.clone();
+            let id = qol_checkbox_id(fix);
+            checkbox.id = Some(id.clone());
+            checkbox.text = Some(fix.label().to_owned());
+            checkbox.tooltip = Some(fix.tooltip().to_owned());
+            checkbox.area.x = MARGIN + f32::from(index / rows) * (width + MARGIN);
+            checkbox.area.y = MARGIN + f32::from(index % rows) * row;
+            checkbox.area.width = width;
+            (id, eq_client_assets::sidl::Element::Button(checkbox))
+        })
+        .collect()
 }
 
 /// The Pet Info window's command buttons, by screen ID, with the `/pet`
@@ -1962,7 +1999,12 @@ fn behave(
             super::tooltip::Tooltip::default(),
         )),
         Does::Option(toggle) => {
-            drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()))
+            drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()));
+            // Greyed where the session does not offer what it is for.
+            match toggle.needs() {
+                Some(needs) => drawn.insert(crate::outbox::Needs::Capability(needs)),
+                None => drawn,
+            }
         }
         Does::Trains => drawn.insert((
             Button,
@@ -3814,7 +3856,7 @@ mod tests {
     #[test]
     fn the_options_window_checkboxes_turn_its_options_on_and_off() {
         use eq_client_assets::sidl::{Button, ButtonLook, Element, Page};
-        use eq_client_core::options::Toggle;
+        use eq_client_core::{options::Toggle, qol::Fix};
         assert!(matches!(
             does("ODP_ShowTargetRingCheckbox", WindowId::Options),
             Some(Does::Option(Toggle::TargetRing))
@@ -3830,7 +3872,8 @@ mod tests {
             Some(Does::Nothing)
         ));
         assert!(does("ODP_SetWindowedButton", WindowId::Options).is_none());
-        // The Client page comes last, with the skin's own checkbox.
+        // The QoL page comes last, a checkbox for each quality-of-life
+        // setting in the skin's own, one under another.
         let checkbox = Button {
             id: Some("OGP_PetWindowPopupCheckbox".into()),
             area: Area {
@@ -3859,28 +3902,49 @@ mod tests {
             title_colors: [None, None],
             tooltip: None,
         };
-        let pages = with_client_page(std::slice::from_ref(&general), WindowId::Options);
+        let pages = with_qol_page(std::slice::from_ref(&general), WindowId::Options, 400.0);
         assert_eq!(pages.len(), 2);
-        assert_eq!(pages[1].title.as_deref(), Some("Client"));
-        let Element::Button(food) = &pages[1].pieces[0].1 else {
-            panic!("a checkbox")
-        };
-        assert!(matches!(
-            does(food.id.as_deref().unwrap(), WindowId::Options),
-            Some(Does::Option(Toggle::SkipModifiedFood))
-        ));
-        // The switch for windows the skin hides sits under it.
-        let Element::Button(hidden) = &pages[1].pieces[1].1 else {
-            panic!("a checkbox")
-        };
-        assert!(matches!(
-            does(hidden.id.as_deref().unwrap(), WindowId::Options),
-            Some(Does::Option(Toggle::HiddenWindows))
-        ));
-        assert!(hidden.area.y >= food.area.y + food.area.height);
+        assert_eq!(pages[1].title.as_deref(), Some("QoL"));
+        let settings: Vec<_> = Fix::settings().collect();
+        assert_eq!(pages[1].pieces.len(), settings.len());
+        let mut above: Option<Area> = None;
+        for ((_, piece), fix) in pages[1].pieces.iter().zip(settings.iter().copied()) {
+            let Element::Button(checkbox) = piece else {
+                panic!("a checkbox")
+            };
+            assert!(checkbox.checkbox);
+            assert_eq!(checkbox.text.as_deref(), Some(fix.label()));
+            assert_eq!(checkbox.tooltip.as_deref(), Some(fix.tooltip()));
+            assert!(matches!(
+                does(checkbox.id.as_deref().unwrap(), WindowId::Options),
+                Some(Does::Option(toggle)) if toggle == Toggle::Qol(fix)
+            ));
+            if let Some(above) = above {
+                assert!((checkbox.area.x - above.x).abs() < f32::EPSILON);
+                assert!(checkbox.area.y >= above.y + above.height);
+            }
+            above = Some(checkbox.area);
+        }
+        // A page too short for another row goes on in the next column.
+        let short = with_qol_page(std::slice::from_ref(&general), WindowId::Options, 70.0);
+        let areas: Vec<Area> = short[1]
+            .pieces
+            .iter()
+            .map(|(_, piece)| match piece {
+                Element::Button(checkbox) => checkbox.area,
+                _ => panic!("a checkbox"),
+            })
+            .collect();
+        assert!(areas[1].x >= areas[0].x + areas[0].width);
+        assert!((areas[1].y - areas[0].y).abs() < f32::EPSILON);
         // Other windows keep the skin's pages as they are.
         assert_eq!(
-            with_client_page(std::slice::from_ref(&general), WindowId::ActionsWindow).len(),
+            with_qol_page(
+                std::slice::from_ref(&general),
+                WindowId::ActionsWindow,
+                400.0
+            )
+            .len(),
             1
         );
     }
