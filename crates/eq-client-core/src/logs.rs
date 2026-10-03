@@ -138,6 +138,7 @@ mod tests {
     fn spoken(channel: ChannelName, sender: Option<&str>, text: &str) -> ChatLine {
         ChatLine {
             channel,
+            message_type: None,
             sender: sender.map(str::to_owned),
             target: None,
             message: Message {

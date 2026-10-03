@@ -199,6 +199,7 @@ mod tests {
         };
         let line = |channel, sender: Option<&str>, source| ChatLine {
             channel,
+            message_type: None,
             sender: sender.map(str::to_owned),
             target: None,
             message: Message {

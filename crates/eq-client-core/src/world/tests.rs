@@ -1495,6 +1495,7 @@ fn news_for_the_player_comes_with_notices_and_others_news_without() {
         &WorldUpdate::ServerMessage {
             string_id: 12293,
             arguments: vec!["x".into()],
+            message_type: Some(289),
         },
         Instant::now(),
         &NoSpells,
@@ -1504,8 +1505,10 @@ fn news_for_the_player_comes_with_notices_and_others_news_without() {
         [Notice::ServerString {
             id: 12293,
             arguments: vec!["x".into()],
+            message_type: Some(289),
         }]
     );
+    assert_eq!(message.notices[0].message_type(), Some(289));
 }
 
 #[test]

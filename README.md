@@ -128,7 +128,10 @@ or an emote as the installed client's string for that kind of NPC line, the
 one the server's own NPC lines use, and a word to the group as a group line
 (inferred from EQEmu's notes on those modes, not checked); a plain server
 line, or one in a tongue other than the common one, reads as its text. Item links in a line
-stay clickable, and each channel keeps its colour. It retains 200 messages per channel group, preserving
+stay clickable. In the skin's chat, a line the server gives a message type of
+the official client's Colors page (256 and up) takes the player's colour for
+that type from the installation's `eqclient.ini`, and any other line its
+channel's. It retains 200 messages per channel group, preserving
 quiet guild/tell history during busy auction traffic. The exact default colors
 come from the mobile client's `src/App.css`; structured item-link data stays in
 memory for the item inspection panel. Scroll over chat to

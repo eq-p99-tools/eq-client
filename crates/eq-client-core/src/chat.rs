@@ -29,6 +29,11 @@ pub struct ChatLine {
     pub message: Message,
     /// Whose words these are.
     pub source: Source,
+    /// The message type the server gave the line (`EQEmu`'s numbers, 256
+    /// and up for the kinds the official client's Colors page sets), by
+    /// which the official client colours it; None for a channel's line,
+    /// whose channel says it, and for this client's own lines.
+    pub message_type: Option<u32>,
 }
 
 /// Channel groups presented by the chat window.
@@ -244,6 +249,7 @@ mod tests {
     fn line(channel: ChannelName) -> ChatLine {
         ChatLine {
             channel,
+            message_type: None,
             sender: None,
             target: None,
             message: Message {

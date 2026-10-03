@@ -7,6 +7,19 @@ use crate::{
     loot::LootResponse,
 };
 
+impl Notice {
+    /// The message type the server gave what the notice says, by which the
+    /// official client colours its line; None for what the world says
+    /// itself.
+    #[must_use]
+    pub const fn message_type(&self) -> Option<u32> {
+        match self {
+            Self::ServerString { message_type, .. } => *message_type,
+            _ => None,
+        }
+    }
+}
+
 /// Something to tell the player.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Notice {
@@ -23,6 +36,9 @@ pub enum Notice {
         id: u32,
         /// Its `%1`, `%2`, ... substitutions, in order.
         arguments: Vec<String>,
+        /// The message type the server gave it, by which the official client
+        /// colours its line.
+        message_type: Option<u32>,
     },
     /// The player considered a spawn.
     Consideration {

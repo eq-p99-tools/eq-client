@@ -449,6 +449,7 @@ pub(crate) fn chat_lines() -> Vec<eq_client_core::chat::ChatLine> {
     .into_iter()
     .map(|(channel, text)| ChatLine {
         channel,
+        message_type: None,
         sender: (!matches!(channel, ChannelName::System | ChannelName::Emote))
             .then(|| "Preview".into()),
         target: None,
