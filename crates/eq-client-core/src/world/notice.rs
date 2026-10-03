@@ -219,6 +219,18 @@ pub enum Notice {
     Group(super::GroupNotice),
     /// The player's own listing changed, as they asked.
     Listing(ListingNotice),
+    /// A die the server rolled for a player nearby, the player among them;
+    /// the server sends no line with it, so the official client words it
+    /// itself (inferred from its strings).
+    Roll(crate::socials::Roll),
+    /// A roll, emote or assist was not sent, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    SocialRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
     /// A listing change was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     ListingRefused {

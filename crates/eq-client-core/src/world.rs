@@ -130,6 +130,9 @@ pub struct ClientWorld {
     group_invitation: Option<String>,
     /// Whether the player agreed to join a group whose list has not come.
     joining_group: bool,
+    /// The target the server's answer to an assist names, until the player
+    /// takes it.
+    assisted: Option<u16>,
     /// Item definitions the server sent for inspection.
     items: ItemCache,
     // Until any reset: the target, the motion granted and camping.
@@ -228,6 +231,12 @@ impl ClientWorld {
     /// The player is done looting.
     pub fn close_loot(&mut self) {
         self.zone.trade.loot = None;
+    }
+
+    /// The target the server's answer to the player's assist names, taken
+    /// once: a front end targets it as the player would.
+    pub fn take_assisted(&mut self) -> Option<u16> {
+        self.assisted.take()
     }
 
     /// The player answered the resurrection offered; whatever comes of it
@@ -538,6 +547,24 @@ impl ClientWorld {
             } => self.ability_refused(*session_id, (reason, *string_id, arguments), news),
             WorldEvent::BindWound(update) => self.bind_wound(update, news),
             WorldEvent::WhoList(list) => news.notices.push(Notice::WhoList(list.clone())),
+            // Dice nearby, the server's answer to an assist, and a roll,
+            // emote or assist the session would not send.
+            WorldEvent::Roll(roll) => news.notices.push(Notice::Roll(roll.clone())),
+            WorldEvent::Assisted(answer) => self.assisted = answer.target,
+            WorldEvent::SocialRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::SocialRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
 
             // Food and drink: the session eats and drinks for the player.
             WorldEvent::Nourishment(nourishment) => self.nourishment = Some(*nourishment),
@@ -837,6 +864,7 @@ impl ClientWorld {
         self.group = None;
         self.group_invitation = None;
         self.joining_group = false;
+        self.assisted = None;
         self.death = None;
         self.forget_zone();
     }

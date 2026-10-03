@@ -402,6 +402,30 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
             command @ ("corpse" | "corpsedrag" | "corpsedrop" | "follow" | "disband" | "loc"
             | "time" | "afk" | "anonymous" | "roleplay"),
         ] => Step::Slash(format!("/{command}")),
+        // A die, an emote, or another's target.
+        ["random", numbers @ ..]
+            if numbers.len() <= 2 && numbers.iter().all(|number| number.parse::<u32>().is_ok()) =>
+        {
+            Step::Slash(
+                ["/random"]
+                    .iter()
+                    .chain(numbers)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+        }
+        ["emote", words @ ..] if !words.is_empty() => {
+            Step::Slash(format!("/emote {}", words.join(" ")))
+        }
+        ["assist", name @ ..] if name.len() <= 1 => Step::Slash(
+            ["/assist"]
+                .iter()
+                .chain(name)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
         // A group invitation, by name or for the target.
         ["invite", name @ ..] if name.len() <= 1 => Step::Slash(
             ["/invite"]

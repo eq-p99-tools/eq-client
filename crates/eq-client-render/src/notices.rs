@@ -224,6 +224,10 @@ fn in_chat(lines: Vec<Said>) -> Vec<(Place, Said)> {
 }
 
 /// How a notice reads, and where each part shows.
+#[allow(
+    clippy::too_many_lines,
+    reason = "a dispatch table: one arm per kind of notice, each a call"
+)]
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, Said)> {
     let chat = |said: Said| vec![(Place::Chat, said)];
     let status = |text: String| vec![(Place::Status, Said::own(text))];
@@ -288,7 +292,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::PetRefused { reason, string_id }
         | Notice::CombineRefused { reason, string_id }
         | Notice::GroupRefused { reason, string_id }
-        | Notice::ListingRefused { reason, string_id } => {
+        | Notice::ListingRefused { reason, string_id }
+        | Notice::SocialRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
         Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
@@ -332,7 +337,37 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         Notice::Group(notice) => in_chat(group_lines(notice, messages)),
         Notice::Listing(notice) => chat(listing_line(*notice, messages)),
+        Notice::Roll(roll) => in_chat(roll_lines(roll, messages)),
     }
+}
+
+/// A die rolled nearby, in the installed client's strings for it: 1086
+/// for who rolled it, then 1087 for its range and what it turned up; this
+/// client's words without them. That the official client says these, so,
+/// is inferred from what each says.
+fn roll_lines(roll: &eq_client_core::socials::Roll, messages: Option<&Messages>) -> Vec<Said> {
+    let range = [
+        roll.low.to_string(),
+        roll.high.to_string(),
+        roll.result.to_string(),
+    ];
+    vec![
+        official(
+            Some(1086),
+            std::slice::from_ref(&roll.name),
+            &format!("{} rolls a die.", roll.name),
+            messages,
+        ),
+        official(
+            Some(1087),
+            &range,
+            &format!(
+                "Rolling {} to {}, it came up {}.",
+                range[0], range[1], range[2]
+            ),
+            messages,
+        ),
+    ]
 }
 
 /// The player's own listing changing, in the installed client's strings
@@ -780,6 +815,37 @@ mod tests {
         assert_eq!(
             lines(GroupNotice::Disbanded, Some(&messages)),
             [Said::own("The group has disbanded.")]
+        );
+    }
+
+    #[test]
+    fn a_roll_reads_in_the_installed_strings() {
+        let messages = Messages::parse(
+            "EQST0002
+0 2
+1086 Die by %1.
+1087 From %1 to %2: %3.
+",
+        );
+        let roll = eq_client_core::socials::Roll {
+            name: "Friend".into(),
+            low: 1,
+            high: 6,
+            result: 4,
+        };
+        assert_eq!(
+            wording(&Notice::Roll(roll.clone()), Some(&messages)),
+            [
+                (Place::Chat, Said::official("Die by Friend.")),
+                (Place::Chat, Said::official("From 1 to 6: 4.")),
+            ]
+        );
+        assert_eq!(
+            wording(&Notice::Roll(roll), None),
+            [
+                (Place::Chat, Said::own("Friend rolls a die.")),
+                (Place::Chat, Said::own("Rolling 1 to 6, it came up 4.")),
+            ]
         );
     }
 
