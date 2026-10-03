@@ -19,6 +19,7 @@ pub mod reading;
 pub mod resources;
 pub mod skills;
 pub mod targeting;
+pub mod whereabouts;
 pub mod who;
 pub mod world;
 pub use eq_network_game::abilities;

@@ -394,6 +394,8 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         // Corpses: consent, summon and drag; a test death leaves one.
         [command @ ("consent" | "deny"), name] => Step::Slash(format!("/{command} {name}")),
         ["log"] => Step::Slash("/log".into()),
+        // Where and when the player is, which the client answers itself.
+        [command @ ("loc" | "time")] => Step::Slash(format!("/{command}")),
         ["shownames", level] => Step::Slash(format!("/shownames {level}")),
         // Corpses summoned or dragged, and groups joined, left, disbanded
         // or declined.
