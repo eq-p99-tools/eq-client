@@ -308,7 +308,8 @@ only while no box has the keyboard, so a Delete typed in the chat deletes
 nothing, and the chat then says whether the server deleted it. Moving and
 deleting need the session to offer them (`MovingSpells`, `DeletingSpells`),
 which servers do only where each has been checked: EQEmu, not P99 yet; a move
-or a deletion waits while another change to the book is under way. The skin's
+or a deletion is refused while another change to the book is under way, and
+the chosen spell stays chosen for another try. The skin's
 gauges fill while a memorization or a scribe is under way, and the chat says
 in the official words when one begins (once the player sits for it), ends (once
 the server answers) or stops (moving, casting or the like cancels it), with or
