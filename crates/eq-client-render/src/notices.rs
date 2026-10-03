@@ -318,11 +318,32 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         // The official client says why in the chat; the HUD keeps it on its
         // casting label as well.
-        Notice::CastInterrupted { string_id } => chat(match messages {
-            Some(messages) => messages.interruption(*string_id),
-            None => Messages::default().interruption(*string_id),
-        }),
+        Notice::CastInterrupted { string_id } => chat(own_interruption(*string_id, messages)),
+        Notice::OtherCastInterrupted { string_id, caster } => {
+            chat(other_interruption(*string_id, caster, messages))
+        }
     }
+}
+
+/// The player's own interruption: the server's string for why, or this
+/// client's words without it.
+fn own_interruption(string_id: u32, messages: Option<&Messages>) -> Said {
+    match messages {
+        Some(messages) => messages.interruption(string_id),
+        None => Messages::default().interruption(string_id),
+    }
+}
+
+/// Another caster's interruption: the server's string with the name it sent
+/// in the string's place for it, or this client's words without the string.
+/// Which chat filter and colour the official client gives it is not
+/// checked.
+fn other_interruption(string_id: u32, caster: &String, messages: Option<&Messages>) -> Said {
+    let fallback = format!("{caster}: casting interrupted (server reason {string_id})");
+    messages.map_or_else(
+        || Said::own(fallback.clone()),
+        |messages| messages.said_or(string_id, std::slice::from_ref(caster), &fallback),
+    )
 }
 
 /// The line as a skill rises: the official client's (eqstr 12091), with its
@@ -484,6 +505,36 @@ mod tests {
                 [(
                     Place::Chat,
                     Said::own(format!("Casting interrupted (server reason {id})"))
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn another_casters_interruption_names_them_in_the_servers_string() {
+        let notice = |string_id| Notice::OtherCastInterrupted {
+            string_id,
+            caster: "Examplar".into(),
+        };
+        let messages = Messages::parse(
+            "EQST0002
+0 1
+74 %1 stopped short.
+",
+        );
+        assert_eq!(
+            wording(&notice(74), Some(&messages)),
+            [(Place::Chat, Said::official("Examplar stopped short."))]
+        );
+        // Without the string, the client says it in its own words.
+        for (id, messages) in [(75, Some(&messages)), (74, None)] {
+            assert_eq!(
+                wording(&notice(id), messages),
+                [(
+                    Place::Chat,
+                    Said::own(format!(
+                        "Examplar: casting interrupted (server reason {id})"
+                    ))
                 )]
             );
         }

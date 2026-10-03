@@ -546,6 +546,29 @@ fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     assert_eq!((others.cast, others.notices), (None, Vec::new()));
     assert!(world.casting().cast.is_some());
     assert!(world.casting().interrupted.is_none());
+    // Another caster's interruption, which the server names, says whose it
+    // was, and leaves the player's cast alone.
+    let named = |caster_id, caster_name: &str| SpellUpdate::Interrupted {
+        caster_id,
+        message_id: 444,
+        caster_name: Some(caster_name.into()),
+    };
+    assert_eq!(
+        spell(&mut world, named(8, "Examplar")).notices,
+        [Notice::OtherCastInterrupted {
+            string_id: 444,
+            caster: "Examplar".into(),
+        }]
+    );
+    assert!(world.casting().cast.is_some());
+    // Whose it was goes by spawn ID: a name never makes it the player's,
+    // and an empty one says nothing.
+    assert_eq!(
+        spell(&mut world, named(9, "Examplar")).notices,
+        [Notice::CastInterrupted { string_id: 444 }]
+    );
+    assert_eq!(spell(&mut world, began.clone()).cast, Some(CastNews::Began));
+    assert_eq!(spell(&mut world, named(8, "")).notices, []);
     let mana = |spell_id, keep_casting| SpellUpdate::Mana {
         spell_id,
         keep_casting,
