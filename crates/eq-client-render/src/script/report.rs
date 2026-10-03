@@ -115,13 +115,22 @@ pub(super) fn state(
         listing = ?online.world().player().map(|player| player.listing),
         group = ?group(online),
         group_invitation = ?online.world().group_invitation(),
-        raid = ?online.world().raid().map(|raid| (
-            raid.leader.clone(),
-            raid.members.iter().map(|member| member.name.clone()).collect::<Vec<_>>(),
-        )),
+        raid = ?raid(online),
         raid_invitation = ?online.world().raid_invitation(),
         "Script report"
     );
+}
+
+/// The player's raid: its leader, and each member with their raid group.
+fn raid(online: &crate::online::OnlineState) -> Option<impl std::fmt::Debug> {
+    let raid = online.world().raid()?;
+    Some((
+        raid.leader.clone(),
+        raid.members
+            .iter()
+            .map(|member| (member.name.clone(), member.group))
+            .collect::<Vec<_>>(),
+    ))
 }
 
 /// The player's group: its leader, whether the player leads it, and each

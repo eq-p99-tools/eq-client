@@ -55,6 +55,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
         WindowId::Group => "EQUI_GroupWindow.xml",
+        WindowId::Raid => "EQUI_RaidWindow.xml",
         WindowId::Selector => "EQUI_SelectorWnd.xml",
         WindowId::CastBar => "EQUI_CastingWindow.xml",
         WindowId::Effects => "EQUI_BuffWindow.xml",
@@ -140,6 +141,14 @@ pub(crate) enum Shows {
     /// and Disband: the skin keeps each pair in the other's places, and the
     /// one for whether an invitation waits shows.
     WhileInvited(bool),
+    /// The Raid window's Accept and Decline buttons (true) or its Invite and
+    /// Disband, kept in the same places: the one for whether a raid
+    /// invitation waits shows.
+    WhileRaidInvited(bool),
+    /// How many are in the player's raid.
+    RaidCount,
+    /// The average level in the player's raid.
+    RaidLevel,
 }
 
 /// What a skinned window is drawn for: the window, and the paperdoll's
@@ -1242,6 +1251,33 @@ impl GroupButton {
     }
 }
 
+/// A button of the Raid window that runs a raid command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RaidButton {
+    Invite,
+    Disband,
+    Accept,
+    Decline,
+}
+
+impl RaidButton {
+    /// The slash command it runs: Invite invites the target, as
+    /// `/raidinvite` with no name does, and Disband leaves the raid.
+    const fn command(self) -> &'static str {
+        match self {
+            Self::Invite => "/raidinvite",
+            Self::Disband => "/raiddisband",
+            Self::Accept => "/raidaccept",
+            Self::Decline => "/raiddecline",
+        }
+    }
+
+    /// Whether it answers an invitation, and so shows only while one waits.
+    const fn answers(self) -> bool {
+        matches!(self, Self::Accept | Self::Decline)
+    }
+}
+
 /// What a skin's button does in the client.
 #[derive(Clone, Copy)]
 enum Does {
@@ -1267,6 +1303,8 @@ enum Does {
     /// Invites, follows, disbands or declines, as the group window's and the
     /// Actions window's group buttons do.
     Group(GroupButton),
+    /// Invites, leaves, accepts or declines, as the Raid window's buttons do.
+    Raid(RaidButton),
     /// Shows the pet's buff in this slot.
     PetBuff(usize),
     /// Shows the player's buff on this button of an effects window.
@@ -1456,12 +1494,14 @@ fn spellbook_button(id: &str) -> Option<Does> {
 }
 
 /// Whether a window's buttons are its own (`own_button`): the pet window's,
-/// the spellbook's, the character list's and the selector's.
+/// the group and Raid windows', the spellbook's, the character list's and
+/// the selector's.
 const fn has_own_buttons(owner: WindowId) -> bool {
     matches!(
         owner,
         WindowId::PetInfo
             | WindowId::Group
+            | WindowId::Raid
             | WindowId::Spellbook
             | WindowId::CharacterSelect
             | WindowId::Selector
@@ -1474,6 +1514,7 @@ fn own_button(id: &str, owner: WindowId) -> Option<Does> {
     match owner {
         WindowId::PetInfo => Some(pet_button(id)),
         WindowId::Group => group_button(id),
+        WindowId::Raid => raid_button(id),
         WindowId::Spellbook => spellbook_button(id),
         WindowId::CharacterSelect => Some(character_button(id)),
         WindowId::Selector => Some(selector_button(id).map_or(Does::Nothing, Does::Toggles)),
@@ -1680,6 +1721,21 @@ fn group_button(id: &str) -> Option<Does> {
     }))
 }
 
+/// The Raid window's buttons: Invite, Disband, Accept and Decline run the
+/// raid commands, and the leader's buttons do nothing yet. Unlock, which the
+/// skin keeps in Lock's place, is left out until the client follows whether
+/// the raid is locked.
+fn raid_button(id: &str) -> Option<Does> {
+    Some(Does::Raid(match id {
+        "RAID_InviteButton" => RaidButton::Invite,
+        "RAID_DisbandButton" => RaidButton::Disband,
+        "RAID_AcceptButton" => RaidButton::Accept,
+        "RAID_DeclineButton" => RaidButton::Decline,
+        "RAID_UnlockButton" => return None,
+        _ => return Some(Does::Nothing),
+    }))
+}
+
 /// The Actions window's ability buttons: the Combat page's first to fourth
 /// and the Abilities page's first to sixth.
 fn ability_button(id: &str) -> Option<super::abilities::AbilityButton> {
@@ -1791,7 +1847,8 @@ fn stacked(area: Area, index: u32, inside: &Area) -> Area {
 }
 
 /// When a button the skin keeps in another's place shows: the pet's Stand
-/// under its Sit, and the group window's Follow and Decline over Invite and
+/// under its Sit, the group window's Follow and Decline over Invite and
+/// Disband, and the Raid window's Accept and Decline over its Invite and
 /// Disband. One of each pair shows at a time.
 fn paired(does: Does, owner: WindowId) -> Option<Shows> {
     match does {
@@ -1799,11 +1856,13 @@ fn paired(does: Does, owner: WindowId) -> Option<Shows> {
         Does::Group(group) if owner == WindowId::Group => {
             Some(Shows::WhileInvited(group.answers()))
         }
+        Does::Raid(raid) => Some(Shows::WhileRaidInvited(raid.answers())),
         _ => None,
     }
 }
 
 /// What a pressed skin button does, and the state it shows.
+#[allow(clippy::too_many_lines)] // One arm for each kind of button.
 fn behave(
     drawn: &mut EntityCommands,
     does: Does,
@@ -1842,6 +1901,12 @@ fn behave(
             SlashButton(group.command()),
             skin(),
             crate::outbox::Needs::Capability(Capability::Grouping),
+        )),
+        Does::Raid(raid) => drawn.insert((
+            Button,
+            SlashButton(raid.command()),
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Raiding),
         )),
         Does::PetBuff(slot) => drawn.insert((Shows::PetBuff(slot), Visibility::Hidden)),
         // Hovering a buff names it, as the client's own window does.
@@ -2062,6 +2127,7 @@ fn caption(
         | Does::Attack
         | Does::Slash(_)
         | Does::Group(_)
+        | Does::Raid(_)
         | Does::Option(_)
         | Does::Trains
         | Does::Answers(_)
@@ -2511,6 +2577,13 @@ fn window_label(owner: WindowId, name: &str) -> Option<Shows> {
                 .map(Shows::BookName),
         };
     }
+    if owner == WindowId::Raid {
+        return match name {
+            "RAID_PlayerCountLabel" => Some(Shows::RaidCount),
+            "RAID_LevelAverageLabel" => Some(Shows::RaidLevel),
+            _ => None,
+        };
+    }
     if owner == WindowId::Group {
         return name
             .strip_prefix("GW_HPPercLabel")
@@ -2720,6 +2793,7 @@ fn shown_now(
         Shows::Member(place) => world.group_place(place).is_some(),
         Shows::MemberPet(place) => world.group_pet(place).is_some(),
         Shows::WhileInvited(invited) => world.group_invitation().is_some() == invited,
+        Shows::WhileRaidInvited(invited) => world.raid_invitation().is_some() == invited,
         _ => return None,
     })
 }
@@ -2811,6 +2885,7 @@ pub(crate) fn show(
                 },
                 None,
             ),
+            Shows::RaidCount | Shows::RaidLevel => (raid_text(*shows, world), None),
             Shows::Partner => (
                 super::give::partner(world),
                 Some(super::give::ink(world, super::give::Side::Theirs)),
@@ -2829,7 +2904,8 @@ pub(crate) fn show(
             | Shows::WhileSelling(_)
             | Shows::Member(_)
             | Shows::MemberPet(_)
-            | Shows::WhileInvited(_) => {
+            | Shows::WhileInvited(_)
+            | Shows::WhileRaidInvited(_) => {
                 continue;
             }
         };
@@ -2841,6 +2917,19 @@ pub(crate) fn show(
         {
             color.0 = tint;
         }
+    }
+}
+
+/// What the Raid window's count of members and their average level say:
+/// nought outside a raid, as the skin's own text says.
+fn raid_text(shows: Shows, world: &eq_client_core::world::ClientWorld) -> String {
+    let raid = world.raid();
+    match shows {
+        Shows::RaidCount => raid.map_or(0, |raid| raid.members.len()).to_string(),
+        _ => raid
+            .and_then(eq_client_core::world::Raid::level_average)
+            .unwrap_or(0)
+            .to_string(),
     }
 }
 
@@ -3987,6 +4076,91 @@ mod tests {
             paired(Does::Group(GroupButton::Follow), WindowId::ActionsWindow),
             None
         );
+    }
+
+    #[test]
+    fn raid_buttons_run_the_raid_commands_and_the_labels_count_the_raid() {
+        use eq_client_core::raid::{RaidMember, RaidUpdate};
+        let raid = |id| match does(id, WindowId::Raid) {
+            Some(Does::Raid(button)) => Some(button),
+            _ => None,
+        };
+        assert_eq!(raid("RAID_InviteButton"), Some(RaidButton::Invite));
+        assert_eq!(raid("RAID_DisbandButton"), Some(RaidButton::Disband));
+        assert_eq!(raid("RAID_AcceptButton"), Some(RaidButton::Accept));
+        assert_eq!(raid("RAID_DeclineButton"), Some(RaidButton::Decline));
+        assert_eq!(RaidButton::Invite.command(), "/raidinvite");
+        assert_eq!(RaidButton::Disband.command(), "/raiddisband");
+        // The leader's buttons do nothing yet, and Unlock, in Lock's place,
+        // is left out.
+        assert!(matches!(
+            does("RAID_MakeLeaderButton", WindowId::Raid),
+            Some(Does::Nothing)
+        ));
+        assert!(matches!(
+            does("RAID_LockButton", WindowId::Raid),
+            Some(Does::Nothing)
+        ));
+        assert!(does("RAID_UnlockButton", WindowId::Raid).is_none());
+        // Accept and Decline take Invite's and Disband's places while an
+        // invitation waits.
+        assert_eq!(
+            paired(Does::Raid(RaidButton::Accept), WindowId::Raid),
+            Some(Shows::WhileRaidInvited(true))
+        );
+        assert_eq!(
+            paired(Does::Raid(RaidButton::Invite), WindowId::Raid),
+            Some(Shows::WhileRaidInvited(false))
+        );
+        assert_eq!(
+            window_label(WindowId::Raid, "RAID_PlayerCountLabel"),
+            Some(Shows::RaidCount)
+        );
+        assert_eq!(
+            window_label(WindowId::Raid, "RAID_LevelAverageLabel"),
+            Some(Shows::RaidLevel)
+        );
+        assert_eq!(window_label(WindowId::Raid, "RAID_PlayerListLabel"), None);
+        // Nought outside a raid; then the members and their average level.
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        assert_eq!(raid_text(Shows::RaidCount, state.world()), "0");
+        assert_eq!(raid_text(Shows::RaidLevel, state.world()), "0");
+        let member = |name: &str, level| {
+            WorldEvent::Raid(RaidUpdate::Added(RaidMember {
+                name: name.into(),
+                group: None,
+                class: 1,
+                level,
+                group_leader: false,
+            }))
+        };
+        testing::news(
+            &mut state,
+            [
+                WorldEvent::Raid(RaidUpdate::Invited {
+                    inviter: "Leader".into(),
+                }),
+                WorldEvent::Raid(RaidUpdate::Created {
+                    leader: "Leader".into(),
+                }),
+                member("Leader", 30),
+                member("Example", 5),
+            ],
+        );
+        assert_eq!(raid_text(Shows::RaidCount, state.world()), "2");
+        assert_eq!(raid_text(Shows::RaidLevel, state.world()), "17");
+        // In the raid, no invitation waits: Invite and Disband show.
+        let shown = |shows| {
+            shown_now(
+                shows,
+                state.world(),
+                &crate::combat::CombatState::default(),
+                &crate::trade::TradeState::default(),
+            )
+        };
+        assert_eq!(shown(Shows::WhileRaidInvited(false)), Some(true));
+        assert_eq!(shown(Shows::WhileRaidInvited(true)), Some(false));
     }
 
     #[test]

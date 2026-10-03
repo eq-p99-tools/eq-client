@@ -683,6 +683,8 @@ pub(crate) enum Listing {
     Skills,
     /// A merchant's wares.
     Merchant,
+    /// The members of the player's raid in a raid group, or in none.
+    Raid(crate::raid::RaidList),
 }
 
 /// A list's rows, which the client fills and the wheel scrolls.
@@ -704,6 +706,12 @@ fn listing(id: Option<&str>, owner: WindowId) -> Option<Listing> {
         (WindowId::Training, Some("SkillList")) => Some(Listing::Training),
         (WindowId::Skills, Some("SkillList")) => Some(Listing::Skills),
         (WindowId::Merchant, Some("ItemList")) => Some(Listing::Merchant),
+        (WindowId::Raid, Some("RAID_PlayerList")) => {
+            Some(Listing::Raid(crate::raid::RaidList::Grouped))
+        }
+        (WindowId::Raid, Some("RAID_NotInGroupPlayerList")) => {
+            Some(Listing::Raid(crate::raid::RaidList::Ungrouped))
+        }
         _ => None,
     }
 }
@@ -728,14 +736,18 @@ pub(super) fn listbox(
         });
     let listing = listing(list.id.as_deref(), owner);
     // A press anywhere on the list stays on it, its rows and headings
-    // included, rather than dragging its window.
+    // included, rather than dragging its window. Nothing of it draws outside
+    // its box, as columns wider than the skin makes it would.
     let mut drawn = window.spawn((
-        at(
-            inside.x + area.x,
-            inside.y + area.y,
-            area.width,
-            area.height,
-        ),
+        Node {
+            overflow: Overflow::clip(),
+            ..at(
+                inside.x + area.x,
+                inside.y + area.y,
+                area.width,
+                area.height,
+            )
+        },
         BackgroundColor(theme::INSET),
         crate::windows::KeepsPress,
     ));
@@ -776,43 +788,35 @@ pub(super) fn listbox(
             ScrollPosition::default(),
         ));
         let scrolled = rows.id();
-        let columns = list.columns.iter().map(|column| column.width).collect();
-        match listing {
-            Some(Listing::Keys) => {
-                rows.insert((
-                    ListRows {
-                        listing: Listing::Keys,
-                        columns,
-                        filled: false,
-                        filter: None,
-                    },
-                    crate::windows::pointer::TakesWheel,
-                ));
-            }
-            Some(Listing::Training) => {
-                rows.insert((
-                    crate::training::SkillRows::new(columns),
-                    crate::windows::pointer::TakesWheel,
-                ));
-            }
-            Some(Listing::Skills) => {
-                rows.insert((
-                    crate::skills::SkillsList::new(columns),
-                    crate::windows::pointer::TakesWheel,
-                ));
-            }
-            Some(Listing::Merchant) => {
-                rows.insert((
-                    crate::trade::MerchantRows::new(columns),
-                    crate::windows::pointer::TakesWheel,
-                ));
-            }
-            None => (),
+        if let Some(listing) = listing {
+            let columns = list.columns.iter().map(|column| column.width).collect();
+            filled_by(&mut rows, listing, columns);
         }
         if let Some(look) = bar {
             super::scrollbar::spawn(frame, art, look, &client, (scrolled, owner));
         }
     });
+}
+
+/// Marks a list's rows for what fills them, with each column's width, and
+/// lets the wheel scroll them.
+fn filled_by(rows: &mut EntityCommands, listing: Listing, columns: Vec<f32>) {
+    let wheel = crate::windows::pointer::TakesWheel;
+    match listing {
+        Listing::Keys => rows.insert((
+            ListRows {
+                listing,
+                columns,
+                filled: false,
+                filter: None,
+            },
+            wheel,
+        )),
+        Listing::Training => rows.insert((crate::training::SkillRows::new(columns), wheel)),
+        Listing::Skills => rows.insert((crate::skills::SkillsList::new(columns), wheel)),
+        Listing::Merchant => rows.insert((crate::trade::MerchantRows::new(columns), wheel)),
+        Listing::Raid(list) => rows.insert((crate::raid::RaidRows::new(list, columns), wheel)),
+    };
 }
 
 /// Each of a list's column headings across the top of its inside, on the
@@ -881,9 +885,9 @@ pub(crate) fn fill_lists(
     for (entity, mut rows, children) in &mut lists {
         let wanted = match rows.listing {
             Listing::Keys => filter.0.clone(),
-            // The Training, Skills and merchant windows' lists fill
+            // The Training, Skills, merchant and Raid windows' lists fill
             // themselves.
-            Listing::Training | Listing::Skills | Listing::Merchant => continue,
+            Listing::Training | Listing::Skills | Listing::Merchant | Listing::Raid(_) => continue,
         };
         if rows.filled && rows.filter == wanted && !keys.is_changed() {
             continue;
@@ -941,6 +945,7 @@ type ScrolledList = Or<(
     With<crate::training::SkillRows>,
     With<crate::skills::SkillsList>,
     With<crate::trade::MerchantRows>,
+    With<crate::raid::RaidRows>,
     With<super::ScrolledView>,
     With<super::ScrolledText>,
 )>;
