@@ -2346,3 +2346,110 @@ fn a_roll_is_said_and_an_assist_answer_is_taken_once() {
     game(&mut world, WorldEvent::Assisted(Assisted { target: None }));
     assert_eq!(world.take_assisted(), None);
 }
+
+#[test]
+fn a_raid_formed_joined_and_left_says_what_happened() {
+    use crate::raid::{RaidMember, RaidUpdate};
+    let raid_news = |world: &mut ClientWorld, update| game(world, WorldEvent::Raid(update)).notices;
+    let said = |notice| vec![Notice::Raid(notice)];
+    let member = |name: &str| {
+        RaidUpdate::Added(RaidMember {
+            name: name.into(),
+            group: None,
+            class: 1,
+            level: 1,
+            group_leader: false,
+        })
+    };
+    let created = |leader: &str| RaidUpdate::Created {
+        leader: leader.into(),
+    };
+    // The player forms a raid with the one they invited.
+    let mut leader = admitted();
+    raid_news(
+        &mut leader,
+        RaidUpdate::Inviting {
+            player: "Friend".into(),
+        },
+    );
+    assert_eq!(raid_news(&mut leader, created("Example")), said(RaidNotice::Formed));
+    assert_eq!(raid_news(&mut leader, member("Example")), []);
+    assert_eq!(
+        raid_news(&mut leader, member("Friend")),
+        said(RaidNotice::Joined(Party::Named("Friend".into())))
+    );
+    assert!(leader.leads_raid());
+    assert_eq!(leader.raid().map(|raid| raid.members.len()), Some(2));
+    // The one invited joins: the list that follows says nothing.
+    let mut joiner = admitted();
+    raid_news(
+        &mut joiner,
+        RaidUpdate::Invited {
+            inviter: "Leader".into(),
+        },
+    );
+    assert_eq!(joiner.raid_invitation(), Some("Leader"));
+    raid_news(
+        &mut joiner,
+        RaidUpdate::Accepting {
+            inviter: "Leader".into(),
+        },
+    );
+    assert_eq!(
+        raid_news(&mut joiner, created("Leader")),
+        said(RaidNotice::Joined(Party::Player))
+    );
+    assert_eq!(raid_news(&mut joiner, member("Leader")), []);
+    assert_eq!(raid_news(&mut joiner, member("Example")), []);
+    assert_eq!(
+        raid_news(
+            &mut joiner,
+            RaidUpdate::Leader {
+                name: "Leader".into()
+            }
+        ),
+        []
+    );
+    // Later joins and leaves say so.
+    assert_eq!(
+        raid_news(&mut joiner, member("Third")),
+        said(RaidNotice::Joined(Party::Named("Third".into())))
+    );
+    assert_eq!(
+        raid_news(
+            &mut joiner,
+            RaidUpdate::Removed {
+                member: "Third".into()
+            }
+        ),
+        said(RaidNotice::Left(Party::Named("Third".into())))
+    );
+    // Leaving: removed, then the raid's end, which says nothing more.
+    assert_eq!(
+        raid_news(
+            &mut joiner,
+            RaidUpdate::Removed {
+                member: "Example".into()
+            }
+        ),
+        said(RaidNotice::Left(Party::Player))
+    );
+    assert_eq!(raid_news(&mut joiner, RaidUpdate::Disbanded), []);
+    assert!(joiner.raid().is_none());
+    // A group the player is not in, ended as they leave a raid, says
+    // nothing.
+    assert_eq!(
+        game(
+            &mut joiner,
+            WorldEvent::Group(crate::group::GroupUpdate::Disbanded)
+        )
+        .notices,
+        []
+    );
+    // Entering a zone lists the raid again without a word.
+    raid_news(&mut leader, RaidUpdate::Leaving);
+    game(&mut leader, entered(2));
+    assert!(leader.raid().is_none());
+    assert_eq!(raid_news(&mut leader, created("Example")), []);
+    assert_eq!(raid_news(&mut leader, member("Friend")), []);
+}

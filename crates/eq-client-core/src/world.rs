@@ -17,6 +17,7 @@ mod group;
 mod items;
 mod link;
 mod notice;
+mod raid;
 mod read;
 mod spells;
 mod target;
@@ -31,6 +32,7 @@ pub use group::{Group, GroupNotice};
 pub use items::ItemCache;
 pub use link::Link;
 pub use notice::{ListingNotice, Notice, Party};
+pub use raid::{Raid, RaidNotice};
 pub use target::Target;
 pub use trade::{Asker, Exchange, Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
@@ -133,6 +135,15 @@ pub struct ClientWorld {
     /// The target the server's answer to an assist names, until the player
     /// takes it.
     assisted: Option<u16>,
+    /// The player's raid, while they are in one. The server lists it again
+    /// after each admission.
+    raid: Option<Raid>,
+    /// Who invited the player to their raid, until the player answers or is
+    /// in one; the session forgets it with the admission.
+    raid_invitation: Option<String>,
+    /// Raid news on the way: an invitation sent or accepted, and the list
+    /// the server is sending.
+    raid_flow: raid::RaidFlow,
     /// Item definitions the server sent for inspection.
     items: ItemCache,
     // Until any reset: the target, the motion granted and camping.
@@ -547,6 +558,22 @@ impl ClientWorld {
             } => self.ability_refused(*session_id, (reason, *string_id, arguments), news),
             WorldEvent::BindWound(update) => self.bind_wound(update, news),
             WorldEvent::WhoList(list) => news.notices.push(Notice::WhoList(list.clone())),
+            // News of raids, and a raid request the session would not send.
+            WorldEvent::Raid(update) => self.raid_news(update, news),
+            WorldEvent::RaidRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::RaidRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             // Dice nearby, the server's answer to an assist, and a roll,
             // emote or assist the session would not send.
             WorldEvent::Roll(roll) => news.notices.push(Notice::Roll(roll.clone())),
@@ -865,6 +892,9 @@ impl ClientWorld {
         self.group_invitation = None;
         self.joining_group = false;
         self.assisted = None;
+        self.raid = None;
+        self.raid_invitation = None;
+        self.raid_flow = raid::RaidFlow::default();
         self.death = None;
         self.forget_zone();
     }

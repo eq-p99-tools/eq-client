@@ -180,6 +180,43 @@ mod tests {
     }
 
     #[test]
+    fn raid_speech_keeps_the_empty_tongues_place() {
+        use eq_client_core::chat::{ChannelName, ChatLine, Message, Source};
+        let messages = crate::hud::messages::Messages::parse(
+            "EQST0002
+0 2
+5109 Mine, '%1'
+5112 %1 raid, %2 '%3'
+",
+        );
+        let line = |sender: &str| ChatLine {
+            channel: ChannelName::Raid,
+            message_type: None,
+            sender: Some(sender.into()),
+            target: None,
+            message: Message {
+                message: None,
+                message_hex: None,
+                text: "go".into(),
+                item_links: Vec::new(),
+            },
+            source: Source::Server,
+        };
+        // Another's line leaves the tongue's place empty, so two spaces stay
+        // before the quote, as the installed string has them.
+        assert_eq!(
+            shown(&line("Examplar"), "Tester", Some(&messages)).text,
+            "Examplar raid,  'go'"
+        );
+        // The player's own line, which the session records as the others
+        // hear it.
+        assert_eq!(
+            shown(&line("Tester"), "Tester", Some(&messages)).text,
+            "Mine, 'go'"
+        );
+    }
+
+    #[test]
     fn the_chat_shows_a_line_in_its_logs_words_with_its_links() {
         use eq_client_core::chat::{ChannelName, ChatLine, Message, Source};
         let messages = crate::hud::messages::Messages::parse(

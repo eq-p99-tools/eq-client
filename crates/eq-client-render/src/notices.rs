@@ -12,7 +12,7 @@ use eq_client_core::{
     entities::display_name,
     food::Shortage,
     loot::LootResponse,
-    world::{GroupNotice, Link, ListingNotice, Notice, Party},
+    world::{GroupNotice, Link, ListingNotice, Notice, Party, RaidNotice},
 };
 
 /// One line on screen besides the chat, which notices set.
@@ -293,7 +293,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::CombineRefused { reason, string_id }
         | Notice::GroupRefused { reason, string_id }
         | Notice::ListingRefused { reason, string_id }
-        | Notice::SocialRefused { reason, string_id } => {
+        | Notice::SocialRefused { reason, string_id }
+        | Notice::RaidRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
         Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
@@ -338,6 +339,78 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::Group(notice) => in_chat(group_lines(notice, messages)),
         Notice::Listing(notice) => chat(listing_line(*notice, messages)),
         Notice::Roll(roll) => in_chat(roll_lines(roll, messages)),
+        Notice::Raid(notice) => in_chat(raid_lines(notice, messages)),
+    }
+}
+
+/// News of the player's raid, in the installed client's strings for it:
+/// 5064 for the player inviting someone; 5065 and then 5067 for an
+/// invitation to the player; 5079 for agreeing to join and 5080 for
+/// declining; 5061 for forming a raid; 5059 and 5083 for someone else and
+/// the player joining, 5063 and 5062 for leaving, and 5070 and 5069 for
+/// becoming the leader; and 5071 for the raid ending. This client's words
+/// without the strings. That the official client says these lines at these
+/// moments is inferred from what each says, since the server sends none of
+/// them.
+fn raid_lines(notice: &RaidNotice, messages: Option<&Messages>) -> Vec<Said> {
+    let line = |id, name: Option<&String>, fallback: &str| {
+        let arguments = name.map(std::slice::from_ref).unwrap_or_default();
+        official(Some(id), arguments, fallback, messages)
+    };
+    match notice {
+        RaidNotice::Inviting(name) => vec![line(
+            5064,
+            Some(name),
+            &format!("You asked {name} to join your raid."),
+        )],
+        RaidNotice::Invited(name) => vec![
+            line(
+                5065,
+                Some(name),
+                &format!("{name} asks you to join a raid."),
+            ),
+            line(
+                5067,
+                None,
+                "Type /raidaccept to join, or /raiddecline to say no.",
+            ),
+        ],
+        RaidNotice::Accepting(name) => vec![line(
+            5079,
+            Some(name),
+            &format!("You tell {name} you will join the raid."),
+        )],
+        RaidNotice::Declining(name) => vec![line(
+            5080,
+            Some(name),
+            &format!("You turn down {name}'s raid."),
+        )],
+        RaidNotice::Formed => vec![line(5061, None, "Your raid is formed.")],
+        RaidNotice::Joined(Party::Named(name)) => {
+            vec![line(
+                5059,
+                Some(name),
+                &format!("{name} is in the raid now."),
+            )]
+        }
+        RaidNotice::Joined(_) => vec![line(5083, None, "You are in the raid now.")],
+        RaidNotice::Left(Party::Named(name)) => {
+            vec![line(
+                5063,
+                Some(name),
+                &format!("{name} is out of the raid."),
+            )]
+        }
+        RaidNotice::Left(_) => vec![line(5062, None, "You are out of the raid.")],
+        RaidNotice::Leader(Party::Named(name)) => {
+            vec![line(
+                5070,
+                Some(name),
+                &format!("{name} leads the raid now."),
+            )]
+        }
+        RaidNotice::Leader(_) => vec![line(5069, None, "You lead the raid now.")],
+        RaidNotice::Disbanded => vec![line(5071, None, "The raid has ended.")],
     }
 }
 
@@ -815,6 +888,35 @@ mod tests {
         assert_eq!(
             lines(GroupNotice::Disbanded, Some(&messages)),
             [Said::own("The group has disbanded.")]
+        );
+    }
+
+    #[test]
+    fn raid_news_reads_in_the_installed_strings() {
+        let messages = Messages::parse(
+            "EQST0002
+0 3
+5059 %1 in.
+5065 From %1.
+5067 Answer.
+",
+        );
+        let said = |notice| wording(&Notice::Raid(notice), Some(&messages));
+        assert_eq!(
+            said(RaidNotice::Joined(Party::Named("Friend".into()))),
+            [(Place::Chat, Said::official("Friend in."))]
+        );
+        assert_eq!(
+            said(RaidNotice::Invited("Friend".into())),
+            [
+                (Place::Chat, Said::official("From Friend.")),
+                (Place::Chat, Said::official("Answer.")),
+            ]
+        );
+        // A string the installation lacks reads in this client's words.
+        assert_eq!(
+            said(RaidNotice::Disbanded),
+            [(Place::Chat, Said::own("The raid has ended."))]
         );
     }
 

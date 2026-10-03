@@ -1095,6 +1095,25 @@ fn social_commands(
             }])
         }),
         // Groups: an invitation takes a name, the rest no words.
+        // Raids: an invitation takes a name or the targeted player, the rest
+        // no words.
+        "raidinvite" => stamp().map(|stamp| {
+            vec![ClientCommand::RaidInvite {
+                session_id: stamp.session_id,
+                name: words
+                    .split_whitespace()
+                    .next()
+                    .map_or_else(|| targeted_player(online), str::to_owned),
+            }]
+        }),
+        "raidaccept" | "raiddecline" | "raiddisband" if words.is_empty() => stamp().map(|stamp| {
+            let session_id = stamp.session_id;
+            vec![match name {
+                "raidaccept" => ClientCommand::RaidAccept { session_id },
+                "raiddecline" => ClientCommand::RaidDecline { session_id },
+                _ => ClientCommand::RaidLeave { session_id },
+            }]
+        }),
         "invite" | "follow" | "disband" if name == "invite" || words.is_empty() => {
             stamp().map(|stamp| vec![group_command(name, words, online, stamp.session_id)])
         }
