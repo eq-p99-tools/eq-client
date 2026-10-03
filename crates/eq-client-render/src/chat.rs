@@ -1404,6 +1404,30 @@ mod tests {
     }
 
     #[test]
+    fn the_skinned_input_shows_only_the_line_and_the_caret() {
+        let mut app = App::new();
+        app.init_resource::<ChatState>()
+            .init_resource::<crate::keys::Typing>()
+            .add_systems(Update, refresh);
+        let bare = app
+            .world_mut()
+            .spawn((InputLabel, Bare, Text::new("x")))
+            .id();
+        let own = app.world_mut().spawn((InputLabel, Text::new("x"))).id();
+        let text = |app: &App, entity| app.world().get::<Text>(entity).unwrap().0.clone();
+        app.update();
+        // Idle, the skin's box is empty; the client's own asks for Enter.
+        assert_eq!(text(&app, bare), "");
+        assert_eq!(text(&app, own), "Press Enter to chat");
+        // Typing, the caret alone shows it.
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        app.update();
+        assert_eq!(text(&app, bare), "|");
+    }
+
+    #[test]
     fn the_skins_boxes_hold_the_tabs_lines_and_input() {
         use bevy::ecs::system::RunSystemOnce;
         let mut app = App::new();
