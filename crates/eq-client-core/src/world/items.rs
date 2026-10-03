@@ -65,6 +65,8 @@ mod tests {
             races: 0,
             flags: Vec::new(),
             stats: Vec::new(),
+            price: None,
+            icon: None,
         }
     }
 

@@ -128,7 +128,7 @@ pub(crate) fn update(
         }
         return;
     };
-    let icon = art.item(item.icon);
+    let icon = item.details.icon.and_then(|icon| art.item(icon));
     let mut text = item.details.name.clone();
     if let Some(count) = item.stack_count {
         use std::fmt::Write;
@@ -174,7 +174,11 @@ fn picture(
 ) -> Option<(ImageNode, Vec2)> {
     let whole = Vec2::new(place.icon.width, place.icon.height);
     match (item, coins) {
-        (Some(item), _) => art.item(item.icon).map(|icon| (icon, whole)),
+        (Some(item), _) => item
+            .details
+            .icon
+            .and_then(|icon| art.item(icon))
+            .map(|icon| (icon, whole)),
         (None, Some((coin, _))) => place.coin(coin).and_then(|piece| {
             let size = Vec2::new(to_f32(piece.width), to_f32(piece.height));
             art.cut(piece).map(|image| (image, size))

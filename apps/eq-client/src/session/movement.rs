@@ -368,6 +368,7 @@ mod tests {
                 killer_id: 0,
                 corpse_id: 0,
                 bind_zone_id: 0,
+                corpse_name: None,
             }),
             now,
         );
@@ -392,6 +393,7 @@ mod tests {
                 killer_id: 0,
                 corpse_id: 0,
                 bind_zone_id: 0,
+                corpse_name: None,
             }),
             transfer(true),
         ] {

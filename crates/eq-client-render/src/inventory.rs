@@ -461,7 +461,7 @@ fn right_click(
             }
         });
     } else {
-        items.open_held(item);
+        items.open_received(item.details.clone());
     }
 }
 

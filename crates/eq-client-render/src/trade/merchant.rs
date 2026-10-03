@@ -36,7 +36,7 @@ impl MerchantRows {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Row {
     slot: u32,
-    icon: u32,
+    icon: Option<u32>,
     name: String,
     quantity: u32,
     price: u32,
@@ -53,7 +53,7 @@ fn rows(world: &ClientWorld, chosen: Option<Chosen>) -> Vec<Row> {
                 .values()
                 .map(|ware| Row {
                     slot: ware.slot,
-                    icon: ware.item.icon,
+                    icon: ware.item.details.icon,
                     name: ware.item.details.name.clone(),
                     quantity: ware.quantity,
                     price: ware.price,
@@ -128,7 +128,7 @@ pub(crate) fn fill(
                         ChildOf(line),
                     ))
                     .id();
-                if let Some(icon) = art.item(row.icon) {
+                if let Some(icon) = row.icon.and_then(|icon| art.item(icon)) {
                     commands.spawn((
                         icon,
                         Node {
@@ -207,7 +207,7 @@ pub(crate) struct ChosenPicture {
 pub(crate) struct ChosenIcon;
 
 /// What the chosen item's box last showed: its icon and name, if anything.
-type Shown<'s> = Local<'s, Option<Option<(u32, String)>>>;
+type Shown<'s> = Local<'s, Option<Option<(Option<u32>, String)>>>;
 
 /// Draws the chosen item's picture in the skin's box, named on hover, when
 /// the choice or the items change.
@@ -222,7 +222,7 @@ pub(crate) fn picture(
     old: Query<(), With<ChosenIcon>>,
 ) {
     let item = chosen(&trade, online.world());
-    let shown = item.map(|(item, _)| (item.icon, item.details.name.clone()));
+    let shown = item.map(|(item, _)| (item.details.icon, item.details.name.clone()));
     if last.as_ref() == Some(&shown) && added.is_empty() {
         return;
     }
@@ -240,7 +240,7 @@ pub(crate) fn picture(
         commands
             .entity(entity)
             .insert(crate::tooltip::Tooltip(name.clone()));
-        if let Some(image) = art.item(*icon) {
+        if let Some(image) = icon.and_then(|icon| art.item(icon)) {
             commands.spawn((
                 ChosenIcon,
                 image,

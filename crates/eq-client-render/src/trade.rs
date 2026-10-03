@@ -15,17 +15,6 @@ pub(crate) use merchant::{ChosenPicture, MerchantRows, chosen, fill as fill_ware
 /// The NPC class that answers ordinary shop requests; servers ignore other classes.
 const MERCHANT_CLASS: u8 = 41;
 
-/// The corpse slot the loot window's first place shows, as Titanium servers
-/// number a corpse's items: from the first carried slot, 22, on (`EQEmu`'s
-/// `CORPSE_BEGIN`; the first item of every live loot so far came in slot
-/// 22). That the official window shows them in that order is inferred, and
-/// `EqMac` sessions do not loot yet.
-const FIRST_CORPSE_SLOT: u16 = 22;
-
-/// The corpse slot a place in the loot window shows, from 0.
-pub(crate) const fn corpse_slot(place: u16) -> u16 {
-    FIRST_CORPSE_SLOT + place
-}
 /// The NPC class that keeps the player's bank.
 const BANKER_CLASS: u8 = 40;
 
@@ -40,7 +29,7 @@ pub(super) struct TradeState {
 
 struct LootWindow {
     name: String,
-    /// The corpse slot asked for and not yet answered.
+    /// The corpse's place asked for and not yet answered.
     pending: Option<u16>,
     loot_all: bool,
 }
@@ -121,10 +110,10 @@ impl TradeState {
         }
     }
 
-    /// The server answered a request for a corpse slot.
-    pub(super) fn taken(&mut self, slot: u16, accepted: bool) {
+    /// The server answered a request for a place on the corpse.
+    pub(super) fn taken(&mut self, place: u16, accepted: bool) {
         if let Some(window) = self.loot.as_mut() {
-            if window.pending == Some(slot) {
+            if window.pending == Some(place) {
                 window.pending = None;
             }
             if !accepted {
@@ -135,13 +124,14 @@ impl TradeState {
     }
 }
 
-/// The open corpse and merchant as `(slot, item id)` lists, for script reports.
+/// The open corpse's `(place, item id)` and the merchant's
+/// `(slot, item id, price)` lists, for script reports.
 pub(super) fn summary(world: &ClientWorld) -> String {
     let loot = world.loot().map(|loot| {
         let items: Vec<_> = loot
             .items
             .iter()
-            .map(|(slot, item)| (*slot, item.details.id))
+            .map(|(place, item)| (*place, item.details.id))
             .collect();
         format!("loot corpse={} items={items:?}", loot.corpse_id)
     });
@@ -191,6 +181,7 @@ pub(super) enum Rows {
 
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Action {
+    /// Takes the item at a place on the corpse, from 0.
     Take(u16),
     TakeAll,
     EndLoot,
@@ -371,7 +362,7 @@ pub(super) fn input(
             (other, _) => other,
         };
         match action {
-            Action::Take(slot) => {
+            Action::Take(place) => {
                 if let Some(window) = trade
                     .loot
                     .as_mut()
@@ -383,13 +374,13 @@ pub(super) fn input(
                             session_id,
                             corpse_id,
                             own_id,
-                            slot,
+                            place,
                             auto: true,
                             created: now,
                         },
                     )
                 {
-                    window.pending = Some(slot);
+                    window.pending = Some(place);
                 }
             }
             Action::TakeAll => {
@@ -501,20 +492,20 @@ pub(super) fn input(
         .filter(|loot| loot.listed)
         .map(|loot| (loot.corpse_id, loot.items.keys().next().copied()));
     match next {
-        Some((corpse_id, Some(slot))) => {
+        Some((corpse_id, Some(place))) => {
             if send(
                 online.world(),
                 ClientCommand::LootItem {
                     session_id,
                     corpse_id,
                     own_id,
-                    slot,
+                    place,
                     auto: true,
                     created: now,
                 },
             ) && let Some(window) = trade.loot.as_mut()
             {
-                window.pending = Some(slot);
+                window.pending = Some(place);
             }
         }
         Some((corpse_id, None))
@@ -591,7 +582,7 @@ pub(super) fn present(
         let rows: Vec<(Action, String)> = contents
             .items
             .iter()
-            .map(|(slot, item)| (Action::Take(*slot), item_label(item)))
+            .map(|(place, item)| (Action::Take(*place), item_label(item)))
             .collect();
         let status = if contents.listed && rows.is_empty() {
             "Nothing left on this corpse"
@@ -1042,14 +1033,14 @@ mod tests {
         let mut trade = TradeState {
             loot: Some(LootWindow {
                 name: "a rat".into(),
-                pending: Some(22),
+                pending: Some(0),
                 loot_all: true,
             }),
             ..TradeState::default()
         };
-        trade.taken(23, true);
-        assert_eq!(trade.loot.as_ref().unwrap().pending, Some(22));
-        trade.taken(22, false);
+        trade.taken(1, true);
+        assert_eq!(trade.loot.as_ref().unwrap().pending, Some(0));
+        trade.taken(0, false);
         let window = trade.loot.as_ref().unwrap();
         assert_eq!(window.pending, None);
         assert!(!window.loot_all);

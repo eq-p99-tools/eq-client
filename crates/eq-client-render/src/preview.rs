@@ -275,10 +275,14 @@ fn trade(
         accepted: true,
         rate: 1.0,
     }));
-    for (item, slot) in items.iter().take(3).zip(22..) {
+    for (item, place) in items.iter().take(3).zip(0u16..) {
         let mut item = item.clone();
-        item.slot = InventorySlot(slot);
-        news.game(WorldEvent::Loot(LootUpdate::Item(Box::new(item))));
+        // The server's slot for the place, as the Titanium wire numbers them.
+        item.slot = InventorySlot(22 + i32::from(place));
+        news.game(WorldEvent::Loot(LootUpdate::Item {
+            place,
+            item: Box::new(item),
+        }));
     }
     news.game(WorldEvent::Loot(LootUpdate::Listed { corpse_id: 1 }));
     for (item, slot) in items.iter().skip(3).cloned().zip(1u32..) {
@@ -498,14 +502,6 @@ pub(crate) fn items() -> Vec<InventoryItem> {
                 ..default()
             },
             slot: InventorySlot(slot),
-            icon: match id {
-                2 => 557,
-                7 => 539,
-                3 => 537,
-                4 => 538,
-                8 => 598,
-                _ => 519,
-            },
             stack_count: count,
             charges: 0,
             bag_slots: bag,
@@ -527,6 +523,15 @@ pub(crate) fn items() -> Vec<InventoryItem> {
                 races: u32::MAX,
                 flags: Vec::new(),
                 stats: Vec::new(),
+                price: None,
+                icon: Some(match id {
+                    2 => 557,
+                    7 => 539,
+                    3 => 537,
+                    4 => 538,
+                    8 => 598,
+                    _ => 519,
+                }),
             },
         });
     }

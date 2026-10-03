@@ -175,6 +175,7 @@ impl Casting {
             SpellUpdate::Interrupted {
                 caster_id,
                 message_id,
+                ..
             } if caster_id == u32::from(own_id) => {
                 self.cast = None;
                 self.interrupted = Some((now, message_id));
@@ -296,6 +297,7 @@ mod tests {
         let interrupted = SpellUpdate::Interrupted {
             caster_id: 7,
             message_id: 199,
+            caster_name: None,
         };
         assert_eq!(
             casting.observe(7, &gems, &interrupted, now),

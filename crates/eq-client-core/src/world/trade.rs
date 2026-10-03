@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 pub struct Loot {
     /// The corpse.
     pub corpse_id: u16,
-    /// Its items, by corpse slot.
+    /// Its items, by their place on the corpse, from 0.
     pub items: BTreeMap<u16, InventoryItem>,
     /// Whether the server has listed every item.
     pub listed: bool,
@@ -115,19 +115,17 @@ impl Trade {
                     self.loot = None;
                 }
             }
-            LootUpdate::Item(item) => {
-                if let Ok(slot) = u16::try_from(item.slot.0) {
-                    loot.items.insert(slot, (**item).clone());
-                }
+            LootUpdate::Item { place, item } => {
+                loot.items.insert(*place, (**item).clone());
             }
             LootUpdate::Listed { corpse_id } => {
                 if *corpse_id == loot.corpse_id {
                     loot.listed = true;
                 }
             }
-            LootUpdate::Taken { slot, accepted } => {
+            LootUpdate::Taken { place, accepted } => {
                 if *accepted {
-                    loot.items.remove(slot);
+                    loot.items.remove(place);
                 }
             }
             LootUpdate::Closed => self.loot = None,
