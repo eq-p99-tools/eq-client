@@ -735,6 +735,7 @@ fn key(name: &str) -> Option<KeyCode> {
         "ESCAPE" => Some(KeyCode::Escape),
         "ENTER" => Some(KeyCode::Enter),
         "BACKSPACE" => Some(KeyCode::Backspace),
+        "DELETE" => Some(KeyCode::Delete),
         "TAB" => Some(KeyCode::Tab),
         "UP" => Some(KeyCode::ArrowUp),
         "DOWN" => Some(KeyCode::ArrowDown),

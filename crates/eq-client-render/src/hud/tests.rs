@@ -67,7 +67,8 @@ fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
         mode: 0,
     });
     testing::news(&mut state, [eq_client_core::WorldEvent::SpellBook(book)]);
-    let held = crate::spellbook::Held { slot: 3, spell: 74 };
+    let mut hand = crate::spellbook::BookHand::default();
+    hand.held = Some(crate::spellbook::Entry { slot: 3, spell: 74 });
     app.insert_resource(state)
         .insert_resource(crate::outbox::Outbox::new(Some(tx)))
         .init_resource::<ButtonInput<KeyCode>>()
@@ -77,7 +78,7 @@ fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
         .init_resource::<crate::spellbook::SpellNames>()
         .init_resource::<messages::Messages>()
         .init_resource::<action_bar::ActionRequests>()
-        .insert_resource(crate::spellbook::BookHand { held: Some(held) })
+        .insert_resource(hand)
         .add_systems(Update, actions);
     app.world_mut().spawn((
         Window {
