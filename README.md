@@ -559,9 +559,12 @@ The target panel lists the keys that apply to the current target:
   with its icon, how many are left where the merchant has only so many, and its
   price under each coin. Clicking a ware chooses it, and **Buy** buys one;
   clicking a carried item in the inventory or a bag chooses it instead of
-  picking it up, and **Sell** sells it. The chosen item shows with its name and,
-  for a ware, its price (what the merchant pays for a carried item is not known
-  yet). **Done** or the close box ends the shopping.
+  picking it up, and **Sell** sells it. The chosen item shows with its name and
+  its price: for a ware, what the merchant asks, and for a carried item, what
+  the merchant pays for it (or the whole stack), where the session offers
+  merchants' offers (`MerchantOffers`, on EQEmu, whose rule was checked
+  against the purse; blank elsewhere). **Done** or the close box ends the
+  shopping.
 - Clicking an NPC with an item on the cursor asks it to take the item, as the
   official client does. Its answer opens the skin's give window (`GiveWnd`)
   with the item in the first of its four slots; more items go in from the
