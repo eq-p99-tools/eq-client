@@ -202,7 +202,7 @@ pub use eq_network_game::zoning::Death;
 /// Preserved item link and server-supplied inspection result.
 pub use eq_network_game::{
     chat::ItemLink,
-    items::{EquipmentRules, ItemBonuses, ItemDetails},
+    items::{EquipmentRules, ItemBonuses, ItemDetails, ItemStat},
 };
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 use super::{online::OnlineState, outbox::Outbox};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
-use eq_client_core::{ClientCommand, ItemDetails, ItemLink};
+use eq_client_core::{ClientCommand, ItemDetails, ItemLink, qol::Fix};
 use std::time::{Duration, Instant};
 
 #[derive(Component)]
@@ -183,7 +183,7 @@ pub(super) fn input(
 /// Shows only received statistics; a missing response never becomes fabricated stats.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn update(
-    state: Res<ItemState>,
+    (state, options): (Res<ItemState>, Res<super::options::OptionsState>),
     mut panels: Query<&mut Node, With<ItemPanel>>,
     mut texts: Query<&mut Text, With<ItemText>>,
     mut titles: Query<&mut Text, (With<ItemTitle>, Without<ItemText>)>,
@@ -208,12 +208,17 @@ pub(super) fn update(
     let text = state.definition().map_or_else(
         || format!("{name}\n\n{}", state.status),
         |item| {
-            let properties = item
+            let mut properties = item
                 .stats
                 .iter()
                 .map(|s| format!("{}: {}", s.label, s.value))
-                .collect::<Vec<_>>()
-                .join("\n");
+                .collect::<Vec<_>>();
+            if options.options.qol.on(Fix::WeaponRatio)
+                && let Some((under, ratio)) = weapon_ratio(item)
+            {
+                properties.insert(under, ratio);
+            }
+            let properties = properties.join("\n");
             format!(
                 "{}\n{}\nWeight: {}.{}\n\n{}\n\nClasses: {}\nRaces: {}\nSlots: {}",
                 item.name,
@@ -271,6 +276,19 @@ pub(super) fn update(
         }
     }
 }
+/// A weapon's damage over its delay, the ratio players weigh weapons by, and
+/// the line of its statistics it goes under: the later of those two
+/// ([`Fix::WeaponRatio`]).
+fn weapon_ratio(item: &ItemDetails) -> Option<(usize, String)> {
+    let at = |label: &str| item.stats.iter().position(|stat| stat.label == label);
+    let (damage, delay) = (at("Damage")?, at("Delay")?);
+    let (damage_value, delay_value) = (item.stats[damage].value, item.stats[delay].value);
+    (damage_value > 0 && delay_value > 0).then(|| {
+        let ratio = f64::from(damage_value) / f64::from(delay_value);
+        (damage.max(delay) + 1, format!("Ratio: {ratio:.3}"))
+    })
+}
+
 /// The picture the item's box last showed, if any.
 type Shown<'s> = Local<'s, Option<Option<u32>>>;
 
@@ -493,6 +511,28 @@ mod tests {
         let mut item = crate::preview::items()[0].details.clone();
         item.id = id;
         item
+    }
+
+    #[test]
+    fn a_weapon_shows_its_ratio_under_its_damage_and_delay() {
+        let stat = |label: &str, value| eq_client_core::ItemStat {
+            label: label.into(),
+            value,
+        };
+        let mut weapon = item(1);
+        weapon.stats = vec![
+            stat("STR", 2),
+            stat("Delay", 30),
+            stat("Range", 10),
+            stat("Damage", 9),
+            stat("Haste", 5),
+        ];
+        assert_eq!(weapon_ratio(&weapon), Some((4, "Ratio: 0.300".into())));
+        // Neither half alone, nor a zero, makes a ratio.
+        weapon.stats.retain(|stat| stat.label != "Damage");
+        assert_eq!(weapon_ratio(&weapon), None);
+        weapon.stats.push(stat("Damage", 0));
+        assert_eq!(weapon_ratio(&weapon), None);
     }
 
     #[test]
