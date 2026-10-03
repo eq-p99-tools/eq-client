@@ -39,17 +39,16 @@ pub(super) fn register_layout(app: &mut App) {
             .after(super::escape::route)
             .in_set(super::Stage::Route),
     );
-    app.init_resource::<Moves>().add_systems(
-        Update,
-        scripted_moves
-            .after(super::Stage::Route)
-            .before(super::Stage::Present),
-    );
+    app.init_resource::<Moves>();
     app.add_systems(Update, store::persist.in_set(super::Stage::Present));
     app.add_systems(PostUpdate, block_clicks);
+    // A window rebuilt on zoning takes back its old place first, so a
+    // scripted move waiting for it lands after and wins.
     app.add_systems(
         PostUpdate,
-        layout::remember.before(bevy::ui::UiSystems::Layout),
+        (layout::remember, scripted_moves)
+            .chain()
+            .before(bevy::ui::UiSystems::Layout),
     );
     app.add_systems(
         PostUpdate,
@@ -485,7 +484,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Moves>()
             .init_resource::<Layouts>()
-            .add_systems(Update, (scripted_moves, layout::remember).chain());
+            .add_systems(Update, (layout::remember, scripted_moves).chain());
         app.world_mut().spawn((
             Window {
                 resolution: bevy::window::WindowResolution::new(800, 600),
@@ -523,9 +522,70 @@ mod tests {
         let node = app.world().get::<Node>(frame).unwrap();
         assert_eq!((node.left, node.top), (px(700.0), px(40.0)));
         assert!(app.world().get::<Frame>(frame).unwrap().placed);
+        // Its place is kept from the next frame on.
+        app.update();
         let saved = app.world().resource::<Layouts>().0[&WindowId::Chat];
         assert!(saved.placed);
         assert_eq!(saved.edges[..2], [px(700.0), px(40.0)]);
+    }
+
+    #[test]
+    fn a_waiting_move_wins_over_a_rebuilt_windows_old_place() {
+        let mut app = App::new();
+        app.init_resource::<Moves>()
+            .init_resource::<Layouts>()
+            .add_systems(Update, (layout::remember, scripted_moves).chain());
+        app.world_mut().spawn((
+            Window {
+                resolution: bevy::window::WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        // The chat's frame from before zoning, which the player had placed.
+        let old = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<Layouts>().0.insert(
+            WindowId::Chat,
+            layout::Saved {
+                entity: old,
+                edges: [px(10.0), px(20.0), Val::Auto, Val::Auto],
+                margin: UiRect::default(),
+                position_type: PositionType::Absolute,
+                minimized: false,
+                placed: true,
+            },
+        );
+        // A move queued while the HUD is rebuilt waits for the new frame.
+        app.world_mut()
+            .resource_mut::<Moves>()
+            .0
+            .push((WindowId::Chat, Vec2::new(300.0, 200.0)));
+        app.update();
+        let frame = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(100.0, 50.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                Frame::default(),
+                WindowId::Chat,
+            ))
+            .id();
+        drag_anywhere(&mut app.world_mut().commands(), frame, WindowId::Chat);
+        app.world_mut().flush();
+        app.update();
+        // The new frame takes back the old place, then the move lands on it.
+        let node = app.world().get::<Node>(frame).unwrap();
+        assert_eq!((node.left, node.top), (px(300.0), px(200.0)));
+        app.update();
+        let saved = app.world().resource::<Layouts>().0[&WindowId::Chat];
+        assert_eq!(
+            (saved.entity, saved.edges[..2].to_vec()),
+            (frame, vec![px(300.0), px(200.0)])
+        );
     }
 
     #[test]
