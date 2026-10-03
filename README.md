@@ -705,7 +705,11 @@ class field remains unavailable, so it cannot enable banking.
   an empty compatible slot. It waits for each worker result and rechecks the current
   inventory before continuing. Escape, closing inventory, a manual move, or an error
   stops it; any unplaced item remains on the cursor.
-- **Right-click** an item to inspect its already received definition.
+- **Right-click** an item to inspect its already received definition. With an
+  installation, the skin's item display (`ItemDisplayWindow`) shows it: the
+  item's name on its title bar, its picture in the skin's box (an item opened
+  from a chat link has none yet), its details in the skin's text box, and its
+  close box closes it.
 - **Escape** does not discard an item held on the cursor.
 
 Slots use the original 40-pixel item icons from `uifiles/default/dragitem*.tga`

@@ -48,6 +48,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Trade => "EQUI_TradeWnd.xml",
         WindowId::Loot => "EQUI_LootWnd.xml",
         WindowId::Merchant => "EQUI_MerchantWnd.xml",
+        WindowId::Item => "EQUI_ItemDisplay.xml",
         WindowId::Quantity => "EQUI_QuantityWnd.xml",
         WindowId::ActionsWindow => "EQUI_ActionsWindow.xml",
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
@@ -652,6 +653,9 @@ fn text_box(
             (WindowId::Book, Some("Page1")) => {
                 words.insert(super::reading::Text::Page(1));
             }
+            (WindowId::Item, Some("ItemDescription")) => {
+                words.insert(super::items::ItemText);
+            }
             _ => (),
         }
     });
@@ -1181,6 +1185,8 @@ enum Does {
     Trades(crate::trade::Action),
     /// Shows the item chosen in the merchant window.
     Chosen,
+    /// Shows the picture of the item the item display shows.
+    ItemIcon,
     /// Nothing yet: drawn greyed out, as the client's own windows show what
     /// it or the server lacks.
     Nothing,
@@ -1216,6 +1222,13 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if let Some(does) = trading_button(id, owner) {
         return Some(does);
+    }
+    if owner == WindowId::Item {
+        return Some(if id == "IconButton" {
+            Does::ItemIcon
+        } else {
+            Does::Nothing
+        });
     }
     // A window's Done button, or the give or trade window's Cancel, closes
     // it; even in a window whose other buttons do nothing yet.
@@ -1533,7 +1546,10 @@ fn button(
     drawn.with_children(|inner| {
         // A buff slot's decal is the buff's own icon, which the caption draws.
         if let (Some(decal), Some(place)) = (&button.decal, button.decal_area)
-            && !matches!(does, Does::PetBuff(_) | Does::Buff(..) | Does::Chosen)
+            && !matches!(
+                does,
+                Does::PetBuff(_) | Does::Buff(..) | Does::Chosen | Does::ItemIcon
+            )
         {
             picture(
                 inner,
@@ -1648,6 +1664,10 @@ fn behave(
             chosen_picture(drawn, button);
             &mut *drawn
         }
+        Does::ItemIcon => {
+            let (x, y, size) = decal_place(button);
+            drawn.insert(super::items::ItemIcon { x, y, size })
+        }
         Does::Offered(_) | Does::BagIcon => drawn,
         Does::Nothing => drawn.insert(missing()),
     };
@@ -1684,20 +1704,23 @@ fn trades(drawn: &mut EntityCommands, action: crate::trade::Action, skin: SkinBu
 /// The merchant window's box for the chosen item, its picture where the
 /// skin's sample sits; hovering it names the item.
 fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::Button) {
+    let (x, y, size) = decal_place(button);
+    drawn.insert((
+        crate::trade::ChosenPicture { x, y, size },
+        Interaction::default(),
+    ));
+}
+
+/// Where a button's picture of an item goes: where the skin puts its
+/// sample picture, or else just inside the button; its left, top and size.
+fn decal_place(button: &eq_client_assets::sidl::Button) -> (f32, f32, f32) {
     let place = button.decal_area.unwrap_or(Area {
         x: 1.0,
         y: 1.0,
         width: button.area.width - 2.0,
         height: button.area.height - 2.0,
     });
-    drawn.insert((
-        crate::trade::ChosenPicture {
-            x: place.x,
-            y: place.y,
-            size: place.width.min(place.height),
-        },
-        Interaction::default(),
-    ));
+    (place.x, place.y, place.width.min(place.height))
 }
 
 /// What a skin button shows on itself: its words, a count of coins, an
@@ -1754,8 +1777,9 @@ fn caption(
         // A box with a picture shows a value, such as the bank's coins;
         // the skin's text there is only a sample, so it stays blank until
         // the client has the value.
-        // The chosen item's picture is drawn over it (`trade::picture`).
-        Does::Chosen => (),
+        // The item's picture is drawn over it (`trade::picture`,
+        // `items::icon`).
+        Does::Chosen | Does::ItemIcon => (),
         Does::Nothing if button.decal.is_some() => (),
         Does::Toggles(_)
         | Does::Closes
@@ -1960,13 +1984,21 @@ fn title(
     );
     // Where the official client writes it on the bar is not checked yet:
     // after the bar's left end, in the middle of its height.
+    let node = Node {
+        align_items: AlignItems::Center,
+        ..at(inside.x + left_width, inside.y, middle_width, tall)
+    };
+    let ink = screen.title_color.map_or(theme::INK_BRIGHT, rgb);
     if let Some(words) = &screen.title {
-        let node = Node {
-            align_items: AlignItems::Center,
-            ..at(inside.x + left_width, inside.y, middle_width, tall)
-        };
-        let ink = screen.title_color.map_or(theme::INK_BRIGHT, rgb);
         let text = theme::text(words.as_str(), font(screen.font), ink);
+        aligned(window, node, Align::Left, text);
+    } else if owner == WindowId::Item {
+        // The item display gives no words of its own: the item's name goes
+        // there (`items::update`).
+        let text = (
+            theme::text("", font(screen.font), ink),
+            super::items::ItemTitle,
+        );
         aligned(window, node, Align::Left, text);
     }
     if let Some(piece) = right {
@@ -2034,6 +2066,8 @@ fn title_boxes(
             // ending the loot or the shopping.
             (true, _) if owner == WindowId::Loot => drawn.insert(crate::trade::Action::EndLoot),
             (true, _) if owner == WindowId::Merchant => drawn.insert(crate::trade::Action::EndShop),
+            // The item display closes as the client's own panel's Close does.
+            (true, _) if owner == WindowId::Item => drawn.insert(super::items::CloseItem),
             (true, true) => drawn.insert(items::Closes(owner)),
             // The client keeps this window open: its close box is one more
             // control the client does not have yet.

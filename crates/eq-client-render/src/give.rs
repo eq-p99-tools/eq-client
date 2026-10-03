@@ -177,7 +177,7 @@ pub(crate) fn inspect_theirs(
         if *interaction != Interaction::None
             && let Some(item) = exchange.theirs.get(&slot.0)
         {
-            items.open_received(item.details.clone());
+            items.open_held(item);
         }
     }
 }
