@@ -602,8 +602,10 @@ mod tests {
     fn the_delete_key_deletes_only_while_no_box_has_the_keyboard() {
         let mut app = crate::testing::app();
         let (queue, sent) = std::sync::mpsc::sync_channel(4);
-        let mut hand = BookHand::default();
-        hand.chosen = Some(Entry { slot: 1, spell: 42 });
+        let hand = BookHand {
+            chosen: Some(Entry { slot: 1, spell: 42 }),
+            ..BookHand::default()
+        };
         let mut shown = crate::windows::Shown::default();
         shown.open(WindowId::Spellbook);
         app.insert_resource(online())
