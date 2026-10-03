@@ -27,6 +27,53 @@ pub struct Merchant {
     pub merchant_id: u16,
     /// What they sell, by list slot.
     pub stock: BTreeMap<u32, MerchantItem>,
+    /// The price rate the server gave when the merchant opened, which the
+    /// official client works a sale's offer out with (inferred: `EQEmu`
+    /// sends one over what it pays per copper of an item's price); None
+    /// until the server's answer comes.
+    pub rate: Option<f32>,
+}
+
+impl Merchant {
+    /// What this merchant pays for a carried item sold to them, in copper,
+    /// as `EQEmu`'s merchants pay (three sales checked against the purse at
+    /// a neutral merchant): its price times how many are sold (a charged
+    /// item counts as one), times the merchant's modifier, then times 0.95,
+    /// each product cut to whole copper. None without the item's price or
+    /// the rate. Whether a server type's merchants pay so is the session's
+    /// `Capability::MerchantOffers`.
+    #[must_use]
+    pub fn offer(&self, item: &InventoryItem) -> Option<u32> {
+        offer(
+            item.details.price?,
+            item.stack_count.unwrap_or(1).max(1),
+            self.rate?,
+        )
+    }
+}
+
+/// What `EQEmu` pays for `count` of an item of this price, mirroring its
+/// `Handle_OP_ShopPlayerSell`: the price times the count, times the
+/// merchant's modifier, stored into whole copper, then times 0.95 and
+/// stored again, each product in `f32` as the server's, so a fraction is
+/// always cut and never rounded up. The modifier is 1 / (0.95 x the rate
+/// the merchant opened with), exactly one at neutral standing; away from
+/// it, recovering it from the `f32` rate can miss by a copper where a
+/// product lands within a hair of a whole copper. None for a rate that
+/// prices nothing or a price too large to count.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)] // The server's own f32 products and whole-copper stores.
+fn offer(price: u32, count: u32, rate: f32) -> Option<u32> {
+    const BUY_COST: f32 = 0.95;
+    if !(rate.is_finite() && rate > 0.0) {
+        return None;
+    }
+    let modifier = 1.0 / (BUY_COST * rate);
+    let worth = (price.checked_mul(count)? as f32 * modifier) as u32;
+    Some((worth as f32 * BUY_COST) as u32)
 }
 
 /// Who asked for a give or trade window.
@@ -140,8 +187,10 @@ impl Trade {
             return false;
         };
         match update {
-            MerchantUpdate::Opened { accepted, .. } => {
-                if !accepted {
+            MerchantUpdate::Opened { accepted, rate, .. } => {
+                if *accepted {
+                    merchant.rate = Some(*rate);
+                } else {
                     self.merchant = None;
                 }
             }

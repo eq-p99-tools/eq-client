@@ -248,6 +248,7 @@ impl ClientWorld {
         self.zone.trade.merchant = Some(Merchant {
             merchant_id,
             stock: BTreeMap::new(),
+            rate: None,
         });
     }
 

@@ -977,6 +977,66 @@ fn a_merchant_lists_stock_until_closed_or_refusing() {
     world.open_shop(8);
     world.close_shop();
     assert!(world.merchant().is_none());
+    // A merchant that opens keeps the server's rate.
+    world.open_shop(8);
+    assert_eq!(world.merchant().unwrap().rate, None);
+    game(
+        &mut world,
+        merchant(MerchantUpdate::Opened {
+            merchant_id: 8,
+            accepted: true,
+            rate: 1.25,
+        }),
+    );
+    assert_eq!(world.merchant().unwrap().rate, Some(1.25));
+}
+
+#[test]
+fn a_merchant_offers_what_eqemu_paid_for_each_sale() {
+    use crate::world::trade::Merchant;
+    // The rate a merchant opens with: 1 / (0.95 x its modifier), in f32.
+    let rate = |modifier: f32| 1.0 / (0.95 * modifier);
+    // What a neutral Qeynos Hills merchant paid on EQEmu: a dagger, a stack
+    // of eleven bandages, a stack of seven, and a potion with charges,
+    // which counts as one.
+    let merchant = Merchant {
+        merchant_id: 8,
+        stock: std::collections::BTreeMap::new(),
+        rate: Some(rate(1.0)),
+    };
+    assert_eq!(merchant.rate, Some(1.052_631_6));
+    let item = |price, stack_count| {
+        let mut item = chest();
+        item.details.price = Some(price);
+        item.stack_count = stack_count;
+        item
+    };
+    // A half copper goes to the merchant: 28.5 pays 28 and 522.5 pays 522.
+    assert_eq!(merchant.offer(&item(30, None)), Some(28));
+    assert_eq!(merchant.offer(&item(50, Some(11))), Some(522));
+    assert_eq!(merchant.offer(&item(50, Some(7))), Some(332));
+    assert_eq!(merchant.offer(&item(3500, None)), Some(3325));
+    // Each product is cut on its own: a merchant whose modifier is 0.96
+    // pays 26 for a 30c item, where one factor of 0.912 would give 27.
+    let wary = Merchant {
+        rate: Some(rate(0.96)),
+        ..merchant.clone()
+    };
+    assert_eq!(wary.offer(&item(30, None)), Some(26));
+    // Without the item's price or the merchant's rate, there is no offer.
+    let mut unpriced = item(30, None);
+    unpriced.details.price = None;
+    assert_eq!(merchant.offer(&unpriced), None);
+    let unrated = Merchant {
+        rate: None,
+        ..merchant.clone()
+    };
+    assert_eq!(unrated.offer(&item(30, None)), None);
+    let broken = Merchant {
+        rate: Some(0.0),
+        ..merchant
+    };
+    assert_eq!(broken.offer(&item(30, None)), None);
 }
 
 #[test]

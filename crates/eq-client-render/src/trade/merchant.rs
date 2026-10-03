@@ -189,8 +189,16 @@ pub(crate) fn chosen<'a>(
             .inventory()
             .items()
             .get(&InventorySlot(slot))
-            .map(|item| (item, None)),
+            .map(|item| (item, offer(world, item))),
     }
+}
+
+/// What the merchant pays for a carried item, where the session offers
+/// merchants' offers; None, which leaves the label blank, elsewhere.
+fn offer(world: &ClientWorld, item: &InventoryItem) -> Option<u32> {
+    crate::outbox::offered(world, eq_client_core::Capability::MerchantOffers)
+        .then(|| world.merchant()?.offer(item))
+        .flatten()
 }
 
 /// The skin's box for the chosen item's picture, with where in it the

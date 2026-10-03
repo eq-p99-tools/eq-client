@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use super::Observed;
 
 /// Slot, item id, stack count, scroll spell and whether it is NO DROP.
-type ReportedItem = (i32, u32, Option<u32>, Option<u32>, bool);
+type ReportedItem = (i32, u32, Option<u32>, Option<u32>, bool, Option<u32>);
 
 /// EQ coordinates and heading of the movement root.
 pub(super) fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
@@ -130,6 +130,7 @@ fn items(online: &crate::online::OnlineState) -> Vec<ReportedItem> {
                 item.stack_count,
                 item.scroll_spell,
                 item.details.flags.iter().any(|flag| flag == "NO DROP"),
+                item.details.price,
             )
         })
         .collect()
