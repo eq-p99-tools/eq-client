@@ -121,11 +121,13 @@ pub(super) fn state(
     );
 }
 
-/// The player's raid: its leader, and each member with their raid group.
+/// The player's raid: its leader, whether it is locked, and each member with
+/// their raid group.
 fn raid(online: &crate::online::OnlineState) -> Option<impl std::fmt::Debug> {
     let raid = online.world().raid()?;
     Some((
         raid.leader.clone(),
+        raid.locked,
         raid.members
             .iter()
             .map(|member| (member.name.clone(), member.group))

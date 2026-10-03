@@ -357,6 +357,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<keys::KeyMap>()
         .init_resource::<keys::Typing>()
         .init_resource::<training::Chosen>()
+        .init_resource::<raid::RaidChoice>()
         .init_resource::<reading::Page>()
         .init_resource::<map::MapView>();
 }
@@ -509,6 +510,7 @@ fn schedule(app: &mut App) {
                 reading::buttons,
                 tradeskills::buttons,
                 map::buttons,
+                raid::buttons,
             ),
             (abilities::input, skinned::slash),
             hud::actions,

@@ -1113,6 +1113,16 @@ fn social_commands(
                     .map_or_else(|| targeted_player(online), str::to_owned),
             }]
         }),
+        // The lead, handed to the player named or else to the target.
+        "makeraidleader" => stamp().map(|stamp| {
+            vec![ClientCommand::RaidMakeLeader {
+                session_id: stamp.session_id,
+                name: words
+                    .split_whitespace()
+                    .next()
+                    .map_or_else(|| targeted_player(online), str::to_owned),
+            }]
+        }),
         "raidaccept" | "raiddecline" | "raiddisband" if words.is_empty() => stamp().map(|stamp| {
             let session_id = stamp.session_id;
             vec![match name {
