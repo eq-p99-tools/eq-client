@@ -124,7 +124,7 @@ impl TradeState {
     }
 }
 
-/// The open corpse's `(place, item id)` and the merchant's
+/// The open corpse's `(place, item id)` and the merchant's rate and
 /// `(slot, item id, price)` lists, for script reports.
 pub(super) fn summary(world: &ClientWorld) -> String {
     let loot = world.loot().map(|loot| {
@@ -141,7 +141,10 @@ pub(super) fn summary(world: &ClientWorld) -> String {
             .values()
             .map(|entry| (entry.slot, entry.item.details.id, entry.price))
             .collect();
-        format!("merchant {} stock={stock:?}", merchant.merchant_id)
+        format!(
+            "merchant {} rate={:?} stock={stock:?}",
+            merchant.merchant_id, merchant.rate
+        )
     });
     [loot, merchant]
         .into_iter()
