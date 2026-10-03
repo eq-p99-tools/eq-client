@@ -83,7 +83,7 @@ impl ClientWorld {
     }
 
     /// Every buff slot at once, as at admission.
-    pub(super) fn buff_snapshot(&mut self, buffs: &[Option<Buff>]) {
+    pub(super) fn buff_snapshot(&mut self, buffs: &[Option<Buff>], now: Instant) {
         self.buffs.replace_snapshot(
             buffs
                 .iter()
@@ -91,17 +91,18 @@ impl ClientWorld {
                 .filter_map(|(slot, buff)| Some((u32::try_from(slot).ok()?, buff.clone()?)))
                 .collect(),
             u32::try_from(buffs.len()).unwrap_or(u32::MAX),
+            now,
         );
     }
 
     /// One of the player's buff slots changed.
-    pub(super) fn buff(&mut self, update: &BuffUpdate, changes: &mut Changes) {
+    pub(super) fn buff(&mut self, update: &BuffUpdate, now: Instant, changes: &mut Changes) {
         if self
             .player
             .as_ref()
             .is_some_and(|player| u32::from(player.spawn_id) == update.entity_id)
         {
-            self.buffs.apply(update.clone());
+            self.buffs.apply(update.clone(), now);
         } else {
             changes.ignored = true;
         }
@@ -112,7 +113,7 @@ impl ClientWorld {
     pub(super) fn spell_effect(
         &mut self,
         effect: &SpellEffect,
-        spells: &dyn SpellCatalog,
+        (now, spells): (Instant, &dyn SpellCatalog),
         changes: &mut Changes,
     ) {
         if self.is_player(effect.target_id) {
@@ -120,7 +121,7 @@ impl ClientWorld {
                 && !matches!(effect.spell_id, 0 | u16::MAX)
                 && !spells.instant_effect(u32::from(effect.spell_id))
             {
-                self.buffs.observe_effect(effect.clone());
+                self.buffs.observe_effect(effect.clone(), now);
             }
         } else {
             changes.ignored = true;

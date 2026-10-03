@@ -3,12 +3,13 @@
 //! Casting, spellbook changes and camping each report elsewhere too; this bar
 //! only mirrors their state so timing is visible in the same spot every time.
 //! Where the skin is installed, its casting window shows casts instead, and
-//! this bar keeps only the spellbook's changes, which no skin window shows
-//! that is known yet; the official client says a camp in the chat alone.
+//! this bar keeps the spellbook's changes, which no skin window shows that
+//! is known yet, and a camp's countdown, which the official client says in
+//! the chat alone ([`Fix::CampCountdown`]).
 
 use crate::theme::{self, Size};
 use bevy::prelude::*;
-use eq_client_core::BookActionStatus;
+use eq_client_core::{BookActionStatus, qol::Fix};
 use std::time::{Duration, Instant};
 
 /// Matches the network worker's sit-and-wait interval before a book change is sent.
@@ -175,13 +176,15 @@ pub(crate) fn skin_shows_casts(settings: &crate::ViewerSettings) -> bool {
 
 /// Chooses the most specific action in progress, then a cast just
 /// interrupted. Where the skin's casting window shows casts, only the
-/// spellbook's changes stay here.
+/// spellbook's changes and a camp stay here. A camp counts down here as a
+/// quality-of-life fix ([`Fix::CampCountdown`]).
 pub(super) fn current(
     world: &eq_client_core::world::ClientWorld,
     requests: &ActionRequests,
     (names, messages): (&crate::spellbook::SpellNames, &super::messages::Messages),
     now: Instant,
     skin_shows_casts: bool,
+    qol: &eq_client_core::qol::Settings,
 ) -> Option<Shown> {
     let cast = || {
         if let Some(progress) = cast_progress(world, now) {
@@ -212,6 +215,9 @@ pub(super) fn current(
         }
     };
     let camp = || {
+        if !qol.on(Fix::CampCountdown) {
+            return None;
+        }
         let eq_client_core::world::Camp { since, logging_out } = world.camp()?;
         Some(if logging_out {
             Shown {
@@ -238,7 +244,7 @@ pub(super) fn current(
             })
     };
     if skin_shows_casts {
-        return book();
+        return book().or_else(camp);
     }
     cast().or_else(book).or_else(camp).or_else(interrupted)
 }
@@ -269,6 +275,7 @@ pub(crate) fn update(
         Res<crate::online::OnlineState>,
         Res<ActionRequests>,
         Res<crate::ViewerSettings>,
+        Res<crate::options::OptionsState>,
     ),
     definitions: (
         Res<crate::spellbook::SpellNames>,
@@ -279,7 +286,7 @@ pub(crate) fn update(
     mut labels: Query<&mut Text, With<ActionLabel>>,
     mut fills: Query<(&mut Node, &mut BackgroundColor), With<ActionFill>>,
 ) {
-    let (online, requests, settings) = state;
+    let (online, requests, settings, options) = state;
     let (names, messages) = definitions;
     let shown = current(
         online.world(),
@@ -287,6 +294,7 @@ pub(crate) fn update(
         (&names, &messages),
         Instant::now(),
         skin_shows_casts(&settings),
+        &options.options.qol,
     );
     for mut node in &mut bars {
         let display = if shown.is_some() {
@@ -344,9 +352,10 @@ mod tests {
     }
 
     #[test]
-    fn with_the_skin_showing_casts_only_the_books_changes_stay() {
+    fn with_the_skin_showing_casts_only_the_books_changes_and_a_camp_stay() {
         let names = crate::spellbook::SpellNames::default();
         let messages = super::super::messages::Messages::load(None);
+        let qol = eq_client_core::qol::Settings::default();
         let now = Instant::now();
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 1, testing::player(7));
@@ -360,25 +369,51 @@ mod tests {
             })],
             now.checked_sub(Duration::from_secs(1)).unwrap(),
         );
-        let shown = |skin| current(online.world(), &requests, (&names, &messages), now, skin);
-        assert!(shown(false).is_some());
-        assert_eq!(shown(true), None);
+        let shown = |online: &OnlineState, skin| {
+            current(
+                online.world(),
+                &requests,
+                (&names, &messages),
+                now,
+                skin,
+                &qol,
+            )
+        };
+        assert!(shown(&online, false).is_some());
+        assert_eq!(shown(&online, true), None);
         assert!((cast_progress(online.world(), now).unwrap() - 0.25).abs() < 0.01);
         assert_eq!(cast_spell(online.world()), Some(202));
+        // A camp counts down here with the skin too.
+        testing::news_at(
+            &mut online,
+            [eq_client_core::WorldEvent::Camp(
+                eq_client_core::CampStatus::Preparing,
+            )],
+            now.checked_sub(Duration::from_secs(10)).unwrap(),
+        );
+        assert_eq!(shown(&online, true).unwrap().label, "Camping (20s)");
     }
 
     #[test]
     fn casting_wins_then_book_changes_then_camping() {
         let names = crate::spellbook::SpellNames::default();
         let messages = super::super::messages::Messages::load(None);
+        let qol = eq_client_core::qol::Settings::default();
         let now = Instant::now();
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 1, testing::player(7));
         let mut requests = ActionRequests::default();
-        assert_eq!(
-            current(online.world(), &requests, (&names, &messages), now, false),
-            None
-        );
+        let shown = |online: &OnlineState, requests: &ActionRequests| {
+            current(
+                online.world(),
+                requests,
+                (&names, &messages),
+                now,
+                false,
+                &qol,
+            )
+        };
+        assert_eq!(shown(&online, &requests), None);
 
         testing::news_at(
             &mut online,
@@ -387,7 +422,7 @@ mod tests {
             )],
             now.checked_sub(Duration::from_secs(15)).unwrap(),
         );
-        let camping = current(online.world(), &requests, (&names, &messages), now, false).unwrap();
+        let camping = shown(&online, &requests).unwrap();
         assert_eq!(camping.label, "Camping (15s)");
         assert!((camping.progress.unwrap() - 0.5).abs() < 0.01);
 
@@ -398,7 +433,7 @@ mod tests {
             change: BookChange::Memorize,
             spell: 202,
         });
-        let book = current(online.world(), &requests, (&names, &messages), now, false).unwrap();
+        let book = shown(&online, &requests).unwrap();
         assert_eq!(book.label, "Memorizing Courage into gem 2");
         assert!((book.progress.unwrap() - 0.2).abs() < 0.01);
         // The skin's book fills the memorization's gauge, not the scribe's.
@@ -406,12 +441,7 @@ mod tests {
         assert!((gauge(BookChange::Memorize).unwrap() - 0.2).abs() < 0.01);
         assert_eq!(gauge(BookChange::Scribe), None);
         testing::book_action(&mut online, BookActionStatus::AwaitingReply);
-        assert_eq!(
-            current(online.world(), &requests, (&names, &messages), now, false)
-                .unwrap()
-                .progress,
-            None
-        );
+        assert_eq!(shown(&online, &requests).unwrap().progress, None);
         assert_eq!(
             book_progress(online.world(), &requests, BookChange::Memorize, now),
             Some(1.0)
@@ -427,7 +457,7 @@ mod tests {
             })],
             now.checked_sub(Duration::from_secs(1)).unwrap(),
         );
-        let casting = current(online.world(), &requests, (&names, &messages), now, false).unwrap();
+        let casting = shown(&online, &requests).unwrap();
         assert!(casting.label.starts_with("Casting "));
         assert!((casting.progress.unwrap() - 0.25).abs() < 0.01);
 
@@ -445,9 +475,6 @@ mod tests {
                 eq_client_core::CampStatus::Abandoned,
             )],
         );
-        assert_eq!(
-            current(online.world(), &requests, (&names, &messages), now, false),
-            None
-        );
+        assert_eq!(shown(&online, &requests), None);
     }
 }

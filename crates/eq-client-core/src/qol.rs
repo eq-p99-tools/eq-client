@@ -52,11 +52,47 @@ pub enum Fix {
     /// Draws a window the UI skin sizes to nothing, as the Velious skin does
     /// its windows from later expansions, as the default skin draws it.
     HiddenWindows,
+    /// Starts the Options window's Max FPS at 60 frames a second rather than
+    /// as fast as vsync allows; the slider and the installation's
+    /// `eqclient.ini` still set another cap. What the official client does
+    /// with no cap set is not checked.
+    FrameCap,
+    /// Greys out the controls for what the server type does not offer, and
+    /// says on hover why a control is unavailable; the official client only
+    /// ever knows its own server.
+    GreyedControls,
+    /// Counts down a camp's preparation on the action bar, besides what the
+    /// chat says.
+    CampCountdown,
+    /// Says the same refusal at most once every 3 seconds, so one a held key
+    /// repeats each frame does not fill the chat.
+    QuietRepeats,
+    /// Keeps a hotbar item button to the item it was made with, so another
+    /// item later put in its place is not used by mistake (inferred: what
+    /// the official client's button uses then is not checked).
+    HotbarItemGuard,
+    /// Counts down how long a buff has left in its tooltip, about, from what
+    /// the server last said or from the spell's own duration.
+    BuffTimeLeft,
+    /// Shows a weapon's damage divided by its delay, the ratio players weigh
+    /// weapons by, under those two in the item display.
+    WeaponRatio,
 }
 
 impl Fix {
-    /// Every fix, in the order the quality-of-life page lists the settings.
-    pub const ALL: [Self; 2] = [Self::SkipModifiedFood, Self::HiddenWindows];
+    /// Every fix: the settings in the order the quality-of-life page lists
+    /// them, then the fixes that are always on.
+    pub const ALL: [Self; 9] = [
+        Self::SkipModifiedFood,
+        Self::HiddenWindows,
+        Self::FrameCap,
+        Self::GreyedControls,
+        Self::CampCountdown,
+        Self::QuietRepeats,
+        Self::HotbarItemGuard,
+        Self::BuffTimeLeft,
+        Self::WeaponRatio,
+    ];
 
     /// The name an options file keeps it under.
     #[must_use]
@@ -64,6 +100,13 @@ impl Fix {
         match self {
             Self::SkipModifiedFood => "skip_modified_food",
             Self::HiddenWindows => "hidden_windows",
+            Self::FrameCap => "frame_cap",
+            Self::GreyedControls => "greyed_controls",
+            Self::CampCountdown => "camp_countdown",
+            Self::QuietRepeats => "quiet_repeats",
+            Self::HotbarItemGuard => "hotbar_item_guard",
+            Self::BuffTimeLeft => "buff_time_left",
+            Self::WeaponRatio => "weapon_ratio",
         }
     }
 
@@ -73,12 +116,20 @@ impl Fix {
         Self::ALL.into_iter().find(|fix| fix.key() == key)
     }
 
-    /// Its checkbox's words on the quality-of-life page.
+    /// Its checkbox's words on the quality-of-life page, and its name in
+    /// the README.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::SkipModifiedFood => "Skip Food With Modifiers",
             Self::HiddenWindows => "Draw Windows the Skin Hides",
+            Self::FrameCap => "Cap Frames at 60",
+            Self::GreyedControls => "Grey Out What Is Unavailable",
+            Self::CampCountdown => "Count Down Camping",
+            Self::QuietRepeats => "Say Each Refusal Once",
+            Self::HotbarItemGuard => "Keep Hotbar Items to Their Item",
+            Self::BuffTimeLeft => "Show Buff Time Left",
+            Self::WeaponRatio => "Show Weapon Ratio",
         }
     }
 
@@ -92,6 +143,23 @@ impl Fix {
             Self::HiddenWindows => {
                 "Draw the windows your UI skin hides, such as the Velious skin's Raid window, as the default skin draws them."
             }
+            Self::FrameCap => {
+                "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
+            }
+            Self::GreyedControls => {
+                "Grey out the buttons for what this server does not offer, and say why on hover."
+            }
+            Self::CampCountdown => "Count down the seconds until a camp ends on the action bar.",
+            Self::QuietRepeats => {
+                "Say the same refusal at most once every 3 seconds, so a held key does not fill the chat."
+            }
+            Self::HotbarItemGuard => {
+                "Use a hotbar item button only for the item it was made with, never another item later put in its place."
+            }
+            Self::BuffTimeLeft => "Count down about how long each buff has left in its tooltip.",
+            Self::WeaponRatio => {
+                "Show a weapon's damage divided by its delay under them in the item display."
+            }
         }
     }
 
@@ -99,8 +167,14 @@ impl Fix {
     #[must_use]
     pub const fn kind(self) -> Kind {
         match self {
-            Self::SkipModifiedFood => Kind::Guards,
-            Self::HiddenWindows => Kind::Shows,
+            Self::SkipModifiedFood | Self::HotbarItemGuard => Kind::Guards,
+            Self::HiddenWindows
+            | Self::FrameCap
+            | Self::GreyedControls
+            | Self::CampCountdown
+            | Self::QuietRepeats
+            | Self::BuffTimeLeft
+            | Self::WeaponRatio => Kind::Shows,
         }
     }
 
@@ -110,17 +184,33 @@ impl Fix {
     pub const fn needs(self) -> Option<Capability> {
         match self {
             Self::SkipModifiedFood => Some(Capability::Inventory),
-            Self::HiddenWindows => None,
+            Self::HiddenWindows
+            | Self::FrameCap
+            | Self::GreyedControls
+            | Self::CampCountdown
+            | Self::QuietRepeats
+            | Self::HotbarItemGuard
+            | Self::BuffTimeLeft
+            | Self::WeaponRatio => None,
         }
     }
 
     /// Whether it is always on or the player's choice: windows the skin
-    /// hides stay hidden unless the player asks for them, as Adam chose.
+    /// hides stay hidden unless the player asks for them, as Adam chose, and
+    /// what only adds what the player could work out, or stops a plain
+    /// mistake, is always on.
     #[must_use]
     pub const fn availability(self) -> Availability {
         match self {
             Self::SkipModifiedFood => Availability::Setting { default: true },
             Self::HiddenWindows => Availability::Setting { default: false },
+            Self::FrameCap
+            | Self::GreyedControls
+            | Self::CampCountdown
+            | Self::QuietRepeats
+            | Self::HotbarItemGuard
+            | Self::BuffTimeLeft
+            | Self::WeaponRatio => Availability::AlwaysOn,
         }
     }
 
@@ -185,11 +275,24 @@ mod tests {
                 assert!(fix.needs().is_some(), "{fix:?} names no feature");
             }
         }
+        // The settings come first, in the page's order.
+        assert!(Fix::ALL.is_sorted_by_key(|fix| !fix.is_setting()));
         let mut keys: Vec<_> = Fix::ALL.iter().map(|fix| fix.key()).collect();
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), Fix::ALL.len());
         assert_eq!(Fix::from_key("shiny"), None);
+    }
+
+    #[test]
+    fn the_readme_names_every_fix() {
+        let readme = include_str!("../../../README.md");
+        for fix in Fix::ALL {
+            assert!(
+                readme.contains(&format!("**{}**", fix.label())),
+                "the README's Quality of life section leaves out {fix:?}"
+            );
+        }
     }
 
     #[test]

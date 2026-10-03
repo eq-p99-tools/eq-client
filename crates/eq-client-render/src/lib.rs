@@ -537,7 +537,7 @@ fn schedule(app: &mut App) {
                 inventory::feedback,
                 inventory::scroll,
                 (skinned::cursor_look, inventory::cursor::update).chain(),
-                (chat::look, chat::refresh).chain(),
+                (chat::follow_options, chat::look, chat::refresh).chain(),
                 items::update,
                 items::scroll,
                 target::update,
