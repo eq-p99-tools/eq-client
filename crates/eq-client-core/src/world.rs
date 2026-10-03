@@ -32,7 +32,7 @@ pub use group::{Group, GroupNotice};
 pub use items::ItemCache;
 pub use link::Link;
 pub use notice::{ListingNotice, Notice, Party};
-pub use raid::{Raid, RaidNotice};
+pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use trade::{Asker, Exchange, Loot, Merchant};
 pub use vitals::{ReportedHp, Vitals};
