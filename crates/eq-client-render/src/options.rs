@@ -76,15 +76,10 @@ pub(crate) fn toggle(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn persist(
     settings: Res<crate::ViewerSettings>,
-    online: Res<crate::online::OnlineState>,
+    profile: Res<crate::profile_files::Profile>,
     mut state: ResMut<OptionsState>,
 ) {
-    let current = online
-        .world()
-        .player()
-        .zip(online.world().world_name())
-        .map(|(player, world)| (world.to_owned(), player.name.clone()));
-    if state.store.loaded && state.store.profile == current {
+    if state.store.loaded && !profile.is_changed() {
         if state.is_changed() {
             save(&mut state);
         }
@@ -100,7 +95,7 @@ pub(crate) fn persist(
         state.store.loaded = true;
     }
     let state = &mut *state;
-    state.store.profile = current;
+    state.store.profile = profile.key();
     let read = |name: &str| {
         state
             .store
@@ -174,7 +169,10 @@ mod tests {
             .0
             .settings_directory = Some(directory.to_owned());
         app.insert_resource(OptionsState::new(Options::default()))
-            .add_systems(Update, (toggle, persist).chain());
+            .add_systems(
+                Update,
+                (crate::profile_files::follow, toggle, persist).chain(),
+            );
         app
     }
 

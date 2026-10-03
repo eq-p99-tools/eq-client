@@ -19,6 +19,14 @@ impl Profile {
             .as_ref()
             .map(|(character, world)| (character.as_str(), world.as_str()))
     }
+
+    /// The world's and the character's names, in the order this client's
+    /// own files are named by them (see [`name`]).
+    pub(crate) fn key(&self) -> Option<(String, String)> {
+        self.0
+            .as_ref()
+            .map(|(character, world)| (world.clone(), character.clone()))
+    }
 }
 
 /// Keeps [`Profile`] on the character playing and their world, changing it

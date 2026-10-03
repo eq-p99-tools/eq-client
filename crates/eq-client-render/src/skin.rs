@@ -22,10 +22,9 @@ pub(super) fn register(app: &mut App) {
 /// character's UI settings file only then.
 #[allow(clippy::needless_pass_by_value)]
 fn follow(
-    online: Res<super::online::OnlineState>,
+    profile: Res<super::profile_files::Profile>,
     settings: Res<super::ViewerSettings>,
     mut skin: ResMut<UiSkin>,
-    mut chosen_for: Local<Option<(String, String)>>,
 ) {
     if let Some(name) = &settings.0.ui_skin {
         if skin.0 != *name {
@@ -33,20 +32,11 @@ fn follow(
         }
         return;
     }
-    let current = online
-        .world()
-        .player()
-        .map(|player| player.name.as_str())
-        .zip(online.world().world_name());
-    if chosen_for
-        .as_ref()
-        .map(|(character, world)| (character.as_str(), world.as_str()))
-        == current
-    {
+    if !profile.is_changed() {
         return;
     }
-    *chosen_for = current.map(|(character, world)| (character.to_owned(), world.to_owned()));
-    let chosen = current
+    let chosen = profile
+        .names()
         .zip(settings.0.official_settings())
         .and_then(|((character, world), official)| official.chosen_skin(character, world))
         .unwrap_or_else(|| DEFAULT_SKIN.into());
@@ -64,13 +54,17 @@ mod tests {
     fn app(install: &Path, ui_skin: Option<&str>) -> App {
         let mut app = App::new();
         app.init_resource::<UiSkin>()
+            .init_resource::<super::super::profile_files::Profile>()
             .insert_resource(super::super::online::OnlineState::new(true))
             .insert_resource(super::super::ViewerSettings(super::super::ViewerConfig {
                 eq_directory: Some(install.to_path_buf()),
                 ui_skin: ui_skin.map(Into::into),
                 ..Default::default()
             }))
-            .add_systems(Update, follow);
+            .add_systems(
+                Update,
+                (super::super::profile_files::follow, follow).chain(),
+            );
         app
     }
 
