@@ -14,6 +14,7 @@ pub mod names;
 pub mod options;
 pub mod outfit;
 pub mod pet;
+pub mod qol;
 pub mod races;
 pub mod reading;
 pub mod resources;

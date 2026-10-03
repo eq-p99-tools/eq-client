@@ -580,8 +580,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
             ClickTarget::RaidRow(*list == "grouped", ordinal(row, "a row")?)
         }
         ["option", name] => ClickTarget::Option(
-            eq_client_core::options::Toggle::ALL
-                .into_iter()
+            eq_client_core::options::Toggle::all()
                 .find(|toggle| toggle.key() == *name)
                 .ok_or("expected an option, by its name in a file")?,
         ),
@@ -1165,6 +1164,13 @@ chat tell Friend inc now
             parse("click option target_ring\n", base).unwrap(),
             [Step::Click(ClickTarget::Option(
                 eq_client_core::options::Toggle::TargetRing
+            ))]
+        );
+        // A quality-of-life setting goes by its name in a file too.
+        assert_eq!(
+            parse("click option skip_modified_food\n", base).unwrap(),
+            [Step::Click(ClickTarget::Option(
+                eq_client_core::options::Toggle::Qol(eq_client_core::qol::Fix::SkipModifiedFood)
             ))]
         );
         for bad in [

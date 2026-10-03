@@ -77,10 +77,8 @@ vsync, which is the monitor's refresh rate. The Options window (Alt+O) sets
 the cap per character with its Max FPS slider, which wins once moved, and its
 Far Clip Plane and Mouselook Sensitivity sliders set how far the scene is
 drawn and how fast the camera turns; its Keyboard page lists the keys. Its
-Client page holds the options only this client has, kept per character:
-Skip Food With Modifiers, and Draw Windows the Skin Hides, which draws a
-window the UI skin sizes to nothing, such as the Velious skin's Raid and
-casting windows, as the default skin draws it.
+QoL page holds the settings only this client has, kept per character (see
+[Quality of life](#quality-of-life)).
 
 ## Stationary online preview
 
@@ -537,6 +535,44 @@ existing nearby-entity behavior. Texture transparency is not sampled by picking.
 
 For explicit stationary live checks, `--online --target-nearest-player-once` selects one nearby player, while `--online --inspect-first-chat-item-once` inspects one actual incoming item link. Both use the same typed command path as the UI and are disabled by default.
 
+## Quality of life
+
+The client copies the official client and each server's defaults, except
+where a quality-of-life fix departs from them on purpose to be friendlier to
+the player. Each fix is defined once, in `eq_client_core::qol`, with one of
+three kinds:
+
+- **Shows** changes only what the player sees or hears, and never shows what
+  the official client keeps from the player. It sends nothing different, so
+  it works on every server.
+- **Guards** asks first, holds back or refuses before something the official
+  client would do at once. It sends less or later, never more, so it works
+  on every server.
+- **Acts** sends something on the player's behalf that the official client
+  would not. Like any feature that sends, the session offers it only where
+  the server type lists it. None exists yet.
+
+A fix is always on when it only adds information or blocks a plain mistake,
+takes no extra step, and nobody would want it off. Every other fix is a
+setting on the Options window's QoL page, kept per character in the options
+file under the name in brackets. A setting whose feature the session does not
+offer is greyed, with the reason on hover. The settings:
+
+- **Skip Food With Modifiers** (`skip_modified_food`, on): eating and
+  drinking on their own leave food and drink with modifiers for the player
+  (see Food and drink below).
+- **Draw Windows the Skin Hides** (`hidden_windows`, off): draws a window the
+  UI skin sizes to nothing, such as the Velious skin's Raid and casting
+  windows, as the default skin draws it.
+
+Always on:
+
+- Controls for what the server type does not offer, or what this client does
+  not have yet, are greyed, with the reason on hover.
+- The action bar counts down a camp's 30-second preparation.
+- The same refusal is said at most once every 3 seconds, so a held key does
+  not fill the chat.
+
 ## Combat, looting, merchants, giving and camping
 
 The target panel lists the keys that apply to the current target:
@@ -599,12 +635,14 @@ The target panel lists the keys that apply to the current target:
 - Food and drink: when the server counts the player hungry or thirsty (3000
   of 6000 or less), the client eats or drinks from the inventory on its
   own, as the official client does, and says so when there is nothing left.
-  By default it leaves food and drink with modifiers for the player to eat
-  or drink by hand: attributes, resists, HP, mana, endurance, AC, HP or mana
-  regeneration, haste, or a click, proc, worn or focus effect. When only
-  such food or drink is left, it says so. `--auto-eat-anything` eats and
-  drinks whatever comes first instead, as the official client does. A
-  right click on food or drink eats or drinks it by hand, whatever it is.
+  Unless Skip Food With Modifiers is off on the QoL page, it leaves food and
+  drink with modifiers for the player to eat or drink by hand: attributes,
+  resists, HP, mana, endurance, AC, HP or mana regeneration, haste, or a
+  click, proc, worn or focus effect. When only such food or drink is left,
+  it says so. `--auto-eat-anything` starts characters who have not chosen
+  with the setting off, eating and drinking whatever comes first, as the
+  official client does. A right click on food or drink eats or drinks it by
+  hand, whatever it is.
 - **/camp** sits, waits the 30-second preparation, logs out and returns to
   character selection. Standing, moving, zoning or dying abandons it. **/sit** and
   **/stand** change posture from chat.
