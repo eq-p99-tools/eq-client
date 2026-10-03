@@ -12,7 +12,7 @@ use eq_client_core::{
     entities::display_name,
     food::Shortage,
     loot::LootResponse,
-    world::{Link, Notice},
+    world::{GroupNotice, Link, Notice, Party},
 };
 
 /// One line on screen besides the chat, which notices set.
@@ -218,6 +218,11 @@ fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<S
     })
 }
 
+/// Lines said in the chat.
+fn in_chat(lines: Vec<Said>) -> Vec<(Place, Said)> {
+    lines.into_iter().map(|line| (Place::Chat, line)).collect()
+}
+
 /// How a notice reads, and where each part shows.
 pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Place, Said)> {
     let chat = |said: Said| vec![(Place::Chat, said)];
@@ -281,7 +286,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::ConsumeRefused { reason, string_id }
         | Notice::CorpseRefused { reason, string_id }
         | Notice::PetRefused { reason, string_id }
-        | Notice::CombineRefused { reason, string_id } => {
+        | Notice::CombineRefused { reason, string_id }
+        | Notice::GroupRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
         Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
@@ -294,10 +300,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),
         Notice::Consent { consent, own } => chat(consent_line(consent, *own, messages)),
         Notice::WhoList(list) => who_lines(list, messages),
-        Notice::NothingToEat { food, water } => nothing_to_eat(*food, *water, messages)
-            .into_iter()
-            .map(|line| (Place::Chat, line))
-            .collect(),
+        Notice::NothingToEat { food, water } => in_chat(nothing_to_eat(*food, *water, messages)),
         // "You are too far away to trade."
         Notice::GiveRefused(reason) | Notice::GroundRefused(reason) => {
             chat(super::ground::refusal(reason).into())
@@ -326,6 +329,73 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::OtherCastInterrupted { string_id, caster } => {
             chat(other_interruption(*string_id, caster, messages))
         }
+        Notice::Group(notice) => in_chat(group_lines(notice, messages)),
+    }
+}
+
+/// News of the player's group, in the installed client's strings for it:
+/// 12273 for the player inviting someone; 12280 and then 12281 for an
+/// invitation to the player; 12283 for agreeing to join and 12289 for
+/// declining; 12266 for the one invited declining; 12003 for forming a
+/// group; 1399 and 12004 for someone else and the player joining, 12005
+/// and 12001 for leaving, and 5041 and 5040 for becoming the leader; and
+/// 12002 for the group disbanding. This client's words without the
+/// strings. That the official client says these lines at these moments is
+/// inferred from what each says, since the server sends none of them.
+fn group_lines(notice: &GroupNotice, messages: Option<&Messages>) -> Vec<Said> {
+    let line = |id, name: Option<&String>, fallback: &str| {
+        let arguments = name.map(std::slice::from_ref).unwrap_or_default();
+        official(Some(id), arguments, fallback, messages)
+    };
+    match notice {
+        GroupNotice::Inviting(name) => vec![line(
+            12273,
+            Some(name),
+            &format!("You asked {name} to join your group."),
+        )],
+        GroupNotice::Invited(name) => vec![
+            line(
+                12280,
+                Some(name),
+                &format!("{name} asks you to join a group."),
+            ),
+            line(12281, None, "Type /follow to join, or /disband to say no."),
+        ],
+        GroupNotice::Following(name) => {
+            vec![line(
+                12283,
+                Some(name),
+                &format!("You tell {name} you will join."),
+            )]
+        }
+        GroupNotice::Declining(name) => vec![line(
+            12289,
+            Some(name),
+            &format!("You turn down {name}'s invitation."),
+        )],
+        GroupNotice::Declined(name) => vec![line(
+            12266,
+            Some(name),
+            &format!("{name} turned down your invitation."),
+        )],
+        GroupNotice::Formed => vec![line(12003, None, "Your group is formed.")],
+        GroupNotice::Joined(Party::Named(name)) => {
+            vec![line(1399, Some(name), &format!("{name} joined the group."))]
+        }
+        GroupNotice::Joined(_) => vec![line(12004, None, "You are in the group now.")],
+        GroupNotice::Left(Party::Named(name)) => {
+            vec![line(12005, Some(name), &format!("{name} left the group."))]
+        }
+        GroupNotice::Left(_) => vec![line(12001, None, "You are out of the group.")],
+        GroupNotice::Leader(Party::Named(name)) => {
+            vec![line(
+                5041,
+                Some(name),
+                &format!("{name} leads the group now."),
+            )]
+        }
+        GroupNotice::Leader(_) => vec![line(5040, None, "You lead the group now.")],
+        GroupNotice::Disbanded => vec![line(12002, None, "The group has disbanded.")],
     }
 }
 
@@ -335,12 +405,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
 /// and 12115 by no one the player can name; this client's words without
 /// the string. That the official client words a death notice so is
 /// inferred from what each string says.
-fn slain(
-    victim: &eq_client_core::world::Party,
-    killer: &eq_client_core::world::Party,
-    messages: Option<&Messages>,
-) -> Said {
-    use eq_client_core::world::Party;
+fn slain(victim: &Party, killer: &Party, messages: Option<&Messages>) -> Said {
     let (id, arguments, fallback) = match (victim, killer) {
         (Party::Player, Party::Named(killer)) => (
             12107,
@@ -370,9 +435,9 @@ fn slain(
 
 /// A party's name in a death line; the world never names an unseen victim,
 /// so it reads as no one in particular.
-fn party_name(party: &eq_client_core::world::Party) -> String {
+fn party_name(party: &Party) -> String {
     match party {
-        eq_client_core::world::Party::Named(name) => name.clone(),
+        Party::Named(name) => name.clone(),
         _ => "someone".to_owned(),
     }
 }
@@ -594,7 +659,6 @@ mod tests {
 
     #[test]
     fn a_death_in_view_reads_in_the_installed_strings_for_whom_it_names() {
-        use eq_client_core::world::Party;
         let messages = Messages::parse(
             "EQST0002
 0 5
@@ -635,6 +699,69 @@ mod tests {
             );
             assert_eq!(wording(&notice, None), [(Place::Chat, own.into())]);
         }
+    }
+
+    #[test]
+    fn group_news_reads_in_the_installed_strings_for_whom_it_names() {
+        let messages = Messages::parse(
+            "EQST0002
+0 6
+1399 %1 is in.
+12001 Out.
+12004 In.
+12005 %1 is out.
+12280 From %1.
+12281 Answer.
+",
+        );
+        let lines = |notice: GroupNotice, messages| {
+            wording(&Notice::Group(notice), messages)
+                .into_iter()
+                .map(|(place, said)| {
+                    assert_eq!(place, Place::Chat);
+                    said
+                })
+                .collect::<Vec<_>>()
+        };
+        let friend = || Party::Named("Friend".into());
+        for (notice, official, own) in [
+            (
+                GroupNotice::Joined(friend()),
+                "Friend is in.",
+                "Friend joined the group.",
+            ),
+            (
+                GroupNotice::Joined(Party::Player),
+                "In.",
+                "You are in the group now.",
+            ),
+            (
+                GroupNotice::Left(friend()),
+                "Friend is out.",
+                "Friend left the group.",
+            ),
+            (
+                GroupNotice::Left(Party::Player),
+                "Out.",
+                "You are out of the group.",
+            ),
+        ] {
+            assert_eq!(
+                lines(notice.clone(), Some(&messages)),
+                [Said::official(official)]
+            );
+            assert_eq!(lines(notice, None), [Said::own(own)]);
+        }
+        // An invitation says who it is from, then how to answer it.
+        assert_eq!(
+            lines(GroupNotice::Invited("Friend".into()), Some(&messages)),
+            [Said::official("From Friend."), Said::official("Answer.")]
+        );
+        // A string the installation lacks reads in this client's words.
+        assert_eq!(
+            lines(GroupNotice::Disbanded, Some(&messages)),
+            [Said::own("The group has disbanded.")]
+        );
     }
 
     #[test]

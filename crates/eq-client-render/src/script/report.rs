@@ -112,8 +112,27 @@ pub(super) fn state(
         tints = ?online.world().player().map(|player| player.appearance.tints),
         face = ?online.world().player().map(|player| player.appearance.face),
         show_helm = ?online.world().player().map(|player| player.appearance.show_helm),
+        group = ?group(online),
+        group_invitation = ?online.world().group_invitation(),
         "Script report"
     );
+}
+
+/// The player's group: its leader, whether the player leads it, and each
+/// other member with their health where the zone shows them.
+fn group(online: &crate::online::OnlineState) -> Option<impl std::fmt::Debug> {
+    let world = online.world();
+    let group = world.group()?;
+    let health = |name: &String| world.group_member(name).map(|spawn| spawn.health);
+    Some((
+        group.leader.clone(),
+        world.leads_group(),
+        group
+            .members
+            .iter()
+            .map(|name| (name.clone(), health(name)))
+            .collect::<Vec<_>>(),
+    ))
 }
 
 /// Every item the player has, where it is and what it is.

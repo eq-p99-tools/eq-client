@@ -946,6 +946,50 @@ pub(super) fn target_request(input: &str) -> Option<Result<String, String>> {
     })
 }
 
+/// The name of the player the player targets, themself included; empty
+/// when the target is no player.
+fn targeted_player(online: &super::online::OnlineState) -> String {
+    let world = online.world();
+    let Some(id) = world.target().selected else {
+        return String::new();
+    };
+    if world.is_player(id) {
+        return world
+            .player()
+            .map(|player| player.name.clone())
+            .unwrap_or_default();
+    }
+    world
+        .spawn(id)
+        .filter(|spawn| spawn.state.kind == eq_client_core::SpawnKind::Player)
+        .map(|spawn| spawn.state.name.clone())
+        .unwrap_or_default()
+}
+
+/// A group command by its name: an invitation for the player named, or else
+/// the targeted player, which the session refuses when it names no one;
+/// joining the group of whoever invited the player last; or leaving the
+/// group, or as its leader removing the target or disbanding it, as the
+/// server decides, which with an invitation waiting declines it.
+fn group_command(
+    name: &str,
+    words: &str,
+    online: &super::online::OnlineState,
+    session_id: u64,
+) -> ClientCommand {
+    match name {
+        "invite" => ClientCommand::InviteToGroup {
+            session_id,
+            name: words
+                .split_whitespace()
+                .next()
+                .map_or_else(|| targeted_player(online), str::to_owned),
+        },
+        "follow" => ClientCommand::FollowGroup { session_id },
+        _ => ClientCommand::Disband { session_id },
+    }
+}
+
 /// The player corpse the player targets.
 fn targeted_corpse(online: &super::online::OnlineState) -> Result<u16, String> {
     let world = online.world();
@@ -1033,6 +1077,10 @@ fn game_commands(
                     target: online.world().target().selected,
                 }])
             }),
+        // Groups: an invitation takes a name, the rest no words.
+        "invite" | "follow" | "disband" if name == "invite" || words.is_empty() => {
+            stamp().map(|stamp| vec![group_command(&name, words, online, stamp.session_id)])
+        }
         // The rest take no words; with words, they are chat.
         _ if !words.is_empty() => return None,
         // A player's corpse the player targets, pulled close or dragged.
