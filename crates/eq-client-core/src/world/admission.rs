@@ -26,7 +26,7 @@ impl ClientWorld {
     /// A new admission replaces the old one and its zone.
     pub(super) fn entered(
         &mut self,
-        (capabilities, session_id): (&[Capability], u64),
+        (capabilities, choices, session_id): (&[Capability], &[Capability], u64),
         (zone, far_clip): (&str, Option<f32>),
         player: &PlayerState,
         now: Instant,
@@ -34,6 +34,7 @@ impl ClientWorld {
         let mut changes = self.reset(Reset::Entered);
         changes.entered = true;
         self.capabilities = capabilities.to_vec();
+        self.choices = choices.to_vec();
         self.session_id = Some(session_id);
         zone.clone_into(&mut self.zone_name);
         self.far_clip = far_clip;

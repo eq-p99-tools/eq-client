@@ -429,6 +429,7 @@ mod tests {
                     .into_iter()
                     .filter(|capability| *capability != Capability::Map)
                     .collect(),
+                choices: Vec::new(),
                 session_id: 1,
                 zone: "qeytoqrg".into(),
                 player: Box::new(crate::online::testing::player(7)),

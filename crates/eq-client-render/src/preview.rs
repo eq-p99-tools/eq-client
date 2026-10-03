@@ -162,6 +162,7 @@ fn admit(news: Res<News>, scene: Res<SceneInfo>, players: Query<&Transform, With
         // The preview lets the player do everything, jumping included, so
         // it never lags what eq-network adds.
         capabilities: eq_client_core::Capability::ALL.to_vec(),
+        choices: Vec::new(),
         session_id: 1,
         zone: scene.zone_name.clone(),
         player: Box::new(player(origin, [None; 8])),

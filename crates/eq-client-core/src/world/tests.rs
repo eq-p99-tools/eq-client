@@ -89,6 +89,7 @@ fn connection(world: &mut ClientWorld, connected: bool, terminal: bool) -> Chang
 fn entered(session_id: u64) -> WorldEvent {
     WorldEvent::Entered {
         capabilities: Vec::new(),
+        choices: Vec::new(),
         session_id,
         zone: "qeytoqrg".into(),
         player: Box::new(player(9)),
@@ -675,6 +676,7 @@ fn the_profile_restores_gem_timers_and_vitals_at_admission() {
     world.apply(
         &WorldUpdate::Game(WorldEvent::Entered {
             capabilities: Vec::new(),
+            choices: Vec::new(),
             session_id: 1,
             zone: "qeytoqrg".into(),
             player: Box::new(caster),
@@ -1208,6 +1210,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     world.apply(
         &WorldUpdate::Game(WorldEvent::Entered {
             capabilities: Vec::new(),
+            choices: Vec::new(),
             session_id: 1,
             zone: "qeytoqrg".into(),
             player: Box::new(warrior),
@@ -1726,6 +1729,7 @@ fn gems_read_the_admitted_players_memorized_spells() {
         &mut world,
         WorldEvent::Entered {
             capabilities: Vec::new(),
+            choices: Vec::new(),
             session_id: 1,
             zone: "qeytoqrg".into(),
             player: Box::new(caster),
@@ -1942,6 +1946,7 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         &mut world,
         WorldEvent::Entered {
             capabilities: Vec::new(),
+            choices: Vec::new(),
             session_id: 1,
             zone: "qeynos".into(),
             player: Box::new(trainee),

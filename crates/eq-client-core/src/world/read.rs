@@ -56,10 +56,26 @@ impl ClientWorld {
         &self.capabilities
     }
 
-    /// Whether the admission lets the player do this.
+    /// Whether the admission lets the player do this: what it offers, and
+    /// what it leaves to the player once they turn it on.
     #[must_use]
     pub fn can(&self, capability: crate::Capability) -> bool {
         self.capabilities.contains(&capability)
+            || (self.leaves(capability) && self.chosen.contains(&capability))
+    }
+
+    /// What the admission leaves to the player, whether or not they turned
+    /// it on.
+    #[must_use]
+    pub fn choices(&self) -> &[crate::Capability] {
+        &self.choices
+    }
+
+    /// Whether the admission leaves this to the player: the server's own
+    /// client keeps it off, so the player has it only once they turn it on.
+    #[must_use]
+    pub fn leaves(&self, capability: crate::Capability) -> bool {
+        self.choices.contains(&capability)
     }
 
     /// The current admission, which commands must name.
