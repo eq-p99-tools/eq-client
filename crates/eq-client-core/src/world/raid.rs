@@ -4,11 +4,11 @@
 //! official client words each itself (inferred from its strings); the world
 //! says which happened.
 //!
-//! The server lists every member as one joins or as the player enters a
-//! zone: after the raid's leader, each member in turn, then the leader
-//! again. Only a member added after that list says they joined. A member
-//! moved between raid groups says nothing (inferred), nor does the leader
-//! named again as someone moves. Locking and unlocking say so as the leader
+//! The server lists every member as the player joins, enters a zone or
+//! moves, which the session tells apart from a member who joins
+//! (`RaidUpdate::Listed`): only a member who joins says so. A member moved
+//! between raid groups says nothing (inferred), nor does the leader named
+//! again. Locking and unlocking say so as the leader
 //! does it, not as the server tells a member who joins or enters a zone
 //! while the raid is locked (inferred: the line names the leader): the
 //! server's word names the leader as they lock it and the member as they
@@ -116,15 +116,13 @@ pub enum RaidNotice {
 }
 
 /// What the world remembers of raid news on the way: an invitation the
-/// player sent or accepted, and the list the server is sending.
+/// player sent or accepted, and a lock they asked for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct RaidFlow {
     /// The player invited someone, and no raid has formed since.
     inviting: bool,
     /// The player accepted an invitation, and no raid has come since.
     joining: bool,
-    /// The server is listing the raid's members, until it names the leader.
-    listing: bool,
     /// The player asked to lock the raid (true) or unlock it, and the server
     /// has not answered yet.
     locking: Option<bool>,
@@ -185,7 +183,8 @@ impl ClientWorld {
                 Some(RaidNotice::Invited(inviter.clone()))
             }
             RaidUpdate::Created { leader } => self.raid_created(leader),
-            RaidUpdate::Added(member) => self.raid_added(member),
+            RaidUpdate::Added(member) => self.raid_added(member, false),
+            RaidUpdate::Listed(member) => self.raid_added(member, true),
             RaidUpdate::Removed { member } => {
                 let party = self.raid_party(member);
                 if party == Party::Player {
@@ -202,14 +201,13 @@ impl ClientWorld {
                     .raid
                     .as_mut()
                     .and_then(|raid| raid.leader.replace(name.clone()));
-                // The leader named after a list ends it, and the leader named
-                // again says nothing.
-                (!std::mem::take(&mut self.raid_flow.listing) && before.as_ref() != Some(name))
-                    .then(|| RaidNotice::Leader(self.raid_party(name)))
+                // The leader named again, as every list names them, says
+                // nothing.
+                (before.as_ref() != Some(name)).then(|| RaidNotice::Leader(self.raid_party(name)))
             }
-            // A member moved takes their new place; one the raid has not
-            // listed yet, as the player moved while listed again, joins the
-            // list without a word.
+            // A member moved takes their new place; one the roster does not
+            // hold joins it without a word, as the session's own roster
+            // does (no EQEmu order sends one).
             RaidUpdate::Moved(member) => {
                 let members = &mut self.raid.get_or_insert_with(Raid::default).members;
                 match members.iter_mut().find(|known| known.name == member.name) {
@@ -257,15 +255,13 @@ impl ClientWorld {
         if flow.inviting && self.is_named(leader) {
             return Some(RaidNotice::Formed);
         }
-        self.raid_flow.listing = true;
         flow.joining.then_some(RaidNotice::Joined(Party::Player))
     }
 
-    /// A member in the player's raid: one who joined, unless the server is
-    /// listing the raid.
-    fn raid_added(&mut self, member: &RaidMember) -> Option<RaidNotice> {
+    /// A member in the player's raid: one who joined, or one the server
+    /// lists, who says nothing.
+    fn raid_added(&mut self, member: &RaidMember, listing: bool) -> Option<RaidNotice> {
         let party = self.raid_party(&member.name);
-        let listing = self.raid_flow.listing;
         let members = &mut self.raid.get_or_insert_with(Raid::default).members;
         let known = members.iter().position(|known| known.name == member.name);
         match known {
