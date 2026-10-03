@@ -2293,7 +2293,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fraid-lists#a037399be7a2b4fc43c85489f234c7ed35f2e8f1"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fraid-lists#96d8b93f17a597eae5518c3383cd23ba06b04d89"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2312,7 +2312,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fraid-lists#a037399be7a2b4fc43c85489f234c7ed35f2e8f1"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fraid-lists#96d8b93f17a597eae5518c3383cd23ba06b04d89"
 dependencies = [
  "anyhow",
  "hex",
@@ -2327,7 +2327,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fraid-lists#a037399be7a2b4fc43c85489f234c7ed35f2e8f1"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fraid-lists#96d8b93f17a597eae5518c3383cd23ba06b04d89"
 dependencies = [
  "cbc",
  "cipher",
@@ -2340,7 +2340,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fraid-lists#a037399be7a2b4fc43c85489f234c7ed35f2e8f1"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fraid-lists#96d8b93f17a597eae5518c3383cd23ba06b04d89"
 dependencies = [
  "anyhow",
  "crc32fast",
