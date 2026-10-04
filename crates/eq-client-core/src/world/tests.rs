@@ -774,7 +774,7 @@ fn hit_points(spawn_id: u16, current: i32, maximum: i32) -> WorldEvent {
         spawn_id,
         current,
         maximum,
-        without_items: true,
+        items: crate::ItemHitPoints::LeftOut,
     }
 }
 
@@ -798,6 +798,42 @@ fn shown_hp_adds_back_what_equipped_items_give() {
     // Another spawn's report is not the player's.
     assert!(game(&mut world, hit_points(5, 1, 2)).ignored);
     assert_eq!(world.hit_points(), Some((0, 150)));
+}
+
+#[test]
+fn the_players_health_follows_their_hp_report_once_there_is_one() {
+    let mut world = admitted();
+    // Before any report, the server's percent is the player's health.
+    game(
+        &mut world,
+        WorldEvent::HealthPercent {
+            spawn_id: 9,
+            percent: 40,
+        },
+    );
+    assert_eq!(world.health(9), Some(40));
+    // EQMac's own update with a +100 HP chest: 175 of 250, sent as 75 of 250
+    // (the current without the chest), whose percent alone says 30.
+    assert!(game(&mut world, inventory(vec![chest()])).inventory);
+    game(
+        &mut world,
+        WorldEvent::HitPoints {
+            spawn_id: 9,
+            current: 75,
+            maximum: 250,
+            items: crate::ItemHitPoints::LeftOutOfCurrent,
+        },
+    );
+    assert_eq!(world.hit_points(), Some((175, 250)));
+    assert_eq!(world.health(9), Some(70));
+    game(
+        &mut world,
+        WorldEvent::HealthPercent {
+            spawn_id: 9,
+            percent: 30,
+        },
+    );
+    assert_eq!(world.health(9), Some(70));
 }
 
 #[test]

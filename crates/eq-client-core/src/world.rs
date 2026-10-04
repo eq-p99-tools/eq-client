@@ -496,13 +496,13 @@ impl ClientWorld {
                 spawn_id,
                 current,
                 maximum,
-                without_items,
+                items,
             } => self.hp_news(
                 *spawn_id,
                 ReportedHp {
                     current: *current,
                     maximum: *maximum,
-                    without_items: *without_items,
+                    items: *items,
                 },
                 news,
             ),

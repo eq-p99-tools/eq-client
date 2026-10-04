@@ -182,7 +182,9 @@ impl super::ClientWorld {
 
     /// A spawn's health; the player's own too, when it is theirs.
     pub(super) fn health_percent(&mut self, spawn_id: u16, percent: u8) {
-        if self.is_player(spawn_id) {
+        // The player's health follows their HP report once there is one:
+        // `EQMac`'s percent for the player leaves out what items add.
+        if self.is_player(spawn_id) && self.vitals.reported_hp.is_none() {
             self.own_health(percent);
         }
         self.zone.health(spawn_id, percent);
