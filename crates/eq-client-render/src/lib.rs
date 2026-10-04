@@ -4,6 +4,7 @@ use std::{path::PathBuf, sync::mpsc::Receiver};
 use theme::Size;
 
 mod abilities;
+mod attention;
 mod book_delete;
 mod buffs;
 mod character;
@@ -303,6 +304,7 @@ pub fn run(
     schedule(&mut app);
     navigation::install(&mut app);
     frame_limit::install(&mut app);
+    attention::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
         install_script(&mut app, steps, follow, (local_session, online));

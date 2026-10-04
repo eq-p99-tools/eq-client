@@ -121,7 +121,8 @@ the base look. HP, mana, endurance,
 experience updates, memorized spell IDs, and communication text feed the HUD.
 Unknown values remain blank. Chat has All and channel tabs, unread counts, and
 independent scroll positions. Each line reads in the official client's words,
-as its log writes them without the time: a player's speech and a tell the
+as its log writes them without the time (**Show Times in Chat** adds it; see
+[Quality of life](#quality-of-life)): a player's speech and a tell the
 player sent by the installed client's string for them (in this client's words
 for who spoke and where, without the installation's string table), and the
 game's own lines as the server sends them. An NPC's line that a Titanium
@@ -588,6 +589,14 @@ offer is greyed, with the reason on hover. The settings:
   from the skin's book, where the official client deletes it at once, and
   the client's own list waits for its **Confirm**. Greyed where the session
   does not delete spells (`DeletingSpells`).
+- **Show Times in Chat** (`chat_times`, off): each chat line starts with the
+  time it arrived by the computer's clock, as `[17:42:05]`, the time of day
+  the chat log writes. Turning it on or off redraws the lines already shown.
+- **Flash on Tells** (`flash_on_tells`, on): a tell that arrives while
+  another window is in front asks for the player's attention. On Windows the
+  client's taskbar button flashes until the client is in front again; other
+  systems show it their own way. Greyed where the session does not chat
+  (`Talking`).
 
 Always on:
 
