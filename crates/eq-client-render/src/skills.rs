@@ -29,7 +29,7 @@ impl SkillsList {
 }
 
 /// Values servers use to mark a skill as reset rather than learned.
-const RESET: u32 = 254;
+pub(crate) const RESET: u32 = 254;
 
 /// The player's learned skills by name, with their values.
 fn rows(world: &ClientWorld) -> Vec<(String, u32)> {

@@ -1,4 +1,5 @@
-//! Classic WLD boundary regions, independent of server destinations.
+//! Classic WLD boundary regions, independent of server destinations, and
+//! the regions the zone fills with water or lava.
 use std::collections::BTreeMap;
 
 use glam::Vec3;
@@ -31,8 +32,27 @@ pub enum ZoneLine {
     },
 }
 
-/// Spatial lookup for zone-line references in classic WLD assets, in the
-/// renderer's frame like the rest of a zone's geometry.
+/// What fills a region of the zone, read as `EQEmu` reads it for its water
+/// maps (zone-utilities' `awater`, `water_map.cpp`): a region named `WT...`
+/// is water and `LA...` lava, and one named for none of the kinds there is
+/// read the same way by its user data. The server's own test for liquid is
+/// water or lava (`WaterMap::InLiquid`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Liquid {
+    /// Water.
+    Water,
+    /// Lava.
+    Lava,
+}
+
+/// The prefixes `EQEmu`'s water maps read a region's name by before its
+/// user data: water, lava, zone line, player-versus-player, slime, ice and
+/// `VWA` regions.
+const REGION_KINDS: [&str; 7] = ["WT", "LA", "DRNTP", "DRP_", "SL", "DRN", "VWA"];
+
+/// Spatial lookup for zone-line references in classic WLD assets, and for
+/// the regions filled with water or lava, in the renderer's frame like the
+/// rest of a zone's geometry.
 ///
 /// Numbers refer to the server's zone-point table, not destination zone IDs.
 /// Unrecognized or malformed tags intentionally produce no route.
@@ -40,6 +60,7 @@ pub enum ZoneLine {
 pub struct ZoneRegions {
     nodes: Vec<Node>,
     routes: BTreeMap<usize, ZoneLine>,
+    liquids: BTreeMap<usize, Liquid>,
 }
 
 impl ZoneRegions {
@@ -75,9 +96,26 @@ impl ZoneRegions {
             })
             .collect::<Result<Vec<_>, LoadError>>()?;
         let mut routes = BTreeMap::new();
+        let mut liquids = BTreeMap::new();
         for zone in doc.fragment_iter::<Zone>() {
+            let name = doc.get_string(zone.name_reference).unwrap_or_default();
+            // As the water maps mark them, the last list naming a region
+            // decides what fills it. A region past the tree fills nothing,
+            // and a list naming one does not cost the zone its other regions.
+            let liquid = liquid_tag(name, &zone.user_data);
+            let listed = zone
+                .regions
+                .iter()
+                .filter_map(|region| usize::try_from(*region).ok())
+                .filter(|region| *region < region_count);
+            for region in listed {
+                match liquid {
+                    Some(liquid) => liquids.insert(region, liquid),
+                    None => liquids.remove(&region),
+                };
+            }
             let tag = if zone.user_data.is_empty() {
-                doc.get_string(zone.name_reference).unwrap_or_default()
+                name
             } else {
                 &zone.user_data
             };
@@ -95,13 +133,31 @@ impl ZoneRegions {
                 }
             }
         }
-        Ok(Self { nodes, routes })
+        Ok(Self {
+            nodes,
+            routes,
+            liquids,
+        })
     }
 
     /// Finds a boundary at a position in the renderer's frame.
     ///
     /// A point exactly on a split plane, a broken tree, or a cycle yields no route.
     pub fn zone_line_at(&self, position: [f32; 3]) -> Option<ZoneLine> {
+        self.routes.get(&self.region_at(position)?).copied()
+    }
+
+    /// What fills the zone at a position in the renderer's frame: water,
+    /// lava, or neither.
+    ///
+    /// A point exactly on a split plane, a broken tree, or a cycle is in
+    /// neither.
+    pub fn liquid_at(&self, position: [f32; 3]) -> Option<Liquid> {
+        self.liquids.get(&self.region_at(position)?).copied()
+    }
+
+    /// The leaf region holding a position in the renderer's frame.
+    fn region_at(&self, position: [f32; 3]) -> Option<usize> {
         if !position.iter().all(|v| v.is_finite()) {
             return None;
         }
@@ -109,7 +165,7 @@ impl ZoneRegions {
         for _ in 0..self.nodes.len() {
             let node = self.nodes.get(cursor)?;
             if let Some(region) = node.region {
-                return self.routes.get(&region).copied();
+                return Some(region);
             }
             let distance = position
                 .iter()
@@ -179,6 +235,11 @@ impl ZoneRegions {
     pub fn boundary_region_count(&self) -> usize {
         self.routes.len()
     }
+
+    /// Number of BSP leaf regions filled with water or lava.
+    pub fn liquid_region_count(&self) -> usize {
+        self.liquids.len()
+    }
 }
 
 fn invalid(message: &str) -> LoadError {
@@ -196,6 +257,24 @@ fn index<T>(reference: &FragmentRef<T>, len: usize) -> Result<Option<usize>, Loa
         }
         FragmentRef::Name(name, _) if name.to_bytes() == [0; 4] => Ok(None),
         FragmentRef::Name(..) => Err(invalid("named BSP reference")),
+    }
+}
+
+/// What fills a region with this name and user data, as `EQEmu`'s water
+/// maps read them: by the name when it starts with any kind's prefix, else
+/// by the user data. Their comparison is exact, so case matters.
+fn liquid_tag(name: &str, user_data: &str) -> Option<Liquid> {
+    let tag = if REGION_KINDS.iter().any(|kind| name.starts_with(kind)) {
+        name
+    } else {
+        user_data
+    };
+    if tag.starts_with("WT") {
+        Some(Liquid::Water)
+    } else if tag.starts_with("LA") {
+        Some(Liquid::Lava)
+    } else {
+        None
     }
 }
 
@@ -294,6 +373,7 @@ mod tests {
                 leaf(1),
             ],
             routes: BTreeMap::from([(0, ZoneLine::Reference(7))]),
+            liquids: BTreeMap::new(),
         }
     }
 
@@ -319,6 +399,7 @@ mod tests {
                 leaf(0),
             ],
             routes: BTreeMap::from([(0, ZoneLine::Reference(7))]),
+            liquids: BTreeMap::new(),
         };
         let start = [9.0, 0.0, 0.0];
         let end = [11.0, 0.0, 0.0];
@@ -332,6 +413,42 @@ mod tests {
         }
         assert!(regions.zone_line_entry(start, start).is_none());
         assert!(regions.zone_line_entry([f32::NAN, 0.0, 0.0], end).is_none());
+    }
+
+    #[test]
+    fn water_and_lava_are_read_as_the_servers_water_maps_read_them() {
+        assert_eq!(liquid_tag("WT_ZONE", ""), Some(Liquid::Water));
+        assert_eq!(liquid_tag("LA_ZONE", ""), Some(Liquid::Lava));
+        // A zone line under water is water too.
+        assert_eq!(liquid_tag("WTNTP00255000007_ZONE", ""), Some(Liquid::Water));
+        // A name of another kind decides, whatever the user data says.
+        assert_eq!(liquid_tag("DRNTP00255000007_ZONE", "WT"), None);
+        assert_eq!(liquid_tag("DRP_ZONE", "LA"), None);
+        assert_eq!(liquid_tag("SLIME_ZONE", "WT"), None);
+        // Any other name leaves it to the user data.
+        assert_eq!(liquid_tag("Z0001_ZONE", "WTN__"), Some(Liquid::Water));
+        assert_eq!(liquid_tag("Z0001_ZONE", "LA"), Some(Liquid::Lava));
+        assert_eq!(liquid_tag("Z0001_ZONE", "VWA"), None);
+        assert_eq!(liquid_tag("Z0001_ZONE", ""), None);
+        // The comparison is exact, as the server's is.
+        assert_eq!(liquid_tag("wt_zone", ""), None);
+    }
+
+    #[test]
+    fn a_point_is_in_the_liquid_of_the_region_holding_it() {
+        let mut regions = tree();
+        regions.liquids = BTreeMap::from([(1, Liquid::Water)]);
+        assert_eq!(regions.liquid_at([9.0, 50.0, 1.0]), Some(Liquid::Water));
+        assert_eq!(regions.liquid_at([11.0, 50.0, 1.0]), None);
+        // On the plane, or nowhere, is in neither.
+        assert_eq!(regions.liquid_at([10.0, 50.0, 1.0]), None);
+        assert_eq!(regions.liquid_at([f32::NAN, 0.0, 0.0]), None);
+        assert_eq!(regions.liquid_region_count(), 1);
+        // The zone line keeps its route.
+        assert_eq!(
+            regions.zone_line_at([11.0, 50.0, 1.0]),
+            Some(ZoneLine::Reference(7))
+        );
     }
 
     #[test]

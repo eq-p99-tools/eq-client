@@ -467,12 +467,20 @@ additional model races and appearance updates, animated world textures and water
 Space jumps, and walking off a ledge falls, with gravity, terminal speed, floor
 landing and ceiling collision: offline, and online on stock `EQEmu` sessions.
 P99 and Quarm sessions keep grounded movement until official-client jumps and
-falls are measured. Each landing exposes local fall distance and impact speed for
-diagnostics; it does not calculate damage or send a damage report, so online falls
-do not hurt yet. The explicit tuning (gravity 32, terminal speed 40, jump speed 10
+falls are measured. On stock `EQEmu`, a landing reports its damage after the
+sample that lands, where the session takes the world's damage from the client:
+none up to 20 units of drop, then growing with the square of the drop past it,
+less the player's Safe Fall skill, and none where the feet land in water or lava.
+The server then applies its own reductions. All of this is inferred until
+official-client falls are measured. Offline, landings only log the damage they
+would do. The explicit tuning (gravity 32, terminal speed 40, jump speed 10
 in world units and seconds) is not calibrated EQ physics. Falls continue after
 movement keys are released or the window loses focus; chat/focus guards suppress
-new movement input. Spell slots
+new movement input. Every walk, route and fall keeps out of the zone's water
+and lava as the WLD's regions mark them (read as `EQEmu`'s water maps read
+them), since the client cannot swim yet and reports no drowning or burns: a
+step stops before the head would go under water or the feet into lava, shallow
+water is waded, and feet already in either may walk out. Spell slots
 show hover names, shortcuts, local base mana cost, cast time, range, reuse timing
 and remaining cooldowns, with distinct
 empty/available/waiting colors. Spell gems and book rows load icons from the user's
