@@ -10,6 +10,7 @@ use eq_client_core::{
     ClientCommand, MovementMode, MovementRequest,
     hazards::Hazard,
     movement::{AirborneController, Landing},
+    qol::{Fix, Settings},
     world::ClientWorld,
     world_position,
 };
@@ -250,6 +251,7 @@ pub(super) fn input(
     online: Res<online::OnlineState>,
     collision: Res<Collision>,
     outbox: Res<crate::outbox::Outbox>,
+    options: Res<crate::options::OptionsState>,
     mut controls: ResMut<Controls>,
     players: Query<&PlayerBody, With<Player>>,
     cameras: Query<&OrbitCamera>,
@@ -409,7 +411,7 @@ pub(super) fn input(
             fall,
             safe_fall(online.world()),
         );
-        report_fall(&outbox, online.world(), fall, amount);
+        report_fall(&outbox, online.world(), &options.options.qol, fall, amount);
     }
     controls.moving = position.distance_squared(origin) > 0.000_001
         || (heading - current_heading).abs() > f32::EPSILON;
@@ -459,13 +461,21 @@ pub(super) fn fall_step(
 }
 
 /// Tells the server the damage a landing did to the player, where the
-/// session reports the world's damage. A landing that does none sends
+/// session reports the world's damage and the player takes it
+/// ([`Fix::TakeEnvironmentalDamage`]). A landing that does none sends
 /// nothing.
-fn report_fall(outbox: &crate::outbox::Outbox, world: &ClientWorld, landing: Landing, amount: u32) {
+fn report_fall(
+    outbox: &crate::outbox::Outbox,
+    world: &ClientWorld,
+    qol: &Settings,
+    landing: Landing,
+    amount: u32,
+) {
     let Some(stamp) = outbox.peek(world) else {
         return;
     };
     let told = amount > 0
+        && qol.on(Fix::TakeEnvironmentalDamage)
         && outbox.tell(
             world,
             ClientCommand::EnvironmentalDamage {
@@ -914,6 +924,7 @@ mod tests {
         app.insert_resource(state)
             .init_resource::<crate::chat::ChatState>()
             .init_resource::<crate::navigation::NavigationKeys>()
+            .init_resource::<crate::options::OptionsState>()
             .insert_resource(Collision(Some(floor)))
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .insert_resource(keys)
@@ -1256,6 +1267,17 @@ mod tests {
             .filter(|capability| *capability != eq_client_core::Capability::EnvironmentalDamage)
             .collect();
         let (mut app, receiver) = landing(None, without);
+        assert_eq!(reported(&mut app, &receiver), None);
+    }
+
+    #[test]
+    fn a_player_who_turns_the_worlds_damage_off_reports_none() {
+        let (mut app, receiver) = landing(None, eq_client_core::Capability::ALL.to_vec());
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::TakeEnvironmentalDamage, false);
         assert_eq!(reported(&mut app, &receiver), None);
     }
 }

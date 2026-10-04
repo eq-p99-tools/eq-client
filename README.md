@@ -469,7 +469,9 @@ Space jumps, and walking off a ledge falls, with gravity, terminal speed, floor
 landing and ceiling collision: offline, and online on stock `EQEmu` sessions.
 P99 and Quarm sessions keep grounded movement until official-client jumps and
 falls are measured. On stock `EQEmu`, a landing reports its damage after the
-sample that lands, where the session takes the world's damage from the client:
+sample that lands, where the session takes the world's damage from the client
+and the player has not turned off **Take Environmental Damage (unsafe)** (see
+[Quality of life](#quality-of-life)):
 none up to 20 units of drop, then growing with the square of the drop past it,
 less the player's Safe Fall skill, and none where the feet land in water or lava.
 The server then applies its own reductions. All of this is inferred until
@@ -597,6 +599,13 @@ offer is greyed, with the reason on hover. The settings:
   client's taskbar button flashes until the client is in front again; other
   systems show it their own way. Greyed where the session does not chat
   (`Talking`).
+- **Take Environmental Damage (unsafe)** (`take_environmental_damage`, on):
+  reports the damage the world does to the player to the server, as the
+  official client does: for now a fall's on stock `EQEmu` (see the movement
+  notes above). Turned off, the client keeps it to itself and the character
+  takes none, which is unsafe: a server may notice a character that never
+  takes it. The water and lava guard stays on either way. Greyed where the
+  session takes no damage from the client (`EnvironmentalDamage`).
 
 Always on:
 
