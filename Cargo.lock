@@ -2293,7 +2293,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#889aadff375b6246db26221d57ed6ca6f2c5b95d"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fenvironmental-damage-otazr5#84c66022d64846ca057c0fc59c5612539dc49747"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2312,7 +2312,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#889aadff375b6246db26221d57ed6ca6f2c5b95d"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fenvironmental-damage-otazr5#84c66022d64846ca057c0fc59c5612539dc49747"
 dependencies = [
  "anyhow",
  "hex",
@@ -2327,7 +2327,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#889aadff375b6246db26221d57ed6ca6f2c5b95d"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fenvironmental-damage-otazr5#84c66022d64846ca057c0fc59c5612539dc49747"
 dependencies = [
  "cbc",
  "cipher",
@@ -2340,7 +2340,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#889aadff375b6246db26221d57ed6ca6f2c5b95d"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Fenvironmental-damage-otazr5#84c66022d64846ca057c0fc59c5612539dc49747"
 dependencies = [
  "anyhow",
  "crc32fast",
