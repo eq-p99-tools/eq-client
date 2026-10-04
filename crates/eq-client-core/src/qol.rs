@@ -63,6 +63,13 @@ pub enum Fix {
     /// Asks Yes or No before a spell leaves the spell book for good; the
     /// official client's Delete key deletes the chosen spell at once.
     AskBeforeDeletingSpells,
+    /// Starts each chat line with the time it arrived, by the computer's
+    /// clock, as the chat log keeps it.
+    ShowTimesInChat,
+    /// Asks for the player's attention when a tell arrives while the client
+    /// is not the focused window: on Windows its taskbar button flashes
+    /// until the client is focused again.
+    FlashOnTells,
     /// Starts the Options window's Max FPS at 60 frames a second rather than
     /// as fast as vsync allows; the slider and the installation's
     /// `eqclient.ini` still set another cap. What the official client does
@@ -93,11 +100,13 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::MapWhereOff,
         Self::AskBeforeDeletingSpells,
+        Self::ShowTimesInChat,
+        Self::FlashOnTells,
         Self::FrameCap,
         Self::GreyedControls,
         Self::CampCountdown,
@@ -115,6 +124,8 @@ impl Fix {
             Self::HiddenWindows => "hidden_windows",
             Self::MapWhereOff => "map_where_off",
             Self::AskBeforeDeletingSpells => "ask_before_deleting_spells",
+            Self::ShowTimesInChat => "chat_times",
+            Self::FlashOnTells => "flash_on_tells",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -140,6 +151,8 @@ impl Fix {
             Self::HiddenWindows => "Draw Windows the Skin Hides",
             Self::MapWhereOff => "Use the Map Where It's Off",
             Self::AskBeforeDeletingSpells => "Ask Before Deleting Spells",
+            Self::ShowTimesInChat => "Show Times in Chat",
+            Self::FlashOnTells => "Flash on Tells",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -165,6 +178,12 @@ impl Fix {
             }
             Self::AskBeforeDeletingSpells => {
                 "Ask Yes or No before a spell is deleted from your spell book for good."
+            }
+            Self::ShowTimesInChat => {
+                "Start each chat line with the time it arrived, by your computer's clock."
+            }
+            Self::FlashOnTells => {
+                "Flash the client's taskbar button when a tell arrives while another window is in front."
             }
             Self::FrameCap => {
                 "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
@@ -194,6 +213,8 @@ impl Fix {
                 Kind::Guards
             }
             Self::HiddenWindows
+            | Self::ShowTimesInChat
+            | Self::FlashOnTells
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -205,16 +226,19 @@ impl Fix {
     }
 
     /// What the session must offer for the fix to matter, if anything:
-    /// eating on its own comes with the inventory, and only a session that
-    /// deletes spells has one to ask about. For a fix that unlocks, what it
-    /// turns on, which the session must leave to the player.
+    /// eating on its own comes with the inventory, only a session that
+    /// deletes spells has one to ask about, and tells come with talking.
+    /// For a fix that unlocks, what it turns on, which the session must
+    /// leave to the player.
     #[must_use]
     pub const fn needs(self) -> Option<Capability> {
         match self {
             Self::SkipModifiedFood => Some(Capability::Inventory),
             Self::MapWhereOff => Some(Capability::Map),
             Self::AskBeforeDeletingSpells => Some(Capability::DeletingSpells),
+            Self::FlashOnTells => Some(Capability::Talking),
             Self::HiddenWindows
+            | Self::ShowTimesInChat
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -246,15 +270,18 @@ impl Fix {
     /// Whether it is always on or the player's choice: windows the skin
     /// hides stay hidden, and the map stays off where the server's own
     /// client keeps it off, unless the player asks for them, as Adam chose;
-    /// what only adds what the player could work out, or stops a plain
-    /// mistake, is always on.
+    /// chat lines read as the official client's do until the player asks
+    /// for their times; and what only adds what the player could work out,
+    /// or stops a plain mistake, is always on.
     #[must_use]
     pub const fn availability(self) -> Availability {
         match self {
-            Self::SkipModifiedFood | Self::AskBeforeDeletingSpells => {
+            Self::SkipModifiedFood | Self::AskBeforeDeletingSpells | Self::FlashOnTells => {
                 Availability::Setting { default: true }
             }
-            Self::HiddenWindows | Self::MapWhereOff => Availability::Setting { default: false },
+            Self::HiddenWindows | Self::MapWhereOff | Self::ShowTimesInChat => {
+                Availability::Setting { default: false }
+            }
             Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -382,7 +409,9 @@ mod tests {
                 Fix::SkipModifiedFood,
                 Fix::HiddenWindows,
                 Fix::MapWhereOff,
-                Fix::AskBeforeDeletingSpells
+                Fix::AskBeforeDeletingSpells,
+                Fix::ShowTimesInChat,
+                Fix::FlashOnTells
             ]
         );
         // A fix that is always on stays on whatever is asked.

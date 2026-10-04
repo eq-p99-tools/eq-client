@@ -366,7 +366,9 @@ fn ask_deleting(
     if action_pending(world) {
         return Some(Said::own(BUSY));
     }
-    asked.ask(chosen.deleting());
+    // A question already waiting stays: this one, as when Delete is pressed
+    // again, or another, which the dialog shows until it is answered.
+    let _ = asked.ask(chosen.deleting());
     None
 }
 

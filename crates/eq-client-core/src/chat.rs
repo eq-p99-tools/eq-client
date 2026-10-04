@@ -1,4 +1,5 @@
 //! Typed chat presentation and bounded per-tab history.
+use chrono::NaiveDateTime;
 pub use eq_network_game::chat::{ChannelName, Message, SpeakMode};
 use std::collections::{BTreeMap, VecDeque};
 
@@ -198,12 +199,32 @@ pub fn channel_rgb(channel: ChannelName) -> [u8; 3] {
 /// Keeps 200 messages per channel group so busy auctions cannot evict guild/tell history.
 #[derive(Default)]
 pub struct ChatHistory {
-    messages: BTreeMap<ChatTab, VecDeque<(u64, ChatLine)>>,
+    messages: BTreeMap<ChatTab, VecDeque<(u64, NaiveDateTime, ChatLine)>>,
     revision: u64,
 }
+
+/// A line the history keeps, as [`ChatHistory::arrivals`] gives it.
+#[derive(Clone, Copy, Debug)]
+pub struct Arrival<'a> {
+    /// Its place in the order lines arrived, as [`ChatHistory::lines`]
+    /// gives it.
+    pub id: u64,
+    /// When it arrived, by the computer's clock.
+    pub at: NaiveDateTime,
+    /// The line.
+    pub line: &'a ChatLine,
+}
+
 impl ChatHistory {
-    /// Adds nonempty text without dropping its item links.
+    /// Adds nonempty text without dropping its item links, as arriving now
+    /// by the computer's clock.
     pub fn push(&mut self, line: ChatLine) {
+        self.push_at(line, chrono::Local::now().naive_local());
+    }
+
+    /// Adds nonempty text as [`push`](Self::push) does, as arriving at a
+    /// given time by the computer's clock.
+    pub fn push_at(&mut self, line: ChatLine, at: NaiveDateTime) {
         if line.message.text.is_empty() {
             return;
         }
@@ -212,7 +233,7 @@ impl ChatHistory {
             .messages
             .entry(ChatTab::for_channel(line.channel))
             .or_default();
-        entries.push_back((self.revision, line));
+        entries.push_back((self.revision, at, line));
         if entries.len() > 200 {
             entries.pop_front();
         }
@@ -226,19 +247,34 @@ impl ChatHistory {
         self.messages
             .iter()
             .filter(|(key, _)| tab == ChatTab::All || **key == tab)
-            .map(|(_, entries)| entries.iter().filter(|(id, _)| *id > seen).count())
+            .map(|(_, entries)| entries.iter().filter(|(id, ..)| *id > seen).count())
             .sum()
     }
 
     /// Selected history in original receive order, including mixed-channel All.
     pub fn lines(&self, tab: ChatTab) -> Vec<(u64, &ChatLine)> {
+        self.arrivals(tab)
+            .into_iter()
+            .map(|arrival| (arrival.id, arrival.line))
+            .collect()
+    }
+
+    /// The lines [`lines`](Self::lines) selects, in the same order, each
+    /// with when it arrived.
+    pub fn arrivals(&self, tab: ChatTab) -> Vec<Arrival<'_>> {
         let mut lines: Vec<_> = self
             .messages
             .iter()
             .filter(|(key, _)| tab == ChatTab::All || **key == tab)
-            .flat_map(|(_, entries)| entries.iter().map(|(id, line)| (*id, line)))
+            .flat_map(|(_, entries)| {
+                entries.iter().map(|(id, at, line)| Arrival {
+                    id: *id,
+                    at: *at,
+                    line,
+                })
+            })
             .collect();
-        lines.sort_by_key(|(id, _)| *id);
+        lines.sort_by_key(|arrival| arrival.id);
         lines
     }
 }
@@ -313,6 +349,32 @@ mod tests {
         );
         assert_eq!(ChatTab::for_channel(ChannelName::GuildMotd), ChatTab::Guild);
     }
+    #[test]
+    fn a_line_keeps_when_it_arrived() {
+        let mut history = ChatHistory::default();
+        let at = |second| {
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 3)
+                .and_then(|day| day.and_hms_opt(17, 42, second))
+                .unwrap()
+        };
+        history.push_at(line(ChannelName::Tell), at(5));
+        history.push_at(line(ChannelName::Guild), at(9));
+        let arrivals = history.arrivals(ChatTab::All);
+        assert_eq!(
+            arrivals
+                .iter()
+                .map(|arrival| (arrival.id, arrival.at))
+                .collect::<Vec<_>>(),
+            [(1, at(5)), (2, at(9))]
+        );
+        assert_eq!(arrivals[1].line.channel, ChannelName::Guild);
+        // A tab gives only its own lines, as their times.
+        let tells = history.arrivals(ChatTab::Tell);
+        assert_eq!(tells.len(), 1);
+        assert_eq!(tells[0].at, at(5));
+        assert_eq!(history.lines(ChatTab::Tell)[0].0, tells[0].id);
+    }
+
     #[test]
     fn palette_matches_mobile_default_values() {
         assert_eq!(channel_rgb(ChannelName::Auction), [0, 128, 0]);
