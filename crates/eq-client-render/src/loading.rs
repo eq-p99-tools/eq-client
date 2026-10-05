@@ -297,7 +297,7 @@ mod tests {
 
     /// Loads the admitted zone's scene in the background until `release`
     /// is used, and takes it once it is done, as the next batch does.
-    fn load_scene(app: &mut App, release: std::sync::mpsc::Sender<()>) {
+    fn load_scene(app: &mut App, release: &std::sync::mpsc::Sender<()>) {
         release.send(()).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while !testing::take_scene(&mut online(app)) {
@@ -314,7 +314,7 @@ mod tests {
         assert!(after(&mut app, 0.0));
         // The spawns' limit counts from the scene, not the admission.
         assert!(after(&mut app, MOST + 1.0));
-        load_scene(&mut app, release);
+        load_scene(&mut app, &release);
         assert!(after(&mut app, 0.0));
         assert!(after(&mut app, 0.1));
         assert!(!after(&mut app, SETTLE));
@@ -335,7 +335,7 @@ mod tests {
         let release = testing::hold_scene(&mut online(&mut app));
         assert!(after(&mut app, 0.0));
         assert!(after(&mut app, 2.0));
-        load_scene(&mut app, release);
+        load_scene(&mut app, &release);
         // A model that never loads leaves the spawns unsettled, and the
         // cover still lifts once it has waited its most after the scene.
         assert!(after(&mut app, 0.0));
