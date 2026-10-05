@@ -31,6 +31,19 @@ pub trait Liquids: Send + Sync {
     fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool;
 }
 
+/// What the guard sees for feet at one place, for probes and logs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GuardView {
+    /// Where the feet come to rest: where they stand, or the floor below
+    /// them in the air; none over no floor at all.
+    pub rest: Option<Vec3>,
+    /// Whether they are in deep water or lava now, which frees them.
+    pub submerged: bool,
+    /// Whether a move ending there stays clear of water and lava all the
+    /// way down to where it comes to rest.
+    pub dry: bool,
+}
+
 /// How far above the feet they are tested for lava, so that the plane of
 /// the floor under them never decides it.
 const SOLES: f32 = 0.1;
@@ -43,6 +56,16 @@ impl CollisionWorld {
     pub fn with_liquids(mut self, liquids: impl Liquids + 'static) -> Self {
         self.liquids = Some(Box::new(liquids));
         self
+    }
+
+    /// What the guard sees for feet here, of a body this tall.
+    #[must_use]
+    pub fn guard_view(&self, feet: Vec3, height: f32) -> GuardView {
+        GuardView {
+            rest: self.rest(feet),
+            submerged: self.submerged(feet, height),
+            dry: self.dry(feet, height),
+        }
     }
 
     /// Where feet here come to rest: where they stand, or the floor below

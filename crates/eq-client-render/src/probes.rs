@@ -1081,6 +1081,83 @@ fn inspect_liquids() {
     }
 }
 
+/// Replays one of the liquid probe's walks tick by tick on a zone of the
+/// installed client, from `EQ_PROBE_START` toward `EQ_PROBE_TOWARD` (EQ
+/// X,Y,Z of the body's middle, as the probe prints them): where the body is,
+/// what it stands in and what the guard sees there, to a few ticks after it
+/// first enters water or lava. The body is 6 units tall unless
+/// `EQ_PROBE_HEIGHT` says otherwise.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_START and EQ_PROBE_TOWARD"]
+fn trace_liquid_walk() {
+    use eq_client_core::movement::{AirborneController, MotionStep, PROVISIONAL_PHYSICS};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let name = std::env::var("EQ_PROBE_ZONE").unwrap();
+    let height = std::env::var("EQ_PROBE_HEIGHT").map_or(6.0, |height| height.parse().unwrap());
+    let feet_at = |key: &str| {
+        let eq: Vec<f32> = std::env::var(key)
+            .unwrap()
+            .split(',')
+            .map(|value| value.trim().parse().unwrap())
+            .collect();
+        let middle = eq_client_core::render_position(eq_client_core::WorldPosition {
+            x: eq[0],
+            y: eq[1],
+            z: eq[2],
+            heading: 0.0,
+        });
+        Vec3::from_array(middle) - Vec3::Y * height * 0.5
+    };
+    let (start, toward) = (feet_at("EQ_PROBE_START"), feet_at("EQ_PROBE_TOWARD"));
+    let zone = eq_client_assets::load_zone(&install, &name).unwrap();
+    let world = build_collision(&zone).unwrap();
+    let liquids = ZoneLiquids(zone.regions.clone());
+    let direction = Vec3::new(toward.x - start.x, 0.0, toward.z - start.z).normalize_or_zero();
+    let mut controller = AirborneController::default();
+    let mut feet = start;
+    let mut left = None;
+    for tick in 0..200 {
+        let view = world.guard_view(feet, height);
+        let ground = Ground::at(&liquids, feet, height);
+        // What the guard makes of the next step's end before walls and
+        // floors move it.
+        let ahead = world.guard_view(feet + direction * 0.5, height);
+        println!(
+            "tick={tick} at_xyz={} ground={ground:?} velocity={:.2} rest_xyz={} submerged={} dry={} ahead_rest_xyz={} ahead_dry={}",
+            eq_xyz(feet, height),
+            controller.velocity(),
+            view.rest
+                .map_or_else(|| "none".to_owned(), |rest| eq_xyz(rest, height)),
+            view.submerged,
+            view.dry,
+            ahead
+                .rest
+                .map_or_else(|| "none".to_owned(), |rest| eq_xyz(rest, height)),
+            ahead.dry,
+        );
+        if ground != Ground::Dry {
+            left = Some(left.unwrap_or(6_u8));
+        }
+        if let Some(ticks) = &mut left {
+            *ticks -= 1;
+            if *ticks == 0 {
+                break;
+            }
+        }
+        feet = controller.step(
+            &world,
+            feet,
+            PROVISIONAL_PHYSICS,
+            MotionStep {
+                horizontal: direction * 0.5,
+                jump: false,
+                seconds: 0.05,
+                height,
+            },
+        );
+    }
+}
+
 /// Liquids filling boxes, each from its lower corner to its upper.
 #[derive(Clone)]
 struct Boxes(Vec<(Vec3, Vec3, eq_client_core::movement::Liquid)>);

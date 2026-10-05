@@ -7,7 +7,7 @@ mod path;
 mod route;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use falls::{HARMLESS_DROP, fall_damage};
-pub use liquids::{Liquid, Liquids};
+pub use liquids::{GuardView, Liquid, Liquids};
 pub use path::{PathProgress, PathSearch};
 pub use route::{Route, RouteStep};
 
