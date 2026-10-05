@@ -107,7 +107,7 @@ mod tests {
         let messages = Messages::parse(
             "EQST0002\n0 6\n12053 Begin %1\n12007 End %1\n12045 Stop\n12049 Scribe %1\n12006 Scribed %1\n12044 Scribe stop\n",
         );
-        line(request, status, following, (&names, &messages)).map(|said| said.text)
+        line(request, status, following, (&names, &messages)).map(|said| said.words.text)
     }
 
     #[test]

@@ -233,10 +233,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
     let status = |text: String| vec![(Place::Status, Said::own(text))];
     match notice {
         Notice::Connection { link, dead } => status(connection_text(*link, *dead)),
-        Notice::ServerString { id, arguments, .. } => chat(messages.map_or_else(
-            || Said::own(format!("Server message {id}")),
-            |messages| messages.said(*id, arguments),
-        )),
+        Notice::ServerString { id, arguments, .. } => chat(
+            messages
+                .unwrap_or(&Messages::default())
+                .linked(*id, arguments),
+        ),
         Notice::Consideration {
             consideration,
             name,
@@ -1040,7 +1041,7 @@ mod tests {
                 .into_iter()
                 .map(|(place, line)| {
                     assert_eq!(place, Place::Chat);
-                    line.text
+                    line.words.text
                 })
                 .collect()
         };
