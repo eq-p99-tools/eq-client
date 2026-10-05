@@ -65,9 +65,32 @@ impl ClientWorld {
             self.vitals.reported_hp = Some(report);
             self.refresh_item_hp();
             self.show_hp();
+            self.bleed_out_news();
         } else {
             changes.ignored = true;
         }
+    }
+
+    /// Whether the server's report says the player bled out, where the
+    /// session takes the client's word for it (`Capability::BleedingOut`,
+    /// and a threshold named, which the session names only where it counts
+    /// what the player's items add): their HP, the report with what their
+    /// items add counted afresh, is at or below the threshold, and no death
+    /// was named for them. Only the server's own report decides, never a
+    /// predicted tick. The session counts the items by the server type's own
+    /// rule too, and refuses a report it rules out.
+    fn bleed_out_news(&mut self) {
+        let current = self
+            .player
+            .as_ref()
+            .and_then(|player| self.vitals.counted_hp(player, &self.inventory));
+        self.bled_out = current.filter(|current| {
+            self.death.is_none()
+                && self.can(crate::Capability::BleedingOut)
+                && self
+                    .death_threshold
+                    .is_some_and(|threshold| *current <= i64::from(threshold))
+        });
     }
 
     /// Notes the player's health.
