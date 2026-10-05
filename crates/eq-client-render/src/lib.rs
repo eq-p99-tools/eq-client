@@ -5,6 +5,7 @@ use theme::Size;
 
 mod abilities;
 mod attention;
+mod background;
 mod book_delete;
 mod buffs;
 mod character;
@@ -774,7 +775,8 @@ fn setup_scene(
             character,
             placed: Transform::from_translation(player_position),
             body,
-        },
+        }
+        .prepare(),
         settings.0.terrain_only,
         &mut online.regions,
     );
