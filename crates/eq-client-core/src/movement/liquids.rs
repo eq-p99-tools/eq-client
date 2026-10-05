@@ -259,6 +259,39 @@ mod tests {
     }
 
     #[test]
+    fn a_jump_at_the_waters_edge_holding_forward_goes_up_and_down() {
+        let world = ledge(false);
+        let mut controller = AirborneController::default();
+        let mut feet = Vec3::new(-0.5, 10.0, 0.0);
+        let mut heights = Vec::new();
+        for tick in 0..30 {
+            feet = controller.step(
+                &world,
+                feet,
+                PROVISIONAL_PHYSICS,
+                MotionStep {
+                    horizontal: Vec3::X * 0.3,
+                    jump: tick == 0,
+                    seconds: 0.05,
+                    height: 6.0,
+                },
+            );
+            heights.push(feet.y);
+        }
+        // Forward is held throughout. Only the step over the water is
+        // refused: gravity still acts, so the jump rises, falls and lands
+        // back on the ledge rather than hanging over the water.
+        let peak = (0..heights.len())
+            .max_by(|a, b| heights[*a].total_cmp(&heights[*b]))
+            .unwrap_or_default();
+        assert!(heights[peak] > 11.0, "{heights:?}");
+        let landed = heights[peak..].iter().position(|y| (y - 10.0).abs() < 0.01);
+        assert!(landed.is_some_and(|ticks| peak + ticks < 20), "{heights:?}");
+        assert!((feet.y - 10.0).abs() < 0.01 && feet.x < 0.5, "{feet:?}");
+        assert!(controller.velocity().abs() < 0.001);
+    }
+
+    #[test]
     fn routes_go_around_deep_water() {
         let triangles = quad(
             [-30.0, 0.0, -30.0],
