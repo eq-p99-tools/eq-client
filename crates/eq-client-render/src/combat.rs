@@ -296,7 +296,8 @@ mod tests {
                 "someone".into()
             }
         };
-        let text = |damage: Damage| damage_text(&messages, 7, names, &damage).map(|said| said.text);
+        let text =
+            |damage: Damage| damage_text(&messages, 7, names, &damage).map(|said| said.words.text);
         assert_eq!(
             text(hit(7, 9, 1, DamageOutcome::Hit(5))).unwrap(),
             "Thou cut a rat, dealing 5 damage."

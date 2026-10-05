@@ -6,6 +6,24 @@ use std::{collections::BTreeMap, io, path::Path};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StringTable(BTreeMap<u32, String>);
 
+/// A substitution's UTF-8 byte range in the formatted result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArgumentSpan {
+    /// Zero-based argument index, including arguments used in nested strings.
+    pub index: usize,
+    /// The complete inserted argument's range.
+    pub range: std::ops::Range<usize>,
+}
+
+/// Formatted text with the locations needed to retain argument annotations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormattedString {
+    /// Text after substituting the arguments.
+    pub text: String,
+    /// Substitutions in display order; repeated placeholders have separate spans.
+    pub arguments: Vec<ArgumentSpan>,
+}
+
 impl StringTable {
     /// Reads `eqstr_us.txt` from the installation.
     ///
@@ -82,12 +100,21 @@ impl StringTable {
     /// argument. Placeholders without an argument stay as written.
     #[must_use]
     pub fn format(&self, id: u32, arguments: &[String]) -> Option<String> {
+        self.format_with_spans(id, arguments)
+            .map(|formatted| formatted.text)
+    }
+
+    /// Formats without discarding the placement of linked or otherwise annotated
+    /// arguments. Literal template text does not receive an argument span.
+    #[must_use]
+    pub fn format_with_spans(&self, id: u32, arguments: &[String]) -> Option<FormattedString> {
         self.format_nested(id, arguments, 0)
     }
 
-    fn format_nested(&self, id: u32, arguments: &[String], depth: u8) -> Option<String> {
+    fn format_nested(&self, id: u32, arguments: &[String], depth: u8) -> Option<FormattedString> {
         let template = self.0.get(&id)?;
         let mut text = String::with_capacity(template.len());
+        let mut spans = Vec::new();
         let mut rest = template.as_str();
         while let Some(position) = rest.find('%') {
             text.push_str(&rest[..position]);
@@ -121,23 +148,63 @@ impl StringTable {
                     .filter(|_| depth < 2)
                     .and_then(|nested| self.format_nested(nested, arguments, depth + 1))
             };
-            match arguments.get(usize::try_from(index - 1).unwrap_or(usize::MAX)) {
-                Some(argument) if after.starts_with('T') => {
-                    text.push_str(&nested(argument).unwrap_or_else(|| argument.clone()));
+            let index = usize::try_from(index - 1).unwrap_or(usize::MAX);
+            match arguments.get(index) {
+                Some(argument) => {
+                    let start = text.len();
+                    if let Some(formatted) =
+                        after.starts_with('T').then(|| nested(argument)).flatten()
+                    {
+                        text.push_str(&formatted.text);
+                        spans.extend(formatted.arguments.into_iter().map(|span| ArgumentSpan {
+                            index: span.index,
+                            range: start + span.range.start..start + span.range.end,
+                        }));
+                    } else {
+                        text.push_str(argument);
+                        spans.push(ArgumentSpan {
+                            index,
+                            range: start..text.len(),
+                        });
+                    }
                 }
-                Some(argument) => text.push_str(argument),
                 None => text.push_str(&rest[position..position + 1 + consumed]),
             }
             rest = &after[consumed..];
         }
         text.push_str(rest);
-        Some(text)
+        Some(FormattedString {
+            text,
+            arguments: spans,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spans_follow_unicode_repeated_and_nested_arguments() {
+        let table = StringTable::parse("EQST0002\n0 2\n1 %2 / %B1(1) / %2 / %T3\n2 %1!\n");
+        let args = ["Épée", "盾", "2"].map(str::to_owned);
+        let formatted = table.format_with_spans(1, &args).unwrap();
+        assert_eq!(formatted.text, "盾 / Épée / 盾 / Épée!");
+        assert_eq!(
+            formatted
+                .arguments
+                .iter()
+                .map(|span| span.index)
+                .collect::<Vec<_>>(),
+            [1, 0, 1, 0]
+        );
+        for span in formatted.arguments {
+            assert_eq!(
+                formatted.text.get(span.range),
+                Some(args[span.index].as_str())
+            );
+        }
+    }
 
     #[test]
     fn missing_malformed_and_parameterized_strings_are_not_argument_free() {

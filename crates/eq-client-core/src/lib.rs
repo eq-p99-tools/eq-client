@@ -82,7 +82,7 @@ pub enum WorldUpdate {
         /// Index into the user's installed `eqstr_us.txt`.
         string_id: u32,
         /// Ordered `%1`, `%2`, ... substitutions supplied by the server.
-        arguments: Vec<String>,
+        arguments: Vec<chat::RichText>,
         /// The message type the server gave it, by which the official client
         /// colours its line; None where a generation's layout is not checked.
         message_type: Option<u32>,
