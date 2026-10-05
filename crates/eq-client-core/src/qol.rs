@@ -101,12 +101,17 @@ pub enum Fix {
     /// Shows a weapon's damage divided by its delay, the ratio players weigh
     /// weapons by, under those two in the item display.
     WeaponRatio,
+    /// Opens the windows always on screen, until the player places them here
+    /// or in the official client, where none covers another: each in a
+    /// corner or along an edge of the screen. The official client opens each
+    /// where the UI skin puts it.
+    WindowsApart,
 }
 
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::MapWhereOff,
@@ -121,6 +126,7 @@ impl Fix {
         Self::HotbarItemGuard,
         Self::BuffTimeLeft,
         Self::WeaponRatio,
+        Self::WindowsApart,
     ];
 
     /// The name an options file keeps it under.
@@ -141,6 +147,7 @@ impl Fix {
             Self::HotbarItemGuard => "hotbar_item_guard",
             Self::BuffTimeLeft => "buff_time_left",
             Self::WeaponRatio => "weapon_ratio",
+            Self::WindowsApart => "windows_apart",
         }
     }
 
@@ -169,6 +176,7 @@ impl Fix {
             Self::HotbarItemGuard => "Keep Hotbar Items to Their Item",
             Self::BuffTimeLeft => "Show Buff Time Left",
             Self::WeaponRatio => "Show Weapon Ratio",
+            Self::WindowsApart => "Open Windows Apart",
         }
     }
 
@@ -214,6 +222,7 @@ impl Fix {
             Self::WeaponRatio => {
                 "Show a weapon's damage divided by its delay under them in the item display."
             }
+            Self::WindowsApart => "Open the windows you have not moved where none covers another.",
         }
     }
 
@@ -233,7 +242,8 @@ impl Fix {
             | Self::CampCountdown
             | Self::QuietRepeats
             | Self::BuffTimeLeft
-            | Self::WeaponRatio => Kind::Shows,
+            | Self::WeaponRatio
+            | Self::WindowsApart => Kind::Shows,
             Self::MapWhereOff => Kind::Unlocks,
         }
     }
@@ -261,7 +271,8 @@ impl Fix {
             | Self::QuietRepeats
             | Self::HotbarItemGuard
             | Self::BuffTimeLeft
-            | Self::WeaponRatio => None,
+            | Self::WeaponRatio
+            | Self::WindowsApart => None,
         }
     }
 
@@ -288,8 +299,9 @@ impl Fix {
     /// client keeps it off, unless the player asks for them, as Adam chose;
     /// chat lines read as the official client's do until the player asks
     /// for their times; the world's damage is taken until the player turns
-    /// it off, as Adam chose; and what only adds what the player could work
-    /// out, or stops a plain mistake, is always on.
+    /// it off, as Adam chose; windows open apart, as Adam asked; and what
+    /// only adds what the player could work out, or stops a plain mistake,
+    /// is always on.
     #[must_use]
     pub const fn availability(self) -> Availability {
         match self {
@@ -306,7 +318,8 @@ impl Fix {
             | Self::QuietRepeats
             | Self::HotbarItemGuard
             | Self::BuffTimeLeft
-            | Self::WeaponRatio => Availability::AlwaysOn,
+            | Self::WeaponRatio
+            | Self::WindowsApart => Availability::AlwaysOn,
         }
     }
 
