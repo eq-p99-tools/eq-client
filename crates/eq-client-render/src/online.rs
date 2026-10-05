@@ -1145,7 +1145,7 @@ mod tests {
                     spawn_id: 7,
                     current,
                     maximum,
-                    without_items: false,
+                    items: eq_client_core::ItemHitPoints::LeftOut,
                 }))
                 .unwrap();
             app.update();
