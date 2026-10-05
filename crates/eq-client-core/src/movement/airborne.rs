@@ -190,6 +190,8 @@ impl AirborneController {
     /// Ends a vertical move that met something: rests on it, or keeps falling
     /// along it when the feet do not stand on it (a slope too steep to stand on,
     /// or the edge of a step the feet came down beside) instead of hanging there.
+    /// A slide that would carry the feet into lava or the head under water
+    /// stops short of it, and the feet rest where it stops.
     fn blocked(
         &mut self,
         world: &CollisionWorld,
@@ -206,11 +208,17 @@ impl AirborneController {
         let surface = -Vec3::new(hit.normal1.x, hit.normal1.y, hit.normal1.z);
         let rest = Vec3::Y * distance * (1.0 - fraction);
         let slide = rest - surface * rest.dot(surface);
-        if distance >= 0.0
+        let resting = distance >= 0.0
             || surface.y <= 0.0
             || slide.length_squared() <= 1e-8
-            || supported(world, contact, height)
-        {
+            || supported(world, contact, height);
+        // A slide stops short of deep water and lava, as a step does.
+        let slide = if resting {
+            Vec3::ZERO
+        } else {
+            slide * world.dry_fraction(contact, slide, height)
+        };
+        if slide.length_squared() <= 1e-8 {
             self.velocity = 0.0;
             return contact;
         }

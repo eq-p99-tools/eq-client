@@ -58,7 +58,7 @@ impl CollisionWorld {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Liquid, Liquids};
+    use super::super::{Liquid, liquids::Boxes};
     use super::*;
 
     #[test]
@@ -85,18 +85,20 @@ mod tests {
         }
     }
 
-    /// Water up to y 5 for x past 10, and lava past 20.
-    struct Pools;
-
-    impl Liquids for Pools {
-        fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
-            match point.x {
-                _ if point.y > 5.0 => None,
-                x if x > 20.0 => Some(Liquid::Lava),
-                x if x > 10.0 => Some(Liquid::Water),
-                _ => None,
-            }
-        }
+    /// Water up to y 5 for x from 10, and lava from 20.
+    fn pools() -> Boxes {
+        Boxes(vec![
+            (
+                Vec3::new(10.0, -50.0, -50.0),
+                Vec3::new(20.0, 5.0, 50.0),
+                Liquid::Water,
+            ),
+            (
+                Vec3::new(20.0, -50.0, -50.0),
+                Vec3::new(50.0, 5.0, 50.0),
+                Liquid::Lava,
+            ),
+        ])
     }
 
     #[test]
@@ -106,7 +108,7 @@ mod tests {
             [[-30.0, 0.0, -30.0], [30.0, 0.0, 30.0], [-30.0, 0.0, 30.0]],
         ])
         .unwrap()
-        .with_liquids(Pools);
+        .with_liquids(pools());
         let landing = Landing {
             fall_distance: 100.0,
             impact_speed: 40.0,

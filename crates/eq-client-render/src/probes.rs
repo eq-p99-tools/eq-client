@@ -1092,6 +1092,32 @@ impl eq_client_core::movement::Liquids for Boxes {
             .find(|(low, high, _)| point.cmpge(*low).all() && point.cmple(*high).all())
             .map(|(_, _, liquid)| *liquid)
     }
+
+    fn liquid_along(&self, from: Vec3, to: Vec3) -> Option<eq_client_core::movement::Liquid> {
+        // Where the path enters each box it meets, as a fraction of it.
+        let path = to - from;
+        let entry = |low: Vec3, high: Vec3| {
+            let (mut enter, mut leave) = (0.0_f32, 1.0_f32);
+            for axis in 0..3 {
+                if path[axis] == 0.0 {
+                    if from[axis] < low[axis] || from[axis] > high[axis] {
+                        return None;
+                    }
+                    continue;
+                }
+                let a = (low[axis] - from[axis]) / path[axis];
+                let b = (high[axis] - from[axis]) / path[axis];
+                enter = enter.max(a.min(b));
+                leave = leave.min(a.max(b));
+            }
+            (enter <= leave).then_some(enter)
+        };
+        self.0
+            .iter()
+            .filter_map(|(low, high, liquid)| Some((entry(*low, *high)?, *liquid)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, liquid)| liquid)
+    }
 }
 
 /// A made-up zone with a lake, lava and a ledge over deep water, all under

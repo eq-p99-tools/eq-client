@@ -1142,11 +1142,22 @@ struct ZoneLiquids(eq_client_assets::regions::ZoneRegions);
 
 impl eq_client_core::movement::Liquids for ZoneLiquids {
     fn liquid_at(&self, point: Vec3) -> Option<eq_client_core::movement::Liquid> {
-        use eq_client_assets::regions::Liquid;
-        Some(match self.0.liquid_at(point.to_array())? {
-            Liquid::Water => eq_client_core::movement::Liquid::Water,
-            Liquid::Lava => eq_client_core::movement::Liquid::Lava,
-        })
+        self.0.liquid_at(point.to_array()).map(movement_liquid)
+    }
+
+    fn liquid_along(&self, from: Vec3, to: Vec3) -> Option<eq_client_core::movement::Liquid> {
+        self.0
+            .liquid_along(from.to_array(), to.to_array())
+            .map(movement_liquid)
+    }
+}
+
+/// A liquid the zone's regions mark, as movement knows it.
+fn movement_liquid(liquid: eq_client_assets::regions::Liquid) -> eq_client_core::movement::Liquid {
+    use eq_client_assets::regions::Liquid;
+    match liquid {
+        Liquid::Water => eq_client_core::movement::Liquid::Water,
+        Liquid::Lava => eq_client_core::movement::Liquid::Lava,
     }
 }
 
