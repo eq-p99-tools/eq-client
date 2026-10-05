@@ -128,6 +128,10 @@ pub(crate) enum Shows {
     BookName(u8),
     /// The number of the spellbook's right page (true) or its left.
     BookPage(bool),
+    /// The player's pet's gauge, shown only while they have a pet in view,
+    /// as a group member's pet's is (inferred): the skins lay it over the
+    /// player's own gauges.
+    Pet,
     /// A group member's gauge, shown only while their place in the group
     /// window, counted from 0, holds a member.
     Member(usize),
@@ -2594,17 +2598,71 @@ fn title_boxes(
     }
 }
 
-/// Whose a group window's gauge is, by its number (`EQType`): 11 to 15
-/// the members' in their places, 17 to 21 their pets'.
-const fn member_gauge(kind: u32) -> Option<Shows> {
+/// Whose a gauge is, for one that shows only while its owner is there, by
+/// its number (`EQType`): 11 to 15 the group members' in their places, 16
+/// the player's pet's, 17 to 21 the members' pets'.
+const fn owned_gauge(kind: u32) -> Option<Shows> {
     match kind {
         11..=15 => Some(Shows::Member((kind - 11) as usize)),
+        16 => Some(Shows::Pet),
         17..=21 => Some(Shows::MemberPet((kind - 17) as usize)),
         _ => None,
     }
 }
 
-/// A gauge: its text, then its bar below it, filled as far as its fraction.
+/// Where a gauge's bar and its ends lie in the gauge, each piece at its own
+/// size from where the skin starts the bar: the left end, then the bar, as
+/// long as its background (or its fill, without one), then the right end.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BarParts {
+    left: Option<Area>,
+    bar: Area,
+    right: Option<Area>,
+}
+
+/// Lays out a gauge's bar. The pieces keep their own sizes rather than
+/// stretching to the gauge (inferred): the skins fit their gauges to them.
+/// The default skin's gauges are exactly as wide as their ends and bar, and
+/// its pet line, as wide as the hit point gauge but with no ends, lies under
+/// that bar's middle only at its pieces' size. The Velious skin's hit point
+/// background sits in a gauge wider than its window, and only at its own
+/// size does it end where the bar's fill does.
+fn bar_parts(gauge: &Gauge) -> BarParts {
+    let look = &gauge.look;
+    let (x, y) = (gauge.bar_left, gauge.bar_offset);
+    let sized = |piece: &Piece, x: f32| Area {
+        x,
+        y,
+        width: to_f32(piece.width),
+        height: to_f32(piece.height),
+    };
+    let left = look.cap_left.as_ref().map(|cap| sized(cap, x));
+    let start = x + left.map_or(0.0, |cap| cap.width);
+    let pieces = [&look.background, &look.fill, &look.lines];
+    let mut middle = pieces.iter().copied().flatten();
+    let bar = Area {
+        x: start,
+        y,
+        width: middle.next().map_or(0.0, |piece| to_f32(piece.width)),
+        height: pieces
+            .iter()
+            .copied()
+            .flatten()
+            .map(|piece| to_f32(piece.height))
+            .fold(0.0, f32::max),
+    };
+    let right = look
+        .cap_right
+        .as_ref()
+        .map(|cap| sized(cap, start + bar.width));
+    BarParts { left, bar, right }
+}
+
+/// A gauge: its text, then its bar, filled as far as its fraction. The
+/// gauge cuts off whatever lies outside it, as the skins expect (inferred):
+/// the Velious skin colours each fifth of its hit point bar with a gauge
+/// over that fifth alone, and both skins move the pet gauge's text out of
+/// its two pixel high box.
 fn gauge(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
@@ -2613,26 +2671,21 @@ fn gauge(
 ) {
     let area = gauge.area;
     let look = &gauge.look;
-    // The bar is its piece's height, or less if the gauge is thinner, as the
-    // pet's line under the player's hit points is.
-    let bar_height = look
-        .background
-        .as_ref()
-        .or(look.fill.as_ref())
-        .map_or(4.0, |piece| to_f32(piece.height))
-        .min(area.height - gauge.bar_offset.max(0.0))
-        .max(1.0);
-    // The bar runs from where the skin starts it to the gauge's right edge.
-    let bar_width = (area.width - gauge.bar_left).max(0.0);
-    let mut root = window.spawn(at(
-        inside.x + area.x,
-        inside.y + area.y,
-        area.width,
-        area.height,
-    ));
-    if let Some(shows) = gauge.eq_type.and_then(member_gauge) {
+    let parts = bar_parts(gauge);
+    let mut root = window.spawn(Node {
+        overflow: Overflow::clip(),
+        ..at(
+            inside.x + area.x,
+            inside.y + area.y,
+            area.width,
+            area.height,
+        )
+    });
+    if let Some(shows) = gauge.eq_type.and_then(owned_gauge) {
         root.insert((shows, Visibility::Hidden));
     }
+    let natural = |piece: &Piece| at(0.0, 0.0, to_f32(piece.width), to_f32(piece.height));
+    let placed = |place: Area| at(place.x, place.y, place.width, place.height);
     root.with_children(|root| {
         if let Some(kind) = gauge.eq_type {
             let ink = gauge.text_color.map_or(theme::INK_BRIGHT, rgb);
@@ -2643,47 +2696,39 @@ fn gauge(
                 TextLayout::new(Justify::Left, LineBreak::NoWrap),
             ));
         }
-        root.spawn(at(gauge.bar_left, gauge.bar_offset, bar_width, bar_height))
-            .with_children(|bar| {
-                if let Some(piece) = &look.background {
-                    picture(bar, art, piece, at(0.0, 0.0, bar_width, bar_height));
-                }
-                if let Some(piece) = &look.fill {
-                    let mut fill = bar.spawn((
-                        gauge.eq_type.map_or(Shows::Fill(0), Shows::Fill),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(0),
-                            top: px(0),
-                            width: percent(0),
-                            height: px(bar_height),
-                            overflow: Overflow::clip(),
-                            ..default()
-                        },
-                    ));
-                    fill.with_children(|fill| {
-                        if let Some(mut image) = art.cut(piece) {
-                            image.color = gauge.fill_tint.map_or(Color::WHITE, rgb);
-                            fill.spawn((image, at(0.0, 0.0, bar_width, bar_height)));
-                        }
-                    });
-                }
-                if let Some(piece) = &look.lines {
-                    picture(bar, art, piece, at(0.0, 0.0, bar_width, bar_height));
-                }
-                if let Some(piece) = &look.cap_left {
-                    picture(
-                        bar,
-                        art,
-                        piece,
-                        at(0.0, 0.0, to_f32(piece.width), bar_height),
-                    );
-                }
-                if let Some(piece) = &look.cap_right {
-                    let cap = to_f32(piece.width);
-                    picture(bar, art, piece, at(bar_width - cap, 0.0, cap, bar_height));
-                }
-            });
+        root.spawn(placed(parts.bar)).with_children(|bar| {
+            if let Some(piece) = &look.background {
+                picture(bar, art, piece, natural(piece));
+            }
+            if let Some(piece) = &look.fill {
+                let mut fill = bar.spawn((
+                    gauge.eq_type.map_or(Shows::Fill(0), Shows::Fill),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(0),
+                        top: px(0),
+                        width: percent(0),
+                        height: px(piece.height),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                ));
+                fill.with_children(|fill| {
+                    if let Some(mut image) = art.cut(piece) {
+                        image.color = gauge.fill_tint.map_or(Color::WHITE, rgb);
+                        fill.spawn((image, natural(piece)));
+                    }
+                });
+            }
+            if let Some(piece) = &look.lines {
+                picture(bar, art, piece, natural(piece));
+            }
+        });
+        for (piece, place) in [(&look.cap_left, parts.left), (&look.cap_right, parts.right)] {
+            if let (Some(piece), Some(place)) = (piece, place) {
+                picture(root, art, piece, placed(place));
+            }
+        }
     });
 }
 
@@ -2915,6 +2960,7 @@ fn shown_now(
             .and_then(|buffs| buffs.slots.get(slot).copied().flatten())
             .is_some(),
         Shows::Buff(window, index) => world.buffs().in_window(window, index).is_some(),
+        Shows::Pet => world.pet().is_some(),
         Shows::Member(place) => world.group_place(place).is_some(),
         Shows::MemberPet(place) => world.group_pet(place).is_some(),
         Shows::WhileInvited(invited) => world.group_invitation().is_some() == invited,
@@ -3028,6 +3074,7 @@ pub(crate) fn show(
             | Shows::PetBuff(_)
             | Shows::Buff(..)
             | Shows::WhileSelling(_)
+            | Shows::Pet
             | Shows::Member(_)
             | Shows::MemberPet(_)
             | Shows::WhileInvited(_)
@@ -3170,12 +3217,12 @@ fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String,
                 .to_owned(),
             None,
         ),
-        // The pet's name, or the skin's own words without one.
+        // The pet's name; without a pet, the gauge hides.
         16 => (
-            world.pet().map_or_else(
-                || "No Pet".to_owned(),
-                |pet| eq_client_core::entities::display_name(&pet.state.name),
-            ),
+            world
+                .pet()
+                .map(|pet| eq_client_core::entities::display_name(&pet.state.name))
+                .unwrap_or_default(),
             None,
         ),
         _ => (String::new(), None),
@@ -4220,15 +4267,197 @@ mod tests {
         assert_eq!(shown(Shows::MemberPet(1)), Some(false));
         assert_eq!(shown(Shows::WhileInvited(false)), Some(true));
         assert_eq!(shown(Shows::WhileInvited(true)), Some(false));
-        // Which piece is whose.
-        assert_eq!(member_gauge(15), Some(Shows::Member(4)));
-        assert_eq!(member_gauge(17), Some(Shows::MemberPet(0)));
-        assert_eq!(member_gauge(16), None);
+        // Which piece is whose; the player's own always shows.
+        assert_eq!(owned_gauge(15), Some(Shows::Member(4)));
+        assert_eq!(owned_gauge(16), Some(Shows::Pet));
+        assert_eq!(owned_gauge(17), Some(Shows::MemberPet(0)));
+        assert_eq!(owned_gauge(1), None);
         assert_eq!(
             window_label(WindowId::Group, "GW_HPPercLabel3"),
             Some(Shows::MemberPercent(2))
         );
         assert_eq!(window_label(WindowId::Group, "GW_HPPercLabel6"), None);
+    }
+
+    #[test]
+    fn the_players_pet_gauge_shows_only_while_they_have_a_pet() {
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let shown = |state: &OnlineState| {
+            shown_now(
+                Shows::Pet,
+                state.world(),
+                &crate::combat::CombatState::default(),
+                &crate::trade::TradeState::default(),
+            )
+        };
+        // Without a pet, the gauge hides and says nothing.
+        assert_eq!(shown(&state), Some(false));
+        assert_eq!(gauge_text(state.world(), 16).0, "");
+        // Another player's pet is not theirs.
+        testing::spawn_entry(&mut state, 8, testing::pet(8, 9));
+        assert_eq!(shown(&state), Some(false));
+        testing::spawn_entry(&mut state, 10, testing::pet(10, 7));
+        assert_eq!(shown(&state), Some(true));
+        assert_eq!(gauge_text(state.world(), 16).0, "Gabober");
+        assert_eq!(fraction(state.world(), None, 16), Some(1.0));
+    }
+
+    /// A piece of a gauge, of this size.
+    fn gauge_piece(width: u32, height: u32) -> Piece {
+        Piece {
+            texture: "gauge.tga".into(),
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }
+    }
+
+    /// A gauge 90 by 30 at the window's corner, its bar started here.
+    fn test_gauge(
+        look: eq_client_assets::sidl::GaugeLook,
+        bar_left: f32,
+        bar_offset: f32,
+    ) -> Gauge {
+        Gauge {
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 90.0,
+                height: 30.0,
+            },
+            eq_type: Some(1),
+            look,
+            fill_tint: None,
+            text_color: None,
+            text_offset: (0.0, 0.0),
+            bar_offset,
+            bar_left,
+        }
+    }
+
+    #[test]
+    fn a_gauges_pieces_keep_their_own_sizes_from_where_the_skin_starts_the_bar() {
+        use eq_client_assets::sidl::GaugeLook;
+        let area = |x, y, width, height| Area {
+            x,
+            y,
+            width,
+            height,
+        };
+        // Its ends either side of the bar, and the bar as long as its
+        // background, though the gauge is longer.
+        let ended = GaugeLook {
+            background: Some(gauge_piece(60, 8)),
+            fill: Some(gauge_piece(60, 8)),
+            lines: Some(gauge_piece(60, 8)),
+            cap_left: Some(gauge_piece(3, 8)),
+            cap_right: Some(gauge_piece(3, 8)),
+        };
+        assert_eq!(
+            bar_parts(&test_gauge(ended, 2.0, 20.0)),
+            BarParts {
+                left: Some(area(2.0, 20.0, 3.0, 8.0)),
+                bar: area(5.0, 20.0, 60.0, 8.0),
+                right: Some(area(65.0, 20.0, 3.0, 8.0)),
+            }
+        );
+        // A fill alone, started before the gauge: the gauge shows the part
+        // of it past its own left edge.
+        let fill = GaugeLook {
+            fill: Some(gauge_piece(60, 6)),
+            ..GaugeLook::default()
+        };
+        assert_eq!(
+            bar_parts(&test_gauge(fill, -20.0, 0.0)),
+            BarParts {
+                left: None,
+                bar: area(-20.0, 0.0, 60.0, 6.0),
+                right: None,
+            }
+        );
+        // Nothing to draw.
+        assert_eq!(
+            bar_parts(&test_gauge(GaugeLook::default(), 0.0, 16.0)).bar,
+            area(0.0, 16.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn a_gauge_cuts_off_what_lies_outside_it() {
+        use bevy::ecs::system::RunSystemOnce;
+        use eq_client_assets::sidl::GaugeLook;
+        // A thin pet line whose bar starts above it and whose text the skin
+        // puts far above it.
+        let line = Gauge {
+            area: Area {
+                x: 4.0,
+                y: 30.0,
+                width: 70.0,
+                height: 2.0,
+            },
+            eq_type: Some(16),
+            text_offset: (0.0, -40.0),
+            ..test_gauge(
+                GaugeLook {
+                    background: Some(gauge_piece(60, 8)),
+                    fill: Some(gauge_piece(60, 8)),
+                    ..GaugeLook::default()
+                },
+                0.0,
+                -3.0,
+            )
+        };
+        let inside = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<crate::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()));
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands, mut art: crate::sheets::Art| {
+                commands
+                    .spawn(Node::default())
+                    .with_children(|window| gauge(window, &mut art, &line, &inside));
+            })
+            .unwrap();
+        let world = app.world_mut();
+        let pieces: Vec<(Entity, Shows, Node)> = world
+            .query::<(Entity, &Shows, &Node)>()
+            .iter(world)
+            .map(|(entity, shows, node)| (entity, *shows, node.clone()))
+            .collect();
+        let find = |wanted: Shows| {
+            pieces
+                .iter()
+                .find(|(_, shows, _)| *shows == wanted)
+                .cloned()
+                .unwrap()
+        };
+        // The gauge cuts off what lies outside its box, its text included;
+        // it hides while the player has no pet.
+        let (root, _, root_node) = find(Shows::Pet);
+        assert_eq!(root_node.overflow, Overflow::clip());
+        assert_eq!(world.get::<Visibility>(root), Some(&Visibility::Hidden));
+        let (text, ..) = find(Shows::GaugeText(16));
+        assert_eq!(world.get::<ChildOf>(text).unwrap().parent(), root);
+        // The bar keeps its pieces' size from where the skin starts it, so
+        // only its rows inside the line show.
+        let (fill, _, fill_node) = find(Shows::Fill(16));
+        assert_eq!(fill_node.height, px(8));
+        let bar = world.get::<ChildOf>(fill).unwrap().parent();
+        let bar_node = world.get::<Node>(bar).unwrap();
+        assert_eq!(world.get::<ChildOf>(bar).unwrap().parent(), root);
+        assert_eq!(
+            (bar_node.left, bar_node.top, bar_node.width, bar_node.height),
+            (px(0), px(-3), px(60), px(8))
+        );
     }
 
     #[test]

@@ -1,10 +1,11 @@
 #![doc = "Bevy scene and camera support for renderer-independent EQ zone assets."]
 
-use std::{path::PathBuf, sync::mpsc::Receiver};
+use std::path::PathBuf;
 use theme::Size;
 
 mod abilities;
 mod attention;
+mod background;
 mod book_delete;
 mod buffs;
 mod character;
@@ -28,6 +29,8 @@ mod inventory;
 mod item_models;
 mod items;
 mod keys;
+mod loading;
+mod login;
 mod logs;
 mod map;
 mod motion;
@@ -63,6 +66,7 @@ mod tradeskills;
 mod training;
 mod whereabouts;
 mod who;
+mod window_size;
 mod windows;
 mod zone;
 
@@ -75,7 +79,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Captured, Screenshot, save_to_disk};
 use eq_client_assets::characters::CharacterAsset;
 use eq_client_assets::{BlendOpacity, MaterialMode, ZoneAsset, ZonePrimitive};
-use eq_client_core::{WorldPosition, WorldUpdate, render_position, world_position};
+use eq_client_core::{WorldPosition, render_position, world_position};
 use image::{RgbaImage, imageops::FilterType};
 
 /// The projection used by the top-down camera.
@@ -97,16 +101,18 @@ pub enum ValidationAction {
     InspectFirstItem,
 }
 
+pub use login::{Availability, Connection, LoginServer, Logins, Session, Worker};
 pub use preview::Preview;
 
 /// Where the viewer's world comes from.
 pub enum Source {
-    /// A server session: its news, and the channel for the player's requests.
+    /// Servers: the login screen and the sessions it starts, beginning with
+    /// the session the launch began, if any.
     Online {
-        /// What the session tells the client.
-        updates: Receiver<WorldUpdate>,
-        /// What the player asks the session to send.
-        commands: std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>,
+        /// The login servers the login screen offers, and how to log in.
+        logins: Box<dyn Logins>,
+        /// The session the launch began, which skips the login screen.
+        session: Option<Session>,
     },
     /// No server. The offline preview, if it shows anything, stands in for one.
     Offline(Preview),
@@ -161,8 +167,11 @@ pub struct ViewerConfig {
     pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
     pub window_position: Option<(i32, i32)>,
-    /// Add the developer's readings to the status box: coordinates, the
-    /// movement mode with its keys, and the count of nearby entities.
+    /// Optional size of the window's drawing area in physical pixels.
+    pub window_size: Option<(u32, u32)>,
+    /// Add the developer's readings to the status box: the zone's short
+    /// name, coordinates, the movement mode with its keys, and the count of
+    /// nearby entities.
     pub debug_overlay: bool,
 }
 
@@ -265,12 +274,24 @@ pub fn run(
     }
     let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
-    let window = primary_window(online, screenshot.is_none(), config.window_position);
+    let window_size = config.window_size;
+    let window = primary_window(
+        online,
+        screenshot.is_none(),
+        config.window_position,
+        window_size,
+    );
     let mut app = App::new();
-    let (updates, commands) = match source {
-        Source::Online { updates, commands } => (Some(updates), Some(commands)),
-        Source::Offline(preview) => (preview::install(&mut app, preview), None),
+    let (front, updates, commands) = match source {
+        Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
+        Source::Offline(preview) => (
+            login::FrontEnd::default(),
+            preview::install(&mut app, preview),
+            None,
+        ),
     };
+    app.insert_resource(front);
+    app.insert_resource(login::LoginStrings::load(config.eq_directory.as_deref()));
     app.insert_resource(spellbook::SpellNames::load(config.eq_directory.as_deref()));
     app.insert_resource(hud::messages::Messages::load(
         config.eq_directory.as_deref(),
@@ -305,6 +326,10 @@ pub fn run(
     navigation::install(&mut app);
     frame_limit::install(&mut app);
     attention::install(&mut app);
+    if let Some(size) = window_size {
+        window_size::install(&mut app, size);
+    }
+    loading::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
         install_script(&mut app, steps, follow, (local_session, online));
@@ -363,7 +388,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<raid::RaidChoice>()
         .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
-        .init_resource::<map::MapView>();
+        .init_resource::<map::MapView>()
+        .init_resource::<login::FrontEnd>();
 }
 
 /// What the tests of the windows start from.
@@ -463,7 +489,13 @@ fn schedule(app: &mut App) {
     .add_systems(
         Update,
         (
-            (online::receive, online::tick, daylight::update)
+            (
+                online::receive,
+                online::report_bleed_out,
+                login::watch,
+                online::tick,
+                daylight::update,
+            )
                 .chain()
                 .in_set(Stage::Receive),
             (
@@ -475,6 +507,7 @@ fn schedule(app: &mut App) {
                 .chain()
                 .in_set(Stage::Scene),
             (
+                login::claim,
                 windows::pointer::wheel,
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
@@ -525,7 +558,10 @@ fn schedule(app: &mut App) {
                 spellbook::book_clicks,
                 spellbook::say_book_lines,
             ),
-            (character_select::update, character_select::names),
+            (
+                (login::form, login::worlds, login::light),
+                (character_select::update, character_select::names),
+            ),
             windows::input,
             move_player,
             motion::input,
@@ -548,6 +584,7 @@ fn schedule(app: &mut App) {
                 combat::target_color,
                 trade::present,
                 trade::scroll,
+                login::scroll,
                 skinned::scroll_lists,
                 motion::interpolate,
                 orbit_camera,
@@ -683,7 +720,12 @@ fn install_overlays(app: &mut App) {
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
-fn primary_window(online: bool, visible: bool, position: Option<(i32, i32)>) -> Window {
+fn primary_window(
+    online: bool,
+    visible: bool,
+    position: Option<(i32, i32)>,
+    size: Option<(u32, u32)>,
+) -> Window {
     Window {
         title: if online {
             "eq-client"
@@ -695,6 +737,7 @@ fn primary_window(online: bool, visible: bool, position: Option<(i32, i32)>) -> 
         position: position.map_or(WindowPosition::Automatic, |(x, y)| {
             WindowPosition::At(IVec2::new(x, y))
         }),
+        resolution: size.map(window_size::resolution).unwrap_or_default(),
         ..default()
     }
 }
@@ -753,7 +796,8 @@ fn setup_scene(
             character,
             placed: Transform::from_translation(player_position),
             body,
-        },
+        }
+        .prepare(),
         settings.0.terrain_only,
         &mut online.regions,
     );
@@ -933,12 +977,11 @@ fn schedule_screenshot(
     mut commands: Commands,
     time: Res<Time>,
     request: Option<ResMut<CaptureRequest>>,
-    online: Res<online::OnlineState>,
+    (online, front): (Res<online::OnlineState>, Res<login::FrontEnd>),
+    loading: Option<Res<loading::Loading>>,
 ) {
-    // Online, the scene is ready once the player is in the world, or once the
-    // character list shows.
-    let admitted = online.world().connected() && online.world().player().is_some();
-    if online.enabled && !admitted && online.selection.is_none() {
+    let covered = loading.is_some_and(|loading| loading.covered());
+    if !screenshot_ready(&front, &online, covered) {
         return;
     }
     let Some(mut request) = request else {
@@ -953,6 +996,15 @@ fn schedule_screenshot(
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
     commands.remove_resource::<CaptureRequest>();
+}
+
+/// Whether a screenshot may count down: offline at once; online once a
+/// login screen, the list of worlds or the character list has settled, or
+/// once the player is in a zone with the loading screen lifted, as a
+/// script's wait for the zone has it. The screen stays up while the zone's
+/// scene loads, so the picture is the zone, not the cover.
+fn screenshot_ready(front: &login::FrontEnd, online: &online::OnlineState, covered: bool) -> bool {
+    !online.enabled || (front.settled(online) && !covered)
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -1136,7 +1188,42 @@ fn object_transform(object: &eq_client_assets::ZoneObject) -> Transform {
     }
 }
 
-/// Includes solid terrain and transformed object geometry, including hidden boundaries.
+/// The zone's water and lava as its regions mark them, which every walk keeps
+/// out of.
+struct ZoneLiquids(eq_client_assets::regions::ZoneRegions);
+
+impl eq_client_core::movement::Liquids for ZoneLiquids {
+    fn liquid_at(&self, point: Vec3) -> Option<eq_client_core::movement::Liquid> {
+        self.0.liquid_at(point.to_array()).map(movement_liquid)
+    }
+
+    fn passes_through(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        liquid: eq_client_core::movement::Liquid,
+    ) -> bool {
+        use eq_client_assets::regions::Liquid;
+        let liquid = match liquid {
+            eq_client_core::movement::Liquid::Water => Liquid::Water,
+            eq_client_core::movement::Liquid::Lava => Liquid::Lava,
+        };
+        self.0
+            .passes_through(from.to_array(), to.to_array(), liquid)
+    }
+}
+
+/// A liquid the zone's regions mark, as movement knows it.
+fn movement_liquid(liquid: eq_client_assets::regions::Liquid) -> eq_client_core::movement::Liquid {
+    use eq_client_assets::regions::Liquid;
+    match liquid {
+        Liquid::Water => eq_client_core::movement::Liquid::Water,
+        Liquid::Lava => eq_client_core::movement::Liquid::Lava,
+    }
+}
+
+/// Includes solid terrain and transformed object geometry, including hidden boundaries,
+/// and the zone's water and lava.
 fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
     let mut triangles = zone.collision.clone();
     for object in &zone.objects {
@@ -1149,7 +1236,8 @@ fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Collisi
         }));
     }
     match eq_client_core::movement::CollisionWorld::new(triangles) {
-        Ok(world) => Some(world),
+        Ok(world) if zone.regions.liquid_region_count() == 0 => Some(world),
+        Ok(world) => Some(world.with_liquids(ZoneLiquids(zone.regions.clone()))),
         Err(error) => {
             warn!("Collision unavailable: {error}");
             None
@@ -1276,7 +1364,9 @@ fn move_player(
         debug!(
             fall_distance = landing.fall_distance,
             impact_speed = landing.impact_speed,
-            "Offline landing; no damage calculated"
+            damage =
+                world.landing_damage(player.translation - Vec3::Y * body.feet_offset, landing, 0),
+            "Offline landing; nothing is sent"
         );
     }
     camera.focus = player.translation;
@@ -1288,8 +1378,9 @@ fn camera_relative_direction(horizontal: f32, vertical: f32, yaw: f32) -> Vec3 {
     (right * horizontal + forward * vertical).normalize_or_zero()
 }
 
-/// Shows the zone, the status line and what the player can use here; the
-/// developer's readings only when the debug overlay is on.
+/// Shows the status line and what the player can use here, and the
+/// developer's readings (the zone's short name among them) only when the
+/// debug overlay is on. With nothing to show, the box hides.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn update_hud(
     motion: Res<motion::Controls>,
@@ -1302,12 +1393,13 @@ fn update_hud(
     nearby: Res<entities::NearbyEntities>,
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
-    mut labels: Query<&mut Text, With<HudText>>,
+    mut labels: Query<(&mut Text, &mut Visibility), With<HudText>>,
 ) {
-    let (Ok(player), Ok(mut label)) = (players.single(), labels.single_mut()) else {
+    let (Ok(player), Ok((mut label, mut visibility))) = (players.single(), labels.single_mut())
+    else {
         return;
     };
-    let mut lines = vec![scene.zone_name.clone(), notices.status.text().to_owned()];
+    let mut lines = vec![notices.status.text().to_owned()];
     if online.enabled && online.in_world() && motion.speed.is_none() {
         lines.push("Movement unavailable: start with --movement-calibration".into());
     }
@@ -1320,6 +1412,7 @@ fn update_hud(
         None => String::new(),
     });
     if settings.0.debug_overlay {
+        lines.push(scene.zone_name.clone());
         let position = world_position(player.translation.to_array(), 0.0);
         lines.push(format!(
             "{:.0}, {:.0}, {:.0}",
@@ -1336,6 +1429,16 @@ fn update_hud(
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
+    // The official client has no such box, so it shows only while it has
+    // something to say.
+    let wanted = if text.is_empty() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    if *visibility != wanted {
+        *visibility = wanted;
+    }
     if label.0 != text {
         label.0 = text;
     }
@@ -1502,6 +1605,77 @@ fn unobstructed_orbit(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_screenshot_waits_for_the_loading_screen_to_lift() {
+        use super::*;
+        // A session logging in, as `--online` starts one.
+        let (_updates, receive) = std::sync::mpsc::sync_channel(1);
+        let (commands, _queue) = std::sync::mpsc::sync_channel(1);
+        let (front, ..) = login::FrontEnd::launched(
+            Box::new(login::testing::Fake {
+                servers: vec![login::testing::server("Example", "someone")],
+                heard: std::sync::Arc::default(),
+            }),
+            Some(login::Session {
+                updates: receive,
+                commands,
+                worker: Box::new(login::testing::Thread::default()),
+            }),
+        );
+        let mut online = online::OnlineState::new(true);
+        assert!(!screenshot_ready(&front, &online, false));
+        online::testing::admit(&mut online, 1, online::testing::player(7));
+        // In the zone, but the cover is still up while its scene loads.
+        assert!(!screenshot_ready(&front, &online, true));
+        assert!(screenshot_ready(&front, &online, false));
+        // Offline there is nothing to wait for.
+        let offline = online::OnlineState::new(false);
+        assert!(screenshot_ready(&front, &offline, true));
+    }
+
+    #[test]
+    fn the_status_box_shows_only_while_it_has_something_to_say() {
+        use super::*;
+        let mut app = testing::app();
+        app.insert_resource(SceneInfo {
+            zone_name: "qeytoqrg".into(),
+        })
+        .add_systems(Update, update_hud);
+        app.world_mut().spawn((Player, Transform::default()));
+        let status = app
+            .world_mut()
+            .spawn((HudText, Text::new(""), Visibility::Inherited))
+            .id();
+        let shown = |app: &mut App| {
+            app.update();
+            let text = app.world().get::<Text>(status).unwrap().0.clone();
+            let visibility = *app.world().get::<Visibility>(status).unwrap();
+            (text, visibility)
+        };
+        // Nothing to say: no zone name, and no box.
+        assert_eq!(shown(&mut app), (String::new(), Visibility::Hidden));
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .status
+            .set("Camped - choose a character");
+        assert_eq!(
+            shown(&mut app),
+            ("Camped - choose a character".into(), Visibility::Inherited)
+        );
+        // The developer's readings name the zone.
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .status
+            .set("");
+        app.world_mut()
+            .resource_mut::<ViewerSettings>()
+            .0
+            .debug_overlay = true;
+        let (text, visibility) = shown(&mut app);
+        assert!(text.starts_with("qeytoqrg\n"), "{text}");
+        assert_eq!(visibility, Visibility::Inherited);
+    }
+
     #[test]
     #[allow(
         clippy::float_cmp,

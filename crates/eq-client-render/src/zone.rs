@@ -8,10 +8,7 @@ use super::{
 };
 use bevy::{ecs::system::SystemParam, prelude::*};
 use eq_client_assets::{ZoneAsset, characters::CharacterAsset, regions::ZoneRegions};
-use eq_client_core::{
-    render_position,
-    world::{ClientWorld, Reset},
-};
+use eq_client_core::{render_position, world::Reset};
 
 /// What a zone's entry spawns: its scene, the player and the HUD.
 type Roots = Or<(With<SceneEntity>, With<HudText>, With<hud::HudRoot>)>;
@@ -26,24 +23,34 @@ pub(super) struct Entry {
     pub body: PlayerBody,
 }
 
+/// CPU-heavy scene data prepared before returning to the render thread.
+pub(super) struct PreparedEntry {
+    entry: Entry,
+    collision: Collision,
+    terrain: TerrainSurface,
+}
+
+impl PreparedEntry {
+    /// Uses the latest placement, including corrections received while loading.
+    pub(super) fn place(&mut self, position: eq_client_core::WorldPosition) {
+        self.entry.placed = placement(position);
+    }
+}
+
 impl Entry {
     /// The zone the world admitted the player to, with the player where the
     /// server put them, or why it cannot be shown.
     pub(super) fn admission(
-        world: &ClientWorld,
+        zone_name: &str,
+        player: &eq_client_core::PlayerState,
         directory: &std::path::Path,
     ) -> Result<Self, String> {
-        let player = world
-            .player()
-            .ok_or_else(|| "No admitted player".to_owned())?;
-        let zone = eq_client_assets::load_zone(directory, world.zone())
-            .map_err(|error| format!("Zone {} could not be loaded: {error}", world.zone()))?;
+        let zone = eq_client_assets::load_zone(directory, zone_name)
+            .map_err(|error| format!("Zone {zone_name} could not be loaded: {error}"))?;
         let character =
             eq_client_core::races::model(player.race, player.gender).and_then(|model| {
                 match eq_client_assets::characters::load_installed_character(
-                    directory,
-                    world.zone(),
-                    model,
+                    directory, zone_name, model,
                 ) {
                     Ok(asset) => Some(asset),
                     Err(error) => {
@@ -70,6 +77,17 @@ impl Entry {
                 height,
             },
         })
+    }
+
+    /// Builds collision and terrain indices alongside archive decoding.
+    pub(super) fn prepare(self) -> PreparedEntry {
+        let collision = Collision(build_collision(&self.zone));
+        let terrain = TerrainSurface::from_primitives(&self.zone.primitives);
+        PreparedEntry {
+            entry: self,
+            collision,
+            terrain,
+        }
     }
 }
 
@@ -125,18 +143,23 @@ impl Scene<'_, '_> {
     pub(super) fn enter(
         &mut self,
         commands: &mut Commands,
-        entry: Entry,
+        prepared: PreparedEntry,
         terrain_only: bool,
         regions: &mut ZoneRegions,
     ) -> Entity {
+        let PreparedEntry {
+            entry,
+            collision,
+            terrain,
+        } = prepared;
         let Entry {
             zone,
             character,
             placed,
             body,
         } = entry;
-        commands.insert_resource(Collision(build_collision(&zone)));
-        commands.insert_resource(TerrainSurface::from_primitives(&zone.primitives));
+        commands.insert_resource(collision);
+        commands.insert_resource(terrain);
         commands.insert_resource(SceneInfo {
             zone_name: zone.short_name.clone(),
         });

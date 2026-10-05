@@ -1,22 +1,24 @@
-//! Worker ownership and environment-only credentials for the graphical consumer.
+//! The sessions the graphical client runs, each on its own thread: what one
+//! logs in with, and the thread's ownership.
 mod movement;
 
-use anyhow::{Context, Result};
-use eq_client_core::{ClientCommand, MotionCalibration, WorldUpdate, food::AutoEat, world::Link};
+use anyhow::Result;
+use eq_client_core::{MotionCalibration, WorldUpdate, food::AutoEat, world::Link};
 use eq_network::{
     assets::Assets,
     client::{
         CancellationToken, Client, ClientConfig, ClientEvent, ClientIdentity, ConnectionState,
-        RecordEvent, RunOptions, ServerProtocol,
+        LoginError, RecordEvent, RunOptions, ServerProtocol,
     },
 };
 use std::{
     env,
-    path::Path,
-    sync::mpsc::{self, Receiver},
+    path::PathBuf,
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::Duration,
 };
+use zeroize::Zeroizing;
 
 /// Chat lines keep their text; string-table messages are resolved by presentation.
 fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
@@ -65,48 +67,87 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
         })
 }
 
-/// Owns shutdown: closing the viewer cancels and joins its network worker.
+/// What a session logs in with.
+pub struct Login {
+    /// The server type.
+    pub protocol: ServerProtocol,
+    /// The login server's address.
+    pub host: String,
+    /// The login server's port.
+    pub port: u16,
+    /// The account's name.
+    pub account: String,
+    /// The password, wiped once the session's configuration holds it.
+    pub password: Zeroizing<String>,
+    /// The world to play on; empty lists the login server's worlds.
+    pub server: String,
+    /// The character to enter; empty lists the world's characters.
+    pub character: String,
+}
+
+/// What every session of a run shares.
+#[derive(Clone)]
+pub struct SessionOptions {
+    /// The installation, whose files a Titanium session's login checks.
+    pub install: PathBuf,
+    /// Ends each session after this many seconds, its login included.
+    pub seconds: Option<u64>,
+    /// Independently measured movement speeds.
+    pub calibration: Option<MotionCalibration>,
+    /// Refuses servers outside this machine's network (a scripted test run).
+    pub local_only: bool,
+    /// What the session eats and drinks on its own.
+    pub auto_eat: AutoEat,
+}
+
+/// Owns a session's thread: dropping it cancels the session and waits for
+/// the thread to end.
 pub struct SessionWorker {
     cancel: CancellationToken,
     worker: Option<JoinHandle<()>>,
-    commands: mpsc::SyncSender<ClientCommand>,
+    /// Why the session ended, once it has, in the player's words.
+    reason: Arc<Mutex<Option<String>>>,
 }
 
 impl SessionWorker {
-    /// Returns the bounded command sender owned by this session.
-    pub fn commands(&self) -> mpsc::SyncSender<ClientCommand> {
-        self.commands.clone()
-    }
-
-    /// Starts one selected server session. Secrets come from the process environment.
-    /// A local-only session refuses servers outside this machine's network.
-    pub fn start(
-        install: &Path,
-        protocol: ServerProtocol,
-        seconds: Option<u64>,
-        calibration: Option<MotionCalibration>,
-        local_only: bool,
-        auto_eat: AutoEat,
-    ) -> Result<(Self, Receiver<WorldUpdate>)> {
-        let client = client_from_environment(install, protocol, local_only, auto_eat)?;
+    /// Starts a session on its own thread. The configuration is checked
+    /// here; the installation's files are read, and the login made, on the
+    /// thread, so starting never holds up the window.
+    ///
+    /// # Errors
+    /// Fails when the login's details cannot make a session, such as an
+    /// account too long for the server type.
+    pub fn start(login: Login, options: &SessionOptions) -> Result<eq_client_render::Session> {
+        let protocol = login.protocol;
+        let client = client(login, options)?;
+        let install = options.install.clone();
         let cancel = CancellationToken::default();
         let worker_cancel = cancel.clone();
         // The limit covers the whole session: login, character select and every zone.
-        if let Some(seconds) = seconds {
+        if let Some(seconds) = options.seconds {
             let deadline = cancel.clone();
             thread::spawn(move || {
                 thread::sleep(Duration::from_secs(seconds));
                 deadline.cancel();
             });
         }
+        let reason = Arc::new(Mutex::new(None));
+        let ended = reason.clone();
         let (sender, receiver) = mpsc::sync_channel(1024);
         let (commands, command_queue) = mpsc::sync_channel(32);
         let configuration = commands.clone();
+        let calibration = options.calibration;
         let worker = thread::spawn(move || {
             let mut movement = movement::Continuity::new(calibration);
             let mut options = RunOptions::default();
             options.reconnect = false;
-            let result =
+            let result = (|| {
+                // A Titanium login sends what the installation's files hold.
+                let client = if protocol.is_titanium() {
+                    client.with_assets(Assets::scan_all(&install)?)?
+                } else {
+                    client
+                };
                 client.run_with_commands(&worker_cancel, options, &command_queue, |event| {
                     let update = match event {
                         ClientEvent::World(event) => {
@@ -153,21 +194,52 @@ impl SessionWorker {
                         }
                     }
                     Ok(())
-                });
+                })
+            })();
             if let Err(error) = result {
+                tracing::error!("Session ended: {error:#}");
+                // A session asked to stop ends without a reason to show.
+                if !worker_cancel.is_cancelled()
+                    && let Ok(mut reason) = ended.lock()
+                {
+                    *reason = Some(player_words(&error));
+                }
                 // Waits for room if the queue is full; fails only once the viewer is gone.
                 let _ = sender.send(WorldUpdate::Connection(Link::Ended));
-                tracing::error!("Session ended: {error:#}");
             }
         });
-        Ok((
-            Self {
+        Ok(eq_client_render::Session {
+            updates: receiver,
+            commands,
+            worker: Box::new(Self {
                 cancel,
                 worker: Some(worker),
-                commands,
-            },
-            receiver,
-        ))
+                reason,
+            }),
+        })
+    }
+}
+
+impl eq_client_render::Worker for SessionWorker {
+    fn stop(&self) {
+        self.cancel.cancel();
+    }
+
+    fn finished(&self) -> bool {
+        self.worker.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
+    fn reason(&self) -> Option<String> {
+        self.reason.lock().ok()?.clone()
+    }
+}
+
+/// Why a session ended, as the login screen says it: the login server's
+/// refusal of the account, or what went wrong, in the library's words.
+fn player_words(error: &anyhow::Error) -> String {
+    match error.downcast_ref::<LoginError>() {
+        Some(refusal) => refusal.to_string(),
+        None => format!("The session ended: {error}"),
     }
 }
 
@@ -195,45 +267,29 @@ fn link(state: ConnectionState) -> Link {
     }
 }
 
-/// Builds a protocol-specific client without loading P99 checksums for Quarm.
-fn client_from_environment(
-    install: &Path,
-    protocol: ServerProtocol,
-    local_only: bool,
-    auto_eat: AutoEat,
-) -> Result<Client> {
-    let value = |name| env::var(name).with_context(|| format!("missing {name}"));
+/// The session's client, configured from the login: the login server, the
+/// account, and the world and character it goes straight to where named.
+fn client(login: Login, options: &SessionOptions) -> Result<Client> {
     let mut config = ClientConfig::for_protocol(
-        protocol,
-        value("EQ_ACCOUNT")?,
-        value("EQ_PASSWORD")?,
-        value("EQ_SERVER")?,
-        env::var("EQ_CHARACTER").unwrap_or_default(),
+        login.protocol,
+        login.account,
+        login.password.as_str(),
+        login.server,
+        login.character,
     );
-    // Local servers (for example stock EQEmu) name their own login endpoint.
-    if let Ok(host) = env::var("EQ_LOGIN_HOST") {
-        config.host = host;
-    }
-    if let Ok(port) = env::var("EQ_LOGIN_PORT") {
-        config.port = port.parse().context("EQ_LOGIN_PORT is not a port number")?;
-    }
-    config.local_only = local_only;
-    config.auto_eat = auto_eat;
+    config.host = login.host;
+    config.port = login.port;
+    config.local_only = options.local_only;
+    config.auto_eat = options.auto_eat;
     let hostname = env::var("COMPUTERNAME").or_else(|_| env::var("HOSTNAME"));
     let username = env::var("USERNAME").or_else(|_| env::var("USER"));
-    let client = Client::new(
+    Client::new(
         config,
         ClientIdentity::new(
             identity_field(hostname.ok(), "EQCLIENT"),
             identity_field(username.ok(), "PLAYER"),
         ),
-    )?;
-    let client = if protocol.is_titanium() {
-        client.with_assets(Assets::scan_all(install)?)?
-    } else {
-        client
-    };
-    Ok(client)
+    )
 }
 
 /// Up to 15 printable ASCII bytes of an identity field (the login identity is

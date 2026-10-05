@@ -1,21 +1,60 @@
-//! News about the session's course: the characters on offer, admissions,
-//! the motion the session allows, transfers between zones, and camping.
+//! News about the session's course: the worlds and characters on offer,
+//! admissions, the motion the session allows, transfers between zones, and
+//! camping.
 use super::{
-    Camp, Changes, CharacterList, ClientWorld, MotionGrant, Moved, Notice, Reply, Reset, Vitals,
+    Camp, Changes, CharacterList, ClientWorld, MotionGrant, Moved, Notice, Reply, Reset,
+    ServerList, Vitals,
 };
 use crate::{
     CampStatus, Capability, CharacterChoice, PlayerState, WorldPosition, ZoneOffer, ZoneRejection,
+    servers::{ServerChoice, ServerRefusal},
 };
 use std::time::Instant;
 
 impl ClientWorld {
-    /// The world server offered these characters to play.
+    /// The login server listed these worlds for the player to choose from.
+    pub(super) fn servers_offered(
+        &mut self,
+        selection_id: u64,
+        servers: &[ServerChoice],
+        changes: &mut Changes,
+    ) {
+        self.servers = Some(ServerList {
+            selection_id,
+            servers: servers.to_vec(),
+            asked: None,
+            refused: None,
+        });
+        changes.servers = true;
+    }
+
+    /// The login server refused the world chosen from its list, which stays
+    /// up for another choice. A refusal for an older list changes nothing.
+    pub(super) fn server_refused(
+        &mut self,
+        selection_id: u64,
+        refusal: &ServerRefusal,
+        changes: &mut Changes,
+    ) {
+        match self.servers.as_mut() {
+            Some(list) if list.selection_id == selection_id => {
+                list.asked = None;
+                list.refused = Some(refusal.clone());
+                changes.servers = true;
+            }
+            _ => changes.ignored = true,
+        }
+    }
+
+    /// The world server offered these characters to play: the login
+    /// server's list is done with.
     pub(super) fn offered(
         &mut self,
         selection_id: u64,
         characters: &[CharacterChoice],
         changes: &mut Changes,
     ) {
+        self.servers = None;
         self.characters = Some(CharacterList {
             selection_id,
             characters: characters.to_vec(),
@@ -37,6 +76,9 @@ impl ClientWorld {
         self.choices = choices.to_vec();
         self.session_id = Some(session_id);
         zone.clone_into(&mut self.zone_name);
+        changes
+            .notices
+            .push(Notice::Arrived(self.zone_long_name().to_owned()));
         self.far_clip = far_clip;
         self.vitals = Vitals {
             mana: Some(player.mana),

@@ -12,8 +12,9 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 24] = [
-    // GM mode on or off: off, the server lets the player go hungry.
+const GM_COMMANDS: [&str; 29] = [
+    // GM mode on or off: off, the server lets the player go hungry. On, the
+    // book and gem commands below act on a player target instead of the GM.
     "gm",
     // A rule changed in this zone only, such as how fast hunger comes, or
     // the zone's rules reloaded; never stored or reset.
@@ -48,11 +49,29 @@ const GM_COMMANDS: [&str; 24] = [
     "wc",
     // The targeted NPC says a line, as its quest dialogue would.
     "npcsay",
+    // Readies another test character: every spell they can use up to a
+    // level scribed in their book, every skill at its most for their
+    // level, and an item onto their cursor, as summonitem puts one on the
+    // GM's.
+    "scribespells",
+    "maxskills",
+    "giveitem",
+    // Puts them back as they were for another run: a spell taken out of
+    // their gems, and every buff taken off them.
+    "unmemspell",
+    "nukebuffs",
 ];
 
 /// One scripted action.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
+    /// Types the account and password the environment holds (`EQ_ACCOUNT`,
+    /// `EQ_PASSWORD`) into the login screen and connects.
+    Login,
+    /// Waits until the login server's list of worlds is shown.
+    WaitServers,
+    /// Highlights a listed world by name and plays on it.
+    Server(String),
     /// Waits until the character selection list is shown.
     WaitSelect,
     /// Highlights a listed character by name and presses Enter.
@@ -349,6 +368,9 @@ fn parse_step(line: &str) -> Result<Step, String> {
     };
     let chord = |keys: &str| keys_from(keys).ok_or_else(|| String::from("unknown key"));
     Ok(match (command, rest.as_slice()) {
+        ("login", []) => Step::Login,
+        ("wait_servers", []) => Step::WaitServers,
+        ("server", name) if !name.is_empty() => Step::Server(name.join(" ")),
         ("wait_select", []) => Step::WaitSelect,
         ("select", [name]) => Step::Select((*name).to_owned()),
         ("create", arguments) => parse_create(arguments)?,
@@ -955,6 +977,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_the_login_steps() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("login\nwait_servers\nserver Example  World\n", base).unwrap(),
+            [
+                Step::Login,
+                Step::WaitServers,
+                Step::Server("Example World".into()),
+            ]
+        );
+        // The account and password come only from the environment.
+        for bad in ["login someone", "wait_servers now", "server"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn parses_bounded_steps_and_rejects_unsafe_input() {
         let base = Path::new("private");
         let steps = parse(
@@ -1056,6 +1095,26 @@ mod tests {
         assert_eq!(
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
+        );
+    }
+
+    #[test]
+    fn a_gm_may_ready_another_test_character_and_put_them_back() {
+        assert_eq!(
+            parse(
+                "gm gm on\ngm scribespells 10\ngm maxskills\ngm giveitem 1001 1\n\
+                 gm unmemspell 200\ngm nukebuffs\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Gm("gm on".into()),
+                Step::Gm("scribespells 10".into()),
+                Step::Gm("maxskills".into()),
+                Step::Gm("giveitem 1001 1".into()),
+                Step::Gm("unmemspell 200".into()),
+                Step::Gm("nukebuffs".into()),
+            ]
         );
     }
 

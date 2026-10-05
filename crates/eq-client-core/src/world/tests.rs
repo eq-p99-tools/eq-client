@@ -154,6 +154,24 @@ fn a_zone_entry_keeps_what_arrives_with_it_before_the_connection() {
 }
 
 #[test]
+fn every_admission_names_the_zone_the_player_arrived_in() {
+    let mut world = ClientWorld::default();
+    let changes = game(&mut world, entered(2));
+    assert_eq!(
+        changes.notices,
+        [Notice::Arrived("The Qeynos Hills".into())]
+    );
+    assert_eq!(world.zone_long_name(), "The Qeynos Hills");
+    // A zone the list lacks goes by its short name.
+    let mut elsewhere = entered(3);
+    if let WorldEvent::Entered { zone, .. } = &mut elsewhere {
+        *zone = "testzone".into();
+    }
+    let changes = game(&mut world, elsewhere);
+    assert_eq!(changes.notices, [Notice::Arrived("testzone".into())]);
+}
+
+#[test]
 fn a_new_zone_entry_forgets_the_old_zone_and_death() {
     let mut world = admitted();
     game(
@@ -855,6 +873,106 @@ fn the_dead_show_no_hp_and_a_new_admission_forgets_the_report() {
     game(&mut world, entered(2));
     assert_eq!(world.hit_points(), None);
     assert_eq!(world.vitals().reported_hp, None);
+}
+
+/// Player 9 admitted in session 1 with these capabilities, and told the
+/// HP at which the server takes them as dead (-11).
+fn bleeding(capabilities: Vec<crate::Capability>) -> ClientWorld {
+    let mut world = ClientWorld::default();
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities,
+            choices: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(player(9)),
+            far_clip: None,
+        },
+    );
+    connection(&mut world, true, false);
+    game(&mut world, WorldEvent::DeathThreshold(-11));
+    world
+}
+
+/// `EQMac`'s report of the player's HP, whose current leaves out what items
+/// add.
+fn eqmac_hp(current: i32) -> WorldEvent {
+    WorldEvent::HitPoints {
+        spawn_id: 9,
+        current,
+        maximum: 150,
+        items: crate::ItemHitPoints::LeftOutOfCurrent,
+    }
+}
+
+#[test]
+fn a_report_at_the_threshold_with_the_items_added_says_the_player_bled_out() {
+    let mut world = bleeding(vec![crate::Capability::BleedingOut]);
+    // Before the inventory comes, what the items add is unknown: the
+    // server's -11 could be a player alive in HP gear.
+    game(&mut world, eqmac_hp(-11));
+    assert_eq!(world.bled_out(), None);
+    // With the +100 HP chest counted, -110 is -10, alive, and -111 is -11.
+    game(&mut world, inventory(vec![chest()]));
+    game(&mut world, eqmac_hp(-110));
+    assert_eq!(world.bled_out(), None);
+    game(&mut world, eqmac_hp(-111));
+    assert_eq!(world.bled_out(), Some(-11));
+    // A front end reports it once, and the server's next report asks again
+    // until a death is named.
+    assert_eq!(world.take_bled_out(), Some(-11));
+    assert_eq!(world.take_bled_out(), None);
+    game(&mut world, eqmac_hp(-112));
+    assert_eq!(world.bled_out(), Some(-12));
+    // A heal before anyone reported it takes it back.
+    game(&mut world, eqmac_hp(-50));
+    assert_eq!(world.bled_out(), None);
+}
+
+#[test]
+fn only_a_server_type_that_takes_the_clients_word_hears_of_a_bleed_out() {
+    let mut world = bleeding(Vec::new());
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, eqmac_hp(-20));
+    assert_eq!(world.bled_out(), None);
+}
+
+#[test]
+fn the_dead_bleed_out_no_more_and_an_admission_forgets_the_threshold() {
+    let mut world = bleeding(vec![crate::Capability::BleedingOut]);
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, eqmac_hp(-11));
+    assert_eq!(world.bled_out(), Some(-11));
+    // The player's death, the session's or the server's, ends it.
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 9,
+            killer_id: 0,
+            corpse_id: 9,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+    );
+    assert_eq!(world.bled_out(), None);
+    game(&mut world, eqmac_hp(-12));
+    assert_eq!(world.bled_out(), None);
+    // A new admission waits for the session to name the threshold again.
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities: vec![crate::Capability::BleedingOut],
+            choices: Vec::new(),
+            session_id: 2,
+            zone: "qeynos".into(),
+            player: Box::new(player(9)),
+            far_clip: None,
+        },
+    );
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, eqmac_hp(-11));
+    assert_eq!(world.bled_out(), None);
 }
 
 #[test]
@@ -2274,6 +2392,42 @@ fn a_group_follows_the_servers_word_and_says_what_happened() {
 }
 
 #[test]
+fn only_a_change_of_leader_says_so() {
+    use crate::group::GroupUpdate;
+    let mut world = admitted();
+    let news = |world: &mut ClientWorld, update| game(world, WorldEvent::Group(update)).notices;
+    let leader = |name: &str| GroupUpdate::Leader { name: name.into() };
+    // Outside a group, a leader is nothing to the player.
+    assert_eq!(news(&mut world, leader("Leader")), []);
+    assert!(world.group().is_none());
+    // A list naming no leader, as TAKP's profile gives after a zone
+    // change: the leader named next is learned quietly.
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Members {
+                leader: String::new(),
+                members: vec!["Leader".into(), "Friend".into()],
+            }
+        ),
+        []
+    );
+    assert_eq!(news(&mut world, leader("Leader")), []);
+    assert_eq!(
+        world.group().and_then(|group| group.leader.as_deref()),
+        Some("Leader")
+    );
+    // The same leader again says nothing; a new one says so.
+    assert_eq!(news(&mut world, leader("leader")), []);
+    assert_eq!(
+        news(&mut world, leader("Friend")),
+        [Notice::Group(GroupNotice::Leader(Party::Named(
+            "Friend".into()
+        )))]
+    );
+}
+
+#[test]
 fn a_group_the_player_formed_is_theirs_to_lead_until_it_ends() {
     use crate::group::GroupUpdate;
     let mut world = admitted();
@@ -2731,4 +2885,75 @@ fn a_raid_listed_after_its_leader_says_nothing_and_a_later_member_joins() {
             "Late".into()
         )))]
     );
+}
+
+fn worlds(selection_id: u64) -> WorldEvent {
+    use crate::servers::{ServerChoice, ServerStatus};
+    WorldEvent::ServerSelection {
+        selection_id,
+        servers: vec![ServerChoice {
+            name: "Example".into(),
+            status: ServerStatus::Up,
+            players: Some(7),
+            preferred: false,
+        }],
+    }
+}
+
+#[test]
+fn the_login_servers_list_lasts_until_the_chosen_world_lists_characters() {
+    use crate::servers::ServerRefusal;
+    let mut world = ClientWorld::default();
+    assert!(game(&mut world, worlds(4)).servers);
+    let list = world.servers().unwrap();
+    assert_eq!((list.selection_id, list.servers.len()), (4, 1));
+    // A refusal for another list changes nothing; one for this list stays
+    // with it while the player chooses again.
+    let refused = |selection_id| WorldEvent::ServerRefused {
+        selection_id,
+        refusal: ServerRefusal::Message(326),
+    };
+    world.ask_server(0);
+    assert!(game(&mut world, refused(3)).ignored);
+    assert_eq!(world.servers().unwrap().asked, Some(0));
+    assert!(game(&mut world, refused(4)).servers);
+    let list = world.servers().unwrap();
+    assert_eq!(
+        (list.asked, &list.refused),
+        (None, &Some(ServerRefusal::Message(326)))
+    );
+    // Asking again clears the old refusal while the login server answers.
+    world.ask_server(0);
+    assert_eq!(world.servers().unwrap().refused, None);
+    let changes = game(
+        &mut world,
+        WorldEvent::CharacterSelection {
+            selection_id: 9,
+            characters: Vec::new(),
+        },
+    );
+    assert!(changes.characters);
+    assert!(world.servers().is_none());
+}
+
+#[test]
+fn a_session_that_ends_forgets_the_list_and_a_new_one_keeps_only_the_players_choices() {
+    use crate::Capability;
+    let mut world = ClientWorld::default();
+    world.choose(vec![Capability::Falling]);
+    game(&mut world, worlds(1));
+    connection(&mut world, false, true);
+    assert!(world.ended());
+    assert!(world.servers().is_none());
+    game(&mut world, worlds(2));
+    world.restart();
+    assert!(!world.ended() && world.servers().is_none());
+    // What the player turned on still counts once an admission leaves it to
+    // them.
+    let mut entry = entered(1);
+    if let WorldEvent::Entered { choices, .. } = &mut entry {
+        *choices = vec![Capability::Falling];
+    }
+    game(&mut world, entry);
+    assert!(world.can(Capability::Falling));
 }

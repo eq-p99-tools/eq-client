@@ -266,6 +266,7 @@ type Observed<'w> = (
     Res<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,
     Res<'w, super::motion::Controls>,
+    Option<Res<'w, crate::loading::Loading>>,
 );
 
 type Input<'w> = (
@@ -285,9 +286,10 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    (mut chat, mut moves): (
+    (mut chat, mut moves, mut front): (
         ResMut<super::chat::ChatState>,
         ResMut<super::windows::Moves>,
+        ResMut<super::login::FrontEnd>,
     ),
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
@@ -445,19 +447,20 @@ pub(super) fn drive(
                 }
                 elapsed >= *duration
             }
-            Step::WaitSelect | Step::WaitOnline | Step::WaitZone(_) => {
+            Step::WaitServers | Step::WaitSelect | Step::WaitOnline | Step::WaitZone(_) => {
                 if elapsed > MAX_ONLINE_WAIT {
                     script.stop(&mut keys, &mut mouse, "server state did not arrive");
                     return;
                 }
-                match &step {
-                    Step::WaitSelect => online.selection.is_some(),
-                    Step::WaitZone(zone) => {
-                        online.world().connected()
-                            && online.world().player().is_some()
-                            && online.world().zone() == *zone
-                    }
-                    _ => online.world().connected() && online.world().player().is_some(),
+                if matches!(step, Step::WaitServers) {
+                    front.screen(&online) == super::login::Screen::Servers
+                        && online
+                            .world()
+                            .servers()
+                            .is_some_and(|list| list.asked.is_none())
+                } else {
+                    let covered = observed.5.as_ref().is_some_and(|loading| loading.covered());
+                    arrived(&step, &online, covered)
                 }
             }
             Step::Click(target) | Step::RightClick(target) => {
@@ -578,6 +581,35 @@ pub(super) fn drive(
             }
             script.held.clone_from(chord);
         }
+        Step::Login => {
+            if front.screen(&online) != super::login::Screen::Login || front.running() {
+                script.stop(&mut keys, &mut mouse, "login needs the login screen");
+            } else if let Err(reason) = front.type_scripted() {
+                script.stop(&mut keys, &mut mouse, reason);
+            } else {
+                front.request = Some(super::login::Request::Connect);
+            }
+            return;
+        }
+        Step::Server(name) => {
+            let listed = online.world().servers().and_then(|list| {
+                list.servers
+                    .iter()
+                    .position(|server| server.name.eq_ignore_ascii_case(name))
+                    .map(|index| (index, list.servers[index].status.open()))
+            });
+            match listed {
+                Some((index, true)) => {
+                    front.highlighted = Some(index);
+                    front.request = Some(super::login::Request::Play);
+                }
+                Some((_, false)) => {
+                    script.stop(&mut keys, &mut mouse, "world takes no players now");
+                }
+                None => script.stop(&mut keys, &mut mouse, "world is not listed"),
+            }
+            return;
+        }
         Step::Select(name) => {
             if !online
                 .selection
@@ -668,7 +700,8 @@ pub(super) fn drive(
             };
             script.route = Some(route);
         }
-        Step::WaitSelect
+        Step::WaitServers
+        | Step::WaitSelect
         | Step::WaitOnline
         | Step::WaitZone(_)
         | Step::Wait(_)
@@ -981,9 +1014,36 @@ fn face(
     Some(flat.length())
 }
 
+/// Whether what a wait step waits for has arrived: the character list, or
+/// the player in a zone, the one named if any, with the loading screen
+/// lifted so the next step acts on the zone and not on the cover.
+fn arrived(step: &Step, online: &super::online::OnlineState, covered: bool) -> bool {
+    let world = online.world();
+    let in_zone = world.connected() && world.player().is_some() && !covered;
+    match step {
+        Step::WaitSelect => online.selection.is_some(),
+        Step::WaitZone(zone) => in_zone && world.zone() == *zone,
+        _ => in_zone,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zone_wait_ends_once_the_loading_screen_has_lifted() {
+        let mut online = crate::online::OnlineState::new(true);
+        let zone = Step::WaitZone("qeytoqrg".into());
+        assert!(!arrived(&zone, &online, false));
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        // The zone is admitted, but the cover is still up.
+        assert!(!arrived(&zone, &online, true));
+        assert!(!arrived(&Step::WaitOnline, &online, true));
+        assert!(arrived(&zone, &online, false));
+        assert!(arrived(&Step::WaitOnline, &online, false));
+        assert!(!arrived(&Step::WaitZone("qeynos2".into()), &online, false));
+    }
 
     #[test]
     fn chat_steps_speak_only_on_a_local_server() {

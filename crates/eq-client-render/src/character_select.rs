@@ -107,17 +107,17 @@ pub(super) fn update(
     buttons: Query<(Ref<Interaction>, &Action)>,
     roots: Query<Entity, With<Root>>,
     mut previous: Local<String>,
-    (mut shown, skinned, mut exit): (
+    (mut shown, skinned, mut exit, front): (
         ResMut<super::windows::Shown>,
         Res<crate::skinned::Skinned>,
         MessageWriter<AppExit>,
+        Res<crate::login::FrontEnd>,
     ),
 ) {
     let focused = keys.focused();
     let keys = navigation.sample(&keys.input);
-    // A session, or the preview's characters, until a character is in.
-    let visible =
-        (online.enabled || online.selection.is_some()) && online.world().session_id().is_none();
+    // The world's characters, or the preview's, until a character is in.
+    let visible = front.screen(&online) == crate::login::Screen::Characters;
     if visible != shown.is_open(WindowId::CharacterSelect) {
         if visible {
             shown.open(WindowId::CharacterSelect);
@@ -377,6 +377,7 @@ mod tests {
             .init_resource::<super::super::navigation::NavigationKeys>()
             .init_resource::<crate::windows::Shown>()
             .init_resource::<crate::skinned::Skinned>()
+            .init_resource::<crate::login::FrontEnd>()
             .add_message::<AppExit>()
             .add_systems(Update, update);
         app.world_mut().spawn((

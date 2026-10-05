@@ -66,6 +66,14 @@ impl Vitals {
         Some((shown(current), shown(maximum)))
     }
 
+    /// The player's current HP, the last report with what equipped items add
+    /// counted afresh; None without a report, or while the inventory cannot
+    /// tell what the items add (the shown HP keeps the last figure then).
+    pub(super) fn counted_hp(&self, player: &PlayerState, inventory: &Inventory) -> Option<i64> {
+        let report = self.reported_hp?;
+        Some(i64::from(report.current) + item_hit_points(player, inventory)?)
+    }
+
     /// Works out what equipped items add again once a report has come, as
     /// every report leaves it out of at least its current, keeping the last
     /// figure when the inventory cannot tell, as a gear change alone brings

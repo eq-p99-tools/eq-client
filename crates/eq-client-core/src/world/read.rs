@@ -1,8 +1,8 @@
 //! What the world knows, for any front end to read; only the session's news
 //! and the player's own choices change it.
 use super::{
-    Camp, Casting, CharacterList, ClientWorld, Exchange, Loot, Merchant, MotionGrant, Spawn,
-    Target, Vitals,
+    Camp, Casting, CharacterList, ClientWorld, Exchange, Loot, Merchant, MotionGrant, ServerList,
+    Spawn, Target, Vitals,
 };
 use crate::{
     BookActionStatus, Coins, Death, PlayerState, PostureState, SpellBook, ZoneOffer,
@@ -41,6 +41,13 @@ impl ClientWorld {
     #[must_use]
     pub fn world_name(&self) -> Option<&str> {
         self.world_name.as_deref()
+    }
+
+    /// The worlds the login server listed, until the chosen world lists
+    /// characters.
+    #[must_use]
+    pub const fn servers(&self) -> Option<&ServerList> {
+        self.servers.as_ref()
     }
 
     /// The characters the world server offered, until one enters the world.
@@ -90,6 +97,15 @@ impl ClientWorld {
         &self.zone_name
     }
 
+    /// The zone's long name, from the zone list, or its short name for a
+    /// zone the list lacks. Inferred: the official client names the zone as
+    /// the server's zone header does, which the session doesn't read, and
+    /// the list is taken to agree with it.
+    #[must_use]
+    pub fn zone_long_name(&self) -> &str {
+        crate::zones::long_name(&self.zone_name).unwrap_or(&self.zone_name)
+    }
+
     /// The zone's far clip distance, when the server gave one.
     #[must_use]
     pub const fn far_clip(&self) -> Option<f32> {
@@ -100,6 +116,13 @@ impl ClientWorld {
     #[must_use]
     pub const fn death(&self) -> Option<&Death> {
         self.death.as_ref()
+    }
+
+    /// The player's HP, with what their items add, when the server's last
+    /// report said they bled out and no front end has reported it yet.
+    #[must_use]
+    pub const fn bled_out(&self) -> Option<i64> {
+        self.bled_out
     }
 
     /// The transfer the server offered, until it is answered.

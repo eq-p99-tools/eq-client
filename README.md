@@ -33,7 +33,7 @@ Install current stable Rust, then point the viewer at your own EQ directory:
 ```console
 cargo run -p eq-client --release -- \
   --eq-dir "/path/to/EverQuest" \
-  --zone ecommons
+  --offline --zone ecommons
 ```
 
 On Windows PowerShell:
@@ -41,8 +41,12 @@ On Windows PowerShell:
 ```powershell
 cargo run -p eq-client --release -- `
   --eq-dir "C:\Program Files (x86)\Sony\EverQuest" `
-  --zone ecommons
+  --offline --zone ecommons
 ```
+
+Without `--offline` the client opens its login screen instead (see
+[Logging in](#logging-in)). `--inspect-only`, `--screenshot`, the `--demo-*`
+previews and a script without a `login` step stay offline by themselves.
 
 Use WASD to move the locally loaded character across the terrain, drag with the
 right mouse button to orbit, and use the wheel to zoom. Add `--camera
@@ -83,10 +87,70 @@ drawn and how fast the camera turns; its Keyboard page lists the keys. Its
 QoL page holds the settings only this client has, kept per character (see
 [Quality of life](#quality-of-life)).
 
+## Logging in
+
+Run without `--offline` or `--online`, the client opens on its login screen:
+choose a login server, type the account and password, and **Connect** (or
+Enter; Tab moves between the boxes). The login server's list of worlds
+follows, with each world's players, or that it is down or locked, and the
+world last played on highlighted; Up and Down browse, Enter or a second
+click plays, and Escape goes back. A world the login server refuses says
+why, in the installed client's words for it where the server gives a login
+string (`eqlsstr_us.txt`), and the list stays up for another choice. The
+world's character list comes next, as in the online gameplay preview below.
+
+The login servers are presets in `login-servers.txt` in the settings
+directory (`--settings-dir` or `EQ_CLIENT_SETTINGS_DIR`, by default
+`eq-client` in the per-user settings directory). A first run writes one
+per server type: Project 1999 and Project Quarm at their login servers, and
+Local EQEmu and Local TAKP on this machine. `EQ_PROTOCOL`, `EQ_LOGIN_HOST`
+and `EQ_LOGIN_PORT`, as launchers set them today, go into their type's
+preset. The file is yours to edit:
+
+```ini
+# eq-client login servers v1
+last = Home server
+
+[Home server]
+type = eqemu
+host = 192.168.1.20
+port = 5998
+installation = C:\EverQuest
+```
+
+`type` is `p99`, `quarm`, `eqemu` or `takp`. The client writes the file
+back only to remember a preset's last account name and world, the
+installation it played with, and the preset last used; it never stores a
+password. A preset at the login server the installed Titanium client's
+`eqhost.txt` names starts from the account name and world that client last
+used (`eqlsPlayerData.ini`) until it remembers its own; both files are only
+read.
+
+A run keeps one installation: `--eq-dir` or `EQ_CLIENT_DIR`, else the
+starting preset's `installation`, else the standard one. A preset whose
+server type needs the other client (Titanium for P99 and EQEmu, TAKP's for
+Quarm and TAKP), or that names another installation, opens the client
+again with that installation when you connect. One for the other client
+with no installation named is greyed, with how to name one on hover: run
+`eq-client --eq-dir <folder> --preset "<name>"` once.
+
+Every screen can be skipped, for scripted runs and quick logins.
+`--preset <name>` (or `EQ_PRESET`) starts on that preset. `--server <world>`
+(`EQ_SERVER`) plays on that world without the list, and `--character
+<name>` (`EQ_CHARACTER`) enters that character without its list, both on
+the starting preset only. `--online` logs in at once, without the login
+screen, with `EQ_ACCOUNT` and `EQ_PASSWORD` from the environment, on
+`--preset` or else the first preset of `EQ_PROTOCOL`'s type (P99 by
+default). Account names and passwords are never taken as arguments.
+
+The login and server windows are this client's own for now; the
+installation's own login windows follow.
+
 ## Online gameplay preview
 
 Set `EQ_ACCOUNT`, `EQ_PASSWORD`, and `EQ_SERVER` in the process
-environment, then run with `--online`. The server's character list appears first;
+environment, then run with `--online` to skip the login screen; without
+`EQ_SERVER`, the login server's list of worlds shows. The character list follows;
 choose a character and click **Enter World** (or use Up/Down and Enter). With an
 installation it is the skin's character select window (`CharacterSelectWindow`):
 its eight character buttons show the server list's slots in order, each with
@@ -150,9 +214,9 @@ worker. `--session-seconds 150` bounds a test; `--screenshot frame.png
 Allow the usual server logout timeout before another client uses the character.
 
 Online sessions are stationary by default. The opt-in P99 movement path is described
-below. `EQ_PROTOCOL` selects `p99` (default) or `quarm`, or a stock server for
-local testing: `eqemu` (Titanium) or `takp` (a TAKP server, which speaks
-Quarm's protocol).
+below. With `--online`, `EQ_PROTOCOL` selects `p99` (default) or `quarm`, or a
+stock server for local testing: `eqemu` (Titanium) or `takp` (a TAKP server,
+which speaks Quarm's protocol); on the login screen, each preset's type does.
 For Quarm, use the TAKP installation as `--eq-dir`; P99 checksum scanning is skipped.
 Both protocols supply server-selected terrain, character state, nearby spawns,
 position updates, despawns, HP, mana, and experience. Quarm's compressed profile and
@@ -471,12 +535,22 @@ additional model races and appearance updates, animated world textures and water
 Space jumps, and walking off a ledge falls, with gravity, terminal speed, floor
 landing and ceiling collision: offline, and online on stock `EQEmu` sessions.
 P99 and Quarm sessions keep grounded movement until official-client jumps and
-falls are measured. Each landing exposes local fall distance and impact speed for
-diagnostics; it does not calculate damage or send a damage report, so online falls
-do not hurt yet. The explicit tuning (gravity 32, terminal speed 40, jump speed 10
+falls are measured. On stock `EQEmu`, a landing reports its damage after the
+sample that lands, where the session takes the world's damage from the client
+and the player has not turned off **Take Environmental Damage (unsafe)** (see
+[Quality of life](#quality-of-life)):
+none up to 20 units of drop, then growing with the square of the drop past it,
+less the player's Safe Fall skill, and none where the feet land in water or lava.
+The server then applies its own reductions. All of this is inferred until
+official-client falls are measured. Offline, landings only log the damage they
+would do. The explicit tuning (gravity 32, terminal speed 40, jump speed 10
 in world units and seconds) is not calibrated EQ physics. Falls continue after
 movement keys are released or the window loses focus; chat/focus guards suppress
-new movement input. Spell slots
+new movement input. Every walk, route and fall keeps out of the zone's water
+and lava as the WLD's regions mark them (read as `EQEmu`'s water maps read
+them), since the client cannot swim yet and reports no drowning or burns: a
+step stops before the head would go under water or the feet into lava, shallow
+water is waded, and feet already in either may walk out. Spell slots
 show hover names, shortcuts, local base mana cost, cast time, range, reuse timing
 and remaining cooldowns, with distinct
 empty/available/waiting colors. Spell gems and book rows load icons from the user's
@@ -592,6 +666,13 @@ offer is greyed, with the reason on hover. The settings:
   client's taskbar button flashes until the client is in front again; other
   systems show it their own way. Greyed where the session does not chat
   (`Talking`).
+- **Take Environmental Damage (unsafe)** (`take_environmental_damage`, on):
+  reports the damage the world does to the player to the server, as the
+  official client does: for now a fall's on stock `EQEmu` (see the movement
+  notes above). Turned off, the client keeps it to itself and the character
+  takes none, which is unsafe: a server may notice a character that never
+  takes it. The water and lava guard stays on either way. Greyed where the
+  session takes no damage from the client (`EnvironmentalDamage`).
 
 Always on:
 
@@ -723,6 +804,9 @@ official client. These paths have synthetic tests; live verification is pending.
 
 `--script <file>` runs a bounded key script through the ordinary input paths, for
 repeatable live or offline checks. One step per line, `#` starts a comment:
+`login` (types `EQ_ACCOUNT` and `EQ_PASSWORD` from the environment into the
+login screen and connects; a script with it opens on the login screen),
+`wait_servers`, `server <name>` (plays on a world of the login server's list),
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...` (`click loot <place>` takes the item at a place on the corpse, from 0), `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
