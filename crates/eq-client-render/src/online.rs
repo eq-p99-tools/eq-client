@@ -418,6 +418,12 @@ pub(super) fn receive(
                     }
                     entry
                 });
+            } else {
+                // Nothing to show the zone around, said as it was before the
+                // load moved off the frame.
+                let text = "No admitted player".to_owned();
+                error!("{text}");
+                chat.history.push(super::chat::system_line(text));
             }
         }
         if let Some(position) = changes.placed {
