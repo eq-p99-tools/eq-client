@@ -100,6 +100,14 @@ impl AirborneController {
         self.velocity = 0.0;
     }
 
+    /// Ends a fall the water and lava guard stopped short of them. It lands
+    /// on nothing, so it leaves no landing: one in water or lava would do
+    /// no harm ([`CollisionWorld::landing_damage`]).
+    fn hold(&mut self) {
+        self.peak = None;
+        self.velocity = 0.0;
+    }
+
     /// Advances horizontal collision and vertical flight, clipping against floors and ceilings.
     /// Invalid inputs preserve position and momentum; no network packets are generated.
     pub fn step(
@@ -160,9 +168,19 @@ impl AirborneController {
             target.y = floor;
             landed = true;
         }
+        // A fall that comes down lower than it was judged stops short of
+        // water and lava.
+        let held = if distance < 0.0 {
+            world.held(position, target, input.height)
+        } else {
+            None
+        };
+        let target = held.unwrap_or(target);
         let distance = target.y - position.y;
         if distance.abs() < 0.000_001 {
-            if landed {
+            if held.is_some() {
+                self.hold();
+            } else if landed {
                 self.finish_landing(target.y, -initial);
             } else {
                 self.velocity = end;
@@ -170,6 +188,10 @@ impl AirborneController {
             return position;
         }
         match world.sweep(position, Vec3::Y * distance, input.height) {
+            Ok(None) if held.is_some() => {
+                self.hold();
+                target
+            }
             Ok(None) => {
                 self.peak = self.peak.map(|peak| peak.max(target.y));
                 if landed {
@@ -191,7 +213,7 @@ impl AirborneController {
     /// along it when the feet do not stand on it (a slope too steep to stand on,
     /// or the edge of a step the feet came down beside) instead of hanging there.
     /// A slide that would carry the feet into lava or the head under water
-    /// stops short of it, and the feet rest where it stops.
+    /// stops short of it, and the fall is held where it stops.
     fn blocked(
         &mut self,
         world: &CollisionWorld,
@@ -213,13 +235,18 @@ impl AirborneController {
             || slide.length_squared() <= 1e-8
             || supported(world, contact, height);
         // A slide stops short of deep water and lava, as a step does.
-        let slide = if resting {
-            Vec3::ZERO
+        let (slide, held) = if resting {
+            (Vec3::ZERO, false)
         } else {
-            slide * world.dry_fraction(contact, slide, height)
+            let fraction = world.dry_fraction(contact, slide, height);
+            (slide * fraction, fraction < 1.0)
         };
         if slide.length_squared() <= 1e-8 {
-            self.velocity = 0.0;
+            if held {
+                self.hold();
+            } else {
+                self.velocity = 0.0;
+            }
             return contact;
         }
         self.velocity = end;

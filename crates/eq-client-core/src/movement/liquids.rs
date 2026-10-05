@@ -7,8 +7,9 @@
 //! through water onto a floor below it is not made either, and over no
 //! floor at all the fall is followed as far as one is looked for. A slide
 //! down a slope too steep to stand on stops short of water and lava as a
-//! step does. Feet that are in deep water or lava now may go anywhere, so
-//! they can leave.
+//! step does, and so does a fall that comes down lower than it was judged,
+//! as the floating capsule lets the feet do beside such a slope. Feet that
+//! are in deep water or lava now may go anywhere, so they can leave.
 use super::{CollisionWorld, LIFT, Support};
 use glam::Vec3;
 
@@ -84,13 +85,47 @@ impl CollisionWorld {
     /// not clear, and over no floor at all, as over a sea drawn without a
     /// bed, the fall is followed as far as one is looked for.
     pub(super) fn dry(&self, feet: Vec3, height: f32) -> bool {
+        if self.liquids.is_none() {
+            return true;
+        }
+        let end = self.rest(feet).unwrap_or(feet - Vec3::Y * FALL_REACH);
+        self.clear(feet, end, height)
+    }
+
+    /// Whether feet moving straight from one place to another keep the head
+    /// of a body this tall out of water and the soles out of lava the whole
+    /// way.
+    fn clear(&self, from: Vec3, to: Vec3, height: f32) -> bool {
         let Some(liquids) = &self.liquids else {
             return true;
         };
-        let end = self.rest(feet).unwrap_or(feet - Vec3::Y * FALL_REACH);
         let (head, soles) = (Vec3::Y * height, Vec3::Y * SOLES);
-        !liquids.passes_through(feet + head, end + head, Liquid::Water)
-            && !liquids.passes_through(feet + soles, end + soles, Liquid::Lava)
+        !liquids.passes_through(from + head, to + head, Liquid::Water)
+            && !liquids.passes_through(from + soles, to + soles, Liquid::Lava)
+    }
+
+    /// Where a fall straight down from `feet` to `end` is held, short of
+    /// the first water over the head of a body this tall or lava at the
+    /// soles, found by halving. Feet whose fall was judged clear come down
+    /// there when they go lower than it was judged, as the floating capsule
+    /// lets them beside a slope too steep to stand on, where they sit below
+    /// the surface over them. Nothing holds a fall that stays clear, nor one
+    /// from feet whose fall was never clear, as over water or lava the
+    /// server put them above.
+    pub(super) fn held(&self, feet: Vec3, end: Vec3, height: f32) -> Option<Vec3> {
+        if self.clear(feet, end, height) || !self.dry(feet, height) {
+            return None;
+        }
+        let (mut clear, mut wet) = (0.0, 1.0);
+        for _ in 0..12 {
+            let fraction = f32::midpoint(clear, wet);
+            if self.clear(feet, feet.lerp(end, fraction), height) {
+                clear = fraction;
+            } else {
+                wet = fraction;
+            }
+        }
+        Some(feet.lerp(end, clear))
     }
 
     /// How much of a straight move keeps feet clear of the zone's liquids
@@ -573,6 +608,99 @@ mod tests {
             !world.in_liquid(feet) && feet.x < foot + 0.01 && feet.y < 1.0,
             "{feet:?}"
         );
+    }
+
+    /// The lava's surface, and how far along x a slope too steep to stand on
+    /// runs from a plateau at y 20 down to the floor at y 0.
+    const POOL: f32 = 0.5;
+    const RUN: f32 = 14.0;
+
+    /// A plateau at y 20 for x below 0, a slope too steep to stand on down
+    /// to the floor at x [`RUN`], and lava over the floor up to [`POOL`]. As
+    /// in Lavastorm, the lava's region runs on into the rock under the slope.
+    fn slope_into_lava() -> CollisionWorld {
+        let mut triangles = quad(
+            [-20.0, 20.0, -20.0],
+            [0.0, 20.0, -20.0],
+            [0.0, 20.0, 20.0],
+            [-20.0, 20.0, 20.0],
+        )
+        .to_vec();
+        triangles.extend(quad(
+            [0.0, 20.0, -20.0],
+            [RUN, 0.0, -20.0],
+            [RUN, 0.0, 20.0],
+            [0.0, 20.0, 20.0],
+        ));
+        triangles.extend(quad(
+            [RUN, 0.0, -20.0],
+            [60.0, 0.0, -20.0],
+            [60.0, 0.0, 20.0],
+            [RUN, 0.0, 20.0],
+        ));
+        CollisionWorld::new(triangles)
+            .unwrap()
+            .with_liquids(Boxes(vec![(
+                Vec3::new(RUN - 5.0, -1.0, -20.0),
+                Vec3::new(60.0, POOL, 20.0),
+                Liquid::Lava,
+            )]))
+    }
+
+    #[test]
+    fn a_fall_onto_a_slope_too_steep_to_stand_on_stops_short_of_lava_under_it() {
+        // Where the slope is a fifth of a unit above the lava, the capsule
+        // would come to rest on it with the feet half a unit below its
+        // surface, in the lava running under it.
+        let world = slope_into_lava();
+        let x = RUN * (1.0 - (POOL + 0.2) / 20.0);
+        let start = Vec3::new(x, 10.0, 0.0);
+        assert!(world.dry(start, 6.0));
+        let mut controller = AirborneController::default();
+        let mut feet = start;
+        for _ in 0..100 {
+            feet = controller.step(
+                &world,
+                feet,
+                PROVISIONAL_PHYSICS,
+                MotionStep {
+                    horizontal: Vec3::ZERO,
+                    jump: false,
+                    seconds: 0.05,
+                    height: 6.0,
+                },
+            );
+        }
+        // The fall stops short of the lava, and lands on nothing.
+        assert!(!world.in_liquid(feet) && feet.y < POOL, "{feet:?}");
+        assert_eq!(controller.take_landing(), None);
+    }
+
+    #[test]
+    fn a_walk_down_a_slope_too_steep_to_stand_on_stops_short_of_lava_under_it() {
+        // Walking on down the slope toward the lava, from a few places on
+        // the plateau, so that its steps meet the slope at different points.
+        let world = slope_into_lava();
+        for tenths in 0..10_u8 {
+            let mut controller = AirborneController::default();
+            let mut feet = Vec3::new(-5.0 - f32::from(tenths) * 0.1, 20.0, 0.0);
+            for tick in 0..200 {
+                feet = controller.step(
+                    &world,
+                    feet,
+                    PROVISIONAL_PHYSICS,
+                    MotionStep {
+                        horizontal: Vec3::X * 0.5,
+                        jump: false,
+                        seconds: 0.05,
+                        height: 6.0,
+                    },
+                );
+                assert!(!world.in_liquid(feet), "{tenths} at {tick}: {feet:?}");
+            }
+            // It came down the slope to the lava's edge.
+            assert!(feet.x > RUN - 1.0 && feet.y < 1.0, "{tenths}: {feet:?}");
+        }
     }
 
     #[test]
