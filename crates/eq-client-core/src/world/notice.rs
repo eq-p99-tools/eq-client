@@ -60,7 +60,7 @@ pub enum Notice {
         /// The string's ID.
         id: u32,
         /// Its `%1`, `%2`, ... substitutions, in order.
-        arguments: Vec<String>,
+        arguments: Vec<crate::chat::RichText>,
         /// The message type the server gave it, by which the official client
         /// colours its line.
         message_type: Option<u32>,
