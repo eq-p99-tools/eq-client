@@ -404,11 +404,19 @@ pub(super) fn receive(
             // The session is this zone's even if its assets fail to load, so
             // nothing of the previous zone stays on screen either.
             scene.leave(&mut commands, &mut state.regions);
+            let loading = std::time::Instant::now();
             match super::zone::Entry::admission(&state.world, directory) {
                 Ok(entry) => {
                     let terrain_only = settings.0.terrain_only;
                     entered =
                         Some(scene.enter(&mut commands, entry, terrain_only, &mut state.regions));
+                    // The picture stands still this long, behind the loading
+                    // screen.
+                    info!(
+                        zone = state.world.zone(),
+                        milliseconds = loading.elapsed().as_millis(),
+                        "Zone loaded"
+                    );
                 }
                 Err(text) => {
                     error!("{text}");
@@ -576,15 +584,21 @@ pub(crate) mod testing {
 
     /// Connects or disconnects the session without ending it.
     pub(crate) fn connect(state: &mut OnlineState, connected: bool) {
-        state.world.apply(
-            &WorldUpdate::Connection(if connected {
+        link(
+            state,
+            if connected {
                 eq_client_core::world::Link::Connected
             } else {
                 eq_client_core::world::Link::Entering
-            }),
-            Instant::now(),
-            &NoSpells,
+            },
         );
+    }
+
+    /// Puts the session's connection where this says, such as ended.
+    pub(crate) fn link(state: &mut OnlineState, link: eq_client_core::world::Link) {
+        state
+            .world
+            .apply(&WorldUpdate::Connection(link), Instant::now(), &NoSpells);
     }
 
     /// Admits this player in this session, connected.

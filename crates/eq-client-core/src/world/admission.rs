@@ -76,6 +76,9 @@ impl ClientWorld {
         self.choices = choices.to_vec();
         self.session_id = Some(session_id);
         zone.clone_into(&mut self.zone_name);
+        changes
+            .notices
+            .push(Notice::Arrived(self.zone_long_name().to_owned()));
         self.far_clip = far_clip;
         self.vitals = Vitals {
             mana: Some(player.mana),

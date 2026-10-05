@@ -154,6 +154,24 @@ fn a_zone_entry_keeps_what_arrives_with_it_before_the_connection() {
 }
 
 #[test]
+fn every_admission_names_the_zone_the_player_arrived_in() {
+    let mut world = ClientWorld::default();
+    let changes = game(&mut world, entered(2));
+    assert_eq!(
+        changes.notices,
+        [Notice::Arrived("The Qeynos Hills".into())]
+    );
+    assert_eq!(world.zone_long_name(), "The Qeynos Hills");
+    // A zone the list lacks goes by its short name.
+    let mut elsewhere = entered(3);
+    if let WorldEvent::Entered { zone, .. } = &mut elsewhere {
+        *zone = "testzone".into();
+    }
+    let changes = game(&mut world, elsewhere);
+    assert_eq!(changes.notices, [Notice::Arrived("testzone".into())]);
+}
+
+#[test]
 fn a_new_zone_entry_forgets_the_old_zone_and_death() {
     let mut world = admitted();
     game(

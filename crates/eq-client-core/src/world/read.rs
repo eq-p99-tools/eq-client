@@ -97,6 +97,15 @@ impl ClientWorld {
         &self.zone_name
     }
 
+    /// The zone's long name, from the zone list, or its short name for a
+    /// zone the list lacks. Inferred: the official client names the zone as
+    /// the server's zone header does, which the session doesn't read, and
+    /// the list is taken to agree with it.
+    #[must_use]
+    pub fn zone_long_name(&self) -> &str {
+        crate::zones::long_name(&self.zone_name).unwrap_or(&self.zone_name)
+    }
+
     /// The zone's far clip distance, when the server gave one.
     #[must_use]
     pub const fn far_clip(&self) -> Option<f32> {

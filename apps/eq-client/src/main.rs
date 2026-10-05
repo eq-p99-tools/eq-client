@@ -82,8 +82,9 @@ struct Arguments {
     #[arg(long)]
     max_fps: Option<u32>,
 
-    /// Add coordinates, the movement mode and the nearby-entity count to the
-    /// status box, for development and live checks.
+    /// Add the zone's short name, coordinates, the movement mode and the
+    /// nearby-entity count to the status box, for development and live
+    /// checks.
     #[arg(long)]
     debug_overlay: bool,
 
@@ -194,6 +195,12 @@ struct Arguments {
     /// negative on multi-monitor desktops).
     #[arg(long, value_parser = parse_window_position, allow_hyphen_values = true)]
     window_position: Option<(i32, i32)>,
+
+    /// Size of the window's drawing area as `WIDTHxHEIGHT` in physical pixels,
+    /// such as `1920x1080`. Without it, the window opens at 1280x720 in the
+    /// desktop's scaled pixels.
+    #[arg(long, value_parser = parse_window_size)]
+    window_size: Option<(u32, u32)>,
 }
 
 /// A finite number, such as a coordinate.
@@ -235,6 +242,20 @@ fn parse_window_position(value: &str) -> Result<(i32, i32), String> {
             .map_err(|error| format!("{text:?}: {error}"))
     };
     Ok((coordinate(x)?, coordinate(y)?))
+}
+
+fn parse_window_size(value: &str) -> Result<(u32, u32), String> {
+    let (width, height) = value
+        .split_once(['x', 'X'])
+        .ok_or_else(|| "expected WIDTHxHEIGHT".to_owned())?;
+    let side = |text: &str| {
+        text.trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|&pixels| pixels > 0)
+            .ok_or_else(|| format!("{text:?}: expected a positive number of pixels"))
+    };
+    Ok((side(width)?, side(height)?))
 }
 
 /// How a run starts.
@@ -606,6 +627,7 @@ fn viewer_config(
         ui_skin: arguments.ui_skin,
         settings_directory,
         window_position: arguments.window_position,
+        window_size: arguments.window_size,
         debug_overlay: arguments.debug_overlay,
     }
 }
@@ -733,7 +755,7 @@ mod tests {
     use super::{
         Arguments, InstalledClient, Mode, ServerProtocol, Step, check_local_steps, distance,
         finite, installed_client, launch_preset, load_script, local_session, mode,
-        parse_window_position, presets, seconds,
+        parse_window_position, parse_window_size, presets, seconds,
     };
     use clap::Parser;
 
@@ -856,5 +878,15 @@ mod tests {
         assert_eq!(parse_window_position(" -40 , 32 "), Ok((-40, 32)));
         assert!(parse_window_position("32").is_err());
         assert!(parse_window_position("x,1").is_err());
+    }
+
+    #[test]
+    fn window_sizes_are_a_positive_width_and_height() {
+        assert_eq!(parse_window_size("1920x1080"), Ok((1920, 1080)));
+        assert_eq!(parse_window_size(" 2560 X 1440 "), Ok((2560, 1440)));
+        assert!(parse_window_size("1920").is_err());
+        assert!(parse_window_size("1920,1080").is_err());
+        assert!(parse_window_size("0x1080").is_err());
+        assert!(parse_window_size("1920x-1080").is_err());
     }
 }
