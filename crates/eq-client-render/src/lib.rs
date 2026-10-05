@@ -5,6 +5,7 @@ use theme::Size;
 
 mod abilities;
 mod attention;
+mod background;
 mod book_delete;
 mod buffs;
 mod character;
@@ -794,7 +795,8 @@ fn setup_scene(
             character,
             placed: Transform::from_translation(player_position),
             body,
-        },
+        }
+        .prepare(),
         settings.0.terrain_only,
         &mut online.regions,
     );
@@ -975,10 +977,10 @@ fn schedule_screenshot(
     time: Res<Time>,
     request: Option<ResMut<CaptureRequest>>,
     (online, front): (Res<online::OnlineState>, Res<login::FrontEnd>),
+    loading: Option<Res<loading::Loading>>,
 ) {
-    // Online, the scene is ready once the player is in the world, or once a
-    // login screen, the list of worlds or the character list shows.
-    if !front.settled(&online) {
+    let covered = loading.is_some_and(|loading| loading.covered());
+    if !screenshot_ready(&front, &online, covered) {
         return;
     }
     let Some(mut request) = request else {
@@ -993,6 +995,15 @@ fn schedule_screenshot(
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
     commands.remove_resource::<CaptureRequest>();
+}
+
+/// Whether a screenshot may count down: offline at once; online once a
+/// login screen, the list of worlds or the character list has settled, or
+/// once the player is in a zone with the loading screen lifted, as a
+/// script's wait for the zone has it. The screen stays up while the zone's
+/// scene loads, so the picture is the zone, not the cover.
+fn screenshot_ready(front: &login::FrontEnd, online: &online::OnlineState, covered: bool) -> bool {
+    !online.enabled || (front.settled(online) && !covered)
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -1555,6 +1566,34 @@ fn unobstructed_orbit(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_screenshot_waits_for_the_loading_screen_to_lift() {
+        use super::*;
+        // A session logging in, as `--online` starts one.
+        let (_updates, receive) = std::sync::mpsc::sync_channel(1);
+        let (commands, _queue) = std::sync::mpsc::sync_channel(1);
+        let (front, ..) = login::FrontEnd::launched(
+            Box::new(login::testing::Fake {
+                servers: vec![login::testing::server("Example", "someone")],
+                heard: std::sync::Arc::default(),
+            }),
+            Some(login::Session {
+                updates: receive,
+                commands,
+                worker: Box::new(login::testing::Thread::default()),
+            }),
+        );
+        let mut online = online::OnlineState::new(true);
+        assert!(!screenshot_ready(&front, &online, false));
+        online::testing::admit(&mut online, 1, online::testing::player(7));
+        // In the zone, but the cover is still up while its scene loads.
+        assert!(!screenshot_ready(&front, &online, true));
+        assert!(screenshot_ready(&front, &online, false));
+        // Offline there is nothing to wait for.
+        let offline = online::OnlineState::new(false);
+        assert!(screenshot_ready(&front, &offline, true));
+    }
+
     #[test]
     fn the_status_box_shows_only_while_it_has_something_to_say() {
         use super::*;

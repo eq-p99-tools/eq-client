@@ -2292,6 +2292,42 @@ fn a_group_follows_the_servers_word_and_says_what_happened() {
 }
 
 #[test]
+fn only_a_change_of_leader_says_so() {
+    use crate::group::GroupUpdate;
+    let mut world = admitted();
+    let news = |world: &mut ClientWorld, update| game(world, WorldEvent::Group(update)).notices;
+    let leader = |name: &str| GroupUpdate::Leader { name: name.into() };
+    // Outside a group, a leader is nothing to the player.
+    assert_eq!(news(&mut world, leader("Leader")), []);
+    assert!(world.group().is_none());
+    // A list naming no leader, as TAKP's profile gives after a zone
+    // change: the leader named next is learned quietly.
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Members {
+                leader: String::new(),
+                members: vec!["Leader".into(), "Friend".into()],
+            }
+        ),
+        []
+    );
+    assert_eq!(news(&mut world, leader("Leader")), []);
+    assert_eq!(
+        world.group().and_then(|group| group.leader.as_deref()),
+        Some("Leader")
+    );
+    // The same leader again says nothing; a new one says so.
+    assert_eq!(news(&mut world, leader("leader")), []);
+    assert_eq!(
+        news(&mut world, leader("Friend")),
+        [Notice::Group(GroupNotice::Leader(Party::Named(
+            "Friend".into()
+        )))]
+    );
+}
+
+#[test]
 fn a_group_the_player_formed_is_theirs_to_lead_until_it_ends() {
     use crate::group::GroupUpdate;
     let mut world = admitted();

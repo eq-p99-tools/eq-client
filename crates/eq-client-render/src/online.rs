@@ -25,9 +25,16 @@ pub(super) struct OnlineState {
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
+    loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
 }
 
 impl OnlineState {
+    /// Whether the admitted zone's scene is still loading in the background.
+    /// A zone whose files fail to load is not: its spawns still show.
+    pub(crate) fn scene_loading(&self) -> bool {
+        self.loading.pending(self.world.session_id())
+    }
+
     /// What the server has told the client.
     pub(super) fn world(&self) -> &ClientWorld {
         &self.world
@@ -154,6 +161,7 @@ impl OnlineState {
             selection: None,
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
+            loading: default(),
         }
     }
 }
@@ -380,14 +388,13 @@ pub(super) fn receive(
     if lost.is_some() {
         warn!("The session stopped without saying why");
     }
-    // The player entity spawned by zone entry in this batch, not yet in the world.
-    let mut entered = None;
     for update in batch.into_iter().chain(lost) {
         let changes = state
             .world
             .apply(&update, std::time::Instant::now(), spells);
         trace(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
+            state.loading.clear();
             panels.forget(reason, &mut state);
             scene.forget(reason, &mut commands);
         }
@@ -404,32 +411,60 @@ pub(super) fn receive(
             // The session is this zone's even if its assets fail to load, so
             // nothing of the previous zone stays on screen either.
             scene.leave(&mut commands, &mut state.regions);
-            let loading = std::time::Instant::now();
-            match super::zone::Entry::admission(&state.world, directory) {
-                Ok(entry) => {
-                    let terrain_only = settings.0.terrain_only;
-                    entered =
-                        Some(scene.enter(&mut commands, entry, terrain_only, &mut state.regions));
-                    // The picture stands still this long, behind the loading
-                    // screen.
-                    info!(
-                        zone = state.world.zone(),
-                        milliseconds = loading.elapsed().as_millis(),
-                        "Zone loaded"
-                    );
-                }
-                Err(text) => {
-                    error!("{text}");
-                    chat.history.push(super::chat::system_line(text));
-                }
+            if let (Some(id), Some(player)) =
+                (state.world.session_id(), state.world.player().cloned())
+            {
+                let zone = state.world.zone().to_owned();
+                let directory = directory.clone();
+                state.loading.start(id, move || {
+                    let loading = std::time::Instant::now();
+                    let entry = super::zone::Entry::admission(&zone, &player, &directory)
+                        .map(super::zone::Entry::prepare);
+                    if entry.is_ok() {
+                        // Read and prepared off the frame thread, behind the
+                        // loading screen.
+                        info!(
+                            zone = zone.as_str(),
+                            milliseconds = loading.elapsed().as_millis(),
+                            "Zone loaded"
+                        );
+                    }
+                    entry
+                });
+            } else {
+                // Nothing to show the zone around, said as it was before the
+                // load moved off the frame.
+                let text = "No admitted player".to_owned();
+                error!("{text}");
+                chat.history.push(super::chat::system_line(text));
             }
         }
         if let Some(position) = changes.placed {
             panels.motion.reset(None);
-            scene.place(&mut commands, super::zone::placement(position), entered);
+            scene.place(&mut commands, super::zone::placement(position), None);
         }
         if let WorldUpdate::Chat(line) = update {
             chat.history.push(line);
+        }
+    }
+    let admission = state.world.session_id();
+    if let Some(result) = state.loading.poll(admission) {
+        match result {
+            Ok(mut entry) => {
+                if let Some(player) = state.world.player() {
+                    entry.place(player.position);
+                }
+                scene.enter(
+                    &mut commands,
+                    entry,
+                    settings.0.terrain_only,
+                    &mut state.regions,
+                );
+            }
+            Err(text) => {
+                error!("{text}");
+                chat.history.push(super::chat::system_line(text));
+            }
         }
     }
 }
@@ -601,6 +636,25 @@ pub(crate) mod testing {
             .apply(&WorldUpdate::Connection(link), Instant::now(), &NoSpells);
     }
 
+    /// Starts loading the admitted zone's scene in the background, as zone
+    /// entry does; it fails once the returned sender sends or drops.
+    pub(crate) fn hold_scene(state: &mut OnlineState) -> std::sync::mpsc::Sender<()> {
+        let (release, wait) = std::sync::mpsc::channel();
+        state
+            .loading
+            .start(state.world.session_id().unwrap_or_default(), move || {
+                let _ = wait.recv();
+                Err("Synthetic scene".into())
+            });
+        release
+    }
+
+    /// Takes the background load's result if it is done, as receiving the
+    /// next batch does; says whether it was.
+    pub(crate) fn take_scene(state: &mut OnlineState) -> bool {
+        state.loading.poll(state.world.session_id()).is_some()
+    }
+
     /// Admits this player in this session, connected.
     pub(crate) fn admit(state: &mut OnlineState, session_id: u64, player: PlayerState) {
         enter(state, session_id, player, None);
@@ -730,6 +784,74 @@ pub(crate) mod testing {
 mod tests {
     use super::*;
     use eq_client_core::PlayerState;
+
+    #[test]
+    fn a_blocked_asset_load_keeps_applying_ordered_session_events() {
+        use eq_client_core::inventory::InventoryUpdate;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1024);
+        let (release, wait) = std::sync::mpsc::channel();
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        state.loading.start(1, move || {
+            wait.recv().unwrap();
+            Err("Synthetic asset read failure".into())
+        });
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig::default()))
+            .init_resource::<hud::HudState>()
+            .init_resource::<crate::motion::Controls>()
+            .init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<crate::combat::CombatState>()
+            .init_resource::<crate::trade::TradeState>()
+            .init_resource::<crate::items::ItemState>()
+            .init_resource::<crate::inventory::InventoryState>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        // More than the queue's capacity over multiple frames while I/O is blocked.
+        // Alternating invalidation and snapshots makes reordering observable.
+        for batch in 0..16 {
+            for value in 0..64 {
+                let mana = batch * 64 + value;
+                for event in [
+                    WorldEvent::Inventory(InventoryUpdate::Invalidated),
+                    WorldEvent::Resources {
+                        mana,
+                        endurance: mana,
+                    },
+                    WorldEvent::Spell(eq_client_core::SpellUpdate::BookDeletion {
+                        slot: 0,
+                        success: true,
+                    }),
+                    WorldEvent::Inventory(InventoryUpdate::Snapshot(Vec::new())),
+                ] {
+                    sender.try_send(WorldUpdate::Game(event)).unwrap();
+                }
+            }
+            app.update();
+            assert!(world(&app).in_world());
+            assert!(!world(&app).inventory().stale());
+            assert_eq!(world(&app).vitals().mana, Some(batch * 64 + 63));
+        }
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app
+            .world()
+            .resource::<crate::chat::ChatState>()
+            .history
+            .lines(eq_client_core::chat::ChatTab::System)
+            .is_empty()
+        {
+            assert!(std::time::Instant::now() < deadline);
+            app.update();
+            std::thread::yield_now();
+        }
+        assert!(world(&app).in_world());
+    }
 
     #[test]
     fn a_zone_entry_batch_keeps_doors_postures_and_the_new_session() {
@@ -894,16 +1016,22 @@ mod tests {
             app.world().resource::<super::super::SceneInfo>().zone_name,
             ""
         );
-        let history = &app
-            .world()
-            .resource::<super::super::chat::ChatState>()
-            .history;
-        assert!(
-            history
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            app.update();
+            if app
+                .world()
+                .resource::<super::super::chat::ChatState>()
+                .history
                 .lines(eq_client_core::chat::ChatTab::System)
                 .iter()
                 .any(|(_, line)| line.message.text.contains("could not be loaded"))
-        );
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "missing load failure");
+            std::thread::yield_now();
+        }
         // The session is the new zone's all the same.
         assert_eq!(world(&app).session_id(), Some(2));
     }
