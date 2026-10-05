@@ -170,11 +170,20 @@ impl ClientWorld {
                 std::mem::take(&mut self.joining_group)
                     .then_some(GroupNotice::Joined(Party::Player))
             }
+            // Only a change of leader says so. A leader named for a group
+            // whose leader was unknown is learned quietly: TAKP names it
+            // after each zone's admission, the profile having listed the
+            // group without it, and nothing prints when the group comes
+            // again on zoning elsewhere (inferred: what the official client
+            // shows then is unrecorded).
             GroupUpdate::Leader { name } => {
-                if let Some(group) = self.group.as_mut() {
-                    group.leader = Some(name.clone());
-                }
-                Some(GroupNotice::Leader(self.group_party(name)))
+                let before = self
+                    .group
+                    .as_mut()
+                    .and_then(|group| group.leader.replace(name.clone()));
+                before
+                    .is_some_and(|before| !before.eq_ignore_ascii_case(name))
+                    .then(|| GroupNotice::Leader(self.group_party(name)))
             }
             // The server ends a group the player is not in as they leave a
             // raid: that says nothing.

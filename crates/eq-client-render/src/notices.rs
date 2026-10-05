@@ -485,7 +485,7 @@ fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
 /// invitation to the player; 12283 for agreeing to join and 12289 for
 /// declining; 12266 for the one invited declining; 12003 for forming a
 /// group; 1399 and 12004 for someone else and the player joining, 12005
-/// and 12001 for leaving, and 5041 and 5040 for becoming the leader; and
+/// and 12001 for leaving, and 5041 and 5040 for a change of leader; and
 /// 12002 for the group disbanding. This client's words without the
 /// strings. That the official client says these lines at these moments is
 /// inferred from what each says, since the server sends none of them.

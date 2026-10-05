@@ -70,6 +70,12 @@ pub enum Fix {
     /// is not the focused window: on Windows its taskbar button flashes
     /// until the client is focused again.
     FlashOnTells,
+    /// Reports the damage the world does to the player, such as a fall's,
+    /// to the server, as the official client does, until the player turns
+    /// it off: then the reports are held back and the character takes none.
+    /// A server may notice a character that never takes the damage, so the
+    /// label calls the setting unsafe.
+    TakeEnvironmentalDamage,
     /// Starts the Options window's Max FPS at 60 frames a second rather than
     /// as fast as vsync allows; the slider and the installation's
     /// `eqclient.ini` still set another cap. What the official client does
@@ -100,13 +106,14 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::MapWhereOff,
         Self::AskBeforeDeletingSpells,
         Self::ShowTimesInChat,
         Self::FlashOnTells,
+        Self::TakeEnvironmentalDamage,
         Self::FrameCap,
         Self::GreyedControls,
         Self::CampCountdown,
@@ -126,6 +133,7 @@ impl Fix {
             Self::AskBeforeDeletingSpells => "ask_before_deleting_spells",
             Self::ShowTimesInChat => "chat_times",
             Self::FlashOnTells => "flash_on_tells",
+            Self::TakeEnvironmentalDamage => "take_environmental_damage",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -153,6 +161,7 @@ impl Fix {
             Self::AskBeforeDeletingSpells => "Ask Before Deleting Spells",
             Self::ShowTimesInChat => "Show Times in Chat",
             Self::FlashOnTells => "Flash on Tells",
+            Self::TakeEnvironmentalDamage => "Take Environmental Damage (unsafe)",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -185,6 +194,9 @@ impl Fix {
             Self::FlashOnTells => {
                 "Flash the client's taskbar button when a tell arrives while another window is in front."
             }
+            Self::TakeEnvironmentalDamage => {
+                "Report the damage the world does to you, such as a fall's, to the server, as the official client does. Turning this off is unsafe: a server may notice a character that never takes it."
+            }
             Self::FrameCap => {
                 "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
             }
@@ -209,9 +221,10 @@ impl Fix {
     #[must_use]
     pub const fn kind(self) -> Kind {
         match self {
-            Self::SkipModifiedFood | Self::AskBeforeDeletingSpells | Self::HotbarItemGuard => {
-                Kind::Guards
-            }
+            Self::SkipModifiedFood
+            | Self::AskBeforeDeletingSpells
+            | Self::TakeEnvironmentalDamage
+            | Self::HotbarItemGuard => Kind::Guards,
             Self::HiddenWindows
             | Self::ShowTimesInChat
             | Self::FlashOnTells
@@ -227,7 +240,9 @@ impl Fix {
 
     /// What the session must offer for the fix to matter, if anything:
     /// eating on its own comes with the inventory, only a session that
-    /// deletes spells has one to ask about, and tells come with talking.
+    /// deletes spells has one to ask about, tells come with talking, and
+    /// only a session that takes the world's damage from the client has any
+    /// to hold back.
     /// For a fix that unlocks, what it turns on, which the session must
     /// leave to the player.
     #[must_use]
@@ -237,6 +252,7 @@ impl Fix {
             Self::MapWhereOff => Some(Capability::Map),
             Self::AskBeforeDeletingSpells => Some(Capability::DeletingSpells),
             Self::FlashOnTells => Some(Capability::Talking),
+            Self::TakeEnvironmentalDamage => Some(Capability::EnvironmentalDamage),
             Self::HiddenWindows
             | Self::ShowTimesInChat
             | Self::FrameCap
@@ -271,14 +287,16 @@ impl Fix {
     /// hides stay hidden, and the map stays off where the server's own
     /// client keeps it off, unless the player asks for them, as Adam chose;
     /// chat lines read as the official client's do until the player asks
-    /// for their times; and what only adds what the player could work out,
-    /// or stops a plain mistake, is always on.
+    /// for their times; the world's damage is taken until the player turns
+    /// it off, as Adam chose; and what only adds what the player could work
+    /// out, or stops a plain mistake, is always on.
     #[must_use]
     pub const fn availability(self) -> Availability {
         match self {
-            Self::SkipModifiedFood | Self::AskBeforeDeletingSpells | Self::FlashOnTells => {
-                Availability::Setting { default: true }
-            }
+            Self::SkipModifiedFood
+            | Self::AskBeforeDeletingSpells
+            | Self::FlashOnTells
+            | Self::TakeEnvironmentalDamage => Availability::Setting { default: true },
             Self::HiddenWindows | Self::MapWhereOff | Self::ShowTimesInChat => {
                 Availability::Setting { default: false }
             }
@@ -411,7 +429,8 @@ mod tests {
                 Fix::MapWhereOff,
                 Fix::AskBeforeDeletingSpells,
                 Fix::ShowTimesInChat,
-                Fix::FlashOnTells
+                Fix::FlashOnTells,
+                Fix::TakeEnvironmentalDamage
             ]
         );
         // A fix that is always on stays on whatever is asked.
@@ -419,6 +438,22 @@ mod tests {
             settings.set(fix, false);
             assert!(settings.on(fix), "{fix:?} turned off");
         }
+    }
+
+    #[test]
+    fn the_worlds_damage_is_taken_until_the_player_turns_it_off() {
+        let mut settings = Settings::default();
+        assert!(settings.on(Fix::TakeEnvironmentalDamage));
+        // Greyed where the session takes none from the client.
+        assert_eq!(
+            Fix::TakeEnvironmentalDamage.needs(),
+            Some(Capability::EnvironmentalDamage)
+        );
+        assert_eq!(Fix::TakeEnvironmentalDamage.kind(), Kind::Guards);
+        assert!(Fix::TakeEnvironmentalDamage.label().ends_with("(unsafe)"));
+        settings.set(Fix::TakeEnvironmentalDamage, false);
+        assert!(!settings.on(Fix::TakeEnvironmentalDamage));
+        assert_eq!(settings.unlocked(), []);
     }
 
     #[test]
