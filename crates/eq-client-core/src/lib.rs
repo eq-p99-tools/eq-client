@@ -37,6 +37,7 @@ pub use eq_network_game::creation;
 pub use eq_network_game::exchange;
 pub use eq_network_game::food;
 pub use eq_network_game::group;
+pub use eq_network_game::hazards;
 pub use eq_network_game::inventory;
 pub use eq_network_game::listing;
 pub use eq_network_game::loot;

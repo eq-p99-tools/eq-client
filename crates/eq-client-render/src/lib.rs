@@ -491,6 +491,7 @@ fn schedule(app: &mut App) {
         (
             (
                 online::receive,
+                online::report_bleed_out,
                 login::watch,
                 online::tick,
                 daylight::update,
@@ -1187,7 +1188,42 @@ fn object_transform(object: &eq_client_assets::ZoneObject) -> Transform {
     }
 }
 
-/// Includes solid terrain and transformed object geometry, including hidden boundaries.
+/// The zone's water and lava as its regions mark them, which every walk keeps
+/// out of.
+struct ZoneLiquids(eq_client_assets::regions::ZoneRegions);
+
+impl eq_client_core::movement::Liquids for ZoneLiquids {
+    fn liquid_at(&self, point: Vec3) -> Option<eq_client_core::movement::Liquid> {
+        self.0.liquid_at(point.to_array()).map(movement_liquid)
+    }
+
+    fn passes_through(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        liquid: eq_client_core::movement::Liquid,
+    ) -> bool {
+        use eq_client_assets::regions::Liquid;
+        let liquid = match liquid {
+            eq_client_core::movement::Liquid::Water => Liquid::Water,
+            eq_client_core::movement::Liquid::Lava => Liquid::Lava,
+        };
+        self.0
+            .passes_through(from.to_array(), to.to_array(), liquid)
+    }
+}
+
+/// A liquid the zone's regions mark, as movement knows it.
+fn movement_liquid(liquid: eq_client_assets::regions::Liquid) -> eq_client_core::movement::Liquid {
+    use eq_client_assets::regions::Liquid;
+    match liquid {
+        Liquid::Water => eq_client_core::movement::Liquid::Water,
+        Liquid::Lava => eq_client_core::movement::Liquid::Lava,
+    }
+}
+
+/// Includes solid terrain and transformed object geometry, including hidden boundaries,
+/// and the zone's water and lava.
 fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
     let mut triangles = zone.collision.clone();
     for object in &zone.objects {
@@ -1200,7 +1236,8 @@ fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Collisi
         }));
     }
     match eq_client_core::movement::CollisionWorld::new(triangles) {
-        Ok(world) => Some(world),
+        Ok(world) if zone.regions.liquid_region_count() == 0 => Some(world),
+        Ok(world) => Some(world.with_liquids(ZoneLiquids(zone.regions.clone()))),
         Err(error) => {
             warn!("Collision unavailable: {error}");
             None
@@ -1327,7 +1364,9 @@ fn move_player(
         debug!(
             fall_distance = landing.fall_distance,
             impact_speed = landing.impact_speed,
-            "Offline landing; no damage calculated"
+            damage =
+                world.landing_damage(player.translation - Vec3::Y * body.feet_offset, landing, 0),
+            "Offline landing; nothing is sent"
         );
     }
     camera.focus = player.translation;

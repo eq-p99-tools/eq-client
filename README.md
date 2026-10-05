@@ -535,12 +535,22 @@ additional model races and appearance updates, animated world textures and water
 Space jumps, and walking off a ledge falls, with gravity, terminal speed, floor
 landing and ceiling collision: offline, and online on stock `EQEmu` sessions.
 P99 and Quarm sessions keep grounded movement until official-client jumps and
-falls are measured. Each landing exposes local fall distance and impact speed for
-diagnostics; it does not calculate damage or send a damage report, so online falls
-do not hurt yet. The explicit tuning (gravity 32, terminal speed 40, jump speed 10
+falls are measured. On stock `EQEmu`, a landing reports its damage after the
+sample that lands, where the session takes the world's damage from the client
+and the player has not turned off **Take Environmental Damage (unsafe)** (see
+[Quality of life](#quality-of-life)):
+none up to 20 units of drop, then growing with the square of the drop past it,
+less the player's Safe Fall skill, and none where the feet land in water or lava.
+The server then applies its own reductions. All of this is inferred until
+official-client falls are measured. Offline, landings only log the damage they
+would do. The explicit tuning (gravity 32, terminal speed 40, jump speed 10
 in world units and seconds) is not calibrated EQ physics. Falls continue after
 movement keys are released or the window loses focus; chat/focus guards suppress
-new movement input. Spell slots
+new movement input. Every walk, route and fall keeps out of the zone's water
+and lava as the WLD's regions mark them (read as `EQEmu`'s water maps read
+them), since the client cannot swim yet and reports no drowning or burns: a
+step stops before the head would go under water or the feet into lava, shallow
+water is waded, and feet already in either may walk out. Spell slots
 show hover names, shortcuts, local base mana cost, cast time, range, reuse timing
 and remaining cooldowns, with distinct
 empty/available/waiting colors. Spell gems and book rows load icons from the user's
@@ -656,6 +666,13 @@ offer is greyed, with the reason on hover. The settings:
   client's taskbar button flashes until the client is in front again; other
   systems show it their own way. Greyed where the session does not chat
   (`Talking`).
+- **Take Environmental Damage (unsafe)** (`take_environmental_damage`, on):
+  reports the damage the world does to the player to the server, as the
+  official client does: for now a fall's on stock `EQEmu` (see the movement
+  notes above). Turned off, the client keeps it to itself and the character
+  takes none, which is unsafe: a server may notice a character that never
+  takes it. The water and lava guard stays on either way. Greyed where the
+  session takes no damage from the client (`EnvironmentalDamage`).
 
 Always on:
 
