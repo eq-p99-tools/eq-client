@@ -36,7 +36,7 @@ impl Messages {
     /// A string with the server's arguments in it. Missing strings stay
     /// identifiable instead of being silently dropped.
     pub(crate) fn format(&self, id: u32, arguments: &[String]) -> String {
-        self.said(id, arguments).text
+        self.said(id, arguments).words.text
     }
 
     /// A string with what it names, as the chat says it: the installed
@@ -53,6 +53,37 @@ impl Messages {
             },
             Said::official,
         )
+    }
+
+    /// Formats server arguments without discarding their original item links.
+    pub(crate) fn linked(&self, id: u32, arguments: &[eq_client_core::chat::RichText]) -> Said {
+        use eq_client_core::chat::{RichText, Source};
+        let plain: Vec<_> = arguments
+            .iter()
+            .map(|argument| argument.text.clone())
+            .collect();
+        if let Some(formatted) = self.0.format_with_spans(id, &plain) {
+            let mut words = RichText::from(formatted.text);
+            for span in formatted.arguments {
+                words.insert_links(&arguments[span.index], span.range.start);
+            }
+            Said {
+                words,
+                source: Source::Official,
+            }
+        } else {
+            let mut words = RichText::from(format!("Server message {id}"));
+            for (index, argument) in arguments.iter().enumerate() {
+                words.text.push_str(if index == 0 { ": " } else { ", " });
+                let offset = words.text.len();
+                words.text.push_str(&argument.text);
+                words.insert_links(argument, offset);
+            }
+            Said {
+                words,
+                source: Source::Client,
+            }
+        }
     }
 
     /// The installed client's words for a string with what it names, or
@@ -90,6 +121,81 @@ impl Messages {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn linked_argument(label: &str, id: u32) -> eq_client_core::chat::RichText {
+        eq_client_core::chat::Message {
+            message: None,
+            message_hex: None,
+            text: format!("a {label}"),
+            item_links: vec![eq_client_core::chat::ItemLink {
+                body: format!("{id:040X}"),
+                text: label.into(),
+                start: 2,
+                end: 44 + label.len(),
+                text_start: 2,
+                text_end: 2 + label.len(),
+                item_id: id,
+            }],
+        }
+        .into()
+    }
+
+    #[test]
+    fn formatted_notices_retain_clickable_links_through_the_final_chat_line() {
+        use eq_client_core::chat::Source;
+        let table = Messages::parse("EQST0002\n0 2\n1 %2 / %1 / %2 / %T3\n2 %1\n");
+        let arguments = vec![
+            linked_argument("Épée", 7),
+            linked_argument("盾", 9),
+            "2".into(),
+        ];
+        let notice = eq_client_core::world::Notice::ServerString {
+            id: 1,
+            arguments,
+            message_type: Some(10),
+        };
+        let mut lines = crate::notices::wording(&notice, Some(&table));
+        assert_eq!(lines.len(), 1);
+        let line = crate::chat::system_line(lines.remove(0).1);
+        assert_eq!(line.source, Source::Official);
+        assert_eq!(line.message.text, "a 盾 / a Épée / a 盾 / a Épée");
+        assert_eq!(
+            line.message
+                .item_links
+                .iter()
+                .map(|link| link.item_id)
+                .collect::<Vec<_>>(),
+            [9, 7, 9, 7]
+        );
+        for link in &line.message.item_links {
+            assert_eq!(
+                &line.message.text[link.text_start..link.text_end],
+                link.text
+            );
+            assert_eq!(link.body, format!("{:040X}", link.item_id));
+        }
+    }
+
+    #[test]
+    fn missing_table_and_invalid_spans_keep_readable_text_without_bad_clicks() {
+        let valid = linked_argument("Épée", 7);
+        let mut invalid = linked_argument("盾", 9);
+        invalid.item_links[0].text_start = 3; // Inside a multibyte label.
+        let notice = eq_client_core::world::Notice::ServerString {
+            id: 99,
+            arguments: vec![valid, invalid],
+            message_type: None,
+        };
+        let mut lines = crate::notices::wording(&notice, None);
+        let line = crate::chat::system_line(lines.remove(0).1);
+        assert_eq!(line.message.text, "Server message 99: a Épée, a 盾");
+        assert_eq!(line.message.item_links.len(), 1);
+        let annotation = &line.message.item_links[0];
+        assert_eq!(
+            &line.message.text[annotation.text_start..annotation.text_end],
+            "Épée"
+        );
+    }
 
     #[test]
     fn missing_strings_keep_numeric_reasons() {
