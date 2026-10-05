@@ -202,9 +202,8 @@ impl CollisionWorld {
         if !feet.is_finite() || !displacement.is_finite() || !height.is_finite() || height < 1.0 {
             return feet;
         }
-        // Feet already in deep water or lava, or above it with no floor
-        // between, may go anywhere, so they can leave.
-        let guarded = self.dry(feet, height);
+        // Feet in deep water or lava now may go anywhere, so they can leave.
+        let guarded = !self.submerged(feet, height);
         if matches!(support, Support::Airborne) {
             let next = self.stride(feet, displacement, height, support);
             // In the air, a move whose fall would end in deep water or lava is not made.

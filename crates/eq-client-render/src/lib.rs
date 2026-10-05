@@ -1145,10 +1145,19 @@ impl eq_client_core::movement::Liquids for ZoneLiquids {
         self.0.liquid_at(point.to_array()).map(movement_liquid)
     }
 
-    fn liquid_along(&self, from: Vec3, to: Vec3) -> Option<eq_client_core::movement::Liquid> {
+    fn passes_through(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        liquid: eq_client_core::movement::Liquid,
+    ) -> bool {
+        use eq_client_assets::regions::Liquid;
+        let liquid = match liquid {
+            eq_client_core::movement::Liquid::Water => Liquid::Water,
+            eq_client_core::movement::Liquid::Lava => Liquid::Lava,
+        };
         self.0
-            .liquid_along(from.to_array(), to.to_array())
-            .map(movement_liquid)
+            .passes_through(from.to_array(), to.to_array(), liquid)
     }
 }
 

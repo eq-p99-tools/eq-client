@@ -156,29 +156,27 @@ impl ZoneRegions {
         self.liquids.get(&self.region_at(position)?).copied()
     }
 
-    /// What fills the zone first along a segment in the renderer's frame:
-    /// the water or lava a point moving from `start` to `end` would enter
-    /// first, or neither.
+    /// Whether a segment in the renderer's frame passes through this
+    /// liquid anywhere, however thin.
     ///
     /// The segment is followed down the tree, split at each plane it
     /// crosses, so no region is skipped however narrow. Parts of it on a
     /// plane, in a broken tree, or in a cycle are in neither.
-    pub fn liquid_along(&self, start: [f32; 3], end: [f32; 3]) -> Option<Liquid> {
+    pub fn passes_through(&self, start: [f32; 3], end: [f32; 3], liquid: Liquid) -> bool {
         if self.liquids.is_empty() || !start.iter().chain(&end).all(|v| v.is_finite()) {
-            return None;
+            return false;
         }
         let (start, end) = (Vec3::from_array(start), Vec3::from_array(end));
         // Parts of the segment, as fractions of it, with the node holding
-        // each and its depth there. The nearer part of a split is taken
-        // first, so the first liquid found is the first along the segment.
+        // each and its depth there.
         let mut parts = vec![(0, 0.0_f32, 1.0_f32, 0)];
         while let Some((cursor, from, to, depth)) = parts.pop() {
             let Some(node) = self.nodes.get(cursor).filter(|_| depth < self.nodes.len()) else {
                 continue;
             };
             if let Some(region) = node.region {
-                if let Some(liquid) = self.liquids.get(&region) {
-                    return Some(*liquid);
+                if self.liquids.get(&region) == Some(&liquid) {
+                    return true;
                 }
                 continue;
             }
@@ -197,8 +195,8 @@ impl ZoneRegions {
             }
             if (near > 0.0 && far < 0.0) || (near < 0.0 && far > 0.0) {
                 let split = from + (to - from) * near / (near - far);
-                parts.extend(child(far).map(|next| (next, split, to, depth + 1)));
                 parts.extend(child(near).map(|next| (next, from, split, depth + 1)));
+                parts.extend(child(far).map(|next| (next, split, to, depth + 1)));
             } else {
                 // Both ends on one side, or one on the plane and the part on
                 // the other's side.
@@ -206,7 +204,7 @@ impl ZoneRegions {
                 parts.extend(child(distance).map(|next| (next, from, to, depth + 1)));
             }
         }
-        None
+        false
     }
 
     /// The leaf region holding a position in the renderer's frame.
@@ -528,46 +526,39 @@ mod tests {
     }
 
     #[test]
-    fn a_segment_finds_the_first_liquid_along_it_however_thin() {
+    fn a_segment_passes_through_a_liquid_however_thin() {
         let regions = layers();
         let (high, low) = ([0.0, 10.0, 0.0], [0.0, -10.0, 0.0]);
-        // Neither end is in the lava, but the segment down passes through
-        // it before the water, and the one up meets the water first.
+        // Neither end is in the lava, but the segment passes through it,
+        // whichever way it runs.
         assert_eq!(regions.liquid_at(high), None);
         assert_eq!(regions.liquid_at(low), Some(Liquid::Water));
-        assert_eq!(regions.liquid_along(high, low), Some(Liquid::Lava));
-        assert_eq!(regions.liquid_along(low, high), Some(Liquid::Water));
-        assert_eq!(
-            regions.liquid_along(high, [0.0, -0.0625, 0.0]),
-            Some(Liquid::Lava)
-        );
-        // Air alone, a segment in a plane, and a broken query find neither.
-        assert_eq!(regions.liquid_along(high, [5.0, 1.0, 5.0]), None);
-        assert_eq!(
-            regions.liquid_along([-5.0, 0.0, 0.0], [5.0, 0.0, 0.0]),
-            None
-        );
-        assert_eq!(regions.liquid_along([f32::NAN, 0.0, 0.0], low), None);
+        for (from, to) in [(high, low), (low, high)] {
+            assert!(regions.passes_through(from, to, Liquid::Lava));
+            assert!(regions.passes_through(from, to, Liquid::Water));
+        }
+        let lava = [0.0, -0.0625, 0.0];
+        assert!(regions.passes_through(high, lava, Liquid::Lava));
+        assert!(!regions.passes_through(high, lava, Liquid::Water));
+        // Air alone, a segment in a plane, and a broken query pass through
+        // neither.
+        for liquid in [Liquid::Water, Liquid::Lava] {
+            assert!(!regions.passes_through(high, [5.0, 1.0, 5.0], liquid));
+            assert!(!regions.passes_through([-5.0, 0.0, 0.0], [5.0, 0.0, 0.0], liquid));
+            assert!(!regions.passes_through([f32::NAN, 0.0, 0.0], low, liquid));
+        }
     }
 
     #[test]
-    fn a_segment_in_a_broken_tree_or_a_cycle_finds_neither_there() {
+    fn a_segment_in_a_broken_tree_or_a_cycle_passes_through_nothing_there() {
         let mut regions = layers();
+        let (high, below, low) = ([0.0, 10.0, 0.0], [0.0, -1.0, 0.0], [0.0, -10.0, 0.0]);
         regions.nodes[2].back = Some(99);
-        assert_eq!(
-            regions.liquid_along([0.0, -1.0, 0.0], [0.0, -10.0, 0.0]),
-            None
-        );
+        assert!(!regions.passes_through(below, low, Liquid::Water));
         // The lava above the break is still found.
-        assert_eq!(
-            regions.liquid_along([0.0, 10.0, 0.0], [0.0, -10.0, 0.0]),
-            Some(Liquid::Lava)
-        );
+        assert!(regions.passes_through(high, low, Liquid::Lava));
         regions.nodes[2].back = Some(0);
-        assert_eq!(
-            regions.liquid_along([0.0, -1.0, 0.0], [0.0, -10.0, 0.0]),
-            None
-        );
+        assert!(!regions.passes_through(below, low, Liquid::Water));
     }
 
     #[test]
