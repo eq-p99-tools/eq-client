@@ -391,11 +391,19 @@ pub(super) fn receive(
             // The session is this zone's even if its assets fail to load, so
             // nothing of the previous zone stays on screen either.
             scene.leave(&mut commands, &mut state.regions);
+            let loading = std::time::Instant::now();
             match super::zone::Entry::admission(&state.world, directory) {
                 Ok(entry) => {
                     let terrain_only = settings.0.terrain_only;
                     entered =
                         Some(scene.enter(&mut commands, entry, terrain_only, &mut state.regions));
+                    // The picture stands still this long, behind the loading
+                    // screen.
+                    info!(
+                        zone = state.world.zone(),
+                        milliseconds = loading.elapsed().as_millis(),
+                        "Zone loaded"
+                    );
                 }
                 Err(text) => {
                     error!("{text}");

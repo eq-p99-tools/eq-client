@@ -89,6 +89,8 @@ pub(super) fn reconcile(
         return;
     };
     let Some(directory) = &settings.0.eq_directory else {
+        // With no installation nothing is drawn, so nothing is still to come.
+        nearby_state.settled = true;
         return;
     };
     let hurried = loading.is_some_and(|loading| loading.covered());
@@ -291,5 +293,30 @@ pub(super) fn interpolate(
             Quat::from_rotation_y(eq_client_core::render_heading(spawn.position.heading)),
             weight,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::online::testing;
+
+    #[test]
+    fn with_no_installation_no_spawn_is_still_to_come() {
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .init_resource::<crate::options::OptionsState>()
+            .init_resource::<Time>()
+            .init_resource::<NearbyEntities>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, reconcile);
+        app.update();
+        // So the loading screen lifts as soon as the zone has laid out.
+        assert!(app.world().resource::<NearbyEntities>().settled());
     }
 }
