@@ -2,8 +2,8 @@
 //! `login-servers.txt` in the client's settings folder, each a login server
 //! of one server type, with what the client remembers of playing there.
 //! The file is the player's to edit; the client writes it back only to
-//! remember the last account, world and installation used, never a
-//! password.
+//! remember the last account and world used and the installation each
+//! needs, never a password.
 use eq_network::client::ServerProtocol;
 use std::{
     fmt::Write as _,
@@ -30,7 +30,8 @@ pub struct Preset {
     /// The login server's port.
     pub port: u16,
     /// The installation of the official client this server type needs, once
-    /// named in the file or used.
+    /// named: in the file, by a launch naming the preset with `--eq-dir`, or
+    /// by the first session played here.
     pub installation: Option<PathBuf>,
     /// The account last logged in with here.
     pub account: Option<String>,
@@ -215,6 +216,19 @@ impl Presets {
         self.list
             .iter()
             .position(|preset| preset.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Names the installation a preset needs, if it names none yet: the
+    /// first one named stays, so only the file changes it. Says whether it
+    /// named one.
+    pub fn name_installation(&mut self, index: usize, directory: &Path) -> bool {
+        match self.list.get_mut(index) {
+            Some(preset) if preset.installation.is_none() => {
+                preset.installation = Some(directory.to_path_buf());
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -407,6 +421,18 @@ mod tests {
         assert_eq!(presets.last.as_deref(), Some("Local TAKP"));
         let takp = &presets.list[presets.find("Local TAKP").unwrap()];
         assert_eq!((takp.host.as_str(), takp.port), ("192.168.1.20", 6000));
+    }
+
+    #[test]
+    fn a_preset_keeps_the_first_installation_it_is_named_with() {
+        let mut presets = Presets::seeded(&Endpoint::default());
+        assert!(presets.name_installation(3, Path::new("C:/TAKP")));
+        assert!(!presets.name_installation(3, Path::new("C:/EverQuest")));
+        assert!(!presets.name_installation(9, Path::new("C:/TAKP")));
+        assert_eq!(
+            presets.list[3].installation.as_deref(),
+            Some(Path::new("C:/TAKP"))
+        );
     }
 
     #[test]

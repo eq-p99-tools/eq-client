@@ -32,6 +32,36 @@ pub fn installed_client(protocol: eq_network::client::ServerProtocol) -> Install
     }
 }
 
+/// The official client the installation in `directory` holds, for a run at
+/// the login screen: that of the presets naming it, the launch's own first.
+/// One no preset names is taken to be Titanium's, as the standard
+/// installation is and as an offline run takes any, so a preset of the
+/// other client never logs in on it until the preset names its own.
+pub fn client_at(presets: &Presets, launch: usize, directory: &Path) -> InstalledClient {
+    holder(presets, launch, directory).map_or(InstalledClient::Titanium, |preset| {
+        installed_client(preset.protocol)
+    })
+}
+
+/// The preset that names the installation in `directory`: the launch's own,
+/// else the first in the file.
+fn holder<'a>(presets: &'a Presets, launch: usize, directory: &Path) -> Option<&'a Preset> {
+    let names = |preset: &&Preset| preset.installation.as_deref() == Some(directory);
+    presets
+        .list
+        .get(launch)
+        .filter(names)
+        .or_else(|| presets.list.iter().find(names))
+}
+
+/// What the login screen calls a client's installation.
+const fn client_name(client: InstalledClient) -> &'static str {
+    match client {
+        InstalledClient::Titanium => "Titanium",
+        InstalledClient::EqMac => "TAKP client",
+    }
+}
+
 /// What the launch says about its own preset: the login server today's
 /// environment names, which wins over the preset's for this run alone, and
 /// the world and character to go straight to.
@@ -112,24 +142,30 @@ impl Launcher {
     }
 
     /// Whether this run logs in on a preset, or opens the client again with
-    /// its installation, or cannot.
+    /// its installation, or cannot. Each but the first names the folders
+    /// involved, so one named for the wrong client shows and can be put
+    /// right in the file.
     fn availability(&self, preset: &Preset) -> Availability {
         let client = installed_client(preset.protocol);
-        let same_client = client == self.installation.client;
+        let here = &self.installation;
+        let same_client = client == here.client;
         match &preset.installation {
-            Some(directory) if same_client && *directory == self.installation.directory => {
-                Availability::Here
-            }
-            Some(_) => Availability::Reopens,
+            Some(directory) if same_client && *directory == here.directory => Availability::Here,
+            Some(directory) => Availability::Reopens(directory.display().to_string()),
             None if same_client => Availability::Here,
-            None => Availability::Unavailable(format!(
-                "Needs a {} installation: run eq-client --eq-dir <folder> --preset \"{}\" once",
-                match client {
-                    InstalledClient::Titanium => "Titanium",
-                    InstalledClient::EqMac => "TAKP client",
-                },
-                preset.name
-            )),
+            None => {
+                let named = holder(&self.presets, self.launch.preset, &here.directory)
+                    .map(|holder| format!(", as {} names it", holder.name))
+                    .unwrap_or_default();
+                Availability::Unavailable(format!(
+                    "Needs a {} installation; this run's, {}, is read as {}'s{named}. \
+                     Run eq-client --eq-dir <folder> --preset \"{}\" once",
+                    client_name(client),
+                    here.directory.display(),
+                    client_name(here.client),
+                    preset.name
+                ))
+            }
         }
     }
 
@@ -265,7 +301,7 @@ impl Logins for Launcher {
             .ok_or_else(|| "No such login server".to_owned())?;
         match self.availability(preset) {
             Availability::Here => (),
-            Availability::Reopens => return self.reopen(server),
+            Availability::Reopens(_) => return self.reopen(server),
             Availability::Unavailable(reason) => return Err(reason),
         }
         let login = self
@@ -277,7 +313,6 @@ impl Logins for Launcher {
     }
 
     fn played(&mut self, server: usize, account: &str, world: Option<&str>) {
-        let directory = self.installation.directory.clone();
         let Some(preset) = self.presets.list.get_mut(server) else {
             return;
         };
@@ -285,9 +320,10 @@ impl Logins for Launcher {
         if let Some(world) = world {
             preset.world = Some(world.to_owned());
         }
-        // The installation a preset first plays with is the one it needs.
-        preset.installation.get_or_insert(directory);
         self.presets.last = Some(preset.name.clone());
+        // The installation a preset first plays with is the one it needs.
+        self.presets
+            .name_installation(server, &self.installation.directory);
         self.presets.save(self.directory.as_deref());
     }
 
@@ -319,36 +355,42 @@ mod tests {
     fn launcher(installation: Installation) -> Launcher {
         let mut presets = Presets::seeded(&Endpoint::default());
         presets.list[3].installation = Some(PathBuf::from("C:/TAKP"));
+        let launch = Launch {
+            preset: 2,
+            endpoint: Endpoint {
+                protocol: None,
+                host: Some("192.168.1.20".into()),
+                port: None,
+            },
+            server: "Example World".into(),
+            character: String::new(),
+        };
+        run(presets, installation, launch)
+    }
+
+    fn run(presets: Presets, installation: Installation, launch: Launch) -> Launcher {
         Launcher::new(
             presets,
             None,
             installation,
             SessionOptions {
-                install: PathBuf::from("C:/EverQuest"),
+                install: installation_directory(),
                 seconds: None,
                 calibration: None,
                 local_only: false,
                 auto_eat: eq_client_core::food::AutoEat::default(),
             },
-            (
-                Launch {
-                    preset: 2,
-                    endpoint: Endpoint {
-                        protocol: None,
-                        host: Some("192.168.1.20".into()),
-                        port: None,
-                    },
-                    server: "Example World".into(),
-                    character: String::new(),
-                },
-                Vec::new(),
-            ),
+            (launch, Vec::new()),
         )
+    }
+
+    fn installation_directory() -> PathBuf {
+        PathBuf::from("C:/EverQuest")
     }
 
     fn titanium() -> Installation {
         Installation {
-            directory: PathBuf::from("C:/EverQuest"),
+            directory: installation_directory(),
             client: InstalledClient::Titanium,
         }
     }
@@ -412,10 +454,76 @@ mod tests {
         assert_eq!(availability[0], Availability::Here);
         assert!(matches!(availability[1], Availability::Unavailable(_)));
         assert_eq!(availability[2], Availability::Here);
-        assert_eq!(availability[3], Availability::Reopens);
+        assert_eq!(availability[3], Availability::Reopens("C:/TAKP".into()));
         assert_eq!(
             installed_client(ServerProtocol::Quarm),
             InstalledClient::EqMac
+        );
+    }
+
+    #[test]
+    fn a_login_screens_installation_holds_the_client_of_the_presets_naming_it() {
+        let mut presets = Presets::seeded(&Endpoint::default());
+        presets.list[2].installation = Some(installation_directory());
+        presets.list[3].installation = Some(PathBuf::from("C:/TAKP"));
+        let at = |presets: &Presets, launch, directory: &str| {
+            client_at(presets, launch, Path::new(directory))
+        };
+        // Whichever preset the run begins on.
+        assert_eq!(at(&presets, 3, "C:/EverQuest"), InstalledClient::Titanium);
+        assert_eq!(at(&presets, 2, "C:/TAKP"), InstalledClient::EqMac);
+        assert_eq!(at(&presets, 3, "C:/TAKP"), InstalledClient::EqMac);
+        // One no preset names is taken to be Titanium's, even begun on TAKP.
+        assert_eq!(at(&presets, 3, "D:/Elsewhere"), InstalledClient::Titanium);
+        // Named for both clients, the launch's own preset decides, else the
+        // first in the file.
+        presets.list[1].installation = Some(installation_directory());
+        assert_eq!(at(&presets, 1, "C:/EverQuest"), InstalledClient::EqMac);
+        assert_eq!(at(&presets, 2, "C:/EverQuest"), InstalledClient::Titanium);
+        assert_eq!(at(&presets, 0, "C:/EverQuest"), InstalledClient::EqMac);
+    }
+
+    #[test]
+    fn a_titanium_run_begun_on_takp_logs_in_there_only_by_opening_its_installation() {
+        // A run on a Titanium installation that begins on Local TAKP, the
+        // last played, which names no installation of its own yet.
+        let mut presets = Presets::seeded(&Endpoint::default());
+        presets.last = Some("Local TAKP".into());
+        let begun = |presets: &Presets| {
+            let installation = Installation {
+                directory: installation_directory(),
+                client: client_at(presets, 3, &installation_directory()),
+            };
+            let launch = Launch {
+                preset: 3,
+                ..Launch::default()
+            };
+            run(presets.clone(), installation, launch)
+        };
+        let mut launcher = begun(&presets);
+        assert_eq!(launcher.installation.client, InstalledClient::Titanium);
+        let offered = launcher.servers();
+        let Availability::Unavailable(reason) = &offered[3].availability else {
+            panic!("{:?}", offered[3].availability);
+        };
+        // The hover names this run's folder and how it is read, and which
+        // preset names that folder, where one does.
+        assert!(reason.contains("this run's, C:/EverQuest, is read as Titanium's. Run"));
+        assert!(launcher.connect(3, "someone", "secret").is_err());
+        assert_eq!(offered[2].availability, Availability::Here);
+        let mut named = presets.clone();
+        named.name_installation(2, &installation_directory());
+        let offered = begun(&named).servers();
+        let Availability::Unavailable(reason) = &offered[3].availability else {
+            panic!("{:?}", offered[3].availability);
+        };
+        assert!(reason.contains("is read as Titanium's, as Local EQEmu names it."));
+        // Once it names its own, Connect opens the client again there.
+        presets.name_installation(3, Path::new("D:/TAKP"));
+        let launcher = begun(&presets);
+        assert_eq!(
+            launcher.servers()[3].availability,
+            Availability::Reopens("D:/TAKP".into())
         );
     }
 

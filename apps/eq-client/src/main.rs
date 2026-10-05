@@ -4,9 +4,9 @@ mod logins;
 mod presets;
 mod session;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSource};
 use eq_client_assets::{ZoneAsset, ui::InstalledClient};
 use eq_client_core::WorldPosition;
 use eq_client_render::{
@@ -365,6 +365,35 @@ fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
     script && protocol.is_some_and(ServerProtocol::is_stock)
 }
 
+/// The command line, and the installation it names itself, which a launch
+/// naming its preset names for it; `EQ_CLIENT_DIR`, which launchers set on
+/// every run, names none (see [`start_point`]).
+fn parse_arguments() -> (Arguments, Option<PathBuf>) {
+    let matches = Arguments::command().get_matches();
+    let arguments = Arguments::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    let typed = (matches.value_source("eq_dir") == Some(ValueSource::CommandLine))
+        .then(|| arguments.eq_dir.clone())
+        .flatten();
+    (arguments, typed)
+}
+
+/// The installation a run uses: `--eq-dir` or `EQ_CLIENT_DIR`, else the
+/// launch preset's, else the standard one.
+fn eq_directory(
+    given: Option<PathBuf>,
+    start: Option<&(presets::Presets, logins::Launch)>,
+) -> PathBuf {
+    let launch_installation =
+        start.and_then(|(presets, launch)| presets.list[launch.preset].installation.clone());
+    given
+        .or(launch_installation)
+        .or_else(default_eq_directory)
+        .unwrap_or_else(|| {
+            eprintln!("error: pass --eq-dir or set EQ_CLIENT_DIR");
+            std::process::exit(2);
+        })
+}
+
 /// Startup problems print to stderr before the viewer exists; once it
 /// runs, the session logs through `tracing` like the viewer.
 fn main() {
@@ -375,7 +404,7 @@ fn main() {
         tracing::error!("The client panicked: {panic}");
         report(panic);
     }));
-    let mut arguments = Arguments::parse();
+    let (mut arguments, typed_installation) = parse_arguments();
     let calibration = arguments
         .movement_calibration
         .as_deref()
@@ -391,7 +420,13 @@ fn main() {
         .clone()
         .or_else(default_settings_directory);
     let start = (mode != Mode::Offline).then(|| {
-        start_point(&arguments, mode, settings_directory.as_deref()).unwrap_or_else(|error| {
+        start_point(
+            &arguments,
+            mode,
+            settings_directory.as_deref(),
+            typed_installation.as_deref(),
+        )
+        .unwrap_or_else(|error| {
             eprintln!("error: {error}");
             std::process::exit(2);
         })
@@ -405,18 +440,10 @@ fn main() {
         std::process::exit(2);
     }
     require_positive_distance(arguments.entity_distance);
-    let launch_installation = start
+    let eq_directory = eq_directory(arguments.eq_dir.take(), start.as_ref());
+    let client = start
         .as_ref()
-        .and_then(|(presets, launch)| presets.list[launch.preset].installation.clone());
-    let eq_directory = arguments
-        .eq_dir
-        .take()
-        .or(launch_installation)
-        .or_else(default_eq_directory)
-        .unwrap_or_else(|| {
-            eprintln!("error: pass --eq-dir or set EQ_CLIENT_DIR");
-            std::process::exit(2);
-        });
+        .map(|(presets, launch)| run_client(presets, launch.preset, mode, &eq_directory));
     let zone = match eq_client_assets::load_zone(&eq_directory, &arguments.zone) {
         Ok(zone) => zone,
         Err(error) => {
@@ -455,7 +482,7 @@ fn main() {
             mode,
             logins::Installation {
                 directory: eq_directory.clone(),
-                client: installed_client(protocol),
+                client: client.unwrap_or_default(),
             },
             settings_directory.clone(),
             session_options(&arguments, &eq_directory, calibration, local),
@@ -464,7 +491,7 @@ fn main() {
     println!("Controls: WASD moves; right-drag orbits; the wheel zooms.");
     let config = viewer_config(
         arguments,
-        protocol,
+        client,
         (eq_directory, settings_directory),
         (script, script_follow),
         local,
@@ -519,11 +546,15 @@ fn session_options(
 }
 
 /// The presets, and the launch's own preset, login server, world and
-/// character.
+/// character. A launch naming its preset (`--preset` or `EQ_PRESET`) and,
+/// on the command line, its installation (`--eq-dir`) names that
+/// installation for the preset, if it names none yet, as a preset needing
+/// one says on the login screen.
 fn start_point(
     arguments: &Arguments,
     mode: Mode,
-    settings_directory: Option<&std::path::Path>,
+    settings_directory: Option<&Path>,
+    typed_installation: Option<&Path>,
 ) -> Result<(presets::Presets, logins::Launch), String> {
     let environment = presets::Endpoint::from_environment()?;
     let mut presets = presets::Presets::load(settings_directory, &environment);
@@ -536,6 +567,14 @@ fn start_point(
         &environment,
         mode == Mode::Online,
     )?;
+    // EQ_PROTOCOL's type and --online's pick choose what to play but name
+    // no installation: launchers set them on every run.
+    if arguments.preset.is_some()
+        && let Some(directory) = typed_installation
+        && presets.name_installation(preset, directory)
+    {
+        presets.save(settings_directory);
+    }
     let given = |value: &Option<String>| value.as_deref().unwrap_or_default().trim().to_owned();
     let launch = logins::Launch {
         preset,
@@ -569,16 +608,17 @@ fn launch_session(launcher: &logins::Launcher, preset: usize) -> eq_client_rende
     })
 }
 
-/// Viewer settings from the command line and the validated script.
+/// Viewer settings from the command line and the validated script, for a
+/// run reading its installation as `client`'s, none offline.
 fn viewer_config(
     arguments: Arguments,
-    protocol: Option<ServerProtocol>,
+    client: Option<InstalledClient>,
     (eq_directory, settings_directory): (PathBuf, Option<PathBuf>),
     (script, script_follow): ScriptInput,
     local: bool,
 ) -> ViewerConfig {
     ViewerConfig {
-        estimate_titanium_resources: protocol.is_some_and(ServerProtocol::is_titanium),
+        estimate_titanium_resources: client == Some(InstalledClient::Titanium),
         projection: match arguments.camera {
             CameraStyle::Perspective => ProjectionStyle::Perspective,
             CameraStyle::Orthographic => ProjectionStyle::Orthographic,
@@ -598,7 +638,7 @@ fn viewer_config(
         camera_distance: arguments.camera_distance,
         terrain_only: arguments.terrain_only,
         eq_directory: Some(eq_directory),
-        installed_client: installed_client(protocol),
+        installed_client: client.unwrap_or_default(),
         entity_distance: Some(arguments.entity_distance),
         option_defaults: {
             let mut defaults = eq_client_core::options::Options {
@@ -632,11 +672,23 @@ fn viewer_config(
     }
 }
 
-/// The official client a server's players install, whose own settings files
-/// the viewer reads by that client's rules. Offline, the installation is
-/// taken to be Titanium's, as the default `--eq-dir` is.
-fn installed_client(protocol: Option<ServerProtocol>) -> InstalledClient {
-    protocol.map_or(InstalledClient::Titanium, logins::installed_client)
+/// The official client a run's installation holds, whose own settings files
+/// the viewer reads by that client's rules. `--online` logs in on the
+/// launch's preset at once, so its run holds that preset's, as before
+/// presets; at the login screen, it is the one the presets name there (see
+/// [`logins::client_at`]). Offline, none: the installation is read as
+/// Titanium's, as the default `--eq-dir` is.
+fn run_client(
+    presets: &presets::Presets,
+    launch: usize,
+    mode: Mode,
+    directory: &Path,
+) -> InstalledClient {
+    if mode == Mode::Online {
+        logins::installed_client(presets.list[launch].protocol)
+    } else {
+        logins::client_at(presets, launch, directory)
+    }
 }
 
 fn require_positive_distance(distance: f32) {
@@ -753,24 +805,37 @@ fn print_summary(zone: &ZoneAsset) {
 #[cfg(test)]
 mod tests {
     use super::{
-        Arguments, InstalledClient, Mode, ServerProtocol, Step, check_local_steps, distance,
-        finite, installed_client, launch_preset, load_script, local_session, mode,
-        parse_window_position, parse_window_size, presets, seconds,
+        Arguments, InstalledClient, Mode, Path, ServerProtocol, Step, check_local_steps, distance,
+        finite, launch_preset, load_script, local_session, mode, parse_window_position,
+        parse_window_size, presets, run_client, seconds,
     };
     use clap::Parser;
 
     #[test]
-    fn titanium_servers_and_offline_runs_read_a_titanium_installation() {
-        for protocol in [
-            None,
-            Some(ServerProtocol::EqEmu),
-            Some(ServerProtocol::Project1999),
+    fn an_online_run_holds_its_presets_client_and_a_login_screen_its_installations() {
+        let mut presets = presets::Presets::seeded(&presets::Endpoint::default());
+        let titanium = Path::new("C:/EverQuest");
+        // `--online` logs in on the launch's preset at once.
+        for (index, client) in [
+            (0, InstalledClient::Titanium),
+            (1, InstalledClient::EqMac),
+            (2, InstalledClient::Titanium),
+            (3, InstalledClient::EqMac),
         ] {
-            assert_eq!(installed_client(protocol), InstalledClient::Titanium);
+            assert_eq!(run_client(&presets, index, Mode::Online, titanium), client);
         }
-        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
-            assert_eq!(installed_client(Some(protocol)), InstalledClient::EqMac);
-        }
+        // The login screen reads an installation no preset names as
+        // Titanium's, whichever preset it begins on, and one a preset names
+        // as that preset's client's.
+        assert_eq!(
+            run_client(&presets, 3, Mode::Login, titanium),
+            InstalledClient::Titanium
+        );
+        presets.name_installation(3, Path::new("D:/TAKP"));
+        assert_eq!(
+            run_client(&presets, 0, Mode::Login, Path::new("D:/TAKP")),
+            InstalledClient::EqMac
+        );
     }
 
     #[test]

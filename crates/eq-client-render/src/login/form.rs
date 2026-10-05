@@ -168,7 +168,9 @@ fn spawn(commands: &mut Commands, front: &FrontEnd) {
             for (index, server) in front.servers.iter().enumerate() {
                 let note = match &server.availability {
                     Availability::Here => String::new(),
-                    Availability::Reopens => "Opens its own installation".to_owned(),
+                    Availability::Reopens(folder) => {
+                        format!("Opens the client again with its installation, {folder}, named in login-servers.txt")
+                    }
                     Availability::Unavailable(reason) => reason.clone(),
                 };
                 let usable =
@@ -286,8 +288,8 @@ fn guidance(front: &FrontEnd) -> String {
         return front.status.clone();
     }
     match front.chosen().map(|server| &server.availability) {
-        Some(Availability::Reopens) => {
-            "Connect opens the client again with this server's installation".to_owned()
+        Some(Availability::Reopens(folder)) => {
+            format!("Connect opens the client again with {folder}")
         }
         Some(Availability::Unavailable(reason)) => reason.clone(),
         _ => "Tab: next box | Enter: connect".to_owned(),
@@ -440,7 +442,7 @@ mod tests {
     #[test]
     fn a_login_server_on_another_installation_reopens_and_one_unavailable_says_why() {
         let mut other = server("Elsewhere", "someone");
-        other.availability = Availability::Reopens;
+        other.availability = Availability::Reopens("C:/Elsewhere".into());
         let mut missing = server("Missing", "");
         missing.availability = Availability::Unavailable("No installation".into());
         let (mut app, _) = app(vec![other, missing]);

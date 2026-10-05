@@ -68,8 +68,9 @@ pub enum Availability {
     /// The session runs in this client.
     Here,
     /// The server type needs another installation of the official client,
-    /// so Connect opens the client again with it.
-    Reopens,
+    /// in the folder named, as the player reads it, so Connect opens the
+    /// client again with it.
+    Reopens(String),
     /// No session can start from here, and why, in the player's words.
     Unavailable(String),
 }
@@ -316,7 +317,7 @@ impl FrontEnd {
         let reopens = self
             .servers
             .get(self.chosen)
-            .is_some_and(|server| server.availability == Availability::Reopens);
+            .is_some_and(|server| matches!(server.availability, Availability::Reopens(_)));
         if self.account.trim().is_empty() && !reopens {
             "Type your account name first".clone_into(&mut self.status);
             self.field = Field::Account;
@@ -657,7 +658,7 @@ pub(crate) mod testing {
                 .push((server, account.to_owned(), password.to_owned()));
             match &self.servers[server].availability {
                 Availability::Here => (),
-                Availability::Reopens => return Ok(Connection::Reopened),
+                Availability::Reopens(_) => return Ok(Connection::Reopened),
                 Availability::Unavailable(reason) => return Err(reason.clone()),
             }
             let (updates, receive) = std::sync::mpsc::sync_channel(64);
