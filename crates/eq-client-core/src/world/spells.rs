@@ -59,7 +59,7 @@ impl ClientWorld {
         changes: &mut Changes,
     ) {
         if self.accepts_reply(session_id) && self.death.is_none() {
-            self.casting.pending = spell_id;
+            self.casting.pend(spell_id);
         } else {
             changes.ignored = true;
         }
