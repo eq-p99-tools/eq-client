@@ -7,9 +7,9 @@ use super::{
 use bevy::prelude::*;
 use eq_client_assets::regions::ZoneLine;
 use eq_client_core::{
-    ClientCommand, MovementMode, MovementRequest,
+    Capability, ClientCommand, MovementMode, MovementRequest,
     hazards::Hazard,
-    movement::{AirborneController, Landing},
+    movement::AirborneController,
     qol::{Fix, Settings},
     world::ClientWorld,
     world_position,
@@ -39,6 +39,9 @@ pub(super) struct Controls {
     pub refused: Option<String>,
     /// When a jump was pressed since the last sample; only where falls are simulated.
     pub jump: Option<Instant>,
+    /// The damage of a landing the session's queue had no room to tell; it
+    /// goes before the next sample.
+    unreported: Option<u32>,
 }
 impl Default for Controls {
     fn default() -> Self {
@@ -59,6 +62,7 @@ impl Default for Controls {
             airborne: None,
             refused: None,
             jump: None,
+            unreported: None,
         }
     }
 }
@@ -308,6 +312,15 @@ pub(super) fn input(
     if elapsed < Duration::from_millis(100) {
         return;
     }
+    // A landing's damage goes before the next sample; a queue with no room
+    // for it has none for the sample either.
+    if let Some(amount) = controls.unreported.take() {
+        controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, amount);
+        if controls.unreported.is_some() {
+            controls.pause_prediction();
+            return;
+        }
+    }
     let (Ok(body), Ok(camera), Some(world), Some(accepted)) = (
         players.single(),
         cameras.single(),
@@ -427,7 +440,8 @@ pub(super) fn input(
             fall,
             safe_fall(online.world()),
         );
-        report_fall(&outbox, online.world(), &options.options.qol, fall, amount);
+        debug!(fall_distance = fall.fall_distance, amount, "Landing");
+        controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, amount);
     }
     controls.moving = position.distance_squared(origin) > 0.000_001
         || (heading - current_heading).abs() > f32::EPSILON;
@@ -479,19 +493,19 @@ pub(super) fn fall_step(
 /// Tells the server the damage a landing did to the player, where the
 /// session reports the world's damage and the player takes it
 /// ([`Fix::TakeEnvironmentalDamage`]). A landing that does none sends
-/// nothing.
+/// nothing. Gives the damage back when the session's queue has no room for
+/// it, to tell again before the next sample.
 fn report_fall(
     outbox: &crate::outbox::Outbox,
     world: &ClientWorld,
     qol: &Settings,
-    landing: Landing,
     amount: u32,
-) {
-    let Some(stamp) = outbox.peek(world) else {
-        return;
-    };
-    let told = amount > 0
+) -> Option<u32> {
+    let stamp = outbox.peek(world)?;
+    let wanted = amount > 0
         && qol.on(Fix::TakeEnvironmentalDamage)
+        && world.can(Capability::EnvironmentalDamage);
+    let told = wanted
         && outbox.tell(
             world,
             ClientCommand::EnvironmentalDamage {
@@ -500,10 +514,8 @@ fn report_fall(
                 amount,
             },
         );
-    debug!(
-        fall_distance = landing.fall_distance,
-        amount, told, "Landing"
-    );
+    debug!(amount, told, "Fall damage");
+    (wanted && !told).then_some(amount)
 }
 
 /// The Safe Fall the player has learned; none where the profile says nothing
@@ -1324,6 +1336,45 @@ mod tests {
             assert!(matches!(receiver.try_recv(), Ok(ClientCommand::Move(_))));
             assert!(receiver.try_recv().is_err());
         }
+    }
+
+    #[test]
+    fn a_landings_damage_the_full_queue_refused_goes_before_the_next_sample() {
+        let ready = |app: &mut App| {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.accepted();
+            controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        };
+        let (mut app, _) = landing(None, eq_client_core::Capability::ALL.to_vec());
+        let (sender, full) = mpsc::sync_channel(1);
+        app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+        // The landing sample takes the queue's only place, so its damage
+        // waits, for as long as the queue stays full.
+        app.update();
+        ready(&mut app);
+        app.update();
+        assert_eq!(app.world().resource::<Controls>().unreported, Some(160));
+        assert!(matches!(full.try_recv(), Ok(ClientCommand::Move(_))));
+        assert!(full.try_recv().is_err());
+        // With room again, it goes before the next sample, once.
+        let (sender, receiver) = mpsc::sync_channel(3);
+        app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyW);
+        ready(&mut app);
+        app.update();
+        assert_eq!(
+            receiver.try_recv().ok(),
+            Some(ClientCommand::EnvironmentalDamage {
+                session_id: 11,
+                hazard: Hazard::Falling,
+                amount: 160,
+            })
+        );
+        assert!(matches!(receiver.try_recv(), Ok(ClientCommand::Move(_))));
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(app.world().resource::<Controls>().unreported, None);
     }
 
     #[test]
