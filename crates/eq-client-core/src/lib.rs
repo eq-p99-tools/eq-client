@@ -62,8 +62,8 @@ pub use eq_network_game::zoning::ZoneRejection;
 
 pub use eq_network_game::buffs::{Buff, BuffUpdate, SpellEffect};
 pub use eq_network_game::world::{
-    BaseAttributes, CampStatus, Capability, Coins, PlayerState, Position as WorldPosition,
-    PostureState, SpawnKind, SpawnState, WorldEvent,
+    BaseAttributes, CampStatus, Capability, Coins, ItemHitPoints, PlayerState,
+    Position as WorldPosition, PostureState, SpawnKind, SpawnState, WorldEvent,
 };
 
 /// Messages crossing the worker/presentation boundary. Queues are bounded by the host.
@@ -81,7 +81,7 @@ pub enum WorldUpdate {
         /// Index into the user's installed `eqstr_us.txt`.
         string_id: u32,
         /// Ordered `%1`, `%2`, ... substitutions supplied by the server.
-        arguments: Vec<String>,
+        arguments: Vec<chat::RichText>,
         /// The message type the server gave it, by which the official client
         /// colours its line; None where a generation's layout is not checked.
         message_type: Option<u32>,

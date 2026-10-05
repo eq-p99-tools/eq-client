@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashSet};
 /// official client's log never takes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Said {
-    pub text: String,
+    pub words: eq_client_core::chat::RichText,
     pub source: Source,
 }
 
@@ -25,7 +25,7 @@ impl Said {
     /// The official client's words.
     pub(crate) fn official(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            words: text.into().into(),
             source: Source::Official,
         }
     }
@@ -33,7 +33,7 @@ impl Said {
     /// This client's own words.
     pub(crate) fn own(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            words: text.into().into(),
             source: Source::Client,
         }
     }
@@ -54,7 +54,7 @@ impl From<&str> for Said {
 
 /// A locally produced line in the System channel.
 pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
-    let Said { text, source } = said.into();
+    let Said { words, source } = said.into();
     ChatLine {
         channel: ChannelName::System,
         message_type: None,
@@ -63,8 +63,8 @@ pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
         message: Message {
             message: None,
             message_hex: None,
-            text,
-            item_links: Vec::new(),
+            text: words.text,
+            item_links: words.item_links,
         },
         source,
     }
@@ -135,18 +135,18 @@ impl ChatState {
     }
 
     fn refuse_at(&mut self, said: Said, now: std::time::Instant) {
-        if said.text.is_empty() {
+        if said.words.text.is_empty() {
             return;
         }
         let refusals = &mut self.refusals;
         if !refusals.says_repeats
             && refusals.last.as_ref().is_some_and(|(text, at)| {
-                *text == said.text && now.saturating_duration_since(*at) < REPEATED
+                *text == said.words.text && now.saturating_duration_since(*at) < REPEATED
             })
         {
             return;
         }
-        refusals.last = Some((said.text.clone(), now));
+        refusals.last = Some((said.words.text.clone(), now));
         self.history.push(system_line(said));
     }
 }

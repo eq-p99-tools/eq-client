@@ -2,7 +2,7 @@
 //! last reported them, and the HP equipped items add, which the client works
 //! out when a report leaves it out.
 use crate::{
-    PlayerState,
+    ItemHitPoints, PlayerState,
     inventory::Inventory,
     resources::{eqemu_equipped_modifiers, eqemu_item_hit_points},
 };
@@ -14,8 +14,9 @@ pub struct ReportedHp {
     pub current: i32,
     /// Maximum HP.
     pub maximum: i32,
-    /// Both leave out what equipped items add, which the client adds back.
-    pub without_items: bool,
+    /// Which values leave out what equipped items add, which the client
+    /// adds back.
+    pub items: ItemHitPoints,
 }
 
 /// The player's HP, mana, endurance and experience as last reported.
@@ -45,30 +46,32 @@ impl Vitals {
     }
 
     /// The HP to show, current and maximum: the last report, adding back what
-    /// equipped items give when the report leaves it out (unknown item HP
+    /// equipped items give to whichever values leave it out (unknown item HP
     /// counts as none). A dead player has none left.
     pub(super) fn hit_points(&self, dead: bool) -> Option<(u32, u32)> {
         let report = self.reported_hp?;
-        let items = if report.without_items {
-            self.item_hp.unwrap_or(0)
-        } else {
-            0
+        let items = self.item_hp.unwrap_or(0);
+        let to_maximum = match report.items {
+            ItemHitPoints::LeftOut => items,
+            ItemHitPoints::LeftOutOfCurrent => 0,
         };
+        let to_current = items;
         let current = if dead {
             0
         } else {
-            i64::from(report.current) + items
+            i64::from(report.current) + to_current
         };
-        let maximum = i64::from(report.maximum) + items;
+        let maximum = i64::from(report.maximum) + to_maximum;
         let shown = |value: i64| u32::try_from(value.max(0)).unwrap_or(u32::MAX);
         Some((shown(current), shown(maximum)))
     }
 
-    /// Works out what equipped items add again when the last report leaves it
-    /// out, keeping the last figure when the inventory cannot tell, as a gear
-    /// change alone brings no new report. Returns whether it changed.
+    /// Works out what equipped items add again once a report has come, as
+    /// every report leaves it out of at least its current, keeping the last
+    /// figure when the inventory cannot tell, as a gear change alone brings
+    /// no new report. Returns whether it changed.
     pub(super) fn refresh_item_hp(&mut self, player: &PlayerState, inventory: &Inventory) -> bool {
-        if !self.reported_hp.is_some_and(|report| report.without_items) {
+        if self.reported_hp.is_none() {
             return false;
         }
         let Some(items) = item_hit_points(player, inventory) else {
@@ -105,12 +108,12 @@ fn item_hit_points(player: &PlayerState, inventory: &Inventory) -> Option<i64> {
 mod tests {
     use super::*;
 
-    fn reported(current: i32, maximum: i32, without_items: bool) -> Vitals {
+    fn reported(current: i32, maximum: i32, items: ItemHitPoints) -> Vitals {
         Vitals {
             reported_hp: Some(ReportedHp {
                 current,
                 maximum,
-                without_items,
+                items,
             }),
             item_hp: Some(25),
             ..Vitals::default()
@@ -118,13 +121,21 @@ mod tests {
     }
 
     #[test]
-    fn item_hp_is_added_back_only_when_the_report_leaves_it_out() {
-        assert_eq!(reported(50, 100, true).hit_points(false), Some((75, 125)));
-        assert_eq!(reported(50, 100, false).hit_points(false), Some((50, 100)));
+    fn item_hp_is_added_back_only_where_the_report_leaves_it_out() {
+        use ItemHitPoints::{LeftOut, LeftOutOfCurrent};
+        assert_eq!(
+            reported(50, 100, LeftOut).hit_points(false),
+            Some((75, 125))
+        );
+        // EQMac's own update counts item HP in the maximum already.
+        assert_eq!(
+            reported(50, 100, LeftOutOfCurrent).hit_points(false),
+            Some((75, 100))
+        );
         // Unknown item HP counts as none.
         let unknown = Vitals {
             item_hp: None,
-            ..reported(50, 100, true)
+            ..reported(50, 100, LeftOut)
         };
         assert_eq!(unknown.hit_points(false), Some((50, 100)));
         assert_eq!(Vitals::default().hit_points(false), None);
@@ -132,8 +143,13 @@ mod tests {
 
     #[test]
     fn the_dead_have_no_hp_left_and_negative_reports_show_none() {
-        assert_eq!(reported(50, 100, true).hit_points(true), Some((0, 125)));
-        assert_eq!(reported(-40, 100, false).hit_points(false), Some((0, 100)));
+        use ItemHitPoints::{LeftOut, LeftOutOfCurrent};
+        assert_eq!(reported(50, 100, LeftOut).hit_points(true), Some((0, 125)));
+        // Below zero even with the items' 25 added back.
+        assert_eq!(
+            reported(-40, 100, LeftOutOfCurrent).hit_points(false),
+            Some((0, 100))
+        );
         assert_eq!(percent((0, 125)), Some(0));
         assert_eq!(percent((75, 125)), Some(60));
         assert_eq!(percent((130, 125)), Some(100));
