@@ -19,6 +19,11 @@ pub(super) struct Wardrobe(HashMap<Look, Option<Handle<StandardMaterial>>>);
 type Gpu<'a, 'b> = (&'a mut Assets<Image>, &'b mut Assets<StandardMaterial>);
 
 impl Wardrobe {
+    /// Releases admission-local cached materials; active entities retain their handles.
+    pub(super) fn clear(&mut self) {
+        self.0.clear();
+    }
+
     /// The material for a primitive whose base-look material is `base_name`;
     /// `helm` says it is on a helmed head.
     fn material(

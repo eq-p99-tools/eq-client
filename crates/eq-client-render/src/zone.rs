@@ -90,6 +90,8 @@ pub(super) struct Scene<'w, 's> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
     nearby: Option<ResMut<'w, super::entities::NearbyEntities>>,
+    wardrobe: Option<ResMut<'w, super::outfit::Wardrobe>>,
+    items: Option<ResMut<'w, super::item_models::ItemLibrary>>,
 }
 
 impl Scene<'_, '_> {
@@ -100,8 +102,16 @@ impl Scene<'_, '_> {
             reason,
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
         );
-        if gone && let Some(nearby) = self.nearby.as_mut() {
-            nearby.forget(commands);
+        if gone {
+            if let Some(nearby) = self.nearby.as_mut() {
+                nearby.forget(commands);
+            }
+            if let Some(wardrobe) = self.wardrobe.as_mut() {
+                wardrobe.clear();
+            }
+            if let Some(items) = self.items.as_mut() {
+                items.clear_shapes();
+            }
         }
     }
 

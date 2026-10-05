@@ -15,7 +15,7 @@ pub(super) struct Shape {
 }
 
 /// The installed item models, opened when the first one is needed, and the
-/// shapes already built, which outlive zones.
+/// shapes built during the current admission. Archive access can outlive zones.
 #[derive(Resource, Default)]
 pub(super) struct ItemLibrary {
     models: Option<eq_client_assets::items::ItemModels>,
@@ -38,6 +38,11 @@ pub(super) type Gpu<'a, 'b, 'c> = (
 );
 
 impl ItemLibrary {
+    /// Releases cached GPU shapes while keeping the installed archive open.
+    pub(super) fn clear_shapes(&mut self) {
+        self.shapes.clear();
+    }
+
     /// A model's shape, such as `IT63`, built on first use; None when not installed.
     pub(super) fn shape(
         &mut self,
@@ -101,4 +106,30 @@ pub(super) fn bounds<'a>(points: impl Iterator<Item = &'a [f32; 3]>) -> Option<(
                 (min.min(point), max.max(point))
             }))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn leaving_releases_cached_shapes_but_not_active_owners() {
+        let mut library = ItemLibrary::default();
+        library.insert(
+            "IT1",
+            Shape {
+                primitives: Vec::new(),
+                bounds: None,
+                flat: false,
+            },
+        );
+        let active = library.shapes["IT1"].as_ref().unwrap().clone();
+        let lifetime = Arc::downgrade(&active);
+        library.clear_shapes();
+        assert!(library.shapes.is_empty());
+        assert!(library.opened);
+        assert!(lifetime.upgrade().is_some());
+        drop(active);
+        assert!(lifetime.upgrade().is_none());
+    }
 }
