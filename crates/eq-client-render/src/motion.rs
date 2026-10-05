@@ -23,7 +23,7 @@ pub(super) struct Controls {
     pub walk_speed: Option<f32>,
     pub strafe_speed: Option<f32>,
     pub walking: bool,
-    pub waiting: bool,
+    waiting: bool,
     pub last_accepted: Instant,
     queued_at: Instant,
     moving: bool,
@@ -156,6 +156,27 @@ impl Controls {
             ..Self::default()
         };
     }
+
+    /// Stops prediction without revoking the session's calibration. A pending
+    /// proposal still owns the movement slot until its result or a reset arrives.
+    fn pause_prediction(&mut self) {
+        self.moving = false;
+        self.cycle = 0.1;
+        self.visual = None;
+        self.taps = TapBuffer::default();
+        self.jump = None;
+        self.last_accepted = Instant::now();
+    }
+
+    /// A full queue sent nothing and can be retried with a fresh bounded sample.
+    /// Other refusals invalidate the admission/capability as before.
+    fn send_failed(&mut self, reason: crate::outbox::Refusal) {
+        if reason == crate::outbox::Refusal::Busy {
+            self.pause_prediction();
+        } else {
+            self.reset(None);
+        }
+    }
     /// Continuous motion covers the whole cycle, including the proposal round trip;
     /// a fresh start covers at most 0.1 s so an idle gap never becomes a jump.
     fn span(&self, elapsed: Duration) -> f32 {
@@ -279,7 +300,7 @@ pub(super) fn input(
         .observe(&keyboard, &map.movement_keys(), focused, now);
     if controls.waiting {
         if now.duration_since(controls.queued_at) > Duration::from_millis(250) {
-            controls.reset(None);
+            controls.pause_prediction();
         }
         return;
     }
@@ -295,27 +316,19 @@ pub(super) fn input(
     ) else {
         return;
     };
-    // A request the outbox refuses resets the motion it would have made;
-    // the outbox says why.
-    let request = |command: fn(crate::outbox::Stamp) -> ClientCommand| {
-        outbox.post(online.world(), command).is_ok()
-    };
     if let Some(player) = online.world().player() {
         let position = player.position;
         let boundary = online
             .regions
             .zone_line_at(eq_client_core::render_position(position));
         if let Some(destination) = controls.boundary.observe(boundary) {
-            if outbox
-                .post(online.world(), |stamp| ClientCommand::CrossZoneLine {
-                    session_id: stamp.session_id,
-                    destination,
-                    position,
-                    created: stamp.created,
-                })
-                .is_err()
-            {
-                controls.reset(None);
+            if let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::CrossZoneLine {
+                session_id: stamp.session_id,
+                destination,
+                position,
+                created: stamp.created,
+            }) {
+                controls.send_failed(reason);
             } else {
                 controls.waiting = true;
                 controls.queued_at = now;
@@ -352,6 +365,7 @@ pub(super) fn input(
     let span = controls.span(elapsed);
     let delta = direction * speed * span;
     let jump = controls.jump.take().is_some();
+    let previous_airborne = controls.airborne.clone();
     let (landing, mode, jumped) = match controls.airborne.as_mut() {
         Some(airborne) => {
             let rising = airborne.velocity() > 0.0;
@@ -369,12 +383,13 @@ pub(super) fn input(
     };
     // The server charges the jump's endurance; the arc travels in position updates.
     if jumped
-        && !request(|stamp| ClientCommand::Jump {
+        && let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::Jump {
             session_id: stamp.session_id,
             created: stamp.created,
         })
     {
-        controls.reset(None);
+        controls.airborne = previous_airborne;
+        controls.send_failed(reason);
         return;
     }
     let position = landing + Vec3::Y * body.feet_offset;
@@ -396,8 +411,9 @@ pub(super) fn input(
             created: stamp.created,
         })
     });
-    if sent.is_err() {
-        controls.reset(None);
+    if let Err(reason) = sent {
+        controls.airborne = previous_airborne;
+        controls.send_failed(reason);
         return;
     }
     // A landing's damage follows the sample that lands.
@@ -1094,8 +1110,58 @@ mod tests {
         let mut controls = app.world_mut().resource_mut::<Controls>();
         controls.queued_at = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
         app.update();
-        assert!(app.world().resource::<Controls>().speed.is_none());
+        assert!(app.world().resource::<Controls>().speed.is_some());
+        assert!(app.world().resource::<Controls>().waiting);
         assert!(receiver.try_recv().is_err());
+        // A late answer releases only the proposal; the grant was never lost.
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.accepted();
+        controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        app.update();
+        let ClientCommand::Move(resumed) = receiver.try_recv().unwrap() else {
+            panic!("expected resumed movement")
+        };
+        // Delay does not accumulate distance to catch up.
+        assert!((resumed.position.x - request.position.x).abs() < 0.0001);
+    }
+
+    #[test]
+    fn a_full_queue_preserves_the_grant_and_retries_after_drain() {
+        let (mut app, _) = app();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .send(ClientCommand::SelectTarget {
+                session_id: 11,
+                spawn_id: None,
+            })
+            .unwrap();
+        app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+        app.update();
+        assert!(app.world().resource::<Controls>().speed.is_some());
+        assert!(!app.world().resource::<Controls>().waiting);
+        receiver.try_recv().unwrap();
+        app.world_mut().resource_mut::<Controls>().last_accepted =
+            Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected retry")
+        };
+        assert!((request.position.x + 0.6).abs() < 0.0001);
+        assert!(app.world().resource::<Controls>().waiting);
+    }
+
+    #[test]
+    fn admission_reset_cannot_be_undone_by_a_late_result() {
+        let mut controls = Controls {
+            speed: Some(6.0),
+            waiting: true,
+            ..default()
+        };
+        controls.reset(None);
+        controls.accepted();
+        assert!(controls.speed.is_none());
+        controls.send_failed(crate::outbox::Refusal::Ended);
+        assert!(controls.speed.is_none());
     }
 
     #[test]
