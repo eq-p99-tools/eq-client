@@ -295,6 +295,17 @@ mod tests {
         assert!(!after(&mut app, 0.5));
     }
 
+    /// Loads the admitted zone's scene in the background until `release`
+    /// is used, and takes it once it is done, as the next batch does.
+    fn load_scene(app: &mut App, release: std::sync::mpsc::Sender<()>) {
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !testing::take_scene(&mut online(app)) {
+            assert!(std::time::Instant::now() < deadline, "the load never ended");
+            std::thread::yield_now();
+        }
+    }
+
     #[test]
     fn the_cover_waits_for_the_zone_to_load_but_not_for_ever() {
         let mut app = app(true);
@@ -303,12 +314,7 @@ mod tests {
         assert!(after(&mut app, 0.0));
         // The spawns' limit counts from the scene, not the admission.
         assert!(after(&mut app, MOST + 1.0));
-        release.send(()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !testing::take_scene(&mut online(&mut app)) {
-            assert!(std::time::Instant::now() < deadline, "the load never ended");
-            std::thread::yield_now();
-        }
+        load_scene(&mut app, release);
         assert!(after(&mut app, 0.0));
         assert!(after(&mut app, 0.1));
         assert!(!after(&mut app, SETTLE));
@@ -319,6 +325,22 @@ mod tests {
         assert!(after(&mut app, 0.0));
         assert!(after(&mut app, STUCK - 1.0));
         assert!(!after(&mut app, 2.0));
+    }
+
+    #[test]
+    fn spawns_that_never_all_come_in_hold_the_cover_at_most_after_the_scene() {
+        let mut app = app(true);
+        app.init_resource::<crate::entities::NearbyEntities>();
+        testing::admit(&mut online(&mut app), 1, testing::player(7));
+        let release = testing::hold_scene(&mut online(&mut app));
+        assert!(after(&mut app, 0.0));
+        assert!(after(&mut app, 2.0));
+        load_scene(&mut app, release);
+        // A model that never loads leaves the spawns unsettled, and the
+        // cover still lifts once it has waited its most after the scene.
+        assert!(after(&mut app, 0.0));
+        assert!(after(&mut app, MOST - 0.5));
+        assert!(!after(&mut app, 1.0));
     }
 
     #[test]
