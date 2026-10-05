@@ -59,12 +59,9 @@ pub(super) struct RemoteEntity {
     report: Option<(eq_client_core::WorldPosition, [f32; 3], std::time::Instant)>,
 }
 
-/// The stores a drawn spawn's meshes, textures and materials go in.
-type Stores<'a> = (
-    &'a mut Assets<Image>,
-    &'a mut Assets<Mesh>,
-    &'a mut Assets<StandardMaterial>,
-);
+/// The stores a drawn spawn's meshes and materials go in; its model's
+/// textures went in when the model was read.
+type Stores<'a> = (&'a mut Assets<Mesh>, &'a mut Assets<StandardMaterial>);
 
 /// Maintains a bounded nearby set. Out in the open, at most one new model is
 /// instantiated every tenth of a second; behind the loading screen, as many
@@ -175,7 +172,7 @@ pub(super) fn reconcile(
             directory,
             id,
             &mut nearby_state,
-            (&mut images, &mut meshes, &mut materials),
+            (&mut meshes, &mut materials),
         ) {
             drawn += 1;
         }
@@ -193,7 +190,7 @@ fn draw(
     directory: &std::path::Path,
     id: u16,
     nearby_state: &mut NearbyEntities,
-    (images, meshes, materials): Stores,
+    (meshes, materials): Stores,
 ) -> bool {
     let spawn = &state.world().spawns()[&id].state;
     let model = races::model(spawn.race, spawn.gender);

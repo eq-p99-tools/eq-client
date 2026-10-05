@@ -123,7 +123,8 @@ fn track(
     } else if admission != loading.admission {
         // A new admission brings its zone. None means the player camped or
         // the connection dropped, and character select has its own cover.
-        admission.map_or(Phase::Clear, |_| Phase::Arriving(now, None))
+        let drawn = (!online.scene_loading()).then_some(now);
+        admission.map_or(Phase::Clear, |_| Phase::Arriving(now, drawn))
     } else if world.pending_transfer().is_some() {
         match loading.phase {
             Phase::Moving(since) if now - since >= STUCK => Phase::Stuck,
@@ -317,7 +318,7 @@ mod tests {
         let _held = testing::hold_scene(&mut online(&mut app));
         assert!(after(&mut app, 0.0));
         assert!(after(&mut app, STUCK - 1.0));
-        assert!(!after(&mut app, 1.0));
+        assert!(!after(&mut app, 2.0));
     }
 
     #[test]

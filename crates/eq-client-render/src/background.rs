@@ -22,7 +22,9 @@ impl<T: Send + 'static> Background<T> {
 
     /// Whether this admission's job has yet to hand over its result.
     pub(crate) fn pending(&self, admission: Option<u64>) -> bool {
-        self.task.as_ref().is_some_and(|(id, _)| Some(*id) == admission)
+        self.task
+            .as_ref()
+            .is_some_and(|(id, _)| Some(*id) == admission)
     }
 
     /// Obsolete results are discarded without waiting for their read to finish.
