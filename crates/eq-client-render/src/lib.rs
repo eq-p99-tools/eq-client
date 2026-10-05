@@ -28,6 +28,7 @@ mod inventory;
 mod item_models;
 mod items;
 mod keys;
+mod loading;
 mod logs;
 mod map;
 mod motion;
@@ -63,6 +64,7 @@ mod tradeskills;
 mod training;
 mod whereabouts;
 mod who;
+mod window_size;
 mod windows;
 mod zone;
 
@@ -161,8 +163,11 @@ pub struct ViewerConfig {
     pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
     pub window_position: Option<(i32, i32)>,
-    /// Add the developer's readings to the status box: coordinates, the
-    /// movement mode with its keys, and the count of nearby entities.
+    /// Optional size of the window's drawing area in physical pixels.
+    pub window_size: Option<(u32, u32)>,
+    /// Add the developer's readings to the status box: the zone's short
+    /// name, coordinates, the movement mode with its keys, and the count of
+    /// nearby entities.
     pub debug_overlay: bool,
 }
 
@@ -265,7 +270,13 @@ pub fn run(
     }
     let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
-    let window = primary_window(online, screenshot.is_none(), config.window_position);
+    let window_size = config.window_size;
+    let window = primary_window(
+        online,
+        screenshot.is_none(),
+        config.window_position,
+        window_size,
+    );
     let mut app = App::new();
     let (updates, commands) = match source {
         Source::Online { updates, commands } => (Some(updates), Some(commands)),
@@ -305,6 +316,10 @@ pub fn run(
     navigation::install(&mut app);
     frame_limit::install(&mut app);
     attention::install(&mut app);
+    if let Some(size) = window_size {
+        window_size::install(&mut app, size);
+    }
+    loading::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
         install_script(&mut app, steps, follow, (local_session, online));
@@ -683,7 +698,12 @@ fn install_overlays(app: &mut App) {
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
-fn primary_window(online: bool, visible: bool, position: Option<(i32, i32)>) -> Window {
+fn primary_window(
+    online: bool,
+    visible: bool,
+    position: Option<(i32, i32)>,
+    size: Option<(u32, u32)>,
+) -> Window {
     Window {
         title: if online {
             "eq-client"
@@ -695,6 +715,7 @@ fn primary_window(online: bool, visible: bool, position: Option<(i32, i32)>) -> 
         position: position.map_or(WindowPosition::Automatic, |(x, y)| {
             WindowPosition::At(IVec2::new(x, y))
         }),
+        resolution: size.map(window_size::resolution).unwrap_or_default(),
         ..default()
     }
 }
@@ -1288,8 +1309,9 @@ fn camera_relative_direction(horizontal: f32, vertical: f32, yaw: f32) -> Vec3 {
     (right * horizontal + forward * vertical).normalize_or_zero()
 }
 
-/// Shows the zone, the status line and what the player can use here; the
-/// developer's readings only when the debug overlay is on.
+/// Shows the status line and what the player can use here, and the
+/// developer's readings (the zone's short name among them) only when the
+/// debug overlay is on. With nothing to show, the box hides.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn update_hud(
     motion: Res<motion::Controls>,
@@ -1302,12 +1324,13 @@ fn update_hud(
     nearby: Res<entities::NearbyEntities>,
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
-    mut labels: Query<&mut Text, With<HudText>>,
+    mut labels: Query<(&mut Text, &mut Visibility), With<HudText>>,
 ) {
-    let (Ok(player), Ok(mut label)) = (players.single(), labels.single_mut()) else {
+    let (Ok(player), Ok((mut label, mut visibility))) = (players.single(), labels.single_mut())
+    else {
         return;
     };
-    let mut lines = vec![scene.zone_name.clone(), notices.status.text().to_owned()];
+    let mut lines = vec![notices.status.text().to_owned()];
     if online.enabled && online.in_world() && motion.speed.is_none() {
         lines.push("Movement unavailable: start with --movement-calibration".into());
     }
@@ -1320,6 +1343,7 @@ fn update_hud(
         None => String::new(),
     });
     if settings.0.debug_overlay {
+        lines.push(scene.zone_name.clone());
         let position = world_position(player.translation.to_array(), 0.0);
         lines.push(format!(
             "{:.0}, {:.0}, {:.0}",
@@ -1336,6 +1360,16 @@ fn update_hud(
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
+    // The official client has no such box, so it shows only while it has
+    // something to say.
+    let wanted = if text.is_empty() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    if *visibility != wanted {
+        *visibility = wanted;
+    }
     if label.0 != text {
         label.0 = text;
     }
@@ -1502,6 +1536,49 @@ fn unobstructed_orbit(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_status_box_shows_only_while_it_has_something_to_say() {
+        use super::*;
+        let mut app = testing::app();
+        app.insert_resource(SceneInfo {
+            zone_name: "qeytoqrg".into(),
+        })
+        .add_systems(Update, update_hud);
+        app.world_mut().spawn((Player, Transform::default()));
+        let status = app
+            .world_mut()
+            .spawn((HudText, Text::new(""), Visibility::Inherited))
+            .id();
+        let shown = |app: &mut App| {
+            app.update();
+            let text = app.world().get::<Text>(status).unwrap().0.clone();
+            let visibility = *app.world().get::<Visibility>(status).unwrap();
+            (text, visibility)
+        };
+        // Nothing to say: no zone name, and no box.
+        assert_eq!(shown(&mut app), (String::new(), Visibility::Hidden));
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .status
+            .set("Camped - choose a character");
+        assert_eq!(
+            shown(&mut app),
+            ("Camped - choose a character".into(), Visibility::Inherited)
+        );
+        // The developer's readings name the zone.
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .status
+            .set("");
+        app.world_mut()
+            .resource_mut::<ViewerSettings>()
+            .0
+            .debug_overlay = true;
+        let (text, visibility) = shown(&mut app);
+        assert!(text.starts_with("qeytoqrg\n"), "{text}");
+        assert_eq!(visibility, Visibility::Inherited);
+    }
+
     #[test]
     #[allow(
         clippy::float_cmp,
