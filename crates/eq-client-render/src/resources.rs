@@ -1,9 +1,6 @@
 //! Explicitly approximate Titanium capacities, invalidated when inputs are incomplete.
 use super::{ViewerSettings, hud::HudState, online::OnlineState, spellbook::SpellNames};
 use bevy::prelude::*;
-use eq_client_core::resources::{
-    EffectiveAttributes, eqemu_equipped_modifiers, eqemu_titanium_base,
-};
 
 /// Recomputes from current admission data; never carries a maximum across a disconnect.
 #[allow(clippy::needless_pass_by_value)]
@@ -27,184 +24,45 @@ pub(super) fn update(
     };
 }
 
-/// Combines supported direct modifiers under pre-SoF assumptions, not server confirmation.
+/// Supplies complete spell modifiers to the engine-independent estimator.
+impl eq_client_core::resources::ResourceSpells for SpellNames {
+    fn preserves_capacities(&self, spell: u32) -> bool {
+        self.mechanics(spell)
+            .is_some_and(eq_client_assets::spells::Mechanics::preserves_mana_and_endurance_capacity)
+    }
+    fn resource_bonuses(
+        &self,
+        spell: u32,
+        level: u16,
+    ) -> Option<eq_client_core::resources::ResourceBonuses> {
+        let projection = self.mechanics(spell)?.resource_projection(level);
+        if !projection.unresolved.is_empty() {
+            return None;
+        }
+        let b = projection.modifiers;
+        Some(eq_client_core::resources::ResourceBonuses {
+            strength: b.strength,
+            stamina: b.stamina,
+            dexterity: b.dexterity,
+            agility: b.agility,
+            intelligence: b.intelligence,
+            wisdom: b.wisdom,
+            mana: b.mana,
+            endurance: b.endurance,
+        })
+    }
+}
+
+/// Adapts a complete estimate to the optional pair the HUD displays.
 fn estimate(
     player: &eq_client_core::PlayerState,
     inventory: &eq_client_core::inventory::Inventory,
     world: &eq_client_core::world::ClientWorld,
     names: &SpellNames,
 ) -> Option<(u32, u32)> {
-    let base = player.base_attributes?;
-    let class = player.class?;
-    // Higher-level stat caps/AA contributions remain unresolved.
-    if player.level > 60 {
-        return None;
-    }
-    let buffs = world.buffs().slots()?;
-    // Unknown slots may replace existing buffs. Preserve an estimate only when
-    // every possible participant leaves both capacities unchanged, regardless
-    // of stacking, level, duration or instrument scaling.
-    let uncertain_slots = !world.buffs().effects().is_empty();
-    if uncertain_slots && !capacity_independent_buffs(world, names) {
-        return None;
-    }
-    let equipment =
-        eqemu_equipped_modifiers(inventory, class, player.race, u16::from(player.level)).ok()?;
-    let mut totals = [
-        i64::from(base.strength),
-        i64::from(base.stamina),
-        i64::from(base.dexterity),
-        i64::from(base.agility),
-        i64::from(base.intelligence),
-        i64::from(base.wisdom),
-        0,
-        0,
-    ];
-    // Stat-bearing food/drink has separate selection/consumption rules not yet evaluated.
-    // Include pre-prediction contents: picking up stat food must not hide its
-    // unresolved contribution merely because it has disappeared from carried slots.
-    for item in inventory
-        .items()
-        .values()
-        .chain(inventory.prediction_origins().filter_map(|(_, item)| item))
-        .filter(|item| item.slot.is_carried() && matches!(item.rules.item_type, 14 | 15))
-    {
-        if item.details.bonuses? != eq_client_core::ItemBonuses::default()
-            || item.details.equipment?.worn.is_some()
-        {
-            return None;
-        }
-    }
-    for (_, item) in equipment {
-        let b = item.bonuses;
-        add(
-            &mut totals,
-            [
-                b.strength,
-                b.stamina,
-                b.dexterity,
-                b.agility,
-                b.intelligence,
-                b.wisdom,
-                b.mana,
-                b.endurance,
-            ]
-            .map(i64::from),
-        )?;
-        if let Some(worn) = item.worn {
-            if worn.effect_type != 2 {
-                return None;
-            }
-            add_spell(
-                &mut totals,
-                names,
-                worn.spell_id,
-                u16::try_from(worn.level).ok()?,
-            )?;
-        }
-    }
-    if !uncertain_slots {
-        add_buffs(&mut totals, names, buffs.values())?;
-    }
-    let stat = |index: usize| u32::try_from(totals[index].clamp(1, 255)).ok();
-    let base = eqemu_titanium_base(
-        class,
-        u16::from(player.level),
-        EffectiveAttributes {
-            strength: stat(0)?,
-            stamina: stat(1)?,
-            dexterity: stat(2)?,
-            agility: stat(3)?,
-            intelligence: stat(4)?,
-            wisdom: stat(5)?,
-        },
-    )?;
-    let maximum = |base: u64, bonus: i64| {
-        u32::try_from(i64::try_from(base).ok()?.checked_add(bonus)?.max(0)).ok()
-    };
-    let mana = if eq_client_core::resources::ManaAttribute::for_class(class)?
-        == eq_client_core::resources::ManaAttribute::None
-    {
-        0
-    } else {
-        maximum(base.mana, totals[6])?
-    };
-    let endurance = maximum(base.endurance, totals[7])?;
-    if world.vitals().mana.is_some_and(|value| value > mana)
-        || world
-            .vitals()
-            .endurance
-            .is_some_and(|value| value > endurance)
-    {
-        return None;
-    }
-    Some((mana, endurance))
-}
-
-/// Checks both incoming effects and the buffs they might replace.
-fn capacity_independent_buffs(
-    world: &eq_client_core::world::ClientWorld,
-    names: &SpellNames,
-) -> bool {
-    world
-        .buffs()
-        .slots()
-        .iter()
-        .flat_map(|buffs| buffs.values())
-        .map(|buff| buff.spell_id)
-        .chain(world.buffs().effects().keys().map(|id| u32::from(*id)))
-        .all(|id| {
-            names.mechanics(id).is_some_and(
-                eq_client_assets::spells::Mechanics::preserves_mana_and_endurance_capacity,
-            )
-        })
-}
-
-/// Applies confirmed buff modifiers when slot membership is resolved.
-fn add_buffs<'a>(
-    totals: &mut [i64; 8],
-    names: &SpellNames,
-    buffs: impl Iterator<Item = &'a eq_client_core::Buff>,
-) -> Option<()> {
-    for buff in buffs {
-        // Instrument modifiers require effect-specific handling; ten is unmodified.
-        if buff.bard_modifier != 10 {
-            return None;
-        }
-        add_spell(totals, names, buff.spell_id, u16::from(buff.caster_level))?;
-    }
-    Some(())
-}
-
-fn add(totals: &mut [i64; 8], values: [i64; 8]) -> Option<()> {
-    for (total, value) in totals.iter_mut().zip(values) {
-        *total = total.checked_add(value)?;
-    }
-    Some(())
-}
-
-fn add_spell(totals: &mut [i64; 8], names: &SpellNames, id: u32, level: u16) -> Option<()> {
-    if level == 0 {
-        return None;
-    }
-    let projection = names.mechanics(id)?.resource_projection(level);
-    if !projection.unresolved.is_empty() {
-        return None;
-    }
-    let b = projection.modifiers;
-    add(
-        totals,
-        [
-            b.strength,
-            b.stamina,
-            b.dexterity,
-            b.agility,
-            b.intelligence,
-            b.wisdom,
-            b.mana,
-            b.endurance,
-        ],
-    )
+    eq_client_core::resources::estimate_titanium(player, inventory, world, names)
+        .ok()
+        .map(|capacity| (capacity.mana, capacity.endurance))
 }
 
 #[cfg(test)]
@@ -361,6 +219,15 @@ mod tests {
         assert_eq!(
             estimate(&player(), &inventory, &world, &SpellNames::default()),
             None
+        );
+        assert_eq!(
+            eq_client_core::resources::estimate_titanium(
+                &player(),
+                &inventory,
+                &world,
+                &SpellNames::default(),
+            ),
+            Err(eq_client_core::resources::EstimateUnavailable::Spell(42))
         );
         let confirmed = world.buffs().slots().unwrap()[&0].clone();
         tell(

@@ -233,10 +233,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
     let status = |text: String| vec![(Place::Status, Said::own(text))];
     match notice {
         Notice::Connection { link, dead } => status(connection_text(*link, *dead)),
-        Notice::ServerString { id, arguments, .. } => chat(messages.map_or_else(
-            || Said::own(format!("Server message {id}")),
-            |messages| messages.said(*id, arguments),
-        )),
+        Notice::ServerString { id, arguments, .. } => chat(
+            messages
+                .unwrap_or(&Messages::default())
+                .linked(*id, arguments),
+        ),
         Notice::Consideration {
             consideration,
             name,
@@ -329,6 +330,15 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         ]
         .concat(),
         Notice::ZoneLineRefused(reason) => chat(format!("Cannot cross zone line: {reason}").into()),
+        // eqstr 12357, naming the zone, where the installation has it.
+        // Inferred: that the official client says it on every arrival,
+        // Enter World included, as a system line.
+        Notice::Arrived(zone) => chat(official(
+            Some(12357),
+            std::slice::from_ref(zone),
+            &format!("Arrived in {zone}."),
+            messages,
+        )),
         Notice::TargetRefused(reason) => chat(format!("Target rejected: {reason}").into()),
         Notice::CastRefused { spell_id, reason } => {
             chat(format!("Cast rejected (spell {spell_id}): {reason}").into())
@@ -1031,7 +1041,7 @@ mod tests {
                 .into_iter()
                 .map(|(place, line)| {
                     assert_eq!(place, Place::Chat);
-                    line.text
+                    line.words.text
                 })
                 .collect()
         };
@@ -1156,5 +1166,23 @@ mod tests {
             [(Place::Chat, "Server message 12293".into())]
         );
         assert_eq!(wording(&Notice::Camp(CampStatus::Camped), None), []);
+    }
+
+    #[test]
+    fn an_arrival_names_the_zone_in_the_installed_clients_words() {
+        let arrived = Notice::Arrived("The Qeynos Hills".into());
+        let messages = Messages::parse("EQST0002\n0 1\n12357 Test arrival: %1\n");
+        assert_eq!(
+            wording(&arrived, Some(&messages)),
+            [(
+                Place::Chat,
+                Said::official("Test arrival: The Qeynos Hills")
+            )]
+        );
+        // Without the installed strings, in this client's words.
+        assert_eq!(
+            wording(&arrived, None),
+            [(Place::Chat, Said::own("Arrived in The Qeynos Hills."))]
+        );
     }
 }

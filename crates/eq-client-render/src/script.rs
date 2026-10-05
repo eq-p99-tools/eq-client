@@ -266,6 +266,7 @@ type Observed<'w> = (
     Res<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,
     Res<'w, super::motion::Controls>,
+    Option<Res<'w, crate::loading::Loading>>,
 );
 
 type Input<'w> = (
@@ -450,15 +451,8 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "server state did not arrive");
                     return;
                 }
-                match &step {
-                    Step::WaitSelect => online.selection.is_some(),
-                    Step::WaitZone(zone) => {
-                        online.world().connected()
-                            && online.world().player().is_some()
-                            && online.world().zone() == *zone
-                    }
-                    _ => online.world().connected() && online.world().player().is_some(),
-                }
+                let covered = observed.5.as_ref().is_some_and(|loading| loading.covered());
+                arrived(&step, &online, covered)
             }
             Step::Click(target) | Step::RightClick(target) => {
                 if elapsed > MAX_WAIT {
@@ -981,9 +975,36 @@ fn face(
     Some(flat.length())
 }
 
+/// Whether what a wait step waits for has arrived: the character list, or
+/// the player in a zone, the one named if any, with the loading screen
+/// lifted so the next step acts on the zone and not on the cover.
+fn arrived(step: &Step, online: &super::online::OnlineState, covered: bool) -> bool {
+    let world = online.world();
+    let in_zone = world.connected() && world.player().is_some() && !covered;
+    match step {
+        Step::WaitSelect => online.selection.is_some(),
+        Step::WaitZone(zone) => in_zone && world.zone() == *zone,
+        _ => in_zone,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zone_wait_ends_once_the_loading_screen_has_lifted() {
+        let mut online = crate::online::OnlineState::new(true);
+        let zone = Step::WaitZone("qeytoqrg".into());
+        assert!(!arrived(&zone, &online, false));
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        // The zone is admitted, but the cover is still up.
+        assert!(!arrived(&zone, &online, true));
+        assert!(!arrived(&Step::WaitOnline, &online, true));
+        assert!(arrived(&zone, &online, false));
+        assert!(arrived(&Step::WaitOnline, &online, false));
+        assert!(!arrived(&Step::WaitZone("qeynos2".into()), &online, false));
+    }
 
     #[test]
     fn chat_steps_speak_only_on_a_local_server() {

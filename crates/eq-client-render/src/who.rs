@@ -93,8 +93,8 @@ fn line(player: &WhoPlayer, messages: &Messages) -> Said {
 /// A line without the spaces its string leaves at its end where an
 /// argument is empty.
 fn trimmed(mut said: Said) -> Said {
-    let end = said.text.trim_end().len();
-    said.text.truncate(end);
+    let end = said.words.text.trim_end().len();
+    said.words.text.truncate(end);
     said
 }
 
@@ -189,7 +189,7 @@ pub(super) fn zone_list(
         return;
     };
     let world = online.world();
-    let zone = zones::long_name(world.zone()).unwrap_or(world.zone());
+    let zone = world.zone_long_name();
     let empty = Messages::default();
     for line in zone_lines(
         &world.zone_who(&filter),
@@ -210,8 +210,8 @@ mod tests {
             .into_iter()
             .map(|said| {
                 let source = eq_client_core::chat::Source::Official;
-                assert_eq!(said.source, source, "{}", said.text);
-                said.text
+                assert_eq!(said.source, source, "{}", said.words.text);
+                said.words.text
             })
             .collect()
     }
