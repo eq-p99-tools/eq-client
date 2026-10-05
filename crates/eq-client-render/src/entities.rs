@@ -47,8 +47,9 @@ impl NearbyEntities {
 }
 
 /// How long a frame may spend drawing spawns while the loading screen hides
-/// them coming in. Out in the open, one is drawn every tenth of a second,
-/// so reading a new model from disk never stalls the picture for long.
+/// them coming in. Out in the open, one is drawn every tenth of a second.
+/// Either way a model is read from disk in the background, so a frame only
+/// puts the ones already read in place.
 const HURRIED: std::time::Duration = std::time::Duration::from_millis(40);
 
 #[derive(Component)]
@@ -86,13 +87,14 @@ pub(super) fn reconcile(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    scene: Option<Res<super::SceneInfo>>,
 ) {
     if !state.world().connected() {
         nearby_state.loading = None;
         return;
     }
-    if scene.is_some_and(|scene| scene.zone_name != state.world().zone()) {
+    // The spawns come once the zone has loaded, or failed to: one whose
+    // files are missing still shows its spawns.
+    if state.scene_loading() {
         return;
     }
     let Some(player) = state.world().player() else {

@@ -20,6 +20,11 @@ impl<T: Send + 'static> Background<T> {
         ));
     }
 
+    /// Whether this admission's job has yet to hand over its result.
+    pub(crate) fn pending(&self, admission: Option<u64>) -> bool {
+        self.task.as_ref().is_some_and(|(id, _)| Some(*id) == admission)
+    }
+
     /// Obsolete results are discarded without waiting for their read to finish.
     pub(crate) fn poll(&mut self, admission: Option<u64>) -> Option<T> {
         let (id, task) = self.task.as_mut()?;
@@ -76,7 +81,10 @@ mod tests {
     fn an_old_admission_cannot_install_its_result() {
         let mut job = Background::default();
         job.start(1, || 42);
+        assert!(job.pending(Some(1)));
+        assert!(!job.pending(Some(2)));
         assert_eq!(job.poll(Some(2)), None);
+        assert!(!job.pending(Some(1)));
         assert_eq!(job.poll(Some(1)), None);
     }
 }

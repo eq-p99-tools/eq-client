@@ -29,6 +29,12 @@ pub(super) struct OnlineState {
 }
 
 impl OnlineState {
+    /// Whether the admitted zone's scene is still loading in the background.
+    /// A zone whose files fail to load is not: its spawns still show.
+    pub(crate) fn scene_loading(&self) -> bool {
+        self.loading.pending(self.world.session_id())
+    }
+
     /// What the server has told the client.
     pub(super) fn world(&self) -> &ClientWorld {
         &self.world
@@ -593,6 +599,25 @@ pub(crate) mod testing {
         state
             .world
             .apply(&WorldUpdate::Connection(link), Instant::now(), &NoSpells);
+    }
+
+    /// Starts loading the admitted zone's scene in the background, as zone
+    /// entry does; it fails once the returned sender sends or drops.
+    pub(crate) fn hold_scene(state: &mut OnlineState) -> std::sync::mpsc::Sender<()> {
+        let (release, wait) = std::sync::mpsc::channel();
+        state
+            .loading
+            .start(state.world.session_id().unwrap_or_default(), move || {
+                let _ = wait.recv();
+                Err("Synthetic scene".into())
+            });
+        release
+    }
+
+    /// Takes the background load's result if it is done, as receiving the
+    /// next batch does; says whether it was.
+    pub(crate) fn take_scene(state: &mut OnlineState) -> bool {
+        state.loading.poll(state.world.session_id()).is_some()
     }
 
     /// Admits this player in this session, connected.
