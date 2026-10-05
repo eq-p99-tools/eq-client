@@ -149,12 +149,15 @@ pub struct Gauge {
     /// The text's offset from the gauge's top left.
     pub text_offset: (f32, f32),
     /// How far down the gauge the bar sits (`GaugeOffsetY`), 16 where the
-    /// skin leaves it out.
+    /// skin leaves it out. Below zero, the bar starts above the gauge, and a
+    /// thin gauge shows only the rows of it inside, as the default skin's
+    /// pet line does.
     pub bar_offset: f32,
-    /// Where the bar starts from the gauge's left (`GaugeOffsetX`); it runs
-    /// to the gauge's right edge, and its fill grows from here. Skins set it
-    /// below zero to show only part of a bar, as the Velious skin's hit
-    /// point bars change colour with each fifth.
+    /// Where the bar starts from the gauge's left (`GaugeOffsetX`): its left
+    /// end, then the bar its fill grows along, each piece at its own size.
+    /// Skins set it below zero to show only part of a bar, as the Velious
+    /// skin colours each fifth of its hit point bar with a gauge over that
+    /// fifth alone.
     pub bar_left: f32,
 }
 
