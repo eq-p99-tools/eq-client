@@ -42,7 +42,9 @@ For an intentional networking update:
 3. Run format, workspace Clippy, tests, and minimum-version/Windows checks.
 4. Exercise affected server scenarios with permission; record the exact client and
    network revisions, server policy, steps, duration and result. Keep credentials,
-   game assets, raw captures and account identifiers out of public evidence.
+   game assets, raw captures, account identifiers and the official client's text
+   out of public evidence; the client reads that text from the installation at
+   runtime by its string id.
 
 CI runs synthetic tests without proprietary assets or live logins. Ignored tests
 requiring an installation remain a separate, opt-in validation step. Windows CI
