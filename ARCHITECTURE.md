@@ -14,6 +14,12 @@ Share their rules and typed records rather than letting the UI mutate session
 state directly. Route commands through `Outbox`; do not add feature-specific
 network channels or raw opcode dispatch to widgets.
 
+What a control needs is a capability the session offers (`outbox::offered`),
+never a flag the client keeps per server. A control the server type lacks says
+"Not available on this server", and one this client lacks says "Not in this
+client yet". Official wording comes from the player's installed client by its
+eqstr id, with this client's own words only as the fallback.
+
 ## Ordered work and asynchronous outcomes
 
 The frame stages run receive, scene, typing, routing, gameplay input, then
@@ -28,11 +34,14 @@ placement when installing a scene. Keep graphics-resource mutation on the engine
 thread. Cache owners need a documented lifetime or budget, including failed-load
 entries; a process-wide map of strong handles is not an eviction policy.
 
-An enqueued command is not a successful action. Distinguish unsent/queue-busy,
-pending, timed-out with unknown outcome, refused, and settled states. A timeout
-does not authorize replaying a non-idempotent transaction. Retain enough identity
-to reconcile a late result; invalidate and resynchronize when it is ambiguous.
-Admission reset invalidates pending work, input prediction and asynchronous loads.
+An enqueued command is not a successful action. `Outbox` refuses what it cannot
+send, such as a command while the queue is full; what it sends settles only when
+the session reports the answer. The session holds what an operation uses until
+the answer settles it, and where a server refuses with silence, as `EQEmu`
+refuses a merchant offer, the hold ends after a timeout while a late answer
+still settles the operation it answers and nothing else. A timeout never
+authorizes resending a non-idempotent action. Admission reset invalidates
+pending work, input prediction and asynchronous loads.
 
 Keep the event callback bounded and fast. Do not block transport work on asset
 loading or silently drop ordered inventory, cast and lifecycle events. Queue
@@ -40,10 +49,8 @@ overflow currently ends the app session explicitly; a future coalescing or
 resynchronization design needs a coherent ordering boundary and tests first.
 
 Use `Instant` for elapsed-time decisions and wall time for logs. Today the UI
-reducer timestamps receipt when it consumes an update; that is not the network
-arrival time. A timestamped bridge is a follow-up API change: carry admission,
-arrival time and ordered payload together, then test delayed delivery and reset.
-Do not silently reinterpret existing duration fields during a UI refactor.
+reducer timestamps an update when it consumes it, which is not when the network
+received it, so do not treat existing duration fields as network timings.
 
 ## Errors and compatibility
 
@@ -55,9 +62,9 @@ does not need an elaborate state machine.
 
 Keep typed action enums and exhaustive internal matches. Public breaking changes
 must have an explicit dependency migration and version policy; do not introduce a
-generic action registry solely to reduce source lines. See networking's
+generic action registry solely to reduce source lines. Networking's
 [API contract](https://github.com/eq-p99-tools/eq-network/blob/main/API-CONTRACT.md)
-for the proposed common command-envelope boundary.
+says how its features, commands and their answers behave.
 
 Regression tests should assert externally meaningful state: a delayed result
 cannot affect a replacement item, queue recovery cannot lose movement grants,
