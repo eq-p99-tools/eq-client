@@ -1,7 +1,7 @@
 # eq-client
 
-`eq-client` is an experimental native, top-down EverQuest client. The first
-milestone is an offline viewer for classic S3D/WLD zones. It loads game data
+`eq-client` is an experimental native, top-down EverQuest client with an offline
+viewer and capability-gated online gameplay. It loads game data
 from an EverQuest installation supplied by the user; this repository and its
 build artifacts do not contain or redistribute EverQuest assets.
 
@@ -17,11 +17,14 @@ The code is intentionally split at stable boundaries:
 - `eq-client-render` is the reusable Bevy presentation layer.
 - `eq-client` owns configuration and the network worker lifecycle.
 
-The stationary P99 preview translates typed events from the
+The online client translates typed events from the
 [`eq-network`](https://github.com/eq-p99-tools/eq-network) crates into
 `eq-client-core`. Packet parsing, connection state, game state, and rendering
-remain separate, so movement, zoning, inventory, combat, and other systems
-can be added without coupling the UI to a specific server protocol.
+remain separate. Movement, zoning, inventory, spells, targeting and combat
+already have client paths; availability depends on the session's capabilities.
+See [support and validation](SUPPORT.md) for the difference between implemented,
+offered and live-tested behavior, and [architecture contracts](ARCHITECTURE.md)
+before extending a feature.
 
 ## Offline East Commonlands demo
 
@@ -94,7 +97,7 @@ world last played on highlighted; Up and Down browse, Enter or a second
 click plays, and Escape goes back. A world the login server refuses says
 why, in the installed client's words for it where the server gives a login
 string (`eqlsstr_us.txt`), and the list stays up for another choice. The
-world's character list comes next, as in the online preview below.
+world's character list comes next, as in the online gameplay preview below.
 
 The login servers are presets in `login-servers.txt` in the settings
 directory (`--settings-dir` or `EQ_CLIENT_SETTINGS_DIR`, by default
@@ -143,7 +146,7 @@ default). Account names and passwords are never taken as arguments.
 The login and server windows are this client's own for now; the
 installation's own login windows follow.
 
-## Stationary online preview
+## Online gameplay preview
 
 Set `EQ_ACCOUNT`, `EQ_PASSWORD`, and `EQ_SERVER` in the process
 environment, then run with `--online` to skip the login screen; without
