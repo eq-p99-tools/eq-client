@@ -192,8 +192,10 @@ impl BuffTracker {
     }
 
     /// Applies an explicit replacement or fade, given at `now`, after entity
-    /// filtering by the session. A fade removes its unslotted effect too;
-    /// repeated empty-slot fades are harmless.
+    /// filtering by the session. A fade removes its unslotted effect too,
+    /// and one naming no slot the table holds removes the slotted buff of
+    /// its spell: TAKP fades a buff by its spell alone, as its own client
+    /// finds it. Repeated empty-slot fades are harmless.
     pub fn apply(&mut self, update: BuffUpdate, now: Instant) {
         if let Ok(id) = u16::try_from(update.spell_id)
             && self.effects.remove(&id).is_some()
@@ -205,9 +207,11 @@ impl BuffTracker {
             if let Some(buff) = update.buff {
                 slots.insert(update.slot, buff);
                 self.given.insert(update.slot, now);
-            } else {
-                slots.remove(&update.slot);
+            } else if slots.remove(&update.slot).is_some() {
                 self.given.remove(&update.slot);
+            } else {
+                slots.retain(|_, buff| buff.spell_id != update.spell_id);
+                self.given.retain(|slot, _| slots.contains_key(slot));
             }
         }
     }
@@ -306,6 +310,24 @@ mod tests {
         state.apply(update(3, 42, false), now());
         state.apply(update(3, 42, false), now());
         assert!(state.effects().is_empty());
+    }
+
+    #[test]
+    fn a_fade_naming_no_slot_the_table_holds_removes_the_buff_of_its_spell() {
+        // TAKP's admission table, and its fade of spell 42, which names no
+        // slot.
+        let mut state = BuffTracker::default();
+        state.replace_snapshot(BTreeMap::from([(2, buff(42)), (5, buff(43))]), 15, now());
+        state.apply(update(u32::MAX, 42, false), now());
+        assert_eq!(state.slots().unwrap(), &BTreeMap::from([(5, buff(43))]));
+        assert_eq!(state.time_left(2, now()), None);
+        // A fade of a slot the table holds still removes that slot alone.
+        state.replace_snapshot(BTreeMap::from([(2, buff(42)), (5, buff(42))]), 15, now());
+        state.apply(update(5, 42, false), now());
+        assert_eq!(state.slots().unwrap(), &BTreeMap::from([(2, buff(42))]));
+        // An empty-slot fade names no spell anything holds.
+        state.apply(update(5, u32::MAX, false), now());
+        assert_eq!(state.slots().unwrap(), &BTreeMap::from([(2, buff(42))]));
     }
 
     #[test]
