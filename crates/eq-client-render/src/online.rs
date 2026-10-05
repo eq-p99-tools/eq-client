@@ -261,7 +261,7 @@ impl Panels<'_> {
                     line.message_type = notice.message_type();
                     chat.history.push(line);
                 }
-                Place::Status => self.lines.status.set(said.text),
+                Place::Status => self.lines.status.set(said.words.text),
             }
         }
     }
