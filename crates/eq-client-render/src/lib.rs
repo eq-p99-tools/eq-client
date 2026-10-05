@@ -63,6 +63,7 @@ mod tradeskills;
 mod training;
 mod whereabouts;
 mod who;
+mod window_size;
 mod windows;
 mod zone;
 
@@ -161,6 +162,8 @@ pub struct ViewerConfig {
     pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
     pub window_position: Option<(i32, i32)>,
+    /// Optional size of the window's drawing area in physical pixels.
+    pub window_size: Option<(u32, u32)>,
     /// Add the developer's readings to the status box: coordinates, the
     /// movement mode with its keys, and the count of nearby entities.
     pub debug_overlay: bool,
@@ -265,7 +268,13 @@ pub fn run(
     }
     let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
-    let window = primary_window(online, screenshot.is_none(), config.window_position);
+    let window_size = config.window_size;
+    let window = primary_window(
+        online,
+        screenshot.is_none(),
+        config.window_position,
+        window_size,
+    );
     let mut app = App::new();
     let (updates, commands) = match source {
         Source::Online { updates, commands } => (Some(updates), Some(commands)),
@@ -305,6 +314,9 @@ pub fn run(
     navigation::install(&mut app);
     frame_limit::install(&mut app);
     attention::install(&mut app);
+    if let Some(size) = window_size {
+        window_size::install(&mut app, size);
+    }
     install_overlays(&mut app);
     if let Some(steps) = steps {
         install_script(&mut app, steps, follow, (local_session, online));
@@ -683,7 +695,12 @@ fn install_overlays(app: &mut App) {
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
-fn primary_window(online: bool, visible: bool, position: Option<(i32, i32)>) -> Window {
+fn primary_window(
+    online: bool,
+    visible: bool,
+    position: Option<(i32, i32)>,
+    size: Option<(u32, u32)>,
+) -> Window {
     Window {
         title: if online {
             "eq-client"
@@ -695,6 +712,7 @@ fn primary_window(online: bool, visible: bool, position: Option<(i32, i32)>) -> 
         position: position.map_or(WindowPosition::Automatic, |(x, y)| {
             WindowPosition::At(IVec2::new(x, y))
         }),
+        resolution: size.map(window_size::resolution).unwrap_or_default(),
         ..default()
     }
 }
