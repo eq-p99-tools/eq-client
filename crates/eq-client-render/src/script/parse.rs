@@ -12,8 +12,9 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 24] = [
-    // GM mode on or off: off, the server lets the player go hungry.
+const GM_COMMANDS: [&str; 29] = [
+    // GM mode on or off: off, the server lets the player go hungry. On, the
+    // book and gem commands below act on a player target instead of the GM.
     "gm",
     // A rule changed in this zone only, such as how fast hunger comes, or
     // the zone's rules reloaded; never stored or reset.
@@ -48,6 +49,17 @@ const GM_COMMANDS: [&str; 24] = [
     "wc",
     // The targeted NPC says a line, as its quest dialogue would.
     "npcsay",
+    // Readies another test character: every spell they can use up to a
+    // level scribed in their book, every skill at its most for their
+    // level, and an item onto their cursor, as summonitem puts one on the
+    // GM's.
+    "scribespells",
+    "maxskills",
+    "giveitem",
+    // Puts them back as they were for another run: a spell taken out of
+    // their gems, and every buff taken off them.
+    "unmemspell",
+    "nukebuffs",
 ];
 
 /// One scripted action.
@@ -1056,6 +1068,26 @@ mod tests {
         assert_eq!(
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
+        );
+    }
+
+    #[test]
+    fn a_gm_may_ready_another_test_character_and_put_them_back() {
+        assert_eq!(
+            parse(
+                "gm gm on\ngm scribespells 10\ngm maxskills\ngm giveitem 1001 1\n\
+                 gm unmemspell 200\ngm nukebuffs\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Gm("gm on".into()),
+                Step::Gm("scribespells 10".into()),
+                Step::Gm("maxskills".into()),
+                Step::Gm("giveitem 1001 1".into()),
+                Step::Gm("unmemspell 200".into()),
+                Step::Gm("nukebuffs".into()),
+            ]
         );
     }
 
