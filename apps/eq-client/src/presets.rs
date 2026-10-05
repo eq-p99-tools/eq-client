@@ -77,7 +77,7 @@ impl Presets {
             ServerProtocol::Takp,
         ]
         .into_iter()
-        .map(|protocol| Preset::new(seed_name(protocol), protocol))
+        .filter_map(|protocol| Some(Preset::new(seed_name(protocol)?, protocol)))
         .collect();
         let mut last = None;
         if let Some(protocol) = environment.protocol
@@ -143,8 +143,13 @@ impl Presets {
             let _ = writeln!(text, "last = {last}");
         }
         for preset in &self.list {
+            // A server type this client cannot name is never written under
+            // another's name; no preset of one is read or seeded.
+            let Some(kind) = type_name(preset.protocol) else {
+                continue;
+            };
             let _ = writeln!(text, "\n[{}]", preset.name);
-            let _ = writeln!(text, "type = {}", type_name(preset.protocol));
+            let _ = writeln!(text, "type = {kind}");
             let _ = writeln!(text, "host = {}\nport = {}", preset.host, preset.port);
             let remembered = [
                 (
@@ -272,26 +277,29 @@ impl Endpoint {
     }
 }
 
-/// The name a first run gives a server type's preset.
-pub fn seed_name(protocol: ServerProtocol) -> &'static str {
+/// The name a first run gives a server type's preset; none for a type a
+/// later eq-network adds, which this client offers no preset of until it is
+/// checked here.
+pub const fn seed_name(protocol: ServerProtocol) -> Option<&'static str> {
     match protocol {
-        ServerProtocol::Quarm => "Project Quarm",
-        ServerProtocol::EqEmu => "Local EQEmu",
-        ServerProtocol::Takp => "Local TAKP",
-        // Project 1999, and a type a later eq-network adds.
-        _ => "Project 1999",
+        ServerProtocol::Project1999 => Some("Project 1999"),
+        ServerProtocol::Quarm => Some("Project Quarm"),
+        ServerProtocol::EqEmu => Some("Local EQEmu"),
+        ServerProtocol::Takp => Some("Local TAKP"),
+        _ => None,
     }
 }
 
-/// A server type's name in the file, which `EQ_PROTOCOL` also takes.
-fn type_name(protocol: ServerProtocol) -> &'static str {
+/// A server type's name in the file, which `EQ_PROTOCOL` also takes; none
+/// for a type a later eq-network adds, which this client cannot name until
+/// it is checked here.
+const fn type_name(protocol: ServerProtocol) -> Option<&'static str> {
     match protocol {
-        ServerProtocol::Quarm => "quarm",
-        ServerProtocol::EqEmu => "eqemu",
-        ServerProtocol::Takp => "takp",
-        // Project 1999, and a type a later eq-network adds, which this
-        // client cannot name until it is checked here.
-        _ => "p99",
+        ServerProtocol::Project1999 => Some("p99"),
+        ServerProtocol::Quarm => Some("quarm"),
+        ServerProtocol::EqEmu => Some("eqemu"),
+        ServerProtocol::Takp => Some("takp"),
+        _ => None,
     }
 }
 
@@ -332,9 +340,12 @@ impl Section {
         }
     }
 
-    /// The preset, when the section names a server type and a port.
+    /// The preset, when the section names a server type this client can
+    /// name, and a port.
     fn preset(self) -> Option<Preset> {
-        let protocol = self.protocol?;
+        let protocol = self
+            .protocol
+            .filter(|protocol| type_name(*protocol).is_some())?;
         let (host, port) = protocol.default_endpoint();
         (!self.name.is_empty()).then_some(())?;
         Some(Preset {

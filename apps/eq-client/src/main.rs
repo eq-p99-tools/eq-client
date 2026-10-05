@@ -297,16 +297,18 @@ fn launch_preset(
         .protocol
         .or(online.then_some(ServerProtocol::Project1999));
     if let Some(protocol) = protocol {
-        return Ok(presets
+        if let Some(index) = presets
             .list
             .iter()
             .position(|preset| preset.protocol == protocol)
-            .unwrap_or_else(|| {
-                presets
-                    .list
-                    .push(presets::Preset::new(presets::seed_name(protocol), protocol));
-                presets.list.len() - 1
-            }));
+        {
+            return Ok(index);
+        }
+        let name = presets::seed_name(protocol).ok_or_else(|| {
+            "EQ_PROTOCOL names a server type this client offers no login server of yet".to_owned()
+        })?;
+        presets.list.push(presets::Preset::new(name, protocol));
+        return Ok(presets.list.len() - 1);
     }
     Ok(presets
         .last
