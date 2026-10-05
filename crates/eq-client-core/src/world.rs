@@ -124,6 +124,13 @@ pub struct ClientWorld {
     zone_name: String,
     far_clip: Option<f32>,
     death: Option<Death>,
+    /// The HP at or below which the server takes the player as dead, where
+    /// it leaves that death to the client's own report; the session names
+    /// it only where it can count what the player's items add.
+    death_threshold: Option<i32>,
+    /// The player's HP, with what their items add, when the server's last
+    /// report said they bled out, until a front end reports it.
+    bled_out: Option<i64>,
     pending_transfer: Option<ZoneOffer>,
     /// The resurrection offered and not yet answered.
     resurrection: Option<crate::resurrection::ResurrectionOffer>,
@@ -263,6 +270,13 @@ impl ClientWorld {
         self.assisted.take()
     }
 
+    /// The player's HP, with what their items add, when the server's last
+    /// report said they bled out, taken once: a front end reports it to the
+    /// session (`ClientCommand::BledOut`).
+    pub fn take_bled_out(&mut self) -> Option<i64> {
+        self.bled_out.take()
+    }
+
     /// The player answered the resurrection offered; whatever comes of it
     /// arrives as news.
     pub fn answer_resurrection(&mut self) {
@@ -395,6 +409,7 @@ impl ClientWorld {
                 refused,
             } => self.motion_sent(*session_id, *position, refused.as_ref(), news),
             WorldEvent::Death(death) => return self.died(death),
+            WorldEvent::DeathThreshold(threshold) => self.death_threshold = Some(*threshold),
             WorldEvent::ZoneTransfer(offer) => return self.transfer(offer),
             WorldEvent::ZoneTransferRejected { session_id, reason } => {
                 self.transfer_refused(*session_id, *reason, news);
@@ -799,6 +814,7 @@ impl ClientWorld {
         } else {
             self.own_health(0);
             self.death = Some(death.clone());
+            self.bled_out = None;
             // The server closes a window the player dies with.
             self.zone.trade.exchange = None;
             self.reset(Reset::Died)
@@ -918,6 +934,8 @@ impl ClientWorld {
         self.raid_invitation = None;
         self.raid_flow = raid::RaidFlow::default();
         self.death = None;
+        self.death_threshold = None;
+        self.bled_out = None;
         self.forget_zone();
     }
 

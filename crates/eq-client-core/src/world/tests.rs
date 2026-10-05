@@ -857,6 +857,106 @@ fn the_dead_show_no_hp_and_a_new_admission_forgets_the_report() {
     assert_eq!(world.vitals().reported_hp, None);
 }
 
+/// Player 9 admitted in session 1 with these capabilities, and told the
+/// HP at which the server takes them as dead (-11).
+fn bleeding(capabilities: Vec<crate::Capability>) -> ClientWorld {
+    let mut world = ClientWorld::default();
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities,
+            choices: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(player(9)),
+            far_clip: None,
+        },
+    );
+    connection(&mut world, true, false);
+    game(&mut world, WorldEvent::DeathThreshold(-11));
+    world
+}
+
+/// `EQMac`'s report of the player's HP, whose current leaves out what items
+/// add.
+fn eqmac_hp(current: i32) -> WorldEvent {
+    WorldEvent::HitPoints {
+        spawn_id: 9,
+        current,
+        maximum: 150,
+        items: crate::ItemHitPoints::LeftOutOfCurrent,
+    }
+}
+
+#[test]
+fn a_report_at_the_threshold_with_the_items_added_says_the_player_bled_out() {
+    let mut world = bleeding(vec![crate::Capability::BleedingOut]);
+    // Before the inventory comes, what the items add is unknown: the
+    // server's -11 could be a player alive in HP gear.
+    game(&mut world, eqmac_hp(-11));
+    assert_eq!(world.bled_out(), None);
+    // With the +100 HP chest counted, -110 is -10, alive, and -111 is -11.
+    game(&mut world, inventory(vec![chest()]));
+    game(&mut world, eqmac_hp(-110));
+    assert_eq!(world.bled_out(), None);
+    game(&mut world, eqmac_hp(-111));
+    assert_eq!(world.bled_out(), Some(-11));
+    // A front end reports it once, and the server's next report asks again
+    // until a death is named.
+    assert_eq!(world.take_bled_out(), Some(-11));
+    assert_eq!(world.take_bled_out(), None);
+    game(&mut world, eqmac_hp(-112));
+    assert_eq!(world.bled_out(), Some(-12));
+    // A heal before anyone reported it takes it back.
+    game(&mut world, eqmac_hp(-50));
+    assert_eq!(world.bled_out(), None);
+}
+
+#[test]
+fn only_a_server_type_that_takes_the_clients_word_hears_of_a_bleed_out() {
+    let mut world = bleeding(Vec::new());
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, eqmac_hp(-20));
+    assert_eq!(world.bled_out(), None);
+}
+
+#[test]
+fn the_dead_bleed_out_no_more_and_an_admission_forgets_the_threshold() {
+    let mut world = bleeding(vec![crate::Capability::BleedingOut]);
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, eqmac_hp(-11));
+    assert_eq!(world.bled_out(), Some(-11));
+    // The player's death, the session's or the server's, ends it.
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 9,
+            killer_id: 0,
+            corpse_id: 9,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+    );
+    assert_eq!(world.bled_out(), None);
+    game(&mut world, eqmac_hp(-12));
+    assert_eq!(world.bled_out(), None);
+    // A new admission waits for the session to name the threshold again.
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities: vec![crate::Capability::BleedingOut],
+            choices: Vec::new(),
+            session_id: 2,
+            zone: "qeynos".into(),
+            player: Box::new(player(9)),
+            far_clip: None,
+        },
+    );
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, eqmac_hp(-11));
+    assert_eq!(world.bled_out(), None);
+}
+
 #[test]
 fn the_inventory_lasts_until_the_admission_or_session_ends() {
     let held = |world: &ClientWorld| !world.inventory().items().is_empty();

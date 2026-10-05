@@ -102,6 +102,13 @@ impl ClientWorld {
         self.death.as_ref()
     }
 
+    /// The player's HP, with what their items add, when the server's last
+    /// report said they bled out and no front end has reported it yet.
+    #[must_use]
+    pub const fn bled_out(&self) -> Option<i64> {
+        self.bled_out
+    }
+
     /// The transfer the server offered, until it is answered.
     #[must_use]
     pub const fn pending_transfer(&self) -> Option<&ZoneOffer> {

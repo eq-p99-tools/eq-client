@@ -320,6 +320,29 @@ impl Panels<'_> {
     }
 }
 
+/// Tells the session the player bled out once the world says so: the
+/// server's report, with what the player's items add, is at the threshold of
+/// a server type that leaves such a death to the client. The session checks
+/// it again; until it takes the report, the world asks again on the
+/// server's next one.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn report_bleed_out(mut state: ResMut<OnlineState>, outbox: Res<super::outbox::Outbox>) {
+    if state.world.bled_out().is_none() {
+        return;
+    }
+    let Some(stamp) = outbox.peek(&state.world) else {
+        return;
+    };
+    let command = eq_client_core::ClientCommand::BledOut {
+        session_id: stamp.session_id,
+        created: stamp.created,
+    };
+    if outbox.tell(&state.world, command) {
+        let hp = state.world.take_bled_out();
+        debug!(?hp, "Reported that the player bled out");
+    }
+}
+
 /// Applies the session's news to the world and shows what it changed. The
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
@@ -698,6 +721,42 @@ pub(crate) mod testing {
 mod tests {
     use super::*;
     use eq_client_core::PlayerState;
+
+    #[test]
+    fn the_session_hears_of_a_bleed_out_the_world_finds_once() {
+        use eq_client_core::{ClientCommand, ItemHitPoints, inventory::InventoryUpdate};
+        let (sender, queue) = std::sync::mpsc::sync_channel(4);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::news(
+            &mut online,
+            [
+                WorldEvent::DeathThreshold(-11),
+                WorldEvent::Inventory(InventoryUpdate::Snapshot(Vec::new())),
+                WorldEvent::HitPoints {
+                    spawn_id: 7,
+                    current: -11,
+                    maximum: 100,
+                    items: ItemHitPoints::LeftOutOfCurrent,
+                },
+            ],
+        );
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(super::super::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, report_bleed_out);
+        app.update();
+        app.update();
+        let sent: Vec<_> = queue.try_iter().collect();
+        assert!(
+            matches!(sent[..], [ClientCommand::BledOut { session_id: 1, .. }]),
+            "{sent:?}"
+        );
+        assert_eq!(
+            app.world().resource::<OnlineState>().world().bled_out(),
+            None
+        );
+    }
 
     #[test]
     fn a_zone_entry_batch_keeps_doors_postures_and_the_new_session() {

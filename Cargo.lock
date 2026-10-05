@@ -2293,7 +2293,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#5fdef1e277f12f2895e9da80d642423ae667a2f1"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftakp-death-going-home-8kazzh#9fc5f40ca190115a6fc4266687147bca53a943ed"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2312,7 +2312,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#5fdef1e277f12f2895e9da80d642423ae667a2f1"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftakp-death-going-home-8kazzh#9fc5f40ca190115a6fc4266687147bca53a943ed"
 dependencies = [
  "anyhow",
  "hex",
@@ -2327,7 +2327,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#5fdef1e277f12f2895e9da80d642423ae667a2f1"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftakp-death-going-home-8kazzh#9fc5f40ca190115a6fc4266687147bca53a943ed"
 dependencies = [
  "cbc",
  "cipher",
@@ -2340,7 +2340,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#5fdef1e277f12f2895e9da80d642423ae667a2f1"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=claude%2Ftakp-death-going-home-8kazzh#9fc5f40ca190115a6fc4266687147bca53a943ed"
 dependencies = [
  "anyhow",
  "crc32fast",

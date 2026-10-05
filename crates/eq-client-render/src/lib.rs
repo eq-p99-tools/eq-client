@@ -463,7 +463,12 @@ fn schedule(app: &mut App) {
     .add_systems(
         Update,
         (
-            (online::receive, online::tick, daylight::update)
+            (
+                online::receive,
+                online::report_bleed_out,
+                online::tick,
+                daylight::update,
+            )
                 .chain()
                 .in_set(Stage::Receive),
             (
