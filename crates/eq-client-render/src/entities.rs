@@ -11,6 +11,10 @@ pub(super) struct NearbyEntities {
     pub(super) rendered: BTreeMap<u16, Entity>,
     revisions: BTreeMap<u16, u64>,
     models: BTreeMap<&'static str, Option<character::PreparedCharacter>>,
+    loading: Option<(
+        &'static str,
+        super::background::Background<Option<eq_client_assets::characters::CharacterAsset>>,
+    )>,
     elapsed: f32,
 }
 
@@ -22,6 +26,7 @@ impl NearbyEntities {
             commands.entity(entity).despawn();
         }
         self.models.clear();
+        self.loading = None;
         self.revisions.clear();
     }
 }
@@ -48,8 +53,13 @@ pub(super) fn reconcile(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    scene: Option<Res<super::SceneInfo>>,
 ) {
     if !state.world().connected() {
+        nearby_state.loading = None;
+        return;
+    }
+    if scene.is_some_and(|scene| scene.zone_name != state.world().zone()) {
         return;
     }
     let Some(player) = state.world().player() else {
@@ -58,6 +68,15 @@ pub(super) fn reconcile(
     let Some(directory) = &settings.0.eq_directory else {
         return;
     };
+    if let Some((code, job)) = &mut nearby_state.loading
+        && let Some(asset) = job.poll(state.world().session_id())
+    {
+        let code = *code;
+        let prepared =
+            asset.map(|asset| character::prepare(asset, &mut images, &mut meshes, &mut materials));
+        nearby_state.models.insert(code, prepared);
+        nearby_state.loading = None;
+    }
     nearby_state.elapsed += time.delta_secs();
     if nearby_state.elapsed < 0.1 {
         return;
@@ -110,20 +129,22 @@ pub(super) fn reconcile(
     };
     let spawn = &state.world().spawns()[&id].state;
     let model = races::model(spawn.race, spawn.gender);
-    let asset = model.and_then(|code| {
-        nearby_state
-            .models
-            .entry(code)
-            .or_insert_with(|| {
-                // Cache failures too, avoiding repeated disk reads for unsupported models.
-                load_installed_character(directory, state.world().zone(), code)
-                    .ok()
-                    .map(|asset| {
-                        character::prepare(asset, &mut images, &mut meshes, &mut materials)
-                    })
-            })
-            .clone()
-    });
+    if let Some(code) = model
+        && !nearby_state.models.contains_key(code)
+    {
+        if nearby_state.loading.is_none() {
+            let directory = directory.clone();
+            let zone = state.world().zone().to_owned();
+            let mut job = super::background::Background::default();
+            job.start(state.world().session_id().unwrap_or_default(), move || {
+                load_installed_character(&directory, &zone, code).ok()
+            });
+            nearby_state.loading = Some((code, job));
+        }
+        return;
+    }
+    // Cache failures too, avoiding repeated reads for unsupported models.
+    let asset = model.and_then(|code| nearby_state.models.get(code).cloned().flatten());
     let corpse = matches!(spawn.kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse);
     let position = Vec3::from_array(render_position(spawn.position));
     let entity = commands
