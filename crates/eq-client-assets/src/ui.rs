@@ -266,6 +266,24 @@ pub trait OfficialSettings {
     fn chat_font(&self, _character: &str, _world: &str) -> Option<u8> {
         None
     }
+
+    /// The account and world the official login screen last used.
+    fn login(&self) -> LoginMemory {
+        LoginMemory::default()
+    }
+}
+
+/// What the official login screen remembers between runs; each None when
+/// the file or setting is missing or empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoginMemory {
+    /// The login server the official client logs in at, as `host:port` or
+    /// a bare host: the one the account and world belong to.
+    pub server: Option<String>,
+    /// The account name last logged in with.
+    pub account: Option<String>,
+    /// The name of the world last played on.
+    pub world: Option<String>,
 }
 
 /// An installed Titanium client's settings files, in its installation.
@@ -350,6 +368,22 @@ impl OfficialSettings for Titanium<'_> {
         )?
         .parse()
         .ok()
+    }
+
+    /// `Username` in `[PLAYER]` and `LastServerName` in `[MISC]` of
+    /// `eqlsPlayerData.ini`, which the official login screen keeps, and the
+    /// login server in `eqhost.txt`, which those belong to.
+    fn login(&self) -> LoginMemory {
+        let value = |file: &str, section, key| {
+            let bytes = std::fs::read(self.0.join(file)).ok()?;
+            ini_value(&String::from_utf8_lossy(&bytes), section, key)
+                .filter(|value| !value.is_empty())
+        };
+        LoginMemory {
+            server: value("eqhost.txt", "LoginServer", "Host"),
+            account: value("eqlsPlayerData.ini", "PLAYER", "Username"),
+            world: value("eqlsPlayerData.ini", "MISC", "LastServerName"),
+        }
     }
 }
 
@@ -937,6 +971,16 @@ MouseSensitivity=4
             "[HotButtons]\nPage1Button1=H0\n",
         )
         .unwrap();
+        std::fs::write(
+            install.join("eqlsPlayerData.ini"),
+            "[MISC]\nLastServerID=1\nLastServerName=ExampleWorld\n[PLAYER]\nUsername=example\n",
+        )
+        .unwrap();
+        std::fs::write(
+            install.join("eqhost.txt"),
+            "[LoginServer]\nHost=localhost:5998\n",
+        )
+        .unwrap();
         let read = |client: InstalledClient| {
             let settings = client.settings(&install);
             (
@@ -944,6 +988,7 @@ MouseSensitivity=4
                 settings.chosen_skin("Example", "ExampleWorld"),
                 settings.hotbuttons("Example", "ExampleWorld").len(),
                 settings.window_positions("Example", "ExampleWorld").len(),
+                settings.login(),
             )
         };
         let titanium = read(InstalledClient::Titanium);
@@ -954,8 +999,25 @@ MouseSensitivity=4
             (titanium.1.as_deref(), titanium.2, titanium.3),
             (Some("velious"), 1, 1)
         );
+        assert_eq!(
+            titanium.4,
+            LoginMemory {
+                server: Some("localhost:5998".into()),
+                account: Some("example".into()),
+                world: Some("ExampleWorld".into()),
+            }
+        );
         // The same files in an EQMac installation are left unread.
-        assert_eq!(eqmac, (OfficialOptions::default(), None, 0, 0));
+        assert_eq!(
+            eqmac,
+            (
+                OfficialOptions::default(),
+                None,
+                0,
+                0,
+                LoginMemory::default()
+            )
+        );
     }
 
     #[test]

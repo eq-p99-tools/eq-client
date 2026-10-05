@@ -1,8 +1,8 @@
 //! What the world knows, for any front end to read; only the session's news
 //! and the player's own choices change it.
 use super::{
-    Camp, Casting, CharacterList, ClientWorld, Exchange, Loot, Merchant, MotionGrant, Spawn,
-    Target, Vitals,
+    Camp, Casting, CharacterList, ClientWorld, Exchange, Loot, Merchant, MotionGrant, ServerList,
+    Spawn, Target, Vitals,
 };
 use crate::{
     BookActionStatus, Coins, Death, PlayerState, PostureState, SpellBook, ZoneOffer,
@@ -41,6 +41,13 @@ impl ClientWorld {
     #[must_use]
     pub fn world_name(&self) -> Option<&str> {
         self.world_name.as_deref()
+    }
+
+    /// The worlds the login server listed, until the chosen world lists
+    /// characters.
+    #[must_use]
+    pub const fn servers(&self) -> Option<&ServerList> {
+        self.servers.as_ref()
     }
 
     /// The characters the world server offered, until one enters the world.

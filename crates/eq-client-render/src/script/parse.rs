@@ -65,6 +65,13 @@ const GM_COMMANDS: [&str; 29] = [
 /// One scripted action.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
+    /// Types the account and password the environment holds (`EQ_ACCOUNT`,
+    /// `EQ_PASSWORD`) into the login screen and connects.
+    Login,
+    /// Waits until the login server's list of worlds is shown.
+    WaitServers,
+    /// Highlights a listed world by name and plays on it.
+    Server(String),
     /// Waits until the character selection list is shown.
     WaitSelect,
     /// Highlights a listed character by name and presses Enter.
@@ -361,6 +368,9 @@ fn parse_step(line: &str) -> Result<Step, String> {
     };
     let chord = |keys: &str| keys_from(keys).ok_or_else(|| String::from("unknown key"));
     Ok(match (command, rest.as_slice()) {
+        ("login", []) => Step::Login,
+        ("wait_servers", []) => Step::WaitServers,
+        ("server", name) if !name.is_empty() => Step::Server(name.join(" ")),
         ("wait_select", []) => Step::WaitSelect,
         ("select", [name]) => Step::Select((*name).to_owned()),
         ("create", arguments) => parse_create(arguments)?,
@@ -964,6 +974,23 @@ mod tests {
             ]
         );
         assert!(parse("click scroll_up nowhere\n", Path::new("private")).is_err());
+    }
+
+    #[test]
+    fn parses_the_login_steps() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("login\nwait_servers\nserver Example  World\n", base).unwrap(),
+            [
+                Step::Login,
+                Step::WaitServers,
+                Step::Server("Example World".into()),
+            ]
+        );
+        // The account and password come only from the environment.
+        for bad in ["login someone", "wait_servers now", "server"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

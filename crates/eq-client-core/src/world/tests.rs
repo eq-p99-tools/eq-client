@@ -2886,3 +2886,74 @@ fn a_raid_listed_after_its_leader_says_nothing_and_a_later_member_joins() {
         )))]
     );
 }
+
+fn worlds(selection_id: u64) -> WorldEvent {
+    use crate::servers::{ServerChoice, ServerStatus};
+    WorldEvent::ServerSelection {
+        selection_id,
+        servers: vec![ServerChoice {
+            name: "Example".into(),
+            status: ServerStatus::Up,
+            players: Some(7),
+            preferred: false,
+        }],
+    }
+}
+
+#[test]
+fn the_login_servers_list_lasts_until_the_chosen_world_lists_characters() {
+    use crate::servers::ServerRefusal;
+    let mut world = ClientWorld::default();
+    assert!(game(&mut world, worlds(4)).servers);
+    let list = world.servers().unwrap();
+    assert_eq!((list.selection_id, list.servers.len()), (4, 1));
+    // A refusal for another list changes nothing; one for this list stays
+    // with it while the player chooses again.
+    let refused = |selection_id| WorldEvent::ServerRefused {
+        selection_id,
+        refusal: ServerRefusal::Message(326),
+    };
+    world.ask_server(0);
+    assert!(game(&mut world, refused(3)).ignored);
+    assert_eq!(world.servers().unwrap().asked, Some(0));
+    assert!(game(&mut world, refused(4)).servers);
+    let list = world.servers().unwrap();
+    assert_eq!(
+        (list.asked, &list.refused),
+        (None, &Some(ServerRefusal::Message(326)))
+    );
+    // Asking again clears the old refusal while the login server answers.
+    world.ask_server(0);
+    assert_eq!(world.servers().unwrap().refused, None);
+    let changes = game(
+        &mut world,
+        WorldEvent::CharacterSelection {
+            selection_id: 9,
+            characters: Vec::new(),
+        },
+    );
+    assert!(changes.characters);
+    assert!(world.servers().is_none());
+}
+
+#[test]
+fn a_session_that_ends_forgets_the_list_and_a_new_one_keeps_only_the_players_choices() {
+    use crate::Capability;
+    let mut world = ClientWorld::default();
+    world.choose(vec![Capability::Falling]);
+    game(&mut world, worlds(1));
+    connection(&mut world, false, true);
+    assert!(world.ended());
+    assert!(world.servers().is_none());
+    game(&mut world, worlds(2));
+    world.restart();
+    assert!(!world.ended() && world.servers().is_none());
+    // What the player turned on still counts once an admission leaves it to
+    // them.
+    let mut entry = entered(1);
+    if let WorldEvent::Entered { choices, .. } = &mut entry {
+        *choices = vec![Capability::Falling];
+    }
+    game(&mut world, entry);
+    assert!(world.can(Capability::Falling));
+}

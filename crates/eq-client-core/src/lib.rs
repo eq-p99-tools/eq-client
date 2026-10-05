@@ -50,6 +50,7 @@ pub use eq_network_game::movement::{
 pub use eq_network_game::pets;
 pub use eq_network_game::raid;
 pub use eq_network_game::resurrection;
+pub use eq_network_game::servers;
 pub use eq_network_game::socials;
 pub use eq_network_game::spells::BookActionStatus;
 pub use eq_network_game::spells::SpellBook;

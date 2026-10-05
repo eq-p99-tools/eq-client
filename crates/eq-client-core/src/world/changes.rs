@@ -82,6 +82,8 @@ pub struct Changes {
     pub entered: bool,
     /// The server put the player here.
     pub placed: Option<WorldPosition>,
+    /// The login server listed its worlds, or refused the one chosen.
+    pub servers: bool,
     /// The world server offered characters to play.
     pub characters: bool,
     /// What a spell notice did to the player's casting.

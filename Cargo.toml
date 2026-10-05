@@ -49,6 +49,7 @@ libeq = { git = "https://github.com/cjab/libeq", rev = "e06ae17dd38b624983663505
 roxmltree = "0.21.1"
 thiserror = "2"
 tracing = "0.1"
+zeroize = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

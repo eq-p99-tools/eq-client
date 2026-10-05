@@ -2246,6 +2246,7 @@ dependencies = [
  "eq-network",
  "serde_json",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -2288,12 +2289,13 @@ dependencies = [
  "eq-client-assets",
  "eq-client-core",
  "image",
+ "zeroize",
 ]
 
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#deadba4892790a0e11b144df4e7453821b1d7ab2"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#5800e4af86b815cbb4992ce75c9ebeb432d95949"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2312,7 +2314,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#deadba4892790a0e11b144df4e7453821b1d7ab2"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#5800e4af86b815cbb4992ce75c9ebeb432d95949"
 dependencies = [
  "anyhow",
  "hex",
@@ -2327,7 +2329,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#deadba4892790a0e11b144df4e7453821b1d7ab2"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#5800e4af86b815cbb4992ce75c9ebeb432d95949"
 dependencies = [
  "cbc",
  "cipher",
@@ -2340,7 +2342,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#deadba4892790a0e11b144df4e7453821b1d7ab2"
+source = "git+https://github.com/eq-p99-tools/eq-network?branch=main#5800e4af86b815cbb4992ce75c9ebeb432d95949"
 dependencies = [
  "anyhow",
  "crc32fast",

@@ -1,6 +1,6 @@
 #![doc = "Bevy scene and camera support for renderer-independent EQ zone assets."]
 
-use std::{path::PathBuf, sync::mpsc::Receiver};
+use std::path::PathBuf;
 use theme::Size;
 
 mod abilities;
@@ -30,6 +30,7 @@ mod item_models;
 mod items;
 mod keys;
 mod loading;
+mod login;
 mod logs;
 mod map;
 mod motion;
@@ -78,7 +79,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Captured, Screenshot, save_to_disk};
 use eq_client_assets::characters::CharacterAsset;
 use eq_client_assets::{BlendOpacity, MaterialMode, ZoneAsset, ZonePrimitive};
-use eq_client_core::{WorldPosition, WorldUpdate, render_position, world_position};
+use eq_client_core::{WorldPosition, render_position, world_position};
 use image::{RgbaImage, imageops::FilterType};
 
 /// The projection used by the top-down camera.
@@ -100,16 +101,18 @@ pub enum ValidationAction {
     InspectFirstItem,
 }
 
+pub use login::{Availability, Connection, LoginServer, Logins, Session, Worker};
 pub use preview::Preview;
 
 /// Where the viewer's world comes from.
 pub enum Source {
-    /// A server session: its news, and the channel for the player's requests.
+    /// Servers: the login screen and the sessions it starts, beginning with
+    /// the session the launch began, if any.
     Online {
-        /// What the session tells the client.
-        updates: Receiver<WorldUpdate>,
-        /// What the player asks the session to send.
-        commands: std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>,
+        /// The login servers the login screen offers, and how to log in.
+        logins: Box<dyn Logins>,
+        /// The session the launch began, which skips the login screen.
+        session: Option<Session>,
     },
     /// No server. The offline preview, if it shows anything, stands in for one.
     Offline(Preview),
@@ -279,10 +282,16 @@ pub fn run(
         window_size,
     );
     let mut app = App::new();
-    let (updates, commands) = match source {
-        Source::Online { updates, commands } => (Some(updates), Some(commands)),
-        Source::Offline(preview) => (preview::install(&mut app, preview), None),
+    let (front, updates, commands) = match source {
+        Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
+        Source::Offline(preview) => (
+            login::FrontEnd::default(),
+            preview::install(&mut app, preview),
+            None,
+        ),
     };
+    app.insert_resource(front);
+    app.insert_resource(login::LoginStrings::load(config.eq_directory.as_deref()));
     app.insert_resource(spellbook::SpellNames::load(config.eq_directory.as_deref()));
     app.insert_resource(hud::messages::Messages::load(
         config.eq_directory.as_deref(),
@@ -379,7 +388,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<raid::RaidChoice>()
         .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
-        .init_resource::<map::MapView>();
+        .init_resource::<map::MapView>()
+        .init_resource::<login::FrontEnd>();
 }
 
 /// What the tests of the windows start from.
@@ -482,6 +492,7 @@ fn schedule(app: &mut App) {
             (
                 online::receive,
                 online::report_bleed_out,
+                login::watch,
                 online::tick,
                 daylight::update,
             )
@@ -496,6 +507,7 @@ fn schedule(app: &mut App) {
                 .chain()
                 .in_set(Stage::Scene),
             (
+                login::claim,
                 windows::pointer::wheel,
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
@@ -546,7 +558,10 @@ fn schedule(app: &mut App) {
                 spellbook::book_clicks,
                 spellbook::say_book_lines,
             ),
-            (character_select::update, character_select::names),
+            (
+                (login::form, login::worlds, login::light),
+                (character_select::update, character_select::names),
+            ),
             windows::input,
             move_player,
             motion::input,
@@ -569,6 +584,7 @@ fn schedule(app: &mut App) {
                 combat::target_color,
                 trade::present,
                 trade::scroll,
+                login::scroll,
                 skinned::scroll_lists,
                 motion::interpolate,
                 orbit_camera,
@@ -961,11 +977,11 @@ fn schedule_screenshot(
     mut commands: Commands,
     time: Res<Time>,
     request: Option<ResMut<CaptureRequest>>,
-    online: Res<online::OnlineState>,
+    (online, front): (Res<online::OnlineState>, Res<login::FrontEnd>),
     loading: Option<Res<loading::Loading>>,
 ) {
     let covered = loading.is_some_and(|loading| loading.covered());
-    if !screenshot_ready(&online, covered) {
+    if !screenshot_ready(&front, &online, covered) {
         return;
     }
     let Some(mut request) = request else {
@@ -982,13 +998,13 @@ fn schedule_screenshot(
     commands.remove_resource::<CaptureRequest>();
 }
 
-/// Whether a screenshot may count down: offline at once; online once the
-/// character list shows, or once the player is in a zone with the loading
-/// screen lifted, as a script's wait for the zone has it. The screen stays up
-/// while the zone's scene loads, so the picture is the zone, not the cover.
-fn screenshot_ready(online: &online::OnlineState, covered: bool) -> bool {
-    let admitted = online.world().connected() && online.world().player().is_some();
-    !online.enabled || online.selection.is_some() || (admitted && !covered)
+/// Whether a screenshot may count down: offline at once; online once a
+/// login screen, the list of worlds or the character list has settled, or
+/// once the player is in a zone with the loading screen lifted, as a
+/// script's wait for the zone has it. The screen stays up while the zone's
+/// scene loads, so the picture is the zone, not the cover.
+fn screenshot_ready(front: &login::FrontEnd, online: &online::OnlineState, covered: bool) -> bool {
+    !online.enabled || (front.settled(online) && !covered)
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -1592,14 +1608,29 @@ mod tests {
     #[test]
     fn a_screenshot_waits_for_the_loading_screen_to_lift() {
         use super::*;
+        // A session logging in, as `--online` starts one.
+        let (_updates, receive) = std::sync::mpsc::sync_channel(1);
+        let (commands, _queue) = std::sync::mpsc::sync_channel(1);
+        let (front, ..) = login::FrontEnd::launched(
+            Box::new(login::testing::Fake {
+                servers: vec![login::testing::server("Example", "someone")],
+                heard: std::sync::Arc::default(),
+            }),
+            Some(login::Session {
+                updates: receive,
+                commands,
+                worker: Box::new(login::testing::Thread::default()),
+            }),
+        );
         let mut online = online::OnlineState::new(true);
-        assert!(!screenshot_ready(&online, false));
+        assert!(!screenshot_ready(&front, &online, false));
         online::testing::admit(&mut online, 1, online::testing::player(7));
         // In the zone, but the cover is still up while its scene loads.
-        assert!(!screenshot_ready(&online, true));
-        assert!(screenshot_ready(&online, false));
+        assert!(!screenshot_ready(&front, &online, true));
+        assert!(screenshot_ready(&front, &online, false));
         // Offline there is nothing to wait for.
-        assert!(screenshot_ready(&online::OnlineState::new(false), true));
+        let offline = online::OnlineState::new(false);
+        assert!(screenshot_ready(&front, &offline, true));
     }
 
     #[test]
