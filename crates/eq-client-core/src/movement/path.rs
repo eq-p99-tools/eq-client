@@ -18,8 +18,9 @@ const SUBSTEP: f32 = 1.0;
 const LEVEL: f32 = 4.0;
 /// Expansions after which a search gives up.
 const MAX_EXPANSIONS: usize = 60_000;
-/// Deepest ledge a path drops off, in world units, keeping falls short.
-const MAX_DROP: f32 = 20.0;
+/// Deepest ledge a path drops off, in world units: no deeper than a fall
+/// that does no damage.
+const MAX_DROP: f32 = super::HARMLESS_DROP;
 /// Airborne slice length, matching the controller's integration limit.
 const SLICE: f32 = 0.05;
 const NEIGHBORS: [(i16, i16); 8] = [

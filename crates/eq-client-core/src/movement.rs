@@ -1,9 +1,13 @@
 //! Conservative ground locomotion and continuous collision queries.
 
 mod airborne;
+mod falls;
+mod liquids;
 mod path;
 mod route;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
+pub use falls::{HARMLESS_DROP, fall_damage};
+pub use liquids::{GuardView, Liquid, Liquids};
 pub use path::{PathProgress, PathSearch};
 pub use route::{Route, RouteStep};
 
@@ -67,10 +71,12 @@ impl CollisionMesh {
     }
 }
 
-/// Static zone geometry plus replaceable nearby obstacles.
+/// Static zone geometry plus replaceable nearby obstacles, and the zone's
+/// water and lava where they are known.
 pub struct CollisionWorld {
     terrain: CollisionMesh,
     obstacles: Vec<Arc<CollisionMesh>>,
+    liquids: Option<Box<dyn Liquids>>,
 }
 
 impl CollisionWorld {
@@ -82,6 +88,7 @@ impl CollisionWorld {
         Ok(Self {
             terrain: CollisionMesh::new(triangles)?,
             obstacles: Vec::new(),
+            liquids: None,
         })
     }
 
@@ -161,7 +168,8 @@ impl CollisionWorld {
     }
 
     /// Sweeps the character capsule and slides along walls without crossing cliffs or steep slopes.
-    /// Movement stops rather than attempting automatic jumps, swimming, or falling.
+    /// Movement stops rather than attempting automatic jumps, swimming, or falling, and
+    /// before deep water or lava where the world knows the zone's liquids.
     pub fn step(&self, feet: Vec3, displacement: Vec3, height: f32) -> Vec3 {
         self.walk(feet, displacement, height, Support::Required)
     }
@@ -194,8 +202,16 @@ impl CollisionWorld {
         if !feet.is_finite() || !displacement.is_finite() || !height.is_finite() || height < 1.0 {
             return feet;
         }
+        // Feet in deep water or lava now may go anywhere, so they can leave.
+        let guarded = !self.submerged(feet, height);
         if matches!(support, Support::Airborne) {
-            return self.stride(feet, displacement, height, support);
+            let next = self.stride(feet, displacement, height, support);
+            // In the air, a move whose fall would end in deep water or lava is not made.
+            return if guarded && !self.dry(next, height) {
+                feet
+            } else {
+                next
+            };
         }
         let horizontal = Vec3::new(displacement.x, 0.0, displacement.z);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped.
@@ -203,13 +219,17 @@ impl CollisionWorld {
         let part = horizontal / f32::from(count);
         let mut position = feet;
         for _ in 0..count {
-            let next = self.stride(position, part, height, support);
+            let mut next = self.stride(position, part, height, support);
+            let wet = guarded && !self.dry(next, height);
+            if wet {
+                next = self.dry_part(position, part, height, support);
+            }
             if (next.y - feet.y).abs() > MAX_GROUNDED_STEP + 0.001 {
                 break;
             }
             let moved = next.distance_squared(position) > 1e-10;
             position = next;
-            if !moved {
+            if !moved || wet {
                 break;
             }
         }
