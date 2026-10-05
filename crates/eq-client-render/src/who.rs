@@ -189,7 +189,7 @@ pub(super) fn zone_list(
         return;
     };
     let world = online.world();
-    let zone = zones::long_name(world.zone()).unwrap_or(world.zone());
+    let zone = world.zone_long_name();
     let empty = Messages::default();
     for line in zone_lines(
         &world.zone_who(&filter),
