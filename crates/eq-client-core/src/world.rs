@@ -53,6 +53,21 @@ pub struct CharacterList {
     pub characters: Vec<CharacterChoice>,
 }
 
+/// The worlds the login server listed for the player to choose from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerList {
+    /// Names this list, which a choice must repeat.
+    pub selection_id: u64,
+    /// The worlds, in the login server's order.
+    pub servers: Vec<crate::servers::ServerChoice>,
+    /// The world the player asked to play on, by its place in the list,
+    /// until the login server answers.
+    pub asked: Option<usize>,
+    /// Why the login server refused the world last asked for; the player
+    /// may choose again.
+    pub refused: Option<crate::servers::ServerRefusal>,
+}
+
 /// One spawn in the zone and what is known about it.
 #[derive(Clone, Debug)]
 pub struct Spawn {
@@ -108,6 +123,8 @@ pub struct ClientWorld {
     time: Option<(crate::clock::GameTime, Instant)>,
     /// Guild names by number, from the world's guild list.
     guild_names: BTreeMap<u32, String>,
+    /// The login server's worlds, until the chosen world lists characters.
+    servers: Option<ServerList>,
     characters: Option<CharacterList>,
     /// The last revision given to a spawn, which never repeats.
     revision: u64,
@@ -231,6 +248,27 @@ impl ClientWorld {
         self.chosen = chosen;
     }
 
+    /// The player asked to play on a world of the login server's list, by
+    /// its place; the list waits for the login server's answer.
+    pub fn ask_server(&mut self, index: usize) {
+        if let Some(list) = self.servers.as_mut() {
+            list.asked = Some(index);
+            list.refused = None;
+        }
+    }
+
+    /// Forgets everything the servers said, for a new session: only the
+    /// player's own choices stay, and the revisions go on from where they
+    /// were, so nothing drawn for the old session matches the new one's.
+    pub fn restart(&mut self) {
+        *self = Self {
+            chosen: std::mem::take(&mut self.chosen),
+            revision: self.revision,
+            book_action_revision: self.book_action_revision,
+            ..Self::default()
+        };
+    }
+
     /// The player's own choice of target, which the client tells the session
     /// separately; what the session makes of it arrives as news.
     pub fn select_target(&mut self, spawn: Option<u16>) {
@@ -352,6 +390,14 @@ impl ClientWorld {
             // The time of day, and how the zone's sky looks.
             WorldEvent::TimeOfDay(time) => self.time = Some((*time, now)),
             WorldEvent::Sky(sky) => self.zone.sky = Some(*sky),
+            WorldEvent::ServerSelection {
+                selection_id,
+                servers,
+            } => self.servers_offered(*selection_id, servers, news),
+            WorldEvent::ServerRefused {
+                selection_id,
+                refusal,
+            } => self.server_refused(*selection_id, refusal, news),
             WorldEvent::CharacterSelection {
                 selection_id,
                 characters,
@@ -875,6 +921,7 @@ impl ClientWorld {
                     self.buffs.clear();
                 }
                 if ended {
+                    self.servers = None;
                     self.characters = None;
                     self.pending_transfer = None;
                     self.inventory = Inventory::default();

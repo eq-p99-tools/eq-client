@@ -1,6 +1,6 @@
 #![doc = "Bevy scene and camera support for renderer-independent EQ zone assets."]
 
-use std::{path::PathBuf, sync::mpsc::Receiver};
+use std::path::PathBuf;
 use theme::Size;
 
 mod abilities;
@@ -28,6 +28,7 @@ mod inventory;
 mod item_models;
 mod items;
 mod keys;
+mod login;
 mod logs;
 mod map;
 mod motion;
@@ -75,7 +76,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Captured, Screenshot, save_to_disk};
 use eq_client_assets::characters::CharacterAsset;
 use eq_client_assets::{BlendOpacity, MaterialMode, ZoneAsset, ZonePrimitive};
-use eq_client_core::{WorldPosition, WorldUpdate, render_position, world_position};
+use eq_client_core::{WorldPosition, render_position, world_position};
 use image::{RgbaImage, imageops::FilterType};
 
 /// The projection used by the top-down camera.
@@ -97,16 +98,18 @@ pub enum ValidationAction {
     InspectFirstItem,
 }
 
+pub use login::{Availability, Connection, LoginServer, Logins, Session, Worker};
 pub use preview::Preview;
 
 /// Where the viewer's world comes from.
 pub enum Source {
-    /// A server session: its news, and the channel for the player's requests.
+    /// Servers: the login screen and the sessions it starts, beginning with
+    /// the session the launch began, if any.
     Online {
-        /// What the session tells the client.
-        updates: Receiver<WorldUpdate>,
-        /// What the player asks the session to send.
-        commands: std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>,
+        /// The login servers the login screen offers, and how to log in.
+        logins: Box<dyn Logins>,
+        /// The session the launch began, which skips the login screen.
+        session: Option<Session>,
     },
     /// No server. The offline preview, if it shows anything, stands in for one.
     Offline(Preview),
@@ -267,10 +270,16 @@ pub fn run(
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
     let window = primary_window(online, screenshot.is_none(), config.window_position);
     let mut app = App::new();
-    let (updates, commands) = match source {
-        Source::Online { updates, commands } => (Some(updates), Some(commands)),
-        Source::Offline(preview) => (preview::install(&mut app, preview), None),
+    let (front, updates, commands) = match source {
+        Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
+        Source::Offline(preview) => (
+            login::FrontEnd::default(),
+            preview::install(&mut app, preview),
+            None,
+        ),
     };
+    app.insert_resource(front);
+    app.insert_resource(login::LoginStrings::load(config.eq_directory.as_deref()));
     app.insert_resource(spellbook::SpellNames::load(config.eq_directory.as_deref()));
     app.insert_resource(hud::messages::Messages::load(
         config.eq_directory.as_deref(),
@@ -363,7 +372,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<raid::RaidChoice>()
         .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
-        .init_resource::<map::MapView>();
+        .init_resource::<map::MapView>()
+        .init_resource::<login::FrontEnd>();
 }
 
 /// What the tests of the windows start from.
@@ -463,7 +473,12 @@ fn schedule(app: &mut App) {
     .add_systems(
         Update,
         (
-            (online::receive, online::tick, daylight::update)
+            (
+                online::receive,
+                login::watch,
+                online::tick,
+                daylight::update,
+            )
                 .chain()
                 .in_set(Stage::Receive),
             (
@@ -475,6 +490,7 @@ fn schedule(app: &mut App) {
                 .chain()
                 .in_set(Stage::Scene),
             (
+                login::claim,
                 windows::pointer::wheel,
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
@@ -525,7 +541,10 @@ fn schedule(app: &mut App) {
                 spellbook::book_clicks,
                 spellbook::say_book_lines,
             ),
-            (character_select::update, character_select::names),
+            (
+                (login::form, login::worlds, login::light),
+                (character_select::update, character_select::names),
+            ),
             windows::input,
             move_player,
             motion::input,
@@ -548,6 +567,7 @@ fn schedule(app: &mut App) {
                 combat::target_color,
                 trade::present,
                 trade::scroll,
+                login::scroll,
                 skinned::scroll_lists,
                 motion::interpolate,
                 orbit_camera,
@@ -933,12 +953,11 @@ fn schedule_screenshot(
     mut commands: Commands,
     time: Res<Time>,
     request: Option<ResMut<CaptureRequest>>,
-    online: Res<online::OnlineState>,
+    (online, front): (Res<online::OnlineState>, Res<login::FrontEnd>),
 ) {
-    // Online, the scene is ready once the player is in the world, or once the
-    // character list shows.
-    let admitted = online.world().connected() && online.world().player().is_some();
-    if online.enabled && !admitted && online.selection.is_none() {
+    // Online, the scene is ready once the player is in the world, or once a
+    // login screen, the list of worlds or the character list shows.
+    if !front.settled(&online) {
         return;
     }
     let Some(mut request) = request else {

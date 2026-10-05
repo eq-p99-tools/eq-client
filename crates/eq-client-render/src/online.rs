@@ -44,6 +44,19 @@ impl OnlineState {
         self.world.apply(update, now, spells)
     }
 
+    /// Starts over for a new session: the world forgets what the servers
+    /// said, keeping the player's own choices, and no character choice is
+    /// in progress.
+    pub(super) fn restart(&mut self) {
+        self.world.restart();
+        self.selection = None;
+    }
+
+    /// The player asked to play on a world of the login server's list.
+    pub(super) fn ask_server(&mut self, index: usize) {
+        self.world.ask_server(index);
+    }
+
     /// Runs the world's clocks.
     pub(super) fn tick(&mut self, now: std::time::Instant, spells: &dyn SpellCatalog) {
         self.world.tick(now, spells);
@@ -487,6 +500,11 @@ pub(crate) mod testing {
     /// Puts a world a test built in place of the session's.
     pub(crate) fn set_world(state: &mut OnlineState, world: eq_client_core::world::ClientWorld) {
         state.world = world;
+    }
+
+    /// Applies one update as the session's receiver hands it over.
+    pub(crate) fn apply(state: &mut OnlineState, update: &WorldUpdate) {
+        state.world.apply(update, Instant::now(), &NoSpells);
     }
 
     /// Applies session news to the world.

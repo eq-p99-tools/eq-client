@@ -102,6 +102,11 @@ impl Outbox {
         }
     }
 
+    /// Sends to another session's queue from now on, or to none.
+    pub(crate) fn connect(&mut self, queue: Option<SyncSender<ClientCommand>>) {
+        self.queue = queue;
+    }
+
     /// The stamp for a command made now in the current admission.
     ///
     /// # Errors

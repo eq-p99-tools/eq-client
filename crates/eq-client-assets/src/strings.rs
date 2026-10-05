@@ -13,7 +13,22 @@ impl StringTable {
     ///
     /// Fails if the file cannot be read.
     pub fn read(eq_directory: &Path) -> io::Result<Self> {
-        let bytes = std::fs::read(eq_directory.join("eqstr_us.txt"))?;
+        Self::read_file(&eq_directory.join("eqstr_us.txt"))
+    }
+
+    /// Reads the login screen's own table, `eqlsstr_us.txt`, whose strings
+    /// a Titanium login server names by id. That it is laid out as
+    /// `eqstr_us.txt` is inferred; a table in another layout reads as empty.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the file cannot be read.
+    pub fn read_login(eq_directory: &Path) -> io::Result<Self> {
+        Self::read_file(&eq_directory.join("eqlsstr_us.txt"))
+    }
+
+    fn read_file(path: &Path) -> io::Result<Self> {
+        let bytes = std::fs::read(path)?;
         Ok(Self::parse(&String::from_utf8_lossy(&bytes)))
     }
 

@@ -1,5 +1,7 @@
 #![doc = "Command-line entry point for the offline EQ zone viewer."]
 
+mod logins;
+mod presets;
 mod session;
 
 use std::path::PathBuf;
@@ -120,24 +122,46 @@ struct Arguments {
     #[arg(long, default_value = "HUM")]
     character_model: String,
 
-    /// Connect using `EQ_ACCOUNT`, `EQ_PASSWORD`, `EQ_SERVER`, and `EQ_CHARACTER`.
-    /// Select P99 (default) or Quarm with `EQ_PROTOCOL`.
+    /// Log in at once with `EQ_ACCOUNT` and `EQ_PASSWORD`, skipping the login
+    /// screen, on the launch's login server: `--preset`, or else the first
+    /// preset of the `EQ_PROTOCOL` type (P99 by default), at `EQ_LOGIN_HOST`
+    /// and `EQ_LOGIN_PORT` where set.
     #[arg(long)]
     online: bool,
 
+    /// Open the offline zone viewer instead of the login screen.
+    #[arg(long, conflicts_with = "online")]
+    offline: bool,
+
+    /// The login server to start on, by its preset's name in
+    /// `login-servers.txt` in the settings directory; without it, the one
+    /// last played.
+    #[arg(long, env = "EQ_PRESET")]
+    preset: Option<String>,
+
+    /// The world to play on, skipping the login server's list, for sessions
+    /// on the launch's login server.
+    #[arg(long, env = "EQ_SERVER")]
+    server: Option<String>,
+
+    /// The character to enter, skipping the world's list, for sessions on
+    /// the launch's login server.
+    #[arg(long, env = "EQ_CHARACTER")]
+    character: Option<String>,
+
     /// JSON containing independently measured P99 movement calibration.
-    #[arg(long, requires = "online")]
+    #[arg(long)]
     movement_calibration: Option<PathBuf>,
 
-    /// End the network session after this many seconds (including admission).
-    #[arg(long, requires = "online")]
+    /// End each network session after this many seconds (including admission).
+    #[arg(long)]
     session_seconds: Option<u64>,
 
     /// When hungry or thirsty, eat and drink whatever comes first, as the
     /// official client does. By default food and drink with modifiers are
     /// left to eat or drink by hand. A character's own choice on the Options
     /// window's quality-of-life page wins over this.
-    #[arg(long, requires = "online")]
+    #[arg(long)]
     auto_eat_anything: bool,
 
     /// Hide placed objects to inspect terrain and material transitions.
@@ -213,17 +237,82 @@ fn parse_window_position(value: &str) -> Result<(i32, i32), String> {
     Ok((coordinate(x)?, coordinate(y)?))
 }
 
-/// The protocol an online session selects with `EQ_PROTOCOL` (P99 by
-/// default), read once for the whole run.
-fn online_protocol(online: bool) -> Result<Option<ServerProtocol>, String> {
-    if !online {
-        return Ok(None);
+/// How a run starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// The offline zone viewer.
+    Offline,
+    /// The login screen.
+    Login,
+    /// A session at once, with the environment's account and password.
+    Online,
+}
+
+/// How a run starts: offline when asked, for a demo, or for a script or
+/// screenshot that does not log in, as before the login screen; logged in
+/// at once with `--online`; at the login screen otherwise, a script's
+/// `login` step included.
+fn mode(arguments: &Arguments, script: Option<&[Step]>) -> Result<Mode, &'static str> {
+    let logs_in = script.is_some_and(|steps| steps.iter().any(|step| matches!(step, Step::Login)));
+    let demo = arguments.demo_entities
+        || arguments.demo_inventory
+        || arguments.demo_spellbook
+        || arguments.demo_character_select
+        || arguments.demo_trade;
+    if arguments.offline || arguments.inspect_only || demo {
+        return if logs_in {
+            Err("a script's login step needs the login screen, which this run leaves out")
+        } else {
+            Ok(Mode::Offline)
+        };
     }
-    let value = std::env::var("EQ_PROTOCOL").unwrap_or_else(|_| "p99".into());
-    value
-        .parse::<ServerProtocol>()
-        .map(Some)
-        .map_err(|error| format!("EQ_PROTOCOL={value:?}: {error}"))
+    if arguments.online {
+        return if logs_in {
+            Err("a script's login step types into the login screen, which --online skips")
+        } else {
+            Ok(Mode::Online)
+        };
+    }
+    if !logs_in && (script.is_some() || arguments.screenshot.is_some()) {
+        return Ok(Mode::Offline);
+    }
+    Ok(Mode::Login)
+}
+
+/// The preset a run begins on: the one named, else the first of the type
+/// the environment names (P99 for `--online`, as before presets), else the
+/// one last played, else the first.
+fn launch_preset(
+    presets: &mut presets::Presets,
+    name: Option<&str>,
+    environment: &presets::Endpoint,
+    online: bool,
+) -> Result<usize, String> {
+    if let Some(name) = name {
+        return presets.find(name).ok_or_else(|| {
+            format!("--preset {name:?}: login-servers.txt has no login server of that name")
+        });
+    }
+    let protocol = environment
+        .protocol
+        .or(online.then_some(ServerProtocol::Project1999));
+    if let Some(protocol) = protocol {
+        return Ok(presets
+            .list
+            .iter()
+            .position(|preset| preset.protocol == protocol)
+            .unwrap_or_else(|| {
+                presets
+                    .list
+                    .push(presets::Preset::new(presets::seed_name(protocol), protocol));
+                presets.list.len() - 1
+            }));
+    }
+    Ok(presets
+        .last
+        .as_deref()
+        .and_then(|last| presets.find(last))
+        .unwrap_or(0))
 }
 
 /// Refuses a script with local-only steps, `gm` and `chat`, unless the
@@ -270,19 +359,36 @@ fn main() {
         .map(load_calibration);
     // Validate every local input before the session logs in.
     let (script, script_follow) = script_input(&arguments);
-    let protocol = online_protocol(arguments.online).unwrap_or_else(|error| {
+    let mode = mode(&arguments, script.as_deref()).unwrap_or_else(|error| {
         eprintln!("error: {error}");
         std::process::exit(2);
     });
+    let settings_directory = arguments
+        .settings_dir
+        .clone()
+        .or_else(default_settings_directory);
+    let start = (mode != Mode::Offline).then(|| {
+        start_point(&arguments, mode, settings_directory.as_deref()).unwrap_or_else(|error| {
+            eprintln!("error: {error}");
+            std::process::exit(2);
+        })
+    });
+    let protocol = start
+        .as_ref()
+        .map(|(presets, launch)| presets.list[launch.preset].protocol);
     let local = local_session(script.is_some(), protocol);
     if let Err(error) = check_local_steps(script.as_deref(), local) {
         eprintln!("error: {error}");
         std::process::exit(2);
     }
     require_positive_distance(arguments.entity_distance);
+    let launch_installation = start
+        .as_ref()
+        .and_then(|(presets, launch)| presets.list[launch.preset].installation.clone());
     let eq_directory = arguments
         .eq_dir
         .take()
+        .or(launch_installation)
         .or_else(default_eq_directory)
         .unwrap_or_else(|| {
             eprintln!("error: pass --eq-dir or set EQ_CLIENT_DIR");
@@ -319,51 +425,132 @@ fn main() {
         character_select: arguments.demo_character_select,
         trade: arguments.demo_trade,
     };
-    let (worker, source) = if let Some(protocol) = protocol {
-        match session::SessionWorker::start(
-            &eq_directory,
-            protocol,
-            arguments.session_seconds,
-            calibration,
-            local,
-            if arguments.auto_eat_anything {
-                eq_client_core::food::AutoEat::Anything
-            } else {
-                eq_client_core::food::AutoEat::Plain
+    let source = match start {
+        None => Source::Offline(preview),
+        Some(start) => online_source(
+            start,
+            mode,
+            logins::Installation {
+                directory: eq_directory.clone(),
+                client: installed_client(protocol),
             },
-        ) {
-            Ok((worker, updates)) => {
-                let commands = worker.commands();
-                (Some(worker), Source::Online { updates, commands })
-            }
-            Err(error) => {
-                eprintln!("Cannot start session: {error:#}");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        (None, Source::Offline(preview))
+            settings_directory.clone(),
+            session_options(&arguments, &eq_directory, calibration, local),
+        ),
     };
     println!("Controls: WASD moves; right-drag orbits; the wheel zooms.");
     let config = viewer_config(
         arguments,
         protocol,
-        eq_directory,
+        (eq_directory, settings_directory),
         (script, script_follow),
         local,
     );
     let exit = eq_client_render::run(zone, character, config, source);
     tracing::info!("The client ends with status {exit}");
-    // Close the session before exiting with the viewer's status.
-    drop(worker);
     std::process::exit(exit);
+}
+
+/// The login screens, over the presets and the run's installation, and for
+/// `--online` a session already logging in on the launch's preset.
+fn online_source(
+    (presets, launch): (presets::Presets, logins::Launch),
+    mode: Mode,
+    installation: logins::Installation,
+    settings_directory: Option<PathBuf>,
+    options: session::SessionOptions,
+) -> Source {
+    let preset = launch.preset;
+    let launcher = logins::Launcher::new(
+        presets,
+        settings_directory,
+        installation,
+        options,
+        (launch, std::env::args_os().skip(1).collect()),
+    );
+    let session = (mode == Mode::Online).then(|| launch_session(&launcher, preset));
+    Source::Online {
+        logins: Box::new(launcher),
+        session,
+    }
+}
+
+/// What every session of the run shares, whichever preset it logs in on.
+fn session_options(
+    arguments: &Arguments,
+    install: &std::path::Path,
+    calibration: Option<eq_client_core::MotionCalibration>,
+    local_only: bool,
+) -> session::SessionOptions {
+    session::SessionOptions {
+        install: install.to_path_buf(),
+        seconds: arguments.session_seconds,
+        calibration,
+        local_only,
+        auto_eat: if arguments.auto_eat_anything {
+            eq_client_core::food::AutoEat::Anything
+        } else {
+            eq_client_core::food::AutoEat::Plain
+        },
+    }
+}
+
+/// The presets, and the launch's own preset, login server, world and
+/// character.
+fn start_point(
+    arguments: &Arguments,
+    mode: Mode,
+    settings_directory: Option<&std::path::Path>,
+) -> Result<(presets::Presets, logins::Launch), String> {
+    let environment = presets::Endpoint::from_environment()?;
+    let mut presets = presets::Presets::load(settings_directory, &environment);
+    if presets.list.is_empty() {
+        presets.list = presets::Presets::seeded(&environment).list;
+    }
+    let preset = launch_preset(
+        &mut presets,
+        arguments.preset.as_deref(),
+        &environment,
+        mode == Mode::Online,
+    )?;
+    let given = |value: &Option<String>| value.as_deref().unwrap_or_default().trim().to_owned();
+    let launch = logins::Launch {
+        preset,
+        endpoint: environment,
+        server: given(&arguments.server),
+        character: given(&arguments.character),
+    };
+    Ok((presets, launch))
+}
+
+/// The session `--online` begins at launch, with the environment's account
+/// and password; a run that cannot begin it ends before the window opens.
+fn launch_session(launcher: &logins::Launcher, preset: usize) -> eq_client_render::Session {
+    let variable = |name| {
+        std::env::var(name).unwrap_or_else(|_| {
+            eprintln!("error: --online needs {name} in the environment");
+            std::process::exit(2);
+        })
+    };
+    let (account, password) = (
+        variable("EQ_ACCOUNT"),
+        zeroize::Zeroizing::new(variable("EQ_PASSWORD")),
+    );
+    let Some(login) = launcher.login(preset, &account, &password) else {
+        eprintln!("error: the launch's login server is missing");
+        std::process::exit(2);
+    };
+    session::SessionWorker::start(login, launcher.options()).unwrap_or_else(|error| {
+        eprintln!("Cannot start session: {error:#}");
+        std::process::exit(1);
+    })
 }
 
 /// Viewer settings from the command line and the validated script.
 fn viewer_config(
     arguments: Arguments,
     protocol: Option<ServerProtocol>,
-    eq_directory: PathBuf,
+    (eq_directory, settings_directory): (PathBuf, Option<PathBuf>),
     (script, script_follow): ScriptInput,
     local: bool,
 ) -> ViewerConfig {
@@ -415,7 +602,7 @@ fn viewer_config(
         script_follow,
         local_session: local,
         ui_skin: arguments.ui_skin,
-        settings_directory: arguments.settings_dir.or_else(default_settings_directory),
+        settings_directory,
         window_position: arguments.window_position,
         debug_overlay: arguments.debug_overlay,
     }
@@ -425,11 +612,7 @@ fn viewer_config(
 /// the viewer reads by that client's rules. Offline, the installation is
 /// taken to be Titanium's, as the default `--eq-dir` is.
 fn installed_client(protocol: Option<ServerProtocol>) -> InstalledClient {
-    if protocol.is_none_or(ServerProtocol::is_titanium) {
-        InstalledClient::Titanium
-    } else {
-        InstalledClient::EqMac
-    }
+    protocol.map_or(InstalledClient::Titanium, logins::installed_client)
 }
 
 fn require_positive_distance(distance: f32) {
@@ -546,9 +729,11 @@ fn print_summary(zone: &ZoneAsset) {
 #[cfg(test)]
 mod tests {
     use super::{
-        InstalledClient, ServerProtocol, Step, check_local_steps, distance, finite,
-        installed_client, load_script, local_session, parse_window_position, seconds,
+        Arguments, InstalledClient, Mode, ServerProtocol, Step, check_local_steps, distance,
+        finite, installed_client, launch_preset, load_script, local_session, mode,
+        parse_window_position, presets, seconds,
     };
+    use clap::Parser;
 
     #[test]
     fn titanium_servers_and_offline_runs_read_a_titanium_installation() {
@@ -562,6 +747,63 @@ mod tests {
         for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
             assert_eq!(installed_client(Some(protocol)), InstalledClient::EqMac);
         }
+    }
+
+    #[test]
+    fn a_run_opens_the_login_screen_unless_it_is_offline_online_or_an_older_script() {
+        let run = |flags: &[&str], script: Option<&[Step]>| {
+            let arguments = Arguments::try_parse_from(
+                std::iter::once("eq-client").chain(flags.iter().copied()),
+            )
+            .unwrap();
+            mode(&arguments, script)
+        };
+        let login = [Step::Login, Step::WaitServers];
+        assert_eq!(run(&[], None), Ok(Mode::Login));
+        assert_eq!(run(&[], Some(&login)), Ok(Mode::Login));
+        assert_eq!(run(&["--online"], None), Ok(Mode::Online));
+        for offline in [
+            &["--offline"][..],
+            &["--inspect-only"],
+            &["--demo-inventory"],
+            &["--screenshot", "a.png"],
+        ] {
+            assert_eq!(run(offline, None), Ok(Mode::Offline), "{offline:?}");
+        }
+        // Scripts written before the login screen still open the viewer.
+        assert_eq!(run(&[], Some(&[Step::Face])), Ok(Mode::Offline));
+        // A login step needs the screen it types into.
+        assert!(run(&["--online"], Some(&login)).is_err());
+        assert!(run(&["--offline"], Some(&login)).is_err());
+        assert!(Arguments::try_parse_from(["eq-client", "--online", "--offline"]).is_err());
+    }
+
+    #[test]
+    fn a_run_begins_on_the_named_preset_else_the_environments_type_else_the_last() {
+        let none = presets::Endpoint::default();
+        let mut presets = presets::Presets::seeded(&none);
+        assert_eq!(
+            launch_preset(&mut presets, Some("local takp"), &none, false),
+            Ok(3)
+        );
+        assert!(launch_preset(&mut presets, Some("Nowhere"), &none, false).is_err());
+        let eqemu = presets::Endpoint {
+            protocol: Some(ServerProtocol::EqEmu),
+            ..presets::Endpoint::default()
+        };
+        assert_eq!(launch_preset(&mut presets, None, &eqemu, false), Ok(2));
+        // `--online` without a server type logs in on P99, as before presets.
+        assert_eq!(launch_preset(&mut presets, None, &none, true), Ok(0));
+        presets.last = Some("Project Quarm".into());
+        assert_eq!(launch_preset(&mut presets, None, &none, false), Ok(1));
+        presets.last = None;
+        assert_eq!(launch_preset(&mut presets, None, &none, false), Ok(0));
+        // A type the player removed comes back as its seed.
+        presets
+            .list
+            .retain(|preset| preset.protocol != ServerProtocol::EqEmu);
+        assert_eq!(launch_preset(&mut presets, None, &eqemu, false), Ok(3));
+        assert_eq!(presets.list[3].protocol, ServerProtocol::EqEmu);
     }
 
     #[test]

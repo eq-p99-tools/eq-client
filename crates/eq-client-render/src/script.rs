@@ -285,9 +285,10 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    (mut chat, mut moves): (
+    (mut chat, mut moves, mut front): (
         ResMut<super::chat::ChatState>,
         ResMut<super::windows::Moves>,
+        ResMut<super::login::FrontEnd>,
     ),
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
@@ -445,12 +446,19 @@ pub(super) fn drive(
                 }
                 elapsed >= *duration
             }
-            Step::WaitSelect | Step::WaitOnline | Step::WaitZone(_) => {
+            Step::WaitServers | Step::WaitSelect | Step::WaitOnline | Step::WaitZone(_) => {
                 if elapsed > MAX_ONLINE_WAIT {
                     script.stop(&mut keys, &mut mouse, "server state did not arrive");
                     return;
                 }
                 match &step {
+                    Step::WaitServers => {
+                        front.screen(&online) == super::login::Screen::Servers
+                            && online
+                                .world()
+                                .servers()
+                                .is_some_and(|list| list.asked.is_none())
+                    }
                     Step::WaitSelect => online.selection.is_some(),
                     Step::WaitZone(zone) => {
                         online.world().connected()
@@ -578,6 +586,35 @@ pub(super) fn drive(
             }
             script.held.clone_from(chord);
         }
+        Step::Login => {
+            if front.screen(&online) != super::login::Screen::Login || front.running() {
+                script.stop(&mut keys, &mut mouse, "login needs the login screen");
+            } else if let Err(reason) = front.type_scripted() {
+                script.stop(&mut keys, &mut mouse, reason);
+            } else {
+                front.request = Some(super::login::Request::Connect);
+            }
+            return;
+        }
+        Step::Server(name) => {
+            let listed = online.world().servers().and_then(|list| {
+                list.servers
+                    .iter()
+                    .position(|server| server.name.eq_ignore_ascii_case(name))
+                    .map(|index| (index, list.servers[index].status.open()))
+            });
+            match listed {
+                Some((index, true)) => {
+                    front.highlighted = Some(index);
+                    front.request = Some(super::login::Request::Play);
+                }
+                Some((_, false)) => {
+                    script.stop(&mut keys, &mut mouse, "world takes no players now");
+                }
+                None => script.stop(&mut keys, &mut mouse, "world is not listed"),
+            }
+            return;
+        }
         Step::Select(name) => {
             if !online
                 .selection
@@ -668,7 +705,8 @@ pub(super) fn drive(
             };
             script.route = Some(route);
         }
-        Step::WaitSelect
+        Step::WaitServers
+        | Step::WaitSelect
         | Step::WaitOnline
         | Step::WaitZone(_)
         | Step::Wait(_)

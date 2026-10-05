@@ -376,23 +376,28 @@ impl KeyMap {
     }
 }
 
-/// Whether a box the player types in has the keyboard: the chat's line or
-/// the quantity window's number, never both. Only those boxes change it;
-/// everything else that takes keys asks it, through [`Keys`].
+/// Whether a box the player types in has the keyboard: the chat's line,
+/// the quantity window's number, or the login screens. Only those change
+/// it; everything else that takes keys asks it, through [`Keys`].
 #[derive(Resource, Default, Debug)]
+#[allow(clippy::struct_excessive_bools)] // Each box holds the keyboard on its own.
 pub(crate) struct Typing {
     /// The player is typing a chat line.
     pub composing: bool,
     /// The player is typing a number in the quantity window.
     pub counting: bool,
+    /// A login screen is up: the login window or the login server's list,
+    /// whose boxes and keys are their own.
+    pub logging_in: bool,
     /// This frame's Escape closed the chat line or left the quantity
     /// window's number, so nothing else takes it.
     pub escape_consumed: bool,
 }
 
 /// The keyboard as the game sees it: the bindings, and whether the game has
-/// the keyboard at all (the window has focus and the chat is not being
-/// typed in). Systems that take keys read them through this.
+/// the keyboard at all (the window has focus, the chat is not being typed
+/// in and no login screen is up). Systems that take keys read them through
+/// this.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Keys<'w, 's> {
     /// The raw keyboard, for keys outside the map such as Escape and Shift-click.
@@ -418,7 +423,10 @@ impl Keys<'_, '_> {
 
     /// Whether the game has the keyboard.
     pub(crate) fn focused(&self) -> bool {
-        !self.typing.composing && !self.typing.counting && self.window_focused()
+        !self.typing.composing
+            && !self.typing.counting
+            && !self.typing.logging_in
+            && self.window_focused()
     }
 
     /// Whether this frame's Escape belongs to the game, not to closing the chat.
