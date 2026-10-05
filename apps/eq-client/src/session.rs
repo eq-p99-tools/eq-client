@@ -30,7 +30,7 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
     {
         return Some(WorldUpdate::ServerMessage {
             string_id,
-            arguments: vec![speaker.clone(), message.text.clone()],
+            arguments: vec![speaker.clone().into(), message.clone().into()],
             message_type: event.message_type,
         });
     }
@@ -41,7 +41,7 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
                 .arguments
                 .unwrap_or_default()
                 .into_iter()
-                .map(|argument| argument.text)
+                .map(Into::into)
                 .collect(),
             message_type: event.message_type,
         });
