@@ -116,6 +116,7 @@ fn track(
     let world = online.world();
     let now = time.elapsed_secs();
     let admission = world.session_id();
+    let settled = world.connected() && nearby.is_none_or(|nearby| nearby.settled());
     let phase = if !online.enabled || world.ended() {
         // Offline, or the session is over and the screen says why.
         Phase::Clear
@@ -139,7 +140,6 @@ fn track(
             }
         } else {
             let since = drawn.unwrap_or(now);
-            let settled = world.connected() && nearby.is_none_or(|nearby| nearby.settled());
             let waited = now - since;
             if waited < MOST && (waited < SETTLE || !settled) {
                 Phase::Arriving(admitted, Some(since))
@@ -151,9 +151,39 @@ fn track(
         // In the zone, or the server refused the transfer.
         Phase::Clear
     };
+    if loading.phase != phase {
+        report(loading.phase, phase, settled);
+    }
     if loading.phase != phase || loading.admission != admission {
         loading.phase = phase;
         loading.admission = admission;
+    }
+}
+
+/// Logs the cover going up and down, so a session's log says when each zone
+/// change kept the player waiting and whether the spawns around them were
+/// all drawn when it lifted.
+fn report(before: Phase, after: Phase, settled: bool) {
+    match (before, after) {
+        (_, Phase::Moving(_)) => info!("Loading screen up: a transfer began"),
+        (Phase::Arriving(_, None), Phase::Arriving(_, Some(_))) => {
+            info!("Loading screen held: the zone's scene is drawn");
+        }
+        (Phase::Moving(_), Phase::Arriving(..)) => {
+            info!("Loading screen held: a zone admitted the player");
+        }
+        (_, Phase::Arriving(..)) => info!("Loading screen up: a zone admitted the player"),
+        (_, Phase::Stuck) => {
+            warn!("Loading screen lifted: no zone admitted the player in {STUCK} s");
+        }
+        (Phase::Arriving(_, None), Phase::Clear) => {
+            warn!("Loading screen down before the zone's scene loaded");
+        }
+        (Phase::Arriving(..), Phase::Clear) => info!(settled, "Loading screen down: in the zone"),
+        (Phase::Moving(_), Phase::Clear) => {
+            info!("Loading screen down: the transfer ended without a new zone");
+        }
+        _ => {}
     }
 }
 

@@ -404,8 +404,19 @@ pub(super) fn receive(
                 let zone = state.world.zone().to_owned();
                 let directory = directory.clone();
                 state.loading.start(id, move || {
-                    super::zone::Entry::admission(&zone, &player, &directory)
-                        .map(super::zone::Entry::prepare)
+                    let loading = std::time::Instant::now();
+                    let entry = super::zone::Entry::admission(&zone, &player, &directory)
+                        .map(super::zone::Entry::prepare);
+                    if entry.is_ok() {
+                        // Read and prepared off the frame thread, behind the
+                        // loading screen.
+                        info!(
+                            zone = zone.as_str(),
+                            milliseconds = loading.elapsed().as_millis(),
+                            "Zone loaded"
+                        );
+                    }
+                    entry
                 });
             }
         }
@@ -1270,7 +1281,7 @@ mod tests {
                     spawn_id: 7,
                     current,
                     maximum,
-                    without_items: false,
+                    items: eq_client_core::ItemHitPoints::LeftOut,
                 }))
                 .unwrap();
             app.update();
