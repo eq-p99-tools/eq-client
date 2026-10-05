@@ -208,6 +208,14 @@ impl Casting {
                 self.requested = None;
                 Some(CastNews::Ended)
             }
+            // A request that ended before any cast began, as a fizzle does.
+            SpellUpdate::Mana {
+                spell_id,
+                keep_casting: false,
+            } if self.cast.is_none() && self.requested == Some(spell_id) => {
+                self.requested = None;
+                None
+            }
             _ => None,
         }
     }
@@ -359,6 +367,14 @@ mod tests {
             assert!(casting.observe(7, &gems, &end, now).is_some());
             assert!(casting.cast.is_none());
         }
+        // A request that ends before anything began is forgotten.
+        let mut casting = Casting::default();
+        casting.pend(Some(42));
+        casting.pend(None);
+        assert_eq!(casting.observe(7, &gems, &ended(42), now), None);
+        casting.observe(7, &gems, &began, now);
+        assert_eq!(casting.observe(7, &gems, &ended(42), now), None);
+        assert!(casting.cast.is_some());
         // A new request forgets the last one's spell.
         let mut casting = Casting::default();
         casting.pend(Some(42));
