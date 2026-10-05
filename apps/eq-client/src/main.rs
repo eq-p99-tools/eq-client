@@ -80,8 +80,9 @@ struct Arguments {
     #[arg(long)]
     max_fps: Option<u32>,
 
-    /// Add coordinates, the movement mode and the nearby-entity count to the
-    /// status box, for development and live checks.
+    /// Add the zone's short name, coordinates, the movement mode and the
+    /// nearby-entity count to the status box, for development and live
+    /// checks.
     #[arg(long)]
     debug_overlay: bool,
 
