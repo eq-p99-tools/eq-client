@@ -62,8 +62,8 @@ pub use eq_network_game::zoning::ZoneRejection;
 
 pub use eq_network_game::buffs::{Buff, BuffUpdate, SpellEffect};
 pub use eq_network_game::world::{
-    BaseAttributes, CampStatus, Capability, Coins, PlayerState, Position as WorldPosition,
-    PostureState, SpawnKind, SpawnState, WorldEvent,
+    BaseAttributes, CampStatus, Capability, Coins, ItemHitPoints, PlayerState,
+    Position as WorldPosition, PostureState, SpawnKind, SpawnState, WorldEvent,
 };
 
 /// Messages crossing the worker/presentation boundary. Queues are bounded by the host.
