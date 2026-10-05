@@ -3,7 +3,9 @@
 //! (Gate, a zone line, the trip back to the bind after a death) until the
 //! new zone is drawn with the spawns around the player in it. At Enter World,
 //! character select's own cover waits for the admission and this one takes
-//! over until the zone has settled. Offline there is nothing to wait for.
+//! over until the zone has settled. The zone's scene loads in the
+//! background after its admission, and the cover waits for it before it
+//! waits for the spawns. Offline there is nothing to wait for.
 //!
 //! So the player never sees the old zone hang on while the transfer runs,
 //! the frame freeze while the new zone loads, or the new zone's windows and
@@ -16,11 +18,13 @@ use bevy::prelude::*;
 /// The least time the cover stays once the zone is admitted, so its windows
 /// and the chat have laid out before they show.
 const SETTLE: f32 = 0.25;
-/// The most it stays once the zone is admitted, whatever is still to come.
+/// The most it stays once the zone's scene is drawn, whatever spawns are
+/// still to come.
 const MOST: f32 = 4.0;
-/// The most it stays while a transfer runs. A transfer that hangs this long
-/// is stuck, and the player sees the old zone again, with the status box
-/// saying where the connection stands.
+/// The most it stays while a transfer runs, or while an admitted zone's
+/// scene loads. A transfer that hangs this long is stuck, and the player
+/// sees the old zone again, with the status box saying where the connection
+/// stands; a load that hangs this long shows the zone as far as it got.
 const STUCK: f32 = 30.0;
 /// Over every window and screen. The cover takes the pointer, so nothing
 /// under it reacts or shows a tooltip.
@@ -46,15 +50,16 @@ enum Phase {
     /// The transfer ran longer than [`STUCK`]: the cover is down until a zone
     /// admits the player.
     Stuck,
-    /// A zone admitted the player this many seconds into the run, and the
-    /// spawns around them are coming in.
-    Arriving(f32),
+    /// A zone admitted the player at the first time into the run. Its scene
+    /// was drawn at the second, or is still loading while there is none,
+    /// and then the spawns around the player are coming in.
+    Arriving(f32, Option<f32>),
 }
 
 impl Loading {
     /// Whether the cover is up.
     pub(crate) fn covered(&self) -> bool {
-        matches!(self.phase, Phase::Moving(_) | Phase::Arriving(_))
+        matches!(self.phase, Phase::Moving(_) | Phase::Arriving(..))
     }
 }
 
@@ -98,8 +103,9 @@ fn spawn(mut commands: Commands) {
 
 /// Follows the move between zones: a transfer the server offered puts the
 /// cover up for up to [`STUCK`] seconds, and a new admission keeps it up
-/// until the spawns around the player are drawn, at least [`SETTLE`] and at
-/// most [`MOST`] seconds.
+/// while its scene loads, for up to [`STUCK`] seconds, then until the spawns
+/// around the player are drawn, at least [`SETTLE`] and at most [`MOST`]
+/// seconds after the scene.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn track(
     time: Res<Time>,
@@ -117,20 +123,30 @@ fn track(
     } else if admission != loading.admission {
         // A new admission brings its zone. None means the player camped or
         // the connection dropped, and character select has its own cover.
-        admission.map_or(Phase::Clear, |_| Phase::Arriving(now))
+        let drawn = (!online.scene_loading()).then_some(now);
+        admission.map_or(Phase::Clear, |_| Phase::Arriving(now, drawn))
     } else if world.pending_transfer().is_some() {
         match loading.phase {
             Phase::Moving(since) if now - since >= STUCK => Phase::Stuck,
             Phase::Moving(since) => Phase::Moving(since),
             Phase::Stuck => Phase::Stuck,
-            Phase::Clear | Phase::Arriving(_) => Phase::Moving(now),
+            Phase::Clear | Phase::Arriving(..) => Phase::Moving(now),
         }
-    } else if let Phase::Arriving(since) = loading.phase {
-        let waited = now - since;
-        if waited < MOST && (waited < SETTLE || !settled) {
-            Phase::Arriving(since)
+    } else if let Phase::Arriving(admitted, drawn) = loading.phase {
+        if online.scene_loading() {
+            if now - admitted < STUCK {
+                Phase::Arriving(admitted, None)
+            } else {
+                Phase::Clear
+            }
         } else {
-            Phase::Clear
+            let since = drawn.unwrap_or(now);
+            let waited = now - since;
+            if waited < MOST && (waited < SETTLE || !settled) {
+                Phase::Arriving(admitted, Some(since))
+            } else {
+                Phase::Clear
+            }
         }
     } else {
         // In the zone, or the server refused the transfer.
@@ -151,14 +167,20 @@ fn track(
 fn report(before: Phase, after: Phase, settled: bool) {
     match (before, after) {
         (_, Phase::Moving(_)) => info!("Loading screen up: a transfer began"),
-        (Phase::Moving(_), Phase::Arriving(_)) => {
+        (Phase::Arriving(_, None), Phase::Arriving(_, Some(_))) => {
+            info!("Loading screen held: the zone's scene is drawn");
+        }
+        (Phase::Moving(_), Phase::Arriving(..)) => {
             info!("Loading screen held: a zone admitted the player");
         }
-        (_, Phase::Arriving(_)) => info!("Loading screen up: a zone admitted the player"),
+        (_, Phase::Arriving(..)) => info!("Loading screen up: a zone admitted the player"),
         (_, Phase::Stuck) => {
             warn!("Loading screen lifted: no zone admitted the player in {STUCK} s");
         }
-        (Phase::Arriving(_), Phase::Clear) => info!(settled, "Loading screen down: in the zone"),
+        (Phase::Arriving(_, None), Phase::Clear) => {
+            warn!("Loading screen down before the zone's scene loaded");
+        }
+        (Phase::Arriving(..), Phase::Clear) => info!(settled, "Loading screen down: in the zone"),
         (Phase::Moving(_), Phase::Clear) => {
             info!("Loading screen down: the transfer ended without a new zone");
         }
@@ -271,6 +293,54 @@ mod tests {
         assert!(after(&mut app, 0.0));
         assert!(after(&mut app, MOST - 0.5));
         assert!(!after(&mut app, 0.5));
+    }
+
+    /// Loads the admitted zone's scene in the background until `release`
+    /// is used, and takes it once it is done, as the next batch does.
+    fn load_scene(app: &mut App, release: &std::sync::mpsc::Sender<()>) {
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !testing::take_scene(&mut online(app)) {
+            assert!(std::time::Instant::now() < deadline, "the load never ended");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn the_cover_waits_for_the_zone_to_load_but_not_for_ever() {
+        let mut app = app(true);
+        testing::admit(&mut online(&mut app), 1, testing::player(7));
+        let release = testing::hold_scene(&mut online(&mut app));
+        assert!(after(&mut app, 0.0));
+        // The spawns' limit counts from the scene, not the admission.
+        assert!(after(&mut app, MOST + 1.0));
+        load_scene(&mut app, &release);
+        assert!(after(&mut app, 0.0));
+        assert!(after(&mut app, 0.1));
+        assert!(!after(&mut app, SETTLE));
+        // A load that hangs lifts it once it has waited as long as a stuck
+        // transfer.
+        testing::admit(&mut online(&mut app), 2, testing::player(7));
+        let _held = testing::hold_scene(&mut online(&mut app));
+        assert!(after(&mut app, 0.0));
+        assert!(after(&mut app, STUCK - 1.0));
+        assert!(!after(&mut app, 2.0));
+    }
+
+    #[test]
+    fn spawns_that_never_all_come_in_hold_the_cover_at_most_after_the_scene() {
+        let mut app = app(true);
+        app.init_resource::<crate::entities::NearbyEntities>();
+        testing::admit(&mut online(&mut app), 1, testing::player(7));
+        let release = testing::hold_scene(&mut online(&mut app));
+        assert!(after(&mut app, 0.0));
+        assert!(after(&mut app, 2.0));
+        load_scene(&mut app, &release);
+        // A model that never loads leaves the spawns unsettled, and the
+        // cover still lifts once it has waited its most after the scene.
+        assert!(after(&mut app, 0.0));
+        assert!(after(&mut app, MOST - 0.5));
+        assert!(!after(&mut app, 1.0));
     }
 
     #[test]

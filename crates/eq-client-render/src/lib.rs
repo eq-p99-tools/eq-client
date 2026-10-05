@@ -5,6 +5,7 @@ use theme::Size;
 
 mod abilities;
 mod attention;
+mod background;
 mod book_delete;
 mod buffs;
 mod character;
@@ -774,7 +775,8 @@ fn setup_scene(
             character,
             placed: Transform::from_translation(player_position),
             body,
-        },
+        }
+        .prepare(),
         settings.0.terrain_only,
         &mut online.regions,
     );
@@ -955,11 +957,10 @@ fn schedule_screenshot(
     time: Res<Time>,
     request: Option<ResMut<CaptureRequest>>,
     online: Res<online::OnlineState>,
+    loading: Option<Res<loading::Loading>>,
 ) {
-    // Online, the scene is ready once the player is in the world, or once the
-    // character list shows.
-    let admitted = online.world().connected() && online.world().player().is_some();
-    if online.enabled && !admitted && online.selection.is_none() {
+    let covered = loading.is_some_and(|loading| loading.covered());
+    if !screenshot_ready(&online, covered) {
         return;
     }
     let Some(mut request) = request else {
@@ -974,6 +975,15 @@ fn schedule_screenshot(
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
     commands.remove_resource::<CaptureRequest>();
+}
+
+/// Whether a screenshot may count down: offline at once; online once the
+/// character list shows, or once the player is in a zone with the loading
+/// screen lifted, as a script's wait for the zone has it. The screen stays up
+/// while the zone's scene loads, so the picture is the zone, not the cover.
+fn screenshot_ready(online: &online::OnlineState, covered: bool) -> bool {
+    let admitted = online.world().connected() && online.world().player().is_some();
+    !online.enabled || online.selection.is_some() || (admitted && !covered)
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -1574,6 +1584,19 @@ fn unobstructed_orbit(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_screenshot_waits_for_the_loading_screen_to_lift() {
+        use super::*;
+        let mut online = online::OnlineState::new(true);
+        assert!(!screenshot_ready(&online, false));
+        online::testing::admit(&mut online, 1, online::testing::player(7));
+        // In the zone, but the cover is still up while its scene loads.
+        assert!(!screenshot_ready(&online, true));
+        assert!(screenshot_ready(&online, false));
+        // Offline there is nothing to wait for.
+        assert!(screenshot_ready(&online::OnlineState::new(false), true));
+    }
+
     #[test]
     fn the_status_box_shows_only_while_it_has_something_to_say() {
         use super::*;

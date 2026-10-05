@@ -11,6 +11,10 @@ pub(super) struct NearbyEntities {
     pub(super) rendered: BTreeMap<u16, Entity>,
     revisions: BTreeMap<u16, u64>,
     models: BTreeMap<&'static str, Option<character::PreparedCharacter>>,
+    loading: Option<(
+        &'static str,
+        super::background::Background<Option<eq_client_assets::characters::CharacterAsset>>,
+    )>,
     elapsed: f32,
     /// Whether the last pass drew every spawn it chose, so none is still to
     /// pop in.
@@ -25,6 +29,7 @@ impl NearbyEntities {
             commands.entity(entity).despawn();
         }
         self.models.clear();
+        self.loading = None;
         self.revisions.clear();
         self.settled = false;
     }
@@ -42,8 +47,9 @@ impl NearbyEntities {
 }
 
 /// How long a frame may spend drawing spawns while the loading screen hides
-/// them coming in. Out in the open, one is drawn every tenth of a second,
-/// so reading a new model from disk never stalls the picture for long.
+/// them coming in. Out in the open, one is drawn every tenth of a second.
+/// Either way a model is read from disk in the background, so a frame only
+/// puts the ones already read in place.
 const HURRIED: std::time::Duration = std::time::Duration::from_millis(40);
 
 #[derive(Component)]
@@ -53,12 +59,9 @@ pub(super) struct RemoteEntity {
     report: Option<(eq_client_core::WorldPosition, [f32; 3], std::time::Instant)>,
 }
 
-/// The stores a drawn spawn's meshes, textures and materials go in.
-type Stores<'a> = (
-    &'a mut Assets<Image>,
-    &'a mut Assets<Mesh>,
-    &'a mut Assets<StandardMaterial>,
-);
+/// The stores a drawn spawn's meshes and materials go in; its model's
+/// textures went in when the model was read.
+type Stores<'a> = (&'a mut Assets<Mesh>, &'a mut Assets<StandardMaterial>);
 
 /// Maintains a bounded nearby set. Out in the open, at most one new model is
 /// instantiated every tenth of a second; behind the loading screen, as many
@@ -83,6 +86,12 @@ pub(super) fn reconcile(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     if !state.world().connected() {
+        nearby_state.loading = None;
+        return;
+    }
+    // The spawns come once the zone has loaded, or failed to: one whose
+    // files are missing still shows its spawns.
+    if state.scene_loading() {
         return;
     }
     let Some(player) = state.world().player() else {
@@ -94,6 +103,15 @@ pub(super) fn reconcile(
         return;
     };
     let hurried = loading.is_some_and(|loading| loading.covered());
+    if let Some((code, job)) = &mut nearby_state.loading
+        && let Some(asset) = job.poll(state.world().session_id())
+    {
+        let code = *code;
+        let prepared =
+            asset.map(|asset| character::prepare(asset, &mut images, &mut meshes, &mut materials));
+        nearby_state.models.insert(code, prepared);
+        nearby_state.loading = None;
+    }
     nearby_state.elapsed += time.delta_secs();
     if !hurried && nearby_state.elapsed < 0.1 {
         return;
@@ -148,43 +166,50 @@ pub(super) fn reconcile(
         if drawn > 0 && (!hurried || started.elapsed() >= HURRIED) {
             break;
         }
-        draw(
+        if draw(
             &mut commands,
             &state,
             directory,
             id,
             &mut nearby_state,
-            (&mut images, &mut meshes, &mut materials),
-        );
-        drawn += 1;
+            (&mut meshes, &mut materials),
+        ) {
+            drawn += 1;
+        }
     }
     nearby_state.settled = drawn == missing.len();
 }
 
-/// Draws one spawn near the player: its race's model, read from the
-/// installation the first time the zone shows that race, or a marker.
+/// Draws one spawn near the player: its race's model, or a marker. The
+/// first time the zone shows a race, its model is read from the
+/// installation in the background and the spawn waits for it; says whether
+/// the spawn was drawn.
 fn draw(
     commands: &mut Commands,
     state: &OnlineState,
     directory: &std::path::Path,
     id: u16,
     nearby_state: &mut NearbyEntities,
-    (images, meshes, materials): Stores,
-) {
+    (meshes, materials): Stores,
+) -> bool {
     let spawn = &state.world().spawns()[&id].state;
     let model = races::model(spawn.race, spawn.gender);
-    let asset = model.and_then(|code| {
-        nearby_state
-            .models
-            .entry(code)
-            .or_insert_with(|| {
-                // Cache failures too, avoiding repeated disk reads for unsupported models.
-                load_installed_character(directory, state.world().zone(), code)
-                    .ok()
-                    .map(|asset| character::prepare(asset, images, meshes, materials))
-            })
-            .clone()
-    });
+    if let Some(code) = model
+        && !nearby_state.models.contains_key(code)
+    {
+        if nearby_state.loading.is_none() {
+            let directory = directory.to_path_buf();
+            let zone = state.world().zone().to_owned();
+            let mut job = super::background::Background::default();
+            job.start(state.world().session_id().unwrap_or_default(), move || {
+                load_installed_character(&directory, &zone, code).ok()
+            });
+            nearby_state.loading = Some((code, job));
+        }
+        return false;
+    }
+    // Cache failures too, avoiding repeated reads for unsupported models.
+    let asset = model.and_then(|code| nearby_state.models.get(code).cloned().flatten());
     let corpse = matches!(spawn.kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse);
     let position = Vec3::from_array(render_position(spawn.position));
     let entity = commands
@@ -254,6 +279,7 @@ fn draw(
     nearby_state
         .revisions
         .insert(id, state.world().spawns()[&id].revision);
+    true
 }
 
 /// Interpolates between received locations without extrapolating beyond the server.
