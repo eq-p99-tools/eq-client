@@ -105,7 +105,15 @@ impl Bindings {
     pub(crate) fn gem(&self, slot: usize) -> Option<usize> {
         match self.0.get(slot).copied().flatten()? {
             Action::Gem(gem) => Some(usize::from(gem)),
-            Action::Sit | Action::Stand | Action::Item { .. } | Action::Ability(_) => None,
+            Action::Sit
+            | Action::Stand
+            | Action::Item { .. }
+            | Action::Ability(_)
+            | Action::Attack
+            | Action::Camp
+            | Action::Invite
+            | Action::Follow
+            | Action::Disband => None,
         }
     }
 }
@@ -330,6 +338,11 @@ pub(crate) fn presentation(
                 Some(Action::Stand) => "Stand".into(),
                 Some(Action::Item { .. }) => "Item".into(),
                 Some(Action::Ability(ability)) => ability.name().into(),
+                Some(Action::Attack) => "Attack".into(),
+                Some(Action::Camp) => "Camp".into(),
+                Some(Action::Invite) => "Invite".into(),
+                Some(Action::Follow) => "Follow".into(),
+                Some(Action::Disband) => "Disband".into(),
                 None => "-".into(),
             };
         }
@@ -378,6 +391,11 @@ fn hovered_detail(
         },
         Some(Action::Sit) => "Sit down".into(),
         Some(Action::Stand) => "Stand up".into(),
+        Some(Action::Attack) => "Melee attack\nTurns auto attack on or off".into(),
+        Some(Action::Camp) => "Camp\nSits down and leaves the world".into(),
+        Some(Action::Invite) => "Invite\nInvites the target into your group".into(),
+        Some(Action::Follow) => "Follow\nJoins the group you were invited to".into(),
+        Some(Action::Disband) => "Disband\nLeaves your group, or declines an invitation".into(),
         Some(Action::Ability(ability)) => match world.ability_wait(ability, now) {
             Some(wait) => format!(
                 "{}\nAvailable in {:.0}s",
@@ -423,8 +441,10 @@ fn bound_item<'a>(
 
 /// What a slot needs of the session for what it holds, as the command it
 /// sends needs it (`ClientCommand::capability`): sitting and standing are
-/// moves, an ability is one the server type lists, and a gem's spell or an
-/// item's click effect is a cast. An empty slot needs nothing.
+/// moves, an ability is one the server type lists, a gem's spell or an
+/// item's click effect is a cast, melee attack is combat, camping is
+/// camping, and inviting, following and disbanding are grouping. An empty
+/// slot needs nothing.
 pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
     use crate::outbox::Needs;
     use eq_client_core::Capability;
@@ -433,6 +453,11 @@ pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
         Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Moving),
         Some(Action::Ability(ability)) => Needs::Ability(ability),
         Some(Action::Gem(_) | Action::Item { .. }) => Needs::Capability(Capability::Casting),
+        Some(Action::Attack) => Needs::Capability(Capability::Combat),
+        Some(Action::Camp) => Needs::Capability(Capability::Camping),
+        Some(Action::Invite | Action::Follow | Action::Disband) => {
+            Needs::Capability(Capability::Grouping)
+        }
     }
 }
 
@@ -512,6 +537,47 @@ mod tests {
         }
         let bash = eq_client_core::abilities::Ability::Bash;
         assert_eq!(need(Some(Action::Ability(bash))), Needs::Ability(bash));
+    }
+
+    #[test]
+    fn the_actions_windows_kinds_need_what_their_commands_need() {
+        use crate::outbox::Needs;
+        use eq_client_core::ClientCommand;
+        let created = std::time::Instant::now();
+        let sent = [
+            (
+                Action::Attack,
+                ClientCommand::AutoAttack {
+                    session_id: 1,
+                    enabled: true,
+                    created,
+                },
+            ),
+            (
+                Action::Camp,
+                ClientCommand::Camp {
+                    session_id: 1,
+                    created,
+                },
+            ),
+            (
+                Action::Invite,
+                ClientCommand::InviteToGroup {
+                    session_id: 1,
+                    name: "Example".into(),
+                },
+            ),
+            (Action::Follow, ClientCommand::FollowGroup { session_id: 1 }),
+            (Action::Disband, ClientCommand::Disband { session_id: 1 }),
+        ];
+        for (action, command) in sent {
+            let capability = command.capability().unwrap();
+            assert_eq!(
+                need(Some(action)),
+                Needs::Capability(capability),
+                "{action:?}"
+            );
+        }
     }
 
     #[test]
