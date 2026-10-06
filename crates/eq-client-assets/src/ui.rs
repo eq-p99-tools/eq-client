@@ -94,6 +94,9 @@ pub enum UiLayoutError {
     /// The window file defines no window of that name.
     #[error("the skin defines no window {0}")]
     MissingWindow(String),
+    /// The set of interface files has no file of that name.
+    #[error("the skin's set of interface files has no {0}")]
+    MissingFile(String),
     /// A texture sheet is not the size its cells assume.
     #[error("{path} is {width}x{height}, not {SHEET_SIZE}x{SHEET_SIZE}")]
     SheetSize {

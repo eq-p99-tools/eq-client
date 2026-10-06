@@ -391,7 +391,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
         .init_resource::<map::MapView>()
-        .init_resource::<login::FrontEnd>();
+        .init_resource::<login::FrontEnd>()
+        .init_resource::<login::LoginLook>();
 }
 
 /// What the tests of the windows start from.
@@ -561,8 +562,13 @@ fn schedule(app: &mut App) {
                 spellbook::say_book_lines,
             ),
             (
-                (login::form, login::worlds, login::light),
-                (character_select::update, character_select::names),
+                // Which login screens show decides which take the presses.
+                (login::read_look, (login::form, login::worlds, login::light)).chain(),
+                (
+                    character_select::update,
+                    character_select::names,
+                    login::quit,
+                ),
             ),
             windows::input,
             move_player,
@@ -586,7 +592,7 @@ fn schedule(app: &mut App) {
                 combat::target_color,
                 trade::present,
                 trade::scroll,
-                login::scroll,
+                (login::login_screen, login::worlds_screen, login::scroll).chain(),
                 skinned::scroll_lists,
                 motion::interpolate,
                 orbit_camera,
@@ -629,7 +635,13 @@ fn schedule(app: &mut App) {
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),
                 skinned::frames,
-                (skinned::apply, skinned::looks::load, skinned::looks::dress).chain(),
+                (
+                    skinned::apply,
+                    skinned::place_own,
+                    skinned::looks::load,
+                    skinned::looks::dress,
+                )
+                    .chain(),
                 skinned::show,
                 skinned::buttons,
                 (

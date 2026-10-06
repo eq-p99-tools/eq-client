@@ -4,12 +4,15 @@
 //! the viewer shows the screens and hands each session's news to the world,
 //! and never sees the network's own types.
 //!
-//! These are the client's own windows, drawn when no official login screen
-//! is: their look and words are ours.
+//! The screens are the installation's own where it has them
+//! ([`official`]), and else the client's own windows, whose look and words
+//! are ours.
 mod form;
+mod official;
 mod worlds;
 
 pub(super) use form::form;
+pub(super) use official::{LoginLook, login_screen, read as read_look, worlds_screen};
 pub(super) use worlds::{LoginStrings, scroll, worlds};
 
 use super::{online::OnlineState, online::Updates, outbox::Outbox, theme};
@@ -179,6 +182,9 @@ struct Running {
     /// The session reached the world's character list; it never shows the
     /// login screens again.
     past_login: bool,
+    /// The player asked Quick Connect: the list's first look plays on the
+    /// world last played on, where it takes players.
+    quick: bool,
 }
 
 impl FrontEnd {
@@ -214,6 +220,7 @@ impl FrontEnd {
             chose: None,
             listed: None,
             past_login: false,
+            quick: false,
         });
         (front, Some(session.updates), Some(session.commands))
     }
@@ -250,6 +257,12 @@ impl FrontEnd {
     /// The login server chosen.
     pub(crate) fn chosen(&self) -> Option<&LoginServer> {
         self.servers.get(self.chosen)
+    }
+
+    /// The world last played on the chosen login server, which Quick
+    /// Connect and Play Last Server play on.
+    pub(crate) fn remembered_world(&self) -> Option<&str> {
+        self.chosen().and_then(|server| server.world.as_deref())
     }
 
     /// Whether the run has a login screen.
@@ -337,6 +350,20 @@ impl FrontEnd {
         }
     }
 
+    /// Logs in as [`Self::connect`] does, then plays on the world last
+    /// played on this login server as soon as the list shows it taking
+    /// players, as the official login screen's Quick Connect does; where it
+    /// does not, the list stays up.
+    pub(crate) fn quick_connect(&mut self, online: &mut OnlineState, link: &mut Link) -> Connected {
+        let connected = self.connect(online, link);
+        if connected == Connected::Session
+            && let Some(running) = self.session.as_mut()
+        {
+            running.quick = true;
+        }
+        connected
+    }
+
     /// Fills the login screen with the account and password a script types.
     ///
     /// # Errors
@@ -370,6 +397,7 @@ impl FrontEnd {
             chose: None,
             listed: None,
             past_login: false,
+            quick: false,
         });
         self.highlighted = None;
         self.status.clear();
@@ -395,6 +423,16 @@ impl FrontEnd {
             self.account = typed;
             self.field = Field::Password;
         }
+    }
+
+    /// Goes back to the login screen from past the list, as character
+    /// select's Quit does: the session ends as [`Self::end`] ends it, with no
+    /// reason to show, and the world starts over. A session asked to stop
+    /// sends no news of its end, so the world would otherwise keep its
+    /// character list.
+    pub(crate) fn back_to_login(&mut self, online: &mut OnlineState, link: &mut Link) {
+        self.end(None, link);
+        online.restart();
     }
 
     /// The player chose a world from the login server's list.
@@ -480,6 +518,14 @@ pub(super) fn watch(mut front: ResMut<FrontEnd>, online: Res<OnlineState>, mut l
             .get(front.chosen)
             .and_then(|server| server.world.as_deref());
         front.highlighted = worlds::first(&list.servers, last);
+        // Quick Connect plays at once on the world last played on, which
+        // the list highlights first where it takes players.
+        if std::mem::take(&mut running.quick)
+            && let (Some(index), Some(last)) = (front.highlighted, last)
+            && list.servers[index].name.eq_ignore_ascii_case(last)
+        {
+            front.request = Some(Request::Play);
+        }
     }
     if !running.past_login && (world.characters().is_some() || world.session_id().is_some()) {
         running.past_login = true;
@@ -499,6 +545,33 @@ pub(super) fn watch(mut front: ResMut<FrontEnd>, online: Res<OnlineState>, mut l
         }
     });
     front.end(Some(reason), &mut link);
+}
+
+/// Character select's Quit goes back to the login screen, the account kept,
+/// in a run that has one, as the owner chose; a run without one, such as an
+/// offline preview, leaves the game.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn quit(
+    mut front: ResMut<FrontEnd>,
+    mut online: ResMut<OnlineState>,
+    mut link: Link,
+    keys: crate::keys::Keys,
+    buttons: Query<(Ref<Interaction>, &super::character_select::Action)>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let pressed = buttons.iter().any(|(interaction, action)| {
+        interaction.is_changed()
+            && *interaction == Interaction::Pressed
+            && matches!(action, super::character_select::Action::Quit)
+    });
+    if !pressed || !keys.focused() || front.screen(&online) != Screen::Characters {
+        return;
+    }
+    if front.has_login() {
+        front.back_to_login(&mut online, &mut link);
+    } else {
+        exit.write(AppExit::Success);
+    }
 }
 
 /// Gives the login screens the keyboard while one is up, so that what the
@@ -693,5 +766,94 @@ pub(crate) mod testing {
             world: None,
             availability: Availability::Here,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::{Fake, Heard, Thread, server};
+    use super::*;
+    use std::sync::{Arc, Mutex, atomic::Ordering};
+
+    /// An app at a world's character list, with character select's Quit
+    /// pressed.
+    fn app(
+        front: FrontEnd,
+        updates: Option<Receiver<WorldUpdate>>,
+        commands: Option<SyncSender<ClientCommand>>,
+    ) -> App {
+        let mut online = OnlineState::new(true);
+        online.selection = Some(crate::character_select::Selection::new(7, Vec::new()));
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.insert_resource(front)
+            .insert_resource(online)
+            .insert_resource(crate::online::Updates(Mutex::new(updates)))
+            .insert_resource(Outbox::new(commands))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_message::<AppExit>()
+            .add_systems(Update, quit);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        app.world_mut()
+            .spawn((Interaction::Pressed, crate::character_select::Action::Quit));
+        app
+    }
+
+    #[test]
+    fn quit_at_character_select_goes_back_to_the_login_screen_keeping_the_account() {
+        let fake = Fake {
+            servers: vec![server("Example", "remembered")],
+            heard: Arc::new(Mutex::new(Heard::default())),
+        };
+        let thread = Thread::default();
+        let (_news, updates) = std::sync::mpsc::sync_channel(1);
+        let (commands, _queue) = std::sync::mpsc::sync_channel(1);
+        let (mut front, updates, commands) = FrontEnd::launched(
+            Box::new(fake),
+            Some(Session {
+                updates,
+                commands,
+                worker: Box::new(thread.clone()),
+            }),
+        );
+        front.account = "typed".into();
+        front.password = Zeroizing::new("secret".into());
+        let mut app = app(front, updates, commands);
+        app.update();
+        // The session stops and the world hears nothing more from it.
+        assert!(thread.stopped.load(Ordering::SeqCst));
+        assert!(
+            app.world()
+                .resource::<crate::online::Updates>()
+                .0
+                .lock()
+                .unwrap()
+                .is_none()
+        );
+        // The login screen shows with no reason, the account kept and the
+        // password gone, and the character list is no more.
+        let front = app.world().resource::<FrontEnd>();
+        let online = app.world().resource::<OnlineState>();
+        assert!(!front.running());
+        assert_eq!(front.screen(online), Screen::Login);
+        assert_eq!(front.status, "");
+        assert_eq!(front.account, "typed");
+        assert_eq!(front.password.as_str(), "");
+        assert!(online.selection.is_none());
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+    }
+
+    #[test]
+    fn quit_at_character_select_without_a_login_screen_leaves_the_game() {
+        let mut app = app(FrontEnd::default(), None, None);
+        app.update();
+        assert_ne!(app.world().resource::<Messages<AppExit>>().len(), 0);
+        assert!(app.world().resource::<OnlineState>().selection.is_some());
     }
 }
