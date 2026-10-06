@@ -3299,18 +3299,8 @@ fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String,
         ),
         6 => {
             let target = world.target().selected;
-            let name = target
-                .and_then(|id| world.spawn(id))
-                .map(|spawn| eq_client_core::entities::display_name(&spawn.state.name))
-                .or_else(|| {
-                    world
-                        .player()
-                        .filter(|player| Some(player.spawn_id) == target)
-                        .map(|player| player.name.clone())
-                })
-                .unwrap_or_default();
             let color = theme::con(target.and_then(|id| world.considered(id)));
-            (name, Some(color))
+            (target_name(world), Some(color))
         }
         // A group member's name over their health (inferred).
         11..=15 => (
@@ -3332,9 +3322,25 @@ fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String,
     }
 }
 
+/// The target's name: a spawn's as players see it, or the player's own
+/// while they target themselves; nothing without a target.
+fn target_name(world: &eq_client_core::world::ClientWorld) -> String {
+    let target = world.target().selected;
+    target
+        .and_then(|id| world.spawn(id))
+        .map(|spawn| eq_client_core::entities::display_name(&spawn.state.name))
+        .or_else(|| {
+            world
+                .player()
+                .filter(|player| Some(player.spawn_id) == target)
+                .map(|player| player.name.clone())
+        })
+        .unwrap_or_default()
+}
+
 /// A label's text, by the official client's numbering: percentages of the
-/// player's hit points, mana and stamina, of the target's hit points and
-/// of each group member's, and the members' names.
+/// player's hit points, mana and stamina, the target's name and hit points,
+/// each group member's, and the members' names.
 fn label_text(
     world: &eq_client_core::world::ClientWorld,
     estimate: Option<(u32, u32)>,
@@ -3380,6 +3386,10 @@ fn label_text(
         19 => percent(fraction(world, estimate, 1)),
         20 => percent(fraction(world, estimate, 2)),
         21 => percent(fraction(world, estimate, 3)),
+        // The target's name, in the skin's colour; whether the official
+        // client tints it by consider colour, as the target gauge's text is
+        // tinted, is inferred.
+        28 => target_name(world),
         29 => target_health(world).map_or_else(String::new, |health| health.to_string()),
         // The group's other members' names and health, in their places.
         30..=34 => world
@@ -4312,9 +4322,24 @@ mod tests {
         // Numbers the client does not know yet show nothing.
         assert_eq!(label_text(world, None, 99), "");
         assert_eq!(fraction(world, None, 16), None);
-        // With no target, the target's gauge is empty.
+        // With no target, the target's gauge is empty, and so is the
+        // label for its name.
         assert_eq!(gauge_text(world, 6).0, "");
+        assert_eq!(label_text(world, None, 28), "");
         assert_eq!(fraction(world, None, 6), None);
+        // A creature targeted: its name as players see it, in the label and
+        // the gauge alike.
+        let mut creature = testing::pet(9, 7);
+        creature.name = "a_gnoll001".into();
+        creature.pet_owner = None;
+        testing::spawn_entry(&mut state, 9, creature);
+        state.select_target(Some(9));
+        assert_eq!(label_text(state.world(), None, 28), "a gnoll");
+        assert_eq!(gauge_text(state.world(), 6).0, "a gnoll");
+        // The player targeting themselves.
+        state.select_target(Some(7));
+        assert_eq!(label_text(state.world(), None, 28), "Example");
+        assert_eq!(gauge_text(state.world(), 6).0, "Example");
     }
 
     #[test]
