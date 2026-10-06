@@ -156,7 +156,8 @@ last played on that login server once the list shows it open, and the
 skin's other buttons, such as its chat and news, are greyed as not in this
 client yet. Exit on the list returns to the login screen, and Cancel with
 nothing logging in leaves the game, since this client draws no main menu
-(inferred). The login server picker above the boxes, the status lines and
+(inferred). The login server picker, on the black above the screen where
+the window has room for it and else above the boxes, the status lines and
 the highlighted world's tint are ours. Without the set the client's own
 windows show.
 

@@ -39,14 +39,22 @@ const WORLDS: (&str, &str) = ("EQLSUI_ServerSelectWnd.xml", "serverselect");
 /// a screen none.
 const SIZE: (f32, f32) = (640.0, 480.0);
 
-/// Where the login server picker sits on the login screen, above the
-/// account box: its name, then the picker. Ours.
+/// Where the login server picker sits on the login screen in a window too
+/// short to hold it above the screen ([`picker_place`]): above the account
+/// box. Ours.
 const PICKER: Area = Area {
     x: 325.0,
     y: 100.0,
     width: 244.0,
     height: 31.0,
 };
+
+/// The room the picker's name takes over it: its line, then a gap. Ours.
+const PICKER_NAME: f32 = 18.0;
+
+/// The gap between the picker and the screen's top edge, where the picker
+/// sits above the screen. Ours.
+const PICKER_GAP: f32 = 6.0;
 
 /// Where the login screen says what is happening, under its Cancel button.
 /// Ours.
@@ -157,11 +165,15 @@ struct Context<'a> {
 }
 
 /// Draws the skin's login screen while it shows, and again when what it
-/// shows changes.
+/// shows changes, or where the login server picker sits.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn login_screen(
     mut commands: Commands,
     (front, online, look): (Res<FrontEnd>, Res<OnlineState>, Res<LoginLook>),
+    (windows, scale): (
+        Query<&Window, With<bevy::window::PrimaryWindow>>,
+        Option<Res<UiScale>>,
+    ),
     mut art: crate::sheets::Art,
     roots: Query<Entity, With<LoginRoot>>,
     mut previous: Local<Option<String>>,
@@ -170,8 +182,18 @@ pub(crate) fn login_screen(
         .current
         .as_ref()
         .filter(|_| front.has_login() && front.screen(&online) == Showing::Login);
-    let signature =
-        screens.map(|screens| format!("{:p}:{}", Arc::as_ptr(screens), form::appearance(&front)));
+    // The window's height as the UI lays out, which places the picker.
+    let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
+    let height = windows.single().ok().map(|window| window.height() / factor);
+    let shown = screens.map(|screens| (screens, picker_place(height, size(&screens.login).1)));
+    let signature = shown.map(|(screens, place)| {
+        format!(
+            "{:p}:{}:{}",
+            Arc::as_ptr(screens),
+            form::appearance(&front),
+            place.y
+        )
+    });
     if *previous == signature {
         return;
     }
@@ -179,18 +201,37 @@ pub(crate) fn login_screen(
     for root in &roots {
         commands.entity(root).despawn();
     }
-    let Some(screens) = screens else {
+    let Some((screens, place)) = shown else {
         return;
     };
     let context = Context {
         front: &front,
         list: None,
     };
-    stage(&mut commands, LoginRoot, &screens.login, |stage, inside| {
+    let frame = stage(&mut commands, LoginRoot, &screens.login, |stage, inside| {
         pieces(stage, &mut art, &screens.login.pieces, &inside, context);
-        picker(stage, &mut art, &screens.login, &front);
         status(stage, LOGIN_STATUS, form::guidance(&front), Justify::Center);
     });
+    commands.entity(frame).with_children(|frame| {
+        picker(frame, &mut art, (&screens.login, place), &front);
+    });
+}
+
+/// Where the login server picker sits, from the screen's top left: on the
+/// black above the screen, lined up with its boxes, so that it covers none
+/// of the skin's art, where the window, as the UI lays out, has the room
+/// there for its name, itself and a gap; else inside, above the account box
+/// ([`PICKER`]). Ours.
+fn picker_place(window_height: Option<f32>, screen_height: f32) -> Area {
+    let room = window_height.map_or(0.0, |height| (height - screen_height) / 2.0);
+    if room >= PICKER_NAME + PICKER.height + PICKER_GAP {
+        Area {
+            y: -(PICKER.height + PICKER_GAP),
+            ..PICKER
+        }
+    } else {
+        PICKER
+    }
 }
 
 /// Draws the skin's list of worlds while it shows, and again when what it
@@ -268,42 +309,60 @@ fn keep_place(world: &mut World, offset: f32) {
     }
 }
 
+/// The screen's size: the skin's, else the official client's for its login
+/// screens.
+fn size(screen: &Screen) -> (f32, f32) {
+    if screen.area.width > 0.0 && screen.area.height > 0.0 {
+        (screen.area.width, screen.area.height)
+    } else {
+        SIZE
+    }
+}
+
 /// A screen-filling black cover with the skin's screen in its middle, at
-/// the skin's size; nothing of the screen draws outside it.
+/// the skin's size; nothing of the screen draws outside it. Gives the
+/// screen's frame, where this client's own pieces can reach past its edges.
 fn stage(
     commands: &mut Commands,
     root: impl Bundle,
     screen: &Screen,
     draw: impl FnOnce(&mut ChildSpawnerCommands, Area),
-) {
-    let (width, height) = if screen.area.width > 0.0 && screen.area.height > 0.0 {
-        (screen.area.width, screen.area.height)
-    } else {
-        SIZE
-    };
+) -> Entity {
+    let (width, height) = size(screen);
+    let mut frame = Entity::PLACEHOLDER;
     super::cover(commands, root)
         .insert(BackgroundColor(Color::BLACK))
         .with_children(|cover| {
-            cover
+            frame = cover
                 .spawn(Node {
                     width: px(width),
                     height: px(height),
                     flex_shrink: 0.0,
-                    overflow: Overflow::clip(),
                     ..default()
                 })
-                .with_children(|stage| {
-                    draw(
-                        stage,
-                        Area {
-                            x: 0.0,
-                            y: 0.0,
-                            width,
-                            height,
-                        },
-                    );
-                });
+                .with_children(|within| {
+                    within
+                        .spawn(Node {
+                            width: percent(100),
+                            height: percent(100),
+                            overflow: Overflow::clip(),
+                            ..default()
+                        })
+                        .with_children(|stage| {
+                            draw(
+                                stage,
+                                Area {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width,
+                                    height,
+                                },
+                            );
+                        });
+                })
+                .id();
         });
+    frame
 }
 
 /// Where a piece sits inside its container: where the skin places it, or
@@ -763,14 +822,15 @@ fn view(
         });
 }
 
-/// The login server picker: its name over a button, drawn as the skin
-/// draws its Connect button, that shows the login server chosen and
-/// chooses the next one; hovering it says what Connect does there. Ours:
-/// the official client logs in only where `eqhost.txt` says.
+/// The login server picker, at its place ([`picker_place`]): its name over
+/// a button, drawn as the skin draws its Connect button, that shows the
+/// login server chosen and chooses the next one; hovering it says what
+/// Connect does there. Ours: the official client logs in only where
+/// `eqhost.txt` says.
 fn picker(
     parent: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
-    screen: &Screen,
+    (screen, area): (&Screen, Area),
     front: &FrontEnd,
 ) {
     let Some(server) = front.chosen() else {
@@ -784,9 +844,9 @@ fn picker(
     words_at(
         parent,
         Area {
-            y: PICKER.y - 18.0,
+            y: area.y - PICKER_NAME,
             height: 16.0,
-            ..PICKER
+            ..area
         },
         ("Login server".to_owned(), Some(2), theme::INK_BRIGHT),
         (Justify::Center, false),
@@ -795,7 +855,7 @@ fn picker(
     let mut drawn = parent.spawn((
         Button,
         form::Action::NextServer,
-        at(PICKER.x, PICKER.y, PICKER.width, PICKER.height),
+        at(area.x, area.y, area.width, area.height),
     ));
     if let Some(look) = connect.map(|button| &button.look) {
         drawn.insert(skinned::SkinButton(look.clone()));
@@ -828,7 +888,7 @@ fn picker(
             .and_then(|button| button.text_color)
             .map_or(theme::INK_BRIGHT, skinned::rgb),
     };
-    drawn.with_children(|inner| centred(inner, PICKER, (server.name.clone(), typeface, ink)));
+    drawn.with_children(|inner| centred(inner, area, (server.name.clone(), typeface, ink)));
 }
 
 /// A line of this client's own, saying what is happening.
@@ -1252,5 +1312,53 @@ mod tests {
             assert_eq!(count::<LoginRoot>(&mut app), 0, "{name}");
             assert_eq!(count::<form::Root>(&mut app), 1, "{name}");
         }
+    }
+
+    #[test]
+    fn the_picker_sits_above_the_screen_where_the_window_has_room_for_it() {
+        let above = Area { y: -37.0, ..PICKER };
+        // A 1080-row window leaves 300 rows above a 480-row screen.
+        assert_eq!(picker_place(Some(1080.0), 480.0), above);
+        // Its name, itself and the gap take 55 rows.
+        assert_eq!(picker_place(Some(590.0), 480.0), above);
+        assert_eq!(picker_place(Some(589.0), 480.0), PICKER);
+        assert_eq!(picker_place(Some(480.0), 480.0), PICKER);
+        // With no window to measure, it stays inside.
+        assert_eq!(picker_place(None, 480.0), PICKER);
+    }
+
+    #[test]
+    fn the_picker_moves_inside_the_screen_in_a_window_too_short_for_it_above() {
+        let install = installation("picker", &WHOLE);
+        let (mut app, _) = launch(&install, vec![server("Example", "remembered")]);
+        std::fs::remove_dir_all(&install).unwrap();
+        // Where the picker's top is, from the screen's top left.
+        let top = |app: &mut App| {
+            let mut pickers = app.world_mut().query::<(&form::Action, &Node)>();
+            let tops = pickers
+                .iter(app.world())
+                .filter(|(action, _)| **action == form::Action::NextServer)
+                .map(|(_, node)| node.top)
+                .collect::<Vec<_>>();
+            assert_eq!(tops.len(), 1, "one picker");
+            tops[0]
+        };
+        let resize = |app: &mut App, height: f32| {
+            let mut windows = app.world_mut().query::<&mut Window>();
+            let mut window = windows.single_mut(app.world_mut()).unwrap();
+            window.resolution.set(1280.0, height);
+            app.update();
+        };
+        // The tests' window, 720 rows tall, has room above the screen.
+        assert_eq!(top(&mut app), px(-37.0));
+        assert!(shown(&mut app).iter().any(|text| text == "Login server"));
+        // A short window draws the screen again with the picker inside, and
+        // a tall one draws it above again.
+        resize(&mut app, 480.0);
+        assert_eq!(top(&mut app), px(100.0));
+        assert_eq!(count::<LoginRoot>(&mut app), 1);
+        resize(&mut app, 1080.0);
+        assert_eq!(top(&mut app), px(-37.0));
+        assert_eq!(count::<LoginRoot>(&mut app), 1);
     }
 }
