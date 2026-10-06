@@ -259,9 +259,11 @@ pub(super) fn spawn(commands: &mut Commands) {
                 super::spell_icons::Source::Gem(number - 1),
                 30.0,
             ));
+        let gem = u8::try_from(number - 1).expect("eight gems");
         commands.entity(slot).insert((
             Button,
-            SpellGem(u8::try_from(number - 1).expect("eight gems")),
+            SpellGem(gem),
+            hotbar::Pickable(hotbar::Source::Gem(gem)),
             crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
         ));
         let value = label(commands, slot, "", Size::Caption, theme::INK);
@@ -413,8 +415,8 @@ pub(super) fn actions(
     mut chat: ResMut<super::chat::ChatState>,
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
-    clicks: Query<(&Interaction, &SpellGem), Changed<Interaction>>,
-    bar_clicks: Query<(&Interaction, &hotbar::Slot), Changed<Interaction>>,
+    clicks: hotbar::Clicks<SpellGem>,
+    bar_clicks: hotbar::Clicks<hotbar::Slot>,
     bindings: Res<hotbar::Bindings>,
     definitions: (Res<super::spellbook::SpellNames>, Res<messages::Messages>),
     (mut hand, mut requests): (
@@ -429,10 +431,7 @@ pub(super) fn actions(
     let Some(player) = online.world().player() else {
         return;
     };
-    let clicked = clicks
-        .iter()
-        .find(|(interaction, _)| **interaction == Interaction::Pressed)
-        .map(|(_, gem)| gem.0);
+    let clicked = clicks.iter().next().map(|gem| gem.0);
     // A spell picked up from the skin's book goes into the gem clicked.
     if let Some(gem) = clicked
         && let Some(held) = hand.held.take()

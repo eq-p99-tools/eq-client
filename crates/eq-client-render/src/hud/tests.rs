@@ -108,6 +108,90 @@ fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
 }
 
 #[test]
+fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead() {
+    let mut app = crate::testing::app();
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(admitted())
+        .insert_resource(Outbox::new(Some(tx)))
+        .add_systems(Update, (hotbar::carry::route, actions).chain());
+    let gem = app
+        .world_mut()
+        .spawn((
+            SpellGem(0),
+            hotbar::Pickable(hotbar::Source::Gem(0)),
+            Interaction::None,
+        ))
+        .id();
+    let fifth = app
+        .world_mut()
+        .spawn((
+            hotbar::Slot(4),
+            hotbar::Pickable(hotbar::Source::Slot(4)),
+            Interaction::None,
+        ))
+        .id();
+    let button = |app: &mut App, on: Option<Entity>, down: bool| {
+        if let Some(on) = on {
+            *app.world_mut().get_mut::<Interaction>(on).unwrap() = Interaction::Pressed;
+        }
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        if down {
+            mouse.press(MouseButton::Left);
+        } else {
+            mouse.release(MouseButton::Left);
+        }
+        app.update();
+        let world = app.world_mut();
+        world.resource_mut::<ButtonInput<MouseButton>>().clear();
+        let mut interactions = world.query::<&mut Interaction>();
+        for mut interaction in interactions.iter_mut(world) {
+            interaction.set_if_neq(Interaction::None);
+        }
+    };
+    button(&mut app, Some(gem), true);
+    assert!(rx.try_recv().is_err());
+    button(&mut app, None, false);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::CastSpell {
+            gem: 0,
+            spell_id: 73,
+            ..
+        }
+    ));
+    testing::pending_cast(&mut online(&mut app), None);
+    // Held, the gem casts nothing and its hotkey goes onto the fifth
+    // hotbutton, whose own gem rides the cursor; neither press sends.
+    button(&mut app, Some(gem), true);
+    app.world_mut()
+        .resource_mut::<hotbar::carry::Presses>()
+        .hold_past();
+    app.update();
+    button(&mut app, None, false);
+    button(&mut app, Some(fifth), true);
+    button(&mut app, None, false);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        app.world().resource::<hotbar::Bindings>().0[4],
+        Some(hotbar::Action::Gem(0))
+    );
+    // Thrown away with a click on nothing, the fifth gem's hotkey goes, and
+    // the fifth hotbutton now casts the first gem's spell.
+    button(&mut app, None, true);
+    button(&mut app, None, false);
+    button(&mut app, Some(fifth), true);
+    button(&mut app, None, false);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::CastSpell {
+            gem: 0,
+            spell_id: 73,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn estimated_resource_bars_fill_and_clear_with_their_maxima() {
     let mut app = App::new();
     let mut state = OnlineState::new(true);

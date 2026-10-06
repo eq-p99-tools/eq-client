@@ -80,6 +80,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         .id();
     app.world_mut().spawn((
         crate::inventory::SlotButton(InventorySlot(13)),
+        Pickable(Source::Item(InventorySlot(13))),
         Interaction::Hovered,
     ));
     {

@@ -921,7 +921,8 @@ fn submit_draft(
     }
 }
 
-/// Sends a game slash command for scripts; ordinary chat is never sent this way.
+/// Sends a game slash command for scripts and buttons; ordinary chat is
+/// never sent this way.
 pub(super) fn submit_game_command(
     input: &str,
     online: &super::online::OnlineState,
@@ -935,6 +936,19 @@ pub(super) fn submit_game_command(
             .map_err(|refusal| refusal.text().to_owned())?;
     }
     Ok(())
+}
+
+/// Runs a button's or a hotbutton's game slash command, as typing it would;
+/// a refusal shows in the chat.
+pub(super) fn run_game_command(
+    command: &str,
+    online: &super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+    chat: &mut ChatState,
+) {
+    if let Err(reason) = submit_game_command(command, online, outbox) {
+        chat.history.push(system_line(reason));
+    }
 }
 
 /// A slash command the client answers itself, noted for the system that

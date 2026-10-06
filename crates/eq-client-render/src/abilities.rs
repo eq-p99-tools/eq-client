@@ -77,17 +77,15 @@ pub(crate) fn needs(
     }
 }
 
-/// A pressed ability button uses its ability.
+/// A clicked ability button uses its ability.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn input(
     online: Res<OnlineState>,
     outbox: Res<Outbox>,
-    buttons: Query<(&Interaction, &AbilityButton), Changed<Interaction>>,
+    buttons: crate::hud::hotbar::Clicks<AbilityButton>,
 ) {
-    for (interaction, button) in &buttons {
-        if *interaction == Interaction::Pressed
-            && let Some(ability) = assigned(online.world(), *button)
-        {
+    for button in buttons.iter() {
+        if let Some(ability) = assigned(online.world(), *button) {
             use_ability(ability, &online, &outbox);
         }
     }

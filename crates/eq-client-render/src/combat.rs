@@ -37,7 +37,7 @@ pub(super) fn input(
     messages: Res<Messages>,
     mut combat: ResMut<CombatState>,
     mut chat: ResMut<super::chat::ChatState>,
-    attack_button: Query<&Interaction, (Changed<Interaction>, With<super::skinned::AttackButton>)>,
+    attack_button: super::hud::hotbar::Clicks<super::skinned::AttackButton>,
 ) {
     use super::keys::Act;
     let Some(player) = online.world().player() else {
@@ -96,11 +96,7 @@ pub(super) fn input(
         );
         let _ = outbox.send(world, ClientCommand::SendChat(OutboundChat::Say(text)));
     }
-    if keys.pressed(Act::Attack)
-        || attack_button
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed)
-    {
+    if keys.pressed(Act::Attack) || attack_button.iter().next().is_some() {
         let enable = !combat.auto_attack;
         if enable && attackable.is_none() {
             feedback("Target a creature to attack it".into());

@@ -20,7 +20,7 @@ pub(crate) use items::{
     Closes, TheirSlot, close, contents, frames, loot, quantity, theirs, toggle_bag,
 };
 
-use super::windows::WindowId;
+use super::{hud::hotbar, windows::WindowId};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_assets::{
@@ -29,6 +29,7 @@ use eq_client_assets::{
 };
 use eq_client_core::{
     buffs::EffectWindow,
+    hotbar::Binding,
     inventory::InventorySlot,
     money::{Coin, CoinPlace},
 };
@@ -1243,6 +1244,7 @@ fn spell_gem(
         .spawn((
             Button,
             super::hud::SpellGem(index),
+            hotbar::Pickable(hotbar::Source::Gem(index)),
             crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
             BackgroundColor(Color::NONE),
             node,
@@ -1262,7 +1264,7 @@ fn spell_gem(
         });
 }
 
-/// A group button, in the group window or on the Actions window's Main page.
+/// A button of the group window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GroupButton {
     Invite,
@@ -1272,15 +1274,21 @@ enum GroupButton {
 }
 
 impl GroupButton {
-    /// The slash command it runs: Invite invites the target, and Decline
-    /// disbands, which with an invitation waiting declines it, as the
-    /// installed string for an invitation says.
-    const fn command(self) -> &'static str {
+    /// What it does, as the Actions window's group buttons do: Invite
+    /// invites the target, and Decline disbands, which with an invitation
+    /// waiting declines it, as the installed string for an invitation says.
+    const fn binding(self) -> Binding {
         match self {
-            Self::Invite => "/invite",
-            Self::Follow => "/follow",
-            Self::Disband | Self::Decline => "/disband",
+            Self::Invite => Binding::Invite,
+            Self::Follow => Binding::Follow,
+            Self::Disband | Self::Decline => Binding::Disband,
         }
+    }
+
+    /// The slash command it runs, from the one table its Actions window
+    /// button and a hotbutton read.
+    fn command(self) -> &'static str {
+        hotbar::command(self.binding()).unwrap_or_default()
     }
 
     /// Whether it answers an invitation, and so shows in the group window
@@ -1331,14 +1339,16 @@ enum Does {
     Offered(Coin),
     /// Shows a bag's picture.
     BagIcon,
-    /// Turns melee auto-attack on or off.
-    Attack,
+    /// Does what a hotbutton bound to it does, which a hold picks up: the
+    /// Actions window's Melee Attack, Sit, Stand, Camp, Invite, Follow and
+    /// Disband.
+    Bound(Binding),
     /// Uses the ability it holds.
     Ability(super::abilities::AbilityButton),
-    /// Runs a game slash command, as the Actions window's sit does.
+    /// Runs a game slash command, as the pet window's buttons do.
     Slash(&'static str),
-    /// Invites, follows, disbands or declines, as the group window's and the
-    /// Actions window's group buttons do.
+    /// Invites, follows, disbands or declines, as the group window's buttons
+    /// do.
     Group(GroupButton),
     /// Invites, accepts or declines, as the Raid window's buttons do.
     Raid(RaidButton),
@@ -1491,13 +1501,13 @@ fn does(id: &str, owner: WindowId) -> Option<Does> {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
         "IW_Skills" => Does::Toggles(WindowId::Skills),
         "GVW_Give_Button" | "TRDW_Trade_Button" => Does::Gives,
-        "ACP_MeleeAttackButton" => Does::Attack,
-        "AMP_SitButton" => Does::Slash("/sit"),
-        "AMP_StandButton" => Does::Slash("/stand"),
-        "AMP_CampButton" => Does::Slash("/camp"),
-        "AMP_InviteButton" => Does::Group(GroupButton::Invite),
-        "AMP_FollowButton" => Does::Group(GroupButton::Follow),
-        "AMP_DisbandButton" => Does::Group(GroupButton::Disband),
+        "ACP_MeleeAttackButton" => Does::Bound(Binding::Attack),
+        "AMP_SitButton" => Does::Bound(Binding::Sit),
+        "AMP_StandButton" => Does::Bound(Binding::Stand),
+        "AMP_CampButton" => Does::Bound(Binding::Camp),
+        "AMP_InviteButton" => Does::Bound(Binding::Invite),
+        "AMP_FollowButton" => Does::Bound(Binding::Follow),
+        "AMP_DisbandButton" => Does::Bound(Binding::Disband),
         "Container_Icon" if matches!(owner, WindowId::Bag(_) | WindowId::WorldContainer) => {
             Does::BagIcon
         }
@@ -1998,15 +2008,24 @@ fn behave(
         Does::Closes => drawn.insert((Button, items::Closes(owner), skin())),
         Does::Gives => drawn.insert((Button, super::give::GiveButton)),
         Does::Coins(place, coin) => drawn.insert((Button, super::coins::CoinBox { place, coin })),
-        Does::Attack => drawn.insert((
-            Button,
-            AttackButton,
-            skin(),
-            crate::outbox::Needs::Capability(Capability::Combat),
-        )),
+        Does::Bound(binding) => {
+            drawn.insert((
+                Button,
+                skin(),
+                hotbar::Pickable(hotbar::Source::Fixed(binding)),
+                hotbar::need(Some(binding)),
+            ));
+            // The button and its hotbutton run one command, from one table;
+            // Melee Attack, which has none, toggles in `combat::input`.
+            match hotbar::command(binding) {
+                Some(command) => drawn.insert(SlashButton(command)),
+                None => drawn.insert(AttackButton),
+            }
+        }
         Does::Ability(place) => drawn.insert((
             Button,
             place,
+            hotbar::Pickable(hotbar::Source::Ability(place)),
             skin(),
             crate::outbox::Needs::Capability(Capability::Abilities),
         )),
@@ -2070,7 +2089,8 @@ fn behave(
         Does::Maps(action) => drawn.insert((Button, action, skin())),
         Does::HotButton(index) => drawn.insert((
             Button,
-            super::hud::hotbar::Slot(index),
+            hotbar::Slot(index),
+            hotbar::Pickable(hotbar::Source::Slot(index)),
             skin(),
             crate::outbox::Needs::Nothing,
         )),
@@ -2207,7 +2227,7 @@ fn caption(
         Does::Ability(place) => {
             inner.spawn((super::abilities::AbilityLabel(place), words("")));
         }
-        Does::HotButton(index) => super::hud::hotbar::contents(inner, index),
+        Does::HotButton(index) => hotbar::contents(inner, index),
         Does::PetBuff(slot) => {
             inner.spawn(super::spell_icons::artwork(
                 super::spell_icons::Source::PetBuff(slot),
@@ -2251,7 +2271,7 @@ fn caption(
         Does::Toggles(_)
         | Does::Closes
         | Does::Gives
-        | Does::Attack
+        | Does::Bound(_)
         | Does::Slash(_)
         | Does::Group(_)
         | Does::Raid(_)
@@ -2313,21 +2333,17 @@ pub(crate) struct AttackButton;
 #[derive(Component, Clone, Copy)]
 pub(crate) struct SlashButton(pub(crate) &'static str);
 
-/// Runs a pressed slash button's command, as typing it would; a refusal
+/// Runs a clicked slash button's command, as typing it would; a refusal
 /// shows in chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn slash(
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut chat: ResMut<super::chat::ChatState>,
-    buttons: Query<(&Interaction, &SlashButton), Changed<Interaction>>,
+    buttons: hotbar::Clicks<SlashButton>,
 ) {
-    for (interaction, SlashButton(command)) in &buttons {
-        if *interaction == Interaction::Pressed
-            && let Err(reason) = super::chat::submit_game_command(command, &online, &outbox)
-        {
-            chat.history.push(super::chat::system_line(reason));
-        }
+    for SlashButton(command) in buttons.iter() {
+        super::chat::run_game_command(command, &online, &outbox, &mut chat);
     }
 }
 
@@ -3476,6 +3492,104 @@ mod tests {
     }
 
     #[test]
+    fn the_actions_windows_buttons_run_what_their_hotbuttons_run_and_a_hold_picks_them_up() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element};
+        let kinds = [
+            ("ACP_MeleeAttackButton", Binding::Attack),
+            ("AMP_SitButton", Binding::Sit),
+            ("AMP_StandButton", Binding::Stand),
+            ("AMP_CampButton", Binding::Camp),
+            ("AMP_InviteButton", Binding::Invite),
+            ("AMP_FollowButton", Binding::Follow),
+            ("AMP_DisbandButton", Binding::Disband),
+        ];
+        let button = |id: &str| {
+            let area = Area {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            };
+            Element::Button(Button {
+                id: Some(id.into()),
+                area,
+                placed: true,
+                anchors: None,
+                look: ButtonLook::default(),
+                checkbox: false,
+                text: None,
+                text_color: None,
+                decal: None,
+                decal_area: None,
+                tooltip: None,
+            })
+        };
+        let screen = Screen {
+            name: "ActionsWindow".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 140.0,
+                height: 30.0,
+            },
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: kinds
+                .iter()
+                .map(|(id, _)| ((*id).to_owned(), button(id)))
+                .collect(),
+            tab_frame: None,
+            transparent: false,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id: WindowId::ActionsWindow,
+                        paperdoll: None,
+                        depth: 0,
+                        tab_frame: None,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            );
+        app.update();
+        let mut controls = app.world_mut().query::<(
+            &hotbar::Pickable,
+            &crate::outbox::Needs,
+            Option<&SlashButton>,
+            Has<AttackButton>,
+        )>();
+        let mut drawn = Vec::new();
+        for (pickable, needs, slash, attack) in controls.iter(app.world()) {
+            let hotbar::Source::Fixed(binding) = pickable.0 else {
+                panic!("{pickable:?}");
+            };
+            // Each runs what its hotbutton runs, and is veiled as it is.
+            assert_eq!(*needs, hotbar::need(Some(binding)), "{binding:?}");
+            assert_eq!(slash.map(|slash| slash.0), hotbar::command(binding));
+            assert_eq!(attack, binding == Binding::Attack, "{binding:?}");
+            drawn.push(format!("{binding:?}"));
+        }
+        let mut wanted: Vec<_> = kinds.iter().map(|(_, b)| format!("{b:?}")).collect();
+        drawn.sort();
+        wanted.sort();
+        assert_eq!(drawn, wanted);
+    }
+
+    #[test]
     fn a_button_the_client_does_not_have_yet_says_so_on_hover() {
         use crate::outbox::Needs;
         use eq_client_assets::sidl::{Button, ButtonLook, Element};
@@ -4474,13 +4588,13 @@ mod tests {
             group("DeclineButton", WindowId::Group),
             Some(GroupButton::Decline)
         );
-        assert_eq!(
-            group("AMP_FollowButton", WindowId::ActionsWindow),
-            Some(GroupButton::Follow)
-        );
         // Looking For Group is left out.
         assert!(does("LFGButton", WindowId::Group).is_none());
-        // Decline disbands, which declines the invitation waiting.
+        // Each runs what the Actions window's button runs; Decline disbands,
+        // which declines the invitation waiting.
+        assert_eq!(GroupButton::Invite.command(), "/invite");
+        assert_eq!(GroupButton::Follow.command(), "/follow");
+        assert_eq!(GroupButton::Disband.command(), "/disband");
         assert_eq!(GroupButton::Decline.command(), "/disband");
         // In the group window, Follow and Decline take Invite's and
         // Disband's places while an invitation waits.
