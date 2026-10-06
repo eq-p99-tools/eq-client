@@ -270,18 +270,19 @@ fn a_hotbuttons_sit_and_stand_send_the_postures_their_keys_send_and_say_a_refusa
         }
     }
     // With no session to take it, the hotbutton's Sit is refused, and the
-    // refusal is said once, though the outbox says it too.
+    // refusal is the one line said, though the outbox says it too.
+    let lines = |app: &App| {
+        let chat = app.world().resource::<ChatState>();
+        chat.history.lines(eq_client_core::chat::ChatTab::All).len()
+    };
+    let before = lines(&app);
     app.insert_resource(Outbox::new(None));
     tap(&mut app, KeyCode::Digit9);
-    let chat = app.world().resource::<ChatState>();
-    let said = chat.newest();
-    assert_eq!(said, crate::outbox::Refusal::Offline.text());
-    let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
-    let times = lines
-        .iter()
-        .filter(|(_, line)| line.message.text == said)
-        .count();
-    assert_eq!(times, 1);
+    assert_eq!(lines(&app), before + 1);
+    assert_eq!(
+        app.world().resource::<ChatState>().newest(),
+        crate::outbox::Refusal::Offline.text()
+    );
 }
 
 #[test]
