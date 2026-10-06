@@ -819,8 +819,14 @@ fn spawn_static_zone(
     materials: &mut Assets<StandardMaterial>,
 ) {
     let texture_images = create_texture_images(zone.textures, images);
-    let terrain =
-        create_render_primitives(zone.primitives, &texture_images, meshes, materials, true);
+    let terrain = create_render_primitives(
+        zone.primitives,
+        &texture_images,
+        meshes,
+        materials,
+        true,
+        RenderAssetUsages::RENDER_WORLD,
+    );
     commands.spawn_batch(
         terrain
             .into_iter()
@@ -843,6 +849,7 @@ fn spawn_static_zone(
                 meshes,
                 materials,
                 true,
+                RenderAssetUsages::RENDER_WORLD,
             );
             door_models.0.insert(
                 doors::model_key(&model.name),
@@ -1091,12 +1098,16 @@ fn generate_mip_chain(width: u32, height: u32, pixels: Vec<u8>) -> (Vec<u8>, u32
     (chain, level_count)
 }
 
+/// Builds a model's or zone's draw calls. `usage` says where the meshes' data
+/// lives: zones draw only, while models hung under a spawn keep theirs in
+/// the main world too, where clicks are picked against them.
 fn create_render_primitives(
     primitives: Vec<ZonePrimitive>,
     texture_images: &[TextureImages],
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     unlit: bool,
+    usage: RenderAssetUsages,
 ) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
     primitives
         .into_iter()
@@ -1106,10 +1117,7 @@ fn create_render_primitives(
                 .texture
                 .and_then(|index| texture_images.get(index));
             let material = create_material(primitive.material_mode, texture, materials, unlit);
-            let mut mesh = Mesh::new(
-                PrimitiveTopology::TriangleList,
-                RenderAssetUsages::RENDER_WORLD,
-            );
+            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usage);
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, primitive.positions);
             if !primitive.normals.is_empty() {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, primitive.normals);
