@@ -103,9 +103,13 @@ The login servers are presets in `login-servers.txt` in the settings
 directory (`--settings-dir` or `EQ_CLIENT_SETTINGS_DIR`, by default
 `eq-client` in the per-user settings directory). A first run writes one
 per server type: Project 1999 and Project Quarm at their login servers, and
-Local EQEmu and Local TAKP on this machine. `EQ_PROTOCOL`, `EQ_LOGIN_HOST`
-and `EQ_LOGIN_PORT`, as launchers set them today, go into their type's
-preset. The file is yours to edit:
+Local EQEmu and Local TAKP with only their usual ports. An emulator server
+runs wherever its owner runs it, and a guess at this machine could reach
+something else listening there, such as a P99 login proxy, so those two are
+greyed, saying why, until their `host` is set in the file, or a launch names
+one with `EQ_LOGIN_HOST` for that run. On a first run, `EQ_PROTOCOL`,
+`EQ_LOGIN_HOST` and `EQ_LOGIN_PORT`, as launchers set them today, go into
+their type's preset. The file is yours to edit:
 
 ```ini
 # eq-client login servers v1
@@ -152,7 +156,8 @@ last played on that login server once the list shows it open, and the
 skin's other buttons, such as its chat and news, are greyed as not in this
 client yet. Exit on the list returns to the login screen, and Cancel with
 nothing logging in leaves the game, since this client draws no main menu
-(inferred). The login server picker above the boxes, the status lines and
+(inferred). The login server picker, on the black above the screen where
+the window has room for it and else above the boxes, the status lines and
 the highlighted world's tint are ours. Without the set the client's own
 windows show.
 
@@ -165,7 +170,8 @@ choose a character and click **Enter World** (or use Up/Down and Enter). With an
 installation it is the skin's character select window (`CharacterSelectWindow`):
 its eight character buttons show the server list's slots in order, each with
 its character's name, the level on hover, and the chosen one pressed; **Quit**
-leaves the game. An empty slot shows the skin's words for creating a character,
+goes back to the login screen with the account kept; in the offline preview
+it leaves the game. An empty slot shows the skin's words for creating a character,
 dimmed, and says on hover that this client cannot make one yet; the skin's
 buttons for creating, deleting and rotating characters, the tutorial, exploring
 and returning home are greyed with the same reason, as this client has none of
