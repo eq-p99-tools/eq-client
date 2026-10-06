@@ -42,6 +42,9 @@ pub(super) struct Controls {
     /// The damage of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
     unreported: Option<u32>,
+    /// Where the player faces while the heading sent still turns toward it;
+    /// None once the two match.
+    facing: Option<f32>,
 }
 impl Default for Controls {
     fn default() -> Self {
@@ -63,6 +66,7 @@ impl Default for Controls {
             refused: None,
             jump: None,
             unreported: None,
+            facing: None,
         }
     }
 }
@@ -96,12 +100,15 @@ impl BoundaryTracker {
 }
 impl Controls {
     /// Smooths a locally accepted sample without changing the simulation position.
-    /// A heading change beyond what the turn keys turn in a cycle is the
-    /// player facing a new way at once, so it shows at once while the
-    /// position still eases.
+    /// The model shows where the player faces, which the heading sent may
+    /// still be turning toward. A facing change beyond what the turn keys
+    /// turn in a cycle is the player facing a new way at once, so it shows at
+    /// once while the position still eases.
     pub fn display_sample(&mut self, from: Transform, position: eq_client_core::WorldPosition) {
-        let rotation = Quat::from_rotation_y(eq_client_core::render_heading(position.heading));
-        // Measured from the heading the last sample asked for, which the
+        let rotation = Quat::from_rotation_y(eq_client_core::render_heading(
+            self.facing.unwrap_or(position.heading),
+        ));
+        // Measured from the facing the last sample asked for, which the
         // model shows once that sample's easing ends: a turn key's sample can
         // arrive before then.
         let asked = self
@@ -109,6 +116,8 @@ impl Controls {
             .as_ref()
             .map_or(from.rotation, |visual| visual.to.rotation);
         let limit = TURN_RATE * self.cycle / 512.0 * std::f32::consts::TAU;
+        // A turn key turns at most the limit in a cycle; the 1% margin keeps
+        // rounding in the angle between two rotations from making that a snap.
         let from = if asked.angle_between(rotation) > limit * 1.01 {
             from.with_rotation(rotation)
         } else {
@@ -233,7 +242,8 @@ impl Controls {
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
 const MAX_CYCLE: f32 = 0.25;
 
-/// How fast the turn keys turn the player, in heading units a second.
+/// How fast the turn keys turn the player, and the heading sent follows the
+/// way the player faces, in heading units a second.
 const TURN_RATE: f32 = 240.0;
 
 /// Holds short press edges across the send throttle, never across focus loss or expiry.
@@ -368,8 +378,9 @@ pub(super) fn input(
         }
     }
     let current_heading = accepted.position.heading;
+    let shown = controls.facing.unwrap_or(current_heading);
     let sampled = controls.taps.take(&keyboard);
-    let intent = controls.intent(&sampled, map, focused, camera.yaw, current_heading);
+    let intent = controls.intent(&sampled, map, focused, camera.yaw, shown);
     let MotionInput {
         mode,
         speed,
@@ -382,11 +393,13 @@ pub(super) fn input(
         .airborne
         .as_ref()
         .is_some_and(|airborne| airborne.velocity() != 0.0);
+    // So does a heading sent that still turns toward the facing.
     if direction == Vec3::ZERO
         && turn == 0.0
         && !controls.moving
         && !airborne
         && controls.jump.is_none()
+        && controls.facing.is_none()
     {
         return;
     }
@@ -425,14 +438,19 @@ pub(super) fn input(
     }
     let position = landing + Vec3::Y * body.feet_offset;
     let position = stop_at_zone_line(&online.regions, origin, position);
-    trace_proposal(mode, delta, position - origin);
-    // The turn keys turn at their rate; moving with the camera-relative keys
-    // faces the way the player moves at once.
-    let heading = if direction == Vec3::ZERO || preserve_facing {
-        (current_heading + turn * TURN_RATE * span).rem_euclid(512.0)
+    // The turn keys turn the facing at their rate, and moving with the
+    // camera-relative keys faces the way the player moves at once. The
+    // heading sent follows the facing at the turn keys' rate: eq-network's
+    // movement session refuses a sample that turns faster than the wire's
+    // turn field holds (`heading_velocity`: at most 127 heading units in its
+    // longest sample), and the position goes with it.
+    let facing = if direction == Vec3::ZERO || preserve_facing {
+        (shown + turn * TURN_RATE * span).rem_euclid(512.0)
     } else {
         eq_client_core::world_heading(direction.x.atan2(direction.z))
     };
+    let heading = turn_toward(current_heading, facing, TURN_RATE * span);
+    trace_proposal(mode, delta, position - origin, heading, facing);
     let position_sent = world_position(position.to_array(), heading);
     let sent = outbox.post(online.world(), |stamp| {
         ClientCommand::Move(MovementRequest {
@@ -463,6 +481,8 @@ pub(super) fn input(
     }
     controls.moving = position.distance_squared(origin) > 0.000_001
         || (heading - current_heading).abs() > f32::EPSILON;
+    // Until the heading sent reaches the facing, the model shows the facing.
+    controls.facing = (arc(heading, facing).abs() > 0.01).then_some(facing);
     controls.waiting = true;
     controls.queued_at = now;
 }
@@ -599,12 +619,15 @@ fn stop_at_zone_line(
         .map_or(end, Vec3::from_array)
 }
 
-/// Logs displacement magnitudes without recording the character's world coordinates.
-fn trace_proposal(mode: MovementMode, requested: Vec3, resolved: Vec3) {
+/// Logs displacement magnitudes, the heading sent and the facing, without
+/// recording the character's world coordinates.
+fn trace_proposal(mode: MovementMode, requested: Vec3, resolved: Vec3, heading: f32, facing: f32) {
     debug!(
         ?mode,
         requested_distance = requested.length(),
         resolved_distance = resolved.length(),
+        heading,
+        facing,
         "Movement proposal after local collision"
     );
 }
@@ -676,6 +699,16 @@ fn movement_input(
         turn,
         preserve_facing: backing || forward,
     }
+}
+
+/// Rotates through the shortest arc without snapping across the heading wrap.
+fn turn_toward(current: f32, desired: f32, limit: f32) -> f32 {
+    (current + arc(current, desired).clamp(-limit, limit)).rem_euclid(512.0)
+}
+
+/// The shortest signed turn from one heading to another, in heading units.
+fn arc(from: f32, to: f32) -> f32 {
+    (to - from + 256.0).rem_euclid(512.0) - 256.0
 }
 
 #[cfg(test)]
@@ -1152,21 +1185,56 @@ mod tests {
         };
         assert!((request.position.heading - 488.0).abs() < 0.001);
         assert!(request.position.x.abs() < 0.001 && request.position.y.abs() < 0.001);
+        assert!((turn_toward(508.0, 4.0, 3.0) - 511.0).abs() < 0.001);
+        assert!((turn_toward(4.0, 508.0, 3.0) - 1.0).abs() < 0.001);
+    }
+
+    /// The model's rotation when it faces this heading.
+    fn turned_to(heading: f32) -> Quat {
+        Quat::from_rotation_y(eq_client_core::render_heading(heading))
+    }
+
+    /// Takes the sample as the session would and draws it, then lets the next
+    /// sample go after a tenth of a second; returns when that wait began.
+    fn accept(app: &mut App, request: &MovementRequest) -> Instant {
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::MotionSent {
+                session_id: request.session_id,
+                position: request.position,
+                refused: None,
+            }],
+        );
+        let world = app.world_mut();
+        let mut players = world.query_filtered::<&Transform, With<Player>>();
+        let drawn = *players.single(world).unwrap();
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.accepted();
+        controls.display_sample(drawn, request.position);
+        controls.last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        controls.last_accepted
     }
 
     #[test]
-    fn camera_relative_keys_face_their_direction_at_once() {
+    fn camera_relative_keys_show_their_way_at_once_while_the_heading_sent_turns() {
         // The player faces heading 0 and the camera looks along 384. Each
-        // camera-relative key faces its way in the first sample, however far
-        // that is; the character-relative forward arrow keeps the facing.
-        for (key, heading) in [
-            (KeyCode::KeyW, 384.0),
-            (KeyCode::KeyS, 128.0),
-            (KeyCode::KeyA, 0.0),
-            (KeyCode::KeyD, 256.0),
-            (KeyCode::ArrowUp, 0.0),
+        // camera-relative key shows the player facing its way from the first
+        // sample, however far that is, while the heading sent turns toward it
+        // at the turn keys' rate: 24 units in a first sample's tenth of a
+        // second. The character-relative forward arrow keeps the facing.
+        for (key, way, sent) in [
+            (KeyCode::KeyW, 384.0, 488.0),
+            (KeyCode::KeyS, 128.0, 24.0),
+            (KeyCode::KeyA, 0.0, 0.0),
+            (KeyCode::KeyD, 256.0, 488.0),
+            (KeyCode::ArrowUp, 0.0, 0.0),
         ] {
             let (mut app, receiver) = app();
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<&mut Transform, With<Player>>();
+            players.single_mut(world).unwrap().rotation = turned_to(0.0);
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.reset_all();
             keys.press(key);
@@ -1174,15 +1242,153 @@ mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected movement for {key:?}")
             };
-            let off = (request.position.heading - heading + 256.0).rem_euclid(512.0) - 256.0;
-            assert!(
-                off.abs() < 0.001,
-                "{key:?} faced {}",
-                request.position.heading
-            );
+            let heading = request.position.heading;
+            assert!(arc(sent, heading).abs() < 0.001, "{key:?} sent {heading}");
             let moved = Vec3::new(request.position.x, request.position.y, 0.0);
             assert!(moved.length() > 0.1, "{key:?} did not move");
+            accept(&mut app, &request);
+            let visual = app.world().resource::<Controls>().visual.as_ref().unwrap();
+            assert!(
+                visual.from.rotation.angle_between(turned_to(way)) < 0.001,
+                "{key:?} showed {}",
+                visual.from.rotation
+            );
         }
+    }
+
+    #[test]
+    fn released_mid_turn_the_heading_sent_reaches_the_facing_then_stops() {
+        // D faces 256, half a turn from 0. Released after one sample, the
+        // player stays put and keeps facing 256 while the heading sent turns
+        // the rest of the way, a sample each tenth of a second, then stops.
+        let (mut app, receiver) = app();
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::KeyD);
+        app.update();
+        let ClientCommand::Move(pressed) = receiver.try_recv().unwrap() else {
+            panic!("expected movement")
+        };
+        accept(&mut app, &pressed);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        let mut heading = pressed.position.heading;
+        let mut samples = 0;
+        loop {
+            app.update();
+            let Ok(ClientCommand::Move(request)) = receiver.try_recv() else {
+                break;
+            };
+            samples += 1;
+            assert!(samples < 20, "the heading sent never reached the facing");
+            let turned = arc(heading, request.position.heading);
+            assert!(turned.abs() <= TURN_RATE * MAX_CYCLE, "turned {turned}");
+            assert!((request.position.x - pressed.position.x).abs() < 0.0001);
+            assert!((request.position.y - pressed.position.y).abs() < 0.0001);
+            heading = request.position.heading;
+            accept(&mut app, &request);
+            let visual = app.world().resource::<Controls>().visual.as_ref().unwrap();
+            assert!(visual.to.rotation.angle_between(turned_to(256.0)) < 0.001);
+        }
+        assert!(arc(heading, 256.0).abs() < 0.01, "stopped at {heading}");
+        assert!(app.world().resource::<Controls>().facing.is_none());
+        // The 232 units left take at most ten samples, then one says it stopped.
+        assert!(samples <= 11, "{samples} samples");
+    }
+
+    #[test]
+    fn a_new_way_mid_move_shows_at_once_while_the_heading_sent_keeps_its_rate() {
+        // W faces 384; S, half a turn from it, shows in the next sample while
+        // the heading sent keeps turning at the turn keys' rate.
+        let (mut app, receiver) = app();
+        app.update();
+        let ClientCommand::Move(first) = receiver.try_recv().unwrap() else {
+            panic!("expected movement")
+        };
+        accept(&mut app, &first);
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::KeyS);
+        app.update();
+        let ClientCommand::Move(second) = receiver.try_recv().unwrap() else {
+            panic!("expected movement")
+        };
+        let turned = arc(first.position.heading, second.position.heading);
+        assert!(
+            turned > 0.0 && turned <= TURN_RATE * MAX_CYCLE,
+            "turned {turned}"
+        );
+        // S walks back the way W came.
+        assert!(second.position.x > first.position.x);
+        accept(&mut app, &second);
+        let controls = app.world().resource::<Controls>();
+        assert!(
+            controls
+                .facing
+                .is_some_and(|facing| arc(facing, 128.0).abs() < 0.001)
+        );
+        let visual = controls.visual.as_ref().unwrap();
+        assert!(visual.from.rotation.angle_between(turned_to(128.0)) < 0.001);
+    }
+
+    #[test]
+    fn eq_networks_movement_session_admits_every_sample() {
+        use eq_network_game::movement::MotionSession;
+        // The session refuses a sample whose heading turns faster than the
+        // wire's turn field holds (`heading_velocity`), and its position with
+        // it. Its clock moves on between two samples at least as far as the
+        // input's own span did, as it does live.
+        let (mut app, receiver) = app();
+        let start = Instant::now();
+        let mut session =
+            MotionSession::new(11, 7, world_position([0.0, 3.0, 0.0], 0.0), start).unwrap();
+        session
+            .calibrate(
+                eq_client_core::MotionCalibration {
+                    strafe: None,
+                    walk: None,
+                    backward: None,
+                    units_per_second: 6.0,
+                    velocity_scale: 1.0,
+                    animation: 1,
+                },
+                start,
+            )
+            .unwrap();
+        let mut clock = start;
+        let mut waited = app.world().resource::<Controls>().last_accepted;
+        // W; half a turn to S; E and the forward arrow while the heading sent
+        // still turns; D and A; then released until it reaches the facing.
+        let keys = [KeyCode::KeyW; 3]
+            .into_iter()
+            .chain([KeyCode::KeyS; 2])
+            .chain([KeyCode::KeyE; 2])
+            .chain([KeyCode::ArrowUp; 2])
+            .chain([KeyCode::KeyD; 2])
+            .chain([KeyCode::KeyA])
+            .map(Some)
+            .chain([None; 16]);
+        for key in keys {
+            let mut input = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            input.reset_all();
+            if let Some(key) = key {
+                input.press(key);
+            }
+            app.update();
+            let Ok(ClientCommand::Move(mut request)) = receiver.try_recv() else {
+                continue;
+            };
+            clock += waited.elapsed();
+            request.created = clock;
+            if let Err(error) = session.send_move(&request, clock, |_| Ok(())) {
+                panic!("{key:?}: {error}");
+            }
+            waited = accept(&mut app, &request);
+        }
+        let heading = session.position().heading;
+        assert!(arc(heading, 0.0).abs() < 0.01, "stopped at {heading}");
+        assert!(app.world().resource::<Controls>().facing.is_none());
     }
 
     #[test]
