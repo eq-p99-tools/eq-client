@@ -165,7 +165,8 @@ choose a character and click **Enter World** (or use Up/Down and Enter). With an
 installation it is the skin's character select window (`CharacterSelectWindow`):
 its eight character buttons show the server list's slots in order, each with
 its character's name, the level on hover, and the chosen one pressed; **Quit**
-leaves the game. An empty slot shows the skin's words for creating a character,
+goes back to the login screen with the account kept; in the offline preview
+it leaves the game. An empty slot shows the skin's words for creating a character,
 dimmed, and says on hover that this client cannot make one yet; the skin's
 buttons for creating, deleting and rotating characters, the tutorial, exploring
 and returning home are greyed with the same reason, as this client has none of

@@ -562,7 +562,11 @@ fn schedule(app: &mut App) {
             (
                 // Which login screens show decides which take the presses.
                 (login::read_look, (login::form, login::worlds, login::light)).chain(),
-                (character_select::update, character_select::names),
+                (
+                    character_select::update,
+                    character_select::names,
+                    login::quit,
+                ),
             ),
             windows::input,
             move_player,
