@@ -5,9 +5,11 @@ use crate::theme::{self, Size};
 use bevy::prelude::*;
 mod lines;
 mod scribe;
+mod seat;
 mod skinned;
 pub(super) use lines::say as say_book_lines;
 pub(super) use scribe::presentation as scribe_presentation;
+pub(super) use seat::seat;
 #[cfg(test)]
 pub(crate) use skinned::Entry;
 pub(crate) use skinned::{BookHand, BookPlace, ChosenMark, PLACES, TurnsPages};

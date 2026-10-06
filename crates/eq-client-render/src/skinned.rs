@@ -2750,11 +2750,42 @@ fn bar_parts(gauge: &Gauge) -> BarParts {
     BarParts { left, bar, right }
 }
 
+/// A step of a bar the skin builds from gauges stacked over one another,
+/// each its own colour: one whose fill starts left of its box and is wider
+/// than the box, as each part of the Velious skin's hit point bars past its
+/// first fifth is. Its fill shows whole, from the bar's start to the level,
+/// only while the level ends past the box's left edge, so the highest step
+/// the level reaches colours the whole filled part (inferred from how the
+/// project owner saw the official client; a recording item). Decided from
+/// the gauge alone.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Step {
+    /// How far along the bar the box starts, as a fraction of the bar.
+    from: f32,
+}
+
+impl Step {
+    /// The step a gauge is, if it is one.
+    fn of(gauge: &Gauge, parts: &BarParts) -> Option<Self> {
+        let fill = gauge.look.fill.as_ref()?;
+        (parts.bar.x < 0.0 && to_f32(fill.width) > gauge.area.width).then_some(Self {
+            from: -parts.bar.x / parts.bar.width,
+        })
+    }
+
+    /// Whether the fill shows at this fraction: once the level ends past
+    /// the box's left edge. Both are fractions of the bar, so at an exact
+    /// step they are equal and the lower colour shows.
+    fn shows(self, fraction: f32) -> bool {
+        fraction > self.from
+    }
+}
+
 /// A gauge: its text, then its bar, filled as far as its fraction. The
 /// gauge cuts off whatever lies outside it, as the skins expect (inferred):
-/// the Velious skin colours each fifth of its hit point bar with a gauge
-/// over that fifth alone, and both skins move the pet gauge's text out of
-/// its two pixel high box.
+/// both skins move the pet gauge's text out of its two pixel high box. A
+/// [`Step`]'s fill is the one thing that crosses its box's sides, drawn
+/// between what lies under it and over it, both still cut.
 fn gauge(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
@@ -2762,10 +2793,14 @@ fn gauge(
     inside: &Area,
 ) {
     let area = gauge.area;
-    let look = &gauge.look;
     let parts = bar_parts(gauge);
+    let step = Step::of(gauge, &parts);
     let mut root = window.spawn(Node {
-        overflow: Overflow::clip(),
+        overflow: if step.is_some() {
+            Overflow::clip_y()
+        } else {
+            Overflow::clip()
+        },
         ..at(
             inside.x + area.x,
             inside.y + area.y,
@@ -2776,52 +2811,106 @@ fn gauge(
     if let Some(shows) = gauge.eq_type.and_then(owned_gauge) {
         root.insert((shows, Visibility::Hidden));
     }
+    root.with_children(|root| {
+        if step.is_none() {
+            gauge_layer(root, art, gauge, &parts, Layer::Whole);
+            return;
+        }
+        let cut = || Node {
+            overflow: Overflow::clip(),
+            ..at(0.0, 0.0, area.width, area.height)
+        };
+        root.spawn(cut())
+            .with_children(|under| gauge_layer(under, art, gauge, &parts, Layer::Under));
+        gauge_layer(root, art, gauge, &parts, Layer::Fill(step));
+        root.spawn(cut())
+            .with_children(|over| gauge_layer(over, art, gauge, &parts, Layer::Over));
+    });
+}
+
+/// The pieces of a gauge one drawing pass puts down.
+#[derive(Clone, Copy)]
+enum Layer {
+    /// Everything, in order: the text, the background, the fill, the lines
+    /// and the ends.
+    Whole,
+    /// The text and the background.
+    Under,
+    /// The fill alone, a step's.
+    Fill(Option<Step>),
+    /// The lines and the ends.
+    Over,
+}
+
+/// Puts down a gauge's pieces of this layer, each where the skin starts it.
+fn gauge_layer(
+    parent: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    gauge: &Gauge,
+    parts: &BarParts,
+    layer: Layer,
+) {
+    let look = &gauge.look;
     let natural = |piece: &Piece| at(0.0, 0.0, to_f32(piece.width), to_f32(piece.height));
     let placed = |place: Area| at(place.x, place.y, place.width, place.height);
-    root.with_children(|root| {
-        if let Some(kind) = gauge.eq_type {
-            let ink = gauge.text_color.map_or(theme::INK_BRIGHT, rgb);
-            root.spawn((
-                Shows::GaugeText(kind),
-                theme::text("", Size::Small, ink),
-                at(gauge.text_offset.0, gauge.text_offset.1, area.width, 12.0),
-                TextLayout::new(Justify::Left, LineBreak::NoWrap),
-            ));
+    let (under, fill, over) = match layer {
+        Layer::Whole => (true, Some(None), true),
+        Layer::Under => (true, None, false),
+        Layer::Fill(step) => (false, Some(step), false),
+        Layer::Over => (false, None, true),
+    };
+    if under && let Some(kind) = gauge.eq_type {
+        let ink = gauge.text_color.map_or(theme::INK_BRIGHT, rgb);
+        parent.spawn((
+            Shows::GaugeText(kind),
+            theme::text("", Size::Small, ink),
+            at(
+                gauge.text_offset.0,
+                gauge.text_offset.1,
+                gauge.area.width,
+                12.0,
+            ),
+            TextLayout::new(Justify::Left, LineBreak::NoWrap),
+        ));
+    }
+    parent.spawn(placed(parts.bar)).with_children(|bar| {
+        if under && let Some(piece) = &look.background {
+            picture(bar, art, piece, natural(piece));
         }
-        root.spawn(placed(parts.bar)).with_children(|bar| {
-            if let Some(piece) = &look.background {
-                picture(bar, art, piece, natural(piece));
+        if let (Some(step), Some(piece)) = (fill, &look.fill) {
+            let mut node = bar.spawn((
+                gauge.eq_type.map_or(Shows::Fill(0), Shows::Fill),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(0),
+                    top: px(0),
+                    width: percent(0),
+                    height: px(piece.height),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ));
+            if let Some(step) = step {
+                node.insert(step);
             }
-            if let Some(piece) = &look.fill {
-                let mut fill = bar.spawn((
-                    gauge.eq_type.map_or(Shows::Fill(0), Shows::Fill),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(0),
-                        top: px(0),
-                        width: percent(0),
-                        height: px(piece.height),
-                        overflow: Overflow::clip(),
-                        ..default()
-                    },
-                ));
-                fill.with_children(|fill| {
-                    if let Some(mut image) = art.cut(piece) {
-                        image.color = gauge.fill_tint.map_or(Color::WHITE, rgb);
-                        fill.spawn((image, natural(piece)));
-                    }
-                });
-            }
-            if let Some(piece) = &look.lines {
-                picture(bar, art, piece, natural(piece));
-            }
-        });
-        for (piece, place) in [(&look.cap_left, parts.left), (&look.cap_right, parts.right)] {
-            if let (Some(piece), Some(place)) = (piece, place) {
-                picture(root, art, piece, placed(place));
-            }
+            node.with_children(|fill| {
+                if let Some(mut image) = art.cut(piece) {
+                    image.color = gauge.fill_tint.map_or(Color::WHITE, rgb);
+                    fill.spawn((image, natural(piece)));
+                }
+            });
+        }
+        if over && let Some(piece) = &look.lines {
+            picture(bar, art, piece, natural(piece));
         }
     });
+    if over {
+        for (piece, place) in [(&look.cap_left, parts.left), (&look.cap_right, parts.right)] {
+            if let (Some(piece), Some(place)) = (piece, place) {
+                picture(parent, art, piece, placed(place));
+            }
+        }
+    }
 }
 
 /// What a loot, merchant or spellbook window's label shows: the corpse's
@@ -3067,6 +3156,24 @@ fn shown_now(
     })
 }
 
+/// Fills a gauge's bar as far as this fraction, from 0 to 1, showing a
+/// step's fill only once the level passes its box. A node changes only
+/// when what it shows does.
+fn fill_to(node: &mut Mut<Node>, step: Option<&Step>, fraction: f32) {
+    let width = percent(fraction * 100.0);
+    if node.width != width {
+        node.width = width;
+    }
+    let display = if step.is_none_or(|step| step.shows(fraction)) {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    if node.display != display {
+        node.display = display;
+    }
+}
+
 /// Shows the world in the skinned windows' gauges and labels.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
@@ -3082,7 +3189,7 @@ pub(crate) fn show(
         Res<super::spellbook::BookView>,
         Res<super::hud::action_bar::ActionRequests>,
     ),
-    mut fills: Query<(&Shows, &mut Node), Without<Text>>,
+    mut fills: Query<(&Shows, &mut Node, Option<&Step>), Without<Text>>,
     mut texts: Query<(&Shows, &mut Text, &mut TextColor)>,
     mut boxes: Query<(&Shows, &mut Visibility)>,
 ) {
@@ -3097,14 +3204,10 @@ pub(crate) fn show(
             Visibility::Hidden
         });
     }
-    for (shows, mut node) in &mut fills {
-        let Shows::Fill(kind) = *shows else {
-            continue;
-        };
-        let fraction = filled(world, (hud.resource_estimate, &requests), kind);
-        let width = percent(fraction.clamp(0.0, 1.0) * 100.0);
-        if node.width != width {
-            node.width = width;
+    for (shows, mut node, step) in &mut fills {
+        if let Shows::Fill(kind) = *shows {
+            let fraction = filled(world, (hud.resource_estimate, &requests), kind);
+            fill_to(&mut node, step, fraction.clamp(0.0, 1.0));
         }
     }
     for (shows, mut text, mut color) in &mut texts {
@@ -3293,18 +3396,8 @@ fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String,
         ),
         6 => {
             let target = world.target().selected;
-            let name = target
-                .and_then(|id| world.spawn(id))
-                .map(|spawn| eq_client_core::entities::display_name(&spawn.state.name))
-                .or_else(|| {
-                    world
-                        .player()
-                        .filter(|player| Some(player.spawn_id) == target)
-                        .map(|player| player.name.clone())
-                })
-                .unwrap_or_default();
             let color = theme::con(target.and_then(|id| world.considered(id)));
-            (name, Some(color))
+            (target_name(world), Some(color))
         }
         // A group member's name over their health (inferred).
         11..=15 => (
@@ -3326,9 +3419,25 @@ fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String,
     }
 }
 
+/// The target's name: a spawn's as players see it, or the player's own
+/// while they target themselves; nothing without a target.
+fn target_name(world: &eq_client_core::world::ClientWorld) -> String {
+    let target = world.target().selected;
+    target
+        .and_then(|id| world.spawn(id))
+        .map(|spawn| eq_client_core::entities::display_name(&spawn.state.name))
+        .or_else(|| {
+            world
+                .player()
+                .filter(|player| Some(player.spawn_id) == target)
+                .map(|player| player.name.clone())
+        })
+        .unwrap_or_default()
+}
+
 /// A label's text, by the official client's numbering: percentages of the
-/// player's hit points, mana and stamina, of the target's hit points and
-/// of each group member's, and the members' names.
+/// player's hit points, mana and stamina, the target's name and hit points,
+/// each group member's, and the members' names.
 fn label_text(
     world: &eq_client_core::world::ClientWorld,
     estimate: Option<(u32, u32)>,
@@ -3374,6 +3483,10 @@ fn label_text(
         19 => percent(fraction(world, estimate, 1)),
         20 => percent(fraction(world, estimate, 2)),
         21 => percent(fraction(world, estimate, 3)),
+        // The target's name, in the skin's colour; whether the official
+        // client tints it by consider colour, as the target gauge's text is
+        // tinted, is inferred.
+        28 => target_name(world),
         29 => target_health(world).map_or_else(String::new, |health| health.to_string()),
         // The group's other members' names and health, in their places.
         30..=34 => world
@@ -4349,9 +4462,24 @@ mod tests {
         // Numbers the client does not know yet show nothing.
         assert_eq!(label_text(world, None, 99), "");
         assert_eq!(fraction(world, None, 16), None);
-        // With no target, the target's gauge is empty.
+        // With no target, the target's gauge is empty, and so is the
+        // label for its name.
         assert_eq!(gauge_text(world, 6).0, "");
+        assert_eq!(label_text(world, None, 28), "");
         assert_eq!(fraction(world, None, 6), None);
+        // A creature targeted: its name as players see it, in the label and
+        // the gauge alike.
+        let mut creature = testing::pet(9, 7);
+        creature.name = "a_gnoll001".into();
+        creature.pet_owner = None;
+        testing::spawn_entry(&mut state, 9, creature);
+        state.select_target(Some(9));
+        assert_eq!(label_text(state.world(), None, 28), "a gnoll");
+        assert_eq!(gauge_text(state.world(), 6).0, "a gnoll");
+        // The player targeting themselves.
+        state.select_target(Some(7));
+        assert_eq!(label_text(state.world(), None, 28), "Example");
+        assert_eq!(gauge_text(state.world(), 6).0, "Example");
     }
 
     #[test]
@@ -4598,6 +4726,213 @@ mod tests {
             (bar_node.left, bar_node.top, bar_node.width, bar_node.height),
             (px(0), px(-3), px(60), px(8))
         );
+    }
+
+    /// Draws these gauges into one window, in their order.
+    fn draw_gauges(app: &mut App, gauges: Vec<Gauge>) {
+        use bevy::ecs::system::RunSystemOnce;
+        let inside = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 50.0,
+        };
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands, mut art: crate::sheets::Art| {
+                commands.spawn(Node::default()).with_children(|window| {
+                    for each in &gauges {
+                        gauge(window, &mut art, each, &inside);
+                    }
+                });
+            })
+            .unwrap();
+    }
+
+    /// Each gauge's fill, with the bar it lies in and the gauge's root.
+    fn gauge_fills(world: &mut World) -> Vec<(Entity, Entity, Entity)> {
+        let fills: Vec<Entity> = world
+            .query::<(Entity, &Shows)>()
+            .iter(world)
+            .filter(|(_, shows)| matches!(shows, Shows::Fill(_)))
+            .map(|(entity, _)| entity)
+            .collect();
+        fills
+            .into_iter()
+            .map(|fill| {
+                let bar = world.get::<ChildOf>(fill).unwrap().parent();
+                let root = world.get::<ChildOf>(bar).unwrap().parent();
+                (fill, bar, root)
+            })
+            .collect()
+    }
+
+    /// A length in pixels.
+    fn pixels(value: Val) -> f32 {
+        let Val::Px(pixels) = value else {
+            panic!("{value:?} is not in pixels");
+        };
+        pixels
+    }
+
+    #[test]
+    fn a_gauge_started_left_of_its_box_stays_cut_unless_its_fill_is_wider() {
+        use eq_client_assets::sidl::GaugeLook;
+        // Started a pixel left of its box, its fill as wide as the box.
+        let lone = test_gauge(
+            GaugeLook {
+                background: Some(gauge_piece(90, 8)),
+                fill: Some(gauge_piece(90, 8)),
+                ..GaugeLook::default()
+            },
+            -1.0,
+            0.0,
+        );
+        assert_eq!(Step::of(&lone, &bar_parts(&lone)), None);
+        let mut app = crate::testing::app();
+        draw_gauges(&mut app, vec![lone]);
+        let world = app.world_mut();
+        let fills = gauge_fills(world);
+        let [(fill, _, root)] = fills[..] else {
+            panic!("one fill: {fills:?}");
+        };
+        assert_eq!(world.get::<Node>(root).unwrap().overflow, Overflow::clip());
+        assert_eq!(world.get::<Step>(fill), None);
+    }
+
+    #[test]
+    fn a_steps_fill_alone_crosses_its_box_from_the_bars_start() {
+        use eq_client_assets::sidl::GaugeLook;
+        // A box 90 wide whose bar starts 30 to its left, after a 3 wide end,
+        // with a fill 120 long, wider than the box, and text, a background,
+        // lines and ends.
+        let step = Gauge {
+            text_offset: (-30.0, 0.0),
+            ..test_gauge(
+                GaugeLook {
+                    background: Some(gauge_piece(120, 8)),
+                    fill: Some(gauge_piece(120, 8)),
+                    lines: Some(gauge_piece(120, 8)),
+                    cap_left: Some(gauge_piece(3, 8)),
+                    cap_right: Some(gauge_piece(3, 8)),
+                },
+                -33.0,
+                0.0,
+            )
+        };
+        assert_eq!(
+            Step::of(&step, &bar_parts(&step)),
+            Some(Step { from: 0.25 })
+        );
+        let mut app = crate::testing::app();
+        draw_gauges(&mut app, vec![step]);
+        let world = app.world_mut();
+        let fills = gauge_fills(world);
+        let [(fill, bar, root)] = fills[..] else {
+            panic!("one fill: {fills:?}");
+        };
+        // The fill lies in the gauge, cut only above and below, in a bar
+        // started where the skin starts it.
+        assert_eq!(world.get::<Step>(fill), Some(&Step { from: 0.25 }));
+        assert_eq!(
+            world.get::<Node>(root).unwrap().overflow,
+            Overflow::clip_y()
+        );
+        let bar_node = world.get::<Node>(bar).unwrap();
+        assert_eq!((bar_node.left, bar_node.width), (px(-30), px(120)));
+        // Everything else lies in a node cut at the box: the text and the
+        // background under the fill, the lines and the ends over it.
+        let layers = world.get::<Children>(root).unwrap().to_vec();
+        let [under, middle, over] = layers[..] else {
+            panic!("three layers: {layers:?}");
+        };
+        assert_eq!(middle, bar);
+        for cut in [under, over] {
+            let node = world.get::<Node>(cut).unwrap();
+            assert_eq!(node.overflow, Overflow::clip());
+            assert_eq!(
+                (node.left, node.top, node.width, node.height),
+                (px(0), px(0), px(90), px(30))
+            );
+        }
+        let text = world
+            .query::<(Entity, &Shows)>()
+            .iter(world)
+            .find(|(_, shows)| **shows == Shows::GaugeText(1))
+            .map(|(entity, _)| entity)
+            .unwrap();
+        assert_eq!(world.get::<ChildOf>(text).unwrap().parent(), under);
+    }
+
+    #[test]
+    fn a_bar_coloured_in_steps_takes_the_colour_of_the_highest_step_reached() {
+        use eq_client_assets::sidl::GaugeLook;
+        // A bar 50 long at the window's x 10, coloured in five steps as the
+        // Velious skin builds its hit point bars (made-up numbers): a gauge
+        // over the whole bar, then one per further fifth, its box from there
+        // to the bar's end and its fill, 50 long, started at the bar's start.
+        let steps: Vec<Gauge> = (0..5u8)
+            .map(|step| {
+                let start = 10.0 * f32::from(step);
+                Gauge {
+                    area: Area {
+                        x: 10.0 + start,
+                        y: 4.0,
+                        width: 50.0 - start,
+                        height: 6.0,
+                    },
+                    ..test_gauge(
+                        GaugeLook {
+                            fill: Some(gauge_piece(50, 6)),
+                            ..GaugeLook::default()
+                        },
+                        -start,
+                        0.0,
+                    )
+                }
+            })
+            .collect();
+        // The steps whose fills draw at this hit point percent. Each one
+        // draws from the bar's start to the level, and later gauges draw
+        // over earlier ones, so the highest step drawn colours it all.
+        let drawn = |level: u8| {
+            let mut app = crate::testing::app();
+            let mut online = OnlineState::new(true);
+            let mut player = testing::player(7);
+            player.hp_percent = Some(level);
+            testing::admit(&mut online, 1, player);
+            app.insert_resource(online).add_systems(Update, show);
+            draw_gauges(&mut app, steps.clone());
+            app.update();
+            let world = app.world_mut();
+            let mut drawn = Vec::new();
+            for (fill, bar, root) in gauge_fills(world) {
+                let fill = world.get::<Node>(fill).unwrap();
+                let place = pixels(world.get::<Node>(root).unwrap().left);
+                let start = place + pixels(world.get::<Node>(bar).unwrap().left);
+                let Val::Percent(width) = fill.width else {
+                    panic!("{:?}", fill.width);
+                };
+                assert!((start - 10.0).abs() < 0.001, "{start}");
+                assert!((width - f32::from(level)).abs() < 0.001, "{width}");
+                if fill.display != Display::None {
+                    let step = [10.0, 20.0, 30.0, 40.0, 50.0]
+                        .iter()
+                        .position(|at: &f32| (place - at).abs() < 0.001)
+                        .unwrap();
+                    drawn.push(step);
+                }
+            }
+            drawn.sort_unstable();
+            drawn
+        };
+        // 70%: three steps draw, the third on top.
+        assert_eq!(drawn(70), [0, 1, 2, 3]);
+        // At an exact step, the lower colour shows.
+        assert_eq!(drawn(60), [0, 1, 2]);
+        assert_eq!(drawn(100), [0, 1, 2, 3, 4]);
+        assert_eq!(drawn(21), [0, 1]);
+        assert_eq!(drawn(10), [0]);
+        assert_eq!(drawn(0), [0]);
     }
 
     #[test]
