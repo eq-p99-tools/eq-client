@@ -155,9 +155,9 @@ pub struct Gauge {
     pub bar_offset: f32,
     /// Where the bar starts from the gauge's left (`GaugeOffsetX`): its left
     /// end, then the bar its fill grows along, each piece at its own size.
-    /// Skins set it below zero to show only part of a bar, as the Velious
-    /// skin colours each fifth of its hit point bar with a gauge over that
-    /// fifth alone.
+    /// Skins set it below zero to show only part of a bar, or, with a fill
+    /// wider than the gauge, to make one step of a bar coloured in steps, as
+    /// the Velious skin's hit point bars are.
     pub bar_left: f32,
 }
 
