@@ -598,10 +598,12 @@ fn launch_session(launcher: &logins::Launcher, preset: usize) -> eq_client_rende
         variable("EQ_ACCOUNT"),
         zeroize::Zeroizing::new(variable("EQ_PASSWORD")),
     );
-    let Some(login) = launcher.login(preset, &account, &password) else {
-        eprintln!("error: the launch's login server is missing");
-        std::process::exit(2);
-    };
+    let login = launcher
+        .login(preset, &account, &password)
+        .unwrap_or_else(|reason| {
+            eprintln!("error: {reason}");
+            std::process::exit(2);
+        });
     session::SessionWorker::start(login, launcher.options()).unwrap_or_else(|error| {
         eprintln!("Cannot start session: {error:#}");
         std::process::exit(1);

@@ -425,13 +425,23 @@ pub(crate) fn apply(
         if drawn.is_some_and(|drawn| drawn.0 == from) {
             continue;
         }
+        let arranged = if state.placed() {
+            None
+        } else {
+            arranged(
+                &mut screens,
+                directory,
+                (&skin.0, *id),
+                &options.options.qol,
+            )
+        };
         let Some(screen) = screens.get(directory, &from, *id) else {
             continue;
         };
         commands.entity(frame).insert(Drawn(from.clone()));
         art.draw_in((from != skin.0).then(|| from.clone()));
         skinned.0.insert(*id);
-        reshape(&mut node, screen, state.placed(), *id);
+        reshape(&mut node, screen, state.placed(), (*id, arranged));
         super::windows::drag_anywhere(&mut commands, frame, *id);
         background.0 = Color::NONE;
         *border = BorderColor::all(Color::NONE);
@@ -451,11 +461,50 @@ pub(crate) fn apply(
     }
 }
 
+/// A window's size as drawn: from the skin it is drawn from, zero where that
+/// skin draws no such window or sizes it to nothing.
+fn drawn_size(
+    screens: &mut Screens,
+    directory: &std::path::Path,
+    (skin, id): (&str, WindowId),
+    hidden_too: bool,
+) -> Vec2 {
+    let from = drawn_from(screens, directory, (skin, id), hidden_too);
+    screens
+        .get(directory, &from, id)
+        .map_or(Vec2::ZERO, |screen| {
+            Vec2::new(screen.area.width, screen.area.height).max(Vec2::ZERO)
+        })
+}
+
+/// Where the client's arrangement opens a window drawn from the skin
+/// ([`WindowId::arranged`]), by the sizes the windows are drawn at, while
+/// Open Windows Apart is on ([`eq_client_core::qol::Fix::WindowsApart`]);
+/// None where the window opens where the skin puts it.
+fn arranged(
+    screens: &mut Screens,
+    directory: &std::path::Path,
+    (skin, id): (&str, WindowId),
+    qol: &eq_client_core::qol::Settings,
+) -> Option<super::windows::Placement> {
+    use eq_client_core::qol::Fix;
+    if !qol.on(Fix::WindowsApart) {
+        return None;
+    }
+    let hidden_too = qol.on(Fix::HiddenWindows);
+    id.arranged(|other| drawn_size(screens, directory, (skin, other), hidden_too))
+}
+
 /// Sizes the frame as the skin does. A window placed neither by the player
-/// nor by the official client's UI file opens where the skin puts it, as
-/// the official client opens it, unless its description declares a place of
-/// its own (`Description::opening`).
-fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
+/// nor by the official client's UI file opens where it opens by default
+/// ([`open_by_default`]), unless its description declares a place of its
+/// own (`Description::opening`).
+fn reshape(
+    node: &mut Node,
+    screen: &Screen,
+    placed: bool,
+    (id, arranged): (WindowId, Option<super::windows::Placement>),
+) {
     node.width = px(screen.area.width);
     node.height = px(screen.area.height);
     // The skin's size is the window's: no caps or scrolling of the client's own.
@@ -468,12 +517,55 @@ fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
     node.border = UiRect::ZERO;
     node.row_gap = Val::ZERO;
     if !placed && id.describe().opening == super::windows::Opening::Skin {
-        node.position_type = PositionType::Absolute;
-        node.left = px(screen.area.x);
-        node.top = px(screen.area.y);
-        node.right = Val::Auto;
-        node.bottom = Val::Auto;
-        node.margin = UiRect::ZERO;
+        open_by_default(node, screen, arranged);
+    }
+}
+
+/// Puts a window drawn from the skin where it opens by default: where the
+/// client's arrangement puts it ([`WindowId::arranged`]), or else where the
+/// skin puts it, as the official client opens it.
+fn open_by_default(node: &mut Node, screen: &Screen, arranged: Option<super::windows::Placement>) {
+    if let Some(place) = arranged {
+        place.apply(node);
+        return;
+    }
+    node.position_type = PositionType::Absolute;
+    node.left = px(screen.area.x);
+    node.top = px(screen.area.y);
+    node.right = Val::Auto;
+    node.bottom = Val::Auto;
+    node.margin = UiRect::ZERO;
+}
+
+/// Keeps the client's own panels, which no skin draws, where the arrangement
+/// puts them while the skin draws the HUD and the player has not placed
+/// them ([`WindowId::arranged`], [`eq_client_core::qol::Fix::WindowsApart`]):
+/// the Status panel in the bottom right corner, clear of the skin's windows.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn place_own(
+    (skinned, options): (Res<Skinned>, Res<super::options::OptionsState>),
+    mut frames: Query<(&WindowId, &mut Node, &super::windows::Frame), Without<Drawn>>,
+) {
+    if !skinned.has(WindowId::Player)
+        || !options
+            .options
+            .qol
+            .on(eq_client_core::qol::Fix::WindowsApart)
+    {
+        return;
+    }
+    for (id, mut node, frame) in &mut frames {
+        if frame.placed() || id.official().is_some() {
+            continue;
+        }
+        let Some(place) = id.arranged(|_| Vec2::ZERO) else {
+            continue;
+        };
+        let mut wanted = node.clone();
+        place.apply(&mut wanted);
+        if wanted != *node {
+            *node = wanted;
+        }
     }
 }
 
@@ -3551,7 +3643,7 @@ mod tests {
         let skin = (px(120.0), px(80.0));
         let at = |id, placed| {
             let mut node = super::super::windows::placed(id, Node::default());
-            reshape(&mut node, &screen, placed, id);
+            reshape(&mut node, &screen, placed, (id, None));
             (node.left, node.top)
         };
         // Pop-ups open at the skin's place as the HUD does.
@@ -3567,6 +3659,43 @@ mod tests {
         assert_ne!(at(WindowId::Give, true), skin);
         // A bag keeps its own place until the official client's is known.
         assert_ne!(at(WindowId::Bag(22), false), skin);
+        // The client's arrangement, for a panel it places, comes before the
+        // skin's place, and a placed window stays where it was put.
+        let arranged = |placed| {
+            let mut node = Node::default();
+            let place = super::super::windows::Placement::TopRight(0.0, 0.0);
+            reshape(&mut node, &screen, placed, (WindowId::Effects, Some(place)));
+            (node.left, node.right, node.top)
+        };
+        assert_eq!(arranged(false), (Val::Auto, px(0.0), px(0.0)));
+        assert_eq!(arranged(true), (Val::Auto, Val::Auto, Val::Auto));
+    }
+
+    #[test]
+    fn the_status_panel_moves_clear_of_the_skins_hud() {
+        let mut app = App::new();
+        app.init_resource::<Skinned>()
+            .init_resource::<crate::options::OptionsState>()
+            .add_systems(Update, place_own);
+        let opens = super::super::windows::placed(WindowId::Status, Node::default());
+        let status = app
+            .world_mut()
+            .spawn((
+                WindowId::Status,
+                opens.clone(),
+                crate::windows::Frame::default(),
+            ))
+            .id();
+        app.update();
+        // The client's own HUD keeps it where the registry opens it.
+        assert_eq!(app.world().get::<Node>(status), Some(&opens));
+        app.insert_resource(Skinned::of(&[WindowId::Player]));
+        app.update();
+        let node = app.world().get::<Node>(status).unwrap();
+        assert_eq!(
+            (node.left, node.top, node.right, node.bottom),
+            (Val::Auto, Val::Auto, px(0.0), px(0.0))
+        );
     }
 
     #[test]

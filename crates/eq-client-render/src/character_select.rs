@@ -80,7 +80,8 @@ pub(super) struct Root;
 pub(super) enum Action {
     Choose(u8),
     Enter,
-    /// Leaves the game, as the skin's Quit does.
+    /// The skin's Quit: back to the login screen, or out of the game in a
+    /// run without one (`login::quit`).
     Quit,
 }
 
@@ -107,10 +108,9 @@ pub(super) fn update(
     buttons: Query<(Ref<Interaction>, &Action)>,
     roots: Query<Entity, With<Root>>,
     mut previous: Local<String>,
-    (mut shown, skinned, mut exit, front): (
+    (mut shown, skinned, front): (
         ResMut<super::windows::Shown>,
         Res<crate::skinned::Skinned>,
-        MessageWriter<AppExit>,
         Res<crate::login::FrontEnd>,
     ),
 ) {
@@ -124,15 +124,6 @@ pub(super) fn update(
         } else {
             shown.close(WindowId::CharacterSelect);
         }
-    }
-    let pressed = |action: fn(&Action) -> bool| {
-        buttons.iter().any(|(interaction, button)| {
-            interaction.is_changed() && *interaction == Interaction::Pressed && action(button)
-        })
-    };
-    // Quit leaves the game from the list, whatever it shows.
-    if visible && focused && pressed(|action| matches!(action, Action::Quit)) {
-        exit.write(AppExit::Success);
     }
     let (choosing, world) = online.choosing();
     if visible

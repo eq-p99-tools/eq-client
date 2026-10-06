@@ -567,7 +567,11 @@ fn schedule(app: &mut App) {
             (
                 // Which login screens show decides which take the presses.
                 (login::read_look, (login::form, login::worlds, login::light)).chain(),
-                (character_select::update, character_select::names),
+                (
+                    character_select::update,
+                    character_select::names,
+                    login::quit,
+                ),
             ),
             windows::input,
             move_player,
@@ -634,7 +638,13 @@ fn schedule(app: &mut App) {
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),
                 skinned::frames,
-                (skinned::apply, skinned::looks::load, skinned::looks::dress).chain(),
+                (
+                    skinned::apply,
+                    skinned::place_own,
+                    skinned::looks::load,
+                    skinned::looks::dress,
+                )
+                    .chain(),
                 skinned::show,
                 skinned::buttons,
                 (

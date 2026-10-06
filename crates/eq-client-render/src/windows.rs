@@ -10,7 +10,7 @@ mod registry;
 mod stack;
 mod store;
 pub(super) use layout::Layouts;
-pub(crate) use registry::{Layer, Opening, Toggle, WindowId};
+pub(crate) use registry::{Layer, Opening, Placement, Toggle, WindowId};
 #[cfg(test)]
 pub(crate) use stack::toggle;
 pub(crate) use stack::{SelectorButton, Shown, Stack, spawn_selector};
