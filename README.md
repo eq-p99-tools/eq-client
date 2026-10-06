@@ -386,23 +386,24 @@ settings folder. A hotbutton holds a spell gem, a worn or carried item with a
 click effect, an Actions window ability, or one of the Actions window's Melee
 Attack, Sit, Stand, Camp, Invite, Follow and Disband buttons: it casts the gem's
 spell, uses the item as Alt+right-click does, or does exactly what the button
-does. Hold the left button on one of those (a gem with a spell, a hotbutton that
-holds something, an Actions window button or such an item) for half a second and
-its hotkey comes onto the cursor, which shows the spell's icon, the item's
-picture or the button's name. A hotbutton held leaves its slot; a gem, button or
-item keeps what it has. Click a hotbutton to put the hotkey there, and what that
-hotbutton held comes onto the cursor, or let the hold go over another hotbutton.
-A click anywhere else throws the hotkey away and does nothing else, which is how
-a hotbutton is emptied; anything else coming onto the cursor, or leaving the
-world, throws it away too. A control with something a hold can pick up acts when
-a quick click is let go over it, not when it is pressed; with Shift, Ctrl or Alt
-held, or with something on the cursor, a press acts at once as before. The hold
-time, that a click waits for its release, the swap, the drop where a hold is let
-go, the click that throws a hotkey away, what the cursor shows and which items
-can go on the bar (those with a click effect) are inferred, not yet checked
-against the official client. Hover any of those controls and press Ctrl+number
-to bind what a hold would pick up from it to that slot; Ctrl+Shift+number
-empties a slot.
+does. Hold the left button on one of those (a gem with a spell, an Actions
+window button, such an item, or a hotbutton that holds one of them) for half a
+second and its hotkey comes onto the cursor, which shows the spell's icon, the
+item's picture or the button's name. A hotbutton held leaves its slot; a gem,
+button or item keeps what it has. Click a hotbutton to put the hotkey there, or
+let the hold go over another hotbutton, and what a hold on that hotbutton would
+pick up comes onto the cursor; a gem with no spell, or an item gone from its
+place, is simply replaced. A click anywhere else throws the hotkey away and does
+nothing else, which is how a hotbutton is emptied; anything else coming onto the
+cursor, or leaving the world, throws it away too. A control with something a
+hold can pick up acts when a quick click is let go over it, not when it is
+pressed; with Shift, Ctrl or Alt held, or with something on the cursor, a press
+acts at once as before. The hold time, that a click waits for its release, the
+swap, the drop where a hold is let go, the click that throws a hotkey away, what
+the cursor shows and which items can go on the bar (those with a click effect)
+are inferred, not yet checked against the official client. Hover any of those
+controls and press Ctrl+number to bind what a hold would pick up from it to that
+slot; Ctrl+Shift+number empties a slot.
 Item shortcuts show installed item artwork and use the same activation checks as
 Alt+right-click in inventory, including cursor, casting, charges and pending-request
 guards. They use the selected target, or self when no target is selected. Worker

@@ -171,7 +171,8 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
     button(&mut app, None, false);
     assert!(rx.try_recv().is_err());
     // Held, the gem casts nothing and its hotkey goes onto the fifth
-    // hotbutton, whose own gem rides the cursor; neither press sends.
+    // hotbutton; neither press sends. The fifth held the fifth gem, which
+    // has no spell, so nothing comes onto the cursor in its place.
     button(&mut app, Some(gem), true);
     app.world_mut()
         .resource_mut::<hotbar::carry::Presses>()
@@ -185,10 +186,23 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
         app.world().resource::<hotbar::Bindings>().0[4],
         Some(hotbar::Action::Gem(0))
     );
-    // Thrown away with a click on nothing, the fifth gem's hotkey goes, and
-    // the fifth hotbutton now casts the first gem's spell.
-    button(&mut app, None, true);
-    button(&mut app, None, false);
+    assert_eq!(
+        app.world().resource::<hotbar::carry::Carry>().hotkey(),
+        None
+    );
+    // The next quick click on the gem casts, and the fifth hotbutton now
+    // casts the first gem's spell.
+    button(&mut app, Some(gem), true);
+    button(&mut app, Some(gem), false);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::CastSpell {
+            gem: 0,
+            spell_id: 73,
+            ..
+        }
+    ));
+    testing::pending_cast(&mut online(&mut app), None);
     button(&mut app, Some(fifth), true);
     button(&mut app, Some(fifth), false);
     assert!(matches!(
@@ -523,7 +537,8 @@ fn gems_and_action_slots_name_their_keys_from_the_key_map() {
         .add_systems(Update, key_help);
     let gem = app.world_mut().spawn(SpellGem(0)).id();
     let memorized = app.world_mut().spawn(SpellGem(1)).id();
-    let slot = app.world_mut().spawn(hotbar::Slot(2)).id();
+    let slot = app.world_mut().spawn(hotbar::Slot(1)).id();
+    let spellless = app.world_mut().spawn(hotbar::Slot(2)).id();
     let empty = app.world_mut().spawn(hotbar::Slot(3)).id();
     app.update();
     let tooltip = |entity| {
@@ -540,9 +555,15 @@ fn gems_and_action_slots_name_their_keys_from_the_key_map() {
         "Synthetic spell
 Alt+2: cast | Shift-click: forget | Hold: pick up"
     );
+    // A hold picks up what a hotbutton holds while that does something: the
+    // second gem's spell, not the third gem, which has none.
     assert_eq!(
         tooltip(slot),
-        "3: use | Ctrl+3: bind the hovered gem, item or button | Ctrl+Shift+3: empty | Hold: pick up"
+        "2: use | Ctrl+2: bind the hovered gem, item or button | Ctrl+Shift+2: empty | Hold: pick up"
+    );
+    assert_eq!(
+        tooltip(spellless),
+        "3: use | Ctrl+3: bind the hovered gem, item or button | Ctrl+Shift+3: empty"
     );
     assert_eq!(
         tooltip(empty),

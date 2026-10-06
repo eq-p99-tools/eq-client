@@ -5,10 +5,11 @@
 //!
 //! What the official client does here is inferred, not checked yet: how long
 //! a press is held before it picks up ([`HOLD`]), that a hotkey put down on
-//! a hotbutton that holds one swaps that one onto the cursor, that letting
-//! go of the hold over another hotbutton puts the hotkey there, that a click
-//! anywhere else throws the hotkey away and does nothing else, and what the
-//! cursor shows of a hotkey ([`Face`]).
+//! a hotbutton swaps onto the cursor what a hold there would pick up (one
+//! that does nothing now, such as an empty gem, is simply replaced), that
+//! letting go of the hold over another hotbutton puts the hotkey there, that
+//! a click anywhere else throws the hotkey away and does nothing else, and
+//! what the cursor shows of a hotkey ([`Face`]).
 //!
 //! Each control says what a hold picks up from it where it is built, with
 //! [`Pickable`], and the systems that act on its clicks read them through
@@ -43,7 +44,9 @@ const MODIFIERS: [KeyCode; 6] = [
 pub(crate) enum Source {
     /// A spell gem, from 0: its spell, while it holds one.
     Gem(u8),
-    /// A hotbutton, from 0: what it holds, which leaves it when picked up.
+    /// A hotbutton, from 0: what it holds, while that does something (a gem
+    /// with a spell, or the item it was made with still in its place, as
+    /// that gem or place gives it), which leaves it when picked up.
     Slot(usize),
     /// An Actions window ability button: the ability it holds now.
     Ability(AbilityButton),
@@ -61,7 +64,24 @@ impl Source {
     pub(crate) fn binding(self, world: &ClientWorld, bindings: &Bindings) -> Option<Action> {
         match self {
             Self::Gem(gem) => world.gem(usize::from(gem)).map(|_| Action::Gem(gem)),
-            Self::Slot(index) => bindings.0.get(index).copied().flatten(),
+            Self::Slot(index) => {
+                let binding = bindings.0.get(index).copied().flatten()?;
+                let source = match binding {
+                    Action::Gem(gem) => Self::Gem(gem),
+                    Action::Item { slot, .. } => Self::Item(slot),
+                    Action::Sit
+                    | Action::Stand
+                    | Action::Ability(_)
+                    | Action::Attack
+                    | Action::Camp
+                    | Action::Invite
+                    | Action::Follow
+                    | Action::Disband => Self::Fixed(binding),
+                };
+                source
+                    .binding(world, bindings)
+                    .filter(|given| *given == binding)
+            }
             Self::Ability(button) => crate::abilities::assigned(world, button).map(Action::Ability),
             Self::Item(slot) => world
                 .inventory()
@@ -255,12 +275,10 @@ pub(crate) fn route(
         presses.held = None;
         if let Some(hotkey) = carry.0 {
             presses.taken = true;
-            // Put down on a hotbutton, what it held comes onto the cursor.
+            // Put down on a hotbutton, what a hold there would pick up comes
+            // onto the cursor.
             carry.0 = match under {
-                Some((_, Source::Slot(index))) => bindings
-                    .0
-                    .get_mut(index)
-                    .and_then(|slot| slot.replace(hotkey)),
+                Some((_, Source::Slot(index))) => put_down(&mut bindings, world, index, hotkey),
                 _ => None,
             };
             // What the press went to shows hovered, so no system takes the
@@ -322,10 +340,24 @@ pub(crate) fn route(
                 _ => None,
             })
             .filter(|index| held.source != Source::Slot(*index));
-        if let Some(slot) = over.and_then(|index| bindings.0.get_mut(index)) {
-            carry.0 = slot.replace(hotkey);
+        if let Some(index) = over {
+            carry.0 = put_down(&mut bindings, world, index, hotkey);
         }
     }
+}
+
+/// Puts a hotkey down on a hotbutton, and gives what a hold there would have
+/// picked up, which comes onto the cursor: what does nothing now (a gem with
+/// no spell, an item gone from its place) is simply replaced.
+fn put_down(
+    bindings: &mut Bindings,
+    world: &ClientWorld,
+    index: usize,
+    hotkey: Action,
+) -> Option<Action> {
+    let lifted = Source::Slot(index).binding(world, bindings);
+    *bindings.0.get_mut(index)? = Some(hotkey);
+    lifted
 }
 
 /// The controls of one kind clicked this frame: one a hold picks up from as
@@ -538,16 +570,16 @@ mod tests {
     fn a_hotkey_put_down_on_a_hotbutton_swaps_with_what_it_held() {
         let mut app = app();
         let gem = control(&mut app, 1, Some(Source::Gem(0)));
-        let second = control(&mut app, 2, Some(Source::Slot(1)));
+        let ninth = control(&mut app, 9, Some(Source::Slot(8)));
         let fifth = control(&mut app, 5, Some(Source::Slot(4)));
         app.world_mut().resource_mut::<Bindings>().0[4] = None;
         pick_up(&mut app, gem);
-        press(&mut app, Some(second));
-        assert_eq!(slots(&app)[1], Some(Action::Gem(0)));
-        assert_eq!(hotkey(&app), Some(Action::Gem(1)));
-        release(&mut app, Some(second));
+        press(&mut app, Some(ninth));
+        assert_eq!(slots(&app)[8], Some(Action::Gem(0)));
+        assert_eq!(hotkey(&app), Some(Action::Sit));
+        release(&mut app, Some(ninth));
         press(&mut app, Some(fifth));
-        assert_eq!(slots(&app)[4], Some(Action::Gem(1)));
+        assert_eq!(slots(&app)[4], Some(Action::Sit));
         assert_eq!(hotkey(&app), None);
         release(&mut app, Some(fifth));
         // The presses that put hotkeys down clicked nothing.
@@ -555,10 +587,53 @@ mod tests {
     }
 
     #[test]
+    fn a_hotkey_put_down_where_a_hold_would_pick_up_nothing_lifts_nothing() {
+        let mut app = app();
+        let gem = control(&mut app, 1, Some(Source::Gem(0)));
+        let fifth = control(&mut app, 5, Some(Source::Slot(4)));
+        let sixth = control(&mut app, 6, Some(Source::Slot(5)));
+        // Hotbuttons 5 and 6 start as gems 5 and 6, which hold no spell.
+        assert_eq!(slots(&app)[4], Some(Action::Gem(4)));
+        assert_eq!(slots(&app)[5], Some(Action::Gem(5)));
+        // Put down with a click, nothing comes onto the cursor, so the next
+        // quick click on the gem clicks it.
+        pick_up(&mut app, gem);
+        press(&mut app, Some(fifth));
+        release(&mut app, Some(fifth));
+        assert_eq!(slots(&app)[4], Some(Action::Gem(0)));
+        assert_eq!(hotkey(&app), None);
+        press(&mut app, Some(gem));
+        release(&mut app, Some(gem));
+        assert_eq!(clicked(&app), [1]);
+        // Let go of a hold over one, the same.
+        press(&mut app, Some(gem));
+        hold(&mut app);
+        release(&mut app, Some(sixth));
+        assert_eq!(slots(&app)[5], Some(Action::Gem(0)));
+        assert_eq!(hotkey(&app), None);
+        press(&mut app, Some(gem));
+        release(&mut app, Some(gem));
+        assert_eq!(clicked(&app), [1, 1]);
+    }
+
+    #[test]
+    fn a_hold_on_a_hotbutton_whose_gem_is_empty_picks_up_nothing_and_clicks_at_once() {
+        let mut app = app();
+        let fifth = control(&mut app, 5, Some(Source::Slot(4)));
+        press(&mut app, Some(fifth));
+        assert_eq!(clicked(&app), [5]);
+        hold(&mut app);
+        assert_eq!(hotkey(&app), None);
+        release(&mut app, Some(fifth));
+        assert_eq!(clicked(&app), [5]);
+        assert_eq!(slots(&app), Bindings::default().0);
+    }
+
+    #[test]
     fn a_hotbutton_held_leaves_its_slot_and_drops_where_the_hold_is_let_go() {
         let mut app = app();
         let first = control(&mut app, 1, Some(Source::Slot(0)));
-        let third = control(&mut app, 3, Some(Source::Slot(2)));
+        let ninth = control(&mut app, 9, Some(Source::Slot(8)));
         press(&mut app, Some(first));
         hold(&mut app);
         assert_eq!(slots(&app)[0], None);
@@ -567,15 +642,15 @@ mod tests {
         release(&mut app, Some(first));
         assert_eq!(slots(&app)[0], None);
         assert_eq!(hotkey(&app), Some(Action::Gem(0)));
-        // Put back, then held and let go over the third: they swap.
+        // Put back, then held and let go over the ninth: they swap.
         press(&mut app, Some(first));
         release(&mut app, Some(first));
         assert_eq!(slots(&app)[0], Some(Action::Gem(0)));
         press(&mut app, Some(first));
         hold(&mut app);
-        release(&mut app, Some(third));
-        assert_eq!(slots(&app)[2], Some(Action::Gem(0)));
-        assert_eq!(hotkey(&app), Some(Action::Gem(2)));
+        release(&mut app, Some(ninth));
+        assert_eq!(slots(&app)[8], Some(Action::Gem(0)));
+        assert_eq!(hotkey(&app), Some(Action::Sit));
         assert_eq!(clicked(&app), [] as [u8; 0]);
     }
 
@@ -647,6 +722,13 @@ mod tests {
             Some(Action::Gem(0))
         );
         assert_eq!(Source::Gem(1).binding(world, &bindings), None);
+        // A hotbutton gives what it holds only while that does something: a
+        // gem with a spell, not one without, and any other kind as it is.
+        assert_eq!(
+            Source::Slot(0).binding(world, &bindings),
+            Some(Action::Gem(0))
+        );
+        assert_eq!(Source::Slot(1).binding(world, &bindings), None);
         assert_eq!(Source::Slot(8).binding(world, &bindings), Some(Action::Sit));
         assert_eq!(
             Source::Fixed(Action::Camp).binding(world, &bindings),
@@ -737,6 +819,28 @@ mod tests {
         // container, nor a carried item without a click effect.
         for slot in [30, 331, 2000, 2031, 3000, 4000, 23] {
             assert_eq!(given(slot), None, "{slot}");
+        }
+        // A hotbutton gives a bound item only while the item it was made with
+        // is still such an item in its place: not another item there, one
+        // without a click effect, none, or one in the bank.
+        let id = world.inventory().items()[&InventorySlot(22)].details.id;
+        let bound = |slot, id| {
+            let mut bindings = Bindings::default();
+            bindings.0[0] = Some(Action::Item {
+                slot: InventorySlot(slot),
+                id,
+            });
+            Source::Slot(0).binding(world, &bindings)
+        };
+        assert_eq!(
+            bound(22, id),
+            Some(Action::Item {
+                slot: InventorySlot(22),
+                id,
+            })
+        );
+        for (slot, id) in [(22, id + 1), (23, id), (24, id), (2000, id)] {
+            assert_eq!(bound(slot, id), None, "{slot}");
         }
     }
 }
