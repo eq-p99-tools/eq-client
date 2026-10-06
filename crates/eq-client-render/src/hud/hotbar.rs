@@ -2,18 +2,18 @@
 //! normal command validators.
 use crate::theme::{self, Size};
 use bevy::prelude::*;
-use eq_client_core::{hotbar::Hotbar, qol::Fix};
+use eq_client_core::{hotbar::Hotbar, qol::Fix, world::ClientWorld};
 use std::path::PathBuf;
 pub(crate) mod carry;
 mod item_art;
 #[cfg(test)]
 mod item_tests;
 pub(crate) use carry::{Clicks, Pickable, Source};
-pub(super) use eq_client_core::hotbar::Binding as Action;
+pub(crate) use eq_client_core::hotbar::Binding as Action;
 pub(crate) use item_art::update as item_artwork;
 
 #[derive(Resource)]
-pub(crate) struct Bindings(pub(super) [Option<Action>; 10]);
+pub(crate) struct Bindings(pub(crate) [Option<Action>; 10]);
 
 impl Default for Bindings {
     fn default() -> Self {
@@ -191,7 +191,7 @@ fn slot_pressed(keys: &crate::keys::Keys, act: fn(u8) -> crate::keys::Act) -> Op
 }
 
 /// Resolves a slot's key or a click on its button into a typed action.
-pub(super) fn requested(
+pub(crate) fn requested(
     keys: &crate::keys::Keys,
     bindings: &Bindings,
     clicks: &Clicks<Slot>,
@@ -315,25 +315,7 @@ pub(crate) fn presentation(
     }
     for (mut text, caption, hint) in &mut labels {
         if let Some(caption) = caption {
-            text.0 = match bindings.0[caption.0] {
-                Some(Action::Gem(gem)) => {
-                    if online.world().gem(usize::from(gem)).is_some() {
-                        format!("G{}", gem + 1)
-                    } else {
-                        "-".into()
-                    }
-                }
-                Some(Action::Sit) => "Sit".into(),
-                Some(Action::Stand) => "Stand".into(),
-                Some(Action::Item { .. }) => "Item".into(),
-                Some(Action::Ability(ability)) => ability.name().into(),
-                Some(Action::Attack) => "Attack".into(),
-                Some(Action::Camp) => "Camp".into(),
-                Some(Action::Invite) => "Invite".into(),
-                Some(Action::Follow) => "Follow".into(),
-                Some(Action::Disband) => "Disband".into(),
-                None => "-".into(),
-            };
+            text.0 = caption_text(bindings.0[caption.0], online.world());
         }
         if hint.is_some() {
             text.0 = hovered_detail(
@@ -347,14 +329,31 @@ pub(crate) fn presentation(
     }
 }
 
+/// The words a slot's button shows for what it holds, which a hotkey with
+/// no picture shows on the cursor too.
+pub(crate) fn caption_text(action: Option<Action>, world: &ClientWorld) -> String {
+    match action {
+        Some(Action::Gem(gem)) if world.gem(usize::from(gem)).is_some() => {
+            format!("G{}", gem + 1)
+        }
+        Some(Action::Sit) => "Sit".into(),
+        Some(Action::Stand) => "Stand".into(),
+        Some(Action::Item { .. }) => "Item".into(),
+        Some(Action::Ability(ability)) => ability.name().into(),
+        Some(Action::Attack) => "Attack".into(),
+        Some(Action::Camp) => "Camp".into(),
+        Some(Action::Invite) => "Invite".into(),
+        Some(Action::Follow) => "Follow".into(),
+        Some(Action::Disband) => "Disband".into(),
+        Some(Action::Gem(_)) | None => "-".into(),
+    }
+}
+
 /// What the hovered slot holds, for the window's detail line.
 fn hovered_detail(
     bindings: &Bindings,
     hovered: Option<usize>,
-    (world, qol): (
-        &eq_client_core::world::ClientWorld,
-        &eq_client_core::qol::Settings,
-    ),
+    (world, qol): (&ClientWorld, &eq_client_core::qol::Settings),
     (names, map): (&crate::spellbook::SpellNames, &crate::keys::KeyMap),
     now: std::time::Instant,
 ) -> String {

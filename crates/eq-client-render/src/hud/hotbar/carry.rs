@@ -6,8 +6,9 @@
 //! What the official client does here is inferred, not checked yet: how long
 //! a press is held before it picks up ([`HOLD`]), that a hotkey put down on
 //! a hotbutton that holds one swaps that one onto the cursor, that letting
-//! go of the hold over another hotbutton puts the hotkey there, and that a
-//! click anywhere else throws the hotkey away and does nothing else.
+//! go of the hold over another hotbutton puts the hotkey there, that a click
+//! anywhere else throws the hotkey away and does nothing else, and what the
+//! cursor shows of a hotkey ([`Face`]).
 //!
 //! Each control says what a hold picks up from it where it is built, with
 //! [`Pickable`], and the systems that act on its clicks read them through
@@ -111,6 +112,14 @@ impl Presses {
 }
 
 #[cfg(test)]
+impl Carry {
+    /// This hotkey on the cursor, as a hold puts it there.
+    pub(crate) const fn holding(hotkey: Action) -> Self {
+        Self(Some(hotkey))
+    }
+}
+
+#[cfg(test)]
 impl Presses {
     /// Takes the press under way back past the hold time, as if held that
     /// long.
@@ -124,6 +133,79 @@ impl Presses {
 /// The hotkey riding the cursor.
 #[derive(Resource, Default, Debug)]
 pub(crate) struct Carry(Option<Action>);
+
+impl Carry {
+    /// The hotkey on the cursor, if one is.
+    pub(crate) const fn hotkey(&self) -> Option<Action> {
+        self.0
+    }
+}
+
+/// A picture a hotkey shows on the cursor, by its icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Picture {
+    /// A spell's icon.
+    Spell(u32),
+    /// An item's icon.
+    Item(u32),
+}
+
+impl Picture {
+    /// The picture, from the installation's art.
+    pub(crate) fn image(self, art: &mut crate::sheets::Art) -> Option<ImageNode> {
+        match self {
+            Self::Spell(icon) => art.spell(icon),
+            Self::Item(icon) => art.item(icon),
+        }
+    }
+}
+
+/// What the cursor shows of a hotkey: a gem's spell, with its icon, the
+/// item it uses, with its picture, or else the words a hotbutton shows for
+/// it. Inferred: what the official client shows there is not checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Face {
+    pub(crate) picture: Option<Picture>,
+    pub(crate) words: String,
+}
+
+impl Face {
+    /// How a hotkey looks on the cursor now.
+    pub(crate) fn of(
+        hotkey: Action,
+        world: &ClientWorld,
+        names: &crate::spellbook::SpellNames,
+    ) -> Self {
+        let spell = match hotkey {
+            Action::Gem(gem) => world.gem(usize::from(gem)),
+            _ => None,
+        };
+        let item = match hotkey {
+            Action::Item { slot, id } => world
+                .inventory()
+                .items()
+                .get(&slot)
+                .filter(|item| item.details.id == id),
+            _ => None,
+        };
+        if let Some(spell) = spell {
+            Self {
+                picture: names.icon(spell).map(Picture::Spell),
+                words: names.label(spell),
+            }
+        } else if let Some(item) = item {
+            Self {
+                picture: item.details.icon.map(Picture::Item),
+                words: item.details.name.clone(),
+            }
+        } else {
+            Self {
+                picture: None,
+                words: super::caption_text(Some(hotkey), world),
+            }
+        }
+    }
+}
 
 /// The controls, with what a hold picks up from each that can.
 type Controls<'w, 's> =
@@ -220,7 +302,14 @@ pub(crate) fn route(
     }
     presses.held = None;
     if !held.picked {
-        presses.clicked = Some(held.entity);
+        // Let go over its control, which Bevy then marks hovered, a quick
+        // press clicks it; let go anywhere else, it clicks nothing.
+        if controls
+            .get(held.entity)
+            .is_ok_and(|(_, interaction, _)| *interaction != Interaction::None)
+        {
+            presses.clicked = Some(held.entity);
+        }
     } else if let Some(hotkey) = carry.0 {
         // Let go over another hotbutton, the hotkey goes there; over the one
         // it came from, it stays on the cursor.
@@ -358,7 +447,7 @@ mod tests {
     }
 
     fn hotkey(app: &App) -> Option<Action> {
-        app.world().resource::<Carry>().0
+        app.world().resource::<Carry>().hotkey()
     }
 
     fn slots(app: &App) -> [Option<Action>; 10] {
@@ -396,6 +485,20 @@ mod tests {
         release(&mut app, Some(gem));
         assert_eq!(hotkey(&app), Some(Action::Gem(0)));
         assert_eq!(clicked(&app), [1, 2]);
+        assert_eq!(slots(&app), Bindings::default().0);
+    }
+
+    #[test]
+    fn a_quick_press_let_go_off_its_control_clicks_nothing() {
+        let mut app = app();
+        let gem = control(&mut app, 1, Some(Source::Gem(0)));
+        let other = control(&mut app, 2, Some(Source::Slot(1)));
+        press(&mut app, Some(gem));
+        release(&mut app, Some(other));
+        press(&mut app, Some(gem));
+        release(&mut app, None);
+        assert_eq!(clicked(&app), [] as [u8; 0]);
+        assert_eq!(hotkey(&app), None);
         assert_eq!(slots(&app), Bindings::default().0);
     }
 
@@ -548,6 +651,51 @@ mod tests {
         assert_eq!(
             Source::Fixed(Action::Camp).binding(world, &bindings),
             Some(Action::Camp)
+        );
+    }
+
+    #[test]
+    fn the_cursor_shows_a_gems_spell_an_items_picture_or_a_hotbuttons_words() {
+        let mut online = world();
+        let mut item = crate::preview::items().remove(0);
+        item.slot = InventorySlot(23);
+        item.details.icon = Some(500);
+        let (id, name) = (item.details.id, item.details.name.clone());
+        testing::inventory(
+            &mut online,
+            eq_client_core::inventory::InventoryUpdate::Snapshot(vec![item]),
+        );
+        let mut fields = vec!["0"; 145];
+        fields[0] = "73";
+        fields[1] = "Synthetic spell";
+        fields[144] = "36";
+        let names = crate::spellbook::SpellNames::parse(&fields.join("^"));
+        let face = |hotkey| Face::of(hotkey, online.world(), &names);
+        assert_eq!(
+            face(Action::Gem(0)),
+            Face {
+                picture: Some(Picture::Spell(36)),
+                words: "Synthetic spell".into(),
+            }
+        );
+        let slot = InventorySlot(23);
+        assert_eq!(
+            face(Action::Item { slot, id }),
+            Face {
+                picture: Some(Picture::Item(500)),
+                words: name,
+            }
+        );
+        // Another item where the bound one was, an empty gem and a kind
+        // without a picture show what a hotbutton shows for them.
+        assert_eq!(face(Action::Item { slot, id: id + 1 }).words, "Item");
+        assert_eq!(face(Action::Gem(1)).words, "-");
+        assert_eq!(
+            face(Action::Camp),
+            Face {
+                picture: None,
+                words: "Camp".into(),
+            }
         );
     }
 

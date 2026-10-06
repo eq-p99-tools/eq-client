@@ -130,9 +130,15 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
             Interaction::None,
         ))
         .id();
+    // Bevy marks the control pressed, or the one the button is let go over
+    // hovered.
     let button = |app: &mut App, on: Option<Entity>, down: bool| {
         if let Some(on) = on {
-            *app.world_mut().get_mut::<Interaction>(on).unwrap() = Interaction::Pressed;
+            *app.world_mut().get_mut::<Interaction>(on).unwrap() = if down {
+                Interaction::Pressed
+            } else {
+                Interaction::Hovered
+            };
         }
         let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
         if down {
@@ -150,7 +156,7 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
     };
     button(&mut app, Some(gem), true);
     assert!(rx.try_recv().is_err());
-    button(&mut app, None, false);
+    button(&mut app, Some(gem), false);
     assert!(matches!(
         rx.try_recv().unwrap(),
         ClientCommand::CastSpell {
@@ -160,6 +166,10 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
         }
     ));
     testing::pending_cast(&mut online(&mut app), None);
+    // Let go off the gem, a quick press casts nothing.
+    button(&mut app, Some(gem), true);
+    button(&mut app, None, false);
+    assert!(rx.try_recv().is_err());
     // Held, the gem casts nothing and its hotkey goes onto the fifth
     // hotbutton, whose own gem rides the cursor; neither press sends.
     button(&mut app, Some(gem), true);
@@ -180,7 +190,7 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
     button(&mut app, None, true);
     button(&mut app, None, false);
     button(&mut app, Some(fifth), true);
-    button(&mut app, None, false);
+    button(&mut app, Some(fifth), false);
     assert!(matches!(
         rx.try_recv().unwrap(),
         ClientCommand::CastSpell {
@@ -189,6 +199,129 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
             ..
         }
     ));
+}
+
+/// The caster in the world with the bar's default keys, its actions run and
+/// their refusals said, sending into this channel.
+fn bar_app(tx: std::sync::mpsc::SyncSender<ClientCommand>) -> App {
+    let mut app = App::new();
+    crate::keys::testing::install(&mut app);
+    app.insert_resource(admitted())
+        .insert_resource(Outbox::new(Some(tx)))
+        .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<ChatState>()
+        .init_resource::<hotbar::Bindings>()
+        .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<messages::Messages>()
+        .init_resource::<crate::spellbook::BookHand>()
+        .add_systems(Update, (actions, crate::outbox::show).chain());
+    app.world_mut().spawn((
+        Window {
+            focused: true,
+            ..default()
+        },
+        bevy::window::PrimaryWindow,
+    ));
+    app
+}
+
+/// Presses one key alone.
+fn tap(app: &mut App, key: KeyCode) {
+    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+    keys.reset_all();
+    keys.press(key);
+    app.update();
+}
+
+#[test]
+fn a_hotbuttons_sit_and_stand_send_the_postures_their_keys_send_and_say_a_refusal_once() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let mut app = bar_app(tx);
+    // The bar's ninth and tenth slots hold Sit and Stand by default, which
+    // run `/sit` and `/stand`; X and V are the posture keys.
+    for (slot, key, wanted) in [
+        (
+            KeyCode::Digit9,
+            KeyCode::KeyX,
+            eq_client_core::Posture::Sitting,
+        ),
+        (
+            KeyCode::Digit0,
+            KeyCode::KeyV,
+            eq_client_core::Posture::Standing,
+        ),
+    ] {
+        for pressed in [slot, key] {
+            tap(&mut app, pressed);
+            let sent = rx.try_recv().unwrap();
+            assert!(
+                matches!(
+                    sent,
+                    ClientCommand::SetPosture {
+                        session_id: 7,
+                        spawn_id: 12,
+                        posture,
+                        ..
+                    } if posture == wanted
+                ),
+                "{pressed:?}: {sent:?}"
+            );
+            assert!(rx.try_recv().is_err());
+        }
+    }
+    // With no session to take it, the hotbutton's Sit is refused, and the
+    // refusal is said once, though the outbox says it too.
+    app.insert_resource(Outbox::new(None));
+    tap(&mut app, KeyCode::Digit9);
+    let chat = app.world().resource::<ChatState>();
+    let said = chat.newest();
+    assert_eq!(said, crate::outbox::Refusal::Offline.text());
+    let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
+    let times = lines
+        .iter()
+        .filter(|(_, line)| line.message.text == said)
+        .count();
+    assert_eq!(times, 1);
+}
+
+#[test]
+fn a_hotbuttons_camp_and_group_kinds_send_what_their_buttons_send() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let mut app = bar_app(tx);
+    let kinds = [
+        hotbar::Action::Camp,
+        hotbar::Action::Follow,
+        hotbar::Action::Disband,
+    ];
+    let mut bindings = hotbar::Bindings::default();
+    for (slot, kind) in bindings.0.iter_mut().zip(kinds) {
+        *slot = Some(kind);
+    }
+    app.insert_resource(bindings);
+    // Camping sits first, as `/camp` does.
+    tap(&mut app, KeyCode::Digit1);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SetPosture {
+            posture: eq_client_core::Posture::Sitting,
+            ..
+        }
+    ));
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::Camp { session_id: 7, .. }
+    ));
+    tap(&mut app, KeyCode::Digit2);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::FollowGroup { session_id: 7 }
+    ));
+    tap(&mut app, KeyCode::Digit3);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::Disband { session_id: 7 }
+    ));
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]
@@ -381,12 +514,16 @@ fn gems_and_action_slots_name_their_keys_from_the_key_map() {
     player.memorized_spells = [None; 8];
     player.memorized_spells[1] = Some(42);
     testing::admit(&mut online, 7, player);
+    let mut bindings = hotbar::Bindings::default();
+    bindings.0[3] = None;
     app.insert_resource(online)
         .insert_resource(crate::spellbook::SpellNames::parse("42^Synthetic spell"))
+        .insert_resource(bindings)
         .add_systems(Update, key_help);
     let gem = app.world_mut().spawn(SpellGem(0)).id();
     let memorized = app.world_mut().spawn(SpellGem(1)).id();
     let slot = app.world_mut().spawn(hotbar::Slot(2)).id();
+    let empty = app.world_mut().spawn(hotbar::Slot(3)).id();
     app.update();
     let tooltip = |entity| {
         app.world()
@@ -396,15 +533,19 @@ fn gems_and_action_slots_name_their_keys_from_the_key_map() {
             .clone()
     };
     assert_eq!(tooltip(gem), "Alt+1: cast | Shift-click: forget");
-    // A gem with a spell names it first.
+    // A gem with a spell names it first, and a hold picks it up.
     assert_eq!(
         tooltip(memorized),
         "Synthetic spell
-Alt+2: cast | Shift-click: forget"
+Alt+2: cast | Shift-click: forget | Hold: pick up"
     );
     assert_eq!(
         tooltip(slot),
-        "3: use | Ctrl+3: bind the hovered gem or item | Ctrl+Shift+3: empty"
+        "3: use | Ctrl+3: bind the hovered gem, item or button | Ctrl+Shift+3: empty | Hold: pick up"
+    );
+    assert_eq!(
+        tooltip(empty),
+        "4: use | Ctrl+4: bind the hovered gem, item or button | Ctrl+Shift+4: empty"
     );
 }
 

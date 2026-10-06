@@ -939,7 +939,8 @@ pub(super) fn submit_game_command(
 }
 
 /// Runs a button's or a hotbutton's game slash command, as typing it would;
-/// a refusal shows in the chat.
+/// a refusal shows in the chat once, though the outbox says it too
+/// (`outbox::show`).
 pub(super) fn run_game_command(
     command: &str,
     online: &super::online::OnlineState,
@@ -947,7 +948,7 @@ pub(super) fn run_game_command(
     chat: &mut ChatState,
 ) {
     if let Err(reason) = submit_game_command(command, online, outbox) {
-        chat.history.push(system_line(reason));
+        chat.refuse(reason);
     }
 }
 

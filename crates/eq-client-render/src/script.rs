@@ -39,6 +39,9 @@ pub struct Script {
     held: Vec<KeyCode>,
     /// The mouse button a scripted click holds down until the next frame.
     clicked: Option<MouseButton>,
+    /// The control a scripted click pressed, which the pointer is over as
+    /// the button is let go.
+    pressed: Option<Entity>,
     started: Option<Duration>,
     paused: bool,
     /// Newest chat line already included in a report.
@@ -79,6 +82,7 @@ impl Script {
             current: None,
             held: Vec::new(),
             clicked: None,
+            pressed: None,
             started: None,
             paused: false,
             chat_seen: 0,
@@ -173,6 +177,7 @@ impl Script {
         if let Some(button) = self.clicked.take() {
             mouse.release(button);
         }
+        self.pressed = None;
     }
 
     fn stop(
@@ -363,6 +368,13 @@ pub(super) fn drive(
         ))
     ) && (!script.held.is_empty() || script.clicked.is_some())
     {
+        // Bevy marks the control under the pointer hovered as the button is
+        // let go, and the hold rule clicks a control only then.
+        if let Some(entity) = script.pressed
+            && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+        {
+            interaction.set_if_neq(Interaction::Hovered);
+        }
         script.release(&mut keys, &mut mouse);
         script.current = None;
     }
@@ -483,6 +495,7 @@ pub(super) fn drive(
                 };
                 mouse.press(button);
                 script.clicked = Some(button);
+                script.pressed = Some(entity);
                 return;
             }
             _ => true,
