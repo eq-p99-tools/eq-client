@@ -4,6 +4,7 @@ use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{hotbar::Hotbar, qol::Fix};
 use std::path::PathBuf;
+pub(crate) mod carry;
 mod item_art;
 #[cfg(test)]
 mod item_tests;
