@@ -56,7 +56,12 @@ fn mesh_distance(mesh: &Mesh, world: Mat4, ray: Ray3d) -> Option<f32> {
     }
     let origin = inverse.transform_point3(ray.origin);
     let direction = inverse.transform_vector3(*ray.direction);
-    let VertexAttributeValues::Float32x3(vertices) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)?
+    // A mesh whose data went to the render world is skipped like one
+    // without positions.
+    let VertexAttributeValues::Float32x3(vertices) = mesh
+        .try_attribute_option(Mesh::ATTRIBUTE_POSITION)
+        .ok()
+        .flatten()?
     else {
         return None;
     };
@@ -73,7 +78,7 @@ fn mesh_distance(mesh: &Mesh, world: Mat4, ray: Ray3d) -> Option<f32> {
             nearest = Some(hit);
         }
     };
-    if let Some(indices) = mesh.indices() {
+    if let Some(indices) = mesh.try_indices_option().ok()? {
         let mut indices = indices.iter();
         while let (Some(a), Some(b), Some(c)) = (indices.next(), indices.next(), indices.next()) {
             visit([a, b, c]);
@@ -179,5 +184,74 @@ mod tests {
             .entity_mut(root)
             .insert(Transform::from_xyz(30.0, 0.0, 0.0));
         assert!(system.get(&world).unwrap().distance(root, ray).is_none());
+    }
+
+    #[test]
+    fn meshes_whose_data_went_to_the_render_world_are_skipped() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        let ray = Ray3d::new(Vec3::new(0.0, 0.0, 10.0), Dir3::NEG_Z);
+        // What the render world's extraction leaves of a mesh drawn only there.
+        let mut extracted = triangle();
+        extracted.take_gpu_data().unwrap();
+        assert!(mesh_distance(&extracted, Mat4::IDENTITY, ray).is_none());
+        let (extracted, body) = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            (meshes.add(extracted), meshes.add(triangle()))
+        };
+        let root = world.spawn(Transform::IDENTITY).id();
+        let held = world.spawn((Mesh3d(extracted), Transform::IDENTITY)).id();
+        world.entity_mut(root).add_child(held);
+        let mut system = SystemState::<Picker>::new(&mut world);
+        assert!(system.get(&world).unwrap().distance(root, ray).is_none());
+        // The spawn's other meshes are still picked.
+        let figure = world
+            .spawn((Mesh3d(body), Transform::from_xyz(0.0, 0.0, 1.0)))
+            .id();
+        world.entity_mut(root).add_child(figure);
+        assert!((system.get(&world).unwrap().distance(root, ray).unwrap() - 9.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn held_items_built_for_a_spawn_are_picked_through_their_holder() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let primitive = eq_client_assets::ZonePrimitive {
+            positions: vec![[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]],
+            normals: Vec::new(),
+            texture_coordinates: Vec::new(),
+            indices: vec![0, 1, 2],
+            texture: None,
+            material_mode: eq_client_assets::MaterialMode::Opaque,
+        };
+        let held = crate::create_render_primitives(
+            vec![primitive],
+            &[],
+            &mut world.resource_mut::<Assets<Mesh>>(),
+            &mut materials,
+            true,
+            crate::character::ON_A_SPAWN,
+        );
+        let (mesh, _) = &held[0];
+        let usage = world
+            .resource::<Assets<Mesh>>()
+            .get(mesh)
+            .unwrap()
+            .asset_usage;
+        assert!(usage.contains(RenderAssetUsages::MAIN_WORLD));
+        // Only the item is under the holder, at its hand.
+        let root = world.spawn(Transform::from_xyz(3.0, 0.0, 0.0)).id();
+        let hand = world
+            .spawn((Transform::from_xyz(0.0, 2.0, 0.0), Visibility::Inherited))
+            .id();
+        let item = world
+            .spawn((Mesh3d(mesh.clone()), Transform::IDENTITY))
+            .id();
+        world.entity_mut(root).add_child(hand);
+        world.entity_mut(hand).add_child(item);
+        let ray = Ray3d::new(Vec3::new(3.0, 2.0, 10.0), Dir3::NEG_Z);
+        let mut system = SystemState::<Picker>::new(&mut world);
+        assert!((system.get(&world).unwrap().distance(root, ray).unwrap() - 10.0).abs() < 0.001);
     }
 }

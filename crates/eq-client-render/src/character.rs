@@ -1,6 +1,6 @@
 //! CPU skinning for the small classic models; asset and pose math stay renderer independent.
 
-use bevy::prelude::*;
+use bevy::{asset::RenderAssetUsages, prelude::*};
 use eq_client_assets::characters::CharacterAsset;
 use std::sync::Arc;
 
@@ -109,6 +109,12 @@ impl PreparedCharacter {
     }
 }
 
+/// Where the meshes of models hung under a spawn, its body and the items it
+/// holds, keep their data: in the main world as well as for drawing, since
+/// clicks are picked against them there and bodies are posed from it.
+pub(super) const ON_A_SPAWN: RenderAssetUsages =
+    RenderAssetUsages::MAIN_WORLD.union(RenderAssetUsages::RENDER_WORLD);
+
 /// Uploads model textures once; posed vertex buffers remain per-instance.
 pub(super) fn prepare(
     asset: CharacterAsset,
@@ -133,13 +139,8 @@ pub(super) fn prepare(
         meshes,
         materials,
         true,
+        ON_A_SPAWN,
     );
-    for (handle, _) in &rendered {
-        if let Some(mut mesh) = meshes.get_mut(handle) {
-            mesh.asset_usage = bevy::asset::RenderAssetUsages::MAIN_WORLD
-                | bevy::asset::RenderAssetUsages::RENDER_WORLD;
-        }
-    }
     PreparedCharacter {
         asset: Arc::new(asset),
         primitives: drawn

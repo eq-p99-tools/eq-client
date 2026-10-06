@@ -25,8 +25,9 @@ pub(crate) struct Scrollbar {
 #[derive(Component, Clone, Copy, Debug)]
 pub(crate) struct ScrollArrow {
     bar: Entity,
-    /// The window its scrollbar is drawn in.
-    pub(crate) window: WindowId,
+    /// The window its scrollbar is drawn in; none on a screen that is no
+    /// window, as the login screens are.
+    pub(crate) window: Option<WindowId>,
     /// Whether it scrolls toward the top.
     pub(crate) up: bool,
 }
@@ -47,7 +48,7 @@ pub(crate) struct Thumb {
 }
 
 /// The scrollbar's width: its arrows'.
-pub(super) fn width(look: &ScrollbarLook) -> f32 {
+pub(crate) fn width(look: &ScrollbarLook) -> f32 {
     look.up
         .normal
         .as_ref()
@@ -58,12 +59,12 @@ pub(super) fn width(look: &ScrollbarLook) -> f32 {
 /// Draws a scrollbar down the right of a box's inside, for the content of
 /// `scrolled`: an arrow at each end and the gutter between them, with the
 /// thumb in it.
-pub(super) fn spawn(
+pub(crate) fn spawn(
     parent: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
     look: &ScrollbarLook,
     inside: &Area,
-    (scrolled, window): (Entity, WindowId),
+    (scrolled, window): (Entity, Option<WindowId>),
 ) {
     let width = width(look);
     let height = |piece: Option<&Piece>| piece.map_or(width, |piece| to_f32(piece.height));
@@ -526,7 +527,13 @@ mod tests {
                     };
                     let scrolled = commands.spawn(Node::default()).id();
                     commands.spawn(Node::default()).with_children(|frame| {
-                        spawn(frame, &mut art, &look, &inside, (scrolled, WindowId::Chat));
+                        spawn(
+                            frame,
+                            &mut art,
+                            &look,
+                            &inside,
+                            (scrolled, Some(WindowId::Chat)),
+                        );
                     });
                 },
             );
@@ -591,7 +598,7 @@ mod tests {
         app.world_mut().spawn((
             ScrollArrow {
                 bar,
-                window: WindowId::Chat,
+                window: Some(WindowId::Chat),
                 up: false,
             },
             Interaction::Pressed,

@@ -1,7 +1,9 @@
-//! The client's own list of the login server's worlds: each world's name and
-//! how many play there, or that it is down or locked, with the world last
-//! played on highlighted first. Up and Down browse, Enter or a second click
-//! plays, and Escape goes back to the login screen.
+//! The world list's keys and presses, and the client's own list of the
+//! login server's worlds: each world's name and how many play there, or that
+//! it is down or locked, with the world last played on highlighted first. Up
+//! and Down browse, Enter or a second click plays, and Escape goes back to
+//! the login screen. Where the installation has its own list, that shows
+//! instead ([`super::official`]), and its controls do what this window's do.
 use super::{FrontEnd, Link, Lit, Request, Screen};
 use crate::{online::OnlineState, theme, theme::Size};
 use bevy::prelude::*;
@@ -50,6 +52,8 @@ pub(crate) enum Action {
     World(usize),
     /// Plays on the highlighted world.
     Play,
+    /// Plays on the world last played on this login server.
+    PlayLast,
     /// Goes back to the login screen.
     Back,
 }
@@ -75,7 +79,10 @@ pub(crate) fn worlds(
     keys: crate::keys::Keys,
     strings: Option<Res<LoginStrings>>,
     buttons: Query<(Ref<Interaction>, &Action)>,
-    roots: Query<Entity, With<Root>>,
+    (roots, look): (
+        Query<Entity, With<Root>>,
+        Option<Res<super::official::LoginLook>>,
+    ),
     lists: Query<&ScrollPosition, With<Rows>>,
     time: Res<Time<Real>>,
     mut clicked: Local<Option<(usize, Duration)>>,
@@ -83,6 +90,7 @@ pub(crate) fn worlds(
     mut built: Local<Option<u64>>,
 ) {
     let visible = front.screen(&online) == Screen::Servers;
+    let official = look.is_some_and(|look| look.official());
     if visible && keys.window_focused() {
         let asked = online
             .world()
@@ -113,6 +121,12 @@ pub(crate) fn worlds(
                     *clicked = Some((*index, now));
                 }
             }
+            if pressed.contains(&Action::PlayLast)
+                && let Some(index) = last_world(&front, &online)
+            {
+                highlight(&mut front, &online, index);
+                play = true;
+            }
             browse(&mut front, &online, &keys.input);
             if play && let Err(refusal) = ask(&mut front, &mut online, &link) {
                 front.status = refusal;
@@ -120,12 +134,7 @@ pub(crate) fn worlds(
         }
     }
     let list = online.world().servers();
-    let signature = format!(
-        "{visible}:{:?}:{:?}:{}",
-        list.map(|list| (list.selection_id, &list.servers, list.asked, &list.refused)),
-        front.highlighted,
-        front.status,
-    );
+    let signature = format!("{visible}:{official}:{}", appearance(list, &front));
     if *previous == signature {
         return;
     }
@@ -141,11 +150,40 @@ pub(crate) fn worlds(
         commands.entity(root).despawn();
     }
     *built = None;
-    if visible && let Some(list) = list {
+    if visible
+        && !official
+        && let Some(list) = list
+    {
         let strings = strings.as_deref().map(|strings| &strings.0);
         spawn(&mut commands, list, (&front, offset), strings);
         *built = Some(list.selection_id);
     }
+}
+
+/// What the world list shows, which draws it again when it changes.
+pub(super) fn appearance(
+    list: Option<&eq_client_core::world::ServerList>,
+    front: &FrontEnd,
+) -> String {
+    format!(
+        "{:?}:{:?}:{}:{:?}",
+        list.map(|list| (list.selection_id, &list.servers, list.asked, &list.refused)),
+        front.highlighted,
+        front.status,
+        front.remembered_world(),
+    )
+}
+
+/// The world last played on this login server, by its place in the list,
+/// where the list shows it taking players.
+pub(super) fn last_world(front: &FrontEnd, online: &OnlineState) -> Option<usize> {
+    let last = front.remembered_world()?;
+    online
+        .world()
+        .servers()?
+        .servers
+        .iter()
+        .position(|server| server.name.eq_ignore_ascii_case(last) && server.status.open())
 }
 
 /// Scrolls the list of worlds as the wheel turns over it, and keeps the
@@ -281,7 +319,7 @@ fn ask(front: &mut FrontEnd, online: &mut OnlineState, link: &Link) -> Result<()
 
 /// What a world's row says after its name: how many play there, or that it
 /// is down or locked, and whether the list marks it preferred.
-fn detail(server: &ServerChoice) -> String {
+pub(super) fn detail(server: &ServerChoice) -> String {
     let state = match (server.status, server.players) {
         (ServerStatus::Up, Some(players)) => format!("{players} players"),
         (ServerStatus::Up, None) => "Up".to_owned(),
@@ -314,7 +352,7 @@ fn refusal_text(
 
 /// The line under the list: why the last world was refused, the world being
 /// asked for, or how to use the list.
-fn guidance(
+pub(super) fn guidance(
     list: &eq_client_core::world::ServerList,
     front: &FrontEnd,
     strings: Option<&eq_client_assets::strings::StringTable>,

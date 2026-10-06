@@ -4,12 +4,15 @@
 //! the viewer shows the screens and hands each session's news to the world,
 //! and never sees the network's own types.
 //!
-//! These are the client's own windows, drawn when no official login screen
-//! is: their look and words are ours.
+//! The screens are the installation's own where it has them
+//! ([`official`]), and else the client's own windows, whose look and words
+//! are ours.
 mod form;
+mod official;
 mod worlds;
 
 pub(super) use form::form;
+pub(super) use official::{LoginLook, login_screen, read as read_look, worlds_screen};
 pub(super) use worlds::{LoginStrings, scroll, worlds};
 
 use super::{online::OnlineState, online::Updates, outbox::Outbox, theme};
@@ -179,6 +182,9 @@ struct Running {
     /// The session reached the world's character list; it never shows the
     /// login screens again.
     past_login: bool,
+    /// The player asked Quick Connect: the list's first look plays on the
+    /// world last played on, where it takes players.
+    quick: bool,
 }
 
 impl FrontEnd {
@@ -214,6 +220,7 @@ impl FrontEnd {
             chose: None,
             listed: None,
             past_login: false,
+            quick: false,
         });
         (front, Some(session.updates), Some(session.commands))
     }
@@ -250,6 +257,12 @@ impl FrontEnd {
     /// The login server chosen.
     pub(crate) fn chosen(&self) -> Option<&LoginServer> {
         self.servers.get(self.chosen)
+    }
+
+    /// The world last played on the chosen login server, which Quick
+    /// Connect and Play Last Server play on.
+    pub(crate) fn remembered_world(&self) -> Option<&str> {
+        self.chosen().and_then(|server| server.world.as_deref())
     }
 
     /// Whether the run has a login screen.
@@ -337,6 +350,20 @@ impl FrontEnd {
         }
     }
 
+    /// Logs in as [`Self::connect`] does, then plays on the world last
+    /// played on this login server as soon as the list shows it taking
+    /// players, as the official login screen's Quick Connect does; where it
+    /// does not, the list stays up.
+    pub(crate) fn quick_connect(&mut self, online: &mut OnlineState, link: &mut Link) -> Connected {
+        let connected = self.connect(online, link);
+        if connected == Connected::Session
+            && let Some(running) = self.session.as_mut()
+        {
+            running.quick = true;
+        }
+        connected
+    }
+
     /// Fills the login screen with the account and password a script types.
     ///
     /// # Errors
@@ -370,6 +397,7 @@ impl FrontEnd {
             chose: None,
             listed: None,
             past_login: false,
+            quick: false,
         });
         self.highlighted = None;
         self.status.clear();
@@ -480,6 +508,14 @@ pub(super) fn watch(mut front: ResMut<FrontEnd>, online: Res<OnlineState>, mut l
             .get(front.chosen)
             .and_then(|server| server.world.as_deref());
         front.highlighted = worlds::first(&list.servers, last);
+        // Quick Connect plays at once on the world last played on, which
+        // the list highlights first where it takes players.
+        if std::mem::take(&mut running.quick)
+            && let (Some(index), Some(last)) = (front.highlighted, last)
+            && list.servers[index].name.eq_ignore_ascii_case(last)
+        {
+            front.request = Some(Request::Play);
+        }
     }
     if !running.past_login && (world.characters().is_some() || world.session_id().is_some()) {
         running.past_login = true;

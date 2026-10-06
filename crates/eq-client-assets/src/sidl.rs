@@ -197,6 +197,9 @@ pub struct Button {
     pub text: Option<String>,
     /// Its words' colour.
     pub text_color: Option<[u8; 3]>,
+    /// The official client's font number for its words, from 1 for the
+    /// smallest, where the skin gives one.
+    pub font: Option<u8>,
     /// A picture on the button, such as a coin on a money button.
     pub decal: Option<Piece>,
     /// Where the picture sits, from the button's top left, and its size.
@@ -415,6 +418,9 @@ pub struct Listbox {
     pub template: Option<WindowTemplate>,
     /// Its columns, from the left.
     pub columns: Vec<Column>,
+    /// The official client's font number for its rows, where the skin gives
+    /// one.
+    pub font: Option<u8>,
     /// Its vertical scrollbar, where the skin gives it one
     /// (`Style_VScroll`).
     pub scrollbar: Option<ScrollbarLook>,
@@ -456,6 +462,9 @@ pub struct Label {
     pub align: Align,
     /// The official client's font number, from 1 for the smallest.
     pub font: Option<u8>,
+    /// Whether its words wrap onto more lines (`NoWrap` false); one that
+    /// says nothing keeps to one line (unchecked).
+    pub wraps: bool,
 }
 
 /// One thing a window shows.
@@ -513,6 +522,9 @@ pub struct TextBox {
     pub template: Option<WindowTemplate>,
     /// The colour of its text, where the skin sets one.
     pub color: Option<[u8; 3]>,
+    /// The official client's font number for its text, where the skin gives
+    /// one.
+    pub font: Option<u8>,
     /// Its vertical scrollbar, where the skin gives it one
     /// (`Style_VScroll`).
     pub scrollbar: Option<ScrollbarLook>,
@@ -590,10 +602,29 @@ impl Library {
     /// # Errors
     /// Rejects malformed XML.
     pub fn parse(animations: &str, templates: &str) -> Result<Self, UiLayoutError> {
+        let documents = [
+            roxmltree::Document::parse(animations)?,
+            roxmltree::Document::parse(templates)?,
+        ];
+        Ok(Self::of(&documents))
+    }
+
+    /// The pieces and templates these documents define, the pieces first,
+    /// since the templates name them.
+    fn of(documents: &[roxmltree::Document<'_>]) -> Self {
         let mut library = Self::default();
-        library.add_pieces(&roxmltree::Document::parse(animations)?);
-        let document = roxmltree::Document::parse(templates)?;
-        library.add_pieces(&document);
+        for document in documents {
+            library.add_pieces(document);
+        }
+        for document in documents {
+            library.add_templates(document);
+        }
+        library
+    }
+
+    /// Notes every template in a document by name.
+    fn add_templates(&mut self, document: &roxmltree::Document<'_>) {
+        let library = self;
         for node in document.root_element().children() {
             let Some(name) = node.attribute("item") else {
                 continue;
@@ -618,7 +649,6 @@ impl Library {
                 _ => (),
             }
         }
-        Ok(library)
     }
 
     /// Reads a window from one of the skin's window files, such as
@@ -643,39 +673,66 @@ impl Library {
     /// # Errors
     /// Rejects malformed XML and files that define no such window.
     pub fn screen(&self, text: &str, name: &str) -> Result<Screen, UiLayoutError> {
-        let document = roxmltree::Document::parse(text)?;
+        self.screen_among(&[roxmltree::Document::parse(text)?], name)
+    }
+
+    /// The screen of this name in the first of these documents. Its pieces
+    /// are found in that document first, then in the others, in order: the
+    /// files of one set, which the official client reads into one namespace.
+    fn screen_among(
+        &self,
+        documents: &[roxmltree::Document<'_>],
+        name: &str,
+    ) -> Result<Screen, UiLayoutError> {
+        // The screen's own file's pictures win over the library's and the
+        // other files', so it comes last.
         let mut local = self.clone();
-        local.add_pieces(&document);
-        let elements: HashMap<&str, roxmltree::Node<'_, '_>> = document
-            .root_element()
-            .children()
-            .filter_map(|node| Some((node.attribute("item")?, node)))
+        for document in documents.iter().rev() {
+            local.add_pieces(document);
+        }
+        let named: Vec<HashMap<&str, roxmltree::Node<'_, '_>>> = documents
+            .iter()
+            .map(|document| {
+                document
+                    .root_element()
+                    .children()
+                    .filter_map(|node| Some((node.attribute("item")?, node)))
+                    .collect()
+            })
             .collect();
-        let screen = elements
-            .get(name)
+        let screen = named
+            .first()
+            .and_then(|own| own.get(name))
             .filter(|node| node.has_tag_name("Screen"))
+            .copied()
             .ok_or_else(|| UiLayoutError::MissingWindow(name.to_owned()))?;
-        let pieces = local.pieces(*screen, &elements, 0);
+        let mut elements = HashMap::new();
+        for file in &named {
+            for (item, node) in file {
+                elements.entry(*item).or_insert(*node);
+            }
+        }
+        let pieces = local.pieces(screen, &elements, 0);
         Ok(Screen {
             name: name.to_owned(),
-            title: text_of(*screen, "Text").map(str::to_owned),
-            title_color: color(*screen, "TextColor"),
-            font: number(*screen, "Font"),
-            area: area(*screen).unwrap_or(Area {
+            title: text_of(screen, "Text").map(str::to_owned),
+            title_color: color(screen, "TextColor"),
+            font: number(screen, "Font"),
+            area: area(screen).unwrap_or(Area {
                 x: 0.0,
                 y: 0.0,
                 width: 0.0,
                 height: 0.0,
             }),
-            template: text_of(*screen, "DrawTemplate")
+            template: text_of(screen, "DrawTemplate")
                 .and_then(|template| local.templates.get(template).cloned()),
-            title_bar: flag(*screen, "Style_Titlebar").then(|| TitleBar {
-                close_box: flag(*screen, "Style_Closebox"),
-                minimize_box: flag(*screen, "Style_Minimizebox"),
+            title_bar: flag(screen, "Style_Titlebar").then(|| TitleBar {
+                close_box: flag(screen, "Style_Closebox"),
+                minimize_box: flag(screen, "Style_Minimizebox"),
             }),
-            border: flag(*screen, "Style_Border"),
-            transparent: flag(*screen, "Style_Transparent"),
-            tooltip: text_of(*screen, "TooltipReference").map(str::to_owned),
+            border: flag(screen, "Style_Border"),
+            transparent: flag(screen, "Style_Transparent"),
+            tooltip: text_of(screen, "TooltipReference").map(str::to_owned),
             pieces,
             tab_frame: local.frames.get("FT_DefTabBorder").cloned().map(Box::new),
         })
@@ -845,6 +902,7 @@ impl Library {
             checkbox: flag(node, "Style_Checkbox"),
             text: text_of(node, "Text").map(str::to_owned),
             text_color: color(node, "TextColor"),
+            font: number(node, "Font"),
             decal: state("NormalDecal"),
             decal_area: child(node, "DecalSize").and_then(|size| {
                 let offset = child(node, "DecalOffset");
@@ -979,6 +1037,7 @@ impl Library {
                         header: self.named_frame(column, "Header"),
                     })
                     .collect(),
+                font: number(node, "Font"),
                 scrollbar: self.scrollbar(node),
                 header: self.frames.get("Header_Listbox").cloned().map(Box::new),
             }),
@@ -1018,6 +1077,8 @@ impl Library {
                     Align::Left
                 },
                 font: number(node, "Font"),
+                wraps: text_of(node, "NoWrap")
+                    .is_some_and(|text| text.eq_ignore_ascii_case("false")),
             }),
             "Button" => self.button(node),
             "InvSlot" => Element::InvSlot(InvSlot {
@@ -1040,6 +1101,7 @@ impl Library {
                     })
                     .and_then(|template| self.templates.get(template).cloned()),
                 color: color(node, "TextColor"),
+                font: number(node, "Font"),
                 scrollbar: self.scrollbar(node),
             }),
             // Pages and windows within windows nest; skins go a few deep.
@@ -1094,6 +1156,87 @@ impl Library {
             },
             other => Element::Other(other.to_owned()),
         }
+    }
+}
+
+/// The index of the login front end's set of interface files, which names
+/// the others.
+pub const LOGIN_SET: &str = "EQLSUI.xml";
+
+/// One of the installed client's sets of interface files, read whole, as
+/// the official client reads every file a set's index names into one
+/// namespace: a screen may list a piece another of the set's files defines,
+/// as the login screens list their backgrounds.
+#[derive(Clone, Debug, Default)]
+pub struct InterfaceSet {
+    /// The pictures and templates the set's files define.
+    library: Library,
+    /// Each file's name and text, in the order the index names them.
+    files: Vec<(String, String)>,
+}
+
+impl InterfaceSet {
+    /// Reads the set an index file names, such as [`LOGIN_SET`], each file
+    /// from the skin or else the default skin. A file named that neither
+    /// has, or that is not well-formed, is left out, as it defines nothing
+    /// this client can use.
+    ///
+    /// # Errors
+    /// Rejects unsafe names, and an unreadable or malformed index.
+    pub fn read(eq_directory: &Path, skin: &str, index: &str) -> Result<Self, UiLayoutError> {
+        let index = read_text(eq_directory, skin, index)?;
+        let document = roxmltree::Document::parse(&index)?;
+        let files = document
+            .descendants()
+            .filter(|node| node.has_tag_name("Include"))
+            .filter_map(|node| node.text())
+            .map(str::trim)
+            .filter_map(|file| Some((file.to_owned(), read_text(eq_directory, skin, file).ok()?)))
+            .collect();
+        Ok(Self::parse(files))
+    }
+
+    /// The set of these files, by name, in the index's order. A file that
+    /// is not well-formed is left out.
+    #[must_use]
+    pub fn parse(files: Vec<(String, String)>) -> Self {
+        let files: Vec<(String, String)> = files
+            .into_iter()
+            .filter(|(_, text)| roxmltree::Document::parse(text).is_ok())
+            .collect();
+        let documents: Vec<_> = files
+            .iter()
+            .filter_map(|(_, text)| roxmltree::Document::parse(text).ok())
+            .collect();
+        Self {
+            library: Library::of(&documents),
+            files,
+        }
+    }
+
+    /// The screen of this name in one of the set's files. Its pieces are
+    /// found in that file first, then in the set's other files, in the
+    /// index's order.
+    ///
+    /// # Errors
+    /// Rejects a file the set lacks, and one that defines no such screen.
+    pub fn screen(&self, file: &str, name: &str) -> Result<Screen, UiLayoutError> {
+        let own = self
+            .files
+            .iter()
+            .position(|(named, _)| named.eq_ignore_ascii_case(file))
+            .ok_or_else(|| UiLayoutError::MissingFile(file.to_owned()))?;
+        let documents: Vec<_> = std::iter::once(&self.files[own])
+            .chain(
+                self.files
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != own)
+                    .map(|(_, file)| file),
+            )
+            .map(|(_, text)| roxmltree::Document::parse(text))
+            .collect::<Result<_, _>>()?;
+        self.library.screen_among(&documents, name)
     }
 }
 
@@ -1805,6 +1948,168 @@ mod tests {
             println!("{name}: {:?} gauges {gauges:?}", screen.area);
             assert!(!gauges.is_empty(), "{name} shows a gauge");
             assert!(screen.template.is_some(), "{name} names its chrome");
+        }
+    }
+
+    /// A login set of four files: the index's order puts the pictures and
+    /// templates first, a file that is not well-formed next, then the
+    /// screen's own file, and last the file that defines the background the
+    /// screen lists.
+    fn login_set() -> InterfaceSet {
+        let shared = r#"<XML>
+            <StaticAnimation item="BG_One">
+                <Location><X>0</X><Y>0</Y></Location><Size><CX>256</CX><CY>256</CY></Size>
+                <Animation>A_Back</Animation>
+            </StaticAnimation>
+            <Label item="Words"><Location><X>9</X><Y>9</Y></Location>
+                <Size><CX>50</CX><CY>15</CY></Size><Text>Elsewhere</Text></Label>
+        </XML>"#;
+        let own = r#"<XML>
+            <Label item="Words"><Location><X>1</X><Y>2</Y></Location>
+                <Size><CX>50</CX><CY>15</CY></Size><Text>Own</Text><NoWrap>false</NoWrap>
+            </Label>
+            <Button item="Go"><ScreenID>GoButton</ScreenID><Font>4</Font>
+                <Location><X>10</X><Y>20</Y></Location><Size><CX>100</CX><CY>31</CY></Size>
+                <ButtonDrawTemplate><Normal>A_Fill</Normal></ButtonDrawTemplate></Button>
+            <Editbox item="Name"><ScreenID>NameEdit</ScreenID><Font>4</Font>
+                <DrawTemplate>WDT_Plain</DrawTemplate><Style_Border>true</Style_Border>
+                <Location><X>10</X><Y>60</Y></Location><Size><CX>100</CX><CY>38</CY></Size>
+            </Editbox>
+            <Listbox item="List"><ScreenID>Rows</ScreenID><Font>3</Font>
+                <Location><X>10</X><Y>100</Y></Location><Size><CX>100</CX><CY>80</CY></Size>
+                <Columns><Width>60</Width><Heading>One</Heading></Columns></Listbox>
+            <Screen item="front"><Size><CX>640</CX><CY>480</CY></Size>
+                <Pieces>BG_One</Pieces><Pieces>Words</Pieces><Pieces>Go</Pieces>
+                <Pieces>Name</Pieces><Pieces>List</Pieces><Pieces>Nowhere</Pieces>
+            </Screen>
+        </XML>"#;
+        InterfaceSet::parse(vec![
+            ("Pictures.xml".into(), ANIMATIONS.into()),
+            ("Templates.xml".into(), TEMPLATES.into()),
+            ("Broken.xml".into(), "<XML><Label item=\"x\"></XML>".into()),
+            ("Front.xml".into(), own.into()),
+            ("Shared.xml".into(), shared.into()),
+        ])
+    }
+
+    #[test]
+    fn a_screen_of_a_set_finds_its_pieces_in_the_sets_other_files() {
+        let set = login_set();
+        let screen = set.screen("front.XML", "front").unwrap();
+        let names: Vec<_> = screen
+            .pieces
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        // A piece no file defines is left out, as a window's always was.
+        assert_eq!(names, ["BG_One", "Words", "Go", "Name", "List"]);
+        let Element::Image { area, piece, .. } = &screen.pieces[0].1 else {
+            panic!("a picture")
+        };
+        assert_eq!((area.width, piece.texture.as_str()), (256.0, "pieces.tga"));
+        // The screen's own file wins over another's element of the same name.
+        let Element::Label(words) = &screen.pieces[1].1 else {
+            panic!("a label")
+        };
+        assert_eq!((words.text.as_str(), words.wraps), ("Own", true));
+        let fonts: Vec<_> = screen.pieces[2..]
+            .iter()
+            .map(|(_, element)| match element {
+                Element::Button(button) => button.font,
+                Element::TextBox(text) => text.font,
+                Element::Listbox(list) => list.font,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fonts, [Some(4), Some(4), Some(3)]);
+        let Element::TextBox(name) = &screen.pieces[3].1 else {
+            panic!("a box")
+        };
+        assert!(
+            name.template.is_some(),
+            "the set's templates draw its boxes"
+        );
+        assert!(matches!(
+            set.screen("Broken.xml", "x"),
+            Err(UiLayoutError::MissingFile(file)) if file == "Broken.xml"
+        ));
+        assert!(matches!(
+            set.screen("Front.xml", "Words"),
+            Err(UiLayoutError::MissingWindow(name)) if name == "Words"
+        ));
+    }
+
+    #[test]
+    fn a_set_is_read_from_the_files_its_index_names() {
+        let install =
+            std::env::temp_dir().join(format!("eq-client-sidl-set-{}", std::process::id()));
+        let default = install.join("uifiles").join("default");
+        let painted = install.join("uifiles").join("painted");
+        std::fs::create_dir_all(&default).unwrap();
+        std::fs::create_dir_all(&painted).unwrap();
+        std::fs::write(
+            default.join(LOGIN_SET),
+            "<XML><Composite><Include>Pictures.xml</Include><Include>Front.xml</Include>\
+             <Include>Absent.xml</Include><Include>../Outside.xml</Include></Composite></XML>",
+        )
+        .unwrap();
+        std::fs::write(default.join("Pictures.xml"), ANIMATIONS).unwrap();
+        let front = |words: &str| {
+            format!(
+                "<XML><Label item=\"Words\"><Size><CX>9</CX><CY>9</CY></Size>\
+                 <Text>{words}</Text></Label>\
+                 <Screen item=\"front\"><Pieces>Words</Pieces></Screen></XML>"
+            )
+        };
+        std::fs::write(default.join("Front.xml"), front("Default")).unwrap();
+        std::fs::write(painted.join("Front.xml"), front("Painted")).unwrap();
+        let read = |skin: &str| {
+            let set = InterfaceSet::read(&install, skin, LOGIN_SET).unwrap();
+            let screen = set.screen("Front.xml", "front").unwrap();
+            let Element::Label(words) = &screen.pieces[0].1 else {
+                panic!("a label")
+            };
+            (set.files.len(), words.text.clone(), words.wraps)
+        };
+        let (default_read, painted_read) = (read("default"), read("painted"));
+        std::fs::remove_dir_all(&install).unwrap();
+        // The skin's own file wins; a file neither skin has, or that would
+        // leave the skin's folder, is left out. A label that says nothing of
+        // wrapping keeps to one line.
+        assert_eq!(default_read, (2, "Default".to_owned(), false));
+        assert_eq!(painted_read, (2, "Painted".to_owned(), false));
+    }
+
+    #[test]
+    #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
+    fn the_installed_login_set_defines_the_login_and_server_screens() {
+        let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
+        let set = InterfaceSet::read(Path::new(&install), "default", LOGIN_SET).unwrap();
+        for (file, name) in [
+            ("EQLSUI_ConnectWnd.xml", "connect"),
+            ("EQLSUI_ServerSelectWnd.xml", "serverselect"),
+        ] {
+            let screen = set.screen(file, name).unwrap();
+            // Names, kinds and places only: never the skin's words.
+            println!("{name}: {:?}", screen.area);
+            for (piece, element) in &screen.pieces {
+                let (kind, area) = match element {
+                    Element::Image { area, .. } => ("picture", Some(*area)),
+                    Element::Label(label) => ("label", Some(label.area)),
+                    Element::Button(button) => ("button", Some(button.area)),
+                    Element::TextBox(text) => ("box", Some(text.area)),
+                    Element::Listbox(list) => ("list", list.area),
+                    Element::View(view) => ("view", Some(view.area)),
+                    _ => ("other", None),
+                };
+                println!("  {piece}: {kind} {area:?}");
+            }
+            let pictures = screen
+                .pieces
+                .iter()
+                .filter(|(_, element)| matches!(element, Element::Image { .. }))
+                .count();
+            assert!(pictures > 0, "{name} draws its background");
         }
     }
 

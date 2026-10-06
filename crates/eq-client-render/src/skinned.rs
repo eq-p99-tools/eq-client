@@ -12,8 +12,8 @@ pub(crate) mod scrollbar;
 
 pub(crate) use controls::{
     AmountBox, Choosing, DropDown, DropDownChoice, KeyFilter, Sets, SkinSlider, drop_downs,
-    fill_lists, light_choices, scroll_lists, show_amount, show_choices, show_sliders, slide,
-    type_amount,
+    fill_lists, headings, light_choices, scroll_lists, show_amount, show_choices, show_sliders,
+    slide, type_amount,
 };
 
 pub(crate) use items::{
@@ -340,7 +340,7 @@ impl Skinned {
 
 /// A button drawn from the skin, with its piece for each state.
 #[derive(Component, Clone)]
-pub(crate) struct SkinButton(ButtonLook);
+pub(crate) struct SkinButton(pub(crate) ButtonLook);
 
 /// A box on a skinned window's title bar: its close box, or its minimize box.
 #[derive(Component, Clone, Copy)]
@@ -755,7 +755,7 @@ fn text_box(
             }
         });
         if let Some(look) = bar {
-            scrollbar::spawn(frame, art, look, &client, (words_box, owner));
+            scrollbar::spawn(frame, art, look, &client, (words_box, Some(owner)));
         }
     });
 }
@@ -821,7 +821,7 @@ fn chat_box(
                         (art, tab_frame),
                     );
                     if let Some(look) = bar {
-                        scrollbar::spawn(frame, art, look, &client, (lines, WindowId::Chat));
+                        scrollbar::spawn(frame, art, look, &client, (lines, Some(WindowId::Chat)));
                     }
                 }
                 Some("CWChatInput") => super::chat::skinned_input(
@@ -909,7 +909,7 @@ fn view(
                 }
             });
             if let Some(look) = bar {
-                scrollbar::spawn(frame, art, look, &client, (scrolled, context.id));
+                scrollbar::spawn(frame, art, look, &client, (scrolled, Some(context.id)));
             }
         });
 }
@@ -2431,7 +2431,7 @@ fn border_insets(border: &eq_client_assets::sidl::Border) -> frame::Insets {
 
 /// The border's corners and its edges stretched between them; what lies
 /// inside it is the window's.
-fn border(
+pub(crate) fn border(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
     border: &eq_client_assets::sidl::Border,
@@ -2969,7 +2969,12 @@ fn label(
 
 /// Text in a box the skin sizes, aligned in it as the skin aligns it, on
 /// one line.
-fn aligned(window: &mut ChildSpawnerCommands, mut node: Node, align: Align, text: impl Bundle) {
+pub(crate) fn aligned(
+    window: &mut ChildSpawnerCommands,
+    mut node: Node,
+    align: Align,
+    text: impl Bundle,
+) {
     node.justify_content = match align {
         Align::Left => JustifyContent::FlexStart,
         Align::Center => JustifyContent::Center,
@@ -2982,7 +2987,7 @@ fn aligned(window: &mut ChildSpawnerCommands, mut node: Node, align: Align, text
 }
 
 /// A piece of the skin, stretched over this node.
-fn picture(
+pub(crate) fn picture(
     parent: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
     piece: &Piece,
@@ -2994,7 +2999,7 @@ fn picture(
 }
 
 /// A node at this place and size in its parent.
-fn at(x: f32, y: f32, width: f32, height: f32) -> Node {
+pub(crate) fn at(x: f32, y: f32, width: f32, height: f32) -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: px(x),
@@ -3015,7 +3020,7 @@ pub(crate) const fn font(number: Option<u8>) -> Size {
     }
 }
 
-fn rgb([red, green, blue]: [u8; 3]) -> Color {
+pub(crate) fn rgb([red, green, blue]: [u8; 3]) -> Color {
     Color::srgb_u8(red, green, blue)
 }
 
@@ -3607,6 +3612,7 @@ mod tests {
                 checkbox: false,
                 text: None,
                 text_color: None,
+                font: None,
                 decal: None,
                 decal_area: None,
                 tooltip: Some("Sample".into()),
@@ -3692,6 +3698,7 @@ mod tests {
                 checkbox: true,
                 text: None,
                 text_color: None,
+                font: None,
                 decal: None,
                 decal_area: None,
                 tooltip: None,
@@ -3713,6 +3720,7 @@ mod tests {
                 header: None,
             }],
             scrollbar: Some(ScrollbarLook::default()),
+            font: None,
             header: None,
         });
         Screen {
@@ -3768,6 +3776,7 @@ mod tests {
                         anchors: None,
                         template: None,
                         color: None,
+                        font: None,
                         scrollbar: None,
                     }),
                 ),
@@ -4004,6 +4013,7 @@ mod tests {
             anchors: None,
             template: None,
             color: None,
+            font: None,
             scrollbar: Some(ScrollbarLook::default()),
         };
         let mut app = App::new();
@@ -4088,6 +4098,7 @@ mod tests {
             checkbox: true,
             text: Some("Pet Window Popup".into()),
             text_color: None,
+            font: None,
             decal: None,
             decal_area: None,
             tooltip: None,
