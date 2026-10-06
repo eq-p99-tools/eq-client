@@ -467,8 +467,11 @@ fn install_script(
     app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
 }
 
-/// Puts every frame's work in its stage, and orders within a stage the few
-/// systems that depend on one another.
+/// Orders world reduction before scene reconciliation, then text entry before
+/// routing and gameplay input, and finally presentation. The chained groups
+/// also serialize shared focus/consumption and deferred entity changes. Keep
+/// those edges when extracting feature registration; parallelism needs a
+/// measured benefit and an explicit audit of input arbitration first.
 #[allow(
     clippy::too_many_lines,
     reason = "one declarative listing of every system in its stage"
