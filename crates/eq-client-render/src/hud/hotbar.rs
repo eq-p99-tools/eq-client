@@ -2,16 +2,18 @@
 //! normal command validators.
 use crate::theme::{self, Size};
 use bevy::prelude::*;
-use eq_client_core::{hotbar::Hotbar, qol::Fix};
+use eq_client_core::{hotbar::Hotbar, qol::Fix, world::ClientWorld};
 use std::path::PathBuf;
+pub(crate) mod carry;
 mod item_art;
 #[cfg(test)]
 mod item_tests;
-pub(super) use eq_client_core::hotbar::Binding as Action;
+pub(crate) use carry::{Clicks, Pickable, Source};
+pub(crate) use eq_client_core::hotbar::Binding as Action;
 pub(crate) use item_art::update as item_artwork;
 
 #[derive(Resource)]
-pub(crate) struct Bindings(pub(super) [Option<Action>; 10]);
+pub(crate) struct Bindings(pub(crate) [Option<Action>; 10]);
 
 impl Default for Bindings {
     fn default() -> Self {
@@ -105,7 +107,15 @@ impl Bindings {
     pub(crate) fn gem(&self, slot: usize) -> Option<usize> {
         match self.0.get(slot).copied().flatten()? {
             Action::Gem(gem) => Some(usize::from(gem)),
-            Action::Sit | Action::Stand | Action::Item { .. } | Action::Ability(_) => None,
+            Action::Sit
+            | Action::Stand
+            | Action::Item { .. }
+            | Action::Ability(_)
+            | Action::Attack
+            | Action::Camp
+            | Action::Invite
+            | Action::Follow
+            | Action::Disband => None,
         }
     }
 }
@@ -131,7 +141,12 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
             let button = super::slot(commands, row, key, 40.0, true);
             commands
                 .entity(button)
-                .insert((Button, Slot(index), crate::outbox::Needs::Nothing))
+                .insert((
+                    Button,
+                    Slot(index),
+                    Pickable(Source::Slot(index)),
+                    crate::outbox::Needs::Nothing,
+                ))
                 .with_children(|button| contents(button, index));
         }
     }
@@ -175,72 +190,54 @@ fn slot_pressed(keys: &crate::keys::Keys, act: fn(u8) -> crate::keys::Act) -> Op
         .map(usize::from)
 }
 
-/// Resolves a slot's key or a button press into a typed action.
-pub(super) fn requested(
+/// Resolves a slot's key or a click on its button into a typed action.
+pub(crate) fn requested(
     keys: &crate::keys::Keys,
     bindings: &Bindings,
-    clicks: &Query<(&Interaction, &Slot), Changed<Interaction>>,
+    clicks: &Clicks<Slot>,
 ) -> Option<Action> {
     let slot = clicks
         .iter()
-        .find(|(interaction, _)| **interaction == Interaction::Pressed)
-        .map(|(_, slot)| slot.0)
+        .next()
+        .map(|slot| slot.0)
         .or_else(|| slot_pressed(keys, crate::keys::Act::Slot))?;
     bindings.0.get(slot).copied().flatten()
 }
 
-/// The spell gems and the Actions window's ability buttons, which Ctrl and a
-/// number bind while under the pointer.
-type Bindable<'w, 's> = (
-    Query<'w, 's, (&'static Interaction, &'static super::SpellGem)>,
-    Query<
-        'w,
-        's,
-        (
-            &'static Interaction,
-            &'static crate::abilities::AbilityButton,
-        ),
-    >,
-);
+/// The slash command a binding runs, as its Actions window button runs it:
+/// the one table for both. None for a kind that sends its own request (a
+/// gem's spell, an item, an ability, melee attack).
+pub(crate) const fn command(action: Action) -> Option<&'static str> {
+    match action {
+        Action::Sit => Some("/sit"),
+        Action::Stand => Some("/stand"),
+        Action::Camp => Some("/camp"),
+        Action::Invite => Some("/invite"),
+        Action::Follow => Some("/follow"),
+        Action::Disband => Some("/disband"),
+        Action::Gem(_) | Action::Item { .. } | Action::Ability(_) | Action::Attack => None,
+    }
+}
 
-/// Ctrl+number binds the hovered gem, ability or item; Ctrl+Shift+number
-/// clears the slot.
+/// Ctrl+number binds what the control under the pointer gives the action
+/// bar, as a hold would pick it up ([`Source::binding`]); Ctrl+Shift+number
+/// empties the slot.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update(
     keys: crate::keys::Keys,
-    (gems, abilities): Bindable,
-    items: Query<(&Interaction, &crate::inventory::SlotButton)>,
-    online: Option<Res<crate::online::OnlineState>>,
+    controls: Query<(&Interaction, &Pickable)>,
+    online: Res<crate::online::OnlineState>,
     mut bindings: ResMut<Bindings>,
 ) {
     if let Some(index) = slot_pressed(&keys, crate::keys::Act::ClearSlot) {
         bindings.0[index] = None;
-    } else if let Some(index) = slot_pressed(&keys, crate::keys::Act::BindSlot) {
-        let ability = online.as_ref().and_then(|online| {
-            abilities
-                .iter()
-                .find(|(interaction, _)| **interaction != Interaction::None)
-                .and_then(|(_, button)| crate::abilities::assigned(online.world(), *button))
-        });
-        if let Some((_, gem)) = gems
+    } else if let Some(index) = slot_pressed(&keys, crate::keys::Act::BindSlot)
+        && let Some(binding) = controls
             .iter()
-            .find(|(interaction, _)| **interaction != Interaction::None)
-        {
-            bindings.0[index] = Some(Action::Gem(gem.0));
-        } else if let Some(ability) = ability {
-            bindings.0[index] = Some(Action::Ability(ability));
-        } else if let Some(online) = online
-            && let Some((_, slot)) = items
-                .iter()
-                .find(|(interaction, _)| **interaction != Interaction::None)
-            && let Some(item) = online.world().inventory().items().get(&slot.0)
-            && item.activation.effect.is_some()
-        {
-            bindings.0[index] = Some(Action::Item {
-                slot: slot.0,
-                id: item.details.id,
-            });
-        }
+            .filter(|(interaction, _)| **interaction != Interaction::None)
+            .find_map(|(_, pickable)| pickable.0.binding(online.world(), &bindings))
+    {
+        bindings.0[index] = Some(binding);
     }
 }
 
@@ -318,20 +315,7 @@ pub(crate) fn presentation(
     }
     for (mut text, caption, hint) in &mut labels {
         if let Some(caption) = caption {
-            text.0 = match bindings.0[caption.0] {
-                Some(Action::Gem(gem)) => {
-                    if online.world().gem(usize::from(gem)).is_some() {
-                        format!("G{}", gem + 1)
-                    } else {
-                        "-".into()
-                    }
-                }
-                Some(Action::Sit) => "Sit".into(),
-                Some(Action::Stand) => "Stand".into(),
-                Some(Action::Item { .. }) => "Item".into(),
-                Some(Action::Ability(ability)) => ability.name().into(),
-                None => "-".into(),
-            };
+            text.0 = caption_text(bindings.0[caption.0], online.world());
         }
         if hint.is_some() {
             text.0 = hovered_detail(
@@ -345,14 +329,31 @@ pub(crate) fn presentation(
     }
 }
 
+/// The words a slot's button shows for what it holds, which a hotkey with
+/// no picture shows on the cursor too.
+pub(crate) fn caption_text(action: Option<Action>, world: &ClientWorld) -> String {
+    match action {
+        Some(Action::Gem(gem)) if world.gem(usize::from(gem)).is_some() => {
+            format!("G{}", gem + 1)
+        }
+        Some(Action::Sit) => "Sit".into(),
+        Some(Action::Stand) => "Stand".into(),
+        Some(Action::Item { .. }) => "Item".into(),
+        Some(Action::Ability(ability)) => ability.name().into(),
+        Some(Action::Attack) => "Attack".into(),
+        Some(Action::Camp) => "Camp".into(),
+        Some(Action::Invite) => "Invite".into(),
+        Some(Action::Follow) => "Follow".into(),
+        Some(Action::Disband) => "Disband".into(),
+        Some(Action::Gem(_)) | None => "-".into(),
+    }
+}
+
 /// What the hovered slot holds, for the window's detail line.
 fn hovered_detail(
     bindings: &Bindings,
     hovered: Option<usize>,
-    (world, qol): (
-        &eq_client_core::world::ClientWorld,
-        &eq_client_core::qol::Settings,
-    ),
+    (world, qol): (&ClientWorld, &eq_client_core::qol::Settings),
     (names, map): (&crate::spellbook::SpellNames, &crate::keys::KeyMap),
     now: std::time::Instant,
 ) -> String {
@@ -378,6 +379,11 @@ fn hovered_detail(
         },
         Some(Action::Sit) => "Sit down".into(),
         Some(Action::Stand) => "Stand up".into(),
+        Some(Action::Attack) => "Melee attack\nTurns auto attack on or off".into(),
+        Some(Action::Camp) => "Camp\nSits down and leaves the world".into(),
+        Some(Action::Invite) => "Invite\nInvites the target into your group".into(),
+        Some(Action::Follow) => "Follow\nJoins the group you were invited to".into(),
+        Some(Action::Disband) => "Disband\nLeaves your group, or declines an invitation".into(),
         Some(Action::Ability(ability)) => match world.ability_wait(ability, now) {
             Some(wait) => format!(
                 "{}\nAvailable in {:.0}s",
@@ -423,8 +429,10 @@ fn bound_item<'a>(
 
 /// What a slot needs of the session for what it holds, as the command it
 /// sends needs it (`ClientCommand::capability`): sitting and standing are
-/// moves, an ability is one the server type lists, and a gem's spell or an
-/// item's click effect is a cast. An empty slot needs nothing.
+/// moves, an ability is one the server type lists, a gem's spell or an
+/// item's click effect is a cast, melee attack is combat, camping is
+/// camping, and inviting, following and disbanding are grouping. An empty
+/// slot needs nothing.
 pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
     use crate::outbox::Needs;
     use eq_client_core::Capability;
@@ -433,6 +441,11 @@ pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
         Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Moving),
         Some(Action::Ability(ability)) => Needs::Ability(ability),
         Some(Action::Gem(_) | Action::Item { .. }) => Needs::Capability(Capability::Casting),
+        Some(Action::Attack) => Needs::Capability(Capability::Combat),
+        Some(Action::Camp) => Needs::Capability(Capability::Camping),
+        Some(Action::Invite | Action::Follow | Action::Disband) => {
+            Needs::Capability(Capability::Grouping)
+        }
     }
 }
 
@@ -453,7 +466,7 @@ pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate
 pub(crate) fn item_actions(
     keys: crate::keys::Keys,
     bindings: Res<Bindings>,
-    clicks: Query<(&Interaction, &Slot), Changed<Interaction>>,
+    clicks: Clicks<Slot>,
     (online, options): (
         Res<crate::online::OnlineState>,
         Res<crate::options::OptionsState>,
@@ -512,6 +525,47 @@ mod tests {
         }
         let bash = eq_client_core::abilities::Ability::Bash;
         assert_eq!(need(Some(Action::Ability(bash))), Needs::Ability(bash));
+    }
+
+    #[test]
+    fn the_actions_windows_kinds_need_what_their_commands_need() {
+        use crate::outbox::Needs;
+        use eq_client_core::ClientCommand;
+        let created = std::time::Instant::now();
+        let sent = [
+            (
+                Action::Attack,
+                ClientCommand::AutoAttack {
+                    session_id: 1,
+                    enabled: true,
+                    created,
+                },
+            ),
+            (
+                Action::Camp,
+                ClientCommand::Camp {
+                    session_id: 1,
+                    created,
+                },
+            ),
+            (
+                Action::Invite,
+                ClientCommand::InviteToGroup {
+                    session_id: 1,
+                    name: "Example".into(),
+                },
+            ),
+            (Action::Follow, ClientCommand::FollowGroup { session_id: 1 }),
+            (Action::Disband, ClientCommand::Disband { session_id: 1 }),
+        ];
+        for (action, command) in sent {
+            let capability = command.capability().unwrap();
+            assert_eq!(
+                need(Some(action)),
+                Needs::Capability(capability),
+                "{action:?}"
+            );
+        }
     }
 
     #[test]
@@ -591,9 +645,20 @@ mod tests {
     fn binding_and_clearing_requires_focused_non_chat_input() {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        crate::online::testing::spell(
+            &mut online,
+            eq_client_core::SpellUpdate::Slot {
+                slot: 4,
+                spell_id: 73,
+                mode: 1,
+            },
+        );
         app.init_resource::<Bindings>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::chat::ChatState>()
+            .insert_resource(online)
             .add_systems(Update, update);
         let window = app
             .world_mut()
@@ -605,8 +670,10 @@ mod tests {
                 bevy::window::PrimaryWindow,
             ))
             .id();
-        app.world_mut()
-            .spawn((Interaction::Hovered, super::super::SpellGem(4)));
+        let gem = app
+            .world_mut()
+            .spawn((Interaction::Hovered, Pickable(Source::Gem(4))))
+            .id();
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::ControlLeft);
@@ -617,6 +684,41 @@ mod tests {
             app.world().resource::<Bindings>().0[0],
             Some(Action::Gem(4))
         );
+        // An Actions window button binds what it does; an empty gem binds
+        // nothing, as a hold picks nothing up from it.
+        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
+        let attack = app
+            .world_mut()
+            .spawn((
+                Interaction::Hovered,
+                Pickable(Source::Fixed(Action::Attack)),
+            ))
+            .id();
+        // Only the digit pressed last is fresh, with Ctrl still held.
+        let press = |app: &mut App, digit| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            for key in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3] {
+                keys.release(key);
+            }
+            keys.clear();
+            keys.press(digit);
+        };
+        press(&mut app, KeyCode::Digit2);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Bindings>().0[1],
+            Some(Action::Attack)
+        );
+        app.world_mut().entity_mut(attack).despawn();
+        app.world_mut()
+            .spawn((Interaction::Hovered, Pickable(Source::Gem(5))));
+        press(&mut app, KeyCode::Digit3);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Bindings>().0[2],
+            Some(Action::Gem(2))
+        );
+        press(&mut app, KeyCode::Digit1);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::ShiftLeft);

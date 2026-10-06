@@ -129,6 +129,10 @@ pub enum Step {
     /// Rests the pointer on one UI control, found as a click finds it, so
     /// its tooltip shows; it stays hovered until the next click or hover.
     Hover(ClickTarget),
+    /// Holds the left button on one UI control, found as a click finds it,
+    /// for a bounded duration, then lets it go there: a hold long enough
+    /// picks a hotkey up onto the cursor.
+    HoldClick(ClickTarget, Duration),
     /// Logs a numeric summary of player, resource, cast and buff state.
     Report(String),
     /// Saves the primary window to a PNG beside the script.
@@ -224,6 +228,9 @@ pub enum ClickTarget {
     BookPage(bool),
     /// A spell gem of the skin's spell bar, from zero.
     SpellGem(u8),
+    /// A hotbutton of the action bar, the client's own or the skin's, from
+    /// zero.
+    HotButton(usize),
 }
 
 /// The skin's character list's buttons.
@@ -410,6 +417,9 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("click", target) => Step::Click(parse_click(target)?),
         ("right_click", target) => Step::RightClick(parse_click(target)?),
         ("hover", target) => Step::Hover(parse_click(target)?),
+        ("hold_click", [duration, target @ ..]) => {
+            Step::HoldClick(parse_click(target)?, millis(duration, MAX_HOLD)?)
+        }
         ("report", label) => Step::Report(label.join(" ")),
         ("screenshot", [name])
             if Path::new(name)
@@ -651,6 +661,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ),
         ["memorize", gem] => ClickTarget::MemorizeGem(gem_number(gem)?),
         ["spell_gem", gem] => ClickTarget::SpellGem(gem_number(gem)?),
+        ["hot_button", number] => ClickTarget::HotButton(hot_button(number)?),
         ["book_place", place] => ClickTarget::BookPlace(
             place
                 .parse::<u8>()
@@ -690,6 +701,17 @@ fn gem_number(gem: &str) -> Result<u8, String> {
         .filter(|gem| (1..=8).contains(gem))
         .map(|gem| gem - 1)
         .ok_or_else(|| String::from("expected a gem from 1 to 8"))
+}
+
+/// A hotbutton a script names, from 1 to 10 as its keys are, as a slot from
+/// zero.
+fn hot_button(number: &str) -> Result<usize, String> {
+    number
+        .parse::<usize>()
+        .ok()
+        .filter(|number| (1..=eq_client_core::hotbar::SLOTS).contains(number))
+        .map(|number| number - 1)
+        .ok_or_else(|| String::from("expected a hotbutton from 1 to 10"))
 }
 
 /// The slider a script names: an Options window setting's, or the
@@ -1245,6 +1267,32 @@ chat tell Friend inc now
             "click pet dance",
             "click option",
             "click option shiny",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parses_hotbuttons_and_holds_that_pick_hotkeys_up() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "click hot_button 1\nhold_click 800 spell_gem 1\nhold_click 600 hot_button 10\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::HotButton(0)),
+                Step::HoldClick(ClickTarget::SpellGem(0), Duration::from_millis(800)),
+                Step::HoldClick(ClickTarget::HotButton(9), Duration::from_millis(600)),
+            ]
+        );
+        for bad in [
+            "click hot_button 0",
+            "click hot_button 11",
+            "hold_click 800",
+            "hold_click spell_gem 1",
+            "hold_click 20000 spell_gem 1",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }

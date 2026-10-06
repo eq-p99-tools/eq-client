@@ -39,6 +39,9 @@ pub struct Script {
     held: Vec<KeyCode>,
     /// The mouse button a scripted click holds down until the next frame.
     clicked: Option<MouseButton>,
+    /// The control a scripted click pressed, which the pointer is over as
+    /// the button is let go.
+    pressed: Option<Entity>,
     started: Option<Duration>,
     paused: bool,
     /// Newest chat line already included in a report.
@@ -79,6 +82,7 @@ impl Script {
             current: None,
             held: Vec::new(),
             clicked: None,
+            pressed: None,
             started: None,
             paused: false,
             chat_seen: 0,
@@ -173,6 +177,7 @@ impl Script {
         if let Some(button) = self.clicked.take() {
             mouse.release(button);
         }
+        self.pressed = None;
     }
 
     fn stop(
@@ -205,6 +210,7 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::spellbook::BookPlace>,
             Option<&'static super::spellbook::TurnsPages>,
             Option<&'static super::hud::SpellGem>,
+            Option<&'static super::hud::hotbar::Slot>,
         ),
         Option<&'static super::spellbook::GemChoice>,
         Option<&'static super::trade::Action>,
@@ -363,6 +369,13 @@ pub(super) fn drive(
         ))
     ) && (!script.held.is_empty() || script.clicked.is_some())
     {
+        // Bevy marks the control under the pointer hovered as the button is
+        // let go, and the hold rule clicks a control only then.
+        if let Some(entity) = script.pressed
+            && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+        {
+            interaction.set_if_neq(Interaction::Hovered);
+        }
         script.release(&mut keys, &mut mouse);
         script.current = None;
     }
@@ -483,7 +496,41 @@ pub(super) fn drive(
                 };
                 mouse.press(button);
                 script.clicked = Some(button);
+                script.pressed = Some(entity);
                 return;
+            }
+            Step::HoldClick(target, duration) => {
+                if script.clicked.is_none() {
+                    // Pressed as a click presses, the hold is timed from the
+                    // press.
+                    if elapsed > MAX_WAIT {
+                        script.stop(&mut keys, &mut mouse, "the pointer stayed over the window");
+                        return;
+                    }
+                    if window.is_some_and(|window| window.cursor_position().is_some()) {
+                        return;
+                    }
+                    let Some(entity) = find(*target, &buttons, &layout) else {
+                        script.stop(&mut keys, &mut mouse, "click target is not visible");
+                        return;
+                    };
+                    press(entity, *target, &mut buttons, &mut pointers);
+                    mouse.press(MouseButton::Left);
+                    script.clicked = Some(MouseButton::Left);
+                    script.pressed = Some(entity);
+                    script.current = Some((step.clone(), now));
+                    return;
+                }
+                if elapsed < *duration {
+                    return;
+                }
+                // Let go over the control it pressed, as a click lets go.
+                if let Some(entity) = script.pressed
+                    && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+                {
+                    interaction.set_if_neq(Interaction::Hovered);
+                }
+                true
             }
             _ => true,
         };
@@ -641,7 +688,7 @@ pub(super) fn drive(
             }
             return;
         }
-        Step::Click(_) | Step::RightClick(_) => {
+        Step::Click(_) | Step::RightClick(_) | Step::HoldClick(..) => {
             script.hovering = None;
             if window.is_some_and(|window| window.cursor_position().is_some()) {
                 info!("Scripted click waits until the pointer leaves the client window");
@@ -817,7 +864,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         slot,
         scribe,
         store,
-        (row, place, turns, spell_gem),
+        (row, place, turns, spell_gem, hot_button),
         gem,
         trade,
         tint,
@@ -871,6 +918,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
             ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
             ClickTarget::SpellGem(number) => spell_gem.is_some_and(|gem| gem.0 == number),
+            ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::Trade(click) => trade.is_some_and(|action| {
                 use super::trade::Action;

@@ -377,10 +377,33 @@ ducking (including server-side cast interruption), and V requests standing.
 Typing in chat or losing window focus suppresses these controls. The spell panel
 can be moved and minimized using its title bar.
 
-The 5-by-2 action bar accepts clicks and unmodified number keys. Defaults are
-1–8 for spell gems, 9 to sit, and 0 to stand. Hover a spell gem and press
-Ctrl+number to bind that gem to an action slot; Ctrl+Shift+number clears a slot.
-Hover an inventory item with a click effect and use Ctrl+number to bind it instead.
+The 5-by-2 action bar holds ten hotbuttons, used with a click or the unmodified
+number keys. A new character's defaults are 1–8 for the spell gems, 9 to sit and
+0 to stand; a character with no hotbar file of their own starts from the
+official client's first page of hotbuttons, where this client knows their kinds.
+Each character's hotbuttons are kept in `hotbar-<world>-<character>.txt` in the
+settings folder. A hotbutton holds a spell gem, a worn or carried item with a
+click effect, an Actions window ability, or one of the Actions window's Melee
+Attack, Sit, Stand, Camp, Invite, Follow and Disband buttons: it casts the gem's
+spell, uses the item as Alt+right-click does, or does exactly what the button
+does. Hold the left button on one of those (a gem with a spell, an Actions
+window button, such an item, or a hotbutton that holds one of them) for half a
+second and its hotkey comes onto the cursor, which shows the spell's icon, the
+item's picture or the button's name. A hotbutton held leaves its slot; a gem,
+button or item keeps what it has. Click a hotbutton to put the hotkey there, or
+let the hold go over another hotbutton, and what a hold on that hotbutton would
+pick up comes onto the cursor; a gem with no spell, or an item gone from its
+place, is simply replaced. A click anywhere else throws the hotkey away and does
+nothing else, which is how a hotbutton is emptied; anything else coming onto the
+cursor, or leaving the world, throws it away too. A control with something a
+hold can pick up acts when a quick click is let go over it, not when it is
+pressed; with Shift, Ctrl or Alt held, or with something on the cursor, a press
+acts at once as before. The hold time, that a click waits for its release, the
+swap, the drop where a hold is let go, the click that throws a hotkey away, what
+the cursor shows and which items can go on the bar (those with a click effect)
+are inferred, not yet checked against the official client. Hover any of those
+controls and press Ctrl+number to bind what a hold would pick up from it to that
+slot; Ctrl+Shift+number empties a slot.
 Item shortcuts show installed item artwork and use the same activation checks as
 Alt+right-click in inventory, including cursor, casting, charges and pending-request
 guards. They use the selected target, or self when no target is selected. Worker
@@ -388,7 +411,7 @@ feedback appears on the HUD even with inventory closed. Each item shortcut retai
 its slot and item ID: moving or replacing it leaves an unavailable binding until
 you rebind it. It never searches for another copy or silently uses another item.
 This path has offline command-submission coverage and awaits live validation.
-Bindings follow the current contents of the gem and are kept only in memory.
+A gem's hotbutton follows what the gem holds now.
 The action bar uses the same cast validation and cooldowns as direct gem input.
 Bound spells show local-install icons and hover details for the current gem contents,
 including cast acknowledgement and cooldown status. Empty gems and cleared bindings
@@ -837,7 +860,7 @@ login screen and connects; a script with it opens on the login screen),
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...` (`click loot <place>` takes the item at a place on the corpse, from 0), `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
-`click character <1-8>`, `click enter_world` and `click quit_game` (the skin's character list), `click chat_tab <tab>` (a chat tab by its label, such as `say` or `ooc`), `click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `press delete`,
+`click character <1-8>`, `click enter_world` and `click quit_game` (the skin's character list), `click chat_tab <tab>` (a chat tab by its label, such as `say` or `ooc`), `click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `click hot_button <1-10>` (a hotbutton of the action bar, the client's own or the skin's), `press delete`,
 `give` (asks the target to take the cursor item, as clicking it does),
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
 `click slider clip_plane|max_fps|mouse_sensitivity|quantity <percent>` (an Options window slider, or the quantity window's, pressed that far along),
@@ -846,6 +869,7 @@ login screen and connects; a script with it opens on the login screen),
 `click window <key>` (a button that opens and closes the window, or hides and shows it, such as its selector button or the inventory's Skills button, by the window's key such as `skills`), `click close_box <window>` and `click minimize_box <window>` (a skinned window's title-bar boxes), `click scroll_up <window>` and `click scroll_down <window>` (a skinned window's scrollbar arrows),
 `right_click` with the same targets (a bag's slot opens its window),
 `hover` with the same targets (rests the pointer there, so its tooltip shows and what rides the cursor hangs there, until the next click or hover),
+`hold_click <ms>` with the same targets (holds the left button there that long, then lets it go there; held long enough, a gem, hotbutton, Actions window button or clicky item puts its hotkey on the cursor),
 `slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
 window is focused (except offline, or on a local `EQEmu` or TAKP server), stop if focus is lost while a key is held, cap each hold, wait

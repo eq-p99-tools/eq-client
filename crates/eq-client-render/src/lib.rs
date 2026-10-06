@@ -357,6 +357,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<windows::pointer::Wheel>()
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
+        .init_resource::<hud::hotbar::carry::Presses>()
+        .init_resource::<hud::hotbar::carry::Carry>()
         .init_resource::<spellbook::BookView>()
         .init_resource::<spellbook::BookSelection>()
         .init_resource::<spellbook::BookHand>()
@@ -518,7 +520,7 @@ fn schedule(app: &mut App) {
             )
                 .chain()
                 .in_set(Stage::Typing),
-            escape::route.in_set(Stage::Route),
+            (escape::route, hud::hotbar::carry::route).in_set(Stage::Route),
         ),
     )
     .add_systems(
@@ -712,7 +714,8 @@ pub(crate) enum Stage {
     Scene,
     /// The chat takes the keyboard first, and the wheel goes to one surface.
     Typing,
-    /// Escape and the window stack decide what a press belongs to.
+    /// Escape and the window stack decide what a press belongs to, and so
+    /// does a hotkey on the cursor or a hold that picks one up.
     Route,
     /// Keys and clicks become requests and moves.
     Input,

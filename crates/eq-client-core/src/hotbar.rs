@@ -30,6 +30,18 @@ pub enum Binding {
     Stand,
     /// Uses this ability.
     Ability(Ability),
+    /// Turns melee auto-attack on or off, as the Actions window's Melee
+    /// Attack does.
+    Attack,
+    /// Camps, as the Actions window's Camp does.
+    Camp,
+    /// Invites the target into the player's group.
+    Invite,
+    /// Joins the group the player was last invited to.
+    Follow,
+    /// Leaves the group, or disbands it as its leader, which with an
+    /// invitation waiting declines it.
+    Disband,
 }
 
 impl Binding {
@@ -41,6 +53,11 @@ impl Binding {
             Self::Sit => "sit".to_owned(),
             Self::Stand => "stand".to_owned(),
             Self::Ability(ability) => format!("ability {}", ability.skill()),
+            Self::Attack => "attack".to_owned(),
+            Self::Camp => "camp".to_owned(),
+            Self::Invite => "invite".to_owned(),
+            Self::Follow => "follow".to_owned(),
+            Self::Disband => "disband".to_owned(),
         }
     }
 
@@ -58,6 +75,11 @@ impl Binding {
             ["sit"] => Self::Sit,
             ["stand"] => Self::Stand,
             ["ability", skill] => Self::Ability(Ability::from_skill(skill.parse().ok()?)?),
+            ["attack"] => Self::Attack,
+            ["camp"] => Self::Camp,
+            ["invite"] => Self::Invite,
+            ["follow"] => Self::Follow,
+            ["disband"] => Self::Disband,
             _ => return None,
         })
     }
@@ -187,6 +209,33 @@ mod tests {
         let odd =
             "slot_0 = sit\nslot_11 = sit\nslot_2 = gem 9\nslot_6 = ability 999\nslot_7 = dance\n";
         assert_eq!(Hotbar::read(odd, Hotbar::default()), Hotbar::default());
+    }
+
+    #[test]
+    fn the_actions_windows_buttons_keep_to_a_file_by_name() {
+        let mut hotbar = Hotbar([None; SLOTS]);
+        let kinds = [
+            Binding::Attack,
+            Binding::Camp,
+            Binding::Invite,
+            Binding::Follow,
+            Binding::Disband,
+        ];
+        for (slot, binding) in hotbar.0.iter_mut().zip(kinds) {
+            *slot = Some(binding);
+        }
+        let text = hotbar.text();
+        for line in [
+            "slot_1 = attack\n",
+            "slot_2 = camp\n",
+            "slot_3 = invite\n",
+            "slot_4 = follow\n",
+            "slot_5 = disband\n",
+            "slot_6 = none\n",
+        ] {
+            assert!(text.contains(line), "{text}");
+        }
+        assert_eq!(Hotbar::read(&text, Hotbar::default()), hotbar);
     }
 
     #[test]

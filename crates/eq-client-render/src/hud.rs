@@ -259,9 +259,11 @@ pub(super) fn spawn(commands: &mut Commands) {
                 super::spell_icons::Source::Gem(number - 1),
                 30.0,
             ));
+        let gem = u8::try_from(number - 1).expect("eight gems");
         commands.entity(slot).insert((
             Button,
-            SpellGem(u8::try_from(number - 1).expect("eight gems")),
+            SpellGem(gem),
+            hotbar::Pickable(hotbar::Source::Gem(gem)),
             crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
         ));
         let value = label(commands, slot, "", Size::Caption, theme::INK);
@@ -289,13 +291,15 @@ pub(super) fn spawn(commands: &mut Commands) {
 }
 
 /// Writes each gem's spell and keys, and each action slot's keys, into its
-/// tooltip from the key map, so the help follows the bindings.
+/// tooltip from the key map, so the help follows the bindings; a gem or slot
+/// a hold picks a hotkey up from says so.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn key_help(
     map: Res<super::keys::KeyMap>,
-    (online, names): (
+    (online, names, bindings): (
         Res<super::online::OnlineState>,
         Res<super::spellbook::SpellNames>,
+        Res<hotbar::Bindings>,
     ),
     mut commands: Commands,
     gems: Query<(Entity, &SpellGem, Option<&super::tooltip::Tooltip>)>,
@@ -320,19 +324,25 @@ pub(super) fn key_help(
             .map_or(keys.clone(), |spell| {
                 format!(
                     "{}
-{keys}",
+{keys} | Hold: pick up",
                     names.label(spell)
                 )
             });
         write(entity, tooltip, help);
     }
-    for (entity, hotbar::Slot(slot), tooltip) in &slots {
-        let slot = u8::try_from(*slot).unwrap_or(u8::MAX);
-        let help = map.help(&[
+    for (entity, hotbar::Slot(index), tooltip) in &slots {
+        let slot = u8::try_from(*index).unwrap_or(u8::MAX);
+        let mut help = map.help(&[
             (Act::Slot(slot), "use"),
-            (Act::BindSlot(slot), "bind the hovered gem or item"),
+            (Act::BindSlot(slot), "bind the hovered gem, item or button"),
             (Act::ClearSlot(slot), "empty"),
         ]);
+        if hotbar::Source::Slot(*index)
+            .binding(online.world(), &bindings)
+            .is_some()
+        {
+            help.push_str(" | Hold: pick up");
+        }
         write(entity, tooltip, help);
     }
 }
@@ -413,8 +423,8 @@ pub(super) fn actions(
     mut chat: ResMut<super::chat::ChatState>,
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
-    clicks: Query<(&Interaction, &SpellGem), Changed<Interaction>>,
-    bar_clicks: Query<(&Interaction, &hotbar::Slot), Changed<Interaction>>,
+    clicks: hotbar::Clicks<SpellGem>,
+    bar_clicks: hotbar::Clicks<hotbar::Slot>,
     bindings: Res<hotbar::Bindings>,
     definitions: (Res<super::spellbook::SpellNames>, Res<messages::Messages>),
     (mut hand, mut requests): (
@@ -429,10 +439,7 @@ pub(super) fn actions(
     let Some(player) = online.world().player() else {
         return;
     };
-    let clicked = clicks
-        .iter()
-        .find(|(interaction, _)| **interaction == Interaction::Pressed)
-        .map(|(_, gem)| gem.0);
+    let clicked = clicks.iter().next().map(|gem| gem.0);
     // A spell picked up from the skin's book goes into the gem clicked.
     if let Some(gem) = clicked
         && let Some(held) = hand.held.take()
@@ -484,6 +491,11 @@ pub(super) fn actions(
     if let Some(hotbar::Action::Ability(ability)) = bar_action {
         super::abilities::use_ability(ability, &online, &outbox);
     }
+    // Sit, Stand, Camp and the group's kinds run what their Actions window
+    // buttons run; melee attack toggles in `combat::input`.
+    if let Some(command) = bar_action.and_then(hotbar::command) {
+        super::chat::run_game_command(command, &online, &outbox, &mut chat);
+    }
     let posture = if keys.pressed(Act::Duck) {
         Some(eq_client_core::Posture::Ducking)
     } else if keys.pressed(Act::Sit) {
@@ -491,11 +503,7 @@ pub(super) fn actions(
     } else if keys.pressed(Act::Stand) {
         Some(eq_client_core::Posture::Standing)
     } else {
-        match bar_action {
-            Some(hotbar::Action::Sit) => Some(eq_client_core::Posture::Sitting),
-            Some(hotbar::Action::Stand) => Some(eq_client_core::Posture::Standing),
-            _ => None,
-        }
+        None
     };
     if let Some(posture) = posture {
         // The outbox shows why a stance did not go.

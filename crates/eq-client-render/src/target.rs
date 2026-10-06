@@ -96,9 +96,10 @@ pub(super) fn input(
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<Outbox>,
-    (ui, escape): (
+    (ui, escape, presses): (
         super::windows::pointer::PointerUi,
         Res<super::escape::Escape>,
+        Res<super::hud::hotbar::carry::Presses>,
     ),
 ) {
     let requested = chat.requested_target.take();
@@ -159,6 +160,8 @@ pub(super) fn input(
         proposal = Some(cycle(&ids, current, act == Act::TargetPrevious));
     } else if accepts_input
         && mouse.just_pressed(MouseButton::Left)
+        // A click that put down or threw away a hotkey does nothing else.
+        && !presses.taken()
         && !chat.hovered
         && let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single())
     {
@@ -679,6 +682,7 @@ mod tests {
             .init_resource::<NearbyEntities>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<super::super::escape::Escape>()
+            .init_resource::<super::super::hud::hotbar::carry::Presses>()
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .add_systems(Update, (input, update).chain());
         app.world_mut().spawn((

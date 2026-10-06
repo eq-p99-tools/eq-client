@@ -28,7 +28,8 @@ fn capitalized(text: &str) -> String {
 }
 
 /// Handles K (consider), H (hail) and G (toggle auto-attack, as the skin's
-/// melee attack button does) for the current target.
+/// melee attack button and a hotbutton bound to it do) for the current
+/// target.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
     keys: super::keys::Keys,
@@ -37,7 +38,11 @@ pub(super) fn input(
     messages: Res<Messages>,
     mut combat: ResMut<CombatState>,
     mut chat: ResMut<super::chat::ChatState>,
-    attack_button: Query<&Interaction, (Changed<Interaction>, With<super::skinned::AttackButton>)>,
+    (attack_button, bar_clicks, bindings): (
+        super::hud::hotbar::Clicks<super::skinned::AttackButton>,
+        super::hud::hotbar::Clicks<super::hud::hotbar::Slot>,
+        Res<super::hud::hotbar::Bindings>,
+    ),
 ) {
     use super::keys::Act;
     let Some(player) = online.world().player() else {
@@ -96,11 +101,9 @@ pub(super) fn input(
         );
         let _ = outbox.send(world, ClientCommand::SendChat(OutboundChat::Say(text)));
     }
-    if keys.pressed(Act::Attack)
-        || attack_button
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed)
-    {
+    let bar_attack = super::hud::hotbar::requested(&keys, &bindings, &bar_clicks)
+        == Some(super::hud::hotbar::Action::Attack);
+    if keys.pressed(Act::Attack) || attack_button.iter().next().is_some() || bar_attack {
         let enable = !combat.auto_attack;
         if enable && attackable.is_none() {
             feedback("Target a creature to attack it".into());
@@ -343,5 +346,56 @@ mod tests {
             text,
             super::super::chat::Said::official("A rat glares, set to fight; seems a fair match.")
         );
+    }
+
+    #[test]
+    fn a_hotbutton_bound_to_melee_attack_turns_auto_attack_on_and_off() {
+        use crate::{hud::hotbar, online::testing};
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut online = crate::online::OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(12));
+        let mut creature = testing::pet(30, 12);
+        creature.pet_owner = None;
+        testing::spawn_entry(&mut online, 30, creature);
+        online.select_target(Some(30));
+        let mut bindings = hotbar::Bindings::default();
+        bindings.0[2] = Some(hotbar::Action::Attack);
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+            .insert_resource(bindings)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<CombatState>()
+            .init_resource::<Messages>()
+            .add_systems(Update, input);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        let press = |app: &mut App| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::Digit3);
+            app.update();
+            let ClientCommand::AutoAttack {
+                session_id: 7,
+                enabled,
+                ..
+            } = rx.try_recv().unwrap()
+            else {
+                panic!("the hotbutton sent something else");
+            };
+            assert!(rx.try_recv().is_err());
+            enabled
+        };
+        assert!(press(&mut app));
+        assert!(app.world().resource::<CombatState>().auto_attack);
+        assert!(!press(&mut app));
+        assert!(!app.world().resource::<CombatState>().auto_attack);
     }
 }
