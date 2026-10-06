@@ -557,10 +557,15 @@ fn schedule(app: &mut App) {
             (hud::hotbar::update, hud::hotbar::persist).chain(),
             hud::hotbar::item_actions,
             (
-                spellbook::update,
-                spellbook::book_clicks,
-                spellbook::say_book_lines,
-            ),
+                // A book the player stands up from closes before it draws.
+                spellbook::seat,
+                (
+                    spellbook::update,
+                    spellbook::book_clicks,
+                    spellbook::say_book_lines,
+                ),
+            )
+                .chain(),
             (
                 // Which login screens show decides which take the presses.
                 (login::read_look, (login::form, login::worlds, login::light)).chain(),

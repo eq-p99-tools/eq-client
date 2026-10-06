@@ -2288,6 +2288,7 @@ dependencies = [
  "chrono",
  "eq-client-assets",
  "eq-client-core",
+ "eq-network-game",
  "image",
  "zeroize",
 ]
