@@ -389,7 +389,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
         .init_resource::<map::MapView>()
-        .init_resource::<login::FrontEnd>();
+        .init_resource::<login::FrontEnd>()
+        .init_resource::<login::LoginLook>();
 }
 
 /// What the tests of the windows start from.
@@ -559,7 +560,8 @@ fn schedule(app: &mut App) {
                 spellbook::say_book_lines,
             ),
             (
-                (login::form, login::worlds, login::light),
+                // Which login screens show decides which take the presses.
+                (login::read_look, (login::form, login::worlds, login::light)).chain(),
                 (character_select::update, character_select::names),
             ),
             windows::input,
@@ -584,7 +586,7 @@ fn schedule(app: &mut App) {
                 combat::target_color,
                 trade::present,
                 trade::scroll,
-                login::scroll,
+                (login::login_screen, login::worlds_screen, login::scroll).chain(),
                 skinned::scroll_lists,
                 motion::interpolate,
                 orbit_camera,

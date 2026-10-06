@@ -143,8 +143,18 @@ screen, with `EQ_ACCOUNT` and `EQ_PASSWORD` from the environment, on
 `--preset` or else the first preset of `EQ_PROTOCOL`'s type (P99 by
 default). Account names and passwords are never taken as arguments.
 
-The login and server windows are this client's own for now; the
-installation's own login windows follow.
+With an installation that has its login skin (the `EQLSUI` set beside the
+`EQUI_*.xml` files), the login screen and the list of worlds are drawn from
+it: the skin's connect and server select screens, 640 by 480, unscaled and
+centred on black (the placement is ours, inferred). Connect, Quick Connect,
+Cancel, Play, Play Last Server and Exit work. Quick Connect plays the world
+last played on that login server once the list shows it open, and the
+skin's other buttons, such as its chat and news, are greyed as not in this
+client yet. Exit on the list returns to the login screen, and Cancel with
+nothing logging in leaves the game, since this client draws no main menu
+(inferred). The login server picker above the boxes, the status lines and
+the highlighted world's tint are ours. Without the set the client's own
+windows show.
 
 ## Online gameplay preview
 

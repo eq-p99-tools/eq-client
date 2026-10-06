@@ -861,9 +861,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                 row.index == index && (row.list == super::raid::RaidList::Grouped) == grouped
             }),
             ClickTarget::Buff(long, index) => effects_button(shows, long, index),
-            ClickTarget::Scroll(key, up) => {
-                arrow.is_some_and(|arrow| arrow.window.key() == key && arrow.up == up)
-            }
+            ClickTarget::Scroll(key, up) => arrow.is_some_and(|arrow| {
+                arrow.window.is_some_and(|window| window.key() == key) && arrow.up == up
+            }),
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
