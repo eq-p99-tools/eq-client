@@ -583,7 +583,11 @@ use **_** / **+** to minimize or restore it. Actions and spells use these title 
 too. Passive character-resource, target and diagnostic panels have no title bar;
 drag anywhere on their surface to move them, and they do not minimize.
 Window positions and minimized states survive HUD reconstruction during zone
-changes within the running application. They are not yet saved across app restarts.
+changes, and each character on each world keeps its own between runs, in the
+settings directory. A character this client has not placed windows for yet
+starts where the official client's UI file (`UI_<character>_<world>.ini`) last
+put them, and a window placed by neither opens in its default place (see
+**Open Windows Apart** under [Quality of life](#quality-of-life)).
 Moved panels are kept within the viewport after resizing or changing UI scale;
 oversized panels keep their title bar at the top left so they remain reachable.
 
@@ -710,6 +714,13 @@ Always on:
   it, from when the buff landed.
 - **Show Weapon Ratio**: the item display shows a weapon's damage divided by
   its delay under those two.
+- **Open Windows Apart**: until the player places them, here or in the
+  official client, the windows always on screen open where none covers
+  another: the spells at the top left with the player, group and pet windows
+  beside them, the window selector and the target at the top centre, the
+  buffs down the right, the hotkeys at the bottom left, the chat at the bottom
+  centre with the casting bar above it, and the status panel at the bottom
+  right. The official client opens each where the UI skin puts it.
 
 ## Combat, looting, merchants, giving and camping
 

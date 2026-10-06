@@ -104,6 +104,8 @@ pub(crate) enum Placement {
     TopRight(f32, f32),
     /// This far from the left and bottom edges.
     BottomLeft(f32, f32),
+    /// This far from the right and bottom edges.
+    BottomRight(f32, f32),
     /// Centred across the screen, this far from the top; the window's width
     /// centres it.
     TopCentre { top: f32, width: f32 },
@@ -141,6 +143,11 @@ impl Placement {
                 node.left = px(left);
                 node.bottom = px(bottom);
             }
+            Self::BottomRight(right, bottom) => {
+                absolute(node);
+                node.right = px(right);
+                node.bottom = px(bottom);
+            }
             Self::TopCentre { top, width } => {
                 absolute(node);
                 node.left = percent(50);
@@ -161,6 +168,25 @@ impl Placement {
                 node.height = percent(100);
             }
         }
+    }
+
+    /// Where it puts the top left corner of a window this size on a screen
+    /// this size, in logical pixels; None for a docked window, which its row
+    /// lays out.
+    #[cfg(test)]
+    pub(crate) fn corner(self, size: Vec2, screen: Vec2) -> Option<Vec2> {
+        Some(match self {
+            Self::Docked => return None,
+            Self::TopLeft(left, top) => Vec2::new(left, top),
+            Self::TopRight(right, top) => Vec2::new(screen.x - right - size.x, top),
+            Self::BottomLeft(left, bottom) => Vec2::new(left, screen.y - bottom - size.y),
+            Self::BottomRight(right, bottom) => screen - Vec2::new(right, bottom) - size,
+            Self::TopCentre { top, width } => Vec2::new((screen.x - width) / 2.0, top),
+            Self::BottomCentre { bottom, width } => {
+                Vec2::new((screen.x - width) / 2.0, screen.y - bottom - size.y)
+            }
+            Self::Fill => Vec2::ZERO,
+        })
     }
 }
 
@@ -635,6 +661,51 @@ impl WindowId {
             },
         }
     }
+
+    /// Where a panel opens while the skin draws the HUD and neither the
+    /// player nor the official client's UI file placed it, in place of where
+    /// the skin puts it: the spell gems in the top left corner, the player
+    /// window beside them with the group and pet windows below it, the
+    /// selector and the target window at the top centre, the effects windows
+    /// down the right edge, the hotbar in the bottom left corner, the chat at
+    /// the bottom centre with the casting window above it, and the client's
+    /// own Status panel in the bottom right corner. Each place follows from
+    /// the sizes the windows are drawn at (`size`, zero for a window the skin
+    /// hides), so that none covers another on a screen with room for the
+    /// windows along each edge; a panel keeps its place while it is closed.
+    /// None for a window that opens where the skin puts it.
+    pub(crate) fn arranged(self, mut size: impl FnMut(Self) -> Vec2) -> Option<Placement> {
+        Some(match self {
+            Self::Spells => Placement::TopLeft(0.0, 0.0),
+            Self::Player => Placement::TopLeft(size(Self::Spells).x, 0.0),
+            Self::Group => Placement::TopLeft(size(Self::Spells).x, size(Self::Player).y),
+            Self::PetInfo => Placement::TopLeft(
+                size(Self::Spells).x,
+                size(Self::Player).y + size(Self::Group).y,
+            ),
+            Self::Selector => Placement::TopCentre {
+                top: 0.0,
+                width: size(Self::Selector).x,
+            },
+            Self::Target => Placement::TopCentre {
+                top: size(Self::Selector).y,
+                width: size(Self::Target).x,
+            },
+            Self::Effects => Placement::TopRight(0.0, 0.0),
+            Self::ShortEffects => Placement::TopRight(0.0, size(Self::Effects).y),
+            Self::Actions => Placement::BottomLeft(0.0, 0.0),
+            Self::Chat => Placement::BottomCentre {
+                bottom: 0.0,
+                width: size(Self::Chat).x,
+            },
+            Self::CastBar => Placement::BottomCentre {
+                bottom: size(Self::Chat).y,
+                width: size(Self::CastBar).x,
+            },
+            Self::Status => Placement::BottomRight(0.0, 0.0),
+            _ => return None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -680,5 +751,123 @@ mod tests {
     fn the_main_chat_keeps_the_chat_managers_place_and_the_skins_name() {
         assert_eq!(WindowId::Chat.section().as_deref(), Some("MainChat"));
         assert_eq!(WindowId::Chat.official(), Some("ChatWindow"));
+    }
+
+    #[test]
+    fn a_placement_puts_a_windows_corner_from_its_edges() {
+        let (size, screen) = (Vec2::new(100.0, 50.0), Vec2::new(800.0, 600.0));
+        let corner = |placement: Placement| placement.corner(size, screen);
+        assert_eq!(
+            corner(Placement::TopLeft(4.0, 5.0)),
+            Some(Vec2::new(4.0, 5.0))
+        );
+        assert_eq!(
+            corner(Placement::TopRight(4.0, 5.0)),
+            Some(Vec2::new(696.0, 5.0))
+        );
+        assert_eq!(
+            corner(Placement::BottomLeft(4.0, 5.0)),
+            Some(Vec2::new(4.0, 545.0))
+        );
+        assert_eq!(
+            corner(Placement::BottomRight(4.0, 5.0)),
+            Some(Vec2::new(696.0, 545.0))
+        );
+        assert_eq!(
+            corner(Placement::TopCentre {
+                top: 5.0,
+                width: 100.0
+            }),
+            Some(Vec2::new(350.0, 5.0))
+        );
+        assert_eq!(
+            corner(Placement::BottomCentre {
+                bottom: 5.0,
+                width: 100.0
+            }),
+            Some(Vec2::new(350.0, 545.0))
+        );
+        assert_eq!(corner(Placement::Docked), None);
+        let mut node = Node::default();
+        Placement::BottomRight(4.0, 5.0).apply(&mut node);
+        assert_eq!(
+            (node.left, node.top, node.right, node.bottom),
+            (Val::Auto, Val::Auto, px(4.0), px(5.0))
+        );
+        assert_eq!(node.position_type, PositionType::Absolute);
+    }
+
+    #[test]
+    fn the_arranged_panels_cover_nothing_and_stay_on_screen() {
+        use WindowId as W;
+        // Sizes made up to the shapes of the default skin's narrow panels,
+        // and of Velious's wide ones, which hides its selector, short effects
+        // and casting windows; the Status panel is the client's own.
+        let narrow = [
+            (W::Spells, (50.0, 300.0)),
+            (W::Player, (150.0, 90.0)),
+            (W::Group, (150.0, 200.0)),
+            (W::PetInfo, (155.0, 140.0)),
+            (W::Selector, (480.0, 50.0)),
+            (W::Target, (150.0, 50.0)),
+            (W::Effects, (105.0, 400.0)),
+            (W::ShortEffects, (105.0, 160.0)),
+            (W::Actions, (100.0, 260.0)),
+            (W::Chat, (420.0, 200.0)),
+            (W::CastBar, (140.0, 60.0)),
+            (W::Status, (300.0, 100.0)),
+        ];
+        let wide = [
+            (W::Spells, (130.0, 220.0)),
+            (W::Player, (270.0, 70.0)),
+            (W::Group, (260.0, 220.0)),
+            (W::PetInfo, (145.0, 140.0)),
+            (W::Selector, (0.0, 0.0)),
+            (W::Target, (270.0, 70.0)),
+            (W::Effects, (200.0, 380.0)),
+            (W::ShortEffects, (0.0, 0.0)),
+            (W::Actions, (220.0, 220.0)),
+            (W::Chat, (420.0, 200.0)),
+            (W::CastBar, (0.0, 0.0)),
+            (W::Status, (300.0, 100.0)),
+        ];
+        for sizes in [narrow, wide] {
+            let size = |id| {
+                sizes
+                    .iter()
+                    .find(|(window, _)| *window == id)
+                    .map_or(Vec2::ZERO, |(_, (width, height))| {
+                        Vec2::new(*width, *height)
+                    })
+            };
+            for screen in [Vec2::new(1280.0, 720.0), Vec2::new(1920.0, 1080.0)] {
+                let placed: Vec<(W, Rect)> = W::ALL
+                    .into_iter()
+                    .filter(|id| size(*id).min_element() > 0.0)
+                    .filter_map(|id| {
+                        let corner = id.arranged(size)?.corner(size(id), screen)?;
+                        Some((id, Rect::from_corners(corner, corner + size(id))))
+                    })
+                    .collect();
+                let drawn = sizes.iter().filter(|(_, (width, _))| *width > 0.0);
+                assert_eq!(placed.len(), drawn.count(), "every panel is arranged");
+                for (id, place) in &placed {
+                    assert!(
+                        place.min.cmpge(Vec2::ZERO).all() && place.max.cmple(screen).all(),
+                        "{id:?} leaves a {screen} screen"
+                    );
+                    for (other, theirs) in placed.iter().filter(|(other, _)| other != id) {
+                        let shared = place.intersect(*theirs);
+                        assert!(
+                            shared.width() <= 0.0 || shared.height() <= 0.0,
+                            "{id:?} covers {other:?} on a {screen} screen"
+                        );
+                    }
+                }
+            }
+        }
+        // Windows the player opens keep the skin's places.
+        assert_eq!(W::Inventory.arranged(|_| Vec2::ONE), None);
+        assert_eq!(W::Bag(22).arranged(|_| Vec2::ONE), None);
     }
 }
