@@ -103,9 +103,13 @@ The login servers are presets in `login-servers.txt` in the settings
 directory (`--settings-dir` or `EQ_CLIENT_SETTINGS_DIR`, by default
 `eq-client` in the per-user settings directory). A first run writes one
 per server type: Project 1999 and Project Quarm at their login servers, and
-Local EQEmu and Local TAKP on this machine. `EQ_PROTOCOL`, `EQ_LOGIN_HOST`
-and `EQ_LOGIN_PORT`, as launchers set them today, go into their type's
-preset. The file is yours to edit:
+Local EQEmu and Local TAKP with only their usual ports. An emulator server
+runs wherever its owner runs it, and a guess at this machine could reach
+something else listening there, such as a P99 login proxy, so those two are
+greyed, saying why, until their `host` is set in the file, or a launch names
+one with `EQ_LOGIN_HOST` for that run. On a first run, `EQ_PROTOCOL`,
+`EQ_LOGIN_HOST` and `EQ_LOGIN_PORT`, as launchers set them today, go into
+their type's preset. The file is yours to edit:
 
 ```ini
 # eq-client login servers v1

@@ -116,13 +116,22 @@ impl Launcher {
 
     /// The login a session on a preset makes: the launch's own login server,
     /// world and character on the launch's preset.
-    pub fn login(&self, index: usize, account: &str, password: &str) -> Option<Login> {
-        let preset = self.presets.list.get(index)?;
+    ///
+    /// # Errors
+    /// Says why there is none: no such preset, or one that names no login
+    /// server.
+    pub fn login(&self, index: usize, account: &str, password: &str) -> Result<Login, String> {
+        let preset = self
+            .presets
+            .list
+            .get(index)
+            .ok_or_else(|| "No such login server".to_owned())?;
         let mut preset = preset.clone();
         let launched = index == self.launch.preset;
         if launched {
             self.launch.endpoint.apply(&mut preset);
         }
+        let host = preset.host.clone().ok_or_else(|| self.unnamed(&preset))?;
         let given = |value: &String| {
             if launched {
                 value.clone()
@@ -130,9 +139,9 @@ impl Launcher {
                 String::new()
             }
         };
-        Some(Login {
+        Ok(Login {
             protocol: preset.protocol,
-            host: preset.host,
+            host,
             port: preset.port,
             account: account.to_owned(),
             password: Zeroizing::new(password.to_owned()),
@@ -144,8 +153,13 @@ impl Launcher {
     /// Whether this run logs in on a preset, or opens the client again with
     /// its installation, or cannot. Each but the first names the folders
     /// involved, so one named for the wrong client shows and can be put
-    /// right in the file.
-    fn availability(&self, preset: &Preset) -> Availability {
+    /// right in the file. A preset naming no login server, where the launch
+    /// names none for it either, logs in nowhere.
+    fn availability(&self, index: usize, preset: &Preset) -> Availability {
+        let launch_host = index == self.launch.preset && self.launch.endpoint.host.is_some();
+        if preset.host.is_none() && !launch_host {
+            return Availability::Unavailable(self.unnamed(preset));
+        }
         let client = installed_client(preset.protocol);
         let here = &self.installation;
         let same_client = client == here.client;
@@ -166,6 +180,19 @@ impl Launcher {
                     preset.name
                 ))
             }
+        }
+    }
+
+    /// Why a preset naming no login server logs in nowhere, and how to name
+    /// one: in the file, or by a launch.
+    fn unnamed(&self, preset: &Preset) -> String {
+        let launch = format!("launch with --preset \"{}\" and EQ_LOGIN_HOST", preset.name);
+        match &self.directory {
+            Some(directory) => format!(
+                "Names no login server yet: set its host in {}, or {launch}",
+                directory.join(crate::presets::FILE).display()
+            ),
+            None => format!("Names no login server yet: {launch}"),
         }
     }
 
@@ -262,8 +289,9 @@ impl Logins for Launcher {
         self.presets
             .list
             .iter()
-            .map(|preset| {
-                let availability = self.availability(preset);
+            .enumerate()
+            .map(|(index, preset)| {
+                let availability = self.availability(index, preset);
                 let seeds = availability == Availability::Here
                     && official
                         .server
@@ -299,14 +327,12 @@ impl Logins for Launcher {
             .list
             .get(server)
             .ok_or_else(|| "No such login server".to_owned())?;
-        match self.availability(preset) {
+        match self.availability(server, preset) {
             Availability::Here => (),
             Availability::Reopens(_) => return self.reopen(server),
             Availability::Unavailable(reason) => return Err(reason),
         }
-        let login = self
-            .login(server, account, password)
-            .ok_or_else(|| "No such login server".to_owned())?;
+        let login = self.login(server, account, password)?;
         SessionWorker::start(login, &self.options)
             .map(Connection::Session)
             .map_err(|error| format!("Cannot log in: {error}"))
@@ -335,15 +361,19 @@ impl Logins for Launcher {
 }
 
 /// Whether the official client's login server, `host:port` or a bare host,
-/// is the preset's; `localhost` and `127.0.0.1` are the same.
+/// is the preset's; `localhost` and `127.0.0.1` are the same. A preset
+/// naming no login server is at none.
 fn same_login_server(official: &str, preset: &Preset) -> bool {
+    let Some(preset_host) = preset.host.as_deref() else {
+        return false;
+    };
     let (host, port) = match official.trim().rsplit_once(':') {
         Some((host, port)) => (host.trim(), port.trim().parse::<u16>().ok()),
         None => (official.trim(), None),
     };
     let loopback = |host: &str| host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1";
     let same_host =
-        host.eq_ignore_ascii_case(&preset.host) || (loopback(host) && loopback(&preset.host));
+        host.eq_ignore_ascii_case(preset_host) || (loopback(host) && loopback(preset_host));
     same_host && port.is_none_or(|port| port == preset.port)
 }
 
@@ -352,8 +382,18 @@ mod tests {
     use super::*;
     use eq_network::client::ServerProtocol;
 
-    fn launcher(installation: Installation) -> Launcher {
+    /// A first run's presets, with the stock emulator servers' login
+    /// servers named, as a player names them in the file.
+    fn hosted() -> Presets {
         let mut presets = Presets::seeded(&Endpoint::default());
+        for preset in &mut presets.list {
+            preset.host.get_or_insert_with(|| "127.0.0.1".into());
+        }
+        presets
+    }
+
+    fn launcher(installation: Installation) -> Launcher {
+        let mut presets = hosted();
         presets.list[3].installation = Some(PathBuf::from("C:/TAKP"));
         let launch = Launch {
             preset: 2,
@@ -410,15 +450,25 @@ mod tests {
             "[MISC]\nLastServerName=ExampleWorld\n[PLAYER]\nUsername=example\n",
         )
         .unwrap();
-        let launcher = launcher(Installation {
+        let installation = || Installation {
             directory: directory.clone(),
             client: InstalledClient::Titanium,
-        });
+        };
+        let mut unnamed = launcher(installation());
+        unnamed.presets.list[2].host = None;
+        let unnamed = unnamed.servers();
+        let launcher = launcher(installation());
         let offered = launcher.servers();
         std::fs::remove_dir_all(&directory).unwrap();
-        // Local EQEmu, at 127.0.0.1:5998, is where the official client logs in.
+        // Local EQEmu, named at 127.0.0.1:5998, is where the official client
+        // logs in.
         assert_eq!(offered[2].account, "example");
         assert_eq!(offered[2].world.as_deref(), Some("ExampleWorld"));
+        // Naming no login server, it is at none, whatever listens there.
+        assert_eq!(
+            (unnamed[2].account.as_str(), unnamed[2].world.as_deref()),
+            ("", None)
+        );
         // P99 is another login server, whatever the official client used.
         assert_eq!(
             (offered[0].account.as_str(), offered[0].world.as_deref()),
@@ -426,7 +476,7 @@ mod tests {
         );
         let preset = |host: &str, port| {
             let mut preset = Preset::new("Example", ServerProtocol::EqEmu);
-            preset.host = host.into();
+            preset.host = Some(host.into());
             preset.port = port;
             preset
         };
@@ -449,7 +499,8 @@ mod tests {
             .presets
             .list
             .iter()
-            .map(|preset| launcher.availability(preset))
+            .enumerate()
+            .map(|(index, preset)| launcher.availability(index, preset))
             .collect();
         assert_eq!(availability[0], Availability::Here);
         assert!(matches!(availability[1], Availability::Unavailable(_)));
@@ -487,7 +538,7 @@ mod tests {
     fn a_titanium_run_begun_on_takp_logs_in_there_only_by_opening_its_installation() {
         // A run on a Titanium installation that begins on Local TAKP, the
         // last played, which names no installation of its own yet.
-        let mut presets = Presets::seeded(&Endpoint::default());
+        let mut presets = hosted();
         presets.last = Some("Local TAKP".into());
         let begun = |presets: &Presets| {
             let installation = Installation {
@@ -541,6 +592,64 @@ mod tests {
             (other.host.as_str(), other.server.as_str()),
             ("login.eqemulator.net", "")
         );
+    }
+
+    #[test]
+    fn a_preset_naming_no_login_server_logs_in_nowhere_unless_the_launch_names_one() {
+        // A first run's presets, begun on P99: the stock emulator servers'
+        // name no login server.
+        let mut launcher = run(
+            Presets::seeded(&Endpoint::default()),
+            titanium(),
+            Launch::default(),
+        );
+        launcher.directory = Some(PathBuf::from("D:/settings"));
+        let offered = launcher.servers();
+        for server in &offered[2..] {
+            let Availability::Unavailable(reason) = &server.availability else {
+                panic!("{:?}", server.availability);
+            };
+            // The hover says where to name one, in the file or by a launch.
+            assert!(reason.starts_with("Names no login server yet: set its host in D:/settings"));
+            assert!(reason.ends_with(&format!(
+                "or launch with --preset \"{}\" and EQ_LOGIN_HOST",
+                server.name
+            )));
+        }
+        // Connect, and an --online launch, log in nowhere and say why.
+        let Err(refused) = launcher.connect(2, "someone", "secret") else {
+            panic!("a preset naming no login server connected");
+        };
+        assert!(refused.starts_with("Names no login server yet"));
+        assert!(
+            launcher
+                .login(3, "someone", "secret")
+                .is_err_and(|reason| reason.starts_with("Names no login server yet"))
+        );
+        // A launch naming a host logs its own preset in there, for this run
+        // alone: the file still names none.
+        let launch = Launch {
+            preset: 2,
+            endpoint: Endpoint {
+                protocol: None,
+                host: Some("192.168.1.20".into()),
+                port: None,
+            },
+            ..Launch::default()
+        };
+        let launcher = run(Presets::seeded(&Endpoint::default()), titanium(), launch);
+        let offered = launcher.servers();
+        assert_eq!(offered[2].availability, Availability::Here);
+        assert!(matches!(
+            offered[3].availability,
+            Availability::Unavailable(_)
+        ));
+        assert!(
+            launcher
+                .login(2, "someone", "secret")
+                .is_ok_and(|login| login.host == "192.168.1.20")
+        );
+        assert_eq!(launcher.presets.list[2].host, None);
     }
 
     #[test]

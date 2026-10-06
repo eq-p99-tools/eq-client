@@ -11,7 +11,7 @@ use std::{
 };
 
 /// The file's name in the settings folder.
-const FILE: &str = "login-servers.txt";
+pub const FILE: &str = "login-servers.txt";
 
 /// The file's first line.
 const HEADER: &str = "# eq-client login servers v1";
@@ -25,8 +25,9 @@ pub struct Preset {
     /// installation it needs: Titanium's for `EQEmu` and P99, the TAKP
     /// client's for TAKP and Quarm.
     pub protocol: ServerProtocol,
-    /// The login server's address.
-    pub host: String,
+    /// The login server's address; none until the player or a launch names
+    /// one, as for a stock emulator server's preset, which nothing guesses.
+    pub host: Option<String>,
     /// The login server's port.
     pub port: u16,
     /// The installation of the official client this server type needs, once
@@ -41,13 +42,13 @@ pub struct Preset {
 
 impl Preset {
     /// A preset at the server type's usual login server, with nothing
-    /// remembered.
+    /// remembered; a stock emulator server's has only the usual port.
     pub fn new(name: &str, protocol: ServerProtocol) -> Self {
-        let (host, port) = protocol.default_endpoint();
+        let (host, port) = seed_endpoint(protocol);
         Self {
             name: name.to_owned(),
             protocol,
-            host: host.to_owned(),
+            host: host.map(str::to_owned),
             port,
             installation: None,
             account: None,
@@ -66,10 +67,11 @@ pub struct Presets {
 }
 
 impl Presets {
-    /// One preset for each server type at its usual login server, which a
-    /// first run writes. The server type and login server the environment
-    /// names (`EQ_PROTOCOL`, `EQ_LOGIN_HOST`, `EQ_LOGIN_PORT`), as today's
-    /// launchers set them, go into that type's preset.
+    /// One preset for each server type at its usual login server, where it
+    /// has one, which a first run writes. The server type and login server
+    /// the environment names (`EQ_PROTOCOL`, `EQ_LOGIN_HOST`,
+    /// `EQ_LOGIN_PORT`), as today's launchers set them, go into that type's
+    /// preset.
     pub fn seeded(environment: &Endpoint) -> Self {
         let mut seeds: Vec<_> = [
             ServerProtocol::Project1999,
@@ -151,7 +153,12 @@ impl Presets {
             };
             let _ = writeln!(text, "\n[{}]", preset.name);
             let _ = writeln!(text, "type = {kind}");
-            let _ = writeln!(text, "host = {}\nport = {}", preset.host, preset.port);
+            let _ = match &preset.host {
+                Some(host) => writeln!(text, "host = {host}"),
+                // Left for the player to fill in.
+                None => writeln!(text, "host ="),
+            };
+            let _ = writeln!(text, "port = {}", preset.port);
             let remembered = [
                 (
                     "installation",
@@ -283,12 +290,22 @@ impl Endpoint {
     /// Puts the login server's address, where set, into a preset.
     pub fn apply(&self, preset: &mut Preset) {
         if let Some(host) = &self.host {
-            preset.host.clone_from(host);
+            preset.host = Some(host.clone());
         }
         if let Some(port) = self.port {
             preset.port = port;
         }
     }
+}
+
+/// The login server a server type's preset starts at: P99's and Quarm's
+/// own. A stock emulator server (`EQEmu`, TAKP) runs wherever its owner runs
+/// it, so its preset starts with only the usual port, and no host until the
+/// player or a launch names one: a guess such as this machine could log in
+/// at another server's login there, such as a P99 login proxy's.
+fn seed_endpoint(protocol: ServerProtocol) -> (Option<&'static str>, u16) {
+    let (host, port) = protocol.default_endpoint();
+    ((!protocol.is_stock()).then_some(host), port)
 }
 
 /// The name a first run gives a server type's preset; none for a type a
@@ -355,17 +372,18 @@ impl Section {
     }
 
     /// The preset, when the section names a server type this client can
-    /// name, and a port.
+    /// name. A missing host or port is the type's usual one, where it has
+    /// one.
     fn preset(self) -> Option<Preset> {
         let protocol = self
             .protocol
             .filter(|protocol| type_name(*protocol).is_some())?;
-        let (host, port) = protocol.default_endpoint();
+        let (host, port) = seed_endpoint(protocol);
         (!self.name.is_empty()).then_some(())?;
         Some(Preset {
             name: self.name,
             protocol,
-            host: self.host.unwrap_or_else(|| host.to_owned()),
+            host: self.host.or_else(|| host.map(str::to_owned)),
             port: self.port.unwrap_or(port),
             installation: self.installation,
             account: self.account,
@@ -386,13 +404,22 @@ mod tests {
             presets
                 .list
                 .iter()
-                .map(|preset| (preset.protocol, preset.host.as_str(), preset.port))
+                .map(|preset| (preset.protocol, preset.host.as_deref(), preset.port))
                 .collect::<Vec<_>>(),
             [
-                (ServerProtocol::Project1999, "login.eqemulator.net", 5998),
-                (ServerProtocol::Quarm, "loginserver.takproject.net", 6000),
-                (ServerProtocol::EqEmu, "127.0.0.1", 5998),
-                (ServerProtocol::Takp, "127.0.0.1", 6000),
+                (
+                    ServerProtocol::Project1999,
+                    Some("login.eqemulator.net"),
+                    5998
+                ),
+                (
+                    ServerProtocol::Quarm,
+                    Some("loginserver.takproject.net"),
+                    6000
+                ),
+                // A stock emulator server's login server is nowhere guessed.
+                (ServerProtocol::EqEmu, None, 5998),
+                (ServerProtocol::Takp, None, 6000),
             ]
         );
         presets.last = Some("Local EQEmu".into());
@@ -403,7 +430,7 @@ mod tests {
         let text = presets.text();
         assert!(text.starts_with(HEADER));
         assert!(text.contains(
-            "[Local EQEmu]\ntype = eqemu\nhost = 127.0.0.1\nport = 5998\n\
+            "[Local EQEmu]\ntype = eqemu\nhost =\nport = 5998\n\
              installation = C:/EverQuest\naccount = example\nworld = Example World\n"
         ));
         assert!(!text.contains("password"));
@@ -420,7 +447,15 @@ mod tests {
         let presets = Presets::seeded(&environment);
         assert_eq!(presets.last.as_deref(), Some("Local TAKP"));
         let takp = &presets.list[presets.find("Local TAKP").unwrap()];
-        assert_eq!((takp.host.as_str(), takp.port), ("192.168.1.20", 6000));
+        assert_eq!(
+            (takp.host.as_deref(), takp.port),
+            (Some("192.168.1.20"), 6000)
+        );
+        // The other stock emulator server's preset still names none.
+        assert_eq!(
+            presets.list[presets.find("Local EQEmu").unwrap()].host,
+            None
+        );
     }
 
     #[test]
@@ -455,11 +490,18 @@ mod tests {
         // type's own, and a name already taken, in any case, is skipped.
         assert_eq!(names, ["Home", "Bad port", "Elsewhere"]);
         assert_eq!(
-            (presets.list[0].host.as_str(), presets.list[0].port),
-            ("10.0.0.5", 5998)
+            (presets.list[0].host.as_deref(), presets.list[0].port),
+            (Some("10.0.0.5"), 5998)
         );
         assert_eq!(presets.list[1].port, 6000);
         assert_eq!(presets.list[2].port, 5999);
+        // Without a host, a stock emulator server's preset names none, and
+        // P99's is P99's own.
+        assert_eq!(presets.list[1].host, None);
+        assert_eq!(
+            presets.list[2].host.as_deref(),
+            Some("login.eqemulator.net")
+        );
         assert_eq!(presets.list[2].account, None);
     }
 
