@@ -1,7 +1,9 @@
-//! The client's own login window: the login servers to choose from, the
-//! account and password boxes, Connect and Quit, and a line saying what is
-//! happening. Tab moves between the boxes, Enter connects, and Escape stops
-//! a login under way.
+//! The login screen's keys and presses, and the client's own login window:
+//! the login servers to choose from, the account and password boxes,
+//! Connect and Quit, and a line saying what is happening. Tab moves between
+//! the boxes, Enter connects, and Escape stops a login under way. Where the
+//! installation has its own login screen, that shows instead
+//! ([`super::official`]), and its controls do what this window's do.
 use super::{Availability, Connected, Field, FrontEnd, Link, Lit, Request, Screen};
 use crate::{online::OnlineState, theme, theme::Size};
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -25,8 +27,26 @@ pub(crate) enum Action {
     Password,
     /// Logs in.
     Connect,
+    /// Logs in, then plays on the world last played on this login server
+    /// as soon as the list shows it taking players.
+    QuickConnect,
+    /// Chooses the next login server.
+    NextServer,
+    /// Stops a login under way; with none, leaves the game.
+    Cancel,
     /// Leaves the game.
     Quit,
+}
+
+/// What the player asked of the idle login screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Asked {
+    /// Nothing that logs in.
+    Nothing,
+    /// To log in.
+    Connect,
+    /// To log in and play on the world last played on.
+    QuickConnect,
 }
 
 /// Takes the player's typing and presses while the login screen shows, and
@@ -38,11 +58,15 @@ pub(crate) fn form(
     keys: crate::keys::Keys,
     mut typed: MessageReader<KeyboardInput>,
     buttons: Query<(Ref<Interaction>, &Action)>,
-    roots: Query<Entity, With<Root>>,
+    (roots, look): (
+        Query<Entity, With<Root>>,
+        Option<Res<super::official::LoginLook>>,
+    ),
     mut previous: Local<String>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let visible = front.has_login() && front.screen(&online) == Screen::Login;
+    let official = look.is_some_and(|look| look.official());
     let typing: Vec<_> = typed.read().filter(|key| key.state.is_pressed()).collect();
     if visible && keys.window_focused() {
         let pressed = buttons
@@ -52,23 +76,44 @@ pub(crate) fn form(
             })
             .map(|(_, action)| *action)
             .collect::<Vec<_>>();
-        if pressed.contains(&Action::Quit) {
+        let cancel = pressed.contains(&Action::Cancel);
+        if pressed.contains(&Action::Quit) || (cancel && !front.running()) {
             exit.write(AppExit::Success);
         }
         if front.running() {
-            // A login under way: Escape stops it.
-            if keys.input.just_pressed(KeyCode::Escape) {
+            // A login under way: Escape or Cancel stops it.
+            if cancel || keys.input.just_pressed(KeyCode::Escape) {
                 front.end(None, &mut link);
             }
         } else {
-            let connect = take(&mut front, &pressed, &typing, &keys.input);
-            if connect && front.connect(&mut online, &mut link) == Connected::Reopened {
+            let connected = match take(&mut front, &pressed, &typing, &keys.input) {
+                Asked::Nothing => Connected::No,
+                Asked::Connect => front.connect(&mut online, &mut link),
+                Asked::QuickConnect => front.quick_connect(&mut online, &mut link),
+            };
+            if connected == Connected::Reopened {
                 exit.write(AppExit::Success);
             }
         }
     }
-    let signature = format!(
-        "{visible}:{}:{}:{}:{}:{:?}:{}:{:?}",
+    let signature = format!("{visible}:{official}:{}", appearance(&front));
+    if *previous == signature {
+        return;
+    }
+    *previous = signature;
+    for root in &roots {
+        commands.entity(root).despawn();
+    }
+    if visible && !official {
+        spawn(&mut commands, &front);
+    }
+}
+
+/// What the login screen shows of the front end, which draws it again when
+/// it changes.
+pub(super) fn appearance(front: &FrontEnd) -> String {
+    format!(
+        "{}:{}:{}:{}:{:?}:{}:{:?}",
         front.running(),
         front.chosen,
         front.account,
@@ -78,37 +123,35 @@ pub(crate) fn form(
         front
             .servers
             .iter()
-            .map(|server| (&server.name, &server.availability))
+            .map(|server| (&server.name, &server.world, &server.availability))
             .collect::<Vec<_>>(),
-    );
-    if *previous == signature {
-        return;
-    }
-    *previous = signature;
-    for root in &roots {
-        commands.entity(root).despawn();
-    }
-    if visible {
-        spawn(&mut commands, &front);
-    }
+    )
 }
 
 /// Applies the idle login screen's presses and typing; says whether the
-/// player asked to connect.
+/// player asked to log in.
 fn take(
     front: &mut FrontEnd,
     pressed: &[Action],
     typing: &[&KeyboardInput],
     input: &ButtonInput<KeyCode>,
-) -> bool {
-    let mut connect = front.request.take() == Some(Request::Connect);
+) -> Asked {
+    let mut asked = if front.request.take() == Some(Request::Connect) {
+        Asked::Connect
+    } else {
+        Asked::Nothing
+    };
     for action in pressed {
         match action {
             Action::Server(index) => front.choose(*index),
+            Action::NextServer if !front.servers.is_empty() => {
+                front.choose((front.chosen + 1) % front.servers.len());
+            }
             Action::Account => front.field = Field::Account,
             Action::Password => front.field = Field::Password,
-            Action::Connect => connect = true,
-            Action::Quit => (),
+            Action::Connect => asked = Asked::Connect,
+            Action::QuickConnect => asked = Asked::QuickConnect,
+            Action::NextServer | Action::Cancel | Action::Quit => (),
         }
     }
     if input.just_pressed(KeyCode::Tab) {
@@ -128,7 +171,11 @@ fn take(
             front.choose((front.chosen + count - 1) % count);
         }
     }
-    connect |= input.just_pressed(KeyCode::Enter) || input.just_pressed(KeyCode::NumpadEnter);
+    if asked == Asked::Nothing
+        && (input.just_pressed(KeyCode::Enter) || input.just_pressed(KeyCode::NumpadEnter))
+    {
+        asked = Asked::Connect;
+    }
     for key in typing {
         let field = match front.field {
             Field::Account => &mut front.account,
@@ -154,7 +201,7 @@ fn take(
             _ => (),
         }
     }
-    connect
+    asked
 }
 
 /// Draws the window: the login servers, the boxes, the buttons and the
@@ -280,7 +327,7 @@ fn field(
 
 /// The line under the buttons: what is happening, why the last login
 /// ended, what Connect does on this login server, or how to use the window.
-fn guidance(front: &FrontEnd) -> String {
+pub(super) fn guidance(front: &FrontEnd) -> String {
     if front.running() {
         return "Logging in... | Escape: stop".to_owned();
     }
@@ -288,12 +335,16 @@ fn guidance(front: &FrontEnd) -> String {
         return front.status.clone();
     }
     match front.chosen().map(|server| &server.availability) {
-        Some(Availability::Reopens(folder)) => {
-            format!("Connect opens the client again with {folder}")
-        }
+        Some(Availability::Reopens(folder)) => reopens(folder),
         Some(Availability::Unavailable(reason)) => reason.clone(),
         _ => "Tab: next box | Enter: connect".to_owned(),
     }
+}
+
+/// What Connect does on a login server whose installation is another
+/// folder, as the player reads it.
+pub(super) fn reopens(folder: &str) -> String {
+    format!("Connect opens the client again with {folder}")
 }
 
 #[cfg(test)]

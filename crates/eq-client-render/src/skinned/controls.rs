@@ -793,7 +793,7 @@ pub(super) fn listbox(
             filled_by(&mut rows, listing, columns);
         }
         if let Some(look) = bar {
-            super::scrollbar::spawn(frame, art, look, &client, (scrolled, owner));
+            super::scrollbar::spawn(frame, art, look, &client, (scrolled, Some(owner)));
         }
     });
 }
@@ -822,7 +822,7 @@ fn filled_by(rows: &mut EntityCommands, listing: Listing, columns: Vec<f32>) {
 /// Each of a list's column headings across the top of its inside, on the
 /// skin's heading frame where it has one; returns how high they are, which
 /// is the frame's height.
-fn headings(
+pub(crate) fn headings(
     frame: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
     list: &Listbox,
