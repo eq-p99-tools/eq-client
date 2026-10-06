@@ -96,15 +96,30 @@ impl BoundaryTracker {
 }
 impl Controls {
     /// Smooths a locally accepted sample without changing the simulation position.
+    /// A heading change beyond what the turn keys turn in a cycle is the
+    /// player facing a new way at once, so it shows at once while the
+    /// position still eases.
     pub fn display_sample(&mut self, from: Transform, position: eq_client_core::WorldPosition) {
+        let rotation = Quat::from_rotation_y(eq_client_core::render_heading(position.heading));
+        // Measured from the heading the last sample asked for, which the
+        // model shows once that sample's easing ends: a turn key's sample can
+        // arrive before then.
+        let asked = self
+            .visual
+            .as_ref()
+            .map_or(from.rotation, |visual| visual.to.rotation);
+        let limit = TURN_RATE * self.cycle / 512.0 * std::f32::consts::TAU;
+        let from = if asked.angle_between(rotation) > limit * 1.01 {
+            from.with_rotation(rotation)
+        } else {
+            from
+        };
         self.visual = Some(VisualMotion {
             from,
             to: Transform::from_translation(Vec3::from_array(eq_client_core::render_position(
                 position,
             )))
-            .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
-                position.heading,
-            ))),
+            .with_rotation(rotation),
             elapsed: 0.0,
             duration: self.cycle,
         });
@@ -217,6 +232,9 @@ impl Controls {
 
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
 const MAX_CYCLE: f32 = 0.25;
+
+/// How fast the turn keys turn the player, in heading units a second.
+const TURN_RATE: f32 = 240.0;
 
 /// Holds short press edges across the send throttle, never across focus loss or expiry.
 #[derive(Default)]
@@ -408,12 +426,12 @@ pub(super) fn input(
     let position = landing + Vec3::Y * body.feet_offset;
     let position = stop_at_zone_line(&online.regions, origin, position);
     trace_proposal(mode, delta, position - origin);
-    let turn_limit = 240.0 * span;
+    // The turn keys turn at their rate; moving with the camera-relative keys
+    // faces the way the player moves at once.
     let heading = if direction == Vec3::ZERO || preserve_facing {
-        (current_heading + turn * turn_limit).rem_euclid(512.0)
+        (current_heading + turn * TURN_RATE * span).rem_euclid(512.0)
     } else {
-        let desired = eq_client_core::world_heading(direction.x.atan2(direction.z));
-        turn_toward(current_heading, desired, turn_limit)
+        eq_client_core::world_heading(direction.x.atan2(direction.z))
     };
     let position_sent = world_position(position.to_array(), heading);
     let sent = outbox.post(online.world(), |stamp| {
@@ -660,12 +678,6 @@ fn movement_input(
     }
 }
 
-/// Rotates through the shortest arc without snapping across the heading wrap.
-fn turn_toward(current: f32, desired: f32, limit: f32) -> f32 {
-    let difference = (desired - current + 256.0).rem_euclid(512.0) - 256.0;
-    (current + difference.clamp(-limit, limit)).rem_euclid(512.0)
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -791,6 +803,50 @@ mod tests {
         assert!(controls.visual.is_some());
         controls.reset(None);
         assert!(controls.visual.is_none());
+    }
+
+    #[test]
+    fn a_new_facing_shows_at_once_while_a_key_turn_eases() {
+        use bevy::prelude::{Quat, Transform};
+        let facing = |heading| Quat::from_rotation_y(eq_client_core::render_heading(heading));
+        let start = Transform::from_rotation(facing(0.0));
+        // In a tenth of a second the turn keys turn 24 heading units. A
+        // quarter turn shows at once, and the position still eases.
+        let mut controls = super::Controls::default();
+        controls.display_sample(
+            start,
+            eq_client_core::world_position([10.0, 0.0, 0.0], 128.0),
+        );
+        let visual = controls.visual.as_mut().unwrap();
+        let mut shown = start;
+        visual.advance(0.0, &mut shown);
+        assert!(shown.rotation.angle_between(facing(128.0)) < 0.001);
+        assert!(shown.translation.length() < 0.001);
+        visual.advance(0.05, &mut shown);
+        assert!(shown.rotation.angle_between(facing(128.0)) < 0.001);
+        assert!((shown.translation - Vec3::new(5.0, 0.0, 0.0)).length() < 0.001);
+        // A turn the keys make in a cycle eases with the position.
+        let mut controls = super::Controls::default();
+        controls.display_sample(
+            start,
+            eq_client_core::world_position([10.0, 0.0, 0.0], 500.0),
+        );
+        let visual = controls.visual.as_mut().unwrap();
+        let mut shown = start;
+        visual.advance(0.05, &mut shown);
+        assert!(shown.rotation.angle_between(facing(506.0)) < 0.001);
+        assert!((shown.translation - Vec3::new(5.0, 0.0, 0.0)).length() < 0.001);
+        // A turn key's next sample, before the last one's easing ends, is
+        // measured from where that sample asked to face (20 units), not from
+        // the facing shown (26 units), so it still eases.
+        controls.display_sample(
+            shown,
+            eq_client_core::world_position([10.0, 0.0, 0.0], 480.0),
+        );
+        let visual = controls.visual.as_mut().unwrap();
+        let mut next = shown;
+        visual.advance(0.0, &mut next);
+        assert!(next.rotation.angle_between(facing(506.0)) < 0.001);
     }
     #[test]
     fn throttled_taps_survive_until_one_sample_but_not_focus_loss_or_expiry() {
@@ -1096,8 +1152,37 @@ mod tests {
         };
         assert!((request.position.heading - 488.0).abs() < 0.001);
         assert!(request.position.x.abs() < 0.001 && request.position.y.abs() < 0.001);
-        assert!((turn_toward(508.0, 4.0, 3.0) - 511.0).abs() < 0.001);
-        assert!((turn_toward(4.0, 508.0, 3.0) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn camera_relative_keys_face_their_direction_at_once() {
+        // The player faces heading 0 and the camera looks along 384. Each
+        // camera-relative key faces its way in the first sample, however far
+        // that is; the character-relative forward arrow keeps the facing.
+        for (key, heading) in [
+            (KeyCode::KeyW, 384.0),
+            (KeyCode::KeyS, 128.0),
+            (KeyCode::KeyA, 0.0),
+            (KeyCode::KeyD, 256.0),
+            (KeyCode::ArrowUp, 0.0),
+        ] {
+            let (mut app, receiver) = app();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(key);
+            app.update();
+            let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+                panic!("expected movement for {key:?}")
+            };
+            let off = (request.position.heading - heading + 256.0).rem_euclid(512.0) - 256.0;
+            assert!(
+                off.abs() < 0.001,
+                "{key:?} faced {}",
+                request.position.heading
+            );
+            let moved = Vec3::new(request.position.x, request.position.y, 0.0);
+            assert!(moved.length() > 0.1, "{key:?} did not move");
+        }
     }
 
     #[test]
