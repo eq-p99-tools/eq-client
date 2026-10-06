@@ -210,6 +210,7 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::spellbook::BookPlace>,
             Option<&'static super::spellbook::TurnsPages>,
             Option<&'static super::hud::SpellGem>,
+            Option<&'static super::hud::hotbar::Slot>,
         ),
         Option<&'static super::spellbook::GemChoice>,
         Option<&'static super::trade::Action>,
@@ -498,6 +499,39 @@ pub(super) fn drive(
                 script.pressed = Some(entity);
                 return;
             }
+            Step::HoldClick(target, duration) => {
+                if script.clicked.is_none() {
+                    // Pressed as a click presses, the hold is timed from the
+                    // press.
+                    if elapsed > MAX_WAIT {
+                        script.stop(&mut keys, &mut mouse, "the pointer stayed over the window");
+                        return;
+                    }
+                    if window.is_some_and(|window| window.cursor_position().is_some()) {
+                        return;
+                    }
+                    let Some(entity) = find(*target, &buttons, &layout) else {
+                        script.stop(&mut keys, &mut mouse, "click target is not visible");
+                        return;
+                    };
+                    press(entity, *target, &mut buttons, &mut pointers);
+                    mouse.press(MouseButton::Left);
+                    script.clicked = Some(MouseButton::Left);
+                    script.pressed = Some(entity);
+                    script.current = Some((step.clone(), now));
+                    return;
+                }
+                if elapsed < *duration {
+                    return;
+                }
+                // Let go over the control it pressed, as a click lets go.
+                if let Some(entity) = script.pressed
+                    && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+                {
+                    interaction.set_if_neq(Interaction::Hovered);
+                }
+                true
+            }
             _ => true,
         };
         if !done {
@@ -654,7 +688,7 @@ pub(super) fn drive(
             }
             return;
         }
-        Step::Click(_) | Step::RightClick(_) => {
+        Step::Click(_) | Step::RightClick(_) | Step::HoldClick(..) => {
             script.hovering = None;
             if window.is_some_and(|window| window.cursor_position().is_some()) {
                 info!("Scripted click waits until the pointer leaves the client window");
@@ -830,7 +864,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         slot,
         scribe,
         store,
-        (row, place, turns, spell_gem),
+        (row, place, turns, spell_gem, hot_button),
         gem,
         trade,
         tint,
@@ -884,6 +918,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
             ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
             ClickTarget::SpellGem(number) => spell_gem.is_some_and(|gem| gem.0 == number),
+            ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::Trade(click) => trade.is_some_and(|action| {
                 use super::trade::Action;
