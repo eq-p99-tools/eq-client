@@ -67,7 +67,7 @@ pub(crate) fn update(
             Marker,
             pose,
             Visibility::Inherited,
-            Mesh3d(meshes.add(Annulus::new(0.90, 1.0))),
+            Mesh3d(meshes.add(Annulus::new(RING_INNER, 1.0))),
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: Color::srgb(0.95, 0.76, 0.22),
                 unlit: true,
@@ -78,15 +78,28 @@ pub(crate) fn update(
     }
 }
 
+/// Where the band starts, as a fraction of the ring's radius.
+const RING_INNER: f32 = 0.85;
+
+/// How far the ring floats over the ground, so bumps under it hide less of
+/// it, as the project owner asked.
+const RING_LIFT: f32 = 0.3;
+
+/// The ring's radius for a target of this size, a little wider than its
+/// body, as the project owner asked.
+fn ring_radius(size: f32) -> f32 {
+    (size * 0.4).clamp(1.0, 10.0)
+}
+
 fn marker_pose(position: Vec3, size: f32, ground: Option<f32>) -> Transform {
     Transform {
         translation: Vec3::new(
             position.x,
-            ground.unwrap_or(position.y - size * 0.5) + 0.04,
+            ground.unwrap_or(position.y - size * 0.5) + RING_LIFT,
             position.z,
         ),
         rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
-        scale: Vec3::splat((size * 0.25).clamp(0.75, 8.0)),
+        scale: Vec3::splat(ring_radius(size)),
     }
 }
 
@@ -198,10 +211,13 @@ mod tests {
     #[test]
     fn ground_marker_uses_rendered_position_and_bounded_radius() {
         let pose = marker_pose(Vec3::new(12.0, 10.0, -7.0), 6.0, Some(3.0));
-        assert_eq!(pose.translation, Vec3::new(12.0, 3.04, -7.0));
-        assert_eq!(pose.scale, Vec3::splat(1.5));
+        assert_eq!(pose.translation, Vec3::new(12.0, 3.3, -7.0));
+        assert_eq!(pose.scale, Vec3::splat(2.4));
         assert!((pose.rotation * Vec3::Z - Vec3::Y).length() < 0.001);
-        assert_eq!(marker_pose(Vec3::ZERO, 0.5, None).scale, Vec3::splat(0.75));
-        assert_eq!(marker_pose(Vec3::ZERO, 100.0, None).scale, Vec3::splat(8.0));
+        assert_eq!(marker_pose(Vec3::ZERO, 0.5, None).scale, Vec3::splat(1.0));
+        assert_eq!(
+            marker_pose(Vec3::ZERO, 100.0, None).scale,
+            Vec3::splat(10.0)
+        );
     }
 }
