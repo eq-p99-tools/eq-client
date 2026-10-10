@@ -35,6 +35,10 @@ pub(super) struct Zone {
     pub(super) asked_container: Option<u32>,
     /// The world container open for the player, such as a forge.
     pub(super) container: Option<crate::ground::ContainerView>,
+    /// Each spawn's latest one-shot motion, the player's own included.
+    pub(super) motions: BTreeMap<u16, super::Motion>,
+    /// The cast each spawn is under, the player's own included.
+    pub(super) casts: BTreeMap<u16, super::motions::Cast>,
 }
 
 impl Zone {
@@ -56,10 +60,12 @@ impl Zone {
         }
     }
 
-    /// A spawn leaves the zone.
+    /// A spawn leaves the zone, and its motion and cast with it.
     pub(super) fn vanish(&mut self, id: u16) {
         self.spawns.remove(&id);
         self.considered.remove(&id);
+        self.motions.remove(&id);
+        self.casts.remove(&id);
     }
 
     /// The server's word on a spawn the player considered.

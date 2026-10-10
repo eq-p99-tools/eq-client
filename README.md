@@ -537,6 +537,17 @@ models inherit missing tracks from their documented donor models, while their ow
 tracks retain priority. Human sitting and crouching have been rendered offline
 from the installed assets; live posture acknowledgements remain unverified.
 
+Swings, kicks and the other one-shot motions the server sends for a spawn in
+view, the player's own included, play their clip once over the stance and the
+walk, and a new one starts it again. A cast under way, anyone's, loops the
+casting gesture the installed `spells_us.txt` names for its spell, from the
+cast's beginning until it lands, is interrupted, or runs a second past its cast
+time. Neither plays over sitting, lying, looting, crouching or a corpse, and a
+model without the clip shows what it would have shown. Each of the servers'
+animation numbers plays the clip EQEmu's documented table gives it, at normal
+speed whatever speed the server sends; that the official client does the same,
+over the walk too, is inferred, not yet checked against it.
+
 Mode-3 server spell-bar refreshes start numeric gem cooldowns. Base recovery and
 recast durations come from the installed `spells_us.txt`; the server's reuse-time
 reduction applies to that spell's recast timer. The shared recovery interval also

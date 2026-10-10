@@ -161,6 +161,12 @@ impl SpellNames {
         self.spell(id)?.icon
     }
 
+    /// The motion a spell's caster plays while casting, as the servers'
+    /// animation number, from the installed spell data.
+    pub(super) fn casting_animation(&self, id: u32) -> Option<u16> {
+        self.spell(id)?.casting_animation
+    }
+
     pub fn label(&self, id: u32) -> String {
         self.spell(id)
             .and_then(|spell| spell.name.clone())
