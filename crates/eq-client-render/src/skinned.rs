@@ -1976,12 +1976,7 @@ fn button(
     let Some(does) = does(button.id.as_deref().unwrap_or_default(), owner) else {
         return;
     };
-    let area = match does {
-        Does::Buff(_, index) if !button.placed => stacked(button.area, index, inside),
-        _ => button.anchors.map_or(button.area, |anchors| {
-            anchors.within(inside.width, inside.height)
-        }),
-    };
+    let area = button_area(button, does, inside);
     let node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -2040,11 +2035,25 @@ fn button(
     });
 }
 
-/// Where an effects window's button goes when the skin gives it no place:
-/// down the window's left edge a row each, a pixel apart, then on in the
-/// next column, so it lines up with the rows of the skins that leave their
-/// buttons unplaced and name each buff beside it. How the official client
-/// places them is not checked yet.
+/// Where a skin's button sits in its window: where the skin places it or
+/// its anchors put it. An effects window's button the skin does neither for
+/// is stacked ([`stacked`]).
+fn button_area(button: &eq_client_assets::sidl::Button, does: Does, inside: &Area) -> Area {
+    match does {
+        Does::Buff(_, index) if !button.placed && button.anchors.is_none() => {
+            stacked(button.area, index, inside)
+        }
+        _ => button.anchors.map_or(button.area, |anchors| {
+            anchors.within(inside.width, inside.height)
+        }),
+    }
+}
+
+/// Where an effects window's button goes when the skin gives it no place
+/// and no anchors: down the window's left edge a row each, a pixel apart,
+/// then on in the next column, so it lines up with the rows of the skins
+/// that leave their buttons unplaced and name each buff beside it. How the
+/// official client places them is not checked yet.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -2269,6 +2278,18 @@ fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::B
     ));
 }
 
+/// Where a buff slot's icon goes in its button: where the skin puts the
+/// button's picture (its decal), or else just inside the button at its
+/// height; its left and top, and its size.
+fn buff_icon_place(button: &eq_client_assets::sidl::Button, area: Area) -> ((f32, f32), f32) {
+    if button.decal_area.is_some() {
+        let (x, y, size) = decal_place(button);
+        ((x, y), size)
+    } else {
+        (super::spell_icons::INSET, area.height.min(area.width) - 4.0)
+    }
+}
+
 /// Where a button's picture of an item goes: where the skin puts its
 /// sample picture, or else just inside the button; its left, top and size.
 fn decal_place(button: &eq_client_assets::sidl::Button) -> (f32, f32, f32) {
@@ -2321,9 +2342,11 @@ fn caption(
         }
         Does::HotButton(index) => hotbar::contents(inner, index),
         Does::PetBuff(slot) => {
-            inner.spawn(super::spell_icons::artwork(
+            let (place, size) = buff_icon_place(button, area);
+            inner.spawn(super::spell_icons::artwork_at(
                 super::spell_icons::Source::PetBuff(slot),
-                area.height.min(area.width) - 4.0,
+                place,
+                size,
             ));
         }
         // The spell's picture, where the skin puts its sample, and the
@@ -2347,9 +2370,11 @@ fn caption(
             ));
         }
         Does::Buff(window, index) => {
-            inner.spawn(super::spell_icons::artwork(
+            let (place, size) = buff_icon_place(button, area);
+            inner.spawn(super::spell_icons::artwork_at(
                 super::spell_icons::Source::Window(window, index),
-                area.height.min(area.width) - 4.0,
+                place,
+                size,
             ));
         }
         // A box with a picture shows a value, such as the bank's coins;
@@ -4460,6 +4485,80 @@ mod tests {
         // Fifteen rows fill the window; the sixteenth starts a column.
         assert_eq!(place(14), (0.0, 350.0));
         assert_eq!(place(15), (25.0, 0.0));
+    }
+
+    /// A buff button as the effects windows' skins lay them out: no place
+    /// of its own, no anchors and no picture.
+    fn buff_button(width: f32) -> eq_client_assets::sidl::Button {
+        eq_client_assets::sidl::Button {
+            id: Some("Buff1".into()),
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: 24.0,
+            },
+            placed: false,
+            anchors: None,
+            look: ButtonLook::default(),
+            checkbox: false,
+            text: None,
+            text_color: None,
+            font: None,
+            decal: None,
+            decal_area: None,
+            tooltip: None,
+        }
+    }
+
+    #[test]
+    fn an_effects_button_the_skin_anchors_goes_where_its_anchors_put_it() {
+        use eq_client_assets::sidl::{Anchor, Anchors};
+        let window = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 375.0,
+        };
+        let buff = Does::Buff(EffectWindow::Long, 1);
+        let place = |button: &eq_client_assets::sidl::Button| {
+            let area = button_area(button, buff, &window);
+            (area.x, area.y, area.width, area.height)
+        };
+        let mut button = buff_button(24.0);
+        // Neither placed nor anchored: stacked down the left edge.
+        assert_eq!(place(&button), (0.0, 25.0, 24.0, 24.0));
+        // Anchored to the window's right edge, where its anchors put it.
+        button.anchors = Some(Anchors {
+            left: Anchor::End(24.0),
+            top: Anchor::Start(25.0),
+            right: Anchor::End(0.0),
+            bottom: Anchor::Start(49.0),
+        });
+        assert_eq!(place(&button), (176.0, 25.0, 24.0, 24.0));
+        // A placed button stays where the skin placed it.
+        button.anchors = None;
+        button.placed = true;
+        button.area.x = 30.0;
+        assert_eq!(place(&button), (30.0, 0.0, 24.0, 24.0));
+    }
+
+    #[test]
+    fn a_buff_slots_icon_sits_where_the_skin_puts_the_buttons_picture() {
+        let mut button = buff_button(200.0);
+        // No picture: just inside the button, at its height, as before.
+        assert_eq!(
+            buff_icon_place(&button, button.area),
+            (crate::spell_icons::INSET, 20.0)
+        );
+        // A picture on the right: the icon fills it.
+        button.decal_area = Some(Area {
+            x: 176.0,
+            y: 2.0,
+            width: 20.0,
+            height: 20.0,
+        });
+        assert_eq!(buff_icon_place(&button, button.area), ((176.0, 2.0), 20.0));
     }
 
     #[test]
