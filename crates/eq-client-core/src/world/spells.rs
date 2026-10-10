@@ -11,6 +11,7 @@ impl ClientWorld {
     /// which the server sends with the caster's name, says whose it was.
     /// Whose cast it was goes by spawn ID; the name only fills the line.
     pub(super) fn spell(&mut self, update: &SpellUpdate, now: Instant, changes: &mut Changes) {
+        self.cast_news(update, now);
         // Forgetting a gem is answered only by the gem emptying.
         if matches!(update, SpellUpdate::Slot { mode: 2, .. })
             && matches!(self.book_action, Some(BookActionStatus::Submitted))
@@ -44,6 +45,8 @@ impl ClientWorld {
         changes.cast = self
             .casting
             .observe(player.spawn_id, &player.memorized_spells, update, now);
+        let own_id = player.spawn_id;
+        self.own_cast_news(own_id, changes.cast);
         if let (Some(CastNews::Interrupted), Some((_, string_id))) =
             (changes.cast, self.casting.interrupted)
         {
@@ -108,14 +111,15 @@ impl ClientWorld {
         }
     }
 
-    /// A spell took effect on someone; only a lasting effect on the player
-    /// leaves a buff the server has not slotted.
+    /// A spell took effect on someone, which ends its caster's cast; only a
+    /// lasting effect on the player leaves a buff the server has not slotted.
     pub(super) fn spell_effect(
         &mut self,
         effect: &SpellEffect,
         (now, spells): (Instant, &dyn SpellCatalog),
         changes: &mut Changes,
     ) {
+        self.landed(effect.caster_id);
         if self.is_player(effect.target_id) {
             if effect.effect_flag == 4
                 && !matches!(effect.spell_id, 0 | u16::MAX)
