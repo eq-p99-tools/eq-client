@@ -31,6 +31,8 @@ pub(super) struct AnimatedCharacter {
     moving_for: f32,
     previous_position: Vec3,
     clip: (&'static str, bool),
+    /// The swings the server sent for the spawn drawn.
+    swings: Swings,
 }
 
 /// A corpse: drawn with its race's model, lying as it fell.
@@ -249,6 +251,7 @@ pub(super) fn spawn_on_layers(
             moving_for: 0.0,
             previous_position: Vec3::ZERO,
             clip: ("P01", false),
+            swings: Swings::default(),
         });
 }
 
@@ -270,26 +273,34 @@ type Animated<'w, 's> = Query<
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn animate(
     time: Res<Time>,
-    online: Res<super::online::OnlineState>,
+    (online, spells): (
+        Res<super::online::OnlineState>,
+        Res<super::spellbook::SpellNames>,
+    ),
     mut characters: Animated,
     mut held_items: HeldItems,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    let now = std::time::Instant::now();
+    let world = online.world();
     for (transform, mut character, remote, own, corpse) in &mut characters {
         let id = remote.map(|entity| entity.id).or_else(|| {
-            own.then(|| online.world().player().map(|player| player.spawn_id))
+            own.then(|| world.player().map(|player| player.spawn_id))
                 .flatten()
         });
-        let posture = id.and_then(|id| online.world().posture(id));
+        let posture = id.and_then(|id| world.posture(id));
         let moving = transform
             .translation
             .distance_squared(character.previous_position)
             > 0.0001;
         character.previous_position = transform.translation;
+        let dt = time.delta_secs().min(0.1);
+        character
+            .swings
+            .follow(id.and_then(|id| world.motion_of(id)), dt);
         if posture == Some(eq_client_core::PostureState::Frozen) {
             continue;
         }
-        let dt = time.delta_secs().min(0.1);
         character.elapsed += dt;
         character.since_pose += dt;
         character.moving_for = if moving {
@@ -301,10 +312,20 @@ pub(super) fn animate(
             continue;
         }
         character.since_pose = 0.0;
-        let (selected, start) = chosen_clip(corpse, posture, character.moving_for > 0.0);
+        let cast = id
+            .and_then(|id| world.cast_by(id, now))
+            .and_then(|spell| spells.casting_animation(spell))
+            .and_then(action_clip);
+        let gesture = character
+            .swings
+            .gesture(cast, |clip| character.asset.clip_seconds(clip));
+        let (selected, pinned) = chosen_clip(corpse, posture, character.moving_for > 0.0, gesture);
         if selected != character.clip {
             character.clip = selected;
-            character.elapsed = start;
+            character.elapsed = 0.0;
+        }
+        if let Some(seconds) = pinned {
+            character.elapsed = seconds;
         }
         let (clip, held) = selected;
         let (mut poses, attachments) =
@@ -341,19 +362,135 @@ pub(super) fn animate(
     }
 }
 
-/// The clip a character shows, and where in it a newly chosen clip starts:
-/// a corpse lies as it fell, in the death clip's last frame, rather than
-/// falling each time it is drawn (a held clip stays on its last frame).
+/// What a character plays over its stance and walk: a swing the server
+/// sent, once, or the gesture of a cast under way, for as long as it lasts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Gesture {
+    /// A swing's clip, and how far into it the character is.
+    Swing {
+        /// The clip, such as `C05`.
+        clip: &'static str,
+        /// Seconds since the swing came.
+        since: f32,
+    },
+    /// The casting gesture's clip, looped.
+    Cast(&'static str),
+}
+
+/// The swings the server sent for one character, as its animation follows
+/// them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Swings {
+    /// Whether the character has followed the world's motions yet.
+    followed: bool,
+    /// The latest motion's count and animation number, and the seconds
+    /// since it came.
+    latest: Option<(u64, u16, f32)>,
+}
+
+impl Swings {
+    /// Follows the world's latest motion for the character over a frame of
+    /// `dt` seconds. A new one starts from its beginning, two alike in a row
+    /// included; the one already there when the character was first drawn
+    /// came before it and is over.
+    fn follow(&mut self, motion: Option<eq_client_core::world::Motion>, dt: f32) {
+        let latest = self
+            .latest
+            .map(|(count, action, since)| (count, action, since + dt));
+        self.latest = match motion {
+            Some(motion) if latest.is_none_or(|(count, ..)| count != motion.count) => {
+                let since = if self.followed { 0.0 } else { f32::INFINITY };
+                Some((motion.count, motion.action, since))
+            }
+            _ => latest,
+        };
+        self.followed = true;
+    }
+
+    /// What the character plays over its stance: the latest swing until its
+    /// clip ends, else the casting gesture. A model without the clip
+    /// (`length` gives none) plays neither.
+    fn gesture(
+        &self,
+        cast: Option<&'static str>,
+        length: impl Fn(&str) -> Option<f32>,
+    ) -> Option<Gesture> {
+        let swing = self.latest.and_then(|(_, action, since)| {
+            let clip = action_clip(action)?;
+            (since < length(clip)?).then_some(Gesture::Swing { clip, since })
+        });
+        swing.or_else(|| {
+            cast.filter(|clip| length(clip).is_some())
+                .map(Gesture::Cast)
+        })
+    }
+}
+
+/// The clip a character shows, and the time in it when that is pinned
+/// rather than run on from when the clip was chosen. A corpse lies as it
+/// fell, in the death clip's last frame, rather than falling each time it is
+/// drawn (a held clip stays on its last frame). Sitting, lying, looting and
+/// ducking show their posture; otherwise a swing plays once over the stance
+/// and the walk alike, its clips being the whole body's (inferred), and a
+/// cast loops its gesture.
 fn chosen_clip(
     corpse: bool,
     posture: Option<eq_client_core::PostureState>,
     moving: bool,
-) -> ((&'static str, bool), f32) {
+    gesture: Option<Gesture>,
+) -> ((&'static str, bool), Option<f32>) {
+    use eq_client_core::PostureState;
     if corpse {
-        (DEATH, 1.0e6)
-    } else {
-        (posture_clip(posture, moving), 0.0)
+        return (DEATH, Some(1.0e6));
     }
+    let posed = matches!(
+        posture,
+        Some(
+            PostureState::Sitting
+                | PostureState::Lying
+                | PostureState::Looting
+                | PostureState::Ducking
+        )
+    );
+    match gesture {
+        Some(Gesture::Swing { clip, since }) if !posed => ((clip, true), Some(since)),
+        Some(Gesture::Cast(clip)) if !posed => ((clip, false), None),
+        _ => (posture_clip(posture, moving), None),
+    }
+}
+
+/// The clip each of the servers' animation numbers plays, from 1, as
+/// `EQEmu` documents them (eqemu-docs-v2, docs/server/npc/animations.md);
+/// TAKP numbers its animations the same. The codes are the models' own clip
+/// names. Inferred: which clip the official client plays for a number is a
+/// recording item.
+#[rustfmt::skip]
+const ACTION_CLIPS: [&str; 73] = [
+    // 1 to 11: the weapon swings, kicks and the bow.
+    "C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08", "C09", "C10", "C11",
+    // 12 to 16: struck, drowning and dying.
+    "D01", "D02", "D03", "D04", "D05",
+    // 17 to 26: moving about, and standing.
+    "L01", "L02", "L03", "L04", "L05", "L06", "L07", "L08", "L09", "O01",
+    // 27 to 31: socials.
+    "S01", "S02", "S03", "S04", "S05",
+    // 32 to 38: stances.
+    "P01", "P02", "P03", "P04", "P05", "P06", "P07",
+    // 39 to 47: the instruments, the three casting gestures and the monk
+    // attacks.
+    "T01", "T02", "T03", "T04", "T05", "T06", "T07", "T08", "T09",
+    // 48 to 70: socials.
+    "S06", "S07", "S08", "S09", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17",
+    "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28",
+    // 71 to 73: stances.
+    "P08", "O02", "O03",
+];
+
+/// The clip a server animation number plays; None for a number without one.
+fn action_clip(action: u16) -> Option<&'static str> {
+    ACTION_CLIPS
+        .get(usize::from(action).checked_sub(1)?)
+        .copied()
 }
 
 /// WLD clip names documented by `EQEmu`; presentation never changes network position.
@@ -380,13 +517,147 @@ mod tests {
     #[test]
     fn a_corpse_lies_in_the_death_clips_last_frame_whatever_its_posture() {
         use eq_client_core::PostureState;
-        let (clip, start) = chosen_clip(true, Some(PostureState::Standing), true);
+        let swing = Gesture::Swing {
+            clip: "C05",
+            since: 0.1,
+        };
+        let (clip, pinned) = chosen_clip(true, Some(PostureState::Standing), true, Some(swing));
         assert_eq!(clip, ("D05", true));
-        assert!(start > 1000.0);
+        assert!(pinned.is_some_and(|seconds| seconds > 1000.0));
         assert_eq!(
-            chosen_clip(false, Some(PostureState::Sitting), false),
-            (("P02", true), 0.0)
+            chosen_clip(false, Some(PostureState::Sitting), false, None),
+            (("P02", true), None)
         );
+    }
+
+    #[test]
+    fn the_servers_animation_numbers_play_eqemus_documented_clips() {
+        assert_eq!(action_clip(5), Some("C05"));
+        assert_eq!(action_clip(8), Some("C08"));
+        assert_eq!(action_clip(43), Some("T05"));
+        assert_eq!(action_clip(1), Some("C01"));
+        assert_eq!(action_clip(16), Some("D05"));
+        assert_eq!(action_clip(26), Some("O01"));
+        assert_eq!(action_clip(48), Some("S06"));
+        assert_eq!(action_clip(71), Some("P08"));
+        assert_eq!(action_clip(73), Some("O03"));
+        for none in [0, 74, 76, u16::MAX] {
+            assert_eq!(action_clip(none), None, "{none}");
+        }
+        // The postures this module plays agree with the table.
+        for (action, posture) in [(32, "P01"), (33, "P02"), (36, "P05"), (17, "L01")] {
+            assert_eq!(action_clip(action), Some(posture));
+        }
+    }
+
+    #[test]
+    fn a_swing_plays_once_over_the_stance_and_walk_but_not_over_a_posture() {
+        use eq_client_core::PostureState;
+        let swing = Some(Gesture::Swing {
+            clip: "C05",
+            since: 0.25,
+        });
+        for moving in [false, true] {
+            assert_eq!(
+                chosen_clip(false, Some(PostureState::Standing), moving, swing),
+                (("C05", true), Some(0.25))
+            );
+        }
+        assert_eq!(
+            chosen_clip(false, None, true, swing),
+            (("C05", true), Some(0.25))
+        );
+        for (posture, shown) in [
+            (PostureState::Sitting, ("P02", true)),
+            (PostureState::Lying, ("D05", true)),
+            (PostureState::Looting, ("P05", true)),
+            (PostureState::Ducking, ("L08", true)),
+        ] {
+            assert_eq!(
+                chosen_clip(false, Some(posture), false, swing),
+                (shown, None)
+            );
+            assert_eq!(
+                chosen_clip(false, Some(posture), false, Some(Gesture::Cast("T05"))),
+                (shown, None)
+            );
+        }
+        // A cast loops its gesture; with nothing to play the stance shows.
+        assert_eq!(
+            chosen_clip(
+                false,
+                Some(PostureState::Standing),
+                true,
+                Some(Gesture::Cast("T04"))
+            ),
+            (("T04", false), None)
+        );
+        assert_eq!(
+            chosen_clip(false, Some(PostureState::Standing), true, None),
+            (("L01", false), None)
+        );
+    }
+
+    fn motion(count: u64, action: u16) -> eq_client_core::world::Motion {
+        eq_client_core::world::Motion {
+            action,
+            speed: 1.0,
+            count,
+        }
+    }
+
+    #[test]
+    fn a_new_swing_plays_from_its_start_until_its_clip_ends() {
+        let length = |clip: &str| match clip {
+            "C05" => Some(0.8),
+            "T05" => Some(1.2),
+            _ => None,
+        };
+        // The swing already there when the character is first drawn is over.
+        let mut swings = Swings::default();
+        swings.follow(Some(motion(3, 5)), 0.0);
+        assert_eq!(swings.gesture(None, length), None);
+        // A new one plays from its start, and a second alike restarts it.
+        swings.follow(Some(motion(4, 5)), 0.1);
+        assert_eq!(
+            swings.gesture(None, length),
+            Some(Gesture::Swing {
+                clip: "C05",
+                since: 0.0
+            })
+        );
+        swings.follow(Some(motion(4, 5)), 0.5);
+        swings.follow(Some(motion(5, 5)), 0.1);
+        assert_eq!(
+            swings.gesture(None, length),
+            Some(Gesture::Swing {
+                clip: "C05",
+                since: 0.0
+            })
+        );
+        // It ends with its clip, and the cast's gesture shows again.
+        swings.follow(Some(motion(5, 5)), 0.5);
+        assert!(matches!(
+            swings.gesture(Some("T05"), length),
+            Some(Gesture::Swing { since, .. }) if (since - 0.5).abs() < 0.0001
+        ));
+        swings.follow(Some(motion(5, 5)), 0.3);
+        assert_eq!(swings.gesture(None, length), None);
+        assert_eq!(
+            swings.gesture(Some("T05"), length),
+            Some(Gesture::Cast("T05"))
+        );
+        // A model without the clip plays neither a swing nor the gesture.
+        swings.follow(Some(motion(6, 8)), 0.1);
+        assert_eq!(swings.gesture(Some("T04"), length), None);
+        // A character first drawn before any motion plays the first one.
+        let mut fresh = Swings::default();
+        fresh.follow(None, 0.1);
+        fresh.follow(Some(motion(7, 5)), 0.1);
+        assert!(matches!(
+            fresh.gesture(None, length),
+            Some(Gesture::Swing { clip: "C05", .. })
+        ));
     }
 
     #[test]
