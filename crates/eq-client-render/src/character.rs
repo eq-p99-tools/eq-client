@@ -281,7 +281,6 @@ pub(super) fn animate(
     mut held_items: HeldItems,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let now = std::time::Instant::now();
     let world = online.world();
     for (transform, mut character, remote, own, corpse) in &mut characters {
         let id = remote.map(|entity| entity.id).or_else(|| {
@@ -295,9 +294,21 @@ pub(super) fn animate(
             > 0.0001;
         character.previous_position = transform.translation;
         let dt = time.delta_secs().min(0.1);
-        character
-            .swings
-            .follow(id.and_then(|id| world.motion_of(id)), dt);
+        // The latest of the spawn's swing and its completed cast, which
+        // plays its spell's casting gesture.
+        let latest = id.and_then(|id| {
+            let swing = world
+                .motion_of(id)
+                .map(|motion| (motion.count, motion.action));
+            let cast = world.completed_cast_of(id).and_then(|done| {
+                Some((
+                    done.count,
+                    spells.casting_animation(u32::from(done.spell_id))?,
+                ))
+            });
+            swing.max(cast)
+        });
+        character.swings.follow(latest, dt);
         if posture == Some(eq_client_core::PostureState::Frozen) {
             continue;
         }
@@ -312,12 +323,9 @@ pub(super) fn animate(
             continue;
         }
         character.since_pose = 0.0;
-        let cast = id
-            .and_then(|id| world.cast_by(id, now))
-            .and_then(|spell| spells.casting_animation(spell));
         let gesture = character
             .swings
-            .gesture(cast, |clip| character.asset.clip_seconds(clip));
+            .gesture(|clip| character.asset.clip_seconds(clip));
         let (selected, pinned) = chosen_clip(corpse, posture, character.moving_for > 0.0, gesture);
         if selected != character.clip {
             character.clip = selected;
@@ -361,65 +369,56 @@ pub(super) fn animate(
     }
 }
 
-/// What a character plays over its stance and walk: a swing the server
-/// sent, once, or the gesture of a cast under way, for as long as it lasts.
+/// What a character plays once over its stance and walk: a swing the
+/// server sent, or the casting gesture of a cast it completed.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Gesture {
-    /// A swing's clip, and how far into it the character is.
-    Swing {
-        /// The clip, such as `C05`.
-        clip: &'static str,
-        /// Seconds since the swing came.
-        since: f32,
-    },
-    /// The casting gesture's clip, looped.
-    Cast(&'static str),
+struct Gesture {
+    /// The clip, such as `C05`.
+    clip: &'static str,
+    /// Seconds since it came.
+    since: f32,
 }
 
-/// The swings the server sent for one character, as its animation follows
-/// them.
+/// The swings the server sent for one character and the casts it completed,
+/// as its animation follows them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Swings {
     /// Whether the character has followed the world's motions yet.
     followed: bool,
-    /// The latest motion's count and animation number, and the seconds
-    /// since it came.
+    /// The latest swing's or completed cast's count and animation number,
+    /// and the seconds since it came.
     latest: Option<(u64, u16, f32)>,
 }
 
 impl Swings {
-    /// Follows the world's latest motion for the character over a frame of
-    /// `dt` seconds. A new one starts from its beginning, two alike in a row
+    /// Follows the world's latest swing or completed cast for the
+    /// character, its count and animation number, over a frame of `dt`
+    /// seconds. A new one starts from its beginning, two alike in a row
     /// included; the one already there when the character was first drawn
     /// came before it and is over.
-    fn follow(&mut self, motion: Option<eq_client_core::world::Motion>, dt: f32) {
+    fn follow(&mut self, news: Option<(u64, u16)>, dt: f32) {
         let latest = self
             .latest
             .map(|(count, action, since)| (count, action, since + dt));
-        self.latest = match motion {
-            Some(motion) if latest.is_none_or(|(count, ..)| count != motion.count) => {
+        self.latest = match news {
+            Some((count, action)) if latest.is_none_or(|(last, ..)| last != count) => {
                 let since = if self.followed { 0.0 } else { f32::INFINITY };
-                Some((motion.count, motion.action, since))
+                Some((count, action, since))
             }
             _ => latest,
         };
         self.followed = true;
     }
 
-    /// What the character plays over its stance: the latest swing until its
-    /// clip ends, else the casting gesture of a cast under way, `cast` being
-    /// its animation number. Each plays the clip the model has for it
-    /// (`length` gives none for a clip the model lacks).
-    fn gesture(&self, cast: Option<u16>, length: impl Fn(&str) -> Option<f32>) -> Option<Gesture> {
-        let has = |clip: &str| length(clip).is_some();
-        let swing = self.latest.and_then(|(_, action, since)| {
-            let clip = played_clip(action, has)?;
-            (since < length(clip)?).then_some(Gesture::Swing { clip, since })
-        });
-        swing.or_else(|| {
-            cast.and_then(|action| played_clip(action, has))
-                .map(Gesture::Cast)
-        })
+    /// What the character plays over its stance: the latest swing or
+    /// casting gesture until its clip ends, in the clip the model has for it
+    /// (`length` gives none for a clip the model lacks). Nothing plays
+    /// during a cast, only once it completes, as the official client does
+    /// (checked against it, 10-14).
+    fn gesture(&self, length: impl Fn(&str) -> Option<f32>) -> Option<Gesture> {
+        let (_, action, since) = self.latest?;
+        let clip = played_clip(action, |clip| length(clip).is_some())?;
+        (since < length(clip)?).then_some(Gesture { clip, since })
     }
 }
 
@@ -427,9 +426,9 @@ impl Swings {
 /// rather than run on from when the clip was chosen. A corpse lies as it
 /// fell, in the death clip's last frame, rather than falling each time it is
 /// drawn (a held clip stays on its last frame). Sitting, lying, looting and
-/// ducking show their posture; otherwise a swing plays once over the stance
-/// and the walk alike, its clips being the whole body's (inferred), and a
-/// cast loops its gesture.
+/// ducking show their posture; otherwise a swing or a completed cast's
+/// gesture plays once over the stance and the walk alike, its clips being
+/// the whole body's (inferred).
 fn chosen_clip(
     corpse: bool,
     posture: Option<eq_client_core::PostureState>,
@@ -450,8 +449,7 @@ fn chosen_clip(
         )
     );
     match gesture {
-        Some(Gesture::Swing { clip, since }) if !posed => ((clip, true), Some(since)),
-        Some(Gesture::Cast(clip)) if !posed => ((clip, false), None),
+        Some(Gesture { clip, since }) if !posed => ((clip, true), Some(since)),
         _ => (posture_clip(posture, moving), None),
     }
 }
@@ -535,7 +533,7 @@ mod tests {
     #[test]
     fn a_corpse_lies_in_the_death_clips_last_frame_whatever_its_posture() {
         use eq_client_core::PostureState;
-        let swing = Gesture::Swing {
+        let swing = Gesture {
             clip: "C05",
             since: 0.1,
         };
@@ -604,7 +602,7 @@ mod tests {
     #[test]
     fn a_swing_plays_once_over_the_stance_and_walk_but_not_over_a_posture() {
         use eq_client_core::PostureState;
-        let swing = Some(Gesture::Swing {
+        let swing = Some(Gesture {
             clip: "C05",
             since: 0.25,
         });
@@ -628,95 +626,61 @@ mod tests {
                 chosen_clip(false, Some(posture), false, swing),
                 (shown, None)
             );
-            assert_eq!(
-                chosen_clip(false, Some(posture), false, Some(Gesture::Cast("T05"))),
-                (shown, None)
-            );
         }
-        // A cast loops its gesture; with nothing to play the stance shows.
-        assert_eq!(
-            chosen_clip(
-                false,
-                Some(PostureState::Standing),
-                true,
-                Some(Gesture::Cast("T04"))
-            ),
-            (("T04", false), None)
-        );
+        // With nothing to play the stance or walk shows.
         assert_eq!(
             chosen_clip(false, Some(PostureState::Standing), true, None),
             (("L01", false), None)
         );
     }
 
-    fn motion(count: u64, action: u16) -> eq_client_core::world::Motion {
-        eq_client_core::world::Motion {
-            action,
-            speed: 1.0,
-            count,
-        }
-    }
-
     #[test]
-    fn a_new_swing_plays_from_its_start_until_its_clip_ends() {
+    fn a_new_swing_or_completed_cast_plays_from_its_start_until_its_clip_ends() {
         let length = |clip: &str| match clip {
             "C05" => Some(0.8),
             "T05" => Some(1.2),
             _ => None,
         };
+        let playing = |clip, since| Some(Gesture { clip, since });
         // The swing already there when the character is first drawn is over.
         let mut swings = Swings::default();
-        swings.follow(Some(motion(3, 5)), 0.0);
-        assert_eq!(swings.gesture(None, length), None);
+        swings.follow(Some((3, 5)), 0.0);
+        assert_eq!(swings.gesture(length), None);
         // A new one plays from its start, and a second alike restarts it.
-        swings.follow(Some(motion(4, 5)), 0.1);
-        assert_eq!(
-            swings.gesture(None, length),
-            Some(Gesture::Swing {
-                clip: "C05",
-                since: 0.0
-            })
-        );
-        swings.follow(Some(motion(4, 5)), 0.5);
-        swings.follow(Some(motion(5, 5)), 0.1);
-        assert_eq!(
-            swings.gesture(None, length),
-            Some(Gesture::Swing {
-                clip: "C05",
-                since: 0.0
-            })
-        );
-        // It ends with its clip, and the cast's gesture shows again.
-        swings.follow(Some(motion(5, 5)), 0.5);
+        swings.follow(Some((4, 5)), 0.1);
+        assert_eq!(swings.gesture(length), playing("C05", 0.0));
+        swings.follow(Some((4, 5)), 0.5);
+        swings.follow(Some((5, 5)), 0.1);
+        assert_eq!(swings.gesture(length), playing("C05", 0.0));
+        // It ends with its clip, and the stance shows again.
+        swings.follow(Some((5, 5)), 0.5);
         assert!(matches!(
-            swings.gesture(Some(43), length),
-            Some(Gesture::Swing { since, .. }) if (since - 0.5).abs() < 0.0001
+            swings.gesture(length),
+            Some(Gesture { since, .. }) if (since - 0.5).abs() < 0.0001
         ));
-        swings.follow(Some(motion(5, 5)), 0.3);
-        assert_eq!(swings.gesture(None, length), None);
-        assert_eq!(swings.gesture(Some(43), length), Some(Gesture::Cast("T05")));
+        swings.follow(Some((5, 5)), 0.3);
+        assert_eq!(swings.gesture(length), None);
+        // A completed cast plays its gesture once the same way.
+        swings.follow(Some((6, 43)), 0.1);
+        assert_eq!(swings.gesture(length), playing("T05", 0.0));
+        swings.follow(Some((6, 43)), 1.3);
+        assert_eq!(swings.gesture(length), None);
         // A model without the clip plays the lowest of its kind it has.
-        swings.follow(Some(motion(6, 8)), 0.1);
-        assert_eq!(
-            swings.gesture(Some(42), length),
-            Some(Gesture::Swing {
-                clip: "C05",
-                since: 0.0
-            })
-        );
-        swings.follow(Some(motion(6, 8)), 0.8);
-        assert_eq!(swings.gesture(Some(42), length), Some(Gesture::Cast("T05")));
+        swings.follow(Some((7, 8)), 0.1);
+        assert_eq!(swings.gesture(length), playing("C05", 0.0));
+        swings.follow(Some((8, 42)), 0.1);
+        assert_eq!(swings.gesture(length), playing("T05", 0.0));
         // One with none of its kind plays nothing for it.
         let bare = |clip: &str| (clip == "P01").then_some(1.0);
-        swings.follow(Some(motion(7, 8)), 0.1);
-        assert_eq!(swings.gesture(Some(42), bare), None);
-        // A character first drawn before any motion plays the first one.
+        swings.follow(Some((9, 8)), 0.1);
+        assert_eq!(swings.gesture(bare), None);
+        // A character first drawn before any swing or cast plays the first.
         let mut fresh = Swings::default();
         fresh.follow(None, 0.1);
-        fresh.follow(Some(motion(8, 5)), 0.1);
+        fresh.follow(Some((10, 5)), 0.1);
         assert!(matches!(
-            fresh.gesture(None, length),
-            Some(Gesture::Swing { clip: "C05", .. })
+            fresh.gesture(length),
+            Some(Gesture { clip: "C05", .. })
         ));
     }
 

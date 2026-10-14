@@ -539,17 +539,20 @@ from the installed assets; live posture acknowledgements remain unverified.
 
 Swings, kicks and the other one-shot motions the server sends for a spawn in
 view, the player's own included, play their clip once over the stance and the
-walk, and a new one starts it again. A cast under way, anyone's, loops the
-casting gesture the installed `spells_us.txt` names for its spell, from the
-cast's beginning until it lands, is interrupted, or runs a second past its cast
-time. Neither plays over sitting, lying, looting, crouching or a corpse. Each
+walk, and a new one starts it again. A cast plays nothing while it runs; when
+its spell lands, anyone's cast included, the caster plays once the casting
+gesture the installed `spells_us.txt` names for the spell, as the official
+client does. An interrupted cast, a fizzle, and a landing with no cast under way
+(a proc, or a cast begun before the caster came into view) play nothing; the
+last two are inferred. Neither plays over sitting, lying, looting, crouching or
+a corpse. Each
 of the servers' animation numbers plays the clip EQEmu's documented table gives
 it, at normal speed whatever speed the server sends. A model without that clip
 plays the lowest-numbered clip of the same kind it has, for an attack (1 to 11)
 or a casting gesture (42 to 44), so a creature whose model lacks its own swing
-still swings; for anything else it shows what it would have shown. That the
-official client does the same, over the walk too, is inferred, not yet checked
-against it.
+still swings; for anything else it shows what it would have shown. Apart from
+when the casting gesture plays, which was checked against the official client,
+all of this, over the walk too, is inferred.
 
 Mode-3 server spell-bar refreshes start numeric gem cooldowns. Base recovery and
 recast durations come from the installed `spells_us.txt`; the server's reuse-time
