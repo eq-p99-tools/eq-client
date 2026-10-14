@@ -314,8 +314,7 @@ pub(super) fn animate(
         character.since_pose = 0.0;
         let cast = id
             .and_then(|id| world.cast_by(id, now))
-            .and_then(|spell| spells.casting_animation(spell))
-            .and_then(action_clip);
+            .and_then(|spell| spells.casting_animation(spell));
         let gesture = character
             .swings
             .gesture(cast, |clip| character.asset.clip_seconds(clip));
@@ -408,19 +407,17 @@ impl Swings {
     }
 
     /// What the character plays over its stance: the latest swing until its
-    /// clip ends, else the casting gesture. A model without the clip
-    /// (`length` gives none) plays neither.
-    fn gesture(
-        &self,
-        cast: Option<&'static str>,
-        length: impl Fn(&str) -> Option<f32>,
-    ) -> Option<Gesture> {
+    /// clip ends, else the casting gesture of a cast under way, `cast` being
+    /// its animation number. Each plays the clip the model has for it
+    /// (`length` gives none for a clip the model lacks).
+    fn gesture(&self, cast: Option<u16>, length: impl Fn(&str) -> Option<f32>) -> Option<Gesture> {
+        let has = |clip: &str| length(clip).is_some();
         let swing = self.latest.and_then(|(_, action, since)| {
-            let clip = action_clip(action)?;
+            let clip = played_clip(action, has)?;
             (since < length(clip)?).then_some(Gesture::Swing { clip, since })
         });
         swing.or_else(|| {
-            cast.filter(|clip| length(clip).is_some())
+            cast.and_then(|action| played_clip(action, has))
                 .map(Gesture::Cast)
         })
     }
@@ -493,6 +490,27 @@ fn action_clip(action: u16) -> Option<&'static str> {
         .copied()
 }
 
+/// The clip a model plays for a server animation number: the table's, or
+/// where the model lacks it, the lowest-numbered clip of its kind the model
+/// has. An attack (1 to 11) stands in with another attack, and a casting
+/// gesture (42 to 44) with another casting gesture; anything else the model
+/// lacks plays nothing. Inferred, a recording item: `EQEmu`'s documentation
+/// notes that a number plays differently from one race's model to
+/// another's, and the gnoll's model has no clip for its own hand-to-hand
+/// swing, kick or bash.
+fn played_clip(action: u16, has: impl Fn(&str) -> bool) -> Option<&'static str> {
+    let clip = action_clip(action)?;
+    if has(clip) {
+        return Some(clip);
+    }
+    let kin = match action {
+        1..=11 => 1..=11,
+        42..=44 => 42..=44,
+        _ => return None,
+    };
+    kin.filter_map(action_clip).find(|clip| has(clip))
+}
+
 /// WLD clip names documented by `EQEmu`; presentation never changes network position.
 fn posture_clip(
     posture: Option<eq_client_core::PostureState>,
@@ -548,6 +566,39 @@ mod tests {
         for (action, posture) in [(32, "P01"), (33, "P02"), (36, "P05"), (17, "L01")] {
             assert_eq!(action_clip(action), Some(posture));
         }
+    }
+
+    #[test]
+    fn a_model_lacking_an_attack_or_gesture_plays_the_lowest_of_its_kind_it_has() {
+        // A model like the Qeynos Hills gnoll's: C05, C09 and C10 its only
+        // attacks, and T06 its only casting gesture.
+        let gnoll = |clip: &str| ["C05", "C09", "C10", "D02", "P01", "T06"].contains(&clip);
+        // Its own hand-to-hand swing, kick and bash stand in with its lowest
+        // attack; the attacks it has play as they are.
+        for action in [8, 1, 7, 5] {
+            assert_eq!(played_clip(action, gnoll), Some("C05"), "{action}");
+        }
+        assert_eq!(played_clip(9, gnoll), Some("C09"));
+        // Every casting gesture plays the one it has.
+        for action in [42, 43, 44] {
+            assert_eq!(played_clip(action, gnoll), Some("T06"), "{action}");
+        }
+        // Anything else it lacks, a monk's attack included, plays nothing,
+        // and what it has plays.
+        for action in [12, 27, 33, 39, 46, 74] {
+            assert_eq!(played_clip(action, gnoll), None, "{action}");
+        }
+        assert_eq!(played_clip(13, gnoll), Some("D02"));
+        // The lowest-numbered of a kind stands in.
+        let clawed = |clip: &str| ["C02", "C03", "T05", "T06"].contains(&clip);
+        assert_eq!(played_clip(8, clawed), Some("C02"));
+        assert_eq!(played_clip(42, clawed), Some("T05"));
+        // A model with every clip plays the table's.
+        assert_eq!(played_clip(8, |_| true), Some("C08"));
+        assert_eq!(played_clip(44, |_| true), Some("T06"));
+        // One with no attack or gesture at all plays nothing for them.
+        assert_eq!(played_clip(8, |clip| clip == "P01"), None);
+        assert_eq!(played_clip(43, |clip| clip == "P01"), None);
     }
 
     #[test]
@@ -638,22 +689,31 @@ mod tests {
         // It ends with its clip, and the cast's gesture shows again.
         swings.follow(Some(motion(5, 5)), 0.5);
         assert!(matches!(
-            swings.gesture(Some("T05"), length),
+            swings.gesture(Some(43), length),
             Some(Gesture::Swing { since, .. }) if (since - 0.5).abs() < 0.0001
         ));
         swings.follow(Some(motion(5, 5)), 0.3);
         assert_eq!(swings.gesture(None, length), None);
-        assert_eq!(
-            swings.gesture(Some("T05"), length),
-            Some(Gesture::Cast("T05"))
-        );
-        // A model without the clip plays neither a swing nor the gesture.
+        assert_eq!(swings.gesture(Some(43), length), Some(Gesture::Cast("T05")));
+        // A model without the clip plays the lowest of its kind it has.
         swings.follow(Some(motion(6, 8)), 0.1);
-        assert_eq!(swings.gesture(Some("T04"), length), None);
+        assert_eq!(
+            swings.gesture(Some(42), length),
+            Some(Gesture::Swing {
+                clip: "C05",
+                since: 0.0
+            })
+        );
+        swings.follow(Some(motion(6, 8)), 0.8);
+        assert_eq!(swings.gesture(Some(42), length), Some(Gesture::Cast("T05")));
+        // One with none of its kind plays nothing for it.
+        let bare = |clip: &str| (clip == "P01").then_some(1.0);
+        swings.follow(Some(motion(7, 8)), 0.1);
+        assert_eq!(swings.gesture(Some(42), bare), None);
         // A character first drawn before any motion plays the first one.
         let mut fresh = Swings::default();
         fresh.follow(None, 0.1);
-        fresh.follow(Some(motion(7, 5)), 0.1);
+        fresh.follow(Some(motion(8, 5)), 0.1);
         assert!(matches!(
             fresh.gesture(None, length),
             Some(Gesture::Swing { clip: "C05", .. })
