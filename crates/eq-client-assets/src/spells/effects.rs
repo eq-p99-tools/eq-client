@@ -225,11 +225,8 @@ pub fn effect_image(eq_directory: &Path, name: &str) -> Result<image::RgbaImage,
         return Err(EffectsError::InvalidImage(name.to_owned()));
     }
     let path = eq_directory.join("SpellEffects").join(name);
-    let bytes = std::fs::read(&path).map_err(|source| EffectsError::Io {
-        path: path.clone(),
-        source,
-    })?;
-    image::load_from_memory(&bytes)
+    // By path, so the extension names the format: TGA has no magic bytes.
+    image::open(&path)
         .map(image::DynamicImage::into_rgba8)
         .map_err(|source| EffectsError::Image { path, source })
 }
@@ -437,5 +434,19 @@ mod tests {
                 Err(EffectsError::InvalidImage(_))
             ));
         }
+    }
+
+    #[test]
+    fn a_tga_image_reads_by_its_extension() {
+        let install = std::env::temp_dir().join(format!("eq-spell-effects-{}", std::process::id()));
+        std::fs::create_dir_all(install.join("SpellEffects")).unwrap();
+        image::RgbaImage::from_pixel(8, 4, image::Rgba([9, 8, 7, 255]))
+            .save(install.join("SpellEffects/spark.tga"))
+            .unwrap();
+        let read = effect_image(&install, "spark.tga");
+        std::fs::remove_dir_all(&install).unwrap();
+        let pixels = read.expect("the tga reads");
+        assert_eq!(pixels.dimensions(), (8, 4));
+        assert_eq!(pixels.get_pixel(0, 0).0, [9, 8, 7, 255]);
     }
 }

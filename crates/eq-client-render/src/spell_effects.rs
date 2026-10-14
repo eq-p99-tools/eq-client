@@ -316,10 +316,7 @@ fn draw(
         let Some(material) = particles.material(&spray.emitter.image, materials, images) else {
             return;
         };
-        let mesh = meshes.add(Mesh::new(
-            bevy::mesh::PrimitiveTopology::TriangleList,
-            RenderAssetUsages::RENDER_WORLD,
-        ));
+        let mesh = meshes.add(spray_mesh());
         let entity = commands
             .spawn((
                 Mesh3d(mesh.clone()),
@@ -336,12 +333,25 @@ fn draw(
         return;
     };
     if let Some(mut mesh) = meshes.get_mut(handle) {
-        let quads = spray.particles.quads(&spray.emitter, facing);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, quads.positions);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, quads.uvs);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, quads.colors);
-        mesh.insert_indices(bevy::mesh::Indices::U32(quads.indices));
+        rewrite(&mut mesh, spray.particles.quads(&spray.emitter, facing));
     }
+}
+
+/// A spray's mesh. It is rewritten every frame, so it keeps its data in the
+/// main world too: a render-world-only mesh gives its data up at extraction
+/// and the next rewrite would panic.
+fn spray_mesh() -> Mesh {
+    Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+}
+
+fn rewrite(mesh: &mut Mesh, quads: Quads) {
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, quads.positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, quads.uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, quads.colors);
+    mesh.insert_indices(bevy::mesh::Indices::U32(quads.indices));
 }
 
 impl SpellParticles {
@@ -633,5 +643,23 @@ mod tests {
         assert!(late.uvs[0][1] >= 0.75);
         assert!(late.colors[0][3] < 0.5);
         assert!(late.colors[0][0] < late.colors[0][2]);
+    }
+
+    #[test]
+    fn a_spray_mesh_takes_a_rewrite_after_each_extraction() {
+        let emitter = emitter(10.0, 1.0);
+        let mut particles = Particles::new(6);
+        let mut room = TOTAL_CAP;
+        particles.step(&emitter, Vec3::ZERO, 0.5, true, &mut room);
+        let mut mesh = spray_mesh();
+        for _ in 0..2 {
+            rewrite(&mut mesh, particles.quads(&emitter, (Vec3::X, Vec3::Y)));
+            // What extraction does each frame: a render-world-only mesh
+            // gives its data up, any other is copied.
+            if mesh.asset_usage == RenderAssetUsages::RENDER_WORLD {
+                mesh.take_gpu_data().expect("the first extraction");
+            }
+        }
+        assert_eq!(mesh.count_vertices(), 4 * particles.len());
     }
 }
