@@ -3131,7 +3131,7 @@ fn label(
 }
 
 /// Text in a box the skin sizes, aligned in it as the skin aligns it, on
-/// one line.
+/// one line in the middle of the box's height.
 pub(crate) fn aligned(
     window: &mut ChildSpawnerCommands,
     mut node: Node,
@@ -3143,6 +3143,10 @@ pub(crate) fn aligned(
         Align::Center => JustifyContent::Center,
         Align::Right => JustifyContent::FlexEnd,
     };
+    // The one line sits in the middle of the box's height, so a box taller
+    // than its text, such as a gem's name row, doesn't leave it at the top
+    // (inferred, recording item 6.220).
+    node.align_items = AlignItems::Center;
     node.overflow = Overflow::clip();
     window
         .spawn(node)
@@ -4776,6 +4780,46 @@ mod tests {
             .iter(world)
             .map(|(entity, shows)| (*shows, entity))
             .collect()
+    }
+
+    #[test]
+    fn a_line_of_text_sits_in_the_middle_of_a_taller_box() {
+        use bevy::ecs::system::RunSystemOnce;
+        for (align, justify) in [
+            (Align::Left, JustifyContent::FlexStart),
+            (Align::Center, JustifyContent::Center),
+            (Align::Right, JustifyContent::FlexEnd),
+        ] {
+            let mut app = App::new();
+            app.world_mut()
+                .run_system_once(move |mut commands: Commands| {
+                    commands.spawn(Node::default()).with_children(|window| {
+                        // A gem's name row in the Velious skin: 23 tall.
+                        aligned(
+                            window,
+                            at(25.0, 15.0, 95.0, 23.0),
+                            align,
+                            Text::new("Courage"),
+                        );
+                    });
+                })
+                .unwrap();
+            let mut texts = app.world_mut().query::<(Entity, &Text, &ChildOf)>();
+            let (line, row) = texts
+                .iter(app.world())
+                .find(|(_, text, _)| text.0 == "Courage")
+                .map(|(line, _, parent)| (line, parent.parent()))
+                .unwrap();
+            let node = app.world().get::<Node>(row).unwrap();
+            assert_eq!(node.align_items, AlignItems::Center);
+            // Across, the line keeps the skin's alignment, and the box keeps
+            // the skin's size.
+            assert_eq!(node.justify_content, justify);
+            assert_eq!(node.width, Val::Px(95.0));
+            assert_eq!(node.height, Val::Px(23.0));
+            let layout = app.world().get::<TextLayout>(line).unwrap();
+            assert_eq!(layout.linebreak, LineBreak::NoWrap);
+        }
     }
 
     #[test]
