@@ -168,7 +168,19 @@ pub(crate) fn cover<'a>(
                     ..default()
                 })
                 .with_children(|line| {
-                    theme::label(line, screen.line.as_deref().unwrap_or(WORD), Size::Large);
+                    // A shadow keeps the line legible over the picture's
+                    // art. Ours, like its place and colour (6.222).
+                    line.spawn((
+                        theme::text(
+                            screen.line.as_deref().unwrap_or(WORD),
+                            Size::Large,
+                            theme::INK_BRIGHT,
+                        ),
+                        TextShadow {
+                            offset: Vec2::splat(2.0),
+                            color: Color::BLACK,
+                        },
+                    ));
                 });
         });
     });
