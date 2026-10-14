@@ -277,6 +277,22 @@ impl CharacterAsset {
         codes
     }
 
+    /// How long a clip takes to play once, such as `C05`: its longest
+    /// track's frames times their interval. None where the model lacks it.
+    #[must_use]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a track has far fewer frames than an f32 counts exactly"
+    )]
+    pub fn clip_seconds(&self, animation: &str) -> Option<f32> {
+        self.clips
+            .get(animation)?
+            .iter()
+            .flatten()
+            .map(|track| track.frames.len() as f32 * track.interval)
+            .reduce(f32::max)
+    }
+
     /// Samples a clip, or the base pose when the clip is unavailable.
     /// No root motion is applied to the entity; movement remains owned by simulation.
     pub fn pose(&self, animation: &str, seconds: f32) -> Vec<CharacterPose> {
@@ -651,6 +667,42 @@ mod tests {
             assert!((asset.pose_held("P02", time)[0].positions[0][0] - 1.0).abs() < 0.0001);
         }
         assert!((asset.pose_held("missing", 10.0)[0].positions[0][0] - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn a_clip_lasts_as_long_as_its_longest_track() {
+        let still = LocalTransform {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+        };
+        let track = |frames: usize, interval: f32| {
+            Some(AnimationTrack {
+                frames: vec![still; frames],
+                interval,
+            })
+        };
+        let asset = CharacterAsset {
+            name: "synthetic".into(),
+            primitives: Vec::new(),
+            textures: Vec::new(),
+            materials: Vec::new(),
+            pieces: Vec::new(),
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None, Some(0), Some(0)],
+            base_pose: vec![still; 3],
+            clips: HashMap::from([
+                ("C05".into(), vec![track(4, 0.1), None, track(10, 0.08)]),
+                ("P01".into(), vec![None, None, None]),
+            ]),
+            skins: Vec::new(),
+            attachments: [None; 3],
+        };
+        assert!((asset.clip_seconds("C05").unwrap() - 0.8).abs() < 0.0001);
+        // A clip with no tracks, or none at all, has no length.
+        assert_eq!(asset.clip_seconds("P01"), None);
+        assert_eq!(asset.clip_seconds("C08"), None);
     }
 
     #[test]

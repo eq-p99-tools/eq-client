@@ -20,6 +20,10 @@ pub struct Definition {
     pub range: Option<f32>,
     /// Fields 14 and 15: recovery and same-spell reuse, in milliseconds.
     pub timing: Option<Timing>,
+    /// Field 120: the motion the caster plays while casting, as the
+    /// servers' animation number, such as 42 to 44 for the three casting
+    /// gestures.
+    pub casting_animation: Option<u16>,
     /// The spell's numeric mechanics.
     pub mechanics: Option<Mechanics>,
 }
@@ -78,6 +82,7 @@ impl Definitions {
                         recovery_ms,
                         recast_ms,
                     }),
+                casting_animation: fields.get(120).and_then(|field| field.parse().ok()),
                 mechanics: Mechanics::from_fields(&fields),
             };
             spells.insert(id, definition);
@@ -106,6 +111,7 @@ mod tests {
         fields[14] = "2250";
         fields[15] = "oops";
         fields[19] = "10";
+        fields[120] = "44";
         fields[144] = "7";
         let spells = Definitions::parse(&format!("{}\nnot a spell\n", fields.join("^")));
         let spell = spells.get(42).expect("parsed");
@@ -113,8 +119,30 @@ mod tests {
         assert_eq!(spell.icon, Some(7));
         assert_eq!(spell.mana, Some(10));
         assert_eq!(spell.cast_ms, Some(1500));
+        assert_eq!(spell.casting_animation, Some(44));
         assert_eq!(spell.range, None);
         assert_eq!(spell.timing, None);
         assert!(spells.get(0).is_none());
+    }
+
+    #[test]
+    fn the_casting_animation_is_field_120_and_stays_unknown_when_malformed() {
+        let mut fields = vec!["0"; 183];
+        fields[0] = "7";
+        fields[119] = "43";
+        fields[120] = "42";
+        fields[121] = "44";
+        let parse = |fields: &[&str]| {
+            Definitions::parse(&fields.join("^"))
+                .get(7)
+                .expect("parsed")
+                .casting_animation
+        };
+        assert_eq!(parse(&fields), Some(42));
+        for malformed in ["", "-1", "70000", "x"] {
+            fields[120] = malformed;
+            assert_eq!(parse(&fields), None, "{malformed:?}");
+        }
+        assert_eq!(parse(&fields[..120]), None);
     }
 }

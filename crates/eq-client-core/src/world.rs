@@ -16,6 +16,7 @@ mod character;
 mod group;
 mod items;
 mod link;
+mod motions;
 mod notice;
 mod raid;
 mod read;
@@ -31,6 +32,7 @@ pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
 pub use items::ItemCache;
 pub use link::Link;
+pub use motions::Motion;
 pub use notice::{ListingNotice, Notice, Party};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
@@ -128,6 +130,8 @@ pub struct ClientWorld {
     characters: Option<CharacterList>,
     /// The last revision given to a spawn, which never repeats.
     revision: u64,
+    /// The last count given to a spawn's motion, which never repeats.
+    motion_count: u64,
     /// Counts the session's spellbook replies, so that two alike still differ.
     book_action_revision: u64,
 
@@ -240,13 +244,15 @@ impl ClientWorld {
         }
     }
 
-    /// Runs the world's clocks: doors the server leaves open swing shut, and
-    /// refreshed gems start their timers once the spells' timing is known.
+    /// Runs the world's clocks: doors the server leaves open swing shut,
+    /// refreshed gems start their timers once the spells' timing is known,
+    /// and casts that nothing ended run out.
     pub fn tick(&mut self, now: Instant, spells: &dyn SpellCatalog) {
         if self.zone.doors.closes_due(now) {
             self.zone.doors.close_due(now);
         }
         self.casting.cooldowns.resolve(spells, now);
+        self.expire_casts(now);
     }
 
     /// The player's choice, from their options, of what a session may leave
@@ -271,6 +277,7 @@ impl ClientWorld {
         *self = Self {
             chosen: std::mem::take(&mut self.chosen),
             revision: self.revision,
+            motion_count: self.motion_count,
             book_action_revision: self.book_action_revision,
             ..Self::default()
         };
@@ -475,6 +482,7 @@ impl ClientWorld {
                 news.notices.push(self.zone.consider(consideration));
             }
             WorldEvent::Damage(damage) => self.damage(damage, news),
+            WorldEvent::Animation(animation) => self.motion_news(*animation, news),
             WorldEvent::TargetSent(id) => self.target_sent(*id, news),
             WorldEvent::TargetRejected {
                 session_id,
@@ -850,6 +858,7 @@ impl ClientWorld {
         if let Ok(id) = u16::try_from(death.spawn_id) {
             self.zone
                 .corpse(id, death.corpse_name.as_deref(), &mut self.revision);
+            self.zone.casts.remove(&id);
         }
         let mut changes = if self
             .player

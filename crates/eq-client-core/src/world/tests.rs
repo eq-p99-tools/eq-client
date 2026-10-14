@@ -683,6 +683,164 @@ fn a_dead_or_disconnected_player_casts_nothing() {
     assert!(world.casting().cast.is_none());
 }
 
+fn swing(spawn_id: u16, action: u16) -> WorldEvent {
+    WorldEvent::Animation(crate::combat::Animation {
+        spawn_id,
+        action,
+        speed: 1.0,
+    })
+}
+
+#[test]
+fn each_spawns_latest_swing_is_kept_with_a_count_that_never_repeats() {
+    let mut world = admitted();
+    assert!(!game(&mut world, swing(5, 5)).ignored);
+    let first = world.motion_of(5).unwrap();
+    assert_eq!((first.action, first.speed), (5, 1.0));
+    // Two alike in a row still differ, and the player's own is kept too.
+    game(&mut world, swing(5, 5));
+    let second = world.motion_of(5).unwrap();
+    assert_eq!(second.action, 5);
+    assert_ne!(second.count, first.count);
+    game(&mut world, swing(9, 8));
+    assert_eq!(world.motion_of(9).map(|motion| motion.action), Some(8));
+    // A spawn not in view is no one's.
+    assert!(game(&mut world, swing(77, 5)).ignored);
+    assert_eq!(world.motion_of(77), None);
+    // The record goes with the spawn, and the zone.
+    game(&mut world, WorldEvent::Despawn(5));
+    assert_eq!(world.motion_of(5), None);
+    game(&mut world, entered(2));
+    assert_eq!(world.motion_of(9), None);
+    // A new session's counts go on from the old one's.
+    let last = second.count.max(world.motion_count);
+    world.restart();
+    game(&mut world, entered(3));
+    game(&mut world, swing(9, 8));
+    assert!(world.motion_of(9).unwrap().count > last);
+}
+
+#[test]
+fn anyones_cast_lasts_from_its_beginning_to_its_landing_or_end() {
+    use std::time::Duration;
+    let mut world = admitted();
+    let start = Instant::now();
+    let at = |world: &mut ClientWorld, event, seconds: f32| {
+        world.apply(
+            &WorldUpdate::Game(event),
+            start + Duration::from_secs_f32(seconds),
+            &NoSpells,
+        )
+    };
+    let began = |caster_id, spell_id| {
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id,
+            spell_id,
+            duration_ms: 3000,
+        })
+    };
+    at(&mut world, began(5, 42), 0.0);
+    assert_eq!(world.cast_by(5, start), Some(42));
+    // Nothing ending it, it lasts its duration and a second more.
+    assert_eq!(
+        world.cast_by(5, start + Duration::from_millis(3999)),
+        Some(42)
+    );
+    assert_eq!(world.cast_by(5, start + Duration::from_secs(4)), None);
+    world.tick(start + Duration::from_secs(5), &NoSpells);
+    assert_eq!(world.cast_by(5, start), None);
+    // A caster's next beginning replaces its last.
+    at(&mut world, began(5, 42), 10.0);
+    at(&mut world, began(5, 43), 11.0);
+    assert_eq!(world.cast_by(5, start + Duration::from_secs(13)), Some(43));
+    // An interruption ends it, and only its caster's.
+    at(&mut world, began(9, 44), 11.0);
+    let interrupted = |caster_id| {
+        WorldEvent::Spell(SpellUpdate::Interrupted {
+            caster_id,
+            message_id: 439,
+            caster_name: None,
+        })
+    };
+    at(&mut world, interrupted(5), 12.0);
+    let now = start + Duration::from_secs(12);
+    assert_eq!(
+        (world.cast_by(5, now), world.cast_by(9, now)),
+        (None, Some(44))
+    );
+    // Its landing ends it, whoever it lands on.
+    at(&mut world, began(5, 42), 12.0);
+    let mut landing = effect(5, 0);
+    landing.caster_id = 5;
+    at(&mut world, WorldEvent::SpellEffect(landing), 13.0);
+    assert_eq!(world.cast_by(5, now), None);
+    // So do a death and the caster leaving, and a spawn not in view casts
+    // nothing.
+    at(&mut world, began(5, 42), 13.0);
+    at(&mut world, began(77, 42), 13.0);
+    assert_eq!(world.cast_by(77, now), None);
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 5,
+            killer_id: 9,
+            corpse_id: 5,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+    );
+    assert_eq!(world.cast_by(5, now), None);
+    at(&mut world, began(5, 42), 14.0);
+    game(&mut world, WorldEvent::Despawn(5));
+    assert_eq!(world.cast_by(5, now), None);
+    // The player's own goes with the zone.
+    assert_eq!(world.cast_by(9, now), Some(44));
+    game(&mut world, entered(2));
+    assert_eq!(world.cast_by(9, now), None);
+}
+
+#[test]
+fn the_players_own_cast_ends_where_their_cast_bar_does() {
+    let mut world = ClientWorld::default();
+    let mut caster = player(9);
+    caster.memorized_spells[0] = Some(42);
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities: Vec::new(),
+            choices: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(caster),
+            far_clip: None,
+        },
+    );
+    connection(&mut world, true, false);
+    let began = WorldEvent::Spell(SpellUpdate::Began {
+        caster_id: 9,
+        spell_id: 42,
+        duration_ms: 3000,
+    });
+    // A gem's refresh ends it, and so does the spell's mana, as TAKP ends
+    // every cast, landed or not.
+    for end in [
+        SpellUpdate::BarRefresh {
+            slot: 0,
+            spell_id: 42,
+            reduction_ms: 0,
+        },
+        SpellUpdate::Mana {
+            spell_id: 42,
+            keep_casting: false,
+        },
+    ] {
+        game(&mut world, began.clone());
+        assert_eq!(world.cast_by(9, Instant::now()), Some(42));
+        game(&mut world, WorldEvent::Spell(end));
+        assert_eq!(world.cast_by(9, Instant::now()), None);
+    }
+}
+
 #[test]
 fn the_profile_restores_gem_timers_and_vitals_at_admission() {
     let mut world = ClientWorld::default();
