@@ -112,6 +112,8 @@ pub(crate) enum Shows {
     Buff(EffectWindow, u32),
     /// The name of the buff on this button of an effects window.
     BuffName(EffectWindow, u32),
+    /// The name of the spell memorized in this gem, counted from 0.
+    GemName(u8),
     /// The player's practice points, which the Training window counts.
     PracticePoints,
     /// The name of the corpse the loot window is open on.
@@ -1878,6 +1880,30 @@ fn buff_label(owner: WindowId, eq_type: Option<u32>) -> Option<(EffectWindow, u3
     effect_window(owner).and(eq_type).and_then(effect_label)
 }
 
+/// The gem, counted from 0, whose spell a label names, by the label's number
+/// (`EQType`): 60 for the first gem to 67 for the eighth, in whichever
+/// window it is. The skins that name their gems' spells give the label
+/// beside each gem these numbers in the gems' order; that the official
+/// client fills them so is inferred.
+fn gem_label(kind: u32) -> Option<u8> {
+    match kind {
+        60..=67 => u8::try_from(kind - 60).ok(),
+        _ => None,
+    }
+}
+
+/// The name of the spell memorized in this gem, or nothing while the gem is
+/// empty.
+fn gem_name(
+    world: &eq_client_core::world::ClientWorld,
+    names: &super::spellbook::SpellNames,
+    gem: u8,
+) -> String {
+    world
+        .gem(usize::from(gem))
+        .map_or_else(String::new, |spell| names.label(spell))
+}
+
 /// Whether a pet command's button shows only while the pet sits (Stand) or
 /// while it does not (Sit); the skin keeps the two in one place.
 fn pet_posture_button(command: &str) -> Option<bool> {
@@ -3063,6 +3089,9 @@ fn label(
             label.align,
             (text, Shows::BuffName(effects, index)),
         ),
+        (Some(kind), _) if let Some(gem) = gem_label(kind) => {
+            aligned(window, node, label.align, (text, Shows::GemName(gem)));
+        }
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
         (None, Some(bag)) => aligned(window, node, label.align, (text, bag)),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
@@ -3268,6 +3297,7 @@ pub(crate) fn show(
                     .map_or_else(String::new, |shown| names.label(shown.spell_id())),
                 None,
             ),
+            Shows::GemName(gem) => (gem_name(world, &names, gem), None),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Offered(coin) => (
                 world
@@ -4694,6 +4724,97 @@ mod tests {
         state.select_target(Some(7));
         assert_eq!(label_text(state.world(), None, 28), "Example");
         assert_eq!(gauge_text(state.world(), 6).0, "Example");
+    }
+
+    /// Draws labels with these numbers into one window, as a skin lays them
+    /// out, and gives each label's text with what it shows.
+    fn draw_labels(app: &mut App, owner: WindowId, kinds: &[u32]) -> Vec<(Shows, Entity)> {
+        use bevy::ecs::system::RunSystemOnce;
+        let inside = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 130.0,
+            height: 215.0,
+        };
+        let kinds = kinds.to_vec();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(|window| {
+                    for kind in &kinds {
+                        let words = Label {
+                            area: Area {
+                                x: 25.0,
+                                y: 15.0,
+                                width: 95.0,
+                                height: 23.0,
+                            },
+                            anchors: None,
+                            eq_type: Some(*kind),
+                            text: String::new(),
+                            color: None,
+                            align: Align::Center,
+                            font: None,
+                            wraps: false,
+                        };
+                        label(window, "Name", &words, &inside, owner);
+                    }
+                });
+            })
+            .unwrap();
+        let world = app.world_mut();
+        world
+            .query_filtered::<(Entity, &Shows), With<Text>>()
+            .iter(world)
+            .map(|(entity, shows)| (*shows, entity))
+            .collect()
+    }
+
+    #[test]
+    fn the_gem_bars_labels_name_the_spell_in_each_gem() {
+        // By number, in the gems' order.
+        assert_eq!(gem_label(59), None);
+        assert_eq!(gem_label(60), Some(0));
+        assert_eq!(gem_label(67), Some(7));
+        assert_eq!(gem_label(68), None);
+        let mut app = crate::testing::app();
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.memorized_spells = [None; 8];
+        player.memorized_spells[0] = Some(42);
+        player.memorized_spells[7] = Some(43);
+        testing::admit(&mut online, 1, player);
+        app.insert_resource(online)
+            .insert_resource(super::super::spellbook::SpellNames::parse(
+                "42^First synthetic spell\n43^Second synthetic spell",
+            ))
+            .add_systems(Update, show);
+        let labels = draw_labels(&mut app, WindowId::Spells, &[60, 61, 67, 28]);
+        let text = |app: &App, shows| {
+            let (_, label) = labels
+                .iter()
+                .find(|(each, _)| *each == shows)
+                .expect("a label showing this");
+            app.world().get::<Text>(*label).unwrap().0.clone()
+        };
+        app.update();
+        assert_eq!(text(&app, Shows::GemName(0)), "First synthetic spell");
+        // An empty gem's label is blank.
+        assert_eq!(text(&app, Shows::GemName(1)), "");
+        assert_eq!(text(&app, Shows::GemName(7)), "Second synthetic spell");
+        // Other numbers keep their own meaning.
+        assert_eq!(text(&app, Shows::Label(28)), "");
+        // Forgotten, the first gem's name goes.
+        testing::spell(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            eq_client_core::SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 42,
+                mode: 2,
+            },
+        );
+        app.update();
+        assert_eq!(text(&app, Shows::GemName(0)), "");
+        assert_eq!(text(&app, Shows::GemName(7)), "Second synthetic spell");
     }
 
     #[test]
