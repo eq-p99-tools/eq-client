@@ -501,7 +501,7 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "click target is not visible");
                     return;
                 };
-                press(entity, *target, &mut buttons, &mut pointers);
+                press(&mut commands, entity, *target, &mut buttons, &mut pointers);
                 let button = if matches!(step, Step::RightClick(_)) {
                     MouseButton::Right
                 } else {
@@ -527,7 +527,7 @@ pub(super) fn drive(
                         script.stop(&mut keys, &mut mouse, "click target is not visible");
                         return;
                     };
-                    press(entity, *target, &mut buttons, &mut pointers);
+                    press(&mut commands, entity, *target, &mut buttons, &mut pointers);
                     mouse.press(MouseButton::Left);
                     script.clicked = Some(MouseButton::Left);
                     script.pressed = Some(entity);
@@ -710,7 +710,13 @@ pub(super) fn drive(
         }
         Step::Hover(target) => {
             match find(*target, &buttons, &layout) {
-                Some(entity) => script.hovering = Some(entity),
+                Some(entity) => {
+                    // A hover rests on the control, even one just clicked.
+                    commands
+                        .entity(entity)
+                        .remove::<super::tooltip::ScriptPressed>();
+                    script.hovering = Some(entity);
+                }
                 None => script.stop(&mut keys, &mut mouse, "hover target is not visible"),
             }
             return;
@@ -1012,8 +1018,18 @@ const fn picks(button: PickButton) -> Option<super::inventory::SplitAction> {
 }
 
 /// Marks a found control pressed, a slider where the setting is to go; the
-/// focus system clears it next frame.
-fn press(entity: Entity, target: ClickTarget, buttons: &mut Buttons, pointers: &mut Pointers) {
+/// focus system clears it next frame. No pointer rests on it, so it shows no
+/// tooltip.
+fn press(
+    commands: &mut Commands,
+    entity: Entity,
+    target: ClickTarget,
+    buttons: &mut Buttons,
+    pointers: &mut Pointers,
+) {
+    commands
+        .entity(entity)
+        .insert(super::tooltip::ScriptPressed);
     let Ok((_, mut interaction, .., (slider, ..))) = buttons.get_mut(entity) else {
         return;
     };
@@ -1242,14 +1258,26 @@ mod tests {
                 .id()
         };
         let closed = button(&mut world, Display::None);
-        let mut state = SystemState::<(Buttons, Layout, Pointers)>::new(&mut world);
-        let (buttons, layout, _) = state.get_mut(&mut world).unwrap();
+        let mut state = SystemState::<(Commands, Buttons, Layout, Pointers)>::new(&mut world);
+        let (_, buttons, layout, _) = state.get_mut(&mut world).unwrap();
         assert_eq!(find(ClickTarget::Give, &buttons, &layout), None);
         let open = button(&mut world, Display::Flex);
-        let (mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
+        let (mut commands, mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
         assert_eq!(find(ClickTarget::Give, &buttons, &layout), Some(open));
-        press(open, ClickTarget::Give, &mut buttons, &mut pointers);
+        press(
+            &mut commands,
+            open,
+            ClickTarget::Give,
+            &mut buttons,
+            &mut pointers,
+        );
+        state.apply(&mut world);
         assert_eq!(world.get::<Interaction>(open), Some(&Interaction::Pressed));
+        assert!(
+            world
+                .get::<super::super::tooltip::ScriptPressed>(open)
+                .is_some()
+        );
         assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
     }
 
