@@ -646,6 +646,19 @@ Development currently uses sibling path dependencies into
 `../network-refactor/eq-network`. Both checkouts contain local, unpublished API
 changes and must be kept together until a coordinated library release.
 
+## Checks
+
+Pull request CI checks only formatting; the full suite (clippy, tests on Linux and
+Windows, the Rust 1.95 build) runs on demand at milestones (Actions > CI > Run
+workflow). Run it locally before opening a pull request:
+
+```console
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo +1.95.0 check --workspace --all-targets --locked
+```
+
 ## License
 
 The original code in this repository is available under the [MIT License](LICENSE).
