@@ -82,6 +82,10 @@ pub enum Step {
     WaitOnline,
     /// Waits until the named zone is admitted with a player present.
     WaitZone(String),
+    /// Waits, for a bounded duration, until the spawn targeted as the step
+    /// starts is an NPC's corpse or has left the zone: a fight's end, however
+    /// long it lasts.
+    WaitDead(Duration),
     /// Runs a game slash command such as `/camp`; chat text is refused.
     Slash(String),
     /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
@@ -383,6 +387,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("create", arguments) => parse_create(arguments)?,
         ("wait_online", []) => Step::WaitOnline,
         ("wait_zone", [zone]) => Step::WaitZone(zone.to_ascii_lowercase()),
+        ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
         ("slash", words) => parse_slash(words)?,
         ("gm", words) => parse_gm(words)?,
         ("chat", words) => parse_chat(words)?,
@@ -1118,6 +1123,21 @@ mod tests {
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
         );
+    }
+
+    #[test]
+    fn a_death_wait_takes_a_time_up_to_the_longest_wait() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("wait_dead 90000\nwait_dead 120000\n", base).unwrap(),
+            [
+                Step::WaitDead(Duration::from_secs(90)),
+                Step::WaitDead(MAX_WAIT),
+            ]
+        );
+        for bad in ["wait_dead", "wait_dead 120001", "wait_dead soon"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

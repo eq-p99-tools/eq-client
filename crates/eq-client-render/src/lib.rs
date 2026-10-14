@@ -688,6 +688,7 @@ fn schedule(app: &mut App) {
                 abilities::needs,
                 outbox::veil,
                 outbox::grey_out,
+                tooltip::end_scripted_presses,
                 tooltip::show,
                 outfit::dress,
                 character::animate,

@@ -63,6 +63,8 @@ pub struct Script {
     /// The control a `hover` step rests the pointer on, until the next click
     /// or hover.
     hovering: Option<Entity>,
+    /// The spawn a `wait_dead` step waits on: the target as it started.
+    awaited: Option<u16>,
 }
 
 struct Follow {
@@ -92,6 +94,7 @@ impl Script {
             focus: None,
             route: None,
             hovering: None,
+            awaited: None,
         }
     }
 
@@ -191,6 +194,7 @@ impl Script {
         self.current = None;
         self.follow = None;
         self.route = None;
+        self.awaited = None;
         info!("Script stopped: {reason}");
     }
 }
@@ -383,6 +387,15 @@ pub(super) fn drive(
         let elapsed = now.saturating_sub(since);
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
+            Step::WaitDead(limit) => {
+                match fallen(online.world(), script.awaited, elapsed, *limit) {
+                    Ok(done) => done,
+                    Err(reason) => {
+                        script.stop(&mut keys, &mut mouse, reason);
+                        return;
+                    }
+                }
+            }
             Step::Approach(range, duration) => {
                 let distance = face(&online, &players, &mut cameras);
                 distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
@@ -488,7 +501,7 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "click target is not visible");
                     return;
                 };
-                press(entity, *target, &mut buttons, &mut pointers);
+                press(&mut commands, entity, *target, &mut buttons, &mut pointers);
                 let button = if matches!(step, Step::RightClick(_)) {
                     MouseButton::Right
                 } else {
@@ -514,7 +527,7 @@ pub(super) fn drive(
                         script.stop(&mut keys, &mut mouse, "click target is not visible");
                         return;
                     };
-                    press(entity, *target, &mut buttons, &mut pointers);
+                    press(&mut commands, entity, *target, &mut buttons, &mut pointers);
                     mouse.press(MouseButton::Left);
                     script.clicked = Some(MouseButton::Left);
                     script.pressed = Some(entity);
@@ -540,6 +553,7 @@ pub(super) fn drive(
         script.release(&mut keys, &mut mouse);
         script.current = None;
         script.route = None;
+        script.awaited = None;
     }
     let Some(step) = script.steps.pop_front() else {
         return;
@@ -696,7 +710,13 @@ pub(super) fn drive(
         }
         Step::Hover(target) => {
             match find(*target, &buttons, &layout) {
-                Some(entity) => script.hovering = Some(entity),
+                Some(entity) => {
+                    // A hover rests on the control, even one just clicked.
+                    commands
+                        .entity(entity)
+                        .remove::<super::tooltip::ScriptPressed>();
+                    script.hovering = Some(entity);
+                }
                 None => script.stop(&mut keys, &mut mouse, "hover target is not visible"),
             }
             return;
@@ -747,6 +767,7 @@ pub(super) fn drive(
             };
             script.route = Some(route);
         }
+        Step::WaitDead(_) => script.awaited = online.world().target().selected,
         Step::WaitServers
         | Step::WaitSelect
         | Step::WaitOnline
@@ -997,8 +1018,18 @@ const fn picks(button: PickButton) -> Option<super::inventory::SplitAction> {
 }
 
 /// Marks a found control pressed, a slider where the setting is to go; the
-/// focus system clears it next frame.
-fn press(entity: Entity, target: ClickTarget, buttons: &mut Buttons, pointers: &mut Pointers) {
+/// focus system clears it next frame. No pointer rests on it, so it shows no
+/// tooltip.
+fn press(
+    commands: &mut Commands,
+    entity: Entity,
+    target: ClickTarget,
+    buttons: &mut Buttons,
+    pointers: &mut Pointers,
+) {
+    commands
+        .entity(entity)
+        .insert(super::tooltip::ScriptPressed);
     let Ok((_, mut interaction, .., (slider, ..))) = buttons.get_mut(entity) else {
         return;
     };
@@ -1075,6 +1106,31 @@ fn arrived(step: &Step, online: &super::online::OnlineState, covered: bool) -> b
     }
 }
 
+/// Whether the spawn a `wait_dead` step waits on has fallen: an NPC's
+/// corpse now, which the servers leave under the dying NPC's own spawn ID,
+/// or gone from the zone. With nothing targeted as the step started, or
+/// once its time is up, the script stops for the reason given.
+fn fallen(
+    world: &eq_client_core::world::ClientWorld,
+    awaited: Option<u16>,
+    elapsed: Duration,
+    limit: Duration,
+) -> Result<bool, &'static str> {
+    let Some(awaited) = awaited else {
+        return Err("wait_dead needs a target");
+    };
+    if world
+        .spawn(awaited)
+        .is_none_or(|spawn| spawn.state.kind == eq_client_core::SpawnKind::NpcCorpse)
+    {
+        Ok(true)
+    } else if elapsed > limit {
+        Err("the target did not die in time")
+    } else {
+        Ok(false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1091,6 +1147,72 @@ mod tests {
         assert!(arrived(&zone, &online, false));
         assert!(arrived(&Step::WaitOnline, &online, false));
         assert!(!arrived(&Step::WaitZone("qeynos2".into()), &online, false));
+    }
+
+    /// A zone with the player (7) and three gnolls (9 to 11) in it, and a
+    /// gnoll's death.
+    fn gnolls() -> (
+        crate::online::OnlineState,
+        impl Fn(u32) -> eq_client_core::WorldEvent,
+    ) {
+        use crate::online::testing;
+        let mut online = crate::online::OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        for spawn_id in 9..=11 {
+            let mut gnoll = testing::pet(spawn_id, 7);
+            gnoll.pet_owner = None;
+            testing::spawn_entry(&mut online, spawn_id, gnoll);
+        }
+        let death = |spawn_id| {
+            eq_client_core::WorldEvent::Death(eq_client_core::Death {
+                spawn_id,
+                killer_id: 7,
+                corpse_id: spawn_id,
+                bind_zone_id: 0,
+                corpse_name: None,
+            })
+        };
+        (online, death)
+    }
+
+    #[test]
+    fn a_death_wait_ends_once_its_target_is_a_corpse_or_gone() {
+        use crate::online::testing;
+        let (mut online, death) = gnolls();
+        let (soon, limit) = (Duration::from_secs(1), Duration::from_secs(90));
+        assert_eq!(fallen(online.world(), Some(9), soon, limit), Ok(false));
+        // Another spawn's death leaves it waiting.
+        testing::news(&mut online, [death(10)]);
+        assert_eq!(fallen(online.world(), Some(9), soon, limit), Ok(false));
+        // The target's own does not: its corpse keeps its spawn ID.
+        testing::news(&mut online, [death(9)]);
+        assert_eq!(fallen(online.world(), Some(9), soon, limit), Ok(true));
+        // A target that leaves the zone ends it too.
+        assert_eq!(fallen(online.world(), Some(11), soon, limit), Ok(false));
+        testing::news(&mut online, [eq_client_core::WorldEvent::Despawn(11)]);
+        assert_eq!(fallen(online.world(), Some(11), soon, limit), Ok(true));
+    }
+
+    #[test]
+    fn a_death_wait_stops_without_a_target_or_once_its_time_is_up() {
+        let (online, _) = gnolls();
+        let limit = Duration::from_secs(90);
+        // Nothing targeted as it started: it stops at once.
+        assert_eq!(
+            fallen(online.world(), None, Duration::ZERO, limit),
+            Err("wait_dead needs a target")
+        );
+        // Still fighting at the limit, it waits; past it, it stops.
+        assert_eq!(fallen(online.world(), Some(9), limit, limit), Ok(false));
+        assert_eq!(
+            fallen(
+                online.world(),
+                Some(9),
+                limit + Duration::from_millis(1),
+                limit
+            ),
+            Err("the target did not die in time")
+        );
     }
 
     #[test]
@@ -1136,14 +1258,26 @@ mod tests {
                 .id()
         };
         let closed = button(&mut world, Display::None);
-        let mut state = SystemState::<(Buttons, Layout, Pointers)>::new(&mut world);
-        let (buttons, layout, _) = state.get_mut(&mut world).unwrap();
+        let mut state = SystemState::<(Commands, Buttons, Layout, Pointers)>::new(&mut world);
+        let (_, buttons, layout, _) = state.get_mut(&mut world).unwrap();
         assert_eq!(find(ClickTarget::Give, &buttons, &layout), None);
         let open = button(&mut world, Display::Flex);
-        let (mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
+        let (mut commands, mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
         assert_eq!(find(ClickTarget::Give, &buttons, &layout), Some(open));
-        press(open, ClickTarget::Give, &mut buttons, &mut pointers);
+        press(
+            &mut commands,
+            open,
+            ClickTarget::Give,
+            &mut buttons,
+            &mut pointers,
+        );
+        state.apply(&mut world);
         assert_eq!(world.get::<Interaction>(open), Some(&Interaction::Pressed));
+        assert!(
+            world
+                .get::<super::super::tooltip::ScriptPressed>(open)
+                .is_some()
+        );
         assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
     }
 

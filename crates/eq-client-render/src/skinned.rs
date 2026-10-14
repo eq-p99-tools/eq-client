@@ -112,6 +112,8 @@ pub(crate) enum Shows {
     Buff(EffectWindow, u32),
     /// The name of the buff on this button of an effects window.
     BuffName(EffectWindow, u32),
+    /// The name of the spell memorized in this gem, counted from 0.
+    GemName(u8),
     /// The player's practice points, which the Training window counts.
     PracticePoints,
     /// The name of the corpse the loot window is open on.
@@ -1878,6 +1880,30 @@ fn buff_label(owner: WindowId, eq_type: Option<u32>) -> Option<(EffectWindow, u3
     effect_window(owner).and(eq_type).and_then(effect_label)
 }
 
+/// The gem, counted from 0, whose spell a label names, by the label's number
+/// (`EQType`): 60 for the first gem to 67 for the eighth, in whichever
+/// window it is. The skins that name their gems' spells give the label
+/// beside each gem these numbers in the gems' order; that the official
+/// client fills them so is inferred.
+fn gem_label(kind: u32) -> Option<u8> {
+    match kind {
+        60..=67 => u8::try_from(kind - 60).ok(),
+        _ => None,
+    }
+}
+
+/// The name of the spell memorized in this gem, or nothing while the gem is
+/// empty.
+fn gem_name(
+    world: &eq_client_core::world::ClientWorld,
+    names: &super::spellbook::SpellNames,
+    gem: u8,
+) -> String {
+    world
+        .gem(usize::from(gem))
+        .map_or_else(String::new, |spell| names.label(spell))
+}
+
 /// Whether a pet command's button shows only while the pet sits (Stand) or
 /// while it does not (Sit); the skin keeps the two in one place.
 fn pet_posture_button(command: &str) -> Option<bool> {
@@ -1976,12 +2002,7 @@ fn button(
     let Some(does) = does(button.id.as_deref().unwrap_or_default(), owner) else {
         return;
     };
-    let area = match does {
-        Does::Buff(_, index) if !button.placed => stacked(button.area, index, inside),
-        _ => button.anchors.map_or(button.area, |anchors| {
-            anchors.within(inside.width, inside.height)
-        }),
-    };
+    let area = button_area(button, does, inside);
     let node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -2040,22 +2061,37 @@ fn button(
     });
 }
 
-/// Where an effects window's button goes when the skin gives it no place:
-/// down the window's left edge a row each, a pixel apart, then on in the
-/// next column, so it lines up with the rows of the skins that leave their
-/// buttons unplaced and name each buff beside it. How the official client
-/// places them is not checked yet.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "a window holds few rows"
-)]
-fn stacked(area: Area, index: u32, inside: &Area) -> Area {
-    let pitch = area.height + 1.0;
-    let rows = (((inside.height + 1.0) / pitch).floor() as u32).max(1);
+/// Where a skin's button sits in its window: where the skin places it or
+/// its anchors put it. A buff slot the skin does neither for, an effects
+/// window's or the pet window's, is stacked ([`stacked`]); any other such
+/// button keeps the skin's default place, the window's top left.
+fn button_area(button: &eq_client_assets::sidl::Button, does: Does, inside: &Area) -> Area {
+    let slot = match does {
+        Does::Buff(_, index) => Some(index),
+        Does::PetBuff(slot) => u32::try_from(slot).ok(),
+        _ => None,
+    };
+    match slot {
+        Some(slot) if !button.placed && button.anchors.is_none() => {
+            stacked(button.area, slot, inside)
+        }
+        _ => button.anchors.map_or(button.area, |anchors| {
+            anchors.within(inside.width, inside.height)
+        }),
+    }
+}
+
+/// Where a buff slot's button goes when the skin gives it no place and no
+/// anchors: down the window's right edge in one column, a pixel in from the
+/// right and the top and a pixel apart, in the slots' order. Slots past the
+/// window's bottom wait below it, as the skins that leave these buttons
+/// unplaced number their slots on down. That is where those skins draw the
+/// numbered slots, and the project owner saw the official client fill them;
+/// that it places such buttons so is inferred (a recording item).
+fn stacked(area: Area, slot: u32, inside: &Area) -> Area {
     Area {
-        x: to_f32(index / rows) * (area.width + 1.0),
-        y: to_f32(index % rows) * pitch,
+        x: inside.width - area.width - 1.0,
+        y: 1.0 + to_f32(slot) * (area.height + 1.0),
         ..area
     }
 }
@@ -2269,6 +2305,18 @@ fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::B
     ));
 }
 
+/// Where a buff slot's icon goes in its button: where the skin puts the
+/// button's picture (its decal), or else just inside the button at its
+/// height; its left and top, and its size.
+fn buff_icon_place(button: &eq_client_assets::sidl::Button, area: Area) -> ((f32, f32), f32) {
+    if button.decal_area.is_some() {
+        let (x, y, size) = decal_place(button);
+        ((x, y), size)
+    } else {
+        (super::spell_icons::INSET, area.height.min(area.width) - 4.0)
+    }
+}
+
 /// Where a button's picture of an item goes: where the skin puts its
 /// sample picture, or else just inside the button; its left, top and size.
 fn decal_place(button: &eq_client_assets::sidl::Button) -> (f32, f32, f32) {
@@ -2321,9 +2369,11 @@ fn caption(
         }
         Does::HotButton(index) => hotbar::contents(inner, index),
         Does::PetBuff(slot) => {
-            inner.spawn(super::spell_icons::artwork(
+            let (place, size) = buff_icon_place(button, area);
+            inner.spawn(super::spell_icons::artwork_at(
                 super::spell_icons::Source::PetBuff(slot),
-                area.height.min(area.width) - 4.0,
+                place,
+                size,
             ));
         }
         // The spell's picture, where the skin puts its sample, and the
@@ -2347,9 +2397,11 @@ fn caption(
             ));
         }
         Does::Buff(window, index) => {
-            inner.spawn(super::spell_icons::artwork(
+            let (place, size) = buff_icon_place(button, area);
+            inner.spawn(super::spell_icons::artwork_at(
                 super::spell_icons::Source::Window(window, index),
-                area.height.min(area.width) - 4.0,
+                place,
+                size,
             ));
         }
         // A box with a picture shows a value, such as the bank's coins;
@@ -3038,6 +3090,9 @@ fn label(
             label.align,
             (text, Shows::BuffName(effects, index)),
         ),
+        (Some(kind), _) if let Some(gem) = gem_label(kind) => {
+            aligned(window, node, label.align, (text, Shows::GemName(gem)));
+        }
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
         (None, Some(bag)) => aligned(window, node, label.align, (text, bag)),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
@@ -3243,6 +3298,7 @@ pub(crate) fn show(
                     .map_or_else(String::new, |shown| names.label(shown.spell_id())),
                 None,
             ),
+            Shows::GemName(gem) => (gem_name(world, &names, gem), None),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Offered(coin) => (
                 world
@@ -4438,7 +4494,7 @@ mod tests {
     }
 
     #[test]
-    fn unplaced_effects_buttons_stack_down_the_window_a_row_each() {
+    fn unplaced_buff_slots_stack_down_the_windows_right_edge() {
         let button = Area {
             x: 0.0,
             y: 0.0,
@@ -4451,15 +4507,97 @@ mod tests {
             width: 200.0,
             height: 375.0,
         };
-        let place = |index| {
-            let area = stacked(button, index, &window);
+        let place = |slot| {
+            let area = stacked(button, slot, &window);
             (area.x, area.y)
         };
-        assert_eq!(place(0), (0.0, 0.0));
-        assert_eq!(place(1), (0.0, 25.0));
-        // Fifteen rows fill the window; the sixteenth starts a column.
-        assert_eq!(place(14), (0.0, 350.0));
-        assert_eq!(place(15), (25.0, 0.0));
+        // A pixel in from the right and the top, a pixel apart.
+        assert_eq!(place(0), (175.0, 1.0));
+        assert_eq!(place(1), (175.0, 26.0));
+        assert_eq!(place(14), (175.0, 351.0));
+        // One column: the sixteenth waits below the window's bottom.
+        assert_eq!(place(15), (175.0, 376.0));
+        assert_eq!(place(24), (175.0, 601.0));
+    }
+
+    /// A buff button as the effects windows' skins lay them out: no place
+    /// of its own, no anchors and no picture.
+    fn buff_button(width: f32) -> eq_client_assets::sidl::Button {
+        eq_client_assets::sidl::Button {
+            id: Some("Buff1".into()),
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: 24.0,
+            },
+            placed: false,
+            anchors: None,
+            look: ButtonLook::default(),
+            checkbox: false,
+            text: None,
+            text_color: None,
+            font: None,
+            decal: None,
+            decal_area: None,
+            tooltip: None,
+        }
+    }
+
+    #[test]
+    fn an_effects_button_the_skin_anchors_goes_where_its_anchors_put_it() {
+        use eq_client_assets::sidl::{Anchor, Anchors};
+        let window = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 375.0,
+        };
+        let buff = Does::Buff(EffectWindow::Long, 1);
+        let place = |button: &eq_client_assets::sidl::Button| {
+            let area = button_area(button, buff, &window);
+            (area.x, area.y, area.width, area.height)
+        };
+        let mut button = buff_button(24.0);
+        // Neither placed nor anchored: stacked down the right edge, as the
+        // pet window's buff slots are; other buttons keep the window's top
+        // left.
+        assert_eq!(place(&button), (175.0, 26.0, 24.0, 24.0));
+        let pet = button_area(&button, Does::PetBuff(2), &window);
+        assert_eq!((pet.x, pet.y), (175.0, 51.0));
+        let other = button_area(&button, Does::Closes, &window);
+        assert_eq!((other.x, other.y), (0.0, 0.0));
+        // Anchored to the window's right edge, where its anchors put it.
+        button.anchors = Some(Anchors {
+            left: Anchor::End(24.0),
+            top: Anchor::Start(25.0),
+            right: Anchor::End(0.0),
+            bottom: Anchor::Start(49.0),
+        });
+        assert_eq!(place(&button), (176.0, 25.0, 24.0, 24.0));
+        // A placed button stays where the skin placed it.
+        button.anchors = None;
+        button.placed = true;
+        button.area.x = 30.0;
+        assert_eq!(place(&button), (30.0, 0.0, 24.0, 24.0));
+    }
+
+    #[test]
+    fn a_buff_slots_icon_sits_where_the_skin_puts_the_buttons_picture() {
+        let mut button = buff_button(200.0);
+        // No picture: just inside the button, at its height, as before.
+        assert_eq!(
+            buff_icon_place(&button, button.area),
+            (crate::spell_icons::INSET, 20.0)
+        );
+        // A picture on the right: the icon fills it.
+        button.decal_area = Some(Area {
+            x: 176.0,
+            y: 2.0,
+            width: 20.0,
+            height: 20.0,
+        });
+        assert_eq!(buff_icon_place(&button, button.area), ((176.0, 2.0), 20.0));
     }
 
     #[test]
@@ -4595,6 +4733,97 @@ mod tests {
         state.select_target(Some(7));
         assert_eq!(label_text(state.world(), None, 28), "Example");
         assert_eq!(gauge_text(state.world(), 6).0, "Example");
+    }
+
+    /// Draws labels with these numbers into one window, as a skin lays them
+    /// out, and gives each label's text with what it shows.
+    fn draw_labels(app: &mut App, owner: WindowId, kinds: &[u32]) -> Vec<(Shows, Entity)> {
+        use bevy::ecs::system::RunSystemOnce;
+        let inside = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 130.0,
+            height: 215.0,
+        };
+        let kinds = kinds.to_vec();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(|window| {
+                    for kind in &kinds {
+                        let words = Label {
+                            area: Area {
+                                x: 25.0,
+                                y: 15.0,
+                                width: 95.0,
+                                height: 23.0,
+                            },
+                            anchors: None,
+                            eq_type: Some(*kind),
+                            text: String::new(),
+                            color: None,
+                            align: Align::Center,
+                            font: None,
+                            wraps: false,
+                        };
+                        label(window, "Name", &words, &inside, owner);
+                    }
+                });
+            })
+            .unwrap();
+        let world = app.world_mut();
+        world
+            .query_filtered::<(Entity, &Shows), With<Text>>()
+            .iter(world)
+            .map(|(entity, shows)| (*shows, entity))
+            .collect()
+    }
+
+    #[test]
+    fn the_gem_bars_labels_name_the_spell_in_each_gem() {
+        // By number, in the gems' order.
+        assert_eq!(gem_label(59), None);
+        assert_eq!(gem_label(60), Some(0));
+        assert_eq!(gem_label(67), Some(7));
+        assert_eq!(gem_label(68), None);
+        let mut app = crate::testing::app();
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.memorized_spells = [None; 8];
+        player.memorized_spells[0] = Some(42);
+        player.memorized_spells[7] = Some(43);
+        testing::admit(&mut online, 1, player);
+        app.insert_resource(online)
+            .insert_resource(super::super::spellbook::SpellNames::parse(
+                "42^First synthetic spell\n43^Second synthetic spell",
+            ))
+            .add_systems(Update, show);
+        let labels = draw_labels(&mut app, WindowId::Spells, &[60, 61, 67, 28]);
+        let text = |app: &App, shows| {
+            let (_, label) = labels
+                .iter()
+                .find(|(each, _)| *each == shows)
+                .expect("a label showing this");
+            app.world().get::<Text>(*label).unwrap().0.clone()
+        };
+        app.update();
+        assert_eq!(text(&app, Shows::GemName(0)), "First synthetic spell");
+        // An empty gem's label is blank.
+        assert_eq!(text(&app, Shows::GemName(1)), "");
+        assert_eq!(text(&app, Shows::GemName(7)), "Second synthetic spell");
+        // Other numbers keep their own meaning.
+        assert_eq!(text(&app, Shows::Label(28)), "");
+        // Forgotten, the first gem's name goes.
+        testing::spell(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            eq_client_core::SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 42,
+                mode: 2,
+            },
+        );
+        app.update();
+        assert_eq!(text(&app, Shows::GemName(0)), "");
+        assert_eq!(text(&app, Shows::GemName(7)), "Second synthetic spell");
     }
 
     #[test]
