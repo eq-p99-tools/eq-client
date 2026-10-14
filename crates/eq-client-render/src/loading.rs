@@ -9,11 +9,22 @@
 //!
 //! So the player never sees the old zone hang on while the transfer runs,
 //! the frame freeze while the new zone loads, or the new zone's windows and
-//! spawns pop in. What the official client shows while it loads a zone is
-//! unrecorded, so this look is inferred: character select's cover with one
-//! word on it.
+//! spawns pop in.
+//!
+//! The cover is the installed client's own loading screen where its
+//! generation names one ([`InstalledClient::loading_screen`]): its picture,
+//! with its line from the string table over it. Character select draws the
+//! same screen once Enter World is asked for, so the two read as one. How
+//! the official client fits the picture to a wider window, where its line
+//! sits and in what colour, and whether Enter World shows the same screen
+//! are unrecorded (recording checklist item 6.222), so these are inferred:
+//! the picture keeps its shape at the window's height, centred on black,
+//! with the line near its foot. Without the picture, the cover is this
+//! client's own: a dark screen with one word on it.
 use crate::theme::{self, Size};
 use bevy::prelude::*;
+use eq_client_assets::ui::InstalledClient;
+use std::path::Path;
 
 /// The least time the cover stays once the zone is admitted, so its windows
 /// and the chat have laid out before they show.
@@ -28,7 +39,153 @@ const MOST: f32 = 4.0;
 const STUCK: f32 = 30.0;
 /// Over every window and screen. The cover takes the pointer, so nothing
 /// under it reacts or shows a tooltip.
-const LAYER: i32 = 900;
+pub(crate) const LAYER: i32 = 900;
+
+/// This client's word on its own cover, and on the picture where the
+/// installation's string table lacks the line.
+const WORD: &str = "Loading";
+
+/// How far up the picture its line sits, from the picture's foot, as a
+/// share of its height. Inferred (6.222).
+const LINE_RAISE: f32 = 8.0;
+
+/// What the covers draw: the installed client's loading screen, read once,
+/// or nothing of it where the installation has none.
+#[derive(Resource, Default)]
+pub(crate) struct Screen {
+    /// The picture, and its width over its height.
+    picture: Option<(Handle<Image>, f32)>,
+    /// The line over the picture, in the installed client's words.
+    line: Option<String>,
+}
+
+/// Reads the installed client's loading screen: its picture, and its line
+/// where the string table has it. A missing or unreadable picture leaves
+/// the client's own cover, said once in the log.
+fn read(
+    directory: Option<&Path>,
+    client: InstalledClient,
+    messages: Option<&crate::hud::messages::Messages>,
+) -> Option<(image::RgbaImage, Option<String>)> {
+    let screen = client.loading_screen()?;
+    let directory = directory?;
+    match screen.read_picture(directory) {
+        Ok(pixels) => {
+            let line = messages.and_then(|messages| messages.argument_free(screen.status));
+            Some((pixels, line.map(str::to_owned)))
+        }
+        Err(error) => {
+            warn!("Loading screen picture unavailable, so the cover is plain: {error}");
+            None
+        }
+    }
+}
+
+/// Reads the loading screen at startup, before the cover is drawn.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+fn prepare(
+    settings: Res<crate::ViewerSettings>,
+    messages: Option<Res<crate::hud::messages::Messages>>,
+    mut images: ResMut<Assets<Image>>,
+    mut screen: ResMut<Screen>,
+) {
+    let Some((pixels, line)) = read(
+        settings.0.eq_directory.as_deref(),
+        settings.0.installed_client,
+        messages.as_deref(),
+    ) else {
+        return;
+    };
+    let (width, height) = pixels.dimensions();
+    if width == 0 || height == 0 {
+        return;
+    }
+    #[allow(clippy::cast_precision_loss)] // A picture's sides are far below f32's exact range.
+    let aspect = width as f32 / height as f32;
+    let mut picture = crate::sheets::image(pixels);
+    // Scaled up to the window, the picture is smoothed rather than blocky.
+    picture.sampler = bevy::image::ImageSampler::linear();
+    *screen = Screen {
+        picture: Some((images.add(picture), aspect)),
+        line,
+    };
+}
+
+/// Spawns a full-window cover drawing the loading screen, with `marker`,
+/// shown as `display`: the installed client's picture and line, or this
+/// client's own dark cover with its word.
+pub(crate) fn cover<'a>(
+    commands: &'a mut Commands,
+    screen: &Screen,
+    marker: impl Bundle,
+    display: Display,
+) -> EntityCommands<'a> {
+    let mut root = commands.spawn((
+        marker,
+        Button,
+        GlobalZIndex(LAYER),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            display,
+            ..default()
+        },
+        BackgroundColor(if screen.picture.is_some() {
+            Color::BLACK
+        } else {
+            theme::COVER
+        }),
+    ));
+    root.with_children(|root| {
+        let Some((image, aspect)) = &screen.picture else {
+            theme::label(root, WORD, Size::Large);
+            return;
+        };
+        root.spawn((
+            ImageNode {
+                image: image.clone(),
+                image_mode: NodeImageMode::Stretch,
+                ..default()
+            },
+            Node {
+                height: percent(100),
+                aspect_ratio: Some(*aspect),
+                ..default()
+            },
+        ))
+        .with_children(|picture| {
+            // Placed by its foot: a bottom offset in percent is a share of
+            // the picture's height, where padding would take its width.
+            picture
+                .spawn(Node {
+                    position_type: PositionType::Absolute,
+                    bottom: percent(LINE_RAISE),
+                    width: percent(100),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                })
+                .with_children(|line| {
+                    // A shadow keeps the line legible over the picture's
+                    // art. Ours, like its place and colour (6.222).
+                    line.spawn((
+                        theme::text(
+                            screen.line.as_deref().unwrap_or(WORD),
+                            Size::Large,
+                            theme::INK_BRIGHT,
+                        ),
+                        TextShadow {
+                            offset: Vec2::splat(2.0),
+                            color: Color::BLACK,
+                        },
+                    ));
+                });
+        });
+    });
+    root
+}
 
 /// Where the player stands between zones.
 #[derive(Resource, Default)]
@@ -71,7 +228,8 @@ struct Cover;
 /// zones.
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<Loading>()
-        .add_systems(Startup, spawn)
+        .init_resource::<Screen>()
+        .add_systems(Startup, (prepare, spawn).chain())
         .add_systems(
             Update,
             (track, show)
@@ -81,24 +239,9 @@ pub(crate) fn install(app: &mut App) {
         );
 }
 
-fn spawn(mut commands: Commands) {
-    commands
-        .spawn((
-            Cover,
-            Button,
-            GlobalZIndex(LAYER),
-            Node {
-                position_type: PositionType::Absolute,
-                width: percent(100),
-                height: percent(100),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                display: Display::None,
-                ..default()
-            },
-            BackgroundColor(theme::COVER),
-        ))
-        .with_children(|cover| theme::label(cover, "Loading", Size::Large));
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+fn spawn(mut commands: Commands, screen: Res<Screen>) {
+    cover(&mut commands, &screen, Cover, Display::None);
 }
 
 /// Follows the move between zones: a transfer the server offered puts the
@@ -385,9 +528,75 @@ mod tests {
     }
 
     #[test]
+    fn the_installed_clients_picture_and_line_make_the_cover_or_it_stays_plain() {
+        let install =
+            std::env::temp_dir().join(format!("eq-render-loading-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        std::fs::create_dir_all(install.join("Resources")).unwrap();
+        image::RgbImage::new(64, 48)
+            .save(install.join("Resources/loadscreen.bmp"))
+            .unwrap();
+        let strings = crate::hud::messages::Messages::parse("EQST0002\n0 1\n12387 Example line\n");
+        let titanium = read(Some(&install), InstalledClient::Titanium, Some(&strings));
+        let no_line = read(Some(&install), InstalledClient::Titanium, None);
+        let mac = read(Some(&install), InstalledClient::EqMac, Some(&strings));
+        std::fs::remove_file(install.join("Resources/loadscreen.bmp")).unwrap();
+        let missing = read(Some(&install), InstalledClient::Titanium, Some(&strings));
+        std::fs::remove_dir_all(&install).unwrap();
+        let (pixels, line) = titanium.unwrap();
+        assert_eq!(pixels.dimensions(), (64, 48));
+        assert_eq!(line.as_deref(), Some("Example line"));
+        assert_eq!(no_line.unwrap().1, None);
+        assert!(mac.is_none());
+        assert!(missing.is_none());
+        assert!(read(None, InstalledClient::Titanium, Some(&strings)).is_none());
+    }
+
+    /// The words on the cover, and whether it draws a picture.
+    fn drawn(screen: Screen) -> (Vec<String>, bool) {
+        let mut app = App::new();
+        app.insert_resource(screen).add_systems(Startup, spawn);
+        app.update();
+        let words = app
+            .world_mut()
+            .query::<&Text>()
+            .iter(app.world())
+            .map(|text| text.0.clone())
+            .collect();
+        let pictured = app
+            .world_mut()
+            .query::<&ImageNode>()
+            .iter(app.world())
+            .next()
+            .is_some();
+        (words, pictured)
+    }
+
+    #[test]
+    fn the_cover_draws_the_picture_with_its_line_or_the_word() {
+        assert_eq!(drawn(Screen::default()), (vec![WORD.to_owned()], false));
+        let picture = Some((Handle::default(), 4.0 / 3.0));
+        assert_eq!(
+            drawn(Screen {
+                picture: picture.clone(),
+                line: Some("Example line".into()),
+            }),
+            (vec!["Example line".to_owned()], true)
+        );
+        assert_eq!(
+            drawn(Screen {
+                picture,
+                line: None
+            }),
+            (vec![WORD.to_owned()], true)
+        );
+    }
+
+    #[test]
     fn the_cover_shows_while_the_player_moves_between_zones() {
         let mut app = App::new();
         app.init_resource::<Loading>()
+            .init_resource::<Screen>()
             .add_systems(Startup, spawn)
             .add_systems(Update, show);
         app.update();

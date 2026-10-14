@@ -214,12 +214,52 @@ impl InstalledClient {
         }
     }
 
+    /// What this client shows while it loads a zone, from its own files;
+    /// None until that is checked for this client. The Mac-era client has no
+    /// such picture among its files.
+    #[must_use]
+    pub const fn loading_screen(self) -> Option<LoadingScreen> {
+        match self {
+            Self::Titanium => Some(LoadingScreen {
+                picture: &["Resources", "loadscreen.bmp"],
+                status: 12387,
+            }),
+            Self::EqMac => None,
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
             Self::Titanium => Box::new(Titanium(eq_directory)),
             Self::EqMac => Box::new(Unchecked),
         }
+    }
+}
+
+/// The picture an installed client covers the screen with while it loads a
+/// zone, and the line it writes over it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoadingScreen {
+    /// The picture's file, folder by folder under the installation.
+    pub picture: &'static [&'static str],
+    /// The line, by its id in the client's string table.
+    pub status: u32,
+}
+
+impl LoadingScreen {
+    /// Reads the picture from the installation as RGBA pixels.
+    ///
+    /// # Errors
+    /// Fails if the file cannot be read or decoded.
+    pub fn read_picture(&self, eq_directory: &Path) -> Result<image::RgbaImage, UiLayoutError> {
+        let path = self
+            .picture
+            .iter()
+            .fold(eq_directory.to_path_buf(), |path, part| path.join(part));
+        Ok(image::open(&path)
+            .map_err(|source| UiLayoutError::Image { path, source })?
+            .into_rgba8())
     }
 }
 
@@ -1184,6 +1224,28 @@ MouseSensitivity=4
         let layout = equipment_layout(&install, "sparse");
         std::fs::remove_dir_all(&install).unwrap();
         assert_eq!(layout.unwrap().slots.len(), 22);
+    }
+
+    #[test]
+    fn the_loading_screen_is_titaniums_picture_and_line_and_none_on_the_mac_client() {
+        assert_eq!(InstalledClient::EqMac.loading_screen(), None);
+        let screen = InstalledClient::Titanium.loading_screen().unwrap();
+        assert_eq!(screen.status, 12387);
+        let install = std::env::temp_dir().join(format!("eq-ui-loading-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        assert!(matches!(
+            screen.read_picture(&install),
+            Err(UiLayoutError::Image { .. })
+        ));
+        std::fs::create_dir_all(install.join("Resources")).unwrap();
+        image::RgbImage::new(64, 48)
+            .save(install.join("Resources/loadscreen.bmp"))
+            .unwrap();
+        let picture = screen
+            .read_picture(&install)
+            .map(|pixels| pixels.dimensions());
+        std::fs::remove_dir_all(&install).unwrap();
+        assert_eq!(picture.unwrap(), (64, 48));
     }
 
     #[test]
