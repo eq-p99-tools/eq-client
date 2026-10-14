@@ -2062,12 +2062,18 @@ fn button(
 }
 
 /// Where a skin's button sits in its window: where the skin places it or
-/// its anchors put it. An effects window's button the skin does neither for
-/// is stacked ([`stacked`]).
+/// its anchors put it. A buff slot the skin does neither for, an effects
+/// window's or the pet window's, is stacked ([`stacked`]); any other such
+/// button keeps the skin's default place, the window's top left.
 fn button_area(button: &eq_client_assets::sidl::Button, does: Does, inside: &Area) -> Area {
-    match does {
-        Does::Buff(_, index) if !button.placed && button.anchors.is_none() => {
-            stacked(button.area, index, inside)
+    let slot = match does {
+        Does::Buff(_, index) => Some(index),
+        Does::PetBuff(slot) => u32::try_from(slot).ok(),
+        _ => None,
+    };
+    match slot {
+        Some(slot) if !button.placed && button.anchors.is_none() => {
+            stacked(button.area, slot, inside)
         }
         _ => button.anchors.map_or(button.area, |anchors| {
             anchors.within(inside.width, inside.height)
@@ -2075,22 +2081,17 @@ fn button_area(button: &eq_client_assets::sidl::Button, does: Does, inside: &Are
     }
 }
 
-/// Where an effects window's button goes when the skin gives it no place
-/// and no anchors: down the window's left edge a row each, a pixel apart,
-/// then on in the next column, so it lines up with the rows of the skins
-/// that leave their buttons unplaced and name each buff beside it. How the
-/// official client places them is not checked yet.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "a window holds few rows"
-)]
-fn stacked(area: Area, index: u32, inside: &Area) -> Area {
-    let pitch = area.height + 1.0;
-    let rows = (((inside.height + 1.0) / pitch).floor() as u32).max(1);
+/// Where a buff slot's button goes when the skin gives it no place and no
+/// anchors: down the window's right edge in one column, a pixel in from the
+/// right and the top and a pixel apart, in the slots' order. Slots past the
+/// window's bottom wait below it, as the skins that leave these buttons
+/// unplaced number their slots on down. That is where those skins draw the
+/// numbered slots, and the project owner saw the official client fill them;
+/// that it places such buttons so is inferred (a recording item).
+fn stacked(area: Area, slot: u32, inside: &Area) -> Area {
     Area {
-        x: to_f32(index / rows) * (area.width + 1.0),
-        y: to_f32(index % rows) * pitch,
+        x: inside.width - area.width - 1.0,
+        y: 1.0 + to_f32(slot) * (area.height + 1.0),
         ..area
     }
 }
@@ -4493,7 +4494,7 @@ mod tests {
     }
 
     #[test]
-    fn unplaced_effects_buttons_stack_down_the_window_a_row_each() {
+    fn unplaced_buff_slots_stack_down_the_windows_right_edge() {
         let button = Area {
             x: 0.0,
             y: 0.0,
@@ -4506,15 +4507,17 @@ mod tests {
             width: 200.0,
             height: 375.0,
         };
-        let place = |index| {
-            let area = stacked(button, index, &window);
+        let place = |slot| {
+            let area = stacked(button, slot, &window);
             (area.x, area.y)
         };
-        assert_eq!(place(0), (0.0, 0.0));
-        assert_eq!(place(1), (0.0, 25.0));
-        // Fifteen rows fill the window; the sixteenth starts a column.
-        assert_eq!(place(14), (0.0, 350.0));
-        assert_eq!(place(15), (25.0, 0.0));
+        // A pixel in from the right and the top, a pixel apart.
+        assert_eq!(place(0), (175.0, 1.0));
+        assert_eq!(place(1), (175.0, 26.0));
+        assert_eq!(place(14), (175.0, 351.0));
+        // One column: the sixteenth waits below the window's bottom.
+        assert_eq!(place(15), (175.0, 376.0));
+        assert_eq!(place(24), (175.0, 601.0));
     }
 
     /// A buff button as the effects windows' skins lay them out: no place
@@ -4556,8 +4559,14 @@ mod tests {
             (area.x, area.y, area.width, area.height)
         };
         let mut button = buff_button(24.0);
-        // Neither placed nor anchored: stacked down the left edge.
-        assert_eq!(place(&button), (0.0, 25.0, 24.0, 24.0));
+        // Neither placed nor anchored: stacked down the right edge, as the
+        // pet window's buff slots are; other buttons keep the window's top
+        // left.
+        assert_eq!(place(&button), (175.0, 26.0, 24.0, 24.0));
+        let pet = button_area(&button, Does::PetBuff(2), &window);
+        assert_eq!((pet.x, pet.y), (175.0, 51.0));
+        let other = button_area(&button, Does::Closes, &window);
+        assert_eq!((other.x, other.y), (0.0, 0.0));
         // Anchored to the window's right edge, where its anchors put it.
         button.anchors = Some(Anchors {
             left: Anchor::End(24.0),
