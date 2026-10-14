@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 const ABOVE_HEAD: f32 = 0.6;
 
 /// The top of what a model root draws, in the root's own units: where a
-/// name over it sits. Whatever draws a root sets it.
+/// name over it sits. Whatever draws a root sets it, and an animated model
+/// moves it with the head each pose.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Overhead(pub(crate) f32);
 

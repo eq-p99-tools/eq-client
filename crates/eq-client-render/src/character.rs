@@ -33,6 +33,9 @@ pub(super) struct AnimatedCharacter {
     clip: (&'static str, bool),
     /// The swings the server sent for the spawn drawn.
     swings: Swings,
+    /// How far the model hangs above its root: what lifts a pose's top to
+    /// the root's [`super::names::Overhead`].
+    lift: f32,
 }
 
 /// A corpse: drawn with its race's model, lying as it fell.
@@ -194,6 +197,7 @@ pub(super) fn spawn_on_layers(
         .map(|(index, mesh, _)| (*index, mesh.clone()))
         .collect();
     let (bottom, top) = asset.span().unwrap_or_default();
+    let lift = -feet_offset - bottom;
     // Until gear says otherwise, only the base body and bare head show.
     let shown: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
     let mut parts = Vec::with_capacity(primitives.len());
@@ -203,7 +207,7 @@ pub(super) fn spawn_on_layers(
             // geometry (installed HUM/ERM/ELM/DWM toes extend along it), not
             // the movement root's +Z. Keep protocol heading on the root and
             // turn the model once here.
-            Transform::from_xyz(0.0, -feet_offset - bottom, 0.0)
+            Transform::from_xyz(0.0, lift, 0.0)
                 .with_rotation(Quat::from_rotation_y(eq_client_core::model_yaw())),
             Visibility::Inherited,
         ))
@@ -234,8 +238,8 @@ pub(super) fn spawn_on_layers(
         .entity(parent)
         .add_child(child)
         // The model hangs with its soles at the feet, so its top is this far
-        // above the root.
-        .insert(super::names::Overhead(top - bottom - feet_offset))
+        // above the root until the first pose places it.
+        .insert(super::names::Overhead(top + lift))
         .insert(AnimatedCharacter {
             asset,
             meshes: handles,
@@ -252,17 +256,20 @@ pub(super) fn spawn_on_layers(
             previous_position: Vec3::ZERO,
             clip: ("P01", false),
             swings: Swings::default(),
+            lift,
         });
 }
 
 /// The characters the animation poses, with what decides their clip: the
-/// spawn they draw, whether they are the player, and whether a corpse.
+/// spawn they draw, whether they are the player, and whether a corpse; and
+/// where their name goes.
 type Animated<'w, 's> = Query<
     'w,
     's,
     (
         &'static Transform,
         &'static mut AnimatedCharacter,
+        Option<&'static mut super::names::Overhead>,
         Option<&'static super::entities::RemoteEntity>,
         Has<super::Player>,
         Has<Corpse>,
@@ -283,7 +290,7 @@ pub(super) fn animate(
 ) {
     let now = std::time::Instant::now();
     let world = online.world();
-    for (transform, mut character, remote, own, corpse) in &mut characters {
+    for (transform, mut character, overhead, remote, own, corpse) in &mut characters {
         let id = remote.map(|entity| entity.id).or_else(|| {
             own.then(|| world.player().map(|player| player.spawn_id))
                 .flatten()
@@ -331,6 +338,13 @@ pub(super) fn animate(
             character
                 .asset
                 .pose_with_attachments(clip, character.elapsed, !held, &character.shown);
+        // The name rides just over the head as the pose moves it (inferred,
+        // a recording item); a corpse's stays where its lying body puts it.
+        if let (Some(mut overhead), Some(top), false) =
+            (overhead, character.asset.top(&poses), corpse)
+        {
+            overhead.set_if_neq(super::names::Overhead(top + character.lift));
+        }
         // Held items follow their hand or shield point, and stay hidden on a
         // skeleton without one rather than sitting at the model's origin.
         character.attachments = attachments;
