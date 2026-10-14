@@ -111,15 +111,16 @@ impl ClientWorld {
         }
     }
 
-    /// A spell took effect on someone, which ends its caster's cast; only a
-    /// lasting effect on the player leaves a buff the server has not slotted.
+    /// A spell took effect on someone, which ends its caster's cast and
+    /// completes it if it was under way; only a lasting effect on the player
+    /// leaves a buff the server has not slotted.
     pub(super) fn spell_effect(
         &mut self,
         effect: &SpellEffect,
         (now, spells): (Instant, &dyn SpellCatalog),
         changes: &mut Changes,
     ) {
-        self.landed(effect.caster_id);
+        self.landed(effect.caster_id, now);
         if self.is_player(effect.target_id) {
             if effect.effect_flag == 4
                 && !matches!(effect.spell_id, 0 | u16::MAX)
