@@ -153,15 +153,23 @@ pub(crate) fn cover<'a>(
             Node {
                 height: percent(100),
                 aspect_ratio: Some(*aspect),
-                flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::FlexEnd,
-                align_items: AlignItems::Center,
-                padding: UiRect::bottom(percent(LINE_RAISE)),
                 ..default()
             },
         ))
         .with_children(|picture| {
-            theme::label(picture, screen.line.as_deref().unwrap_or(WORD), Size::Large);
+            // Placed by its foot: a bottom offset in percent is a share of
+            // the picture's height, where padding would take its width.
+            picture
+                .spawn(Node {
+                    position_type: PositionType::Absolute,
+                    bottom: percent(LINE_RAISE),
+                    width: percent(100),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                })
+                .with_children(|line| {
+                    theme::label(line, screen.line.as_deref().unwrap_or(WORD), Size::Large);
+                });
         });
     });
     root
