@@ -32,7 +32,7 @@ pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
 pub use items::ItemCache;
 pub use link::Link;
-pub use motions::Motion;
+pub use motions::{CastDone, Motion};
 pub use notice::{ListingNotice, Notice, Party};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;

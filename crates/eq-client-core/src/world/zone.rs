@@ -39,6 +39,8 @@ pub(super) struct Zone {
     pub(super) motions: BTreeMap<u16, super::Motion>,
     /// The cast each spawn is under, the player's own included.
     pub(super) casts: BTreeMap<u16, super::motions::Cast>,
+    /// The latest cast each spawn completed, the player's own included.
+    pub(super) completions: BTreeMap<u16, super::CastDone>,
 }
 
 impl Zone {
@@ -60,12 +62,13 @@ impl Zone {
         }
     }
 
-    /// A spawn leaves the zone, and its motion and cast with it.
+    /// A spawn leaves the zone, and its motion and casts with it.
     pub(super) fn vanish(&mut self, id: u16) {
         self.spawns.remove(&id);
         self.considered.remove(&id);
         self.motions.remove(&id);
         self.casts.remove(&id);
+        self.completions.remove(&id);
     }
 
     /// The server's word on a spawn the player considered.
