@@ -22,9 +22,12 @@ pub(super) struct Artwork {
     initialized: bool,
 }
 
+/// Where artwork sits in its button when nothing else places it.
+pub(super) const INSET: (f32, f32) = (3.0, 2.0);
+
 /// Child artwork never participates in hit testing; the owning button handles input.
 pub(super) fn artwork(source: Source, size: f32) -> impl Bundle {
-    artwork_at(source, (3.0, 2.0), size)
+    artwork_at(source, INSET, size)
 }
 
 /// Artwork at this place in the button that owns it.

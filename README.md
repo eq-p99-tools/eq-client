@@ -858,6 +858,7 @@ repeatable live or offline checks. One step per line, `#` starts a comment:
 login screen and connects; a script with it opens on the login screen),
 `wait_servers`, `server <name>` (plays on a world of the login server's list),
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
+`wait_dead <ms>` (waits until the spawn targeted as it starts is an NPC's corpse or has left the zone; past the time, or with nothing targeted, the script stops; a player who dies leaves a player's corpse, so a wait on a player runs out its time),
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...` (`click loot <place>` takes the item at a place on the corpse, from 0), `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
 `click character <1-8>`, `click enter_world` and `click quit_game` (the skin's character list), `click chat_tab <tab>` (a chat tab by its label, such as `say` or `ooc`), `click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `click hot_button <1-10>` (a hotbutton of the action bar, the client's own or the skin's), `press delete`,
