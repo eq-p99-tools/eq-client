@@ -1,8 +1,8 @@
 //! What the world knows, for any front end to read; only the session's news
 //! and the player's own choices change it.
 use super::{
-    Camp, Casting, CharacterList, ClientWorld, Exchange, Loot, Merchant, Motion, MotionGrant,
-    ServerList, Spawn, Target, Vitals,
+    Camp, CastDone, Casting, CharacterList, ClientWorld, Exchange, Loot, Merchant, Motion,
+    MotionGrant, ServerList, Spawn, Target, Vitals,
 };
 use crate::{
     BookActionStatus, Coins, Death, PlayerState, PostureState, SpellBook, ZoneOffer,
@@ -259,16 +259,11 @@ impl ClientWorld {
         self.zone.motions.get(&id).copied()
     }
 
-    /// The spell a spawn is casting, the player's own included, from the
-    /// cast's beginning until its landing, an interruption, its death, the
-    /// caster leaving or a second past its duration (inferred).
+    /// The latest cast a spawn completed, the player's own included, while
+    /// it is in view: its spell landed while the cast was under way.
     #[must_use]
-    pub fn cast_by(&self, id: u16, now: std::time::Instant) -> Option<u32> {
-        self.zone
-            .casts
-            .get(&id)
-            .filter(|cast| now < cast.until)
-            .map(|cast| u32::from(cast.spell_id))
+    pub fn completed_cast_of(&self, id: u16) -> Option<CastDone> {
+        self.zone.completions.get(&id).copied()
     }
 
     /// The posture last reported for the player or a spawn.

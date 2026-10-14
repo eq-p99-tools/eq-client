@@ -721,7 +721,7 @@ fn each_spawns_latest_swing_is_kept_with_a_count_that_never_repeats() {
 }
 
 #[test]
-fn anyones_cast_lasts_from_its_beginning_to_its_landing_or_end() {
+fn a_cast_completes_when_its_spell_lands_while_it_is_under_way() {
     use std::time::Duration;
     let mut world = admitted();
     let start = Instant::now();
@@ -739,46 +739,54 @@ fn anyones_cast_lasts_from_its_beginning_to_its_landing_or_end() {
             duration_ms: 3000,
         })
     };
+    let landing = |caster_id| {
+        let mut landing = effect(5, 0);
+        landing.caster_id = caster_id;
+        WorldEvent::SpellEffect(landing)
+    };
+    // A landing with no cast under way completes nothing.
+    at(&mut world, landing(5), 0.0);
+    assert_eq!(world.completed_cast_of(5), None);
+    // Its landing completes it, whoever it lands on, after the caster's
+    // last motion.
+    game(&mut world, swing(5, 5));
     at(&mut world, began(5, 42), 0.0);
-    assert_eq!(world.cast_by(5, start), Some(42));
-    // Nothing ending it, it lasts its duration and a second more.
-    assert_eq!(
-        world.cast_by(5, start + Duration::from_millis(3999)),
-        Some(42)
-    );
-    assert_eq!(world.cast_by(5, start + Duration::from_secs(4)), None);
-    world.tick(start + Duration::from_secs(5), &NoSpells);
-    assert_eq!(world.cast_by(5, start), None);
-    // A caster's next beginning replaces its last.
-    at(&mut world, began(5, 42), 10.0);
-    at(&mut world, began(5, 43), 11.0);
-    assert_eq!(world.cast_by(5, start + Duration::from_secs(13)), Some(43));
-    // An interruption ends it, and only its caster's.
-    at(&mut world, began(9, 44), 11.0);
-    let interrupted = |caster_id| {
+    assert_eq!(world.completed_cast_of(5), None);
+    at(&mut world, landing(5), 2.5);
+    let done = world.completed_cast_of(5).unwrap();
+    assert_eq!(done.spell_id, 42);
+    assert!(done.count > world.motion_of(5).unwrap().count);
+    // The landing that follows for the same cast completes nothing more.
+    at(&mut world, landing(5), 2.6);
+    assert_eq!(world.completed_cast_of(5), Some(done));
+    // Nor does one after the cast ran a second past its duration, nor after
+    // an interruption, a death or the caster's next beginning.
+    at(&mut world, began(5, 43), 10.0);
+    at(&mut world, landing(5), 14.0);
+    at(&mut world, began(5, 43), 20.0);
+    world.tick(start + Duration::from_secs(25), &NoSpells);
+    at(&mut world, landing(5), 22.0);
+    at(&mut world, began(5, 43), 30.0);
+    at(
+        &mut world,
         WorldEvent::Spell(SpellUpdate::Interrupted {
-            caster_id,
+            caster_id: 5,
             message_id: 439,
             caster_name: None,
-        })
-    };
-    at(&mut world, interrupted(5), 12.0);
-    let now = start + Duration::from_secs(12);
-    assert_eq!(
-        (world.cast_by(5, now), world.cast_by(9, now)),
-        (None, Some(44))
+        }),
+        31.0,
     );
-    // Its landing ends it, whoever it lands on.
-    at(&mut world, began(5, 42), 12.0);
-    let mut landing = effect(5, 0);
-    landing.caster_id = 5;
-    at(&mut world, WorldEvent::SpellEffect(landing), 13.0);
-    assert_eq!(world.cast_by(5, now), None);
-    // So do a death and the caster leaving, and a spawn not in view casts
-    // nothing.
-    at(&mut world, began(5, 42), 13.0);
-    at(&mut world, began(77, 42), 13.0);
-    assert_eq!(world.cast_by(77, now), None);
+    at(&mut world, landing(5), 31.5);
+    assert_eq!(world.completed_cast_of(5), Some(done));
+    at(&mut world, began(5, 43), 40.0);
+    at(&mut world, began(5, 44), 40.5);
+    at(&mut world, landing(5), 41.0);
+    assert_eq!(
+        world.completed_cast_of(5).map(|done| done.spell_id),
+        Some(44)
+    );
+    let last = world.completed_cast_of(5);
+    at(&mut world, began(5, 42), 50.0);
     game(
         &mut world,
         WorldEvent::Death(Death {
@@ -789,14 +797,24 @@ fn anyones_cast_lasts_from_its_beginning_to_its_landing_or_end() {
             corpse_name: None,
         }),
     );
-    assert_eq!(world.cast_by(5, now), None);
-    at(&mut world, began(5, 42), 14.0);
+    at(&mut world, landing(5), 51.0);
+    assert_eq!(world.completed_cast_of(5), last);
+    // A spawn not in view completes nothing, and one leaving forgets its
+    // own.
+    at(&mut world, began(77, 42), 60.0);
+    at(&mut world, landing(77), 61.0);
+    assert_eq!(world.completed_cast_of(77), None);
     game(&mut world, WorldEvent::Despawn(5));
-    assert_eq!(world.cast_by(5, now), None);
+    assert_eq!(world.completed_cast_of(5), None);
     // The player's own goes with the zone.
-    assert_eq!(world.cast_by(9, now), Some(44));
+    at(&mut world, began(9, 44), 70.0);
+    at(&mut world, landing(9), 71.0);
+    assert_eq!(
+        world.completed_cast_of(9).map(|done| done.spell_id),
+        Some(44)
+    );
     game(&mut world, entered(2));
-    assert_eq!(world.cast_by(9, now), None);
+    assert_eq!(world.completed_cast_of(9), None);
 }
 
 #[test]
@@ -821,8 +839,14 @@ fn the_players_own_cast_ends_where_their_cast_bar_does() {
         spell_id: 42,
         duration_ms: 3000,
     });
+    let landing = || {
+        let mut landing = effect(5, 0);
+        landing.caster_id = 9;
+        WorldEvent::SpellEffect(landing)
+    };
     // A gem's refresh ends it, and so does the spell's mana, as TAKP ends
-    // every cast, landed or not.
+    // every cast, landed or not, and EQEmu a fizzle; neither completes it,
+    // so a landing after them plays nothing.
     for end in [
         SpellUpdate::BarRefresh {
             slot: 0,
@@ -835,10 +859,17 @@ fn the_players_own_cast_ends_where_their_cast_bar_does() {
         },
     ] {
         game(&mut world, began.clone());
-        assert_eq!(world.cast_by(9, Instant::now()), Some(42));
         game(&mut world, WorldEvent::Spell(end));
-        assert_eq!(world.cast_by(9, Instant::now()), None);
+        game(&mut world, landing());
+        assert_eq!(world.completed_cast_of(9), None);
     }
+    // Its landing first completes it.
+    game(&mut world, began);
+    game(&mut world, landing());
+    assert_eq!(
+        world.completed_cast_of(9).map(|done| done.spell_id),
+        Some(42)
+    );
 }
 
 #[test]

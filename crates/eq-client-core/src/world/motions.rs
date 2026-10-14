@@ -1,7 +1,8 @@
 //! What the spawns in view are doing that a front end shows as motion: each
-//! one's latest swing or other one-shot motion the server sent, and the cast
-//! each one is under, the player's own included. Both are the zone's, so
-//! they go with a spawn that leaves and with the zone.
+//! one's latest swing or other one-shot motion the server sent, and the
+//! latest cast each one completed, the player's own included. The casts
+//! under way are kept only to tell a completion from a stray landing. All
+//! are the zone's, so they go with a spawn that leaves and with the zone.
 use super::{CastNews, Changes, ClientWorld};
 use crate::{SpellUpdate, combat::Animation};
 use std::time::{Duration, Instant};
@@ -20,6 +21,19 @@ pub struct Motion {
     pub speed: f32,
     /// Never the same for two motions, so a front end tells a new swing
     /// from the one before it when the two are alike.
+    pub count: u64,
+}
+
+/// A cast its caster completed: its spell landed while the cast was under
+/// way. The official client plays the casting gesture then, once, and
+/// nothing during the cast (checked against it, 10-14).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastDone {
+    /// The spell cast.
+    pub spell_id: u16,
+    /// Never the same for two completions or motions, so a front end tells
+    /// a new one from the one before it and which of a swing and a
+    /// completion came last.
     pub count: u64,
 }
 
@@ -79,16 +93,36 @@ impl ClientWorld {
     }
 
     /// The player's own cast also ends where their cast bar's does: a gem's
-    /// refresh or the spell's mana ends it, whether the spell landed or not.
+    /// refresh or the spell's mana ends it, whether the spell landed or not,
+    /// completing nothing, since the servers send the same mana change for a
+    /// fizzle or an interruption; the landing, which the caster's own client
+    /// always gets, comes before it for a cast that completes.
     pub(super) fn own_cast_news(&mut self, own_id: u16, news: Option<CastNews>) {
         if matches!(news, Some(CastNews::Refreshed | CastNews::Ended)) {
             self.zone.casts.remove(&own_id);
         }
     }
 
-    /// A spell landed: its caster's cast is over.
-    pub(super) fn landed(&mut self, caster_id: u16) {
-        self.zone.casts.remove(&caster_id);
+    /// A spell landed: its caster's cast is over, and completed if it was
+    /// still under way. The servers send the landing twice for a spell that
+    /// takes hold, and once for each target of a group spell; only the
+    /// first finds the cast under way. A landing with no cast under way,
+    /// such as a proc or a cast whose beginning came before the caster was
+    /// in view, completes nothing (inferred).
+    pub(super) fn landed(&mut self, caster_id: u16, now: Instant) {
+        let Some(cast) = self.zone.casts.remove(&caster_id) else {
+            return;
+        };
+        if now < cast.until {
+            self.motion_count = self.motion_count.wrapping_add(1);
+            self.zone.completions.insert(
+                caster_id,
+                CastDone {
+                    spell_id: cast.spell_id,
+                    count: self.motion_count,
+                },
+            );
+        }
     }
 
     /// Forgets the casts that ran past their time with nothing to end them.
