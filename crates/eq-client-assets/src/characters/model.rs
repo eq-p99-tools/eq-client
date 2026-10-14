@@ -233,6 +233,26 @@ impl CharacterAsset {
         (min <= max).then_some((min, max))
     }
 
+    /// The top of the head in a pose from [`Self::pose_with_attachments`]:
+    /// the highest point of its drawn head pieces, or of everything drawn
+    /// for a model without one, in the pose's units; None when nothing is
+    /// drawn.
+    #[must_use]
+    pub fn top(&self, poses: &[Option<CharacterPose>]) -> Option<f32> {
+        let drawn = || {
+            poses
+                .iter()
+                .zip(&self.pieces)
+                .filter_map(|(pose, piece)| Some((pose.as_ref()?, *piece)))
+        };
+        let head = drawn().any(|(_, piece)| matches!(piece, Piece::Head(_)));
+        drawn()
+            .filter(|(_, piece)| !head || matches!(piece, Piece::Head(_)))
+            .flat_map(|(pose, _)| &pose.positions)
+            .map(|position| position[1])
+            .reduce(f32::max)
+    }
+
     /// The archive the model came from.
     #[must_use]
     pub fn source(&self) -> &Path {
@@ -774,6 +794,38 @@ mod tests {
         let hand = attachments[Attachment::RightHand.index()].unwrap();
         assert!((hand.transform_point3(Vec3::ZERO) - Vec3::new(0.0, 5.0, 0.0)).length() < 0.0001);
         assert!(attachments[Attachment::Shield.index()].is_none());
+    }
+
+    #[test]
+    fn the_top_is_the_drawn_heads_else_the_highest_drawn_point() {
+        let at = |heights: &[f32]| {
+            Some(CharacterPose {
+                positions: heights.iter().map(|y| [0.0, *y, 0.0]).collect(),
+                normals: Vec::new(),
+            })
+        };
+        let asset = CharacterAsset {
+            name: "synthetic".into(),
+            primitives: Vec::new(),
+            textures: Vec::new(),
+            materials: Vec::new(),
+            pieces: vec![Piece::Body(0), Piece::Head(0), Piece::Head(1)],
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: Vec::new(),
+            base_pose: Vec::new(),
+            clips: HashMap::new(),
+            skins: Vec::new(),
+            attachments: [None; 3],
+        };
+        // Arms raised over a lowered head: the name stays with the head.
+        let posed = [at(&[0.0, 6.0]), at(&[3.0, 4.5]), None];
+        assert_eq!(asset.top(&posed), Some(4.5));
+        // A helmed head drawn instead of the bare one.
+        assert_eq!(asset.top(&[at(&[6.0]), None, at(&[5.0])]), Some(5.0));
+        // No head drawn: the top of what is.
+        assert_eq!(asset.top(&[at(&[0.0, 6.0]), None, None]), Some(6.0));
+        assert_eq!(asset.top(&[None, None, None]), None);
     }
 
     #[test]
