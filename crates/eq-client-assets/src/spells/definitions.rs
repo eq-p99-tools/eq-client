@@ -24,6 +24,9 @@ pub struct Definition {
     /// servers' animation number, such as 42 to 44 for the three casting
     /// gestures.
     pub casting_animation: Option<u16>,
+    /// Field 145: the particle effect the installed client draws for the
+    /// spell, by its record in the client's effect file.
+    pub effect: Option<u32>,
     /// The spell's numeric mechanics.
     pub mechanics: Option<Mechanics>,
 }
@@ -83,6 +86,7 @@ impl Definitions {
                         recast_ms,
                     }),
                 casting_animation: fields.get(120).and_then(|field| field.parse().ok()),
+                effect: number(145),
                 mechanics: Mechanics::from_fields(&fields),
             };
             spells.insert(id, definition);
@@ -113,6 +117,7 @@ mod tests {
         fields[19] = "10";
         fields[120] = "44";
         fields[144] = "7";
+        fields[145] = "86";
         let spells = Definitions::parse(&format!("{}\nnot a spell\n", fields.join("^")));
         let spell = spells.get(42).expect("parsed");
         assert_eq!(spell.name.as_deref(), Some("Synthetic spell"));
@@ -120,6 +125,7 @@ mod tests {
         assert_eq!(spell.mana, Some(10));
         assert_eq!(spell.cast_ms, Some(1500));
         assert_eq!(spell.casting_animation, Some(44));
+        assert_eq!(spell.effect, Some(86));
         assert_eq!(spell.range, None);
         assert_eq!(spell.timing, None);
         assert!(spells.get(0).is_none());

@@ -1,6 +1,7 @@
 //! Numeric spell mechanics from the user's patched `spells_us.txt`.
 //! Field positions follow the `SPDat` layout; these are local base values, not server state.
 mod definitions;
+pub mod effects;
 mod magnitude;
 pub mod resources;
 

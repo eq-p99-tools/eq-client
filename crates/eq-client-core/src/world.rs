@@ -15,6 +15,7 @@ mod changes;
 mod character;
 mod group;
 mod items;
+mod landings;
 mod link;
 mod motions;
 mod notice;
@@ -31,6 +32,7 @@ pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTim
 pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
 pub use items::ItemCache;
+pub use landings::Landing;
 pub use link::Link;
 pub use motions::{CastDone, Motion};
 pub use notice::{ListingNotice, Notice, Party};
@@ -144,6 +146,9 @@ pub struct ClientWorld {
     choices: Vec<crate::Capability>,
     zone_name: String,
     far_clip: Option<f32>,
+    /// The spell action flag that says a spell landed on its target, as the
+    /// admission says for its server type; None records no landings.
+    spell_landing_flag: Option<u8>,
     death: Option<Death>,
     /// The HP at or below which the server takes the player as dead, where
     /// it leaves that death to the client's own report; the session names
@@ -430,10 +435,11 @@ impl ClientWorld {
                 zone,
                 player,
                 far_clip,
+                spell_landing_flag,
             } => {
                 return self.entered(
                     (capabilities, choices, *session_id),
-                    (zone, *far_clip),
+                    (zone, *far_clip, *spell_landing_flag),
                     player,
                     now,
                 );
