@@ -12,7 +12,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 29] = [
+const GM_COMMANDS: [&str; 31] = [
     // GM mode on or off: off, the server lets the player go hungry. On, the
     // book and gem commands below act on a player target instead of the GM.
     "gm",
@@ -56,6 +56,11 @@ const GM_COMMANDS: [&str; 29] = [
     "scribespells",
     "maxskills",
     "giveitem",
+    // Another test character's standing with a faction: `faction view` and
+    // `faction review` read it, `factionassociation <id> <amount>` raises
+    // it as a quest reward would, and `faction reset <id>` puts it back.
+    "faction",
+    "factionassociation",
     // Puts them back as they were for another run: a spell taken out of
     // their gems, and every buff taken off them.
     "unmemspell",
@@ -1156,6 +1161,22 @@ mod tests {
                 Step::Gm("giveitem 1001 1".into()),
                 Step::Gm("unmemspell 200".into()),
                 Step::Gm("nukebuffs".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gm_may_read_raise_and_reset_another_test_characters_faction() {
+        assert_eq!(
+            parse(
+                "gm faction view\ngm factionassociation 406 1500\ngm faction reset 406\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Gm("faction view".into()),
+                Step::Gm("factionassociation 406 1500".into()),
+                Step::Gm("faction reset 406".into()),
             ]
         );
     }
