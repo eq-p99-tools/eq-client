@@ -108,10 +108,11 @@ pub(super) fn update(
     buttons: Query<(Ref<Interaction>, &Action)>,
     roots: Query<Entity, With<Root>>,
     mut previous: Local<String>,
-    (mut shown, skinned, front): (
+    (mut shown, skinned, front, screen): (
         ResMut<super::windows::Shown>,
         Res<crate::skinned::Skinned>,
         Res<crate::login::FrontEnd>,
+        Res<crate::loading::Screen>,
     ),
 ) {
     let focused = keys.focused();
@@ -186,7 +187,19 @@ pub(super) fn update(
     for root in &roots {
         commands.entity(root).despawn();
     }
-    if visible {
+    if !visible {
+        return;
+    }
+    // Once Enter World is asked for, the loading screen covers the list
+    // until the zone admits the character and the zone's own cover takes
+    // over, so the two read as one (inferred, 6.222).
+    if online
+        .selection
+        .as_ref()
+        .is_some_and(|selection| selection.submitted)
+    {
+        crate::loading::cover(&mut commands, &screen, Root, Display::Flex);
+    } else {
         spawn(&mut commands, online.selection.as_ref(), status, skinned);
     }
 }
@@ -369,6 +382,7 @@ mod tests {
             .init_resource::<crate::windows::Shown>()
             .init_resource::<crate::skinned::Skinned>()
             .init_resource::<crate::login::FrontEnd>()
+            .init_resource::<crate::loading::Screen>()
             .add_message::<AppExit>()
             .add_systems(Update, update);
         app.world_mut().spawn((
@@ -400,6 +414,14 @@ mod tests {
         );
         app.update();
         assert!(rx.try_recv().is_err());
+        // Entering world, the loading screen covers the list.
+        let layers: Vec<i32> = app
+            .world_mut()
+            .query_filtered::<&GlobalZIndex, With<Root>>()
+            .iter(app.world())
+            .map(|layer| layer.0)
+            .collect();
+        assert_eq!(layers, [crate::loading::LAYER]);
         crate::online::testing::admit(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             8,

@@ -86,7 +86,7 @@ impl Art<'_> {
     }
 }
 
-fn image(pixels: image::RgbaImage) -> Image {
+pub(crate) fn image(pixels: image::RgbaImage) -> Image {
     let (width, height) = pixels.dimensions();
     let mut texture = Image::new(
         bevy::render::render_resource::Extent3d {

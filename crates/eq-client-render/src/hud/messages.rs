@@ -24,6 +24,12 @@ impl Messages {
         Self(StringTable::parse(text))
     }
 
+    /// A string that takes no arguments, in the installed client's words;
+    /// None where the installation lacks it.
+    pub(crate) fn argument_free(&self, id: u32) -> Option<&str> {
+        self.0.argument_free(id)
+    }
+
     /// Why a cast was interrupted, as the chat says it. Interrupt packets
     /// supply a reason ID but no format arguments; never invent them.
     pub(crate) fn interruption(&self, id: u32) -> Said {
