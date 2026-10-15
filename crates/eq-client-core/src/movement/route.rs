@@ -297,6 +297,8 @@ pub struct Route {
     waypoints: VecDeque<Vec3>,
     /// For each waypoint, the closed door the leg to it passes through.
     crossings: VecDeque<Option<u8>>,
+    /// Waypoints reached since the last search finished.
+    reached: usize,
     /// Closed doors the route may pass by opening them.
     doors: Vec<u8>,
     /// Where searches run when not a budget at a time in [`Route::next`].
@@ -352,6 +354,7 @@ impl Route {
             replan: Replan::Ready,
             searched: None,
             timing: None,
+            reached: 0,
         }
     }
 
@@ -449,6 +452,7 @@ impl Route {
         self.search = Some(Search::new(search, None));
         self.waypoints.clear();
         self.crossings.clear();
+        self.reached = 0;
         self.unreachable = false;
         self.partial = false;
         self.best = None;
@@ -509,6 +513,20 @@ impl Route {
     #[must_use]
     pub fn remaining(&self) -> usize {
         self.waypoints.len()
+    }
+
+    /// Waypoints reached since the last search finished, so the one a
+    /// follower heads for is this index in that search's waypoints.
+    #[must_use]
+    pub const fn waypoints_reached(&self) -> usize {
+        self.reached
+    }
+
+    /// Flat distance still to cover from `feet`: the measure a stall is
+    /// judged by.
+    #[must_use]
+    pub fn distance_left(&self, feet: Vec3, goal: Vec3) -> f32 {
+        self.left(feet, goal)
     }
 
     /// Advances the search by up to `budget` positions, then says where to head
@@ -601,6 +619,7 @@ impl Route {
                     self.detoured = None;
                     self.partial = !finished.found;
                     (self.waypoints, self.crossings) = legs.into_iter().unzip();
+                    self.reached = 0;
                 }
                 (Some(spliced), legs) => {
                     self.detoured = Some(finished.found);
@@ -612,6 +631,7 @@ impl Route {
                             self.waypoints.push_front(waypoint);
                             self.crossings.push_front(door);
                         }
+                        self.reached = 0;
                     }
                 }
             }
@@ -637,6 +657,7 @@ impl Route {
             }
             self.waypoints.pop_front();
             self.crossings.pop_front();
+            self.reached += 1;
         }
         let toward = match (self.waypoints.front(), self.crossings.front()) {
             // A door still shut across the next leg is opened before going on.
@@ -1339,6 +1360,22 @@ mod tests {
             .filter(|step| **step == RouteStep::Searching)
             .count();
         assert_eq!(searches, 1);
+    }
+
+    #[test]
+    fn a_follower_reports_where_it_heads_and_how_far_is_left() {
+        let world = open_field();
+        let goal = Vec3::new(20.0, 0.0, 0.0);
+        let mut route = Route::new(Vec3::ZERO, goal, 2.0, 6.0);
+        let steps = ticks(&mut route, &world, goal, 2, |_| Vec3::ZERO);
+        assert!(
+            matches!(steps.last(), Some(RouteStep::Toward(_))),
+            "{steps:?}"
+        );
+        assert_eq!(route.waypoints_reached(), 0);
+        assert!((route.distance_left(Vec3::ZERO, goal) - 20.0).abs() < 0.01);
+        let halfway = Vec3::new(10.0, 0.0, 0.0);
+        assert!((route.distance_left(halfway, goal) - 10.0).abs() < 0.01);
     }
 
     #[test]
