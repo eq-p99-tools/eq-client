@@ -441,6 +441,46 @@ mod tests {
     }
 
     #[test]
+    fn a_door_open_when_planned_and_shut_on_arrival_is_opened_after_the_replan() {
+        let (mut world, door) = doorway(false);
+        world.set_door_obstacles(Vec::new());
+        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
+        let mut feet = start;
+        let mut shut = false;
+        let mut asked = None;
+        for tick in 0..500_u64 {
+            // The door shuts on its own as the walker nears the doorway.
+            if !shut && feet.z > -4.0 {
+                world.set_door_obstacles(vec![(7, Arc::clone(&door))]);
+                shut = true;
+            }
+            match route.next(&world, feet, goal, 256, Duration::from_millis(tick * 150)) {
+                RouteStep::Searching => (),
+                RouteStep::Toward(next) => {
+                    let to = Vec3::new(next.x - feet.x, 0.0, next.z - feet.z).clamp_length_max(3.0);
+                    for _ in 0..3 {
+                        feet = world.step(feet, to / 3.0, 6.0);
+                    }
+                }
+                RouteStep::OpenDoor(id) => {
+                    asked = Some((id, tick));
+                    break;
+                }
+                end => panic!("{end:?} at {feet:?}"),
+            }
+        }
+        let (id, tick) = asked.expect("the shut door is asked for");
+        assert_eq!(id, 7);
+        assert!(shut && feet.z < 0.0, "{feet:?}");
+        // The walker opens it and goes on through.
+        world.set_door_obstacles(Vec::new());
+        let (step, feet) = follow_to_door(&mut route, &world, feet, goal, tick + 1);
+        assert_eq!(step, RouteStep::Arrived);
+        assert!(feet.z > 8.0, "{feet:?}");
+    }
+
+    #[test]
     fn a_door_the_route_may_not_open_is_a_wall() {
         let (world, _) = doorway(false);
         let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));

@@ -1385,14 +1385,15 @@ impl DoorWait {
     }
 }
 
-/// The closed doors a walk may open on its way.
+/// The doors a walk may open on its way, open or shut now: a route consults
+/// them only where one blocks a step, and the walk clicks only a shut one.
 fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
     online
         .world()
         .doors()
         .entries()
         .values()
-        .filter(|door| super::doors::openable(door))
+        .filter(|door| super::doors::swings(door))
         .map(|door| door.id)
         .collect()
 }

@@ -68,11 +68,13 @@ fn hinge_target(door: &eq_client_core::doors::Door) -> Option<f32> {
     })
 }
 
-/// A closed door a route may pass by clicking it, as the player would: one
-/// this client swings open on its hinge, so its open pose is drawn and walked
-/// against. Other mechanisms stay walls to a route.
-pub(super) fn openable(door: &eq_client_core::doors::Door) -> bool {
-    hinge_target(door).is_some() && door.active_endpoint() == Some(false)
+/// A door a route may pass by clicking it while it is shut, as the player
+/// would: one this client swings on its hinge, so its open pose is drawn and
+/// walked against. Its state now does not matter, since an open door shuts
+/// again on its own before the walker may reach it. Other mechanisms stay
+/// walls to a route.
+pub(super) fn swings(door: &eq_client_core::doors::Door) -> bool {
+    hinge_target(door).is_some()
 }
 
 /// Cosmetic interpolation only, half a turn a second; this rate does not drive
@@ -275,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn a_route_may_open_only_a_shut_hinged_door() {
+    fn a_route_may_open_only_a_hinged_door_open_or_shut() {
         let mut door = eq_client_core::doors::Door {
             id: 1,
             model: "DOOR".into(),
@@ -288,18 +290,18 @@ mod tests {
             parameter: 0,
             action: None,
         };
-        assert!(openable(&door));
+        assert!(swings(&door));
         door.action = Some(2);
-        assert!(!openable(&door), "already open");
+        assert!(swings(&door), "open now, shut again later");
         door.action = Some(3);
-        assert!(openable(&door));
+        assert!(swings(&door));
         for open_type in [9, 58, 255] {
-            assert!(!openable(&eq_client_core::doors::Door {
+            assert!(!swings(&eq_client_core::doors::Door {
                 open_type,
                 ..door.clone()
             }));
         }
-        assert!(!openable(&eq_client_core::doors::Door {
+        assert!(!swings(&eq_client_core::doors::Door {
             incline: 90,
             ..door
         }));
