@@ -20,6 +20,22 @@ const SUBSTEP: f32 = 1.0;
 const LEVEL: f32 = 4.0;
 /// Expansions after which a search gives up.
 const MAX_EXPANSIONS: usize = 60_000;
+/// How near its target a walk must end to count as reaching it.
+const LANDING: f32 = 0.25;
+/// How near a blocked step a door must come to be the one in its way.
+const DOOR_REACH: f32 = CELL;
+/// How far across the ground every probe of one expansion reaches from its
+/// feet, which lie within `LANDING` of their cell's centre: a diagonal step
+/// to a neighbour's centre, then the body's own reach, or a door's when a
+/// blocked step looks for one. Obstacles farther away can't change any of
+/// them.
+const NEAR: f32 = CELL * std::f32::consts::SQRT_2
+    + LANDING
+    + if super::BODY_REACH > DOOR_REACH {
+        super::BODY_REACH
+    } else {
+        DOOR_REACH
+    };
 /// Deepest ledge a path drops off, in world units: no deeper than a fall
 /// that does no damage.
 const MAX_DROP: f32 = super::HARMLESS_DROP;
@@ -193,10 +209,8 @@ impl PathSearch {
         self
     }
 
-    /// Weighs the distance still to go by `weight` (at least 1), for measuring
-    /// how many expansions a weighted search saves and how much longer its
-    /// path is; routes the client walks never call it.
-    #[doc(hidden)]
+    /// Weighs the distance still to go by `weight` (at least 1): fewer
+    /// expansions, for a path at most `weight` times the cost of the shortest.
     #[must_use]
     pub fn with_weight(mut self, weight: f32) -> Self {
         self.weight = weight.max(1.0);
@@ -219,7 +233,6 @@ impl PathSearch {
 
     /// Expands up to `budget` positions.
     pub fn advance(&mut self, world: &CollisionWorld, budget: usize) -> PathProgress {
-        let opened = (!self.doors.is_empty()).then(|| world.without_doors(&self.doors));
         for _ in 0..budget {
             let Some(Open { key, .. }) = self.open.pop() else {
                 return PathProgress::Failed;
@@ -239,6 +252,11 @@ impl PathSearch {
             if self.expanded > self.max_expansions {
                 return PathProgress::Failed;
             }
+            // Every walk below stays within reach of the feet, so only nearby
+            // obstacles are tested: the same answers, without visiting every
+            // door's mesh on every probe.
+            let world = &world.near(feet, NEAR);
+            let opened = (!self.doors.is_empty()).then(|| world.without_doors(&self.doors));
             let steps = NEIGHBORS.map(|(di, dj)| {
                 let (i, j) = (key.0.checked_add(di)?, key.1.checked_add(dj)?);
                 let target = self.origin + Vec2::new(f32::from(i), f32::from(j)) * CELL;
@@ -304,7 +322,7 @@ impl PathSearch {
         target: Vec2,
     ) -> Option<(Vec3, u8)> {
         let to = Vec3::new(target.x, feet.y, target.y);
-        let door = world.door_between(&self.doors, feet, to, CELL)?;
+        let door = world.door_between(&self.doors, feet, to, DOOR_REACH)?;
         Some((walk(opened?, feet, target, self.height)?, door))
     }
 
@@ -401,7 +419,7 @@ pub(super) fn walk(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) ->
     for _ in 0..steps {
         feet = world.step(feet, part, height);
     }
-    (Vec2::new(feet.x - to.x, feet.z - to.y).length() < 0.25).then_some(feet)
+    (Vec2::new(feet.x - to.x, feet.z - to.y).length() < LANDING).then_some(feet)
 }
 
 /// Straightens a grid path found from `start` into fewer, longer legs: each
@@ -495,7 +513,7 @@ fn drop(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) -> Option<Vec
     for _ in 0..4 {
         feet = step(&mut airborne, feet, delta / 4.0);
     }
-    if Vec2::new(feet.x - to.x, feet.z - to.y).length() >= 0.25 {
+    if Vec2::new(feet.x - to.x, feet.z - to.y).length() >= LANDING {
         return None;
     }
     // Two seconds of falling reaches terminal speed well past the drop limit.
@@ -514,6 +532,7 @@ fn drop(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) -> Option<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn quad(a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]) -> [[[f32; 3]; 3]; 2] {
         [[a, b, c], [a, c, d]]
@@ -720,6 +739,81 @@ mod tests {
         // Without falls, grounded movement stops at the ledge, so no route drops.
         let grounded = PathSearch::new(high, low, 2.0, 6.0);
         assert_eq!(search(grounded, &world), PathProgress::Failed);
+    }
+
+    #[test]
+    fn a_walk_meets_the_same_obstacles_in_the_world_near_its_start() {
+        // Door slabs around a point, some across its steps and some beyond reach.
+        let world = {
+            let mut world = CollisionWorld::new(floor()).unwrap();
+            let slab = |x: f32, z: f32, along_x: bool| {
+                let (dx, dz) = if along_x { (4.0, 0.0) } else { (0.0, 4.0) };
+                Arc::new(
+                    crate::movement::CollisionMesh::new(quad(
+                        [x, 0.0, z],
+                        [x + dx, 0.0, z + dz],
+                        [x + dx, 8.0, z + dz],
+                        [x, 8.0, z],
+                    ))
+                    .unwrap(),
+                )
+            };
+            world.set_door_obstacles(vec![
+                (1, slab(1.0, -2.0, false)),
+                (2, slab(-3.0, 1.5, true)),
+                (3, slab(-2.5, -3.5, true)),
+                (4, slab(5.5, -2.0, false)),
+                (5, slab(12.0, 0.0, false)),
+            ]);
+            world
+        };
+        let mut blocked = 0;
+        for i in -4_i16..=4 {
+            for j in -4_i16..=4 {
+                let feet = Vec3::new(f32::from(i) * 0.5, 0.0, f32::from(j) * 0.5);
+                let near = world.near(feet, NEAR);
+                assert!(near.obstacle_count() < world.obstacle_count());
+                for (di, dj) in NEIGHBORS {
+                    let target =
+                        Vec2::new(feet.x, feet.z) + Vec2::new(f32::from(di), f32::from(dj)) * CELL;
+                    let whole = walk(&world, feet, target, 6.0);
+                    assert_eq!(
+                        walk(&near, feet, target, 6.0),
+                        whole,
+                        "{feet:?} to {target:?}"
+                    );
+                    blocked += usize::from(whole.is_none());
+                }
+            }
+        }
+        // The doors stood in the way of some of those steps.
+        assert!(blocked > 0);
+    }
+
+    #[test]
+    fn an_obstacle_at_the_edge_of_reach_is_kept_and_one_past_it_is_not() {
+        let slab = |x: f32| {
+            Arc::new(
+                crate::movement::CollisionMesh::new(quad(
+                    [x, 0.0, -2.0],
+                    [x, 0.0, 2.0],
+                    [x, 8.0, 2.0],
+                    [x, 8.0, -2.0],
+                ))
+                .unwrap(),
+            )
+        };
+        let mut world = CollisionWorld::new(floor()).unwrap();
+        world.set_door_obstacles(vec![(1, slab(NEAR)), (2, slab(NEAR + 0.01))]);
+        let near = world.near(Vec3::ZERO, NEAR);
+        assert_eq!(near.obstacle_count(), 1);
+        assert_eq!(
+            near.door_between(&[1, 2], Vec3::ZERO, Vec3::X * NEAR, 0.0),
+            Some(1)
+        );
+        // The kept one is the farthest any probe from here can meet.
+        let reach = CELL * std::f32::consts::SQRT_2 + LANDING;
+        assert!(reach + super::super::BODY_REACH <= NEAR && reach + DOOR_REACH <= NEAR);
     }
 
     #[test]

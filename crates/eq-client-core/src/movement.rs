@@ -11,7 +11,7 @@ pub use falls::{HARMLESS_DROP, fall_damage};
 pub use liquids::{GuardView, Liquid, Liquids};
 pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};
-pub use route::{Background, Route, RouteStep};
+pub use route::{Background, Route, RouteStep, SearchTiming};
 
 #[derive(Clone, Copy)]
 enum Support {
@@ -33,9 +33,24 @@ use std::sync::Arc;
 /// and uneven ground never register as walls.
 const LIFT: f32 = 0.85;
 
+/// The collision capsule's radius.
+const CAPSULE_RADIUS: f32 = 0.4;
+/// How far a sweep stops short of what it hits.
+const SKIN: f32 = 0.03;
+/// How far from the capsule's centre the ground under it is sampled.
+const SUPPORT_SPREAD: f32 = 0.4;
+/// How far across the ground from the feet any one movement probe reaches,
+/// beyond the distance moved: the capsule with its skin, or the ground
+/// samples around it.
+pub(super) const BODY_REACH: f32 = if CAPSULE_RADIUS + SKIN > SUPPORT_SPREAD {
+    CAPSULE_RADIUS + SKIN
+} else {
+    SUPPORT_SPREAD
+};
+
 /// The character's collision capsule at `feet`, floating `LIFT` above them.
 fn body(feet: Vec3, height: f32) -> (Pose, Capsule) {
-    let radius = 0.4;
+    let radius = CAPSULE_RADIUS;
     let center = feet + Vec3::Y * (height * 0.5 + LIFT);
     (
         Pose::translation(center.x, center.y, center.z),
@@ -125,6 +140,36 @@ impl CollisionWorld {
                 .collect(),
             liquids: self.liquids.clone(),
         }
+    }
+
+    /// The same world keeping only the obstacles that come within `reach` of
+    /// `center` across the ground, sharing its geometry. Any movement that
+    /// stays within `reach` of `center` meets exactly what it would in the
+    /// whole world.
+    #[must_use]
+    pub fn near(&self, center: Vec3, reach: f32) -> Self {
+        Self {
+            terrain: Arc::clone(&self.terrain),
+            obstacles: self
+                .obstacles
+                .iter()
+                .filter(|(_, mesh)| {
+                    let bounds = mesh.mesh.local_aabb();
+                    center.x >= bounds.mins.x - reach
+                        && center.x <= bounds.maxs.x + reach
+                        && center.z >= bounds.mins.z - reach
+                        && center.z <= bounds.maxs.z + reach
+                })
+                .cloned()
+                .collect(),
+            liquids: self.liquids.clone(),
+        }
+    }
+
+    /// How many obstacles stand in the world, for diagnostics.
+    #[must_use]
+    pub fn obstacle_count(&self) -> usize {
+        self.obstacles.len()
     }
 
     /// The first of these doors whose collider comes within `margin` of the box
@@ -227,10 +272,10 @@ impl CollisionWorld {
     fn support_height(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
         const OFFSETS: [(f32, f32); 9] = [
             (0.0, 0.0),
-            (0.4, 0.0),
-            (-0.4, 0.0),
-            (0.0, 0.4),
-            (0.0, -0.4),
+            (SUPPORT_SPREAD, 0.0),
+            (-SUPPORT_SPREAD, 0.0),
+            (0.0, SUPPORT_SPREAD),
+            (0.0, -SUPPORT_SPREAD),
             (0.282_842_7, 0.282_842_7),
             (-0.282_842_7, 0.282_842_7),
             (0.282_842_7, -0.282_842_7),
@@ -438,7 +483,7 @@ impl CollisionWorld {
         // goes deeper; one that stops there would pin the character in every direction.
         let options = ShapeCastOptions {
             max_time_of_impact: 1.0,
-            target_distance: 0.03,
+            target_distance: SKIN,
             stop_at_penetration: false,
             compute_impact_geometry_on_penetration: true,
         };

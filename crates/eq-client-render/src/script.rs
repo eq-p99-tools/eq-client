@@ -30,6 +30,12 @@ const MAX_RUNTIME: Duration = Duration::from_mins(15);
 const FOLLOW_POLL: Duration = Duration::from_millis(250);
 /// Path positions searched per frame, keeping each frame short.
 const SEARCH_BUDGET: usize = 1500;
+/// A frame at least this long is logged while a script runs: past it, a
+/// frame shows as a hitch.
+const SLOW_FRAME: Duration = Duration::from_millis(50);
+/// A walk's call into its route at least this long is logged, with what the
+/// route was doing.
+const SLOW_ROUTE_CALL: Duration = Duration::from_millis(5);
 
 /// Remaining steps and the one in progress.
 #[derive(Resource)]
@@ -62,9 +68,13 @@ pub struct Script {
     route: Option<eq_client_core::movement::Route>,
     /// The closed door the walk is opening, if any.
     door_wait: Option<DoorWait>,
-    /// While a walk's route searches: the last frame, and the longest frame
-    /// so far, so the log shows whether the search held frames up.
-    search_frames: Option<(Duration, Duration)>,
+    /// While a walk's route searches: when the search began, the last frame,
+    /// and the longest frame so far, so the log shows how long the walk
+    /// waited and whether the search held frames up.
+    search_frames: Option<SearchFrames>,
+    /// When the last frame ran, so a slow one is logged with what the script
+    /// was doing.
+    last_frame: Option<Duration>,
     /// The control a `hover` step rests the pointer on, until the next click
     /// or hover.
     hovering: Option<Entity>,
@@ -73,6 +83,16 @@ pub struct Script {
     /// The world container an `approach object` or `walk object` step walks
     /// toward, chosen as it started.
     approached: Option<u32>,
+}
+
+/// A walk's frames while its route searches.
+#[derive(Clone, Copy)]
+struct SearchFrames {
+    began: Duration,
+    last: Duration,
+    slowest: Duration,
+    /// Frames so far, counting the one that began the search as 1.
+    count: u32,
 }
 
 struct Follow {
@@ -103,6 +123,7 @@ impl Script {
             route: None,
             door_wait: None,
             search_frames: None,
+            last_frame: None,
             hovering: None,
             awaited: None,
             approached: None,
@@ -337,6 +358,20 @@ pub(super) fn drive(
     }
     let (mut keys, mut mouse) = input;
     let now = time.elapsed();
+    if let Some(last) = script.last_frame.replace(now)
+        && now.saturating_sub(last) >= SLOW_FRAME
+    {
+        let ms = now.saturating_sub(last).as_secs_f32() * 1000.0;
+        let walking = script.route.is_some();
+        let searching = script
+            .route
+            .as_ref()
+            .is_some_and(eq_client_core::movement::Route::is_searching);
+        // The frame just ended was this one since the walk's search began;
+        // with `searching` false, it was the frame that took the result.
+        let search_frame = script.search_frames.map(|frames| frames.count);
+        info!(ms, walking, searching, ?search_frame, "Script slow frame");
+    }
     let started = *script.started.get_or_insert(now);
     if now.saturating_sub(started) > MAX_RUNTIME {
         script.stop(&mut keys, &mut mouse, "maximum runtime reached");
@@ -454,44 +489,77 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
                     return;
                 };
-                let slowest_frame = if script
+                let (waited, slowest_frame) = if script
                     .route
                     .as_ref()
                     .is_some_and(eq_client_core::movement::Route::is_searching)
                 {
-                    let (last, slowest) = script.search_frames.get_or_insert((now, Duration::ZERO));
-                    *slowest = (*slowest).max(now.saturating_sub(*last));
-                    *last = now;
-                    slowest.as_secs_f32() * 1000.0
+                    let frames = script.search_frames.get_or_insert(SearchFrames {
+                        began: now,
+                        last: now,
+                        slowest: Duration::ZERO,
+                        count: 0,
+                    });
+                    frames.slowest = frames.slowest.max(now.saturating_sub(frames.last));
+                    frames.last = now;
+                    frames.count += 1;
+                    (
+                        now.saturating_sub(frames.began).as_secs_f32(),
+                        frames.slowest.as_secs_f32() * 1000.0,
+                    )
                 } else {
                     script.search_frames = None;
-                    0.0
+                    (0.0, 0.0)
                 };
                 let Some(route) = script.route.as_mut() else {
                     script.stop(&mut keys, &mut mouse, "walk lost its route");
                     return;
                 };
                 let searching = route.is_searching();
+                let call = std::time::Instant::now();
                 let step = route.next(world, feet, goal, SEARCH_BUDGET, now);
+                let call = call.elapsed();
+                if call >= SLOW_ROUTE_CALL {
+                    let phase = match (searching, route.is_searching()) {
+                        (true, false) => "result",
+                        (true, true) => "searching",
+                        (false, true) => "search again",
+                        (false, false) => "following",
+                    };
+                    let ms = call.as_secs_f32() * 1000.0;
+                    info!(ms, phase, "Script route call slow");
+                }
                 if searching
                     && !route.is_searching()
                     && let Some(found) = route.detoured()
                 {
                     let (expanded, _) = route.searched().unwrap_or_default();
                     let waypoints = route.remaining();
-                    let waited = elapsed.as_secs_f32();
+                    let timing = route.search_timing().unwrap_or_default();
                     info!(
+                        queued = timing.queued.as_secs_f32(),
+                        ran = timing.ran.as_secs_f32(),
                         found,
-                        expanded, waypoints, waited, slowest_frame, "Script walk detour ready"
+                        expanded,
+                        waypoints,
+                        waited,
+                        slowest_frame,
+                        "Script walk detour ready"
                     );
                 } else if searching && !route.is_searching() {
                     let (waypoints, partial) = (route.remaining(), route.partial());
                     let (expanded, open) = route.searched().unwrap_or_default();
                     let (height, drops) = (route.height(), observed.4.airborne.is_some());
-                    let (reach, waited) = (route.reach(), elapsed.as_secs_f32());
+                    let reach = route.reach();
+                    let timing = route.search_timing().unwrap_or_default();
                     info!(
                         waypoints,
                         waited,
+                        queued = timing.queued.as_secs_f32(),
+                        ran = timing.ran.as_secs_f32(),
+                        obstacles = timing.obstacles,
+                        snapshot_ms = timing.snapshot.as_secs_f32() * 1000.0,
+                        handoff_ms = timing.handoff.as_secs_f32() * 1000.0,
                         slowest_frame,
                         partial,
                         reach,
@@ -959,6 +1027,7 @@ pub(super) fn drive(
                     return;
                 }
             }
+            let creating = std::time::Instant::now();
             let route = bodies.single().ok().and_then(|body| {
                 let (feet, goal) = walk_ends(&online, *body, script.approached)?;
                 // Ledges are routes only where the session simulates falls.
@@ -969,6 +1038,13 @@ pub(super) fn drive(
                         .with_background(std::sync::Arc::new(super::background::ComputePool)),
                 )
             });
+            let creating = creating.elapsed();
+            if creating >= SLOW_ROUTE_CALL {
+                info!(
+                    ms = creating.as_secs_f32() * 1000.0,
+                    "Script walk route made slowly"
+                );
+            }
             let Some(route) = route else {
                 script.stop(&mut keys, &mut mouse, "walk needs a visible target");
                 return;
