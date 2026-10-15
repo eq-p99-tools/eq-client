@@ -326,6 +326,10 @@ pub struct Route {
     searched: Option<(usize, bool)>,
     /// How long the last finished search handed off waited to start, and ran.
     timing: Option<SearchTiming>,
+    /// Where the walker stood before it last moved, and where it stands now
+    /// as last seen: the last sample's path, which can pass a waypoint it
+    /// ends beyond.
+    path: Option<(Vec3, Vec3)>,
 }
 
 impl Route {
@@ -355,6 +359,7 @@ impl Route {
             searched: None,
             timing: None,
             reached: 0,
+            path: None,
         }
     }
 
@@ -543,6 +548,22 @@ impl Route {
         budget: usize,
         now: Duration,
     ) -> RouteStep {
+        self.next_with(world, (feet, false), goal, budget, now)
+    }
+
+    /// [`Route::next`] for a walker that says whether it is falling. Off the
+    /// ground, the next waypoint counts as passed once the feet are within
+    /// about a sample of it across and not above them by more than a riser: the
+    /// fall brings the height, so the walker heads on to the one after it
+    /// instead of turning back under the ledge it dropped from.
+    pub fn next_with(
+        &mut self,
+        world: &CollisionWorld,
+        (feet, falling): (Vec3, bool),
+        goal: Vec3,
+        budget: usize,
+        now: Duration,
+    ) -> RouteStep {
         let tick = self.last_call.map_or(Duration::ZERO, |last| {
             now.saturating_sub(last).min(MAX_TICK)
         });
@@ -550,7 +571,7 @@ impl Route {
         if self.replan == Replan::Stalled {
             return RouteStep::Stalled;
         }
-        let step = self.steer(world, feet, goal, budget);
+        let step = self.steer(world, (feet, falling), goal, budget);
         if !matches!(step, RouteStep::Toward(_)) {
             return step;
         }
@@ -592,7 +613,7 @@ impl Route {
     fn steer(
         &mut self,
         world: &CollisionWorld,
-        feet: Vec3,
+        (feet, falling): (Vec3, bool),
         goal: Vec3,
         budget: usize,
     ) -> RouteStep {
@@ -639,9 +660,23 @@ impl Route {
         if self.unreachable {
             return RouteStep::Unreachable;
         }
+        // The last sample's path: from where the walker stood before its
+        // last move to where it stands now.
+        self.path = match self.path {
+            Some((_, last)) if last != feet => Some((last, feet)),
+            Some(path) => Some(path),
+            None => Some((feet, feet)),
+        };
+        let (from, _) = self.path.unwrap_or((feet, feet));
         while let Some(&waypoint) = self.waypoints.front() {
             let near = |reach: f32| {
                 flat(waypoint - feet) <= reach && (waypoint.y - feet.y).abs() <= MAX_GROUNDED_STEP
+            };
+            // A sample is longer than the reach circle is wide, so it can
+            // end beyond a waypoint it walked through; its path counts.
+            let crossed = || {
+                flat_to_segment(waypoint, from, feet) <= FINAL_REACH
+                    && (waypoint.y - feet.y).abs() <= MAX_GROUNDED_STEP
             };
             // A waypoint behind a wall, or a level up a stair beside the feet, can
             // be close without being reachable; cutting to the next one is only
@@ -652,7 +687,17 @@ impl Route {
                         .is_some_and(|end| (end.y - next.y).abs() <= MAX_GROUNDED_STEP)
                 })
             };
-            if !(near(FINAL_REACH) || near(WAYPOINT_REACH) && shortcut()) {
+            // From mid-air no walk test means anything, and the waypoint
+            // may lie on the floor the fall is bringing the feet down to. A
+            // sample is longer than the half-sample reach is wide, so it
+            // could step over that circle and turn back; one heading straight
+            // at the waypoint always lands within a sample's reach of it.
+            let passed = if falling {
+                flat(waypoint - feet) <= WAYPOINT_REACH && waypoint.y - feet.y <= MAX_GROUNDED_STEP
+            } else {
+                near(FINAL_REACH) || crossed() || near(WAYPOINT_REACH) && shortcut()
+            };
+            if !passed {
                 break;
             }
             self.waypoints.pop_front();
@@ -702,6 +747,22 @@ fn flat(v: Vec3) -> f32 {
     Vec2::new(v.x, v.z).length()
 }
 
+/// Flat distance from a point to the segment between two others.
+fn flat_to_segment(point: Vec3, from: Vec3, to: Vec3) -> f32 {
+    let (point, from, to) = (
+        Vec2::new(point.x, point.z),
+        Vec2::new(from.x, from.z),
+        Vec2::new(to.x, to.z),
+    );
+    let along = to - from;
+    let length = along.length_squared();
+    if length <= f32::EPSILON {
+        return point.distance(from);
+    }
+    let t = ((point - from).dot(along) / length).clamp(0.0, 1.0);
+    point.distance(from + along * t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,6 +791,91 @@ mod tests {
             }
         }
         panic!("route did not finish");
+    }
+
+    /// Follows a route that drops off a ledge as the online walker does:
+    /// samples of `stride` toward the next waypoint, each stepped by the
+    /// airborne controller in five 50 ms slices, telling the route whether
+    /// it falls when `told`. Returns the feet at the end and how many samples
+    /// between leaving the edge and landing turned back on the one before.
+    fn follow_falling(start: Vec3, stride: f32, told: bool) -> (Vec3, usize) {
+        use crate::movement::{AirborneController, MotionStep, PROVISIONAL_PHYSICS};
+        // An upper floor at y = 0 for z < 0, a lower one at y = -5 beyond it,
+        // and the ledge's face between them.
+        let mut triangles = quad(
+            [-30.0, 0.0, -30.0],
+            [30.0, 0.0, -30.0],
+            [30.0, 0.0, 0.0],
+            [-30.0, 0.0, 0.0],
+        )
+        .to_vec();
+        triangles.extend(quad(
+            [-30.0, -5.0, 0.0],
+            [30.0, -5.0, 0.0],
+            [30.0, -5.0, 30.0],
+            [-30.0, -5.0, 30.0],
+        ));
+        triangles.extend(quad(
+            [-30.0, -5.0, 0.0],
+            [30.0, -5.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [-30.0, 0.0, 0.0],
+        ));
+        let world = CollisionWorld::new(triangles).unwrap();
+        let goal = Vec3::new(0.0, -5.0, 20.0);
+        let mut feet = start;
+        let mut route = Route::new(feet, goal, 1.5, 6.0).with_drops(true);
+        let mut controller = AirborneController::default();
+        let (mut reversals, mut last) = (0, None::<Vec3>);
+        for tick in 0..500_u64 {
+            let falling = told && controller.peak().is_some();
+            let now = Duration::from_millis(tick * 250);
+            match route.next_with(&world, (feet, falling), goal, 256, now) {
+                RouteStep::Searching => (),
+                RouteStep::Toward(next) => {
+                    let way = Vec3::new(next.x - feet.x, 0.0, next.z - feet.z).normalize_or_zero();
+                    let airborne = feet.y < -0.01 && feet.y > -4.99;
+                    if airborne && last.is_some_and(|last| last.dot(way) < 0.0) {
+                        reversals += 1;
+                    }
+                    last = Some(way);
+                    for _ in 0..5 {
+                        feet = controller.step(
+                            &world,
+                            feet,
+                            PROVISIONAL_PHYSICS,
+                            MotionStep {
+                                horizontal: way * stride / 5.0,
+                                jump: false,
+                                seconds: 0.05,
+                                height: 6.0,
+                            },
+                        );
+                    }
+                }
+                RouteStep::Arrived => return (feet, reversals),
+                end => panic!("{end:?} at {feet:?}"),
+            }
+        }
+        panic!("route did not finish");
+    }
+
+    #[test]
+    fn a_walker_falling_off_a_ledge_heads_on_instead_of_turning_back_under_it() {
+        // At a run's sample, and at the 0.5 of a 16 ms frame.
+        for stride in [3.1, 3.26, 0.5] {
+            for start in [Vec3::new(0.0, 0.0, -12.0), Vec3::new(0.81, 0.0, -11.19)] {
+                let (end, reversals) = follow_falling(start, stride, true);
+                assert!((end.y + 5.0).abs() < 0.01, "stride {stride}: {end:?}");
+                assert_eq!(reversals, 0, "turned back while falling, stride {stride}");
+            }
+            // Untold, the same walk turns back over the landing waypoint.
+            let (_, untold) = follow_falling(Vec3::new(0.81, 0.0, -11.19), stride, false);
+            assert!(
+                untold > 0,
+                "the walk this test guards against, stride {stride}"
+            );
+        }
     }
 
     /// A floor split by a wall across z = 0, with a doorway at 10 < x < 14 shut
@@ -889,6 +1035,72 @@ mod tests {
         );
         drop(route);
         assert_eq!(held.run(), 1);
+    }
+
+    /// Follows with whole samples of `stride` toward each waypoint, never
+    /// shortened near it, as the online walker steps; says how it ends, and
+    /// how many samples turned back on the one before.
+    fn follow_strides(
+        route: &mut Route,
+        world: &CollisionWorld,
+        mut feet: Vec3,
+        goal: Vec3,
+        stride: f32,
+    ) -> (RouteStep, Vec3, usize) {
+        let (mut reversals, mut last) = (0, None::<Vec3>);
+        for tick in 0..2000_u64 {
+            match route.next(world, feet, goal, 256, Duration::from_millis(tick * 100)) {
+                RouteStep::Searching => (),
+                RouteStep::Toward(next) => {
+                    let way = Vec3::new(next.x - feet.x, 0.0, next.z - feet.z).normalize_or_zero();
+                    if last.is_some_and(|last| last.dot(way) < 0.0) {
+                        reversals += 1;
+                    }
+                    last = Some(way);
+                    for _ in 0..5 {
+                        feet = world.step(feet, way * stride / 5.0, 6.0);
+                    }
+                }
+                end => return (end, feet, reversals),
+            }
+        }
+        panic!("route did not finish");
+    }
+
+    #[test]
+    fn a_walker_whose_samples_step_over_a_waypoint_still_counts_it() {
+        // A sample at run speed is longer than the reach circle is wide, so
+        // it can end beyond a waypoint it walked through. Before the door,
+        // the leg on through it fails the walk test, so no shortcut counts
+        // that waypoint either: before the last sample's path counted, each
+        // stride of 3.32 or more here turned back over it every sample until
+        // the walk stalled; 3.32 is the stride the live stall measured, and
+        // 0.5 that of a 16 ms frame.
+        let (world, _) = doorway(false);
+        let goal = Vec3::new(12.0, 0.0, 10.0);
+        for (stride, start) in [
+            (3.32, Vec3::new(-20.0, 0.0, -20.0)),
+            (3.32, Vec3::new(-10.0, 0.0, -22.0)),
+            (3.32, Vec3::new(-10.0, 0.0, -10.0)),
+            (0.5, Vec3::new(-20.0, 0.0, -20.0)),
+            (0.5, Vec3::new(-10.0, 0.0, -10.0)),
+            (0.5, Vec3::new(20.0, 0.0, -8.0)),
+            (4.5, Vec3::new(-15.0, 0.0, -8.0)),
+            (4.5, Vec3::new(0.0, 0.0, -8.0)),
+            (4.5, Vec3::new(28.0, 0.0, -15.0)),
+            (6.0, Vec3::new(-25.0, 0.0, -15.0)),
+            (6.0, Vec3::new(20.0, 0.0, -8.0)),
+            (7.6, Vec3::new(-15.0, 0.0, -8.0)),
+            (7.6, Vec3::new(0.0, 0.0, -8.0)),
+        ] {
+            let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
+            let (step, feet, reversals) = follow_strides(&mut route, &world, start, goal, stride);
+            assert_eq!(
+                (step, reversals),
+                (RouteStep::OpenDoor(7), 0),
+                "stride {stride} from {start:?}, at {feet:?}"
+            );
+        }
     }
 
     #[test]
