@@ -177,8 +177,10 @@ fn default_size(race: u32) -> f32 {
 }
 
 /// How far above its feet a spawn's reported position sits: 0.2 × size × a
-/// per-model factor, exactly as `EQEmu` places mobs (zone/waypoints.cpp
-/// `Mob::GetZOffset`), with the race's default size when none was sent.
+/// per-model factor, exactly as `EQEmu` places mobs it moves (zone/waypoints.cpp
+/// `Mob::GetZOffset`), with the race's default size when none was sent. Used
+/// only for the player's own body, whose z we send; remote models are drawn by
+/// [`drawn_feet_offset`]. What a non-human player sends is recording item 1.11.
 /// Unverified against a P99 capture.
 #[must_use]
 pub fn z_offset(race: u32, size: f32) -> f32 {
@@ -186,12 +188,30 @@ pub fn z_offset(race: u32, size: f32) -> f32 {
         .iter()
         .find(|(model, _)| *model == race)
         .map_or(3.125, |(_, factor)| *factor);
-    let size = if size.is_finite() && size > 0.0 {
+    0.2 * size_or_default(race, size) * factor
+}
+
+/// How far under a remote spawn's reported position its soles are drawn:
+/// 0.625 × size for every model, with the race's default size when none was
+/// sent. A local server's static spawns of five humanoid races in four cities,
+/// short races included, all sat at floor + 0.625 × their own size, and the
+/// classic meshes share one shape about their origin, so `EQEmu`'s per-model
+/// factors (applied by the server only to mobs it moves) play no part here. A
+/// mob the server has moved to its own lower height draws into the floor, as
+/// the official client is expected to draw it. Inferred until a recording of
+/// the official client: item 6.231.
+#[must_use]
+pub fn drawn_feet_offset(race: u32, size: f32) -> f32 {
+    0.625 * size_or_default(race, size)
+}
+
+/// The size sent, or the race's default when it is missing or not positive.
+fn size_or_default(race: u32, size: f32) -> f32 {
+    if size.is_finite() && size > 0.0 {
         size
     } else {
         default_size(race)
-    };
-    0.2 * size * factor
+    }
 }
 
 /// Converts a renderer position back to EQ world coordinates, undoing
@@ -227,6 +247,15 @@ mod tests {
         assert!((offset(1, 0.0) - 3.75).abs() < 0.0001);
         assert!((offset(10, 0.0) - 5.625).abs() < 0.0001);
         assert!((offset(12, f32::NAN) - 1.875).abs() < 0.0001); // gnome
+    }
+
+    #[test]
+    fn remote_models_hang_their_soles_by_size_alone() {
+        let offset = super::drawn_feet_offset;
+        assert!((offset(1, 6.0) - 3.75).abs() < 0.0001); // human, as z_offset
+        assert!((offset(183, 4.8) - 3.0).abs() < 0.0001); // Coldain
+        assert!((offset(8, 0.0) - 2.5).abs() < 0.0001); // dwarf, default size 4
+        assert!((offset(12, f32::NAN) - 1.875).abs() < 0.0001); // gnome, default 3
     }
 
     use super::{WorldPosition, render_position, world_position};

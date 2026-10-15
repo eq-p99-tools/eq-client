@@ -237,7 +237,7 @@ fn draw(
         };
         // The server reports the position EQ's size rule puts above the feet; the
         // offset is in model units because the model is scaled below its root.
-        let feet = eq_client_core::z_offset(spawn.race, spawn.size) / scale;
+        let feet = eq_client_core::drawn_feet_offset(spawn.race, spawn.size) / scale;
         character::spawn_prepared(commands, entity, &asset, feet, meshes);
         commands.entity(entity).insert(
             Transform::from_translation(position)
