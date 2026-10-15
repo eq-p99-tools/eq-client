@@ -313,6 +313,18 @@ impl CharacterAsset {
             .reduce(f32::max)
     }
 
+    /// Whether a clip, such as `L01`, moves the body: it has a track for a
+    /// bone below the root. A clip with only its root's track leaves every
+    /// other bone in its base pose. False where the model lacks the clip.
+    #[must_use]
+    pub fn clip_moves_body(&self, animation: &str) -> bool {
+        self.clips.get(animation).is_some_and(|clip| {
+            clip.iter()
+                .zip(&self.parents)
+                .any(|(track, parent)| track.is_some() && parent.is_some())
+        })
+    }
+
     /// Samples a clip, or the base pose when the clip is unavailable.
     /// No root motion is applied to the entity; movement remains owned by simulation.
     pub fn pose(&self, animation: &str, seconds: f32) -> Vec<CharacterPose> {
@@ -912,6 +924,42 @@ mod tests {
         // A clip with no tracks, or none at all, has no length.
         assert_eq!(asset.clip_seconds("P01"), None);
         assert_eq!(asset.clip_seconds("C08"), None);
+    }
+
+    #[test]
+    fn a_clip_moves_the_body_only_with_a_track_below_the_root() {
+        let still = LocalTransform {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+        };
+        let track = || {
+            Some(AnimationTrack {
+                frames: vec![still; 2],
+                interval: 0.1,
+            })
+        };
+        let asset = CharacterAsset {
+            name: "synthetic".into(),
+            primitives: Vec::new(),
+            textures: Vec::new(),
+            materials: Vec::new(),
+            pieces: Vec::new(),
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None, Some(0), Some(1)],
+            base_pose: vec![still; 3],
+            clips: HashMap::from([
+                // The root's track only, as a gnoll's walk.
+                ("L01".into(), vec![track(), None, None]),
+                ("L02".into(), vec![track(), None, track()]),
+            ]),
+            skins: Vec::new(),
+            attachments: [None; 3],
+        };
+        assert!(!asset.clip_moves_body("L01"));
+        assert!(asset.clip_moves_body("L02"));
+        assert!(!asset.clip_moves_body("L09"));
     }
 
     #[test]

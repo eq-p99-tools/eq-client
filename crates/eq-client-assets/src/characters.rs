@@ -385,6 +385,50 @@ mod tests {
         }
     }
 
+    /// Prints, for every model in a zone's character archive, which movement
+    /// clips move the body below the root (checklist 6.232). A model whose
+    /// walk moves only the root is drawn walking in its run, and the other
+    /// way round. `EQ_PROBE_ZONE` defaults to the gnolls' zone.
+    #[test]
+    #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
+    fn inspect_movement_clips() {
+        let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
+        let install = std::path::Path::new(&install);
+        let zone = std::env::var("EQ_PROBE_ZONE").unwrap_or_else(|_| "qeytoqrg".into());
+        let archive = install.join(format!("{zone}_chr.s3d"));
+        let mut models: Vec<String> = super::inspect_archive(&archive)
+            .unwrap()
+            .into_iter()
+            .filter_map(|character| character.name.split('_').next().map(str::to_owned))
+            .collect();
+        models.sort();
+        models.dedup();
+        let donors = super::DonorArchives::default();
+        for model in models {
+            match super::load_installed_character(install, &zone, &model, &donors) {
+                Ok(asset) => {
+                    let codes = asset.animation_codes();
+                    let clips: Vec<String> = ["L01", "L02", "L06", "L08"]
+                        .into_iter()
+                        .filter(|clip| codes.contains(clip))
+                        .map(|clip| {
+                            format!(
+                                "{clip} {}",
+                                if asset.clip_moves_body(clip) {
+                                    "body"
+                                } else {
+                                    "root only"
+                                }
+                            )
+                        })
+                        .collect();
+                    println!("{model}: {}", clips.join(", "));
+                }
+                Err(error) => println!("{model}: not loaded ({error})"),
+            }
+        }
+    }
+
     #[test]
     fn an_unreadable_donor_archive_is_tried_once() {
         let donors = super::DonorArchives::default();

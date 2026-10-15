@@ -44,6 +44,8 @@ fn spawn(spawn_id: u16) -> SpawnState {
         gender: 0,
         position: WorldPosition::default(),
         velocity: [0.0; 3],
+        walk_speed: 0.0,
+        run_speed: 0.0,
         size: 0.0,
         invisible: false,
         appearance: Appearance::default(),

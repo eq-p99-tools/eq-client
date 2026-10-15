@@ -122,6 +122,8 @@ mod tests {
                 heading: 128.0,
             },
             velocity: [4.0, -2.0, 0.5],
+            walk_speed: 0.0,
+            run_speed: 0.0,
             size: 0.0,
             invisible: false,
             appearance: crate::outfit::Appearance::default(),
@@ -170,6 +172,8 @@ mod tests {
                 ..Default::default()
             },
             velocity: [0.0; 3],
+            walk_speed: 0.0,
+            run_speed: 0.0,
             size: 0.0,
             invisible: false,
             appearance: crate::outfit::Appearance::default(),
