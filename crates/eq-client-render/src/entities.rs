@@ -245,7 +245,9 @@ fn draw(
         if corpse {
             // Lying down, its name shows just over the body.
             commands.entity(entity).insert((
-                character::Corpse,
+                character::Corpse {
+                    fell: state.world().died_at(id),
+                },
                 super::names::Overhead(character::CORPSE_NAME_HEIGHT / scale),
             ));
         }

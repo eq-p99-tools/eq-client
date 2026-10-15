@@ -10,7 +10,7 @@ use crate::{
     ground::Objects,
     outfit::WearChange,
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 /// The zone's contents, as the server described them.
 #[derive(Default)]
@@ -43,14 +43,19 @@ pub(super) struct Zone {
     pub(super) completions: BTreeMap<u16, super::CastDone>,
     /// The latest spell that landed on each spawn, the player included.
     pub(super) landings: BTreeMap<u16, super::Landing>,
+    /// When each corpse in view died, for one seen dying rather than
+    /// arriving dead.
+    pub(super) deaths: BTreeMap<u16, Instant>,
 }
 
 impl Zone {
     /// Spawns appear, or replace what had their IDs; each is drawn anew.
     pub(super) fn appear(&mut self, spawns: &[SpawnState], revision: &mut u64) {
         for spawn in spawns {
-            // A new spawn has not been considered, whatever had its ID.
+            // A new spawn has not been considered, whatever had its ID, and
+            // one arriving as a corpse was not seen dying.
             self.considered.remove(&spawn.spawn_id);
+            self.deaths.remove(&spawn.spawn_id);
             *revision = revision.wrapping_add(1);
             self.spawns.insert(
                 spawn.spawn_id,
@@ -72,6 +77,7 @@ impl Zone {
         self.casts.remove(&id);
         self.completions.remove(&id);
         self.landings.remove(&id);
+        self.deaths.remove(&id);
     }
 
     /// The server's word on a spawn the player considered.
@@ -126,16 +132,18 @@ impl Zone {
     /// A spawn died: it becomes a corpse, drawn anew, under the name the
     /// death gives it (the session's, by the client generation's rule) or
     /// its living name where the death gives none. Titanium corpses keep the
-    /// spawn ID.
-    pub(super) fn corpse(&mut self, id: u16, name: Option<&str>, revision: &mut u64) {
+    /// spawn ID. A living spawn's death is when it fell; a repeated death
+    /// changes nothing of that.
+    pub(super) fn corpse(&mut self, id: u16, name: Option<&str>, now: Instant, revision: &mut u64) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
             *revision = revision.wrapping_add(1);
             spawn.health = Some(0);
             let kind = spawn.state.kind.corpse();
-            if kind != spawn.state.kind
-                && let Some(name) = name
-            {
-                spawn.state.name = name.into();
+            if kind != spawn.state.kind {
+                self.deaths.insert(id, now);
+                if let Some(name) = name {
+                    spawn.state.name = name.into();
+                }
             }
             spawn.state.kind = kind;
             spawn.revision = *revision;
