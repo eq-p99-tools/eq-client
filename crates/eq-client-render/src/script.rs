@@ -462,14 +462,19 @@ pub(super) fn drive(
                 {
                     let (expanded, _) = route.searched().unwrap_or_default();
                     let waypoints = route.remaining();
-                    info!(found, expanded, waypoints, "Script walk detour ready");
+                    let waited = elapsed.as_secs_f32();
+                    info!(
+                        found,
+                        expanded, waypoints, waited, "Script walk detour ready"
+                    );
                 } else if searching && !route.is_searching() {
                     let (waypoints, partial) = (route.remaining(), route.partial());
                     let (expanded, open) = route.searched().unwrap_or_default();
                     let (height, drops) = (route.height(), observed.4.airborne.is_some());
-                    let reach = route.reach();
+                    let (reach, waited) = (route.reach(), elapsed.as_secs_f32());
                     info!(
                         waypoints,
+                        waited,
                         partial,
                         reach,
                         expanded,
@@ -942,7 +947,8 @@ pub(super) fn drive(
                 Some(
                     eq_client_core::movement::Route::new(feet, goal, *range, body.height)
                         .with_drops(observed.4.airborne.is_some())
-                        .with_doors(openable_doors(&online)),
+                        .with_doors(openable_doors(&online))
+                        .with_background(std::sync::Arc::new(super::background::ComputePool)),
                 )
             });
             let Some(route) = route else {
@@ -1405,6 +1411,8 @@ impl DoorWait {
                     self.asked.get_or_insert(now);
                     self.clicked = Some(now);
                     self.opened = None;
+                    // Each opening gets its own step round the leaf.
+                    self.rerouted = false;
                     DoorAction::Click
                 }
             },
@@ -1625,6 +1633,18 @@ mod tests {
             wait.act(Some(false), true, at(1_800)),
             DoorAction::Refuse("it shut again")
         );
+    }
+
+    #[test]
+    fn a_door_that_shuts_again_gets_its_own_step_round_its_leaf_once_reopened() {
+        let at = Duration::from_millis;
+        let mut wait = DoorWait::new(4);
+        assert_eq!(wait.act(Some(false), true, at(0)), DoorAction::Click);
+        assert_eq!(wait.act(Some(true), true, at(500)), DoorAction::Wait);
+        assert_eq!(wait.act(Some(true), true, at(1_100)), DoorAction::Reroute);
+        assert_eq!(wait.act(Some(false), true, at(1_300)), DoorAction::Click);
+        assert_eq!(wait.act(Some(true), true, at(1_500)), DoorAction::Wait);
+        assert_eq!(wait.act(Some(true), true, at(2_100)), DoorAction::Reroute);
     }
 
     #[test]

@@ -11,7 +11,7 @@ pub use falls::{HARMLESS_DROP, fall_damage};
 pub use liquids::{GuardView, Liquid, Liquids};
 pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};
-pub use route::{Route, RouteStep};
+pub use route::{Background, Route, RouteStep};
 
 #[derive(Clone, Copy)]
 enum Support {
@@ -74,7 +74,9 @@ impl CollisionMesh {
 }
 
 /// Static zone geometry plus replaceable nearby obstacles, and the zone's
-/// water and lava where they are known.
+/// water and lava where they are known. A clone shares all of it, so a
+/// snapshot for another thread costs a few reference counts.
+#[derive(Clone)]
 pub struct CollisionWorld {
     terrain: Arc<CollisionMesh>,
     /// Each obstacle with the door it belongs to, if any.

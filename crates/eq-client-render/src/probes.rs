@@ -40,7 +40,8 @@ fn inspect_path() {
 /// of walkable positions. Each of `EQ_PROBE_FEET` and `EQ_PROBE_GOAL` (renderer
 /// points a little above their floor) drops to the floor below it; the search
 /// then runs once per cap in `EQ_PROBE_CAPS` (comma-separated, default the
-/// client's own), with the wall toll on and off. `open=false` on a failure
+/// client's own) and weight in `EQ_PROBE_WEIGHTS` (comma-separated, default
+/// 1), with the wall toll on and off. `open=false` on a failure
 /// means every walkable position from the start was searched.
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_FEET and EQ_PROBE_GOAL"]
@@ -74,10 +75,21 @@ fn inspect_search_limits() {
             .map(|cap| cap.trim().parse().unwrap())
             .collect()
     });
-    for cap in caps {
+    let weights: Vec<f32> = std::env::var("EQ_PROBE_WEIGHTS").map_or(vec![1.0], |weights| {
+        weights
+            .split(',')
+            .map(|weight| weight.trim().parse().unwrap())
+            .collect()
+    });
+    for (cap, weight) in caps
+        .iter()
+        .flat_map(|&cap| weights.iter().map(move |&weight| (cap, weight)))
+    {
         for toll in [true, false] {
             let started = std::time::Instant::now();
-            let mut search = PathSearch::new(feet, goal, 10.0, height).with_limits(cap, toll);
+            let mut search = PathSearch::new(feet, goal, 10.0, height)
+                .with_limits(cap, toll)
+                .with_weight(weight);
             let result = loop {
                 match search.advance(&world, 5000) {
                     PathProgress::Searching => (),
@@ -101,7 +113,7 @@ fn inspect_search_limits() {
                 _ => None,
             };
             println!(
-                "cap={cap} toll={toll} found={} expanded={} open={} reached={} seconds={elapsed:.2} \
+                "cap={cap} weight={weight} toll={toll} found={} expanded={} open={} reached={} seconds={elapsed:.2} \
                  path_length={length:?} floor_y={low:.1}..{high:.1} closest_eq={:?} closest_flat_distance={:?}",
                 matches!(result, PathProgress::Found(_)),
                 search.expanded(),
