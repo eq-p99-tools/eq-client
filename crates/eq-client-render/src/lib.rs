@@ -1825,11 +1825,11 @@ mod tests {
         // Walking under the roof's edge and back out, a frame at a time.
         let frame = 1.0 / 60.0;
         let mut shown = Vec::new();
-        for step in 0..240 {
+        for step in 0..240_u16 {
             let x = if step < 120 {
-                140.0 - step as f32
+                140.0 - f32::from(step)
             } else {
-                20.0 + (step - 120) as f32 * 2.0
+                20.0 + f32::from(step - 120) * 2.0
             };
             camera.focus.x = x;
             let unobstructed = unobstructed_orbit(
