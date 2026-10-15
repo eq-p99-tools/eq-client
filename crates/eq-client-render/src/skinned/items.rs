@@ -91,7 +91,7 @@ pub(super) fn slot(
     let Some((number, in_bag)) = slot.slot.and_then(|number| slot_of(owner, number)) else {
         return;
     };
-    let area = slot.area;
+    let area = slot.area_in(inside.width, inside.height);
     let node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -135,7 +135,7 @@ fn loot_slot(window: &mut ChildSpawnerCommands, art: &mut Art, slot: &InvSlot, i
     else {
         return;
     };
-    let area = slot.area;
+    let area = slot.area_in(inside.width, inside.height);
     window
         .spawn((
             Button,

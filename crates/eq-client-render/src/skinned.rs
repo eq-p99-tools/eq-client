@@ -5,6 +5,7 @@
 //! official client's numbering. A skin without the window, or a viewer
 //! without an installation, keeps the client's own chrome.
 mod controls;
+mod fit;
 mod frame;
 mod items;
 pub(crate) mod looks;
@@ -320,9 +321,10 @@ pub(crate) fn cursor_look(
     }
 }
 
-/// The skin a frame is drawn in.
+/// The skin a frame is drawn in, and how many places the container it
+/// shows has, where its window fits its container ([`fit`]).
 #[derive(Component)]
-pub(crate) struct Drawn(String);
+pub(crate) struct Drawn(String, Option<u8>);
 
 /// The windows drawn from the skin.
 #[derive(Resource, Default)]
@@ -411,9 +413,10 @@ pub(crate) fn apply(
     mut screens: ResMut<Screens>,
     mut frames: Frames,
     mut art: crate::sheets::Art,
-    (paperdoll, mut skinned): (
+    (paperdoll, mut skinned, online): (
         Option<Res<super::paperdoll::PaperdollImage>>,
         ResMut<Skinned>,
+        Option<Res<crate::online::OnlineState>>,
     ),
 ) {
     let Some(directory) = settings.0.eq_directory.as_deref() else {
@@ -425,7 +428,10 @@ pub(crate) fn apply(
         .on(eq_client_core::qol::Fix::HiddenWindows);
     for (frame, id, mut node, mut background, mut border, drawn, mut state) in &mut frames {
         let from = drawn_from(&mut screens, directory, (&skin.0, *id), hidden_too);
-        if drawn.is_some_and(|drawn| drawn.0 == from) {
+        let places = online
+            .as_deref()
+            .and_then(|online| fit::places(online.world(), *id));
+        if drawn.is_some_and(|drawn| drawn.0 == from && drawn.1 == places) {
             continue;
         }
         let arranged = if state.placed() {
@@ -441,7 +447,9 @@ pub(crate) fn apply(
         let Some(screen) = screens.get(directory, &from, *id) else {
             continue;
         };
-        commands.entity(frame).insert(Drawn(from.clone()));
+        let fitted = places.and_then(|places| fit::fitted(screen, places));
+        let screen = fitted.as_ref().unwrap_or(screen);
+        commands.entity(frame).insert(Drawn(from.clone(), places));
         art.draw_in((from != skin.0).then(|| from.clone()));
         skinned.0.insert(*id);
         reshape(&mut node, screen, state.placed(), (*id, arranged));
