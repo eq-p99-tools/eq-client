@@ -60,6 +60,9 @@ pub(super) struct RemoteEntity {
     pub(super) id: u16,
     /// The server report this entity moves on from, and when it was first seen.
     report: Option<(eq_client_core::WorldPosition, [f32; 3], std::time::Instant)>,
+    /// How far under the reported position a drawn model's soles hang, in
+    /// world units; None for a marker, which stays where the server says.
+    feet: Option<f32>,
 }
 
 /// The stores a drawn spawn's meshes and materials go in; its model's
@@ -218,7 +221,11 @@ fn draw(
     let position = Vec3::from_array(render_position(spawn.position));
     let entity = commands
         .spawn((
-            RemoteEntity { id, report: None },
+            RemoteEntity {
+                id,
+                report: None,
+                feet: None,
+            },
             Name::new(spawn.name.clone()),
             Transform::from_translation(position).with_rotation(Quat::from_rotation_y(
                 eq_client_core::render_heading(spawn.position.heading),
@@ -236,16 +243,22 @@ fn draw(
             1.0
         };
         // The server reports the position EQ's size rule puts above the feet; the
-        // offset is in model units because the model is scaled below its root.
-        let feet = eq_client_core::z_offset(spawn.race, spawn.size) / scale;
-        character::spawn_prepared(commands, entity, &asset, feet, meshes);
-        commands.entity(entity).insert(
+        // model hangs by it in model units, as it is scaled below its root, and
+        // `interpolate` stands its root on the floor by it in world units.
+        let feet = eq_client_core::drawn_feet_offset(spawn.race, spawn.size);
+        character::spawn_prepared(commands, entity, &asset, feet / scale, meshes);
+        commands.entity(entity).insert((
+            RemoteEntity {
+                id,
+                report: None,
+                feet: Some(feet),
+            },
             Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
                     spawn.position.heading,
                 )))
                 .with_scale(Vec3::splat(scale)),
-        );
+        ));
         if corpse {
             // Lying down, its name shows just over the body.
             commands.entity(entity).insert((
@@ -293,8 +306,12 @@ fn draw(
 pub(super) fn interpolate(
     state: Res<OnlineState>,
     time: Res<Time>,
+    collision: Option<Res<super::Collision>>,
     mut entities: Query<(&mut RemoteEntity, &mut Transform)>,
 ) {
+    let world = collision
+        .as_ref()
+        .and_then(|collision| collision.0.as_ref());
     let weight = 1.0 - (-time.delta_secs().min(0.1) / 0.1).exp();
     let now = std::time::Instant::now();
     for (mut entity, mut transform) in &mut entities {
@@ -302,6 +319,7 @@ pub(super) fn interpolate(
             continue;
         };
         // A spawn moves on from its latest report at its reported velocity.
+        let first = entity.report.is_none();
         let since = match entity.report {
             Some((position, velocity, seen))
                 if position == spawn.position
@@ -315,8 +333,14 @@ pub(super) fn interpolate(
             }
         };
         let position = eq_client_core::entities::extrapolate(spawn, now.duration_since(since));
-        let target = Vec3::from_array(render_position(position));
-        if transform.translation.distance_squared(target) > 100.0 * 100.0 {
+        let mut target = Vec3::from_array(render_position(position));
+        // A drawn model stands on the floor under it, whichever rule put its z.
+        if let (Some(feet), Some(world)) = (entity.feet, world) {
+            let soles = target - Vec3::Y * feet;
+            target.y +=
+                eq_client_core::grounded_soles(world, soles, spawn.race, spawn.size) - soles.y;
+        }
+        if first || transform.translation.distance_squared(target) > 100.0 * 100.0 {
             transform.translation = target;
         } else {
             transform.translation = transform.translation.lerp(target, weight);
