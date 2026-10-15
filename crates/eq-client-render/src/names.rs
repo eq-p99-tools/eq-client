@@ -59,7 +59,7 @@ pub(crate) fn request(
 
 /// Draws a name over the player's head and every drawn spawn's, and takes
 /// away those of spawns gone or hidden by the options.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Bevy system parameters.
 pub(crate) fn update(
     mut commands: Commands,
     (online, nearby, options, scale): (
@@ -68,12 +68,12 @@ pub(crate) fn update(
         Res<crate::options::OptionsState>,
         Option<Res<UiScale>>,
     ),
+    collision: Option<Res<crate::Collision>>,
     mut drawn: ResMut<NameTags>,
     player: Query<Entity, With<crate::Player>>,
     roots: Query<(&Transform, &Overhead)>,
     cameras: Query<(&Camera, &Transform), With<crate::OrbitCamera>>,
     mut tags: Query<(&mut Node, &mut Text, &mut Visibility), With<NameTag>>,
-    collision: Option<Res<crate::Collision>>,
 ) {
     let world = online.world();
     let options = options.options;
