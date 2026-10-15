@@ -432,21 +432,23 @@ fn compose_hierarchy(local: &[Mat4], parents: &[Option<usize>]) -> Vec<Mat4> {
 /// # Errors
 /// Rejects missing models, unsupported legacy skins/tracks, invalid hierarchies,
 /// or skin groups that do not cover the mesh. It never fabricates missing bones.
-#[allow(clippy::too_many_lines)]
 pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadError> {
-    let file = File::open(path).map_err(|source| LoadError::OpenArchive {
-        path: path.to_owned(),
-        source,
-    })?;
-    let mut archive = PfsReader::open(file)?;
-    let stem = path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| invalid("archive name"))?;
-    let world_name = format!("{stem}.wld");
-    let bytes = archive
-        .get(&world_name)?
-        .ok_or(LoadError::MissingWorld(world_name))?;
+    load_with_donors(path, model, &[])
+}
+
+/// Loads a model as [`load_character`] does, reading its donor's animation
+/// tracks from the first of `donor_archives` that has them when the model's
+/// own archive has none. Archives that cannot be read are skipped.
+///
+/// # Errors
+/// As [`load_character`], for the model's own archive only.
+#[allow(clippy::too_many_lines)]
+pub(super) fn load_with_donors(
+    path: &Path,
+    model: &str,
+    donor_archives: &[PathBuf],
+) -> Result<CharacterAsset, LoadError> {
+    let (mut archive, bytes) = open_world(path)?;
     let doc = WldDoc::parse(&bytes)
         .map_err(|errors| invalid(&format!("WLD ({} parse errors)", errors.len())))?;
     let name = model.to_ascii_uppercase();
@@ -483,49 +485,22 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         }
     }
     validate_parents(&parents)?;
-    let mut clips: HashMap<String, Vec<Option<AnimationTrack>>> = HashMap::new();
+    let mut clips = HashMap::new();
     let source = animation_source(&name);
-    for track in doc.fragment_iter::<Track>() {
-        let Some(track_name) = doc.get_string(track.name_reference) else {
-            continue;
-        };
-        let Some((code, suffix)) = track_name.split_at_checked(3) else {
-            continue;
-        };
-        let inherited = source.is_some_and(|source| suffix.starts_with(source));
-        let Some(index) = bone_names.iter().position(|bone| {
-            *bone == suffix
-                || source.is_some_and(|source| {
-                    bone.strip_prefix(name.as_str())
-                        .zip(suffix.strip_prefix(source))
-                        .is_some_and(|(own, donor)| own == donor)
-                })
-        }) else {
-            continue;
-        };
-        let Some(definition) = doc.get(&track.reference) else {
-            continue;
-        };
-        let Some(frames) = &definition.frame_transforms else {
-            continue;
-        };
-        if frames.is_empty() {
-            continue;
+    let borrowed = gather_clips(&doc, &name, &bone_names, source, true, &mut clips);
+    // A donor kept in another archive (the dwarf's movements in global_chr for
+    // a zone's Coldain) lends its tracks from there.
+    if let Some(source) = source
+        && borrowed == 0
+    {
+        for other in donor_archives {
+            let Ok(doc) = read_world(other) else {
+                continue;
+            };
+            if gather_clips(&doc, &name, &bone_names, Some(source), false, &mut clips) > 0 {
+                break;
+            }
         }
-        let interval = u16::try_from(track.sleep.unwrap_or(100))
-            .unwrap_or(100)
-            .max(1);
-        let tracks = clips
-            .entry(code.to_owned())
-            .or_insert_with(|| vec![None; parents.len()]);
-        // Model-specific tracks override inherited ones regardless of fragment order.
-        if inherited && tracks[index].is_some() {
-            continue;
-        }
-        tracks[index] = Some(AnimationTrack {
-            frames: frames.iter().map(LocalTransform::decode).collect(),
-            interval: f32::from(interval) / 1000.0,
-        });
     }
     let world = libeq::wld::load(&bytes).map_err(|error| invalid(&error.to_string()))?;
     let catalog = world
@@ -628,21 +603,233 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
     Ok(asset)
 }
 
-/// Classic playable donors: <https://github.com/LanternEQ/LanternExtractor/blob/main/LanternExtractor/ClientData/animationsources.txt>
-fn animation_source(model: &str) -> Option<&'static str> {
-    match model {
-        "HUM" | "BAM" | "ERM" | "HIM" | "DAM" | "HAM" => Some("ELM"),
-        "HUF" | "BAF" | "ERF" | "HIF" | "DAF" | "HAF" => Some("ELF"),
-        "TRM" | "TRF" | "OGM" => Some("OGF"),
-        "HOM" | "GNM" => Some("DWM"),
-        "HOF" | "GNF" => Some("DWF"),
-        _ => None,
+/// Opens an archive and reads its WLD, named after the archive.
+fn open_world(path: &Path) -> Result<(PfsReader<File>, Vec<u8>), LoadError> {
+    let file = File::open(path).map_err(|source| LoadError::OpenArchive {
+        path: path.to_owned(),
+        source,
+    })?;
+    let mut archive = PfsReader::open(file)?;
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid("archive name"))?;
+    let world_name = format!("{stem}.wld");
+    let bytes = archive
+        .get(&world_name)?
+        .ok_or(LoadError::MissingWorld(world_name))?;
+    Ok((archive, bytes))
+}
+
+/// Parses another archive's WLD, for its animation tracks only.
+fn read_world(path: &Path) -> Result<WldDoc, LoadError> {
+    let (_, bytes) = open_world(path)?;
+    WldDoc::parse(&bytes).map_err(|errors| invalid(&format!("WLD ({} parse errors)", errors.len())))
+}
+
+/// Adds a WLD's animation tracks for the bones of model `name`: the model's
+/// own when `own` is set, and those of its donor `source` under the same bone
+/// names. The model's own tracks win over inherited ones regardless of
+/// fragment order. Returns how many donor tracks it found.
+fn gather_clips(
+    doc: &WldDoc,
+    name: &str,
+    bone_names: &[&str],
+    source: Option<&str>,
+    own: bool,
+    clips: &mut HashMap<String, Vec<Option<AnimationTrack>>>,
+) -> usize {
+    let mut borrowed = 0;
+    for track in doc.fragment_iter::<Track>() {
+        let Some(track_name) = doc.get_string(track.name_reference) else {
+            continue;
+        };
+        let Some((code, suffix)) = track_name.split_at_checked(3) else {
+            continue;
+        };
+        let inherited = source.is_some_and(|source| suffix.starts_with(source));
+        let Some(index) = bone_names.iter().position(|bone| {
+            (own && *bone == suffix)
+                || source.is_some_and(|source| {
+                    bone.strip_prefix(name)
+                        .zip(suffix.strip_prefix(source))
+                        .is_some_and(|(own, donor)| own == donor)
+                })
+        }) else {
+            continue;
+        };
+        let Some(definition) = doc.get(&track.reference) else {
+            continue;
+        };
+        let Some(frames) = &definition.frame_transforms else {
+            continue;
+        };
+        if frames.is_empty() {
+            continue;
+        }
+        let interval = u16::try_from(track.sleep.unwrap_or(100))
+            .unwrap_or(100)
+            .max(1);
+        borrowed += usize::from(inherited);
+        let track = AnimationTrack {
+            frames: frames.iter().map(LocalTransform::decode).collect(),
+            interval: f32::from(interval) / 1000.0,
+        };
+        place_track(clips, bone_names.len(), code, index, inherited, track);
     }
+    borrowed
+}
+
+/// Puts one bone's track in its clip. An inherited track only fills a slot
+/// nothing holds yet, so the model's own tracks win whichever comes first.
+fn place_track(
+    clips: &mut HashMap<String, Vec<Option<AnimationTrack>>>,
+    bones: usize,
+    code: &str,
+    bone: usize,
+    inherited: bool,
+    track: AnimationTrack,
+) {
+    let tracks = clips
+        .entry(code.to_owned())
+        .or_insert_with(|| vec![None; bones]);
+    if !(inherited && tracks[bone].is_some()) {
+        tracks[bone] = Some(track);
+    }
+}
+
+// The table below comes from LanternExtractor, under this notice:
+//
+// MIT License
+//
+// Copyright (c) 2024 LanternEQ
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+/// The model whose animations a model plays when it has none of its own,
+/// from `LanternExtractor`'s `animationsources.txt`
+/// (<https://github.com/LanternEQ/LanternExtractor/blob/main/LanternExtractor/ClientData/animationsources.txt>).
+/// Its two rows with two-letter models (`CL`, `KA`) name no model and are
+/// left out.
+///
+/// Inferred: a community reading of the original client, which keeps this
+/// pairing in its program rather than its files; recording item 6.228.
+fn animation_source(model: &str) -> Option<&'static str> {
+    Some(match model {
+        "CPF" => "CPM",
+        "SDE" => "DML",
+        "GDR" | "WUR" => "DRA",
+        "FMO" | "GRI" | "SPH" => "DRK",
+        "CLF" | "COF" | "GNF" | "HOF" | "KAF" | "RIF" => "DWF",
+        "BRI" | "CLM" | "COK" | "COM" | "GNM" | "HOM" | "KAM" | "RIM" => "DWM",
+        "ABH" | "BAF" | "BRF" | "DAF" | "ERF" | "ERO" | "FEF" | "GFF" | "HAF" | "HAG" | "HIF"
+        | "HLF" | "HUF" | "QCF" | "SIR" | "ZOF" => "ELF",
+        "BAM" | "BGM" | "BRM" | "DAM" | "EGM" | "ENA" | "ERM" | "FEM" | "FPM" | "GFM" | "HAM"
+        | "HHM" | "HIM" | "HLM" | "HUM" | "NGM" | "QCM" | "SKE" | "TRI" | "ZOM" => "ELM",
+        "PIF" => "FAF",
+        "FDF" => "FDR",
+        "FRG" => "FRO",
+        "STG" => "FSG",
+        "GAM" | "IMP" => "GAR",
+        "GOL" | "GOM" => "GIA",
+        "MIN" | "YAK" => "GNN",
+        "GHU" => "GOB",
+        "ICF" | "ICM" | "ICN" | "IKF" | "IKS" => "IKM",
+        "BGG" => "KGO",
+        "LIF" | "PUM" | "STC" | "TIG" => "LIM",
+        "GRF" | "GRM" | "OGM" | "OKF" | "OKM" | "TRF" | "TRM" => "OGF",
+        "ARM" | "SKU" => "RAT",
+        "IKH" => "REA",
+        "BTM" => "RHI",
+        "TOT" => "SCA",
+        "SPC" => "SPE",
+        "BET" => "SPI",
+        "SSK" => "SRW",
+        "BWD" | "CCD" | "DR2" | "PRI" => "TRK",
+        "VRF" => "VRM",
+        "KOB" => "WER",
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn models_without_movements_borrow_from_the_listed_model() {
+        assert_eq!(animation_source("COM"), Some("DWM"));
+        assert_eq!(animation_source("COF"), Some("DWF"));
+        assert_eq!(animation_source("COK"), Some("DWM"));
+        assert_eq!(animation_source("KOB"), Some("WER"));
+        assert_eq!(animation_source("HUM"), Some("ELM"));
+        assert_eq!(animation_source("GNN"), None);
+        assert_eq!(animation_source("CL"), None);
+    }
+
+    #[test]
+    fn every_donor_has_movements_of_its_own() {
+        let models = (b'A'..=b'Z').flat_map(|a| {
+            (b'A'..=b'Z').flat_map(move |b| {
+                (b'0'..=b'Z').map(move |c| String::from_utf8(vec![a, b, c]).unwrap())
+            })
+        });
+        let mut rows = 0;
+        for model in models {
+            if let Some(donor) = animation_source(&model) {
+                rows += 1;
+                assert_eq!(donor.len(), 3, "{model}");
+                assert_ne!(donor, model);
+                assert_eq!(animation_source(donor), None, "{model} -> {donor}");
+            }
+        }
+        assert_eq!(rows, 99);
+    }
+
+    #[test]
+    fn own_tracks_win_and_borrowed_ones_fill_only_empty_bones() {
+        let track = |angle: f32| AnimationTrack {
+            frames: vec![LocalTransform {
+                translation: Vec3::ZERO,
+                rotation: Quat::from_rotation_z(angle),
+                scale: 1.0,
+            }],
+            interval: 0.1,
+        };
+        let angle = |clips: &HashMap<String, Vec<Option<AnimationTrack>>>, bone: usize| {
+            clips["L01"][bone]
+                .as_ref()
+                .map(|track| track.frames[0].rotation.to_axis_angle().1)
+        };
+        let mut clips = HashMap::new();
+        // Inherited first, then the model's own: the own track replaces it.
+        place_track(&mut clips, 3, "L01", 0, true, track(1.0));
+        place_track(&mut clips, 3, "L01", 0, false, track(2.0));
+        // Own first, then inherited: the own track stays.
+        place_track(&mut clips, 3, "L01", 1, false, track(2.0));
+        place_track(&mut clips, 3, "L01", 1, true, track(1.0));
+        // A later archive's donor fills only the bone nothing holds.
+        place_track(&mut clips, 3, "L01", 2, true, track(1.0));
+        for (bone, expected) in [(0, 2.0), (1, 2.0), (2, 1.0)] {
+            assert!((angle(&clips, bone).unwrap() - expected).abs() < 0.0001);
+        }
+    }
 
     #[test]
     fn held_pose_keeps_final_frame_while_locomotion_still_loops() {
