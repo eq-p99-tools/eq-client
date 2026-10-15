@@ -172,6 +172,14 @@ impl PathSearch {
         self
     }
 
+    /// Gives up after this many expansions instead of the usual cap, for a
+    /// short search that should stay short.
+    #[must_use]
+    pub fn with_max_expansions(mut self, max_expansions: usize) -> Self {
+        self.max_expansions = max_expansions;
+        self
+    }
+
     /// Overrides the expansion cap and switches the wall toll, for diagnosing
     /// searches that give up; routes the client walks never call it.
     #[doc(hidden)]

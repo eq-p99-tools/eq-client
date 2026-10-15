@@ -28,6 +28,12 @@ const MAX_TICK: Duration = Duration::from_millis(250);
 const DOOR_PROBE: f32 = 4.0;
 /// How near the way a door's collider must come to be the one in the way.
 const DOOR_MARGIN: f32 = 2.0;
+/// A step round an opened door rejoins the route at its first waypoint at
+/// least this far from the feet, beyond the door's leaf.
+const DETOUR_REJOIN: f32 = 8.0;
+/// Expansions a step round an opened door may take: a few rooms' worth, so
+/// it stays local and never stands the walker still for long.
+const DETOUR_EXPANSIONS: usize = 3000;
 
 /// What a follower should do next.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,6 +70,9 @@ pub struct Route {
     crossings: VecDeque<Option<u8>>,
     /// Closed doors the route may pass by opening them.
     doors: Vec<u8>,
+    /// A short search round an opened door, and how many of the waypoints
+    /// ahead its path replaces.
+    detour: Option<(PathSearch, usize)>,
     reach: f32,
     height: f32,
     partial: bool,
@@ -93,6 +102,7 @@ impl Route {
             waypoints: VecDeque::new(),
             crossings: VecDeque::new(),
             doors: Vec::new(),
+            detour: None,
             reach,
             height,
             partial: false,
@@ -142,11 +152,28 @@ impl Route {
         ready
     }
 
-    /// A door the follower opened stands in the way as drawn: searches again
-    /// from `feet` in the world as it stands, the door still passable, outside
-    /// the stall's one replan.
+    /// A door the follower opened stands in the way as drawn: searches from
+    /// `feet`, in the world as it stands with the door still passable, for a
+    /// short way round to a waypoint beyond it, keeping the rest of the route,
+    /// as a player steps round a door that swung toward them. Outside the
+    /// stall's one replan. If no short way round exists the route is left as
+    /// it was, so the same door is asked for again.
     pub fn reroute(&mut self, feet: Vec3, goal: Vec3) {
-        self.replan(feet, goal);
+        let Some(last) = self.waypoints.len().checked_sub(1) else {
+            self.replan(feet, goal);
+            return;
+        };
+        let rejoin = self
+            .waypoints
+            .iter()
+            .position(|waypoint| flat(*waypoint - feet) >= DETOUR_REJOIN)
+            .unwrap_or(last);
+        let search = PathSearch::new(feet, self.waypoints[rejoin], FINAL_REACH, self.height)
+            .with_drops(self.drops)
+            .with_doors(self.doors.clone())
+            .with_max_expansions(DETOUR_EXPANSIONS);
+        self.detour = Some((search, rejoin + 1));
+        self.best = None;
     }
 
     fn replan(&mut self, feet: Vec3, goal: Vec3) {
@@ -157,6 +184,7 @@ impl Route {
         );
         self.waypoints.clear();
         self.crossings.clear();
+        self.detour = None;
         self.partial = false;
         self.best = None;
     }
@@ -164,7 +192,7 @@ impl Route {
     /// Whether the search is still running.
     #[must_use]
     pub const fn is_searching(&self) -> bool {
-        self.search.is_some()
+        self.search.is_some() || self.detour.is_some()
     }
 
     /// Whether no full path existed and the route ends at the nearest reachable point.
@@ -295,6 +323,28 @@ impl Route {
                 .collect();
             self.searched = Some((search.expanded(), search.has_open()));
             self.search = None;
+        }
+        if let Some((mut search, replaced)) = self.detour.take() {
+            match search.advance(world, budget) {
+                PathProgress::Searching => {
+                    self.detour = Some((search, replaced));
+                    return RouteStep::Searching;
+                }
+                PathProgress::Found(path) => {
+                    let doors = search.doors_along();
+                    let kept = path::straightened(world, feet, &path, self.height);
+                    self.waypoints.drain(..replaced.min(self.waypoints.len()));
+                    self.crossings.drain(..replaced.min(self.crossings.len()));
+                    for &index in kept.iter().rev() {
+                        self.waypoints.push_front(path[index]);
+                        self.crossings
+                            .push_front(doors.get(index).copied().flatten());
+                    }
+                }
+                // No short way round: the route stays, and asks for the door again.
+                PathProgress::Failed => (),
+            }
+            self.searched = Some((search.expanded(), search.has_open()));
         }
         while let Some(&waypoint) = self.waypoints.front() {
             let near = |reach: f32| {
@@ -574,6 +624,9 @@ mod tests {
         let (step, feet) = follow_to_door(&mut route, &world, feet, goal, 1000);
         assert_eq!(step, RouteStep::Arrived);
         assert!(feet.z > 8.0, "{feet:?}");
+        // Only a short way round was searched, not the whole route again.
+        let (expanded, _) = route.searched().unwrap();
+        assert!(expanded < 500, "{expanded}");
     }
 
     #[test]
