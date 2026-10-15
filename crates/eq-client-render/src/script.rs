@@ -456,7 +456,14 @@ pub(super) fn drive(
                 };
                 let searching = route.is_searching();
                 let step = route.next(world, feet, goal, SEARCH_BUDGET, now);
-                if searching && !route.is_searching() {
+                if searching
+                    && !route.is_searching()
+                    && let Some(found) = route.detoured()
+                {
+                    let (expanded, _) = route.searched().unwrap_or_default();
+                    let waypoints = route.remaining();
+                    info!(found, expanded, waypoints, "Script walk detour ready");
+                } else if searching && !route.is_searching() {
                     let (waypoints, partial) = (route.remaining(), route.partial());
                     let (expanded, open) = route.searched().unwrap_or_default();
                     let (height, drops) = (route.height(), observed.4.airborne.is_some());
