@@ -36,6 +36,84 @@ fn inspect_path() {
     );
 }
 
+/// Separates a search that gives up on its expansion cap from one that runs out
+/// of walkable positions. Each of `EQ_PROBE_FEET` and `EQ_PROBE_GOAL` (renderer
+/// points a little above their floor) drops to the floor below it; the search
+/// then runs once per cap in `EQ_PROBE_CAPS` (comma-separated, default the
+/// client's own), with the wall toll on and off. `open=false` on a failure
+/// means every walkable position from the start was searched.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_FEET and EQ_PROBE_GOAL"]
+fn inspect_search_limits() {
+    use eq_client_core::movement::{PathProgress, PathSearch};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone =
+        eq_client_assets::load_zone(&install, &std::env::var("EQ_PROBE_ZONE").unwrap()).unwrap();
+    let height = std::env::var("EQ_PROBE_MODEL").map_or(6.0, |model| {
+        eq_client_assets::characters::load_character(&install.join("global_chr.s3d"), &model)
+            .unwrap()
+            .height()
+    });
+    let world = build_collision(&zone).unwrap();
+    let floor = |at: Vec3| {
+        let below = world.ray_distance(at, -Vec3::Y, 50.0).unwrap();
+        at - Vec3::Y * below
+    };
+    let (feet, goal) = (
+        floor(probe_point("EQ_PROBE_FEET")),
+        floor(probe_point("EQ_PROBE_GOAL")),
+    );
+    let eq = |at: Vec3| Vec3::new(-at.z, at.x, at.y);
+    println!(
+        "height={height} feet={feet:?} goal={goal:?} eq_feet={:?} eq_goal={:?}",
+        eq(feet),
+        eq(goal)
+    );
+    let caps: Vec<usize> = std::env::var("EQ_PROBE_CAPS").map_or(vec![60_000], |caps| {
+        caps.split(',')
+            .map(|cap| cap.trim().parse().unwrap())
+            .collect()
+    });
+    for cap in caps {
+        for toll in [true, false] {
+            let started = std::time::Instant::now();
+            let mut search = PathSearch::new(feet, goal, 10.0, height).with_limits(cap, toll);
+            let result = loop {
+                match search.advance(&world, 5000) {
+                    PathProgress::Searching => (),
+                    done => break done,
+                }
+            };
+            let elapsed = started.elapsed().as_secs_f32();
+            let (low, high) = search
+                .positions()
+                .fold((f32::MAX, f32::MIN), |(low, high), p| {
+                    (low.min(p.y), high.max(p.y))
+                });
+            let closest = search.closest().and_then(|path| path.last().copied());
+            let length = match &result {
+                PathProgress::Found(path) => Some(
+                    path.windows(2)
+                        .map(|pair| pair[0].distance(pair[1]))
+                        .sum::<f32>()
+                        + path.first().map_or(0.0, |first| first.distance(feet)),
+                ),
+                _ => None,
+            };
+            println!(
+                "cap={cap} toll={toll} found={} expanded={} open={} reached={} seconds={elapsed:.2} \
+                 path_length={length:?} floor_y={low:.1}..{high:.1} closest_eq={:?} closest_flat_distance={:?}",
+                matches!(result, PathProgress::Found(_)),
+                search.expanded(),
+                search.has_open(),
+                search.reached(),
+                closest.map(eq),
+                closest.map(|end| Vec2::new(end.x - goal.x, end.z - goal.z).length()),
+            );
+        }
+    }
+}
+
 /// Checks whether a server's spawn positions sit in this client's zone geometry:
 /// each named point should have a floor a little below it. Points in empty space
 /// mean the server's zone data was laid out for different zone files.

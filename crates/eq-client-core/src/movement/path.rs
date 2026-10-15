@@ -109,6 +109,10 @@ pub struct PathSearch {
     nodes: HashMap<Key, Node>,
     open: BinaryHeap<Open>,
     expanded: usize,
+    /// Expansions after which the search gives up.
+    max_expansions: usize,
+    /// Extra cost of leaving a position beside a wall or ledge.
+    wall_toll: f32,
     /// Whether routes may step off ledges and fall to the floor below.
     drops: bool,
 }
@@ -142,8 +146,20 @@ impl PathSearch {
             nodes,
             open,
             expanded: 0,
+            max_expansions: MAX_EXPANSIONS,
+            wall_toll: WALL_TOLL,
             drops: false,
         }
+    }
+
+    /// Overrides the expansion cap and switches the wall toll, for diagnosing
+    /// searches that give up; routes the client walks never call it.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_limits(mut self, max_expansions: usize, wall_toll: bool) -> Self {
+        self.max_expansions = max_expansions;
+        self.wall_toll = if wall_toll { WALL_TOLL } else { 0.0 };
+        self
     }
 
     /// Lets routes step off ledges and fall, for sessions that simulate falls;
@@ -171,7 +187,7 @@ impl PathSearch {
                 return PathProgress::Found(self.trace(key));
             }
             self.expanded += 1;
-            if self.expanded > MAX_EXPANSIONS {
+            if self.expanded > self.max_expansions {
                 return PathProgress::Failed;
             }
             let steps = NEIGHBORS.map(|(di, dj)| {
@@ -183,7 +199,7 @@ impl PathSearch {
             // A position a wall or ledge stands beside costs more to leave, so
             // routes keep to the middle of rooms where there is room to.
             let beside_wall = steps.iter().any(Option::is_none);
-            let toll = if beside_wall { WALL_TOLL } else { 0.0 };
+            let toll = if beside_wall { self.wall_toll } else { 0.0 };
             for (index, step) in steps.into_iter().enumerate() {
                 let Some((i, j, next_feet)) = step.or_else(|| {
                     let (di, dj) = NEIGHBORS[index];
@@ -240,6 +256,19 @@ impl PathSearch {
     #[must_use]
     pub fn reached(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// How many positions the search has expanded, for diagnostics.
+    #[must_use]
+    pub fn expanded(&self) -> usize {
+        self.expanded
+    }
+
+    /// Whether positions remain to expand: false after a failure means every
+    /// walkable position from the start was searched; true means it gave up.
+    #[must_use]
+    pub fn has_open(&self) -> bool {
+        !self.open.is_empty()
     }
 
     /// Every feet position the search has reached, for diagnostics.
