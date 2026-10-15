@@ -527,7 +527,13 @@ pub(super) fn drive(
                 };
                 let searching = route.is_searching();
                 let call = std::time::Instant::now();
-                let step = route.next(world, feet, goal, SEARCH_BUDGET, now);
+                // Off the ground, the fall brings the walker to its waypoint.
+                let falling = observed
+                    .4
+                    .airborne
+                    .as_ref()
+                    .is_some_and(|airborne| airborne.peak().is_some());
+                let step = route.next_with(world, (feet, falling), goal, SEARCH_BUDGET, now);
                 let call = call.elapsed();
                 if let RouteStep::Toward(toward) = step {
                     let traced = script.following.and_then(|following| following.traced);
