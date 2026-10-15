@@ -2,12 +2,14 @@
 
 mod airborne;
 mod falls;
+mod ground_grid;
 mod liquids;
 mod pace;
 mod path;
 mod route;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use falls::{HARMLESS_DROP, fall_damage};
+pub use ground_grid::GroundGridStats;
 pub use liquids::{GuardView, Liquid, Liquids};
 pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};
@@ -94,6 +96,8 @@ impl CollisionMesh {
 #[derive(Clone)]
 pub struct CollisionWorld {
     terrain: Arc<CollisionMesh>,
+    /// A faster index of the terrain for straight-down ground rays.
+    ground_grid: Option<Arc<ground_grid::GroundGrid>>,
     /// Each obstacle with the door it belongs to, if any.
     obstacles: Vec<(Option<u8>, Arc<CollisionMesh>)>,
     liquids: Option<Arc<dyn Liquids>>,
@@ -105,8 +109,10 @@ impl CollisionWorld {
     /// # Errors
     /// Rejects empty geometry, excessive vertex counts, and invalid meshes.
     pub fn new(triangles: impl IntoIterator<Item = [[f32; 3]; 3]>) -> Result<Self, String> {
+        let terrain = CollisionMesh::new(triangles)?;
         Ok(Self {
-            terrain: Arc::new(CollisionMesh::new(triangles)?),
+            ground_grid: ground_grid::GroundGrid::new(&terrain.mesh).map(Arc::new),
+            terrain: Arc::new(terrain),
             obstacles: Vec::new(),
             liquids: None,
         })
@@ -132,6 +138,7 @@ impl CollisionWorld {
     pub fn without_doors(&self, doors: &[u8]) -> Self {
         Self {
             terrain: Arc::clone(&self.terrain),
+            ground_grid: self.ground_grid.clone(),
             obstacles: self
                 .obstacles
                 .iter()
@@ -150,6 +157,7 @@ impl CollisionWorld {
     pub fn near(&self, center: Vec3, reach: f32) -> Self {
         Self {
             terrain: Arc::clone(&self.terrain),
+            ground_grid: self.ground_grid.clone(),
             obstacles: self
                 .obstacles
                 .iter()
@@ -163,6 +171,22 @@ impl CollisionWorld {
                 .cloned()
                 .collect(),
             liquids: self.liquids.clone(),
+        }
+    }
+
+    /// What building the terrain's ground grid took, if it has one.
+    #[must_use]
+    pub fn ground_grid_stats(&self) -> Option<GroundGridStats> {
+        self.ground_grid.as_ref().map(|grid| grid.stats())
+    }
+
+    /// The same world answering every ground ray from the terrain's BVH alone,
+    /// for comparing the two.
+    #[must_use]
+    pub fn without_ground_grid(&self) -> Self {
+        Self {
+            ground_grid: None,
+            ..self.clone()
         }
     }
 
@@ -221,16 +245,23 @@ impl CollisionWorld {
         // bottom one, since mesh traversal can discard an endpoint contact.
         const EDGE: f32 = 0.000_1;
         let origin = Vector::from_array((position + Vec3::Y * (step_up + EDGE)).to_array());
-        let hit = self
-            .meshes()
-            .filter_map(|mesh| {
-                mesh.cast_local_ray_and_get_normal(
-                    &Ray::new(origin, -Vector::Y),
-                    step_up + drop + 2.0 * EDGE,
-                    false,
-                )
-            })
-            .min_by(|a, b| a.time_of_impact.total_cmp(&b.time_of_impact))?;
+        let (ray, max) = (Ray::new(origin, -Vector::Y), step_up + drop + 2.0 * EDGE);
+        let terrain = self
+            .ground_grid
+            .as_ref()
+            .and_then(|grid| grid.cast_down(&self.terrain.mesh, &ray, max).ok())
+            .unwrap_or_else(|| {
+                self.terrain
+                    .mesh
+                    .cast_local_ray_and_get_normal(&ray, max, false)
+            });
+        let hit =
+            terrain
+                .into_iter()
+                .chain(self.obstacles.iter().filter_map(|(_, mesh)| {
+                    mesh.mesh.cast_local_ray_and_get_normal(&ray, max, false)
+                }))
+                .min_by(|a, b| a.time_of_impact.total_cmp(&b.time_of_impact))?;
         if hit.normal.y.abs() < 0.7 {
             return None;
         }

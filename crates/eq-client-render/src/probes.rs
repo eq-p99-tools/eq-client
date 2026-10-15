@@ -42,7 +42,8 @@ fn inspect_path() {
 /// then runs once per cap in `EQ_PROBE_CAPS` (comma-separated, default the
 /// client's own) and weight in `EQ_PROBE_WEIGHTS` (comma-separated, default
 /// 1), with the wall toll on and off. `open=false` on a failure
-/// means every walkable position from the start was searched.
+/// means every walkable position from the start was searched. `EQ_PROBE_GRID=0`
+/// answers every ground ray from the terrain's tree alone, to compare the two.
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_FEET and EQ_PROBE_GOAL"]
 fn inspect_search_limits() {
@@ -56,6 +57,12 @@ fn inspect_search_limits() {
             .height()
     });
     let world = build_collision(&zone).unwrap();
+    let world = if std::env::var("EQ_PROBE_GRID").is_ok_and(|grid| grid == "0") {
+        world.without_ground_grid()
+    } else {
+        world
+    };
+    println!("ground_grid={:?}", world.ground_grid_stats());
     let floor = |at: Vec3| {
         let below = world.ray_distance(at, -Vec3::Y, 50.0).unwrap();
         at - Vec3::Y * below
@@ -114,11 +121,13 @@ fn inspect_search_limits() {
             };
             println!(
                 "cap={cap} weight={weight} toll={toll} found={} expanded={} open={} reached={} seconds={elapsed:.2} \
-                 path_length={length:?} floor_y={low:.1}..{high:.1} closest_eq={:?} closest_flat_distance={:?}",
+                 us_per_expansion={:.1} path_length={length:?} floor_y={low:.1}..{high:.1} closest_eq={:?} closest_flat_distance={:?}",
                 matches!(result, PathProgress::Found(_)),
                 search.expanded(),
                 search.has_open(),
                 search.reached(),
+                f64::from(elapsed) * 1e6
+                    / f64::from(u32::try_from(search.expanded()).unwrap_or(u32::MAX).max(1)),
                 closest.map(eq),
                 closest.map(|end| Vec2::new(end.x - goal.x, end.z - goal.z).length()),
             );

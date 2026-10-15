@@ -1272,7 +1272,23 @@ fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Collisi
             triangle.map(|p| transform.transform_point3(Vec3::from_array(p)).to_array())
         }));
     }
-    match eq_client_core::movement::CollisionWorld::new(triangles) {
+    let world = eq_client_core::movement::CollisionWorld::new(triangles);
+    if let Some(grid) = world
+        .as_ref()
+        .ok()
+        .and_then(eq_client_core::movement::CollisionWorld::ground_grid_stats)
+    {
+        info!(
+            columns = grid.columns,
+            column_size = grid.column_size,
+            triangles = grid.triangles,
+            wide = grid.wide,
+            bytes = grid.bytes,
+            build_ms = grid.build.as_secs_f32() * 1000.0,
+            "Ground grid"
+        );
+    }
+    match world {
         Ok(world) if zone.regions.liquid_region_count() == 0 => Some(world),
         Ok(world) => Some(world.with_liquids(ZoneLiquids(zone.regions.clone()))),
         Err(error) => {
