@@ -467,7 +467,7 @@ impl ClientWorld {
                 position,
                 refused,
             } => self.motion_sent(*session_id, *position, refused.as_ref(), news),
-            WorldEvent::Death(death) => return self.died(death),
+            WorldEvent::Death(death) => return self.died(death, now),
             WorldEvent::DeathThreshold(threshold) => self.death_threshold = Some(*threshold),
             WorldEvent::ZoneTransfer(offer) => return self.transfer(offer),
             WorldEvent::ZoneTransferRejected { session_id, reason } => {
@@ -851,7 +851,7 @@ impl ClientWorld {
 
     /// A death: a spawn becomes a corpse, and the player's own death holds
     /// them until the server offers to return them home.
-    fn died(&mut self, death: &Death) -> Changes {
+    fn died(&mut self, death: &Death, now: Instant) -> Changes {
         // Who died and who killed them, named before the corpse takes its
         // name; a death of no one the player knows says nothing.
         let slain = match self.party(death.spawn_id) {
@@ -863,7 +863,7 @@ impl ClientWorld {
         };
         if let Ok(id) = u16::try_from(death.spawn_id) {
             self.zone
-                .corpse(id, death.corpse_name.as_deref(), &mut self.revision);
+                .corpse(id, death.corpse_name.as_deref(), now, &mut self.revision);
             self.zone.casts.remove(&id);
         }
         let mut changes = if self
