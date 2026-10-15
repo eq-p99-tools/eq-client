@@ -475,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn a_door_unseen_when_planned_and_shut_on_arrival_is_opened_without_a_stall() {
+    fn a_far_door_unseen_when_planned_and_shut_on_arrival_is_opened_without_a_stall() {
         let (mut world, door) = doorway(false);
         world.set_door_obstacles(Vec::new());
         let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
