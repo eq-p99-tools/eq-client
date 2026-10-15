@@ -29,7 +29,9 @@ pub(super) struct AnimatedCharacter {
     elapsed: f32,
     since_pose: f32,
     moving_for: f32,
-    previous_position: Vec3,
+    /// Where it stood when last posed; none before its first pose, so a
+    /// character newly drawn at its place is not taken for moving there.
+    previous_position: Option<Vec3>,
     clip: (&'static str, bool),
     /// The swings the server sent for the spawn drawn.
     swings: Swings,
@@ -267,7 +269,7 @@ pub(super) fn spawn_on_layers(
             elapsed: 0.0,
             since_pose: 0.0,
             moving_for: 0.0,
-            previous_position: Vec3::ZERO,
+            previous_position: None,
             clip: ("P01", false),
             swings: Swings::default(),
             lift,
@@ -312,11 +314,10 @@ pub(super) fn animate(
                 .flatten()
         });
         let posture = id.and_then(|id| world.posture(id));
-        let moving = transform
-            .translation
-            .distance_squared(character.previous_position)
-            > 0.0001;
-        character.previous_position = transform.translation;
+        let moving = character
+            .previous_position
+            .is_some_and(|previous| transform.translation.distance_squared(previous) > 0.0001);
+        character.previous_position = Some(transform.translation);
         let dt = time.delta_secs().min(0.1);
         // The latest of the spawn's swing and its completed cast, which
         // plays its spell's casting gesture.
@@ -580,12 +581,18 @@ fn paced(
 ) -> (&'static str, bool) {
     use eq_client_core::movement::{record_speed, runs};
     let (speed, walk_speed, run_speed) = pace(world, id, own, controls);
-    let selected = paced_clip(selected, runs(speed, walk_speed), |clip| {
-        asset.clip_moves_body(clip)
-    });
+    // The player moves at the pace it chose: its run, or its walk while
+    // the walk toggle is on.
+    let runs = if own {
+        !controls.is_some_and(|controls| controls.walking)
+    } else {
+        runs(speed, walk_speed)
+    };
+    let selected = paced_clip(selected, runs, |clip| asset.clip_moves_body(clip));
     if selected != current && matches!(selected.0, "L01" | "L02") {
         debug!(
             spawn = id,
+            own,
             clip = selected.0,
             speed,
             walk = record_speed(walk_speed),
@@ -598,8 +605,9 @@ fn paced(
 
 /// The pace a drawn character moves at, in units per second, with its
 /// record's walk and run speeds: another spawn's by the speed of its latest
-/// report, the player's by the speed its movement asks for (its run, or its
-/// walk while walking). [`eq_client_core::movement::runs`] decides from it.
+/// report, from which [`eq_client_core::movement::runs`] decides; the
+/// player's by the speed its movement asks for (its run, or its walk while
+/// walking), logged beside its choice.
 fn pace(
     world: &eq_client_core::world::ClientWorld,
     id: Option<u16>,
@@ -608,18 +616,14 @@ fn pace(
 ) -> (f32, f32, f32) {
     use eq_client_core::movement::record_speed;
     if own {
-        let Some(player) = world.player() else {
-            return (0.0, 0.0, 0.0);
-        };
         let walking = controls.is_some_and(|controls| controls.walking);
-        // The record's own speeds where it has them, so the comparison is in
-        // its units; else what the session lets the player move at.
-        let asked = if player.walk_speed > 0.0 && player.run_speed > player.walk_speed {
-            record_speed(if walking {
-                player.walk_speed
-            } else {
-                player.run_speed
-            })
+        let (walk, run) = world
+            .player()
+            .map_or((0.0, 0.0), |player| (player.walk_speed, player.run_speed));
+        // The record's own speeds where it has them; else what the session
+        // lets the player move at.
+        let asked = if walk > 0.0 && run > walk {
+            record_speed(if walking { walk } else { run })
         } else {
             controls
                 .and_then(|controls| {
@@ -631,7 +635,7 @@ fn pace(
                 })
                 .unwrap_or(0.0)
         };
-        return (asked, player.walk_speed, player.run_speed);
+        return (asked, walk, run);
     }
     id.and_then(|id| world.spawn(id))
         .map_or((0.0, 0.0, 0.0), |spawn| {

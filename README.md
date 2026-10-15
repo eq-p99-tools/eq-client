@@ -279,7 +279,7 @@ Implemented locally:
   objects or animation work. Model textures/materials are shared, poses update
   at most 30 times per second, and new instances are created gradually.
   A moving character walks or runs by its speed against its spawn record's
-  walk speed, and a model whose walk or run moves only its root plays the other
+  walk speed (the player by its walk toggle), and a model whose walk or run moves only its root plays the other
   (inferred, recording checklist 6.232).
 - `--demo-entities` provides an explicitly offline moving player/wolf/orc scene
   using the same renderer. The player cycles through sitting, ducking, and walking
