@@ -65,6 +65,9 @@ pub struct Script {
     hovering: Option<Entity>,
     /// The spawn a `wait_dead` step waits on: the target as it started.
     awaited: Option<u16>,
+    /// The world container an `approach object` step walks toward, chosen
+    /// as it started.
+    approached: Option<u32>,
 }
 
 struct Follow {
@@ -95,6 +98,7 @@ impl Script {
             route: None,
             hovering: None,
             awaited: None,
+            approached: None,
         }
     }
 
@@ -195,6 +199,7 @@ impl Script {
         self.follow = None;
         self.route = None;
         self.awaited = None;
+        self.approached = None;
         info!("Script stopped: {reason}");
     }
 }
@@ -400,6 +405,22 @@ pub(super) fn drive(
                 let distance = face(&online, &players, &mut cameras);
                 distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
             }
+            Step::ApproachObject {
+                range, duration, ..
+            } => {
+                let Some(distance) =
+                    face_object(script.approached, &online, &players, &mut cameras)
+                else {
+                    script.stop(&mut keys, &mut mouse, "approach object lost its object");
+                    return;
+                };
+                if distance > *range && elapsed >= *duration {
+                    // A later step such as `press f` would act on nothing.
+                    script.stop(&mut keys, &mut mouse, "approach object ran out of time");
+                    return;
+                }
+                distance <= *range
+            }
             Step::Walk(_, duration) => {
                 use eq_client_core::movement::RouteStep;
                 let ends = bodies
@@ -554,6 +575,7 @@ pub(super) fn drive(
         script.current = None;
         script.route = None;
         script.awaited = None;
+        script.approached = None;
     }
     let Some(step) = script.steps.pop_front() else {
         return;
@@ -747,6 +769,23 @@ pub(super) fn drive(
         Step::Approach(..) => {
             if face(&online, &players, &mut cameras).is_none() {
                 script.stop(&mut keys, &mut mouse, "approach needs a visible target");
+                return;
+            }
+            keys.press(KeyCode::KeyW);
+            script.held = vec![KeyCode::KeyW];
+        }
+        Step::ApproachObject { kind, .. } => {
+            let world = online.world();
+            script.approached = world.player().and_then(|player| {
+                eq_client_core::ground::nearest_container(world.objects(), *kind, player.position)
+                    .map(|object| object.drop_id)
+            });
+            if face_object(script.approached, &online, &players, &mut cameras).is_none() {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "approach object found no container of that kind",
+                );
                 return;
             }
             keys.press(KeyCode::KeyW);
@@ -1080,9 +1119,30 @@ fn face(
         .target()
         .selected
         .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state))?;
+    face_toward(spawn.position, players, cameras)
+}
+
+/// [`face`] toward a world object instead of the target, or None without a
+/// player or once the object has left the zone.
+fn face_object(
+    drop_id: Option<u32>,
+    online: &super::online::OnlineState,
+    players: &Query<&Transform, With<super::Player>>,
+    cameras: &mut Query<&mut super::OrbitCamera>,
+) -> Option<f32> {
+    let object = online.world().objects().entries().get(&drop_id?)?;
+    face_toward(object.position, players, cameras)
+}
+
+/// Points the camera from the player toward a position and returns the flat
+/// distance between them, or None without a player.
+fn face_toward(
+    position: eq_client_core::WorldPosition,
+    players: &Query<&Transform, With<super::Player>>,
+    cameras: &mut Query<&mut super::OrbitCamera>,
+) -> Option<f32> {
     let transform = players.single().ok()?;
-    let to =
-        Vec3::from_array(eq_client_core::render_position(spawn.position)) - transform.translation;
+    let to = Vec3::from_array(eq_client_core::render_position(position)) - transform.translation;
     let flat = Vec2::new(to.x, to.z);
     if flat.length() > f32::EPSILON {
         for mut camera in cameras.iter_mut() {

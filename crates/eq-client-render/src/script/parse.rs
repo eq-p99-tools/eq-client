@@ -124,6 +124,17 @@ pub enum Step {
     /// Holds W toward the current target until it is within a distance, for a
     /// bounded duration.
     Approach(f32, Duration),
+    /// Holds W toward the nearest world container of one tradeskill kind
+    /// (its container type, such as a pottery wheel's), chosen as the step
+    /// starts, until it is within a distance, for a bounded duration.
+    ApproachObject {
+        /// The container type the object must have.
+        kind: u8,
+        /// Flat distance at which the step ends.
+        range: f32,
+        /// Longest the step may walk.
+        duration: Duration,
+    },
     /// Walks a searched path around walls to within a distance of the current
     /// target, for a bounded duration.
     Walk(f32, Duration),
@@ -417,6 +428,15 @@ fn parse_step(line: &str) -> Result<Step, String> {
         },
         ("trace", [duration]) => Step::Trace(millis(duration, MAX_TRACE)?),
         ("face", []) => Step::Face,
+        ("approach", ["object", kind, range, duration]) => Step::ApproachObject {
+            kind: kind
+                .parse::<u8>()
+                .ok()
+                .filter(|kind| eq_client_core::tradeskills::combines(*kind))
+                .ok_or("expected a tradeskill container type")?,
+            range: number(range, 1.0, 200.0)?,
+            duration: millis(duration, MAX_HOLD)?,
+        },
         ("approach", [range, duration]) => {
             Step::Approach(number(range, 1.0, 200.0)?, millis(duration, MAX_HOLD)?)
         }
@@ -1128,6 +1148,33 @@ mod tests {
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
         );
+    }
+
+    #[test]
+    fn an_object_approach_names_a_tradeskill_container_kind() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("approach object 21 12 8000\n", base).unwrap(),
+            [Step::ApproachObject {
+                kind: 21,
+                range: 12.0,
+                duration: Duration::from_secs(8),
+            }]
+        );
+        // Bags that only hold things are not stations; the range and time
+        // keep the targeted approach's bounds.
+        for bad in [
+            "approach object",
+            "approach object 21 12",
+            "approach object 51 12 8000",
+            "approach object 8 12 8000",
+            "approach object 256 12 8000",
+            "approach object wheel 12 8000",
+            "approach object 21 0 8000",
+            "approach object 21 12 10001",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

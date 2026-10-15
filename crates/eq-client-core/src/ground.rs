@@ -31,6 +31,30 @@ pub fn nearest_usable(objects: &Objects, player: WorldPosition) -> Option<(u32, 
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// The nearest world container of one tradeskill kind (its container type,
+/// such as a pottery wheel's), anywhere in the zone: a step that names the
+/// kind passes over a nearer station of another kind.
+#[must_use]
+pub fn nearest_container(
+    objects: &Objects,
+    kind: u8,
+    player: WorldPosition,
+) -> Option<&GroundObject> {
+    objects
+        .entries()
+        .values()
+        .filter(|object| object.is_tradeskill_container() && object.object_type == u32::from(kind))
+        .map(|object| {
+            let distance = (object.position.x - player.x)
+                .hypot(object.position.y - player.y)
+                .hypot(object.position.z - player.z);
+            (object, distance)
+        })
+        .filter(|(_, distance)| distance.is_finite())
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(object, _)| object)
+}
+
 /// A model's bounds grown to at least [`MIN_PICK_SIZE`] on each axis, around
 /// the same center.
 #[must_use]
@@ -113,6 +137,31 @@ mod tests {
         assert_eq!(nearest_usable(&objects, player).map(|hit| hit.0), Some(5));
         objects.apply(&ObjectUpdate::Snapshot(Vec::new()));
         assert_eq!(nearest_usable(&objects, player), None);
+    }
+
+    #[test]
+    fn a_named_kind_of_container_is_chosen_over_a_nearer_one_of_another_kind() {
+        let mut objects = Objects::default();
+        let station = |drop_id, x, object_type| GroundObject {
+            object_type,
+            ..object(drop_id, "STATION", x)
+        };
+        // A station of kind 20 nearer than either of kind 21, and an item.
+        for update in [
+            station(1, 33.0, 20),
+            station(2, 59.0, 21),
+            station(3, 90.0, 21),
+            object(4, "IT63_ACTORDEF", 1.0),
+        ] {
+            objects.apply(&ObjectUpdate::Spawn(update));
+        }
+        let player = WorldPosition::default();
+        let chosen = |kind| nearest_container(&objects, kind, player).map(|object| object.drop_id);
+        assert_eq!(chosen(21), Some(2));
+        assert_eq!(chosen(20), Some(1));
+        // Beyond reach still counts; a kind the zone lacks finds nothing.
+        assert_eq!(chosen(17), None);
+        assert_eq!(chosen(0), None);
     }
 
     #[test]
