@@ -433,12 +433,13 @@ fn compose_hierarchy(local: &[Mat4], parents: &[Option<usize>]) -> Vec<Mat4> {
 /// Rejects missing models, unsupported legacy skins/tracks, invalid hierarchies,
 /// or skin groups that do not cover the mesh. It never fabricates missing bones.
 pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadError> {
-    load_with_donors(path, model, &[])
+    load_with_donors(path, model, &[], &super::DonorArchives::default())
 }
 
 /// Loads a model as [`load_character`] does, reading its donor's animation
 /// tracks from the first of `donor_archives` that has them when the model's
-/// own archive has none. Archives that cannot be read are skipped.
+/// own archive has none. Each of those archives is parsed once per `parsed`
+/// handle; archives that cannot be read are skipped.
 ///
 /// # Errors
 /// As [`load_character`], for the model's own archive only.
@@ -447,6 +448,7 @@ pub(super) fn load_with_donors(
     path: &Path,
     model: &str,
     donor_archives: &[PathBuf],
+    parsed: &super::DonorArchives,
 ) -> Result<CharacterAsset, LoadError> {
     let (mut archive, bytes) = open_world(path)?;
     let doc = WldDoc::parse(&bytes)
@@ -494,10 +496,10 @@ pub(super) fn load_with_donors(
         && borrowed == 0
     {
         for other in donor_archives {
-            let Ok(doc) = read_world(other) else {
-                continue;
-            };
-            if gather_clips(&doc, &name, &bone_names, Some(source), false, &mut clips) > 0 {
+            let lent = parsed.with(other, |doc| {
+                gather_clips(doc, &name, &bone_names, Some(source), false, &mut clips)
+            });
+            if lent.is_some_and(|tracks| tracks > 0) {
                 break;
             }
         }
@@ -622,7 +624,7 @@ fn open_world(path: &Path) -> Result<(PfsReader<File>, Vec<u8>), LoadError> {
 }
 
 /// Parses another archive's WLD, for its animation tracks only.
-fn read_world(path: &Path) -> Result<WldDoc, LoadError> {
+pub(super) fn read_world(path: &Path) -> Result<WldDoc, LoadError> {
     let (_, bytes) = open_world(path)?;
     WldDoc::parse(&bytes).map_err(|errors| invalid(&format!("WLD ({} parse errors)", errors.len())))
 }

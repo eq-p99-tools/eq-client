@@ -2,7 +2,7 @@
 
 use super::{ViewerSettings, character, online::OnlineState};
 use bevy::prelude::*;
-use eq_client_assets::characters::load_installed_character;
+use eq_client_assets::characters::{DonorArchives, load_installed_character};
 use eq_client_core::{SpawnKind, entities::nearby, races, render_position};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,6 +15,8 @@ pub(super) struct NearbyEntities {
         &'static str,
         super::background::Background<Option<eq_client_assets::characters::CharacterAsset>>,
     )>,
+    /// The archives this zone's models borrow movements from, each parsed once.
+    donors: DonorArchives,
     elapsed: f32,
     /// Whether the last pass drew every spawn it chose, so none is still to
     /// pop in.
@@ -29,6 +31,7 @@ impl NearbyEntities {
             commands.entity(entity).despawn();
         }
         self.models.clear();
+        self.donors = DonorArchives::default();
         self.loading = None;
         self.revisions.clear();
         self.settled = false;
@@ -200,9 +203,10 @@ fn draw(
         if nearby_state.loading.is_none() {
             let directory = directory.to_path_buf();
             let zone = state.world().zone().to_owned();
+            let donors = nearby_state.donors.clone();
             let mut job = super::background::Background::default();
             job.start(state.world().session_id().unwrap_or_default(), move || {
-                load_installed_character(&directory, &zone, code).ok()
+                load_installed_character(&directory, &zone, code, &donors).ok()
             });
             nearby_state.loading = Some((code, job));
         }

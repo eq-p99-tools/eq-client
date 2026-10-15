@@ -681,9 +681,13 @@ mod tests {
     fn installed_triangles_wind_counter_clockwise_around_their_normals() {
         let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
         let zone = load_zone(Path::new(&install), "qeytoqrg").unwrap();
-        let human =
-            crate::characters::load_installed_character(Path::new(&install), "qeynos2", "HUM")
-                .unwrap();
+        let human = crate::characters::load_installed_character(
+            Path::new(&install),
+            "qeynos2",
+            "HUM",
+            &crate::characters::DonorArchives::default(),
+        )
+        .unwrap();
         let (terrain, character) = (
             counter_clockwise_share(&zone.primitives),
             counter_clockwise_share(&human.primitives),
