@@ -1354,7 +1354,7 @@ fn the_purse_is_what_the_session_says_whatever_loot_and_purchases_suggest() {
     let mut world = admitted();
     game(&mut world, WorldEvent::Coins(coins(1, 0, 0, 0)));
     world.open_loot(9);
-    world.open_shop(8);
+    game(&mut world, shop_opened(8));
     // The session adds loot coins and takes a price, and says so; the
     // client does no sums of its own.
     game(
@@ -1378,13 +1378,51 @@ fn the_purse_is_what_the_session_says_whatever_loot_and_purchases_suggest() {
     assert_eq!(world.coins(), Some(&coins(0, 9, 9, 5)));
 }
 
+/// The server opening this merchant's window at a neutral rate.
+fn shop_opened(merchant_id: u16) -> WorldEvent {
+    WorldEvent::Merchant(crate::merchant::MerchantUpdate::Opened {
+        merchant_id,
+        accepted: true,
+        rate: 1.0,
+    })
+}
+
+#[test]
+fn a_merchant_opens_only_on_the_servers_answer() {
+    use crate::merchant::MerchantUpdate;
+    let mut world = admitted();
+    // Asked and unanswered, as EQEmu leaves a merchant out of range, nothing
+    // is open: the stock that would follow an answer is no merchant's.
+    assert!(world.merchant().is_none());
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::Merchant(MerchantUpdate::Removed { slot: 3 })
+        )
+        .ignored
+    );
+    // The answer opens the window at the server's rate.
+    let changes = game(
+        &mut world,
+        WorldEvent::Merchant(MerchantUpdate::Opened {
+            merchant_id: 8,
+            accepted: true,
+            rate: 1.25,
+        }),
+    );
+    assert!(changes.trade && !changes.ignored);
+    let merchant = world.merchant().unwrap();
+    assert_eq!((merchant.merchant_id, merchant.rate), (8, 1.25));
+    assert!(merchant.stock.is_empty());
+}
+
 #[test]
 fn a_merchant_lists_stock_until_closed_or_refusing() {
     use crate::merchant::{MerchantItem, MerchantUpdate};
     let mut world = admitted();
     let merchant = |update| WorldEvent::Merchant(update);
     assert!(game(&mut world, merchant(MerchantUpdate::Closed)).ignored);
-    world.open_shop(8);
+    game(&mut world, shop_opened(8));
     game(
         &mut world,
         merchant(MerchantUpdate::Item(Box::new(MerchantItem {
@@ -1406,21 +1444,12 @@ fn a_merchant_lists_stock_until_closed_or_refusing() {
         }),
     );
     assert!(world.merchant().is_none());
-    world.open_shop(8);
+    game(&mut world, shop_opened(8));
     world.close_shop();
     assert!(world.merchant().is_none());
-    // A merchant that opens keeps the server's rate.
-    world.open_shop(8);
-    assert_eq!(world.merchant().unwrap().rate, None);
-    game(
-        &mut world,
-        merchant(MerchantUpdate::Opened {
-            merchant_id: 8,
-            accepted: true,
-            rate: 1.25,
-        }),
-    );
-    assert_eq!(world.merchant().unwrap().rate, Some(1.25));
+    game(&mut world, shop_opened(8));
+    assert!(game(&mut world, merchant(MerchantUpdate::Closed)).trade);
+    assert!(world.merchant().is_none());
 }
 
 #[test]
@@ -1434,9 +1463,9 @@ fn a_merchant_offers_what_eqemu_paid_for_each_sale() {
     let merchant = Merchant {
         merchant_id: 8,
         stock: std::collections::BTreeMap::new(),
-        rate: Some(rate(1.0)),
+        rate: rate(1.0),
     };
-    assert_eq!(merchant.rate, Some(1.052_631_6));
+    assert!((merchant.rate - 1.052_631_6).abs() < f32::EPSILON);
     let item = |price, stack_count| {
         let mut item = chest();
         item.details.price = Some(price);
@@ -1451,21 +1480,16 @@ fn a_merchant_offers_what_eqemu_paid_for_each_sale() {
     // Each product is cut on its own: a merchant whose modifier is 0.96
     // pays 26 for a 30c item, where one factor of 0.912 would give 27.
     let wary = Merchant {
-        rate: Some(rate(0.96)),
+        rate: rate(0.96),
         ..merchant.clone()
     };
     assert_eq!(wary.offer(&item(30, None)), Some(26));
-    // Without the item's price or the merchant's rate, there is no offer.
+    // Without the item's price or a usable rate, there is no offer.
     let mut unpriced = item(30, None);
     unpriced.details.price = None;
     assert_eq!(merchant.offer(&unpriced), None);
-    let unrated = Merchant {
-        rate: None,
-        ..merchant.clone()
-    };
-    assert_eq!(unrated.offer(&item(30, None)), None);
     let broken = Merchant {
-        rate: Some(0.0),
+        rate: 0.0,
         ..merchant
     };
     assert_eq!(broken.offer(&item(30, None)), None);
@@ -1982,7 +2006,7 @@ fn loot_and_shop_replies_say_what_the_player_got_or_was_refused() {
         game(&mut world, opened(LootResponse::TooFar, Coins::default())).notices,
         []
     );
-    world.open_shop(8);
+    // A merchant's refusal answers the player's request, so it is said.
     assert_eq!(
         game(
             &mut world,
