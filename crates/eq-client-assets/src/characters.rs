@@ -314,6 +314,77 @@ mod tests {
         assert_eq!(donors.tried(), 0);
     }
 
+    /// Prints, for each model a zone shows, what the client would draw: the
+    /// archive it came from, its pieces, its base-look height and, per clip,
+    /// how far the base-look pieces reach and whether any point is lost
+    /// (not finite). A model that loads yet draws nothing visible shows here
+    /// as no base pieces, a collapsed height or lost points.
+    #[test]
+    #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
+    fn inspect_zone_models() {
+        let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
+        let install = std::path::Path::new(&install);
+        let zone = std::env::var("EQ_PROBE_ZONE").unwrap_or_else(|_| "akanon".into());
+        let models = std::env::var("EQ_PROBE_MODELS")
+            .unwrap_or_else(|_| "CLM,CLF,GNM,GNF,RAT,SPI,BET,SNA,BIX,DWM,DWF".into());
+        let donors = super::DonorArchives::default();
+        for model in models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+            let asset = match super::load_installed_character(install, &zone, model, &donors) {
+                Ok(asset) => asset,
+                Err(error) => {
+                    println!("{model}: not loaded ({error})");
+                    continue;
+                }
+            };
+            let archive = asset
+                .source()
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let mut pieces: Vec<String> = asset.pieces.iter().map(|p| format!("{p:?}")).collect();
+            pieces.dedup();
+            let base: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
+            let shown = base.iter().filter(|shown| **shown).count();
+            println!(
+                "{model}: from {archive}; {} primitives, {shown} in the base look; pieces {pieces:?}; base span {:?}; clips {:?}",
+                asset.primitives.len(),
+                asset.span(),
+                asset.animation_codes(),
+            );
+            for clip in asset.animation_codes() {
+                let length = asset.clip_seconds(clip).unwrap_or(0.0);
+                for at in [0.0, length / 2.0] {
+                    let (poses, _) = asset.pose_with_attachments(clip, at, true, &base);
+                    let points: Vec<[f32; 3]> = poses
+                        .iter()
+                        .flatten()
+                        .flat_map(|pose| pose.positions.iter().copied())
+                        .collect();
+                    let lost = points
+                        .iter()
+                        .filter(|p| !p.iter().all(|v| v.is_finite()))
+                        .count();
+                    let reach = |axis: usize| {
+                        points
+                            .iter()
+                            .map(|p| p[axis])
+                            .filter(|v| v.is_finite())
+                            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+                                (lo.min(v), hi.max(v))
+                            })
+                    };
+                    println!(
+                        "  {clip} at {at:.2}s: x {:?} y {:?} z {:?}; {} points, {lost} lost",
+                        reach(0),
+                        reach(1),
+                        reach(2),
+                        points.len(),
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn an_unreadable_donor_archive_is_tried_once() {
         let donors = super::DonorArchives::default();
