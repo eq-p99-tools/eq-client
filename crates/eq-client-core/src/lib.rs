@@ -206,13 +206,16 @@ pub fn drawn_feet_offset(race: u32, size: f32) -> f32 {
 }
 
 /// Where a remote model's soles are drawn, in renderer coordinates: on the
-/// floor of `world` when one lies within 0.6 × size above or below `soles`
-/// (the reported position less [`drawn_feet_offset`]), else at `soles`.
-/// `EQEmu` places a spawn it has moved at its own per-model height, up to
-/// (0.625 − 0.2 × factor) × size under where a standing one sits, and nothing
-/// in the spawn says which rule produced its z, so the floor decides. A
-/// flyer, a swimmer or a mob over ground this geometry lacks has no floor in
-/// that window and stays where the server says. Inferred; recording item 6.231.
+/// floor of `world` when one lies above `soles` (the reported position less
+/// [`drawn_feet_offset`]) by up to 0.6 × size or below it by up to 0.5, else at
+/// `soles`. `EQEmu` places a spawn it has moved at its own per-model height, up
+/// to (0.625 − 0.2 × factor) × size under where a standing one sits, and
+/// nothing in the spawn says which rule produced its z, so the floor decides.
+/// The fix only ever raises a model: a standing spawn's soles already sit a
+/// little over the floor, so the reach down is kept short, and a low flyer, a
+/// mob on a lift or a door (doors are not in this geometry) or one over ground
+/// this geometry lacks stays where the server says. Inferred; recording item
+/// 6.231.
 #[must_use]
 pub fn grounded_soles(
     world: &movement::CollisionWorld,
@@ -221,7 +224,7 @@ pub fn grounded_soles(
     size: f32,
 ) -> f32 {
     let reach = 0.6 * size_or_default(race, size);
-    world.ground(soles, reach, reach).unwrap_or(soles.y)
+    world.ground(soles, reach, 0.5).unwrap_or(soles.y)
 }
 
 /// The size sent, or the race's default when it is missing or not positive.
@@ -285,15 +288,19 @@ mod tests {
         ];
         let world = crate::movement::CollisionWorld::new(floor).unwrap();
         let soles = |y: f32| super::grounded_soles(&world, glam::Vec3::Y * y, 183, 4.0);
-        // Reported two under the floor, as a walked mob's z puts it, or two over.
+        // Reported two under the floor, as a walked mob's z puts it, it lands;
+        // two over, as a flyer or a mob on a lift, it stays.
         assert!(soles(-2.0).abs() < 0.001);
-        assert!(soles(2.0).abs() < 0.001);
-        // Within 0.6 × size it lands; past it, a flyer stays.
-        assert!(soles(2.39).abs() < 0.001);
-        assert!((soles(2.41) - 2.41).abs() < 0.001);
+        assert!((soles(2.0) - 2.0).abs() < 0.001);
+        // It reaches up 0.6 × size to a floor above its soles, and no further.
+        assert!(soles(-2.39).abs() < 0.001);
+        assert!((soles(-2.41) + 2.41).abs() < 0.001);
+        // It reaches down only 0.5, the measured excess of a standing spawn.
+        assert!(soles(0.49).abs() < 0.001);
+        assert!((soles(0.51) - 0.51).abs() < 0.001);
         assert!((soles(5.0) - 5.0).abs() < 0.001);
         // A size-less spawn reaches by its race's default size: 0.6 × 4 for a dwarf.
-        assert!(super::grounded_soles(&world, glam::Vec3::Y * 2.3, 8, 0.0).abs() < 0.001);
+        assert!(super::grounded_soles(&world, glam::Vec3::Y * -2.3, 8, 0.0).abs() < 0.001);
     }
 
     use super::{WorldPosition, render_position, world_position};
