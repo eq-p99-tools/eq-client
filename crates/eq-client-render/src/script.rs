@@ -68,6 +68,8 @@ pub struct Script {
     route: Option<eq_client_core::movement::Route>,
     /// The closed door the walk is opening, if any.
     door_wait: Option<DoorWait>,
+    /// Where the walk last headed, for the stall line and the follower trace.
+    following: Option<Following>,
     /// While a walk's route searches: when the search began, the last frame,
     /// and the longest frame so far, so the log shows how long the walk
     /// waited and whether the search held frames up.
@@ -122,6 +124,7 @@ impl Script {
             focus: None,
             route: None,
             door_wait: None,
+            following: None,
             search_frames: None,
             last_frame: None,
             hovering: None,
@@ -353,6 +356,9 @@ pub(super) fn drive(
     let Some(mut script) = script else {
         return;
     };
+    // Plain borrows of the fields, so a walk can hold its route and note
+    // where it heads at once.
+    let script = &mut *script;
     if let Some(event) = focus.read().last() {
         script.focus = Some(event.focused);
     }
@@ -519,6 +525,28 @@ pub(super) fn drive(
                 let call = std::time::Instant::now();
                 let step = route.next(world, feet, goal, SEARCH_BUDGET, now);
                 let call = call.elapsed();
+                if let RouteStep::Toward(toward) = step {
+                    let traced = script.following.and_then(|following| following.traced);
+                    let mut following = Following {
+                        toward,
+                        index: route.waypoints_reached(),
+                        ahead: route.remaining(),
+                        left: route.distance_left(feet, goal),
+                        traced,
+                    };
+                    if traced.is_none_or(|traced| now.saturating_sub(traced) >= TRACE_EVERY) {
+                        following.traced = Some(now);
+                        debug!(
+                            feet = ?eq_point(feet),
+                            toward = ?eq_point(toward),
+                            index = following.index,
+                            ahead = following.ahead,
+                            left = following.left,
+                            "Script walk following"
+                        );
+                    }
+                    script.following = Some(following);
+                }
                 if call >= SLOW_ROUTE_CALL {
                     let phase = match (searching, route.is_searching()) {
                         (true, false) => "result",
@@ -576,7 +604,7 @@ pub(super) fn drive(
                     }
                 } else if !searching && route.is_searching() {
                     let refused = observed.4.refused.as_deref();
-                    info!(?refused, "Script walk stalled; searching again from here");
+                    log_stall(true, feet, script.following, &observed.4, refused);
                 }
                 let distance = Vec2::new(goal.x - feet.x, goal.z - feet.z).length();
                 // Where an object walk ends, so a partial route shows in the log.
@@ -602,6 +630,7 @@ pub(super) fn drive(
                     }
                     RouteStep::Stalled => {
                         let refused = observed.4.refused.as_deref();
+                        log_stall(false, feet, script.following, &observed.4, refused);
                         let reason = refused.map_or_else(
                             || "walk made no progress, even after searching again".to_owned(),
                             |refused| {
@@ -637,6 +666,9 @@ pub(super) fn drive(
                                         id,
                                         model = %door.model,
                                         open_type = door.open_type,
+                                        x = door.position.x,
+                                        y = door.position.y,
+                                        z = door.position.z,
                                         "Script walk opening door"
                                     );
                                 }
@@ -802,6 +834,7 @@ pub(super) fn drive(
         script.release(&mut keys, &mut mouse);
         script.current = None;
         script.route = None;
+        script.following = None;
         script.awaited = None;
         script.approached = None;
     }
@@ -1051,6 +1084,7 @@ pub(super) fn drive(
             };
             script.route = Some(route);
             script.door_wait = None;
+            script.following = None;
         }
         Step::WaitDead(_) => script.awaited = online.world().target().selected,
         Step::WaitServers
@@ -1437,6 +1471,79 @@ const DOOR_SWING: Duration = Duration::from_millis(1500);
 /// Clicks one door may take in one walk: the first, and one more if it shut
 /// again before the walker got through.
 const DOOR_CLICKS: u8 = 2;
+
+/// How often a walk's follower trace logs where it heads, at debug level.
+const TRACE_EVERY: Duration = Duration::from_secs(1);
+
+/// Where a walk last headed: the waypoint it steered toward and that
+/// waypoint's index in the last search's waypoints, how many were left, and
+/// the route distance still to cover.
+#[derive(Clone, Copy, Debug)]
+struct Following {
+    toward: Vec3,
+    index: usize,
+    ahead: usize,
+    left: f32,
+    /// When the follower trace last logged.
+    traced: Option<Duration>,
+}
+
+/// A renderer point as EQ x, y, z, as the server and the client's own
+/// reports give positions.
+fn eq_point(point: Vec3) -> [f32; 3] {
+    let at = eq_client_core::world_position(point.to_array(), 0.0);
+    [at.x, at.y, at.z]
+}
+
+/// The line a walk logs when following stops shortening its route: where it
+/// stands, where it last headed, and what the movement samples of the last
+/// second asked and moved, so one line tells a blocked walker (asked, not
+/// moved) from one going round in place (moved, not net) or one not asked to
+/// move at all.
+fn log_stall(
+    again: bool,
+    feet: Vec3,
+    following: Option<Following>,
+    controls: &super::motion::Controls,
+    refused: Option<&str>,
+) {
+    let motion = controls.recent.last_second(std::time::Instant::now());
+    let feet = eq_point(feet);
+    let toward = following.map(|following| eq_point(following.toward));
+    let index = following.map(|following| following.index);
+    let ahead = following.map(|following| following.ahead);
+    let left = following.map(|following| following.left);
+    let (samples, asked, moved, net) = (motion.samples, motion.asked, motion.moved, motion.net);
+    if again {
+        info!(
+            ?refused,
+            ?feet,
+            ?toward,
+            ?index,
+            ?ahead,
+            ?left,
+            samples,
+            asked,
+            moved,
+            net,
+            "Script walk stalled; searching again from here"
+        );
+    } else {
+        info!(
+            ?refused,
+            ?feet,
+            ?toward,
+            ?index,
+            ?ahead,
+            ?left,
+            samples,
+            asked,
+            moved,
+            net,
+            "Script walk stalled after searching again"
+        );
+    }
+}
 
 /// A walk waiting on a closed door across its next leg.
 #[derive(Clone, Copy, Debug, PartialEq)]

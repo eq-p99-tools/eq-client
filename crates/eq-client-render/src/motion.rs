@@ -45,6 +45,8 @@ pub(super) struct Controls {
     /// Where the player faces while the heading sent still turns toward it;
     /// None once the two match.
     facing: Option<f32>,
+    /// What the samples sent lately asked of the controller and moved.
+    pub recent: RecentMotion,
 }
 impl Default for Controls {
     fn default() -> Self {
@@ -67,7 +69,59 @@ impl Default for Controls {
             jump: None,
             unreported: None,
             facing: None,
+            recent: RecentMotion::default(),
         }
+    }
+}
+
+/// The level displacement each sample sent over the last second asked of the
+/// controller, and what it moved, so a walk that stops can say which.
+#[derive(Default)]
+pub(super) struct RecentMotion(std::collections::VecDeque<(Instant, Vec3, Vec3)>);
+
+/// What the samples sent over the last second asked and moved, as level
+/// distances.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct MotionSummary {
+    pub samples: usize,
+    /// The distance asked, summed sample by sample.
+    pub asked: f32,
+    /// The distance moved, summed sample by sample.
+    pub moved: f32,
+    /// How far the samples moved altogether, start to end.
+    pub net: f32,
+}
+
+impl RecentMotion {
+    const SPAN: Duration = Duration::from_secs(1);
+
+    fn record(&mut self, now: Instant, asked: Vec3, moved: Vec3) {
+        self.0.push_back((now, asked, moved));
+        while self
+            .0
+            .front()
+            .is_some_and(|(at, ..)| now.duration_since(*at) > Self::SPAN)
+        {
+            self.0.pop_front();
+        }
+    }
+
+    /// The samples sent within the second before `now`.
+    pub fn last_second(&self, now: Instant) -> MotionSummary {
+        let level = |v: Vec3| Vec2::new(v.x, v.z).length();
+        let (mut summary, mut net) = (MotionSummary::default(), Vec3::ZERO);
+        for (_, asked, moved) in self
+            .0
+            .iter()
+            .filter(|(at, ..)| now.saturating_duration_since(*at) <= Self::SPAN)
+        {
+            summary.samples += 1;
+            summary.asked += level(*asked);
+            summary.moved += level(*moved);
+            net += *moved;
+        }
+        summary.net = level(net);
+        summary
     }
 }
 
@@ -465,6 +519,7 @@ pub(super) fn input(
         controls.send_failed(reason);
         return;
     }
+    controls.recent.record(now, delta, position - origin);
     // A landing's damage follows the sample that lands.
     if let Some(fall) = controls
         .airborne
@@ -925,6 +980,25 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn recent_motion_tells_asked_moved_and_net_over_the_last_second() {
+        let start = Instant::now();
+        let mut recent = RecentMotion::default();
+        // An old sample falls out of the window.
+        recent.record(start, Vec3::X * 9.0, Vec3::X * 9.0);
+        let at = |ms| start + Duration::from_millis(ms);
+        // Asked 2 a sample; moved 2 one way then back.
+        recent.record(at(1200), Vec3::X * 2.0, Vec3::X * 2.0);
+        recent.record(at(1400), Vec3::Z * 2.0, Vec3::X * -2.0);
+        // Asked, and moved nothing.
+        recent.record(at(1600), Vec3::X * 2.0, Vec3::ZERO);
+        let summary = recent.last_second(at(1700));
+        assert_eq!(summary.samples, 3);
+        assert!((summary.asked - 6.0).abs() < 1e-5);
+        assert!((summary.moved - 4.0).abs() < 1e-5);
+        assert!(summary.net < 1e-5);
+    }
     use std::sync::mpsc;
 
     #[test]
