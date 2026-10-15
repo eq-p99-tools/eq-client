@@ -215,12 +215,26 @@ pub struct InvSlot {
     pub id: Option<String>,
     /// Where it sits in its window.
     pub area: Area,
+    /// Where it sits when it stretches with its window instead
+    /// (`AutoStretch`), as a skin may keep a bag's second column to the
+    /// window's right edge.
+    pub anchors: Option<Anchors>,
     /// The slot's number in the official client's numbering (`EQType`): the
     /// Titanium inventory slot for the player's own, the place in the
     /// container for a container's.
     pub slot: Option<u32>,
     /// What the empty slot shows, such as an ear for an ear slot.
     pub background: Option<Piece>,
+}
+
+impl InvSlot {
+    /// Where the slot sits inside a container of this size: where its
+    /// anchors put it, or else where the skin places it.
+    #[must_use]
+    pub fn area_in(&self, width: f32, height: f32) -> Area {
+        self.anchors
+            .map_or(self.area, |anchors| anchors.within(width, height))
+    }
 }
 
 /// One page of a set of tabs.
@@ -1084,6 +1098,7 @@ impl Library {
             "InvSlot" => Element::InvSlot(InvSlot {
                 id: text_of(node, "ScreenID").map(str::to_owned),
                 area: at(),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
                 slot: number(node, "EQType"),
                 background: self.piece(text_of(node, "Background")),
             }),
@@ -1820,6 +1835,43 @@ mod tests {
                 height: 24.0
             }
         );
+    }
+
+    #[test]
+    fn a_slot_that_stretches_keeps_to_its_anchors() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        // A bag's second column kept to the window's right edge: 50 to 6 from
+        // the right, 30 to 72 from the top.
+        let text = r#"<XML>
+            <InvSlot item="Two"><ScreenID>ContainerSlot2</ScreenID>
+                <AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>50</LeftAnchorOffset><TopAnchorOffset>30</TopAnchorOffset>
+                <RightAnchorOffset>6</RightAnchorOffset><BottomAnchorOffset>72</BottomAnchorOffset>
+                <RightAnchorToLeft>false</RightAnchorToLeft><LeftAnchorToLeft>false</LeftAnchorToLeft>
+                <EQType>31</EQType></InvSlot>
+            <InvSlot item="One"><Location><X>6</X><Y>30</Y></Location>
+                <Size><CX>42</CX><CY>42</CY></Size><EQType>30</EQType></InvSlot>
+            <Screen item="Bag"><Size><CX>100</CX><CY>200</CY></Size>
+                <Pieces>Two</Pieces><Pieces>One</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(text, "Bag").unwrap();
+        let Element::InvSlot(two) = &screen.pieces[0].1 else {
+            panic!("a slot")
+        };
+        assert_eq!(two.slot, Some(31));
+        assert_eq!(
+            two.anchors.unwrap().within(100.0, 200.0),
+            Area {
+                x: 50.0,
+                y: 30.0,
+                width: 44.0,
+                height: 42.0
+            }
+        );
+        let Element::InvSlot(one) = &screen.pieces[1].1 else {
+            panic!("a slot")
+        };
+        assert_eq!(one.anchors, None);
     }
 
     #[test]
