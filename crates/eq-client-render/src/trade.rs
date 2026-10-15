@@ -98,15 +98,28 @@ impl TradeState {
     }
 
     /// Closes the windows whose corpse or merchant the world no longer has
-    /// open: the server closed or refused them, or the zone ended.
+    /// open: the server closed or refused them, or the zone ended. Opens the
+    /// merchant window once the server opens a merchant, named as the
+    /// merchant is shown.
     pub(super) fn follow(&mut self, world: &ClientWorld) {
         if self.loot.is_some() && world.loot().is_none() {
             self.loot = None;
             self.changed();
         }
-        if self.merchant.is_some() && world.merchant().is_none() {
-            self.merchant = None;
-            self.changed();
+        match (self.merchant.is_some(), world.merchant()) {
+            (true, None) => {
+                self.merchant = None;
+                self.changed();
+            }
+            (false, Some(merchant)) => {
+                let name = world
+                    .spawn(merchant.merchant_id)
+                    .map(|spawn| eq_client_core::entities::display_name(&spawn.state.name))
+                    .unwrap_or_default();
+                self.merchant = Some(MerchantWindow { name, chosen: None });
+                self.changed();
+            }
+            _ => (),
         }
     }
 
@@ -304,14 +317,15 @@ pub(super) fn input(
             .map(|(trainer, ..)| *trainer);
         if trade.merchant.is_some() {
             clicked.push(Action::EndShop);
-        } else if let Some((merchant_id, _, _, _, name)) =
-            targeted.filter(|(_, kind, class, invisible, _)| {
-                *kind == SpawnKind::Npc
-                    && !invisible
-                    && class.is_none_or(|class| class == MERCHANT_CLASS)
-            })
-        {
-            if send(
+        } else if let Some((merchant_id, ..)) = targeted.filter(|(_, kind, class, invisible, _)| {
+            *kind == SpawnKind::Npc
+                && !invisible
+                && class.is_none_or(|class| class == MERCHANT_CLASS)
+        }) {
+            // Only the server's answer opens the window. A merchant out of
+            // its range gets no answer and nothing opens; whether the
+            // official client says anything then is inferred (item 6.236).
+            send(
                 online.world(),
                 ClientCommand::Shop {
                     session_id,
@@ -320,11 +334,7 @@ pub(super) fn input(
                     open: true,
                     created: now,
                 },
-            ) {
-                online.open_shop(merchant_id);
-                trade.merchant = Some(MerchantWindow { name, chosen: None });
-                trade.changed();
-            }
+            );
         } else if let Some(trainer) = guildmaster {
             // A guildmaster's answer opens the Training window.
             send(
@@ -797,7 +807,11 @@ mod tests {
             news.push(WorldEvent::Loot(LootUpdate::Listed { corpse_id }));
         }
         if let Some((merchant_id, stock)) = merchant {
-            online.open_shop(merchant_id);
+            news.push(WorldEvent::Merchant(MerchantUpdate::Opened {
+                merchant_id,
+                accepted: true,
+                rate: 1.0,
+            }));
             news.extend(
                 stock
                     .into_values()
@@ -1118,6 +1132,97 @@ mod tests {
         assert!(app.world().resource::<TradeState>().loot.is_some());
     }
 
+    /// The server opening this merchant for the player at a neutral rate.
+    fn shop_opened(online: &mut super::super::online::OnlineState, merchant_id: u16) {
+        use eq_client_core::{WorldEvent, WorldUpdate, world::NoSpells};
+        online.tell(
+            &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Opened {
+                merchant_id,
+                accepted: true,
+                rate: 1.0,
+            })),
+            std::time::Instant::now(),
+            &NoSpells,
+        );
+    }
+
+    #[test]
+    fn the_merchant_window_opens_on_the_servers_answer_not_the_key() {
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        let mut merchant = crate::online::testing::pet(8, 7);
+        merchant.pet_owner = None;
+        merchant.class = Some(MERCHANT_CLASS);
+        merchant.name = "Example_Trader00".into();
+        crate::online::testing::spawn_entry(&mut online, 8, merchant);
+        online.select_target(Some(8));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        app.init_resource::<windows::Shown>();
+        crate::keys::testing::install(&mut app);
+        app.insert_resource(online)
+            .init_resource::<TradeState>()
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::escape::Escape>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, input);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        let press_u = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::KeyU);
+            app.update();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::KeyU);
+            keys.clear();
+        };
+        // The key asks; with no answer, as from a merchant out of the
+        // server's range, no window opens.
+        press_u(&mut app);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::Shop {
+                merchant_id: 8,
+                open: true,
+                ..
+            })
+        ));
+        app.update();
+        assert_eq!(app.world().resource::<TradeState>().merchant(), None);
+        // Asking again asks again.
+        press_u(&mut app);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::Shop { merchant_id: 8, .. })
+        ));
+        // The server's answer opens it, named as the merchant is shown.
+        shop_opened(
+            &mut app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>(),
+            8,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<TradeState>().merchant(),
+            Some("Example Trader")
+        );
+        // Open, the key ends the trade.
+        press_u(&mut app);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::Shop { open: false, .. })
+        ));
+    }
+
     #[test]
     fn the_skins_merchant_window_buys_and_sells_what_it_has_chosen() {
         use eq_client_core::{WorldEvent, WorldUpdate, inventory::InventorySlot, world::NoSpells};
@@ -1131,7 +1236,7 @@ mod tests {
             &mut online,
             eq_client_core::inventory::InventoryUpdate::Snapshot(items.clone()),
         );
-        online.open_shop(8);
+        shop_opened(&mut online, 8);
         online.tell(
             &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Item(Box::new(
                 MerchantItem {

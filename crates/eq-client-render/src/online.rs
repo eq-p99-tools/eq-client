@@ -109,11 +109,6 @@ impl OnlineState {
         self.world.close_loot();
     }
 
-    /// The player asked to trade with this merchant.
-    pub(super) fn open_shop(&mut self, merchant_id: u16) {
-        self.world.open_shop(merchant_id);
-    }
-
     /// The player answered the resurrection offered.
     pub(super) fn answer_resurrection(&mut self) {
         self.world.answer_resurrection();
@@ -664,6 +659,8 @@ pub(crate) mod testing {
             gender: 2,
             position: WorldPosition::default(),
             velocity: [0.0; 3],
+            walk_speed: 0.0,
+            run_speed: 0.0,
             size: 0.0,
             invisible: false,
             appearance: eq_client_core::outfit::Appearance::default(),
@@ -1007,6 +1004,8 @@ mod tests {
             gender: 0,
             position: eq_client_core::WorldPosition::default(),
             velocity: [0.0; 3],
+            walk_speed: 0.0,
+            run_speed: 0.0,
             size: 0.0,
             invisible: false,
             appearance: eq_client_core::outfit::Appearance::default(),

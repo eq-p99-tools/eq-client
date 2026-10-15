@@ -29,7 +29,9 @@ pub(super) struct AnimatedCharacter {
     elapsed: f32,
     since_pose: f32,
     moving_for: f32,
-    previous_position: Vec3,
+    /// Where it stood when last posed; none before its first pose, so a
+    /// character newly drawn at its place is not taken for moving there.
+    previous_position: Option<Vec3>,
     clip: (&'static str, bool),
     /// The swings the server sent for the spawn drawn.
     swings: Swings,
@@ -267,7 +269,7 @@ pub(super) fn spawn_on_layers(
             elapsed: 0.0,
             since_pose: 0.0,
             moving_for: 0.0,
-            previous_position: Vec3::ZERO,
+            previous_position: None,
             clip: ("P01", false),
             swings: Swings::default(),
             lift,
@@ -295,9 +297,10 @@ type Animated<'w, 's> = Query<
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn animate(
     time: Res<Time>,
-    (online, spells): (
+    (online, spells, controls): (
         Res<super::online::OnlineState>,
         Res<super::spellbook::SpellNames>,
+        Option<Res<super::motion::Controls>>,
     ),
     mut characters: Animated,
     mut held_items: HeldItems,
@@ -311,11 +314,10 @@ pub(super) fn animate(
                 .flatten()
         });
         let posture = id.and_then(|id| world.posture(id));
-        let moving = transform
-            .translation
-            .distance_squared(character.previous_position)
-            > 0.0001;
-        character.previous_position = transform.translation;
+        let moving = character
+            .previous_position
+            .is_some_and(|previous| transform.translation.distance_squared(previous) > 0.0001);
+        character.previous_position = Some(transform.translation);
         let dt = time.delta_secs().min(0.1);
         // The latest of the spawn's swing and its completed cast, which
         // plays its spell's casting gesture.
@@ -353,6 +355,12 @@ pub(super) fn animate(
         // lies in the death clip's last frame.
         let lying = corpse.map(|corpse| corpse.lying(now));
         let (selected, pinned) = chosen_clip(lying, posture, character.moving_for > 0.0, gesture);
+        let selected = paced(
+            selected,
+            character.clip,
+            &character.asset,
+            (world, id, own, controls.as_deref()),
+        );
         if selected != character.clip {
             character.clip = selected;
             character.elapsed = 0.0;
@@ -558,7 +566,113 @@ fn played_clip(action: u16, has: impl Fn(&str) -> bool) -> Option<&'static str> 
     kin.filter_map(action_clip).find(|clip| has(clip))
 }
 
+/// The clip a character plays at its pace ([`paced_clip`]); a change into
+/// the walk or the run logs the pace it was chosen by.
+fn paced(
+    selected: (&'static str, bool),
+    current: (&'static str, bool),
+    asset: &CharacterAsset,
+    (world, id, own, controls): (
+        &eq_client_core::world::ClientWorld,
+        Option<u16>,
+        bool,
+        Option<&super::motion::Controls>,
+    ),
+) -> (&'static str, bool) {
+    use eq_client_core::movement::{record_speed, runs};
+    let (speed, walk_speed, run_speed) = pace(world, id, own, controls);
+    // The player moves at the pace it chose: its run, or its walk while
+    // the walk toggle is on.
+    let runs = if own {
+        !controls.is_some_and(|controls| controls.walking)
+    } else {
+        runs(speed, walk_speed)
+    };
+    let selected = paced_clip(selected, runs, |clip| asset.clip_moves_body(clip));
+    if selected != current && matches!(selected.0, "L01" | "L02") {
+        debug!(
+            spawn = id,
+            own,
+            clip = selected.0,
+            speed,
+            walk = record_speed(walk_speed),
+            run = record_speed(run_speed),
+            "Moving pace"
+        );
+    }
+    selected
+}
+
+/// The pace a drawn character moves at, in units per second, with its
+/// record's walk and run speeds: another spawn's by the speed of its latest
+/// report, from which [`eq_client_core::movement::runs`] decides; the
+/// player's by the speed its movement asks for (its run, or its walk while
+/// walking), logged beside its choice.
+fn pace(
+    world: &eq_client_core::world::ClientWorld,
+    id: Option<u16>,
+    own: bool,
+    controls: Option<&super::motion::Controls>,
+) -> (f32, f32, f32) {
+    use eq_client_core::movement::record_speed;
+    if own {
+        let walking = controls.is_some_and(|controls| controls.walking);
+        let (walk, run) = world
+            .player()
+            .map_or((0.0, 0.0), |player| (player.walk_speed, player.run_speed));
+        // The record's own speeds where it has them; else what the session
+        // lets the player move at.
+        let asked = if walk > 0.0 && run > walk {
+            record_speed(if walking { walk } else { run })
+        } else {
+            controls
+                .and_then(|controls| {
+                    if walking {
+                        controls.walk_speed
+                    } else {
+                        controls.speed
+                    }
+                })
+                .unwrap_or(0.0)
+        };
+        return (asked, walk, run);
+    }
+    id.and_then(|id| world.spawn(id))
+        .map_or((0.0, 0.0, 0.0), |spawn| {
+            let [x, y, _] = spawn.state.velocity;
+            (x.hypot(y), spawn.state.walk_speed, spawn.state.run_speed)
+        })
+}
+
+/// The moving clip a character plays at its pace: the run (`L02`) when it
+/// `runs`, else the walk (`L01`); either one the model has only for its root
+/// gives way to the other, and a ducking walk (`L06`) the model has only for
+/// its root gives way to the ducked stance (`L08`). `moves` says whether the
+/// model's clip moves the body. A model lacking both moving clips shows what
+/// it chose. Other clips pass unchanged. Inferred, recording checklist item
+/// 6.232.
+fn paced_clip(
+    (clip, held): (&'static str, bool),
+    runs: bool,
+    moves: impl Fn(&str) -> bool,
+) -> (&'static str, bool) {
+    match clip {
+        "L01" => {
+            let (chosen, other) = if runs { ("L02", "L01") } else { ("L01", "L02") };
+            let clip = if !moves(chosen) && moves(other) {
+                other
+            } else {
+                chosen
+            };
+            (clip, held)
+        }
+        "L06" if !moves("L06") => ("L08", true),
+        _ => (clip, held),
+    }
+}
+
 /// WLD clip names documented by `EQEmu`; presentation never changes network position.
+/// A moving character's walk (`L01`) is paced into its run by [`paced_clip`].
 fn posture_clip(
     posture: Option<eq_client_core::PostureState>,
     moving: bool,
@@ -608,6 +722,29 @@ mod tests {
             chosen_clip(None, Some(PostureState::Sitting), false, None),
             (("P02", true), None)
         );
+    }
+
+    #[test]
+    fn a_moving_character_walks_or_runs_in_the_clip_that_moves_its_body() {
+        let full = |clip: &str| clip != "missing";
+        // Its pace picks the walk or the run.
+        assert_eq!(paced_clip(("L01", false), false, full), ("L01", false));
+        assert_eq!(paced_clip(("L01", false), true, full), ("L02", false));
+        // A clip moving only the root gives way to the other, as a gnoll's
+        // walk to its run.
+        let root_walk = |clip: &str| clip != "L01";
+        assert_eq!(paced_clip(("L01", false), false, root_walk), ("L02", false));
+        let root_run = |clip: &str| clip != "L02";
+        assert_eq!(paced_clip(("L01", false), true, root_run), ("L01", false));
+        // A model with neither shows what it chose.
+        let neither = |_: &str| false;
+        assert_eq!(paced_clip(("L01", false), true, neither), ("L02", false));
+        // A ducking walk with only the root's track ducks in place.
+        assert_eq!(paced_clip(("L06", false), false, neither), ("L08", true));
+        assert_eq!(paced_clip(("L06", false), true, full), ("L06", false));
+        // Standing and the other clips are left as they are.
+        assert_eq!(paced_clip(("P01", false), true, neither), ("P01", false));
+        assert_eq!(paced_clip(("C05", true), true, full), ("C05", true));
     }
 
     #[test]
