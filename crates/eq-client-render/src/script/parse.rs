@@ -1055,7 +1055,7 @@ mod tests {
         let steps = parse(
             "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
              gm summon\ngm damage 10000\ngm givemoney 0 0 5 0\npress F1 # self\n\
-             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\nhover close_box chat\nclick done bank\n\
+             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\nhover close_box chat\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 0\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\ngive\nclick give\nreport after cast\nscreenshot a.png\nquit\n",
             base,
         )
@@ -1102,7 +1102,6 @@ mod tests {
                 Step::Click(ClickTarget::Slot(23)),
                 Step::RightClick(ClickTarget::Slot(22)),
                 Step::Hover(ClickTarget::TitleBox("chat", true)),
-                Step::Click(ClickTarget::Done("bank")),
                 Step::Click(ClickTarget::Scribe),
                 Step::Click(ClickTarget::Store),
                 Step::Click(ClickTarget::BookRow(0)),
@@ -1458,6 +1457,22 @@ click sell_chosen
                 Step::Click(ClickTarget::Trade(TradeClick::SellChosen)),
             ]
         );
+    }
+
+    #[test]
+    fn parses_a_windows_own_done_button() {
+        assert_eq!(
+            parse(
+                "click done bank\nhover done world-container\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Done("bank")),
+                Step::Hover(ClickTarget::Done("world-container")),
+            ]
+        );
+        assert!(parse("click done nowhere\n", Path::new("private")).is_err());
     }
 
     #[test]

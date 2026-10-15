@@ -887,8 +887,8 @@ const fn raid(click: RaidClick) -> super::raid::RaidAction {
     }
 }
 
-/// Whether a control of the Training window, the confirmation dialog or a
-/// skinned window's title bar is the one a click names.
+/// Whether a control of the Training window, the confirmation dialog, a
+/// skinned window's title bar or its Done button is the one a click names.
 fn dialog_control(
     target: ClickTarget,
     (skill_row, train, closes, answer, title_box): (
@@ -898,8 +898,10 @@ fn dialog_control(
         Option<&super::confirm::AnswerButton>,
         Option<&super::skinned::TitleBox>,
     ),
+    trade: Option<&super::trade::Action>,
 ) -> bool {
     match target {
+        ClickTarget::Done(key) => done_button(key, closes, trade, title_box),
         ClickTarget::TitleBox(key, close) => title_box
             .is_some_and(|title_box| title_box.window.key() == key && title_box.close == close),
         ClickTarget::Answer(yes) => answer.is_some_and(|answer| answer.0 == yes),
@@ -911,6 +913,22 @@ fn dialog_control(
             closes.is_some_and(|closes| closes.0 == super::windows::WindowId::Training)
         }
         _ => false,
+    }
+}
+
+/// The loot or merchant window's action a scripted click names.
+const fn trading(click: TradeClick) -> super::trade::Action {
+    use super::trade::Action;
+    match click {
+        TradeClick::Take(place) => Action::Take(place),
+        TradeClick::TakeAll => Action::TakeAll,
+        TradeClick::EndLoot => Action::EndLoot,
+        TradeClick::Buy(slot) => Action::Buy(slot),
+        TradeClick::Sell(slot) => Action::Sell(slot),
+        TradeClick::EndShop => Action::EndShop,
+        TradeClick::Choose(slot) => Action::Choose(slot),
+        TradeClick::BuyChosen => Action::BuyChosen,
+        TradeClick::SellChosen => Action::SellChosen,
     }
 }
 
@@ -978,10 +996,10 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
             ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
-            ClickTarget::Answer(_) | ClickTarget::Training(_) | ClickTarget::TitleBox(..) => {
-                dialog_control(target, dialog)
-            }
-            ClickTarget::Done(key) => done_button(key, dialog.2, trade, dialog.4),
+            ClickTarget::Answer(_)
+            | ClickTarget::Training(_)
+            | ClickTarget::TitleBox(..)
+            | ClickTarget::Done(_) => dialog_control(target, dialog, trade),
             ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
             ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),
             ClickTarget::Map(action) => map.is_some_and(|button| *button == action),
@@ -1002,21 +1020,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::SpellGem(number) => spell_gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
-            ClickTarget::Trade(click) => trade.is_some_and(|action| {
-                use super::trade::Action;
-                *action
-                    == match click {
-                        TradeClick::Take(place) => Action::Take(place),
-                        TradeClick::TakeAll => Action::TakeAll,
-                        TradeClick::EndLoot => Action::EndLoot,
-                        TradeClick::Buy(slot) => Action::Buy(slot),
-                        TradeClick::Sell(slot) => Action::Sell(slot),
-                        TradeClick::EndShop => Action::EndShop,
-                        TradeClick::Choose(slot) => Action::Choose(slot),
-                        TradeClick::BuyChosen => Action::BuyChosen,
-                        TradeClick::SellChosen => Action::SellChosen,
-                    }
-            }),
+            ClickTarget::Trade(click) => trade == Some(&trading(click)),
             ClickTarget::Tint(number, color) => tint.is_some_and(|action| {
                 use super::inventory::colors::Action;
                 match (action, color) {
