@@ -31,8 +31,15 @@ const CLEARANCE: f32 = CELL;
 /// so a route along a wall prefers a parallel line a cell away, and one through
 /// a doorway its middle rather than a jamb.
 const WALL_TOLL: f32 = 2.0 * CELL;
-/// Waypoints a straightened leg may skip at most, bounding its cost.
+/// Waypoints a straightened leg may skip at most, bounding its cost. The
+/// longest leg, every skipped hop a diagonal, must stay within the 255
+/// substeps [`walk`] counts in a `u8`.
 const LOOKAHEAD: usize = 32;
+#[allow(clippy::cast_precision_loss)] // A small count.
+const _: () = assert!(
+    (LOOKAHEAD + 1) as f32 * CELL * std::f32::consts::SQRT_2 / SUBSTEP <= 255.0,
+    "a straightened leg would overflow walk's substep count"
+);
 /// Airborne slice length, matching the controller's integration limit.
 const SLICE: f32 = 0.05;
 const NEIGHBORS: [(i16, i16); 8] = [
@@ -430,6 +437,26 @@ mod tests {
         assert!(path.len() > 5, "{path:?}");
         let legs = straighten(&world, start, &path, 6.0);
         assert_eq!(legs, [*path.last().unwrap()]);
+    }
+
+    #[test]
+    fn a_route_along_a_wall_keeps_a_cell_off_it() {
+        // A long wall across z = 0, with the start and goal one unit from it.
+        let mut triangles = floor();
+        triangles.extend(quad(
+            [-30.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [30.0, 10.0, 0.0],
+            [-30.0, 10.0, 0.0],
+        ));
+        let world = CollisionWorld::new(triangles).unwrap();
+        let (start, goal) = (Vec3::new(-20.0, 0.0, -1.0), Vec3::new(20.0, 0.0, -1.0));
+        let path = found(&world, start, goal);
+        // Apart from the last hop back toward the goal, every position is a
+        // cell farther off the wall than the start.
+        let (_, along) = path.split_last().unwrap();
+        assert!(along.len() > 10, "{path:?}");
+        assert!(along.iter().all(|feet| feet.z < -2.5), "{path:?}");
     }
 
     #[test]
