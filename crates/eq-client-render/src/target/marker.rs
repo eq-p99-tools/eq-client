@@ -127,6 +127,8 @@ mod tests {
                 gender: 0,
                 position: default(),
                 velocity: [0.0; 3],
+                walk_speed: 0.0,
+                run_speed: 0.0,
                 size: 6.0,
                 invisible: false,
                 appearance: eq_client_core::outfit::Appearance::default(),

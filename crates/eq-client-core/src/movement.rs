@@ -3,11 +3,13 @@
 mod airborne;
 mod falls;
 mod liquids;
+mod pace;
 mod path;
 mod route;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use falls::{HARMLESS_DROP, fall_damage};
 pub use liquids::{GuardView, Liquid, Liquids};
+pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};
 pub use route::{Route, RouteStep};
 
