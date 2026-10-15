@@ -209,7 +209,11 @@ fn draw(
             let donors = nearby_state.donors.clone();
             let mut job = super::background::Background::default();
             job.start(state.world().session_id().unwrap_or_default(), move || {
-                load_installed_character(&directory, &zone, code, &donors).ok()
+                // Read once per model and zone: a failure draws the marker
+                // for the rest of the zone, so it is said once.
+                load_installed_character(&directory, &zone, code, &donors)
+                    .inspect_err(|error| warn!("Model {code} unavailable in {zone}: {error}"))
+                    .ok()
             });
             nearby_state.loading = Some((code, job));
         }
