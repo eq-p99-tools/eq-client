@@ -1528,9 +1528,11 @@ fn orbit_camera(
     (wheel, options): (Res<windows::pointer::Wheel>, Res<options::OptionsState>),
     online: Res<online::OnlineState>,
     mut cameras: Query<(&mut OrbitCamera, &mut Transform, Option<&mut Projection>)>,
+    bodies: Query<&PlayerBody, With<Player>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
 ) {
+    let head = bodies.single().map_or(0.0, |body| body.height * HEAD_LINE);
     let accepts_input = windows.single().is_ok_and(|window| {
         window.focused
             && !window
@@ -1578,6 +1580,7 @@ fn orbit_camera(
         *transform = unobstructed_orbit(
             &mut camera,
             collision.as_ref().and_then(|world| world.0.as_ref()),
+            head,
             time.delta_secs(),
         );
     }
@@ -1628,10 +1631,14 @@ fn orbit_transform(camera: &OrbitCamera) -> Transform {
 /// Keeps the camera on the player's side of roofs and walls without changing
 /// the chosen zoom: it pulls in at once to just short of whatever stands
 /// between it and the player, then eases back out as the way clears, never
-/// past the chosen radius. Display only; inferred, item 6.233.
+/// past the chosen radius. Both the line from the focus (the body's middle)
+/// and the line from near the top of the head, `head` above it, must reach
+/// the camera clear, so a wall top never hides the head while the waist is in
+/// view. Display only; inferred, item 6.233.
 fn unobstructed_orbit(
     camera: &mut OrbitCamera,
     collision: Option<&eq_client_core::movement::CollisionWorld>,
+    head: f32,
     seconds: f32,
 ) -> Transform {
     let mut pose = orbit_transform(camera);
@@ -1642,9 +1649,12 @@ fn unobstructed_orbit(
         return pose;
     }
     let direction = offset / distance;
-    let allowed = collision
-        .and_then(|world| world.ray_distance(camera.focus, direction, distance))
-        .map_or(distance, |hit| (hit - 0.5).max(0.01));
+    let allowed = collision.map_or(distance, |world| {
+        let along_focus = world
+            .ray_distance(camera.focus, direction, distance)
+            .map_or(distance, |hit| (hit - 0.5).max(0.01));
+        clear_of_head(world, camera.focus, Vec3::Y * head, direction, along_focus)
+    });
     camera.pulled = camera
         .pulled
         .map(|shown| eased_distance(shown, allowed, seconds))
@@ -1654,6 +1664,40 @@ fn unobstructed_orbit(
         pose.translation = camera.focus + direction * shown;
     }
     pose
+}
+
+/// Where the head line starts, as a share of the body's height above its
+/// middle: near the top of the head.
+const HEAD_LINE: f32 = 0.4;
+
+/// How many times the head line is cast before the distance it gives stands.
+const HEAD_CASTS: usize = 3;
+
+/// The distance along the orbit, at most `along_focus`, at which the line from
+/// the head (`rise` above the focus) to the camera is clear: each hit pulls the
+/// camera in by the share of the line that was clear, then the line is cast
+/// again, a bounded number of times.
+fn clear_of_head(
+    world: &eq_client_core::movement::CollisionWorld,
+    focus: Vec3,
+    rise: Vec3,
+    direction: Vec3,
+    along_focus: f32,
+) -> f32 {
+    let head = focus + rise;
+    let mut distance = along_focus;
+    for _ in 0..HEAD_CASTS {
+        let line = focus + direction * distance - head;
+        let length = line.length();
+        if length <= 0.001 {
+            break;
+        }
+        let Some(hit) = world.ray_distance(head, line / length, length) else {
+            break;
+        };
+        distance = (distance * (hit - 0.5).max(0.0) / length).max(0.01);
+    }
+    distance
 }
 
 /// How close to the chosen radius an easing camera counts as back out.
@@ -1775,7 +1819,7 @@ mod tests {
         };
         let requested = orbit_transform(&camera);
         let mut under = OrbitCamera { ..camera };
-        let inside = unobstructed_orbit(&mut under, Some(&roof), 1.0 / 60.0);
+        let inside = unobstructed_orbit(&mut under, Some(&roof), 0.0, 1.0 / 60.0);
         assert!(inside.translation.y < 8.0);
         assert!(
             (inside.translation.length() - (8.0 / 60.0_f32.to_radians().sin() - 0.5)).abs() < 0.001
@@ -1783,14 +1827,17 @@ mod tests {
         assert_eq!(inside.rotation, requested.rotation);
         assert_eq!(under.radius, 40.0);
         let mut open = OrbitCamera { ..camera };
-        assert_eq!(unobstructed_orbit(&mut open, None, 1.0 / 60.0), requested);
+        assert_eq!(
+            unobstructed_orbit(&mut open, None, 0.0, 1.0 / 60.0),
+            requested
+        );
         let mut outside = OrbitCamera {
             focus: Vec3::new(200.0, 0.0, 200.0),
             ..camera
         };
         let expected = orbit_transform(&outside);
         assert_eq!(
-            unobstructed_orbit(&mut outside, Some(&roof), 1.0 / 60.0),
+            unobstructed_orbit(&mut outside, Some(&roof), 0.0, 1.0 / 60.0),
             expected
         );
     }
@@ -1822,8 +1869,10 @@ mod tests {
             pitch: -60.0_f32.to_radians(),
             pulled: None,
         };
-        // Walking under the roof's edge and back out, a frame at a time.
+        // Walking under the roof's edge and back out, a frame at a time, with
+        // the head's line as well as the middle's.
         let frame = 1.0 / 60.0;
+        let rise = 6.0 * HEAD_LINE;
         let mut shown = Vec::new();
         for step in 0..240_u16 {
             let x = if step < 120 {
@@ -1838,9 +1887,10 @@ mod tests {
                     ..camera
                 },
                 Some(&roof),
+                rise,
                 frame,
             );
-            let pose = unobstructed_orbit(&mut camera, Some(&roof), frame);
+            let pose = unobstructed_orbit(&mut camera, Some(&roof), rise, frame);
             let distance = (pose.translation - camera.focus).length();
             let limit = (unobstructed.translation - camera.focus).length();
             assert!(
@@ -1859,13 +1909,53 @@ mod tests {
         );
         // Out in the open again, a few frames later it is back at the radius.
         for _ in 0..60 {
-            unobstructed_orbit(&mut camera, Some(&roof), frame);
+            unobstructed_orbit(&mut camera, Some(&roof), rise, frame);
         }
         assert_eq!(camera.pulled, None);
         assert_eq!(
-            unobstructed_orbit(&mut camera, Some(&roof), frame),
+            unobstructed_orbit(&mut camera, Some(&roof), rise, frame),
             orbit_transform(&camera)
         );
+    }
+
+    #[test]
+    fn a_wall_top_across_the_head_line_pulls_the_camera_in() {
+        use super::*;
+        // A lintel hanging from 2 to 4 units up, 10 units behind the player:
+        // under the line from the body's middle, across the line from the head.
+        let lintel = eq_client_core::movement::CollisionWorld::new([
+            [[-10.0, 2.0, 10.0], [10.0, 2.0, 10.0], [10.0, 4.0, 10.0]],
+            [[-10.0, 2.0, 10.0], [10.0, 4.0, 10.0], [-10.0, 4.0, 10.0]],
+        ])
+        .unwrap();
+        let camera = OrbitCamera {
+            focus: Vec3::ZERO,
+            radius: 40.0,
+            yaw: 0.0,
+            pitch: -0.15,
+            pulled: None,
+        };
+        let requested = orbit_transform(&camera);
+        let rise = 6.0 * HEAD_LINE;
+        // The middle's line alone is clear, so it stays out at the radius.
+        let mut waist_only = OrbitCamera { ..camera };
+        assert_eq!(
+            unobstructed_orbit(&mut waist_only, Some(&lintel), 0.0, 1.0 / 60.0),
+            requested
+        );
+        // With the head's line, it comes in to this side of the lintel.
+        let mut both = OrbitCamera { ..camera };
+        let pose = unobstructed_orbit(&mut both, Some(&lintel), rise, 1.0 / 60.0);
+        assert!(pose.translation.z < 10.0, "{:?}", pose.translation);
+        assert_eq!(pose.rotation, requested.rotation);
+        let head = Vec3::Y * rise;
+        let line = pose.translation - head;
+        assert!(
+            lintel
+                .ray_distance(head, line.normalize(), line.length())
+                .is_none()
+        );
+        assert!(both.pulled.is_some_and(|shown| shown < 40.0));
     }
 
     #[test]
