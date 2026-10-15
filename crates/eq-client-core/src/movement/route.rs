@@ -55,6 +55,8 @@ pub struct Route {
     replanned: bool,
     /// Whether the route may step off ledges; see [`PathSearch::with_drops`].
     drops: bool,
+    /// The last finished search's expansions, and whether positions remained.
+    searched: Option<(usize, bool)>,
 }
 
 impl Route {
@@ -73,6 +75,7 @@ impl Route {
             last_call: None,
             best: None,
             replanned: false,
+            searched: None,
         }
     }
 
@@ -94,6 +97,25 @@ impl Route {
     #[must_use]
     pub const fn partial(&self) -> bool {
         self.partial
+    }
+
+    /// The last finished search's expansions and whether positions remained
+    /// unexpanded, for diagnostics; None until a search finishes.
+    #[must_use]
+    pub const fn searched(&self) -> Option<(usize, bool)> {
+        self.searched
+    }
+
+    /// The collision height the route was searched for.
+    #[must_use]
+    pub const fn height(&self) -> f32 {
+        self.height
+    }
+
+    /// Where the waypoints still ahead end.
+    #[must_use]
+    pub fn end(&self) -> Option<Vec3> {
+        self.waypoints.back().copied()
     }
 
     /// Waypoints still ahead.
@@ -187,6 +209,7 @@ impl Route {
                 }
             };
             self.waypoints = path::straighten(world, feet, &path, self.height).into();
+            self.searched = Some((search.expanded(), search.has_open()));
             self.search = None;
         }
         while let Some(&waypoint) = self.waypoints.front() {

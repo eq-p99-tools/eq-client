@@ -97,6 +97,12 @@ impl CollisionWorld {
         self.obstacles = obstacles;
     }
 
+    /// Takes the dynamic obstacles out, leaving the static geometry, so they can
+    /// be put back with [`Self::set_obstacles`].
+    pub fn take_obstacles(&mut self) -> Vec<Arc<CollisionMesh>> {
+        std::mem::take(&mut self.obstacles)
+    }
+
     fn meshes(&self) -> impl Iterator<Item = &TriMesh> {
         std::iter::once(&self.terrain.mesh).chain(self.obstacles.iter().map(|mesh| &mesh.mesh))
     }

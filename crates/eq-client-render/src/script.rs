@@ -310,7 +310,7 @@ pub(super) fn drive(
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
     bodies: Query<&super::PlayerBody, With<super::Player>>,
-    collision: Option<Res<super::Collision>>,
+    mut collision: Option<ResMut<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
     (mut buttons, layout, mut pointers, needs): (
         Buttons,
@@ -455,7 +455,27 @@ pub(super) fn drive(
                 let step = route.next(world, feet, goal, SEARCH_BUDGET, now);
                 if searching && !route.is_searching() {
                     let (waypoints, partial) = (route.remaining(), route.partial());
-                    info!(waypoints, partial, "Script route ready");
+                    let (expanded, open) = route.searched().unwrap_or_default();
+                    let (height, drops) = (route.height(), observed.4.airborne.is_some());
+                    info!(
+                        waypoints,
+                        partial,
+                        expanded,
+                        open,
+                        ?feet,
+                        ?goal,
+                        height,
+                        drops,
+                        "Script route ready"
+                    );
+                    if partial
+                        && let Some(end) = route.end()
+                        && let Some(world) = collision
+                            .as_mut()
+                            .and_then(|collision| collision.bypass_change_detection().0.as_mut())
+                    {
+                        log_partial_route(&online, world, feet, goal, end, height, drops);
+                    }
                 } else if !searching && route.is_searching() {
                     let refused = observed.4.refused.as_deref();
                     info!(?refused, "Script walk stalled; searching again from here");
@@ -1209,6 +1229,63 @@ fn displayed(entity: Entity, layout: &Layout) -> bool {
 
 /// The player's feet at its accepted position and the goal's position, in
 /// render coordinates: the world object `object` names, or else the target.
+/// Diagnoses a partial route: the doors nearest where it ends, and whether the
+/// same search finds the goal with every door left out. Logging only; the walk
+/// keeps its own route.
+fn log_partial_route(
+    online: &super::online::OnlineState,
+    world: &mut eq_client_core::movement::CollisionWorld,
+    feet: Vec3,
+    goal: Vec3,
+    end: Vec3,
+    height: f32,
+    drops: bool,
+) {
+    use eq_client_core::movement::{PathProgress, PathSearch};
+    // Renderer (EQ y, EQ z, -EQ x) back to EQ x, y, z.
+    let end = Vec3::new(-end.z, end.x, end.y);
+    let mut doors: Vec<_> = online
+        .world()
+        .doors()
+        .entries()
+        .values()
+        .map(|door| {
+            let at = Vec3::new(door.position.x, door.position.y, door.position.z);
+            (at.distance(end), door)
+        })
+        .collect();
+    doors.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (distance, door) in doors.into_iter().take(5) {
+        info!(
+            id = door.id,
+            model = %door.model,
+            open_type = door.open_type,
+            incline = door.incline,
+            action = ?door.action,
+            x = door.position.x,
+            y = door.position.y,
+            z = door.position.z,
+            distance,
+            "Script route doors"
+        );
+    }
+    let obstacles = world.take_obstacles();
+    let mut search = PathSearch::new(feet, goal, 10.0, height).with_drops(drops);
+    let found = loop {
+        match search.advance(world, 5000) {
+            PathProgress::Searching => (),
+            done => break matches!(done, PathProgress::Found(_)),
+        }
+    };
+    world.set_obstacles(obstacles);
+    info!(
+        found,
+        expanded = search.expanded(),
+        open = search.has_open(),
+        "Script route without doors"
+    );
+}
+
 fn walk_ends(
     online: &super::online::OnlineState,
     body: super::PlayerBody,
