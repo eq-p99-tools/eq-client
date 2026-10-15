@@ -177,8 +177,10 @@ fn default_size(race: u32) -> f32 {
 }
 
 /// How far above its feet a spawn's reported position sits: 0.2 × size × a
-/// per-model factor, exactly as `EQEmu` places mobs (zone/waypoints.cpp
-/// `Mob::GetZOffset`), with the race's default size when none was sent.
+/// per-model factor, exactly as `EQEmu` places mobs it moves (zone/waypoints.cpp
+/// `Mob::GetZOffset`), with the race's default size when none was sent. Used
+/// only for the player's own body, whose z we send; remote models are drawn by
+/// [`drawn_feet_offset`]. What a non-human player sends is recording item 1.11.
 /// Unverified against a P99 capture.
 #[must_use]
 pub fn z_offset(race: u32, size: f32) -> f32 {
@@ -186,12 +188,52 @@ pub fn z_offset(race: u32, size: f32) -> f32 {
         .iter()
         .find(|(model, _)| *model == race)
         .map_or(3.125, |(_, factor)| *factor);
-    let size = if size.is_finite() && size > 0.0 {
+    0.2 * size_or_default(race, size) * factor
+}
+
+/// How far under a remote spawn's reported position its soles are drawn:
+/// 0.625 × size for every model, with the race's default size when none was
+/// sent. A local server's static spawns of five humanoid races in four cities,
+/// short races included, all sat at floor + 0.625 × their own size, and the
+/// classic meshes share one shape about their origin, so `EQEmu`'s per-model
+/// factors (applied by the server only to mobs it moves) play no part here. A
+/// mob the server has moved to its own lower height draws into the floor, as
+/// the official client is expected to draw it. Inferred until a recording of
+/// the official client: item 6.231.
+#[must_use]
+pub fn drawn_feet_offset(race: u32, size: f32) -> f32 {
+    0.625 * size_or_default(race, size)
+}
+
+/// Where a remote model's soles are drawn, in renderer coordinates: on the
+/// floor of `world` when one lies above `soles` (the reported position less
+/// [`drawn_feet_offset`]) by up to 0.6 × size or below it by up to 0.5, else at
+/// `soles`. `EQEmu` places a spawn it has moved at its own per-model height, up
+/// to (0.625 − 0.2 × factor) × size under where a standing one sits, and
+/// nothing in the spawn says which rule produced its z, so the floor decides.
+/// The fix only ever raises a model: a standing spawn's soles already sit a
+/// little over the floor, so the reach down is kept short, and a low flyer, a
+/// mob on a lift or a door (doors are not in this geometry) or one over ground
+/// this geometry lacks stays where the server says. Inferred; recording item
+/// 6.231.
+#[must_use]
+pub fn grounded_soles(
+    world: &movement::CollisionWorld,
+    soles: glam::Vec3,
+    race: u32,
+    size: f32,
+) -> f32 {
+    let reach = 0.6 * size_or_default(race, size);
+    world.ground(soles, reach, 0.5).unwrap_or(soles.y)
+}
+
+/// The size sent, or the race's default when it is missing or not positive.
+fn size_or_default(race: u32, size: f32) -> f32 {
+    if size.is_finite() && size > 0.0 {
         size
     } else {
         default_size(race)
-    };
-    0.2 * size * factor
+    }
 }
 
 /// Converts a renderer position back to EQ world coordinates, undoing
@@ -227,6 +269,38 @@ mod tests {
         assert!((offset(1, 0.0) - 3.75).abs() < 0.0001);
         assert!((offset(10, 0.0) - 5.625).abs() < 0.0001);
         assert!((offset(12, f32::NAN) - 1.875).abs() < 0.0001); // gnome
+    }
+
+    #[test]
+    fn remote_models_hang_their_soles_by_size_alone() {
+        let offset = super::drawn_feet_offset;
+        assert!((offset(1, 6.0) - 3.75).abs() < 0.0001); // human, as z_offset
+        assert!((offset(183, 4.8) - 3.0).abs() < 0.0001); // Coldain
+        assert!((offset(8, 0.0) - 2.5).abs() < 0.0001); // dwarf, default size 4
+        assert!((offset(12, f32::NAN) - 1.875).abs() < 0.0001); // gnome, default 3
+    }
+
+    #[test]
+    fn remote_models_stand_on_a_floor_near_their_soles() {
+        let floor = [
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ];
+        let world = crate::movement::CollisionWorld::new(floor).unwrap();
+        let soles = |y: f32| super::grounded_soles(&world, glam::Vec3::Y * y, 183, 4.0);
+        // Reported two under the floor, as a walked mob's z puts it, it lands;
+        // two over, as a flyer or a mob on a lift, it stays.
+        assert!(soles(-2.0).abs() < 0.001);
+        assert!((soles(2.0) - 2.0).abs() < 0.001);
+        // It reaches up 0.6 × size to a floor above its soles, and no further.
+        assert!(soles(-2.39).abs() < 0.001);
+        assert!((soles(-2.41) + 2.41).abs() < 0.001);
+        // It reaches down only 0.5, the measured excess of a standing spawn.
+        assert!(soles(0.49).abs() < 0.001);
+        assert!((soles(0.51) - 0.51).abs() < 0.001);
+        assert!((soles(5.0) - 5.0).abs() < 0.001);
+        // A size-less spawn reaches by its race's default size: 0.6 × 4 for a dwarf.
+        assert!(super::grounded_soles(&world, glam::Vec3::Y * -2.3, 8, 0.0).abs() < 0.001);
     }
 
     use super::{WorldPosition, render_position, world_position};
