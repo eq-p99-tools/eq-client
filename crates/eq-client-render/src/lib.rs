@@ -352,6 +352,7 @@ pub fn run(
 /// list that the tests' app starts from too.
 fn init_presentation(app: &mut App) {
     app.init_resource::<spell_effects::SpellParticles>()
+        .init_resource::<doors::Hinges>()
         .init_resource::<options::OptionsState>()
         .init_resource::<logs::ChatLog>()
         .init_resource::<hud::HudState>()

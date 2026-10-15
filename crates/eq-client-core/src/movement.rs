@@ -268,6 +268,14 @@ impl CollisionWorld {
         self.walk(feet, displacement, height, Support::Required)
     }
 
+    /// The floor the airborne controller stands feet here on, as its step
+    /// finds it: under the footprint, from just above the feet to a little
+    /// below them. None means the next step falls.
+    #[must_use]
+    pub fn support(&self, feet: Vec3) -> Option<f32> {
+        self.support_height(feet, 0.01, 0.05)
+    }
+
     /// Samples support under the capsule footprint, including contact before its center reaches a stair.
     fn support_height(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
         const OFFSETS: [(f32, f32); 9] = [

@@ -300,7 +300,7 @@ fn objects(
 }
 
 /// Logs the nearest visible spawns, coins, open trade windows and auto-attack.
-pub(super) fn surroundings(online: &crate::online::OnlineState, (.., combat, _, _): &Observed) {
+pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat, ..): &Observed) {
     let origin = online
         .world()
         .player()

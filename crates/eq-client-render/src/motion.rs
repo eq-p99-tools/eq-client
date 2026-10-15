@@ -47,6 +47,30 @@ pub(super) struct Controls {
     facing: Option<f32>,
     /// What the samples sent lately asked of the controller and moved.
     pub recent: RecentMotion,
+    /// When the latest sample went out, and when the session last answered
+    /// one; both outlast a reset, so a walk that stops can say how long ago.
+    pub last_sent: Option<Instant>,
+    pub last_answer: Option<Instant>,
+    /// Why the latest frame sent no sample; None when it sent one.
+    pub held: Option<Held>,
+}
+
+/// Why a frame sent no movement sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Held {
+    /// The session took movement away, or never granted it.
+    Withdrawn,
+    /// A sample is out and its answer has not come back.
+    Waiting,
+    /// Too soon after the last answer, or a landing's damage or a zone
+    /// crossing went first.
+    Gate,
+    /// Nothing asked to move: no direction, turn, fall or jump.
+    NoSpeed,
+    /// The player's body, the camera or the zone's collision is missing.
+    NoBody,
+    /// The session's queue refused the sample.
+    Refused,
 }
 impl Default for Controls {
     fn default() -> Self {
@@ -70,6 +94,9 @@ impl Default for Controls {
             unreported: None,
             facing: None,
             recent: RecentMotion::default(),
+            last_sent: None,
+            last_answer: None,
+            held: None,
         }
     }
 }
@@ -235,6 +262,8 @@ impl Controls {
     pub fn reset(&mut self, speed: Option<f32>) {
         *self = Self {
             speed,
+            last_sent: self.last_sent,
+            last_answer: self.last_answer,
             ..Self::default()
         };
     }
@@ -290,6 +319,12 @@ impl Controls {
         };
         self.waiting = false;
         self.last_accepted = now;
+        self.last_answer = Some(now);
+    }
+
+    /// Whether a sample is out and its answer has not come back.
+    pub const fn waiting(&self) -> bool {
+        self.waiting
     }
 }
 
@@ -365,9 +400,11 @@ pub(super) fn input(
 ) {
     if !online.enabled || !online.world().connected() || online.world().death().is_some() {
         controls.reset(None);
+        controls.held = Some(Held::Withdrawn);
         return;
     }
     let Some(_) = controls.speed else {
+        controls.held = Some(Held::Withdrawn);
         return;
     };
     let focused = keys.focused();
@@ -388,10 +425,12 @@ pub(super) fn input(
         if now.duration_since(controls.queued_at) > Duration::from_millis(250) {
             controls.pause_prediction();
         }
+        controls.held = Some(Held::Waiting);
         return;
     }
     let elapsed = now.duration_since(controls.last_accepted);
     if elapsed < Duration::from_millis(100) {
+        controls.held = Some(Held::Gate);
         return;
     }
     // A landing's damage goes before the next sample; a queue with no room
@@ -400,6 +439,7 @@ pub(super) fn input(
         controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, amount);
         if controls.unreported.is_some() {
             controls.pause_prediction();
+            controls.held = Some(Held::Gate);
             return;
         }
     }
@@ -409,6 +449,7 @@ pub(super) fn input(
         collision.0.as_ref(),
         online.world().player(),
     ) else {
+        controls.held = Some(Held::NoBody);
         return;
     };
     if let Some(player) = online.world().player() {
@@ -424,9 +465,11 @@ pub(super) fn input(
                 created: stamp.created,
             }) {
                 controls.send_failed(reason);
+                controls.held = Some(Held::Refused);
             } else {
                 controls.waiting = true;
                 controls.queued_at = now;
+                controls.held = Some(Held::Gate);
             }
             return;
         }
@@ -455,6 +498,7 @@ pub(super) fn input(
         && controls.jump.is_none()
         && controls.facing.is_none()
     {
+        controls.held = Some(Held::NoSpeed);
         return;
     }
     let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
@@ -488,6 +532,7 @@ pub(super) fn input(
     {
         controls.airborne = previous_airborne;
         controls.send_failed(reason);
+        controls.held = Some(Held::Refused);
         return;
     }
     let position = landing + Vec3::Y * body.feet_offset;
@@ -517,9 +562,12 @@ pub(super) fn input(
     if let Err(reason) = sent {
         controls.airborne = previous_airborne;
         controls.send_failed(reason);
+        controls.held = Some(Held::Refused);
         return;
     }
     controls.recent.record(now, delta, position - origin);
+    controls.last_sent = Some(now);
+    controls.held = None;
     // A landing's damage follows the sample that lands.
     if let Some(fall) = controls
         .airborne
