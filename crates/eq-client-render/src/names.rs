@@ -346,6 +346,7 @@ mod tests {
                 radius: 20.0,
                 yaw: 0.0,
                 pitch: 0.0,
+                pulled: None,
             },
         ));
         // The gnoll stands behind a wall; everyone else in the open.

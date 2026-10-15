@@ -309,6 +309,7 @@ fn inspect_admission_support() {
         radius: 40.0,
         yaw: 0.75,
         pitch: -60.0_f32.to_radians(),
+        pulled: None,
     };
     let camera_delta = orbit_transform(&camera).translation - position;
     println!(
