@@ -211,6 +211,9 @@ pub enum ClickTarget {
     /// A box on a skinned window's title bar, by the window's key: its
     /// close box (true) or its minimize box.
     TitleBox(&'static str, bool),
+    /// The button in a skinned window's own body that closes it, by the
+    /// window's key: its Done or Close, as a player presses it.
+    Done(&'static str),
     /// An arrow of a skinned window's scrollbar, by the window's key: the
     /// one that scrolls up (true) or down.
     Scroll(&'static str, bool),
@@ -656,6 +659,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["actions"] => ClickTarget::ActionsWindow,
         ["window", key] => ClickTarget::Toggle(window_key(key)?),
         ["close_box", key] => ClickTarget::TitleBox(window_key(key)?, true),
+        ["done", key] => ClickTarget::Done(window_key(key)?),
         ["minimize_box", key] => ClickTarget::TitleBox(window_key(key)?, false),
         ["scroll_up", key] => ClickTarget::Scroll(window_key(key)?, true),
         ["scroll_down", key] => ClickTarget::Scroll(window_key(key)?, false),
@@ -1498,6 +1502,22 @@ click sell_chosen
                 Step::Click(ClickTarget::Trade(TradeClick::SellChosen)),
             ]
         );
+    }
+
+    #[test]
+    fn parses_a_windows_own_done_button() {
+        assert_eq!(
+            parse(
+                "click done bank\nhover done world-container\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Done("bank")),
+                Step::Hover(ClickTarget::Done("world-container")),
+            ]
+        );
+        assert!(parse("click done nowhere\n", Path::new("private")).is_err());
     }
 
     #[test]

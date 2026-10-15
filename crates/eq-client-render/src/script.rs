@@ -935,8 +935,8 @@ const fn raid(click: RaidClick) -> super::raid::RaidAction {
     }
 }
 
-/// Whether a control of the Training window, the confirmation dialog or a
-/// skinned window's title bar is the one a click names.
+/// Whether a control of the Training window, the confirmation dialog, a
+/// skinned window's title bar or its Done button is the one a click names.
 fn dialog_control(
     target: ClickTarget,
     (skill_row, train, closes, answer, title_box): (
@@ -946,8 +946,10 @@ fn dialog_control(
         Option<&super::confirm::AnswerButton>,
         Option<&super::skinned::TitleBox>,
     ),
+    trade: Option<&super::trade::Action>,
 ) -> bool {
     match target {
+        ClickTarget::Done(key) => done_button(key, closes, trade, title_box),
         ClickTarget::TitleBox(key, close) => title_box
             .is_some_and(|title_box| title_box.window.key() == key && title_box.close == close),
         ClickTarget::Answer(yes) => answer.is_some_and(|answer| answer.0 == yes),
@@ -960,6 +962,43 @@ fn dialog_control(
         }
         _ => false,
     }
+}
+
+/// The loot or merchant window's action a scripted click names.
+const fn trading(click: TradeClick) -> super::trade::Action {
+    use super::trade::Action;
+    match click {
+        TradeClick::Take(place) => Action::Take(place),
+        TradeClick::TakeAll => Action::TakeAll,
+        TradeClick::EndLoot => Action::EndLoot,
+        TradeClick::Buy(slot) => Action::Buy(slot),
+        TradeClick::Sell(slot) => Action::Sell(slot),
+        TradeClick::EndShop => Action::EndShop,
+        TradeClick::Choose(slot) => Action::Choose(slot),
+        TradeClick::BuyChosen => Action::BuyChosen,
+        TradeClick::SellChosen => Action::SellChosen,
+    }
+}
+
+/// Whether a control is the button in a window's own body that closes it:
+/// one that only closes the window, or the loot or merchant window's Done,
+/// which ends the loot or the shopping as it closes. The title bar's close
+/// box closes it too, but is `close_box`'s.
+fn done_button(
+    key: &str,
+    closes: Option<&super::skinned::Closes>,
+    trade: Option<&super::trade::Action>,
+    title_box: Option<&super::skinned::TitleBox>,
+) -> bool {
+    use super::trade::Action;
+    use super::windows::WindowId;
+    let window = match (closes, trade) {
+        (Some(closes), _) => closes.0,
+        (None, Some(Action::EndLoot)) => WindowId::Loot,
+        (None, Some(Action::EndShop)) => WindowId::Merchant,
+        _ => return false,
+    };
+    title_box.is_none() && window.key() == key
 }
 
 /// The first visible matching control in an open window, as a click or a
@@ -1005,9 +1044,10 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
             ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
-            ClickTarget::Answer(_) | ClickTarget::Training(_) | ClickTarget::TitleBox(..) => {
-                dialog_control(target, dialog)
-            }
+            ClickTarget::Answer(_)
+            | ClickTarget::Training(_)
+            | ClickTarget::TitleBox(..)
+            | ClickTarget::Done(_) => dialog_control(target, dialog, trade),
             ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
             ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),
             ClickTarget::Map(action) => map.is_some_and(|button| *button == action),
@@ -1028,21 +1068,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::SpellGem(number) => spell_gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
-            ClickTarget::Trade(click) => trade.is_some_and(|action| {
-                use super::trade::Action;
-                *action
-                    == match click {
-                        TradeClick::Take(place) => Action::Take(place),
-                        TradeClick::TakeAll => Action::TakeAll,
-                        TradeClick::EndLoot => Action::EndLoot,
-                        TradeClick::Buy(slot) => Action::Buy(slot),
-                        TradeClick::Sell(slot) => Action::Sell(slot),
-                        TradeClick::EndShop => Action::EndShop,
-                        TradeClick::Choose(slot) => Action::Choose(slot),
-                        TradeClick::BuyChosen => Action::BuyChosen,
-                        TradeClick::SellChosen => Action::SellChosen,
-                    }
-            }),
+            ClickTarget::Trade(click) => trade == Some(&trading(click)),
             ClickTarget::Tint(number, color) => tint.is_some_and(|action| {
                 use super::inventory::colors::Action;
                 match (action, color) {
@@ -1315,6 +1341,41 @@ mod tests {
         assert!(arrived(&zone, &online, false));
         assert!(arrived(&Step::WaitOnline, &online, false));
         assert!(!arrived(&Step::WaitZone("qeynos2".into()), &online, false));
+    }
+
+    #[test]
+    fn done_is_a_window_body_button_that_closes_it() {
+        use super::super::skinned::{Closes, TitleBox};
+        use super::super::trade::Action;
+        use super::super::windows::WindowId;
+        let bank = Closes(WindowId::Bank);
+        let container = Closes(WindowId::WorldContainer);
+        assert!(done_button("bank", Some(&bank), None, None));
+        assert!(done_button("world-container", Some(&container), None, None));
+        // Another window's Done, or a button that does something else.
+        assert!(!done_button("bank", Some(&container), None, None));
+        assert!(!done_button("bank", None, Some(&Action::BuyChosen), None));
+        assert!(!done_button("bank", None, None, None));
+        // The loot and merchant windows' Done end the loot or the shopping.
+        assert!(done_button("loot", None, Some(&Action::EndLoot), None));
+        assert!(done_button("merchant", None, Some(&Action::EndShop), None));
+        assert!(!done_button("loot", None, Some(&Action::EndShop), None));
+        // The title bar's close box is `close_box`'s.
+        let close_box = TitleBox {
+            window: WindowId::Bank,
+            close: true,
+        };
+        assert!(!done_button("bank", Some(&bank), None, Some(&close_box)));
+        let close_box = TitleBox {
+            window: WindowId::Loot,
+            close: true,
+        };
+        assert!(!done_button(
+            "loot",
+            None,
+            Some(&Action::EndLoot),
+            Some(&close_box)
+        ));
     }
 
     /// A zone with the player (7) and three gnolls (9 to 11) in it, and a
