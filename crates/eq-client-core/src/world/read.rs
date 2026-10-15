@@ -259,6 +259,13 @@ impl ClientWorld {
         self.zone.motions.get(&id).copied()
     }
 
+    /// When a corpse in view died, for one the player saw die rather than
+    /// one that arrived dead.
+    #[must_use]
+    pub fn died_at(&self, id: u16) -> Option<std::time::Instant> {
+        self.zone.deaths.get(&id).copied()
+    }
+
     /// The latest cast a spawn completed, the player's own included, while
     /// it is in view: its spell landed while the cast was under way.
     #[must_use]

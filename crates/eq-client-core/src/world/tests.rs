@@ -3228,3 +3228,41 @@ fn a_landing_is_the_action_with_the_servers_landing_flag() {
     land(&mut world, 9, 42, 4);
     assert_eq!(world.landing_on(9), None);
 }
+
+#[test]
+fn a_spawn_seen_dying_keeps_when_it_fell_and_one_arriving_dead_has_none() {
+    use std::time::Duration;
+    let mut world = admitted();
+    let start = Instant::now();
+    let death = |spawn_id| {
+        WorldUpdate::Game(WorldEvent::Death(Death {
+            spawn_id,
+            killer_id: 9,
+            corpse_id: spawn_id,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }))
+    };
+    assert_eq!(world.died_at(5), None);
+    world.apply(&death(5), start, &NoSpells);
+    assert_eq!(world.died_at(5), Some(start));
+    // A repeated death leaves when it fell alone.
+    world.apply(&death(5), start + Duration::from_secs(2), &NoSpells);
+    assert_eq!(world.died_at(5), Some(start));
+    // A corpse arriving in its place, or one arriving anywhere, was not
+    // seen dying.
+    let mut corpse = spawn(5);
+    corpse.kind = SpawnKind::NpcCorpse;
+    let mut other = spawn(6);
+    other.kind = SpawnKind::PlayerCorpse;
+    game(&mut world, WorldEvent::Spawns(vec![corpse, other]));
+    assert_eq!((world.died_at(5), world.died_at(6)), (None, None));
+    // One leaving forgets it, and the zone forgets them all.
+    game(&mut world, WorldEvent::Spawns(vec![spawn(7), spawn(8)]));
+    world.apply(&death(7), start, &NoSpells);
+    world.apply(&death(8), start, &NoSpells);
+    game(&mut world, WorldEvent::Despawn(7));
+    assert_eq!((world.died_at(7), world.died_at(8)), (None, Some(start)));
+    game(&mut world, entered(2));
+    assert_eq!(world.died_at(8), None);
+}

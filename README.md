@@ -545,7 +545,9 @@ gesture the installed `spells_us.txt` names for the spell, as the official
 client does. An interrupted cast, a fizzle, and a landing with no cast under way
 (a proc, or a cast begun before the caster came into view) play nothing; the
 last two are inferred. Neither plays over sitting, lying, looting, crouching or
-a corpse. Each
+a corpse. A spawn the player sees die plays its death clip once and stays on its
+last frame, lying on the ground; a corpse that comes into view already dead lies
+there without falling (inferred). Each
 of the servers' animation numbers plays the clip EQEmu's documented table gives
 it, at normal speed whatever speed the server sends. A model without that clip
 plays the lowest-numbered clip of the same kind it has, for an attack (1 to 11)
