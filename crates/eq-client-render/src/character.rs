@@ -38,9 +38,23 @@ pub(super) struct AnimatedCharacter {
     lift: f32,
 }
 
-/// A corpse: drawn with its race's model, lying as it fell.
+/// A corpse: drawn with its race's model, falling from when it died if the
+/// player saw it die, else lying as it fell.
 #[derive(Component, Clone, Copy, Debug, Default)]
-pub(super) struct Corpse;
+pub(super) struct Corpse {
+    /// When it died, for a death the player saw.
+    pub(super) fell: Option<std::time::Instant>,
+}
+
+impl Corpse {
+    /// Seconds since it fell: for one that arrived dead, a time long past,
+    /// so it lies rather than falling each time it is drawn.
+    fn lying(self, now: std::time::Instant) -> f32 {
+        self.fell.map_or(1.0e6, |fell| {
+            now.saturating_duration_since(fell).as_secs_f32()
+        })
+    }
+}
 
 /// The death clip, whose last frame is the body lying on the ground.
 const DEATH: (&str, bool) = ("D05", true);
@@ -261,7 +275,8 @@ pub(super) fn spawn_on_layers(
 }
 
 /// The characters the animation poses, with what decides their clip: the
-/// spawn they draw, whether they are the player, and whether a corpse; and
+/// spawn they draw, whether they are the player, and whether a corpse and
+/// when it fell; and
 /// where their name goes.
 type Animated<'w, 's> = Query<
     'w,
@@ -272,7 +287,7 @@ type Animated<'w, 's> = Query<
         Option<&'static mut super::names::Overhead>,
         Option<&'static super::entities::RemoteEntity>,
         Has<super::Player>,
-        Has<Corpse>,
+        Option<&'static Corpse>,
     ),
 >;
 
@@ -288,6 +303,7 @@ pub(super) fn animate(
     mut held_items: HeldItems,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    let now = std::time::Instant::now();
     let world = online.world();
     for (transform, mut character, overhead, remote, own, corpse) in &mut characters {
         let id = remote.map(|entity| entity.id).or_else(|| {
@@ -333,7 +349,10 @@ pub(super) fn animate(
         let gesture = character
             .swings
             .gesture(|clip| character.asset.clip_seconds(clip));
-        let (selected, pinned) = chosen_clip(corpse, posture, character.moving_for > 0.0, gesture);
+        // A corpse seen dying falls from its death; one that arrived dead
+        // lies in the death clip's last frame.
+        let lying = corpse.map(|corpse| corpse.lying(now));
+        let (selected, pinned) = chosen_clip(lying, posture, character.moving_for > 0.0, gesture);
         if selected != character.clip {
             character.clip = selected;
             character.elapsed = 0.0;
@@ -348,8 +367,8 @@ pub(super) fn animate(
                 .pose_with_attachments(clip, character.elapsed, !held, &character.shown);
         // The name rides just over the head as the pose moves it (inferred,
         // a recording item); a corpse's stays where its lying body puts it.
-        if let (Some(mut overhead), Some(top), false) =
-            (overhead, character.asset.top(&poses), corpse)
+        if let (Some(mut overhead), Some(top), None) =
+            (overhead, character.asset.top(&poses), lying)
         {
             overhead.set_if_neq(super::names::Overhead(top + character.lift));
         }
@@ -437,21 +456,23 @@ impl Swings {
 }
 
 /// The clip a character shows, and the time in it when that is pinned
-/// rather than run on from when the clip was chosen. A corpse lies as it
-/// fell, in the death clip's last frame, rather than falling each time it is
-/// drawn (a held clip stays on its last frame). Sitting, lying, looting and
+/// rather than run on from when the clip was chosen. A corpse plays the
+/// death clip from `corpse` seconds since it fell, staying on its last
+/// frame, the body lying on the ground (a held clip stays there); one that
+/// arrived dead is given a time long past, so it lies rather than falling
+/// each time it is drawn (the fall is inferred). Sitting, lying, looting and
 /// ducking show their posture; otherwise a swing or a completed cast's
 /// gesture plays once over the stance and the walk alike, its clips being
 /// the whole body's (inferred).
 fn chosen_clip(
-    corpse: bool,
+    corpse: Option<f32>,
     posture: Option<eq_client_core::PostureState>,
     moving: bool,
     gesture: Option<Gesture>,
 ) -> ((&'static str, bool), Option<f32>) {
     use eq_client_core::PostureState;
-    if corpse {
-        return (DEATH, Some(1.0e6));
+    if let Some(since) = corpse {
+        return (DEATH, Some(since));
     }
     let posed = matches!(
         posture,
@@ -545,17 +566,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_corpse_lies_in_the_death_clips_last_frame_whatever_its_posture() {
+    fn a_corpse_falls_from_its_death_or_lies_in_the_death_clips_last_frame() {
         use eq_client_core::PostureState;
         let swing = Gesture {
             clip: "C05",
             since: 0.1,
         };
-        let (clip, pinned) = chosen_clip(true, Some(PostureState::Standing), true, Some(swing));
+        // One that arrived dead lies; one seen dying falls from its death.
+        let now = std::time::Instant::now();
+        let arrived = Corpse { fell: None }.lying(now);
+        let (clip, pinned) = chosen_clip(
+            Some(arrived),
+            Some(PostureState::Standing),
+            true,
+            Some(swing),
+        );
         assert_eq!(clip, ("D05", true));
         assert!(pinned.is_some_and(|seconds| seconds > 1000.0));
+        let seen = Corpse {
+            fell: now.checked_sub(std::time::Duration::from_millis(400)),
+        };
         assert_eq!(
-            chosen_clip(false, Some(PostureState::Sitting), false, None),
+            chosen_clip(Some(seen.lying(now)), None, false, None),
+            (("D05", true), Some(0.4))
+        );
+        assert_eq!(
+            chosen_clip(None, Some(PostureState::Sitting), false, None),
             (("P02", true), None)
         );
     }
@@ -622,12 +658,12 @@ mod tests {
         });
         for moving in [false, true] {
             assert_eq!(
-                chosen_clip(false, Some(PostureState::Standing), moving, swing),
+                chosen_clip(None, Some(PostureState::Standing), moving, swing),
                 (("C05", true), Some(0.25))
             );
         }
         assert_eq!(
-            chosen_clip(false, None, true, swing),
+            chosen_clip(None, None, true, swing),
             (("C05", true), Some(0.25))
         );
         for (posture, shown) in [
@@ -637,13 +673,13 @@ mod tests {
             (PostureState::Ducking, ("L08", true)),
         ] {
             assert_eq!(
-                chosen_clip(false, Some(posture), false, swing),
+                chosen_clip(None, Some(posture), false, swing),
                 (shown, None)
             );
         }
         // With nothing to play the stance or walk shows.
         assert_eq!(
-            chosen_clip(false, Some(PostureState::Standing), true, None),
+            chosen_clip(None, Some(PostureState::Standing), true, None),
             (("L01", false), None)
         );
     }
