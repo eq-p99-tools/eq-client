@@ -262,6 +262,7 @@ type Buttons<'w, 's> = Query<
                     Option<&'static super::raid::RaidRow>,
                     Option<&'static super::raid::RaidAction>,
                     Option<&'static super::skinned::Shows>,
+                    Option<&'static super::skinned::SkinId>,
                 ),
             ),
         ),
@@ -311,7 +312,12 @@ pub(super) fn drive(
     bodies: Query<&super::PlayerBody, With<super::Player>>,
     collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
-    (mut buttons, layout, mut pointers): (Buttons, Layout, Pointers),
+    (mut buttons, layout, mut pointers, needs): (
+        Buttons,
+        Layout,
+        Pointers,
+        Query<&crate::outbox::Needs>,
+    ),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut exit: MessageWriter<AppExit>,
@@ -518,9 +524,12 @@ pub(super) fn drive(
                 if window.is_some_and(|window| window.cursor_position().is_some()) {
                     return;
                 }
-                let Some(entity) = find(*target, &buttons, &layout) else {
-                    script.stop(&mut keys, &mut mouse, "click target is not visible");
-                    return;
+                let entity = match reach(*target, &buttons, &layout, &needs, online.world()) {
+                    Ok(entity) => entity,
+                    Err(reason) => {
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
+                    }
                 };
                 press(&mut commands, entity, *target, &mut buttons, &mut pointers);
                 let button = if matches!(step, Step::RightClick(_)) {
@@ -544,9 +553,12 @@ pub(super) fn drive(
                     if window.is_some_and(|window| window.cursor_position().is_some()) {
                         return;
                     }
-                    let Some(entity) = find(*target, &buttons, &layout) else {
-                        script.stop(&mut keys, &mut mouse, "click target is not visible");
-                        return;
+                    let entity = match reach(*target, &buttons, &layout, &needs, online.world()) {
+                        Ok(entity) => entity,
+                        Err(reason) => {
+                            script.stop(&mut keys, &mut mouse, &reason);
+                            return;
+                        }
                     };
                     press(&mut commands, entity, *target, &mut buttons, &mut pointers);
                     mouse.press(MouseButton::Left);
@@ -953,6 +965,26 @@ fn done_button(
     title_box.is_none() && window.key() == key
 }
 
+/// The control a click or a hold presses, or why the script stops: none is
+/// visible, or a skin's button named by its `ScreenID` is greyed out, as it
+/// is for a player, with the reason its hover gives.
+fn reach(
+    target: ClickTarget,
+    buttons: &Buttons,
+    layout: &Layout,
+    needs: &Query<&crate::outbox::Needs>,
+    world: &eq_client_core::world::ClientWorld,
+) -> Result<Entity, String> {
+    let entity = find(target, buttons, layout).ok_or("click target is not visible")?;
+    match (target, needs.get(entity)) {
+        (ClickTarget::Button(..), Ok(needs)) if !needs.offered(world) => Err(format!(
+            "that button is greyed out: {}",
+            needs.reason(world)
+        )),
+        _ => Ok(entity),
+    }
+}
+
 /// The first visible matching control in an open window, as a click or a
 /// hover reaches it.
 fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entity> {
@@ -970,7 +1002,12 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         (give, character, chat_tab),
         (coins, pick, arrow, amount),
         (selector, tab, ability, attack, slash, checkbox),
-        (slider, drop_down, choice, (dialog, page, combine, map, (raid_row, raid_action, shows))),
+        (
+            slider,
+            drop_down,
+            choice,
+            (dialog, page, combine, map, (raid_row, raid_action, shows, skin_id)),
+        ),
     ) in buttons
     {
         let matches = match target {
@@ -1008,6 +1045,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                 row.index == index && (row.list == super::raid::RaidList::Grouped) == grouped
             }),
             ClickTarget::Buff(long, index) => effects_button(shows, long, index),
+            ClickTarget::Button(key, id) => {
+                skin_id.is_some_and(|skin| skin.id == id && skin.window.key() == key)
+            }
             ClickTarget::Scroll(key, up) => arrow.is_some_and(|arrow| {
                 arrow.window.is_some_and(|window| window.key() == key) && arrow.up == up
             }),
@@ -1268,6 +1308,65 @@ mod tests {
             Some(&Action::EndLoot),
             Some(&close_box)
         ));
+    }
+
+    #[test]
+    fn a_skin_button_is_pressed_by_its_name_unless_it_is_greyed() {
+        use crate::outbox::Needs;
+        use crate::skinned::SkinId;
+        use crate::windows::WindowId;
+        #[derive(Resource, Default)]
+        struct Reached(Vec<Result<bool, String>>);
+        let mut app = App::new();
+        app.init_resource::<Reached>();
+        for (id, needs) in [("FakeDone", Needs::Nothing), ("FakeGrey", Needs::Missing)] {
+            app.world_mut().spawn((
+                Node::default(),
+                Button,
+                InheritedVisibility::VISIBLE,
+                SkinId {
+                    window: WindowId::Bank,
+                    id: id.into(),
+                },
+                needs,
+            ));
+        }
+        app.add_systems(
+            Update,
+            |buttons: Buttons,
+             layout: Layout,
+             needs: Query<&Needs>,
+             skins: Query<&SkinId>,
+             mut reached: ResMut<Reached>| {
+                let world = crate::online::OnlineState::new(true);
+                for target in [
+                    ClickTarget::Button("bank", "FakeDone"),
+                    ClickTarget::Button("bank", "FakeGrey"),
+                    ClickTarget::Button("bank", "FakeNone"),
+                    ClickTarget::Button("merchant", "FakeDone"),
+                ] {
+                    let found = reach(target, &buttons, &layout, &needs, world.world());
+                    reached.0.push(
+                        found.map(|entity| {
+                            skins.get(entity).is_ok_and(|skin| skin.id == "FakeDone")
+                        }),
+                    );
+                }
+            },
+        );
+        app.update();
+        let reached = &app.world().resource::<Reached>().0;
+        assert_eq!(reached[0], Ok(true));
+        assert_eq!(
+            reached[1],
+            Err(format!(
+                "that button is greyed out: {}",
+                crate::outbox::MISSING
+            ))
+        );
+        // No such button, or none in that window.
+        assert_eq!(reached[2], Err("click target is not visible".into()));
+        assert_eq!(reached[3], Err("click target is not visible".into()));
     }
 
     /// A zone with the player (7) and three gnolls (9 to 11) in it, and a

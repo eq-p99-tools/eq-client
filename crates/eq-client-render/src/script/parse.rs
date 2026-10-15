@@ -203,6 +203,9 @@ pub enum ClickTarget {
     /// The button in a skinned window's own body that closes it, by the
     /// window's key: its Done or Close, as a player presses it.
     Done(&'static str),
+    /// Any button of a skinned window, by the window's key and what the
+    /// installed skin's file calls the button (`ScreenID`), spelled exactly.
+    Button(&'static str, &'static str),
     /// An arrow of a skinned window's scrollbar, by the window's key: the
     /// one that scrolls up (true) or down.
     Scroll(&'static str, bool),
@@ -641,6 +644,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["window", key] => ClickTarget::Toggle(window_key(key)?),
         ["close_box", key] => ClickTarget::TitleBox(window_key(key)?, true),
         ["done", key] => ClickTarget::Done(window_key(key)?),
+        ["button", key, id] => ClickTarget::Button(window_key(key)?, screen_id(id)?),
         ["minimize_box", key] => ClickTarget::TitleBox(window_key(key)?, false),
         ["scroll_up", key] => ClickTarget::Scroll(window_key(key)?, true),
         ["scroll_down", key] => ClickTarget::Scroll(window_key(key)?, false),
@@ -858,6 +862,31 @@ fn window_key(key: &str) -> Result<&'static str, String> {
             _ => None,
         })
         .ok_or_else(|| "expected a window, by its key such as skills".into())
+}
+
+/// A skin button's `ScreenID` as a script names it: letters, digits and
+/// underscores. Kept for the run, once per name; a script holds at most
+/// `MAX_STEPS` steps, so few are ever kept.
+fn screen_id(id: &str) -> Result<&'static str, String> {
+    static NAMES: std::sync::Mutex<std::collections::BTreeSet<&'static str>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err("expected a button, by its ScreenID in the skin's file".into());
+    }
+    let mut names = NAMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(name) = names.get(id) {
+        return Ok(name);
+    }
+    let name: &'static str = Box::leak(id.into());
+    names.insert(name);
+    Ok(name)
 }
 
 /// `chat <say|ooc|shout|auction|group|guild|raid> <words>` or `chat tell
@@ -1473,6 +1502,38 @@ click sell_chosen
             ]
         );
         assert!(parse("click done nowhere\n", Path::new("private")).is_err());
+    }
+
+    #[test]
+    fn parses_a_skin_button_by_its_screen_id() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "click button bank Fake_Button1\nright_click button bank Fake_Button1\n\
+                 hover button merchant FakeButton\nhold_click 500 button bank FakeButton\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Button("bank", "Fake_Button1")),
+                Step::RightClick(ClickTarget::Button("bank", "Fake_Button1")),
+                Step::Hover(ClickTarget::Button("merchant", "FakeButton")),
+                Step::HoldClick(
+                    ClickTarget::Button("bank", "FakeButton"),
+                    Duration::from_millis(500)
+                ),
+            ]
+        );
+        for bad in [
+            "click button bank",
+            "click button nowhere FakeButton",
+            "click button bank Fake-Button",
+            "click button bank Fake Button",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+        let long = format!("click button bank {}", "A".repeat(65));
+        assert!(parse(&long, base).is_err());
     }
 
     #[test]
