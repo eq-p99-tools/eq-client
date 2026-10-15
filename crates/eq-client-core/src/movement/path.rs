@@ -5,7 +5,9 @@
 //! walk stops at a ledge, the edge may instead drop to the floor below, simulated
 //! with the same airborne controller online falls use.
 
-use super::{AirborneController, CollisionWorld, MotionStep, PROVISIONAL_PHYSICS};
+use super::{
+    AirborneController, CollisionWorld, MAX_GROUNDED_STEP, MotionStep, PROVISIONAL_PHYSICS,
+};
 use glam::{Vec2, Vec3};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -21,6 +23,16 @@ const MAX_EXPANSIONS: usize = 60_000;
 /// Deepest ledge a path drops off, in world units: no deeper than a fall
 /// that does no damage.
 const MAX_DROP: f32 = super::HARMLESS_DROP;
+/// Room a straightened leg keeps from walls on either side, so a route runs
+/// down the middle of a room rather than along its walls: the cell's length,
+/// the room the search's wall toll keeps.
+const CLEARANCE: f32 = CELL;
+/// Extra cost of leaving a position beside a wall or ledge: two cells' length,
+/// so a route along a wall prefers a parallel line a cell away, and one through
+/// a doorway its middle rather than a jamb.
+const WALL_TOLL: f32 = 2.0 * CELL;
+/// Waypoints a straightened leg may skip at most, bounding its cost.
+const LOOKAHEAD: usize = 32;
 /// Airborne slice length, matching the controller's integration limit.
 const SLICE: f32 = 0.05;
 const NEIGHBORS: [(i16, i16); 8] = [
@@ -155,20 +167,30 @@ impl PathSearch {
             if self.expanded > MAX_EXPANSIONS {
                 return PathProgress::Failed;
             }
-            for (di, dj) in NEIGHBORS {
-                let (Some(i), Some(j)) = (key.0.checked_add(di), key.1.checked_add(dj)) else {
-                    continue;
-                };
+            let steps = NEIGHBORS.map(|(di, dj)| {
+                let (i, j) = (key.0.checked_add(di)?, key.1.checked_add(dj)?);
                 let target = self.origin + Vec2::new(f32::from(i), f32::from(j)) * CELL;
-                let Some(next_feet) = walk(world, feet, target, self.height).or_else(|| {
+                let next_feet = walk(world, feet, target, self.height)?;
+                Some((i, j, next_feet))
+            });
+            // A position a wall or ledge stands beside costs more to leave, so
+            // routes keep to the middle of rooms where there is room to.
+            let beside_wall = steps.iter().any(Option::is_none);
+            let toll = if beside_wall { WALL_TOLL } else { 0.0 };
+            for (index, step) in steps.into_iter().enumerate() {
+                let Some((i, j, next_feet)) = step.or_else(|| {
+                    let (di, dj) = NEIGHBORS[index];
+                    let (i, j) = (key.0.checked_add(di)?, key.1.checked_add(dj)?);
+                    let target = self.origin + Vec2::new(f32::from(i), f32::from(j)) * CELL;
                     self.drops
                         .then(|| drop(world, feet, target, self.height))
                         .flatten()
+                        .map(|landing| (i, j, landing))
                 }) else {
                     continue;
                 };
                 let next = (i, j, level(next_feet.y));
-                let next_cost = cost + feet.distance(next_feet);
+                let next_cost = cost + feet.distance(next_feet) + toll;
                 if self
                     .nodes
                     .get(&next)
@@ -255,6 +277,52 @@ pub(super) fn walk(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) ->
     (Vec2::new(feet.x - to.x, feet.z - to.y).length() < 0.25).then_some(feet)
 }
 
+/// Straightens a grid path found from `start` into fewer, longer legs: each
+/// leg runs from one kept waypoint to the farthest later one that a straight
+/// walk reaches with [`CLEARANCE`] to spare on both sides. Where no such leg
+/// exists, such as through a doorway narrower than twice the clearance or over
+/// a drop, the grid's own hop is kept, so the result is walkable wherever the
+/// path was.
+#[must_use]
+pub(super) fn straighten(
+    world: &CollisionWorld,
+    start: Vec3,
+    path: &[Vec3],
+    height: f32,
+) -> Vec<Vec3> {
+    let mut legs = Vec::new();
+    let (mut from, mut next) = (start, 0);
+    while let Some(&hop) = path.get(next) {
+        // Scan forward while the leg stays clear: the first leg that is not
+        // ends the stretch, since one past a corner rarely clears again.
+        let reach = (next + 1..path.len().min(next + 1 + LOOKAHEAD))
+            .take_while(|&later| clear_leg(world, from, path[later], height))
+            .last();
+        let to = reach.unwrap_or(next);
+        from = reach.map_or(hop, |later| path[later]);
+        legs.push(from);
+        next = to + 1;
+    }
+    legs
+}
+
+/// Whether a straight walk from `from` reaches `to` on its floor, and so do the
+/// walks beside it, [`CLEARANCE`] to either side.
+fn clear_leg(world: &CollisionWorld, from: Vec3, to: Vec3, height: f32) -> bool {
+    let reach = |from: Vec3, to: Vec3| {
+        walk(world, from, Vec2::new(to.x, to.z), height)
+            .filter(|end| (end.y - to.y).abs() <= MAX_GROUNDED_STEP)
+    };
+    let along = Vec2::new(to.x - from.x, to.z - from.z);
+    let side = along.perp().normalize_or_zero() * CLEARANCE;
+    reach(from, to).is_some()
+        && [side, -side].into_iter().all(|side| {
+            let offset = Vec3::new(side.x, 0.0, side.y);
+            // Sideways first, so a wall between the leg and its neighbour fails.
+            reach(from, from + offset).is_some_and(|beside| reach(beside, to + offset).is_some())
+        })
+}
+
 /// Whether feet are close enough to a goal: within `reach` across, and on its
 /// floor rather than one far above or below.
 pub(super) fn within_reach(feet: Vec3, goal: Vec3, reach: f32) -> bool {
@@ -322,6 +390,92 @@ mod tests {
                 done => return done,
             }
         }
+    }
+
+    fn found(world: &CollisionWorld, start: Vec3, goal: Vec3) -> Vec<Vec3> {
+        let PathProgress::Found(path) = run(world, start, goal) else {
+            panic!("expected a path");
+        };
+        path
+    }
+
+    /// Every leg is walkable from the one before it, as the follower walks it.
+    fn assert_walkable(world: &CollisionWorld, start: Vec3, legs: &[Vec3]) {
+        let mut previous = start;
+        for feet in legs {
+            assert!(
+                walk(world, previous, Vec2::new(feet.x, feet.z), 6.0).is_some(),
+                "{previous:?} to {feet:?} in {legs:?}"
+            );
+            previous = *feet;
+        }
+    }
+
+    fn floor() -> Vec<[[f32; 3]; 3]> {
+        quad(
+            [-30.0, 0.0, -30.0],
+            [30.0, 0.0, -30.0],
+            [30.0, 0.0, 30.0],
+            [-30.0, 0.0, 30.0],
+        )
+        .to_vec()
+    }
+
+    #[test]
+    fn an_open_floor_route_straightens_into_one_leg() {
+        let world = CollisionWorld::new(floor()).unwrap();
+        // Off the grid's eight directions, so the search returns a zigzag.
+        let (start, goal) = (Vec3::new(-10.0, 0.0, -10.0), Vec3::new(13.0, 0.0, 1.0));
+        let path = found(&world, start, goal);
+        assert!(path.len() > 5, "{path:?}");
+        let legs = straighten(&world, start, &path, 6.0);
+        assert_eq!(legs, [*path.last().unwrap()]);
+    }
+
+    #[test]
+    fn straightened_routes_keep_clear_of_walls_and_keep_narrow_doorways() {
+        // A wall across z = 0 with a doorway at 10 < x < 20.
+        let mut triangles = floor();
+        let wall = |from: f32, to: f32| {
+            quad(
+                [from, 0.0, 0.0],
+                [to, 0.0, 0.0],
+                [to, 10.0, 0.0],
+                [from, 10.0, 0.0],
+            )
+        };
+        triangles.extend(wall(-30.0, 10.0));
+        triangles.extend(wall(20.0, 30.0));
+        let world = CollisionWorld::new(triangles.clone()).unwrap();
+        let (start, goal) = (Vec3::new(-10.0, 0.0, -15.0), Vec3::new(-10.0, 0.0, 15.0));
+        let path = found(&world, start, goal);
+        let legs = straighten(&world, start, &path, 6.0);
+        assert!(legs.len() < path.len() / 3, "{legs:?} from {path:?}");
+        assert_walkable(&world, start, &legs);
+        // The legs through the doorway pass it with room on both sides.
+        let through = legs
+            .windows(2)
+            .find(|leg| leg[0].z < 0.0 && leg[1].z > 0.0)
+            .map_or_else(|| [start, legs[0]], |leg| [leg[0], leg[1]]);
+        let crossing = through[0].x
+            + (through[1].x - through[0].x) * (-through[0].z / (through[1].z - through[0].z));
+        assert!(
+            crossing > 10.0 + CLEARANCE - 0.5 && crossing < 20.0 - CLEARANCE + 0.5,
+            "{crossing} {legs:?}"
+        );
+
+        // A doorway narrower than twice the clearance keeps the grid's own
+        // hops through it, so the route stays walkable.
+        let mut triangles = floor();
+        triangles.extend(wall(-30.0, 10.0));
+        triangles.extend(wall(13.0, 30.0));
+        let world = CollisionWorld::new(triangles).unwrap();
+        let path = found(&world, start, goal);
+        let legs = straighten(&world, start, &path, 6.0);
+        assert!(legs.len() < path.len(), "{legs:?} from {path:?}");
+        assert!(legs.iter().any(|feet| feet.x > 10.0 && feet.x < 13.0));
+        assert_walkable(&world, start, &legs);
+        assert_eq!(legs.last(), path.last());
     }
 
     #[test]
