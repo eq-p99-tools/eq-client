@@ -121,6 +121,7 @@ impl ClientWorld {
         changes: &mut Changes,
     ) {
         self.landed(effect.caster_id, now);
+        self.landed_on(effect);
         if self.is_player(effect.target_id) {
             if effect.effect_flag == 4
                 && !matches!(effect.spell_id, 0 | u16::MAX)

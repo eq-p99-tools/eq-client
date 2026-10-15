@@ -1583,6 +1583,7 @@ mod tests {
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),
                 far_clip: None,
+                spell_landing_flag: None,
             }],
         );
         crate::online::testing::connect(&mut state, true);

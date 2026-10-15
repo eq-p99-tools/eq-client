@@ -259,6 +259,7 @@ mod tests {
                 zone: "qeytoqrg".into(),
                 player: Box::new(testing::player(7)),
                 far_clip: None,
+                spell_landing_flag: None,
             }],
         );
         testing::connect(&mut online, true);

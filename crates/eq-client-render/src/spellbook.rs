@@ -152,6 +152,11 @@ impl SpellNames {
             .is_some_and(eq_client_assets::spells::Mechanics::instant)
     }
 
+    /// The particle effect the installed client draws for a spell.
+    pub(super) fn effect(&self, id: u32) -> Option<u32> {
+        self.spell(id)?.effect
+    }
+
     /// Unmodified installation mana cost.
     pub(super) fn mana(&self, id: u32) -> Option<u32> {
         self.spell(id)?.mana
