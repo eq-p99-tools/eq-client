@@ -11,7 +11,11 @@
 //! as Gate's does, lets the casting gesture finish before the cover is
 //! drawn, at most [`GESTURE_WAIT`] seconds. Only the drawing waits: the
 //! cover is up for everything else, the pointer included (inferred, recording
-//! checklist item 6.230).
+//! checklist item 6.230). A new zone admitting the player during the
+//! gesture doesn't end it: the admission's news waits until the gesture has
+//! played ([`Loading::waiting`]), so the old zone and its windows stay as
+//! they were under the clear cover, while the session takes the new zone as
+//! it always does.
 //!
 //! So the player never sees the old zone hang on while the transfer runs,
 //! the frame freeze while the new zone loads, or the new zone's windows and
@@ -202,6 +206,9 @@ pub(crate) struct Loading {
     phase: Phase,
     /// The admission last seen, to tell a new one.
     admission: Option<u64>,
+    /// Whether the cover's drawing waited for the player's casting gesture
+    /// in the last frame drawn.
+    waiting: bool,
 }
 
 /// How far a move between zones has come.
@@ -226,6 +233,24 @@ impl Loading {
     /// Whether the cover is up.
     pub(crate) fn covered(&self) -> bool {
         matches!(self.phase, Phase::Moving(_) | Phase::Arriving(..))
+    }
+
+    /// Whether the cover's drawing waited for the player's casting gesture
+    /// in the last frame drawn. A new zone's admission waits with it.
+    pub(crate) const fn waiting(&self) -> bool {
+        self.waiting
+    }
+}
+
+#[cfg(test)]
+impl Loading {
+    /// Loading as the last frame drawn left it, its drawing waiting for the
+    /// player's casting gesture or not.
+    pub(crate) fn waiting_for_gesture(waiting: bool) -> Self {
+        Self {
+            waiting,
+            ..Self::default()
+        }
     }
 }
 
@@ -378,7 +403,7 @@ fn report(before: Phase, after: Phase, settled: bool) {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn show(
     time: Res<Time>,
-    loading: Res<Loading>,
+    mut loading: ResMut<Loading>,
     player: Query<&crate::character::AnimatedCharacter, With<crate::Player>>,
     mut covers: Query<(&mut Node, &mut BackgroundColor, &Shade, &Children), With<Cover>>,
     mut parts: Query<&mut Visibility>,
@@ -398,6 +423,9 @@ fn show(
         ),
         _ => false,
     };
+    if loading.waiting != clear {
+        loading.waiting = clear;
+    }
     for (mut node, mut background, shade, children) in &mut covers {
         if node.display != display {
             node.display = display;

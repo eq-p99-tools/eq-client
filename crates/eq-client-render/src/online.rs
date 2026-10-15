@@ -26,6 +26,10 @@ pub(super) struct OnlineState {
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
     loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
+    /// A new zone's admission and the news after it, held back while the
+    /// loading screen waits for the player's casting gesture over the zone
+    /// they are leaving.
+    held: Vec<WorldUpdate>,
 }
 
 impl OnlineState {
@@ -162,7 +166,30 @@ impl OnlineState {
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
             loading: default(),
+            held: Vec::new(),
         }
+    }
+}
+
+impl OnlineState {
+    /// The news to apply this frame: any held back, then `batch`. The
+    /// player's casting gesture, as Gate's, plays to its end over the zone
+    /// they are leaving before the loading screen is drawn, even once the
+    /// next zone has admitted them (inferred, 6.230): while the screen is
+    /// `waiting` for it, the admission and what follows it are held back,
+    /// unapplied. Only the screen waits; the session takes the new zone as it
+    /// always does.
+    fn news(
+        &mut self,
+        batch: impl IntoIterator<Item = WorldUpdate>,
+        waiting: bool,
+    ) -> Vec<WorldUpdate> {
+        let mut news = std::mem::take(&mut self.held);
+        news.extend(batch);
+        if waiting && let Some(admission) = news.iter().position(admits) {
+            self.held = news.split_off(admission);
+        }
+        news
     }
 }
 
@@ -379,7 +406,7 @@ pub(super) fn receive(
     mut state: ResMut<OnlineState>,
     mut panels: Panels,
     mut chat: ResMut<super::chat::ChatState>,
-    mut scene: super::zone::Scene,
+    (mut scene, loading): (super::zone::Scene, Option<Res<super::loading::Loading>>),
 ) {
     let (settings, spell_names, messages) = definitions;
     let Ok(receiver) = updates.0.lock() else {
@@ -411,7 +438,9 @@ pub(super) fn receive(
     if lost.is_some() {
         warn!("The session stopped without saying why");
     }
-    for update in batch.into_iter().chain(lost) {
+    let waiting = loading.is_some_and(|loading| loading.waiting());
+    let news = state.news(batch.into_iter().chain(lost), waiting);
+    for update in news {
         let changes = state
             .world
             .apply(&update, std::time::Instant::now(), spells);
@@ -490,6 +519,11 @@ pub(super) fn receive(
             }
         }
     }
+}
+
+/// Whether the news is a new admission, which brings its zone.
+const fn admits(update: &WorldUpdate) -> bool {
+    matches!(update, WorldUpdate::Game(WorldEvent::Entered { .. }))
 }
 
 /// Logs what diagnosing a session needs from its news.
@@ -1100,6 +1134,69 @@ mod tests {
         }
         // The session is the new zone's all the same.
         assert_eq!(world(&app).session_id(), Some(2));
+    }
+
+    #[test]
+    fn a_new_admission_waits_while_the_players_casting_gesture_plays() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let missing = std::env::temp_dir().join("no-everquest-installed-here");
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig {
+                eq_directory: Some(missing),
+                ..default()
+            }))
+            .insert_resource(super::super::loading::Loading::waiting_for_gesture(true))
+            .init_resource::<hud::HudState>()
+            .init_resource::<super::super::motion::Controls>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<super::super::combat::CombatState>()
+            .init_resource::<super::super::trade::TradeState>()
+            .init_resource::<super::super::items::ItemState>()
+            .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        // What the zone being left shows, the player's body among it.
+        let old = app.world_mut().spawn(super::super::SceneEntity).id();
+        let resources = |mana| {
+            WorldUpdate::Game(WorldEvent::Resources {
+                mana,
+                endurance: mana,
+            })
+        };
+        sender.send(resources(5)).unwrap();
+        sender
+            .send(WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 2,
+                zone: "example".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }))
+            .unwrap();
+        sender.send(resources(6)).unwrap();
+        // The news before the admission applies; the admission and what
+        // follows it wait, and the zone being left stays drawn.
+        app.update();
+        sender.send(resources(7)).unwrap();
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(1));
+        assert_eq!(world(&app).vitals().mana, Some(5));
+        assert!(app.world().get_entity(old).is_ok());
+        // Once the gesture has played, the held news applies in its order.
+        app.insert_resource(super::super::loading::Loading::waiting_for_gesture(false));
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(2));
+        assert_eq!(world(&app).vitals().mana, Some(7));
+        assert!(app.world().get_entity(old).is_err());
     }
 
     #[test]
