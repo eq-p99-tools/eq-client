@@ -292,6 +292,86 @@ mod tests {
         assert!(end.z < 0.0 && end.z > -2.0 - FINAL_REACH - 0.1, "{end:?}");
     }
 
+    /// A lower floor at y = 0 for z < 0 and a raised floor at y = 4 for z > 0,
+    /// split by a ledge too tall to step up, with an optional ramp between them
+    /// for x > 20.
+    fn ledge(ramp: bool) -> CollisionWorld {
+        let mut triangles = quad(
+            [-30.0, 0.0, -30.0],
+            [30.0, 0.0, -30.0],
+            [30.0, 0.0, -10.0],
+            [-30.0, 0.0, -10.0],
+        )
+        .to_vec();
+        triangles.extend(quad(
+            [-30.0, 0.0, -10.0],
+            [20.0, 0.0, -10.0],
+            [20.0, 0.0, 0.0],
+            [-30.0, 0.0, 0.0],
+        ));
+        triangles.extend(quad(
+            [-30.0, 4.0, 0.0],
+            [30.0, 4.0, 0.0],
+            [30.0, 4.0, 30.0],
+            [-30.0, 4.0, 30.0],
+        ));
+        triangles.extend(quad(
+            [-30.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 4.0, 0.0],
+            [-30.0, 4.0, 0.0],
+        ));
+        if ramp {
+            // Rises 4 over 10, well within a walkable slope.
+            triangles.extend(quad(
+                [20.0, 0.0, -10.0],
+                [30.0, 0.0, -10.0],
+                [30.0, 4.0, 0.0],
+                [20.0, 4.0, 0.0],
+            ));
+            // The ramp's side above the lower floor.
+            triangles.push([[20.0, 0.0, -10.0], [20.0, 0.0, 0.0], [20.0, 4.0, 0.0]]);
+        } else {
+            triangles.extend(quad(
+                [20.0, 0.0, -10.0],
+                [30.0, 0.0, -10.0],
+                [30.0, 0.0, 0.0],
+                [20.0, 0.0, 0.0],
+            ));
+            triangles.extend(quad(
+                [20.0, 0.0, 0.0],
+                [30.0, 0.0, 0.0],
+                [30.0, 4.0, 0.0],
+                [20.0, 4.0, 0.0],
+            ));
+        }
+        CollisionWorld::new(triangles).unwrap()
+    }
+
+    #[test]
+    fn a_follower_climbs_to_a_raised_floor_by_its_ramp_or_stops_at_the_ledge() {
+        let (start, goal) = (Vec3::new(0.0, 0.0, -20.0), Vec3::new(0.0, 4.0, 15.0));
+        let world = ledge(true);
+        let mut route = Route::new(start, goal, 3.0, 6.0);
+        let end = follow(&mut route, &world, start, goal);
+        assert!(!route.partial());
+        assert!(
+            Vec2::new(end.x - goal.x, end.z - goal.z).length() <= 3.0 && end.y > 3.9,
+            "{end:?}"
+        );
+
+        // Without the ramp the ledge is too tall to step up, so the route ends
+        // as close as it can get on the lower floor.
+        let world = ledge(false);
+        let mut route = Route::new(start, goal, 3.0, 6.0);
+        let end = follow(&mut route, &world, start, goal);
+        assert!(route.partial());
+        assert!(
+            end.y.abs() < 0.01 && end.z < 0.0 && end.z > -2.0 - FINAL_REACH - 0.1,
+            "{end:?}"
+        );
+    }
+
     #[test]
     fn a_start_with_no_way_out_is_unreachable() {
         // A floor too small for any step, with nothing below to drop onto.

@@ -138,6 +138,17 @@ pub enum Step {
     /// Walks a searched path around walls to within a distance of the current
     /// target, for a bounded duration.
     Walk(f32, Duration),
+    /// Walks a searched path around walls toward the nearest world container
+    /// of one tradeskill kind, chosen as the step starts, until it is within a
+    /// distance, for a bounded duration.
+    WalkObject {
+        /// The container type the object must have.
+        kind: u8,
+        /// Flat distance at which the step ends.
+        range: f32,
+        /// Longest the step may walk.
+        duration: Duration,
+    },
     /// Asks the current target to take the item on the cursor, as clicking
     /// it with the item does.
     Give,
@@ -397,6 +408,13 @@ fn parse_step(line: &str) -> Result<Step, String> {
             .ok_or_else(|| format!("expected a number from {low} to {high}"))
     };
     let chord = |keys: &str| keys_from(keys).ok_or_else(|| String::from("unknown key"));
+    // A world container that combines: a station, not a bag that only holds things.
+    let station = |kind: &str| {
+        kind.parse::<u8>()
+            .ok()
+            .filter(|kind| eq_client_core::tradeskills::combines(*kind))
+            .ok_or("expected a tradeskill container type")
+    };
     Ok(match (command, rest.as_slice()) {
         ("login", []) => Step::Login,
         ("wait_servers", []) => Step::WaitServers,
@@ -432,17 +450,18 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("trace", [duration]) => Step::Trace(millis(duration, MAX_TRACE)?),
         ("face", []) => Step::Face,
         ("approach", ["object", kind, range, duration]) => Step::ApproachObject {
-            kind: kind
-                .parse::<u8>()
-                .ok()
-                .filter(|kind| eq_client_core::tradeskills::combines(*kind))
-                .ok_or("expected a tradeskill container type")?,
+            kind: station(kind)?,
             range: number(range, 1.0, 200.0)?,
             duration: millis(duration, MAX_HOLD)?,
         },
         ("approach", [range, duration]) => {
             Step::Approach(number(range, 1.0, 200.0)?, millis(duration, MAX_HOLD)?)
         }
+        ("walk", ["object", kind, range, duration]) => Step::WalkObject {
+            kind: station(kind)?,
+            range: number(range, 1.0, 200.0)?,
+            duration: millis(duration, MAX_WALK)?,
+        },
         ("walk", [range, duration]) => {
             Step::Walk(number(range, 1.0, 200.0)?, millis(duration, MAX_WALK)?)
         }
@@ -1176,6 +1195,32 @@ mod tests {
             "approach object wheel 12 8000",
             "approach object 21 0 8000",
             "approach object 21 12 10001",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_object_walk_names_a_tradeskill_container_kind() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("walk object 21 12 20000\n", base).unwrap(),
+            [Step::WalkObject {
+                kind: 21,
+                range: 12.0,
+                duration: Duration::from_secs(20),
+            }]
+        );
+        // The kinds are `approach object`'s; the range and time keep `walk`'s bounds.
+        for bad in [
+            "walk object",
+            "walk object 21 12",
+            "walk object 51 12 8000",
+            "walk object 8 12 8000",
+            "walk object 256 12 8000",
+            "walk object wheel 12 8000",
+            "walk object 21 0 8000",
+            "walk object 21 12 60001",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
