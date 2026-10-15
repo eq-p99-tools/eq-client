@@ -68,6 +68,15 @@ fn hinge_target(door: &eq_client_core::doors::Door) -> Option<f32> {
     })
 }
 
+/// A door a route may pass by clicking it while it is shut, as the player
+/// would: one this client swings on its hinge, so its open pose is drawn and
+/// walked against. Its state now does not matter, since an open door shuts
+/// again on its own before the walker may reach it. Other mechanisms stay
+/// walls to a route.
+pub(super) fn swings(door: &eq_client_core::doors::Door) -> bool {
+    hinge_target(door).is_some()
+}
+
 /// Cosmetic interpolation only, half a turn a second; this rate does not drive
 /// packets or claim original-client timing.
 fn advance_hinge(current: f32, target: f32, seconds: f32) -> f32 {
@@ -188,7 +197,7 @@ pub(super) fn reconcile(
                     .and_then(|model| collider(model, &next));
                 *transform = next;
             }
-            obstacles.extend(door.collider.iter().cloned());
+            obstacles.extend(door.collider.iter().map(|mesh| (door.id, Arc::clone(mesh))));
         }
     }
     let Some(models) = models else {
@@ -196,7 +205,7 @@ pub(super) fn reconcile(
             .as_mut()
             .and_then(|collision| collision.0.as_mut())
         {
-            world.set_obstacles(Vec::new());
+            world.set_door_obstacles(Vec::new());
         }
         return;
     };
@@ -207,7 +216,7 @@ pub(super) fn reconcile(
         };
         let transform = posed(door, hinge_target(door).unwrap_or(0.0));
         let collider = collider(model, &transform);
-        obstacles.extend(collider.iter().cloned());
+        obstacles.extend(collider.iter().map(|mesh| (id, Arc::clone(mesh))));
         commands
             .spawn((
                 super::SceneEntity,
@@ -231,7 +240,7 @@ pub(super) fn reconcile(
         .as_mut()
         .and_then(|collision| collision.0.as_mut())
     {
-        world.set_obstacles(obstacles);
+        world.set_door_obstacles(obstacles);
     }
 }
 
@@ -265,6 +274,37 @@ mod tests {
         assert!(world.step(start, movement, 6.0).distance(start + movement) < 0.001);
         world.set_obstacles(vec![collider(&model, &closed).unwrap()]);
         assert!(world.step(start, movement, 6.0).z < 4.6);
+    }
+
+    #[test]
+    fn a_route_may_open_only_a_hinged_door_open_or_shut() {
+        let mut door = eq_client_core::doors::Door {
+            id: 1,
+            model: "DOOR".into(),
+            position: default(),
+            incline: 0,
+            size: 100,
+            open_type: 5,
+            state_at_spawn: 0,
+            invert_state: 0,
+            parameter: 0,
+            action: None,
+        };
+        assert!(swings(&door));
+        door.action = Some(2);
+        assert!(swings(&door), "open now, shut again later");
+        door.action = Some(3);
+        assert!(swings(&door));
+        for open_type in [9, 58, 255] {
+            assert!(!swings(&eq_client_core::doors::Door {
+                open_type,
+                ..door.clone()
+            }));
+        }
+        assert!(!swings(&eq_client_core::doors::Door {
+            incline: 90,
+            ..door
+        }));
     }
 
     #[test]

@@ -31,6 +31,9 @@ const CLEARANCE: f32 = CELL;
 /// so a route along a wall prefers a parallel line a cell away, and one through
 /// a doorway its middle rather than a jamb.
 const WALL_TOLL: f32 = 2.0 * CELL;
+/// Extra cost of a step through a closed door the player can open: four
+/// cells' length, so a short way round beats stopping to open a door.
+const DOOR_TOLL: f32 = 4.0 * CELL;
 /// Waypoints a straightened leg may skip at most, bounding its cost. The
 /// longest leg, every skipped hop a diagonal, must stay within the 255
 /// substeps [`walk`] counts in a `u8`.
@@ -71,6 +74,8 @@ struct Node {
     cost: f32,
     parent: Option<Key>,
     closed: bool,
+    /// The closed door the step to this position passes through.
+    door: Option<u8>,
 }
 
 struct Open {
@@ -109,6 +114,14 @@ pub struct PathSearch {
     nodes: HashMap<Key, Node>,
     open: BinaryHeap<Open>,
     expanded: usize,
+    /// Expansions after which the search gives up.
+    max_expansions: usize,
+    /// Extra cost of leaving a position beside a wall or ledge.
+    wall_toll: f32,
+    /// Closed doors a route may pass by opening them.
+    doors: Vec<u8>,
+    /// Where a found path ends.
+    found: Option<Key>,
     /// Whether routes may step off ledges and fall to the floor below.
     drops: bool,
 }
@@ -127,6 +140,7 @@ impl PathSearch {
                 cost: 0.0,
                 parent: None,
                 closed: false,
+                door: None,
             },
         );
         let mut open = BinaryHeap::new();
@@ -142,8 +156,38 @@ impl PathSearch {
             nodes,
             open,
             expanded: 0,
+            max_expansions: MAX_EXPANSIONS,
+            wall_toll: WALL_TOLL,
+            doors: Vec::new(),
+            found: None,
             drops: false,
         }
+    }
+
+    /// Lets routes pass these closed doors, at a cost, for a walker that opens
+    /// each as it reaches it.
+    #[must_use]
+    pub fn with_doors(mut self, doors: Vec<u8>) -> Self {
+        self.doors = doors;
+        self
+    }
+
+    /// Gives up after this many expansions instead of the usual cap, for a
+    /// short search that should stay short.
+    #[must_use]
+    pub fn with_max_expansions(mut self, max_expansions: usize) -> Self {
+        self.max_expansions = max_expansions;
+        self
+    }
+
+    /// Overrides the expansion cap and switches the wall toll, for diagnosing
+    /// searches that give up; routes the client walks never call it.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_limits(mut self, max_expansions: usize, wall_toll: bool) -> Self {
+        self.max_expansions = max_expansions;
+        self.wall_toll = if wall_toll { WALL_TOLL } else { 0.0 };
+        self
     }
 
     /// Lets routes step off ledges and fall, for sessions that simulate falls;
@@ -156,6 +200,7 @@ impl PathSearch {
 
     /// Expands up to `budget` positions.
     pub fn advance(&mut self, world: &CollisionWorld, budget: usize) -> PathProgress {
+        let opened = (!self.doors.is_empty()).then(|| world.without_doors(&self.doors));
         for _ in 0..budget {
             let Some(Open { key, .. }) = self.open.pop() else {
                 return PathProgress::Failed;
@@ -168,36 +213,42 @@ impl PathSearch {
                 _ => continue,
             };
             if self.arrived(feet) {
+                self.found = Some(key);
                 return PathProgress::Found(self.trace(key));
             }
             self.expanded += 1;
-            if self.expanded > MAX_EXPANSIONS {
+            if self.expanded > self.max_expansions {
                 return PathProgress::Failed;
             }
             let steps = NEIGHBORS.map(|(di, dj)| {
                 let (i, j) = (key.0.checked_add(di)?, key.1.checked_add(dj)?);
                 let target = self.origin + Vec2::new(f32::from(i), f32::from(j)) * CELL;
                 let next_feet = walk(world, feet, target, self.height)?;
-                Some((i, j, next_feet))
+                Some((i, j, next_feet, None))
             });
             // A position a wall or ledge stands beside costs more to leave, so
             // routes keep to the middle of rooms where there is room to.
             let beside_wall = steps.iter().any(Option::is_none);
-            let toll = if beside_wall { WALL_TOLL } else { 0.0 };
+            let toll = if beside_wall { self.wall_toll } else { 0.0 };
             for (index, step) in steps.into_iter().enumerate() {
-                let Some((i, j, next_feet)) = step.or_else(|| {
+                let Some((i, j, next_feet, door)) = step.or_else(|| {
                     let (di, dj) = NEIGHBORS[index];
                     let (i, j) = (key.0.checked_add(di)?, key.1.checked_add(dj)?);
                     let target = self.origin + Vec2::new(f32::from(i), f32::from(j)) * CELL;
-                    self.drops
-                        .then(|| drop(world, feet, target, self.height))
-                        .flatten()
-                        .map(|landing| (i, j, landing))
+                    self.through_door(world, opened.as_ref(), feet, target)
+                        .map(|(landing, door)| (i, j, landing, Some(door)))
+                        .or_else(|| {
+                            self.drops
+                                .then(|| drop(world, feet, target, self.height))
+                                .flatten()
+                                .map(|landing| (i, j, landing, None))
+                        })
                 }) else {
                     continue;
                 };
                 let next = (i, j, level(next_feet.y));
-                let next_cost = cost + feet.distance(next_feet) + toll;
+                let door_toll = if door.is_some() { DOOR_TOLL } else { 0.0 };
+                let next_cost = cost + feet.distance(next_feet) + toll + door_toll;
                 if self
                     .nodes
                     .get(&next)
@@ -212,6 +263,7 @@ impl PathSearch {
                         cost: next_cost,
                         parent: Some(key),
                         closed: false,
+                        door,
                     },
                 );
                 self.open.push(Open {
@@ -223,23 +275,72 @@ impl PathSearch {
         PathProgress::Searching
     }
 
+    /// A step blocked only by one of the openable doors: where the walk ends
+    /// with that door out of the way, and which door it was.
+    fn through_door(
+        &self,
+        world: &CollisionWorld,
+        opened: Option<&CollisionWorld>,
+        feet: Vec3,
+        target: Vec2,
+    ) -> Option<(Vec3, u8)> {
+        let to = Vec3::new(target.x, feet.y, target.y);
+        let door = world.door_between(&self.doors, feet, to, CELL)?;
+        Some((walk(opened?, feet, target, self.height)?, door))
+    }
+
+    fn closest_key(&self) -> Option<Key> {
+        let flat = |feet: Vec3| Vec2::new(feet.x - self.goal.x, feet.z - self.goal.z).length();
+        self.nodes
+            .iter()
+            .filter(|(_, node)| node.parent.is_some())
+            .min_by(|(_, a), (_, b)| flat(a.feet).total_cmp(&flat(b.feet)))
+            .map(|(key, _)| *key)
+    }
+
     /// The path to the reached position nearest the goal, for when no full path
     /// exists; None when nothing beyond the start was reachable.
     #[must_use]
     pub fn closest(&self) -> Option<Vec<Vec3>> {
-        let flat = |feet: Vec3| Vec2::new(feet.x - self.goal.x, feet.z - self.goal.z).length();
-        let (key, _) = self
-            .nodes
-            .iter()
-            .filter(|(_, node)| node.parent.is_some())
-            .min_by(|(_, a), (_, b)| flat(a.feet).total_cmp(&flat(b.feet)))?;
-        Some(self.trace(*key))
+        self.closest_key().map(|key| self.trace(key))
+    }
+
+    /// For each position of the found path, or else of [`Self::closest`], the
+    /// door the step to it passes through.
+    #[must_use]
+    pub fn doors_along(&self) -> Vec<Option<u8>> {
+        let Some(mut key) = self.found.or_else(|| self.closest_key()) else {
+            return Vec::new();
+        };
+        let mut doors = Vec::new();
+        while let Some(node) = self.nodes.get(&key) {
+            let Some(parent) = node.parent else {
+                break;
+            };
+            doors.push(node.door);
+            key = parent;
+        }
+        doors.reverse();
+        doors
     }
 
     /// How many positions the search has reached.
     #[must_use]
     pub fn reached(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// How many positions the search has expanded, for diagnostics.
+    #[must_use]
+    pub fn expanded(&self) -> usize {
+        self.expanded
+    }
+
+    /// Whether positions remain to expand: false after a failure means every
+    /// walkable position from the start was searched; true means it gave up.
+    #[must_use]
+    pub fn has_open(&self) -> bool {
+        !self.open.is_empty()
     }
 
     /// Every feet position the search has reached, for diagnostics.
@@ -290,6 +391,9 @@ pub(super) fn walk(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) ->
 /// exists, such as through a doorway narrower than twice the clearance or over
 /// a drop, the grid's own hop is kept, so the result is walkable wherever the
 /// path was.
+/// A closed door on the path blocks every leg across it, so the hop through it
+/// is always kept, with the position before it.
+#[cfg(test)]
 #[must_use]
 pub(super) fn straighten(
     world: &CollisionWorld,
@@ -297,20 +401,33 @@ pub(super) fn straighten(
     path: &[Vec3],
     height: f32,
 ) -> Vec<Vec3> {
-    let mut legs = Vec::new();
+    straightened(world, start, path, height)
+        .into_iter()
+        .map(|index| path[index])
+        .collect()
+}
+
+/// The indices of the path positions [`straighten`] keeps.
+pub(super) fn straightened(
+    world: &CollisionWorld,
+    start: Vec3,
+    path: &[Vec3],
+    height: f32,
+) -> Vec<usize> {
+    let mut kept = Vec::new();
     let (mut from, mut next) = (start, 0);
-    while let Some(&hop) = path.get(next) {
+    while next < path.len() {
         // Scan forward while the leg stays clear: the first leg that is not
         // ends the stretch, since one past a corner rarely clears again.
-        let reach = (next + 1..path.len().min(next + 1 + LOOKAHEAD))
+        let to = (next + 1..path.len().min(next + 1 + LOOKAHEAD))
             .take_while(|&later| clear_leg(world, from, path[later], height))
-            .last();
-        let to = reach.unwrap_or(next);
-        from = reach.map_or(hop, |later| path[later]);
-        legs.push(from);
+            .last()
+            .unwrap_or(next);
+        from = path[to];
+        kept.push(to);
         next = to + 1;
     }
-    legs
+    kept
 }
 
 /// Whether a straight walk from `from` reaches `to` on its floor, and so do the
@@ -426,6 +543,52 @@ mod tests {
             [-30.0, 0.0, 30.0],
         )
         .to_vec()
+    }
+
+    #[test]
+    fn a_search_passes_an_openable_door_paying_its_toll_and_keeps_the_hop_through_it() {
+        // A wall across z = 0 whose only doorway, 10 < x < 14, door 3 shuts.
+        let mut triangles = floor();
+        for (from, to) in [(-30.0, 10.0), (14.0, 30.0)] {
+            triangles.extend(quad(
+                [from, 0.0, 0.0],
+                [to, 0.0, 0.0],
+                [to, 10.0, 0.0],
+                [from, 10.0, 0.0],
+            ));
+        }
+        let mut world = CollisionWorld::new(triangles).unwrap();
+        let door = super::super::CollisionMesh::new(quad(
+            [10.0, 0.0, 0.0],
+            [14.0, 0.0, 0.0],
+            [14.0, 10.0, 0.0],
+            [10.0, 10.0, 0.0],
+        ))
+        .unwrap();
+        world.set_door_obstacles(vec![(3, std::sync::Arc::new(door))]);
+        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        assert_eq!(run(&world, start, goal), PathProgress::Failed);
+        let mut search = PathSearch::new(start, goal, 1.0, 6.0).with_doors(vec![3]);
+        let path = loop {
+            match search.advance(&world, 256) {
+                PathProgress::Searching => (),
+                PathProgress::Found(path) => break path,
+                PathProgress::Failed => panic!("expected a path through the door"),
+            }
+        };
+        let doors = search.doors_along();
+        assert_eq!(doors.iter().flatten().collect::<Vec<_>>(), [&3]);
+        let crossing = doors.iter().position(Option::is_some).unwrap();
+        assert!(
+            path[crossing].z >= 0.0 && path[crossing - 1].z < 0.0,
+            "{path:?}"
+        );
+        // Straightening keeps the hop through the door and the position before it.
+        let kept = straightened(&world, start, &path, 6.0);
+        assert!(
+            kept.contains(&crossing) && kept.contains(&(crossing - 1)),
+            "{kept:?}"
+        );
     }
 
     #[test]

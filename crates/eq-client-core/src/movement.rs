@@ -76,9 +76,10 @@ impl CollisionMesh {
 /// Static zone geometry plus replaceable nearby obstacles, and the zone's
 /// water and lava where they are known.
 pub struct CollisionWorld {
-    terrain: CollisionMesh,
-    obstacles: Vec<Arc<CollisionMesh>>,
-    liquids: Option<Box<dyn Liquids>>,
+    terrain: Arc<CollisionMesh>,
+    /// Each obstacle with the door it belongs to, if any.
+    obstacles: Vec<(Option<u8>, Arc<CollisionMesh>)>,
+    liquids: Option<Arc<dyn Liquids>>,
 }
 
 impl CollisionWorld {
@@ -88,7 +89,7 @@ impl CollisionWorld {
     /// Rejects empty geometry, excessive vertex counts, and invalid meshes.
     pub fn new(triangles: impl IntoIterator<Item = [[f32; 3]; 3]>) -> Result<Self, String> {
         Ok(Self {
-            terrain: CollisionMesh::new(triangles)?,
+            terrain: Arc::new(CollisionMesh::new(triangles)?),
             obstacles: Vec::new(),
             liquids: None,
         })
@@ -96,11 +97,55 @@ impl CollisionWorld {
 
     /// Replaces dynamic obstacles without rebuilding the zone's acceleration structure.
     pub fn set_obstacles(&mut self, obstacles: Vec<Arc<CollisionMesh>>) {
-        self.obstacles = obstacles;
+        self.obstacles = obstacles.into_iter().map(|mesh| (None, mesh)).collect();
+    }
+
+    /// Replaces dynamic obstacles with doors' colliders, each with its door id,
+    /// so a route search can tell which door stands in its way.
+    pub fn set_door_obstacles(&mut self, doors: Vec<(u8, Arc<CollisionMesh>)>) {
+        self.obstacles = doors
+            .into_iter()
+            .map(|(id, mesh)| (Some(id), mesh))
+            .collect();
+    }
+
+    /// The same world with these doors' colliders left out, sharing its
+    /// geometry, as if they stood open.
+    #[must_use]
+    pub fn without_doors(&self, doors: &[u8]) -> Self {
+        Self {
+            terrain: Arc::clone(&self.terrain),
+            obstacles: self
+                .obstacles
+                .iter()
+                .filter(|(door, _)| door.is_none_or(|door| !doors.contains(&door)))
+                .cloned()
+                .collect(),
+            liquids: self.liquids.clone(),
+        }
+    }
+
+    /// The first of these doors whose collider comes within `margin` of the box
+    /// spanning `from` and `to`.
+    #[must_use]
+    pub fn door_between(&self, doors: &[u8], from: Vec3, to: Vec3, margin: f32) -> Option<u8> {
+        let (low, high) = (
+            from.min(to) - Vec3::splat(margin),
+            from.max(to) + Vec3::splat(margin),
+        );
+        self.obstacles.iter().find_map(|(door, mesh)| {
+            let door = (*door).filter(|door| doors.contains(door))?;
+            let bounds = mesh.mesh.local_aabb();
+            let (mins, maxs) = (
+                Vec3::from_array(bounds.mins.into()),
+                Vec3::from_array(bounds.maxs.into()),
+            );
+            (mins.cmple(high).all() && maxs.cmpge(low).all()).then_some(door)
+        })
     }
 
     fn meshes(&self) -> impl Iterator<Item = &TriMesh> {
-        std::iter::once(&self.terrain.mesh).chain(self.obstacles.iter().map(|mesh| &mesh.mesh))
+        std::iter::once(&self.terrain.mesh).chain(self.obstacles.iter().map(|(_, mesh)| &mesh.mesh))
     }
 
     /// Returns the nearest solid obstruction along a normalized viewing ray.

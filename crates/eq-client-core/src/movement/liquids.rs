@@ -55,7 +55,7 @@ impl CollisionWorld {
     /// Keeps every walk in this world out of the zone's water and lava.
     #[must_use]
     pub fn with_liquids(mut self, liquids: impl Liquids + 'static) -> Self {
-        self.liquids = Some(Box::new(liquids));
+        self.liquids = Some(std::sync::Arc::new(liquids));
         self
     }
 
