@@ -259,7 +259,16 @@ fn trade(
     mut trade: ResMut<super::trade::TradeState>,
 ) {
     online.open_loot(1);
-    online.open_shop(2);
+    // The merchant opens as the server's answer opens it.
+    online.tell(
+        &eq_client_core::WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Opened {
+            merchant_id: 2,
+            accepted: true,
+            rate: 1.0,
+        })),
+        std::time::Instant::now(),
+        &eq_client_core::world::NoSpells,
+    );
     trade.preview("a preview rat", "Preview merchant");
     let items = items();
     news.game(WorldEvent::Coins(Coins {
@@ -271,11 +280,6 @@ fn trade(
     news.game(WorldEvent::Loot(LootUpdate::Opened {
         response: LootResponse::Normal,
         coins: Coins::default(),
-    }));
-    news.game(WorldEvent::Merchant(MerchantUpdate::Opened {
-        merchant_id: 2,
-        accepted: true,
-        rate: 1.0,
     }));
     for (item, place) in items.iter().take(3).zip(0u16..) {
         let mut item = item.clone();

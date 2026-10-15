@@ -109,11 +109,6 @@ impl OnlineState {
         self.world.close_loot();
     }
 
-    /// The player asked to trade with this merchant.
-    pub(super) fn open_shop(&mut self, merchant_id: u16) {
-        self.world.open_shop(merchant_id);
-    }
-
     /// The player answered the resurrection offered.
     pub(super) fn answer_resurrection(&mut self) {
         self.world.answer_resurrection();

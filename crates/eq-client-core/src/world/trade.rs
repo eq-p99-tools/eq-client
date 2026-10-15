@@ -29,9 +29,8 @@ pub struct Merchant {
     pub stock: BTreeMap<u32, MerchantItem>,
     /// The price rate the server gave when the merchant opened, which the
     /// official client works a sale's offer out with (inferred: `EQEmu`
-    /// sends one over what it pays per copper of an item's price); None
-    /// until the server's answer comes.
-    pub rate: Option<f32>,
+    /// sends one over what it pays per copper of an item's price).
+    pub rate: f32,
 }
 
 impl Merchant {
@@ -40,14 +39,14 @@ impl Merchant {
     /// a neutral merchant): its price times how many are sold (a charged
     /// item counts as one), times the merchant's modifier, then times 0.95,
     /// each product cut to whole copper. None without the item's price or
-    /// the rate. Whether a server type's merchants pay so is the session's
+    /// a usable rate. Whether a server type's merchants pay so is the session's
     /// `Capability::MerchantOffers`.
     #[must_use]
     pub fn offer(&self, item: &InventoryItem) -> Option<u32> {
         offer(
             item.details.price?,
             item.stack_count.unwrap_or(1).max(1),
-            self.rate?,
+            self.rate,
         )
     }
 }
@@ -180,20 +179,30 @@ impl Trade {
         true
     }
 
-    /// Follows the server's word on the merchant open; the session takes a
-    /// purchase's price from the purse. False when none is.
+    /// Follows the server's word on the merchant: it opens the window,
+    /// answering the player's request, or refuses; the stock and the close
+    /// are news of the merchant open. The session takes a purchase's price
+    /// from the purse. False when the news is of no open merchant.
     pub(super) fn merchant(&mut self, update: &MerchantUpdate) -> bool {
+        if let MerchantUpdate::Opened {
+            merchant_id,
+            accepted,
+            rate,
+        } = update
+        {
+            // Only the server's answer opens a merchant; a request it
+            // ignores, as one out of its range, opens nothing.
+            self.merchant = accepted.then(|| Merchant {
+                merchant_id: *merchant_id,
+                stock: BTreeMap::new(),
+                rate: *rate,
+            });
+            return true;
+        }
         let Some(merchant) = self.merchant.as_mut() else {
             return false;
         };
         match update {
-            MerchantUpdate::Opened { accepted, rate, .. } => {
-                if *accepted {
-                    merchant.rate = Some(*rate);
-                } else {
-                    self.merchant = None;
-                }
-            }
             MerchantUpdate::Item(entry) => {
                 merchant.stock.insert(entry.slot, (**entry).clone());
             }
@@ -202,7 +211,9 @@ impl Trade {
             }
             MerchantUpdate::Closed => self.merchant = None,
             // The session moves the purse and the inventory.
-            MerchantUpdate::Bought { .. } | MerchantUpdate::Sold { .. } => (),
+            MerchantUpdate::Opened { .. }
+            | MerchantUpdate::Bought { .. }
+            | MerchantUpdate::Sold { .. } => (),
         }
         true
     }
