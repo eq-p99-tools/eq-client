@@ -391,6 +391,7 @@ mod tests {
                     [None; 8],
                 )),
                 far_clip: None,
+                spell_landing_flag: None,
             }),
             WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {
@@ -592,6 +593,7 @@ mod hud_tests {
                     [None; 8],
                 )),
                 far_clip: None,
+                spell_landing_flag: None,
             }),
             eq_client_core::WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {

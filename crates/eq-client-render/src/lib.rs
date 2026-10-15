@@ -56,6 +56,7 @@ mod sheets;
 mod skills;
 mod skin;
 mod skinned;
+mod spell_effects;
 mod spell_icons;
 mod spellbook;
 mod target;
@@ -347,7 +348,8 @@ pub fn run(
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 fn init_presentation(app: &mut App) {
-    app.init_resource::<options::OptionsState>()
+    app.init_resource::<spell_effects::SpellParticles>()
+        .init_resource::<options::OptionsState>()
         .init_resource::<logs::ChatLog>()
         .init_resource::<hud::HudState>()
         .init_resource::<hud::action_bar::ActionRequests>()
@@ -498,6 +500,7 @@ fn schedule(app: &mut App) {
                 login::watch,
                 online::tick,
                 daylight::update,
+                spell_effects::load,
             )
                 .chain()
                 .in_set(Stage::Receive),
@@ -692,6 +695,7 @@ fn schedule(app: &mut App) {
                 tooltip::show,
                 outfit::dress,
                 character::animate,
+                spell_effects::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
                 schedule_screenshot,

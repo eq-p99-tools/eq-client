@@ -41,6 +41,8 @@ pub(super) struct Zone {
     pub(super) casts: BTreeMap<u16, super::motions::Cast>,
     /// The latest cast each spawn completed, the player's own included.
     pub(super) completions: BTreeMap<u16, super::CastDone>,
+    /// The latest spell that landed on each spawn, the player included.
+    pub(super) landings: BTreeMap<u16, super::Landing>,
 }
 
 impl Zone {
@@ -69,6 +71,7 @@ impl Zone {
         self.motions.remove(&id);
         self.casts.remove(&id);
         self.completions.remove(&id);
+        self.landings.remove(&id);
     }
 
     /// The server's word on a spawn the player considered.

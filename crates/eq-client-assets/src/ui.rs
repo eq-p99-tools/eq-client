@@ -228,6 +228,22 @@ impl InstalledClient {
         }
     }
 
+    /// The spell particle effects this client draws, from its files in
+    /// `eq_directory`; None until they are checked for this client.
+    #[must_use]
+    pub fn spell_effects(
+        self,
+        eq_directory: &Path,
+    ) -> Option<Result<crate::spells::effects::SpellEffects, crate::spells::effects::EffectsError>>
+    {
+        match self {
+            Self::Titanium => Some(crate::spells::effects::SpellEffects::read_titanium(
+                eq_directory,
+            )),
+            Self::EqMac => None,
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
@@ -857,7 +873,7 @@ fn valid_skin(skin: &str) -> bool {
 }
 
 /// A character or world name that keeps a file name inside the installation.
-fn plain_name(name: &str) -> bool {
+pub(crate) fn plain_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()

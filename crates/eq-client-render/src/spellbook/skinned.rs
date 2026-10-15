@@ -867,6 +867,7 @@ mod tests {
                 zone: "qeytoqrg".into(),
                 player: Box::new(crate::online::testing::player(1)),
                 far_clip: None,
+                spell_landing_flag: None,
             }],
         );
         let (queue, _sent) = std::sync::mpsc::sync_channel(4);

@@ -66,7 +66,7 @@ impl ClientWorld {
     pub(super) fn entered(
         &mut self,
         (capabilities, choices, session_id): (&[Capability], &[Capability], u64),
-        (zone, far_clip): (&str, Option<f32>),
+        (zone, far_clip, spell_landing_flag): (&str, Option<f32>, Option<u8>),
         player: &PlayerState,
         now: Instant,
     ) -> Changes {
@@ -80,6 +80,7 @@ impl ClientWorld {
             .notices
             .push(Notice::Arrived(self.zone_long_name().to_owned()));
         self.far_clip = far_clip;
+        self.spell_landing_flag = spell_landing_flag;
         self.vitals = Vitals {
             mana: Some(player.mana),
             endurance: player.endurance,

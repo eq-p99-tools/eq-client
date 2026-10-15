@@ -1,7 +1,7 @@
 //! What the world knows, for any front end to read; only the session's news
 //! and the player's own choices change it.
 use super::{
-    Camp, CastDone, Casting, CharacterList, ClientWorld, Exchange, Loot, Merchant, Motion,
+    Camp, CastDone, Casting, CharacterList, ClientWorld, Exchange, Landing, Loot, Merchant, Motion,
     MotionGrant, ServerList, Spawn, Target, Vitals,
 };
 use crate::{
@@ -264,6 +264,20 @@ impl ClientWorld {
     #[must_use]
     pub fn completed_cast_of(&self, id: u16) -> Option<CastDone> {
         self.zone.completions.get(&id).copied()
+    }
+
+    /// The spell a spawn is casting, the player's own included, while the
+    /// cast is under way and the spawn in view.
+    #[must_use]
+    pub fn casting_of(&self, id: u16) -> Option<u16> {
+        self.zone.casts.get(&id).map(|cast| cast.spell_id)
+    }
+
+    /// The latest spell that landed on a spawn, the player included, while
+    /// it is in view.
+    #[must_use]
+    pub fn landing_on(&self, id: u16) -> Option<Landing> {
+        self.zone.landings.get(&id).copied()
     }
 
     /// The posture last reported for the player or a spawn.
