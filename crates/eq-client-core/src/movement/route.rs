@@ -23,6 +23,12 @@ const STALL: Duration = Duration::from_secs(3);
 /// calls is never mistaken for a stall.
 const MAX_TICK: Duration = Duration::from_millis(250);
 
+/// How far ahead a follower looks for a listed door shut across its way:
+/// about one online movement sample.
+const DOOR_PROBE: f32 = 4.0;
+/// How near the way a door's collider must come to be the one in the way.
+const DOOR_MARGIN: f32 = 2.0;
+
 /// What a follower should do next.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RouteStep {
@@ -309,20 +315,41 @@ impl Route {
             self.waypoints.pop_front();
             self.crossings.pop_front();
         }
-        match (self.waypoints.front(), self.crossings.front()) {
+        let toward = match (self.waypoints.front(), self.crossings.front()) {
             // A door still shut across the next leg is opened before going on.
             (Some(next), Some(Some(door)))
                 if path::walk(world, feet, Vec2::new(next.x, next.z), self.height)
                     .is_none_or(|end| (end.y - next.y).abs() > MAX_GROUNDED_STEP) =>
             {
-                RouteStep::OpenDoor(*door)
+                return RouteStep::OpenDoor(*door);
             }
-            (Some(next), _) => RouteStep::Toward(*next),
+            (Some(next), _) => *next,
             // A full route's last waypoint lies within reach of the goal, so the
             // rest of the way is a short straight walk.
-            (None, _) if !self.partial => RouteStep::Toward(goal),
-            (None, _) => RouteStep::Arrived,
+            (None, _) if !self.partial => goal,
+            (None, _) => return RouteStep::Arrived,
+        };
+        match self.door_ahead(world, feet, toward) {
+            Some(door) => RouteStep::OpenDoor(door),
+            None => RouteStep::Toward(toward),
         }
+    }
+
+    /// A listed door shut across the next few units of the way, which the
+    /// search could not see: one too far away to be loaded when the route was
+    /// planned, or one standing open then. Clicked where it blocks, so the
+    /// walker never pushes against it until the route stalls.
+    fn door_ahead(&self, world: &CollisionWorld, feet: Vec3, toward: Vec3) -> Option<u8> {
+        if self.doors.is_empty() {
+            return None;
+        }
+        let along =
+            Vec3::new(toward.x - feet.x, 0.0, toward.z - feet.z).clamp_length_max(DOOR_PROBE);
+        let ahead = feet + along;
+        if path::walk(world, feet, Vec2::new(ahead.x, ahead.z), self.height).is_some() {
+            return None;
+        }
+        world.door_between(&self.doors, feet, ahead, DOOR_MARGIN)
     }
 }
 
@@ -448,19 +475,20 @@ mod tests {
     }
 
     #[test]
-    fn a_door_open_when_planned_and_shut_on_arrival_is_opened_after_the_replan() {
+    fn a_door_unseen_when_planned_and_shut_on_arrival_is_opened_without_a_stall() {
         let (mut world, door) = doorway(false);
         world.set_door_obstacles(Vec::new());
         let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
         let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
         let mut feet = start;
-        let mut shut = false;
+        // Without a collider when planned: open, or too far away to be loaded.
+        let mut shut = None;
         let mut asked = None;
         for tick in 0..500_u64 {
-            // The door shuts on its own as the walker nears the doorway.
-            if !shut && feet.z > -4.0 {
+            // Shut as the walker nears the doorway.
+            if shut.is_none() && feet.z > -6.0 {
                 world.set_door_obstacles(vec![(7, Arc::clone(&door))]);
-                shut = true;
+                shut = Some(tick);
             }
             match route.next(&world, feet, goal, 256, Duration::from_millis(tick * 150)) {
                 RouteStep::Searching => (),
@@ -479,7 +507,10 @@ mod tests {
         }
         let (id, tick) = asked.expect("the shut door is asked for");
         assert_eq!(id, 7);
-        assert!(shut && feet.z < 0.0, "{feet:?}");
+        assert!(feet.z < 0.0, "{feet:?}");
+        // Asked for as the walker meets it, well before the 3 s stall (20 ticks).
+        let shut = shut.unwrap();
+        assert!(tick - shut < 8, "asked {} ticks after it shut", tick - shut);
         // The walker opens it and goes on through.
         world.set_door_obstacles(Vec::new());
         let (step, feet) = follow_to_door(&mut route, &world, feet, goal, tick + 1);
