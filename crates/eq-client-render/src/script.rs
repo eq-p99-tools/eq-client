@@ -62,6 +62,9 @@ pub struct Script {
     route: Option<eq_client_core::movement::Route>,
     /// The closed door the walk is opening, if any.
     door_wait: Option<DoorWait>,
+    /// While a walk's route searches: the last frame, and the longest frame
+    /// so far, so the log shows whether the search held frames up.
+    search_frames: Option<(Duration, Duration)>,
     /// The control a `hover` step rests the pointer on, until the next click
     /// or hover.
     hovering: Option<Entity>,
@@ -99,6 +102,7 @@ impl Script {
             focus: None,
             route: None,
             door_wait: None,
+            search_frames: None,
             hovering: None,
             awaited: None,
             approached: None,
@@ -450,6 +454,19 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
                     return;
                 };
+                let slowest_frame = if script
+                    .route
+                    .as_ref()
+                    .is_some_and(eq_client_core::movement::Route::is_searching)
+                {
+                    let (last, slowest) = script.search_frames.get_or_insert((now, Duration::ZERO));
+                    *slowest = (*slowest).max(now.saturating_sub(*last));
+                    *last = now;
+                    slowest.as_secs_f32() * 1000.0
+                } else {
+                    script.search_frames = None;
+                    0.0
+                };
                 let Some(route) = script.route.as_mut() else {
                     script.stop(&mut keys, &mut mouse, "walk lost its route");
                     return;
@@ -465,7 +482,7 @@ pub(super) fn drive(
                     let waited = elapsed.as_secs_f32();
                     info!(
                         found,
-                        expanded, waypoints, waited, "Script walk detour ready"
+                        expanded, waypoints, waited, slowest_frame, "Script walk detour ready"
                     );
                 } else if searching && !route.is_searching() {
                     let (waypoints, partial) = (route.remaining(), route.partial());
@@ -475,6 +492,7 @@ pub(super) fn drive(
                     info!(
                         waypoints,
                         waited,
+                        slowest_frame,
                         partial,
                         reach,
                         expanded,
