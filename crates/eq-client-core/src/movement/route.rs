@@ -44,10 +44,11 @@ const DETOUR_EXPANSIONS: usize = 3000;
 
 /// How much a search of the whole way weighs the distance still to go. On
 /// two long city routes (9,554 and 13,849 expansions unweighted) it expanded
-/// 33% and 26% fewer positions, for paths at most 1.91 units (0.3%) longer;
-/// a path is never more than this many times the cost of the shortest. A
-/// step round a door stays unweighted: it is short already.
-const SEARCH_WEIGHT: f32 = 1.25;
+/// 76% and 62% fewer positions (2,321 and 5,260), for paths 2.7% and 3.5%
+/// longer; every weight from 1.25 to 2 kept both within 5%. A path is never
+/// more than this many times the cost of the shortest. A step round a door
+/// stays unweighted: it is short already.
+const SEARCH_WEIGHT: f32 = 2.0;
 /// Expansions a search off the caller's thread makes between checks that its
 /// route still wants it.
 const BACKGROUND_CHUNK: usize = 500;
