@@ -527,11 +527,10 @@ pub(super) fn drive(
                                     at(door.position).distance(at(player.position))
                                         <= eq_client_core::doors::Doors::USE_DISTANCE
                                 });
-                        let wait = script
+                        let mut wait = script
                             .door_wait
                             .filter(|wait| wait.id == id)
                             .unwrap_or(DoorWait::new(id));
-                        let mut wait = wait;
                         let open = door.and_then(eq_client_core::doors::Door::active_endpoint);
                         match wait.act(open, within_use, now) {
                             DoorAction::Click => {
@@ -1280,8 +1279,6 @@ fn displayed(entity: Entity, layout: &Layout) -> bool {
     true
 }
 
-/// The player's feet at its accepted position and the goal's position, in
-/// render coordinates: the world object `object` names, or else the target.
 /// Logs the doors nearest where a partial route ends, the likeliest reason it
 /// ends short.
 fn log_partial_route(online: &super::online::OnlineState, end: Vec3) {
@@ -1400,6 +1397,8 @@ fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
         .collect()
 }
 
+/// The player's feet at its accepted position and the goal's position, in
+/// render coordinates: the world object `object` names, or else the target.
 fn walk_ends(
     online: &super::online::OnlineState,
     body: super::PlayerBody,
