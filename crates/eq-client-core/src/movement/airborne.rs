@@ -62,7 +62,7 @@ fn buried_floor(world: &CollisionWorld, feet: Vec3, height: f32) -> Option<f32> 
 /// Whether feet stand on ground the next step finds: under the footprint, or a
 /// floor they are buried in.
 fn supported(world: &CollisionWorld, feet: Vec3, height: f32) -> bool {
-    world.support_height(feet, 0.01, 0.05).is_some() || buried_floor(world, feet, height).is_some()
+    world.support(feet).is_some() || buried_floor(world, feet, height).is_some()
 }
 
 /// Vertical velocity survives frames with no keyboard input.
@@ -78,6 +78,13 @@ impl AirborneController {
     #[must_use]
     pub const fn velocity(&self) -> f32 {
         self.velocity
+    }
+
+    /// The highest the feet have been since they left the ground; None
+    /// while they stand on it.
+    #[must_use]
+    pub const fn peak(&self) -> Option<f32> {
+        self.peak
     }
 
     /// Resets momentum after a correction, teleport, or a new admission.
@@ -134,7 +141,7 @@ impl AirborneController {
             Some(floor) if self.velocity <= 0.0 => Vec3::new(feet.x, floor, feet.z),
             _ => feet,
         };
-        let floor = world.support_height(feet, 0.01, 0.05);
+        let floor = world.support(feet);
         let grounded = self.velocity <= 0.0 && floor.is_some();
         if grounded {
             self.finish_landing(floor.unwrap_or(feet.y), -self.velocity);
@@ -147,7 +154,7 @@ impl AirborneController {
         };
         let position = world.walk(feet, input.horizontal, input.height, support);
         if self.velocity <= 0.0
-            && let Some(floor) = world.support_height(position, 0.01, 0.05)
+            && let Some(floor) = world.support(position)
         {
             self.finish_landing(floor, -self.velocity);
             return Vec3::new(position.x, floor, position.z);

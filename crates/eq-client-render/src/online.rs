@@ -248,6 +248,7 @@ impl Panels<'_> {
         if changes.motion
             && let Some(grant) = state.world.motion()
         {
+            log_grant(grant);
             self.motion.grant(grant);
         }
         if changes.trade {
@@ -437,9 +438,7 @@ pub(super) fn receive(
     let waiting = loading.is_some_and(|loading| loading.waiting());
     let news = state.news(batch.into_iter().chain(lost), waiting);
     for update in news {
-        let changes = state
-            .world
-            .apply(&update, std::time::Instant::now(), spells);
+        let (changes, before) = apply(&mut state.world, &update, spells);
         trace(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
             state.loading.clear();
@@ -488,6 +487,8 @@ pub(super) fn receive(
             }
         }
         if let Some(position) = changes.placed {
+            let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
+            info!(from = ?before.map(at), to = ?at(position), "Server corrected the player");
             panels.motion.reset(None);
             scene.place(&mut commands, super::zone::placement(position), None);
         }
@@ -514,6 +515,42 @@ pub(super) fn receive(
                 chat.history.push(super::chat::system_line(text));
             }
         }
+    }
+}
+
+/// Applies one piece of news to the world, and says where the player stood
+/// before it, so a server correction can say where it moved them from.
+fn apply(
+    world: &mut ClientWorld,
+    update: &WorldUpdate,
+    spells: &dyn SpellCatalog,
+) -> (Changes, Option<eq_client_core::WorldPosition>) {
+    let before = world.player().map(|player| player.position);
+    let changes = world.apply(update, std::time::Instant::now(), spells);
+    (changes, before)
+}
+
+/// Logs the session's word on how the player may move: a withdrawal (no
+/// speed, as after a server correction until it grants again) or a grant.
+fn log_grant(grant: eq_client_core::world::MotionGrant) {
+    let eq_client_core::world::MotionGrant {
+        units_per_second,
+        backward_units_per_second,
+        walk_units_per_second,
+        strafe_units_per_second,
+        falls,
+    } = grant;
+    if units_per_second.is_none() {
+        info!(falls, "Movement withdrawn");
+    } else {
+        info!(
+            ?units_per_second,
+            ?backward_units_per_second,
+            ?walk_units_per_second,
+            ?strafe_units_per_second,
+            falls,
+            "Movement granted"
+        );
     }
 }
 

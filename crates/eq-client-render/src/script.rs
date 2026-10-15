@@ -70,6 +70,9 @@ pub struct Script {
     door_wait: Option<DoorWait>,
     /// Where the walk last headed, for the stall line and the follower trace.
     following: Option<Following>,
+    /// Since when a following walk has seen no movement sample sent, and
+    /// whether it has said so.
+    quiet: Option<Quiet>,
     /// While a walk's route searches: when the search began, the last frame,
     /// and the longest frame so far, so the log shows how long the walk
     /// waited and whether the search held frames up.
@@ -125,6 +128,7 @@ impl Script {
             route: None,
             door_wait: None,
             following: None,
+            quiet: None,
             search_frames: None,
             last_frame: None,
             hovering: None,
@@ -314,6 +318,7 @@ type Observed<'w> = (
     Res<'w, super::combat::CombatState>,
     Res<'w, super::motion::Controls>,
     Option<Res<'w, crate::loading::Loading>>,
+    Option<Res<'w, super::doors::Hinges>>,
 );
 
 type Input<'w> = (
@@ -484,17 +489,16 @@ pub(super) fn drive(
                     _ => None,
                 };
                 // Only an object walk has chosen an object.
-                let ends = bodies
-                    .single()
-                    .ok()
-                    .and_then(|body| walk_ends(&online, *body, script.approached));
+                let body = bodies.single().ok().copied();
+                let ends = body.and_then(|body| walk_ends(&online, body, script.approached));
                 let world = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
-                let (Some((feet, goal)), Some(world)) = (ends, world) else {
+                let (Some((feet, goal)), Some(world), Some(body)) = (ends, world, body) else {
                     script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
                     return;
                 };
+                let height = body.height;
                 let (waited, slowest_frame) = if script
                     .route
                     .as_ref()
@@ -546,6 +550,9 @@ pub(super) fn drive(
                         );
                     }
                     script.following = Some(following);
+                    log_quiet(&mut script.quiet, &observed.4, std::time::Instant::now());
+                } else {
+                    script.quiet = None;
                 }
                 if call >= SLOW_ROUTE_CALL {
                     let phase = match (searching, route.is_searching()) {
@@ -603,8 +610,7 @@ pub(super) fn drive(
                         log_partial_route(&online, end);
                     }
                 } else if !searching && route.is_searching() {
-                    let refused = observed.4.refused.as_deref();
-                    log_stall(true, feet, script.following, &observed.4, refused);
+                    log_stall(true, (feet, height), script.following, &observed.4, world);
                 }
                 let distance = Vec2::new(goal.x - feet.x, goal.z - feet.z).length();
                 // Where an object walk ends, so a partial route shows in the log.
@@ -630,7 +636,7 @@ pub(super) fn drive(
                     }
                     RouteStep::Stalled => {
                         let refused = observed.4.refused.as_deref();
-                        log_stall(false, feet, script.following, &observed.4, refused);
+                        log_stall(false, (feet, height), script.following, &observed.4, world);
                         let reason = refused.map_or_else(
                             || "walk made no progress, even after searching again".to_owned(),
                             |refused| {
@@ -659,7 +665,11 @@ pub(super) fn drive(
                             .filter(|wait| wait.id == id)
                             .unwrap_or(DoorWait::new(id));
                         let open = door.and_then(eq_client_core::doors::Door::active_endpoint);
-                        match wait.act(open, within_use, now) {
+                        let hinge = observed
+                            .6
+                            .as_ref()
+                            .and_then(|hinges| hinges.0.get(&id).copied());
+                        match wait.act(open, hinge, within_use, now) {
                             DoorAction::Click => {
                                 if let Some(door) = door {
                                     info!(
@@ -677,7 +687,7 @@ pub(super) fn drive(
                             }
                             DoorAction::Wait => script.door_wait = Some(wait),
                             DoorAction::Reroute => {
-                                info!(id, "Script walk door open; searching around it");
+                                info!(id, ?hinge, "Script walk door open; searching around it");
                                 script.door_wait = Some(wait);
                                 if let Some(route) = script.route.as_mut() {
                                     route.reroute(feet, goal);
@@ -835,6 +845,7 @@ pub(super) fn drive(
         script.current = None;
         script.route = None;
         script.following = None;
+        script.quiet = None;
         script.awaited = None;
         script.approached = None;
     }
@@ -1085,6 +1096,7 @@ pub(super) fn drive(
             script.route = Some(route);
             script.door_wait = None;
             script.following = None;
+            script.quiet = None;
         }
         Step::WaitDead(_) => script.awaited = online.world().target().selected,
         Step::WaitServers
@@ -1462,11 +1474,9 @@ fn log_partial_route(online: &super::online::OnlineState, end: Vec3) {
 /// How long a clicked door may take to start opening before the walk treats
 /// it as locked: longer than any server's answer to a click.
 const DOOR_WAIT: Duration = Duration::from_secs(3);
-/// How long a door takes to swing open as drawn: a quarter turn at half a
-/// turn a second, and a little to spare.
-const DOOR_SWUNG: Duration = Duration::from_millis(600);
-/// How long an opened door may still block the way, after the walk has
-/// searched around it once: the swing and a second to spare.
+/// How long an opened door may take to swing open as drawn, and may still
+/// block the way after the walk has searched around it once: the swing, a
+/// quarter turn at half a turn a second, and a second to spare.
 const DOOR_SWING: Duration = Duration::from_millis(1500);
 /// Clicks one door may take in one walk: the first, and one more if it shut
 /// again before the walker got through.
@@ -1502,12 +1512,15 @@ fn eq_point(point: Vec3) -> [f32; 3] {
 /// move at all.
 fn log_stall(
     again: bool,
-    feet: Vec3,
+    (feet, height): (Vec3, f32),
     following: Option<Following>,
     controls: &super::motion::Controls,
-    refused: Option<&str>,
+    world: &eq_client_core::movement::CollisionWorld,
 ) {
-    let motion = controls.recent.last_second(std::time::Instant::now());
+    let refused = controls.refused.as_deref();
+    let now = std::time::Instant::now();
+    let motion = controls.recent.last_second(now);
+    let stance = Stance::at(world, controls, (feet, height), now);
     let feet = eq_point(feet);
     let toward = following.map(|following| eq_point(following.toward));
     let index = following.map(|following| following.index);
@@ -1526,6 +1539,7 @@ fn log_stall(
             asked,
             moved,
             net,
+            ?stance,
             "Script walk stalled; searching again from here"
         );
     } else {
@@ -1540,7 +1554,117 @@ fn log_stall(
             asked,
             moved,
             net,
+            ?stance,
             "Script walk stalled after searching again"
+        );
+    }
+}
+
+/// How the player stands as the movement controller sees it, for the stall
+/// lines: whether it falls and how far it has, the floor under it, the
+/// zone's liquids there, and how long since a sample went out and since the
+/// session answered one.
+#[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "the fields are read through Debug, in the stall lines"
+)]
+struct Stance {
+    /// Upward velocity while the session simulates falls; None when it
+    /// doesn't.
+    velocity: Option<f32>,
+    /// How far the feet have come down from the highest they were since
+    /// they left the ground; None while they stand on it.
+    fallen: Option<f32>,
+    /// The floor the next step stands the feet on, in EQ z; None means it
+    /// falls.
+    support: Option<f32>,
+    /// Where the feet come to rest below them, in EQ x, y, z.
+    rest: Option<[f32; 3]>,
+    /// Whether they are in deep water or lava, and whether coming to rest
+    /// stays clear of both.
+    submerged: bool,
+    dry: bool,
+    /// Whether a sample is out awaiting its answer, and why the latest
+    /// frame sent none.
+    waiting: bool,
+    held: Option<super::motion::Held>,
+    /// Seconds since the latest sample went out, since the session last
+    /// answered one, and since the last sample the controls count as
+    /// accepted (an answer, or a prediction paused).
+    since_sent: Option<f32>,
+    since_answer: Option<f32>,
+    since_accepted: f32,
+}
+
+impl Stance {
+    fn at(
+        world: &eq_client_core::movement::CollisionWorld,
+        controls: &super::motion::Controls,
+        (feet, height): (Vec3, f32),
+        now: std::time::Instant,
+    ) -> Self {
+        let since = |at: std::time::Instant| now.saturating_duration_since(at).as_secs_f32();
+        let view = world.guard_view(feet, height);
+        let airborne = controls.airborne.as_ref();
+        Self {
+            velocity: airborne.map(eq_client_core::movement::AirborneController::velocity),
+            fallen: airborne
+                .and_then(eq_client_core::movement::AirborneController::peak)
+                .map(|peak| peak - feet.y),
+            support: world
+                .support(feet)
+                .map(|floor| eq_point(Vec3::new(feet.x, floor, feet.z))[2]),
+            rest: view.rest.map(eq_point),
+            submerged: view.submerged,
+            dry: view.dry,
+            waiting: controls.waiting(),
+            held: controls.held,
+            since_sent: controls.last_sent.map(since),
+            since_answer: controls.last_answer.map(since),
+            since_accepted: since(controls.last_accepted),
+        }
+    }
+}
+
+/// How long a following walk may see no movement sample sent before it
+/// says why.
+const QUIET: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Since when a following walk has seen no sample sent, and whether it has
+/// said so for this pause.
+#[derive(Clone, Copy)]
+struct Quiet {
+    since: std::time::Instant,
+    said: bool,
+}
+
+/// Says once per pause, when a walk following its route has had no movement
+/// sample sent for over [`QUIET`], why the latest frame held one back.
+fn log_quiet(
+    quiet: &mut Option<Quiet>,
+    controls: &super::motion::Controls,
+    now: std::time::Instant,
+) {
+    let mark = quiet.get_or_insert(Quiet {
+        since: now,
+        said: false,
+    });
+    if let Some(sent) = controls.last_sent.filter(|sent| *sent > mark.since) {
+        *mark = Quiet {
+            since: sent,
+            said: false,
+        };
+    }
+    let quiet_for = now.saturating_duration_since(mark.since);
+    if !mark.said && quiet_for > QUIET {
+        mark.said = true;
+        info!(
+            reason = ?controls.held,
+            seconds = quiet_for.as_secs_f32(),
+            waiting = controls.waiting(),
+            speed = ?controls.speed,
+            "Script walk samples paused"
         );
     }
 }
@@ -1584,20 +1708,31 @@ impl DoorWait {
     }
 
     /// `open` is the door's state as drawn (None when unknown); a click is sent
-    /// only to a door shown shut, since a click toggles it.
-    fn act(&mut self, open: Option<bool>, within_use: bool, now: Duration) -> DoorAction {
+    /// only to a door shown shut, since a click toggles it. `hinge` is how far
+    /// its leaf is drawn swung open, 0 to 1 (None when it is not drawn): the
+    /// walk searches round an open door only once the leaf it walks against
+    /// stands fully open, however slowly the frames swing it.
+    fn act(
+        &mut self,
+        open: Option<bool>,
+        hinge: Option<f32>,
+        within_use: bool,
+        now: Duration,
+    ) -> DoorAction {
         match open {
             None => DoorAction::Refuse("its state is unknown"),
             Some(true) => {
                 let since = now.saturating_sub(*self.opened.get_or_insert(now));
-                if since < DOOR_SWUNG {
-                    DoorAction::Wait
-                } else if !std::mem::replace(&mut self.rerouted, true) {
+                let swung = hinge.is_none_or(|hinge| hinge >= 1.0);
+                if swung && !self.rerouted {
+                    self.rerouted = true;
                     DoorAction::Reroute
-                } else if since >= DOOR_SWING {
+                } else if since < DOOR_SWING {
+                    DoorAction::Wait
+                } else if self.rerouted {
                     DoorAction::Refuse("it opened but still blocks the way")
                 } else {
-                    DoorAction::Wait
+                    DoorAction::Refuse("it never finished swinging")
                 }
             }
             Some(false) => match (self.clicked, self.opened) {
@@ -1782,11 +1917,20 @@ mod tests {
     fn a_walk_clicks_a_shut_door_once_then_waits_for_it_to_swing_open() {
         let at = Duration::from_secs;
         let mut wait = DoorWait::new(4);
-        assert_eq!(wait.act(Some(false), true, at(10)), DoorAction::Click);
+        assert_eq!(
+            wait.act(Some(false), Some(0.0), true, at(10)),
+            DoorAction::Click
+        );
         // No second click while the server's answer is on its way: a click toggles.
-        assert_eq!(wait.act(Some(false), true, at(11)), DoorAction::Wait);
+        assert_eq!(
+            wait.act(Some(false), Some(0.0), true, at(11)),
+            DoorAction::Wait
+        );
         // Opening: never clicked, only waited on until the swing ends.
-        assert_eq!(wait.act(Some(true), true, at(12)), DoorAction::Wait);
+        assert_eq!(
+            wait.act(Some(true), Some(0.4), true, at(12)),
+            DoorAction::Wait
+        );
         assert_eq!(wait.asked, Some(at(10)));
     }
 
@@ -1794,29 +1938,55 @@ mod tests {
     fn a_door_that_does_not_open_or_still_blocks_is_given_up() {
         let at = Duration::from_millis;
         let mut locked = DoorWait::new(4);
-        assert_eq!(locked.act(Some(false), true, at(0)), DoorAction::Click);
-        assert_eq!(locked.act(Some(false), true, at(2_999)), DoorAction::Wait);
         assert_eq!(
-            locked.act(Some(false), true, at(3_000)),
+            locked.act(Some(false), Some(0.0), true, at(0)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            locked.act(Some(false), Some(0.0), true, at(2_999)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            locked.act(Some(false), Some(0.0), true, at(3_000)),
             DoorAction::Refuse("it did not open")
         );
         let mut stuck = DoorWait::new(4);
-        stuck.act(Some(false), true, at(0));
-        assert_eq!(stuck.act(Some(true), true, at(100)), DoorAction::Wait);
-        // Swung open but in the way: one search around it first.
-        assert_eq!(stuck.act(Some(true), true, at(700)), DoorAction::Reroute);
-        assert_eq!(stuck.act(Some(true), true, at(900)), DoorAction::Wait);
-        // Still across the way after that: the door is a wall.
+        stuck.act(Some(false), Some(0.0), true, at(0));
         assert_eq!(
-            stuck.act(Some(true), true, at(1_600)),
-            DoorAction::Refuse("it opened but still blocks the way")
+            stuck.act(Some(true), Some(0.2), true, at(100)),
+            DoorAction::Wait
+        );
+        // Swung open but in the way: one search around it first.
+        assert_eq!(
+            stuck.act(Some(true), Some(1.0), true, at(600)),
+            DoorAction::Reroute
         );
         assert_eq!(
-            DoorWait::new(4).act(Some(false), false, at(0)),
+            stuck.act(Some(true), Some(1.0), true, at(900)),
+            DoorAction::Wait
+        );
+        // Still across the way after that: the door is a wall.
+        assert_eq!(
+            stuck.act(Some(true), Some(1.0), true, at(1_600)),
+            DoorAction::Refuse("it opened but still blocks the way")
+        );
+        let mut slow = DoorWait::new(4);
+        slow.act(Some(false), Some(0.0), true, at(0));
+        slow.act(Some(true), Some(0.0), true, at(100));
+        assert_eq!(
+            slow.act(Some(true), Some(0.9), true, at(1_599)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            slow.act(Some(true), Some(0.9), true, at(1_600)),
+            DoorAction::Refuse("it never finished swinging")
+        );
+        assert_eq!(
+            DoorWait::new(4).act(Some(false), Some(0.0), false, at(0)),
             DoorAction::Refuse("it is out of reach")
         );
         assert_eq!(
-            DoorWait::new(4).act(None, true, at(0)),
+            DoorWait::new(4).act(None, Some(0.0), true, at(0)),
             DoorAction::Refuse("its state is unknown")
         );
     }
@@ -1825,13 +1995,25 @@ mod tests {
     fn a_door_that_shuts_again_is_clicked_once_more_then_given_up() {
         let at = Duration::from_millis;
         let mut wait = DoorWait::new(4);
-        assert_eq!(wait.act(Some(false), true, at(0)), DoorAction::Click);
-        assert_eq!(wait.act(Some(true), true, at(500)), DoorAction::Wait);
-        // Shut again before the walker got through.
-        assert_eq!(wait.act(Some(false), true, at(900)), DoorAction::Click);
-        assert_eq!(wait.act(Some(true), true, at(1_400)), DoorAction::Wait);
         assert_eq!(
-            wait.act(Some(false), true, at(1_800)),
+            wait.act(Some(false), Some(0.0), true, at(0)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(0.8), true, at(500)),
+            DoorAction::Wait
+        );
+        // Shut again before the walker got through.
+        assert_eq!(
+            wait.act(Some(false), Some(0.6), true, at(900)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(0.8), true, at(1_400)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            wait.act(Some(false), Some(0.6), true, at(1_800)),
             DoorAction::Refuse("it shut again")
         );
     }
@@ -1840,12 +2022,67 @@ mod tests {
     fn a_door_that_shuts_again_gets_its_own_step_round_its_leaf_once_reopened() {
         let at = Duration::from_millis;
         let mut wait = DoorWait::new(4);
-        assert_eq!(wait.act(Some(false), true, at(0)), DoorAction::Click);
-        assert_eq!(wait.act(Some(true), true, at(500)), DoorAction::Wait);
-        assert_eq!(wait.act(Some(true), true, at(1_100)), DoorAction::Reroute);
-        assert_eq!(wait.act(Some(false), true, at(1_300)), DoorAction::Click);
-        assert_eq!(wait.act(Some(true), true, at(1_500)), DoorAction::Wait);
-        assert_eq!(wait.act(Some(true), true, at(2_100)), DoorAction::Reroute);
+        assert_eq!(
+            wait.act(Some(false), Some(0.0), true, at(0)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(0.8), true, at(500)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(1.0), true, at(1_100)),
+            DoorAction::Reroute
+        );
+        assert_eq!(
+            wait.act(Some(false), Some(1.0), true, at(1_300)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(0.8), true, at(1_500)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(1.0), true, at(2_100)),
+            DoorAction::Reroute
+        );
+    }
+
+    #[test]
+    fn a_door_drawn_open_slowly_is_searched_round_only_once_its_leaf_stands_open() {
+        // Slow frames: each draws at most a tenth of a second of swing, so a
+        // quarter turn at half a turn a second takes five of them, whatever
+        // time passes between them.
+        let frame = Duration::from_millis(250);
+        let mut wait = DoorWait::new(4);
+        assert_eq!(
+            wait.act(Some(false), Some(0.0), true, Duration::ZERO),
+            DoorAction::Click
+        );
+        let mut swing = 0.0;
+        let mut now = Duration::ZERO;
+        let mut rerouted_at = None;
+        // Within the swing's bound: past it, a leaf still across the way
+        // after the search round it makes the door a wall.
+        for _ in 0..6 {
+            now += frame;
+            swing = super::super::doors::advance_hinge(
+                swing,
+                super::super::doors::QUARTER_TURN,
+                frame.as_secs_f32(),
+            );
+            let hinge = swing / super::super::doors::QUARTER_TURN;
+            match wait.act(Some(true), Some(hinge), true, now) {
+                DoorAction::Reroute => {
+                    assert!(rerouted_at.is_none(), "one search round the leaf");
+                    assert_eq!(hinge, 1.0, "searched round a leaf still swinging");
+                    rerouted_at = Some(now);
+                }
+                DoorAction::Wait => (),
+                other => panic!("{other:?} at {now:?}"),
+            }
+        }
+        assert_eq!(rerouted_at, Some(frame * 5));
     }
 
     #[test]
