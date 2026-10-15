@@ -746,15 +746,20 @@ mod tests {
     fn a_route_searched_off_the_caller_follows_the_same_waypoints_and_doors() {
         let (world, _) = doorway(true);
         let (start, goal) = (Vec3::new(-20.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        // However busy the machine, a thread of its own finishes this search.
         let first_step = |route: &mut Route| {
-            for tick in 0..10_000_u64 {
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            for tick in 0_u64.. {
                 let now = Duration::from_millis(tick);
                 match route.next(&world, start, goal, 256, now) {
-                    RouteStep::Searching => std::thread::yield_now(),
+                    RouteStep::Searching if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    RouteStep::Searching => panic!("the search never finished"),
                     step => return step,
                 }
             }
-            panic!("the search never finished");
+            unreachable!("the clock ran out first");
         };
         let mut inline = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
         let mut handed = Route::new(start, goal, 1.0, 6.0)
