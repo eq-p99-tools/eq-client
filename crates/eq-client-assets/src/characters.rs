@@ -3,7 +3,12 @@
 mod model;
 pub use model::{Attachment, CharacterAsset, CharacterPose, Piece, load_character};
 
-use std::{fs::File, path::Path};
+use std::{
+    collections::HashMap,
+    fs::File,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError},
+};
 
 use libeq::{
     pfs::PfsReader,
@@ -12,8 +17,36 @@ use libeq::{
 
 use crate::LoadError;
 
+/// The character archives parsed for the movements models borrow, each read
+/// once however many models borrow from it (Coldain, male, female and king,
+/// all from `global_chr.s3d`). Clones share the archives; a fresh handle starts
+/// empty, so its holder decides how long they stay in memory (the render keeps
+/// one per zone).
+#[derive(Clone, Debug, Default)]
+pub struct DonorArchives(Arc<Mutex<HashMap<PathBuf, Option<WldDoc>>>>);
+
+impl DonorArchives {
+    /// Runs `read` on the archive's parsed WLD, parsing it on first use, or
+    /// returns None for an archive that cannot be read (remembered too).
+    fn with<R>(&self, path: &Path, read: impl FnOnce(&WldDoc) -> R) -> Option<R> {
+        let mut archives = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        archives
+            .entry(path.to_owned())
+            .or_insert_with(|| model::read_world(path).ok())
+            .as_ref()
+            .map(read)
+    }
+
+    /// How many archives were tried, readable or not.
+    #[cfg(test)]
+    fn tried(&self) -> usize {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).len()
+    }
+}
+
 /// Finds a classic model in the zone archive or the installation's global
-/// archives, with the movements it borrows from another model in any of them.
+/// archives, with the movements it borrows from another model in any of them,
+/// parsed through `donors`.
 ///
 /// # Errors
 /// Returns [`LoadError::InvalidZoneName`] for a zone name that could leave the
@@ -23,6 +56,7 @@ pub fn load_installed_character(
     directory: &Path,
     zone: &str,
     model: &str,
+    donors: &DonorArchives,
 ) -> Result<CharacterAsset, LoadError> {
     let zone = crate::zone_name(zone)?;
     let mut archives = vec![format!("{zone}_chr.s3d"), "global_chr.s3d".into()];
@@ -40,7 +74,7 @@ pub fn load_installed_character(
             .filter(|(other, _)| *other != index)
             .map(|(_, path)| path.clone())
             .collect();
-        match model::load_with_donors(archive, model, &others) {
+        match model::load_with_donors(archive, model, &others, donors) {
             Ok(asset) => return Ok(asset),
             Err(error) => last_error = Some(error),
         }
@@ -178,7 +212,12 @@ mod tests {
     #[test]
     fn server_zone_names_never_leave_the_installation() {
         assert!(matches!(
-            super::load_installed_character(std::path::Path::new("unused"), "../secrets", "HUM"),
+            super::load_installed_character(
+                std::path::Path::new("unused"),
+                "../secrets",
+                "HUM",
+                &super::DonorArchives::default(),
+            ),
             Err(crate::LoadError::InvalidZoneName(_))
         ));
     }
@@ -194,9 +233,13 @@ mod tests {
     #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
     fn installed_models_name_their_materials_and_find_other_looks() {
         let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
-        let human =
-            super::load_installed_character(std::path::Path::new(&install), "qeynos2", "HUM")
-                .unwrap();
+        let human = super::load_installed_character(
+            std::path::Path::new(&install),
+            "qeynos2",
+            "HUM",
+            &super::DonorArchives::default(),
+        )
+        .unwrap();
         let materials: Vec<_> = human.materials.iter().flatten().collect();
         println!("HUM materials: {materials:?}");
         assert!(
@@ -250,8 +293,10 @@ mod tests {
     fn a_zone_model_borrows_movements_kept_in_a_global_archive() {
         let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
         let install = std::path::Path::new(&install);
+        let donors = super::DonorArchives::default();
         for model in ["COM", "COF"] {
-            let coldain = super::load_installed_character(install, "thurgadina", model).unwrap();
+            let coldain =
+                super::load_installed_character(install, "thurgadina", model, &donors).unwrap();
             let codes = coldain.animation_codes();
             println!("{model} clips: {codes:?}");
             assert!(codes.contains(&"P01") && codes.contains(&"L01"));
@@ -259,8 +304,23 @@ mod tests {
             let alone = super::load_character(&install.join("thurgadina_chr.s3d"), model).unwrap();
             assert_eq!(alone.animation_codes(), [] as [&str; 0]);
         }
-        let human = super::load_installed_character(install, "qeynos2", "HUM").unwrap();
+        // Both Coldain borrowed from global_chr, read once.
+        assert_eq!(donors.tried(), 1);
+        let donors = super::DonorArchives::default();
+        let human = super::load_installed_character(install, "qeynos2", "HUM", &donors).unwrap();
         let alone = super::load_character(&install.join("global_chr.s3d"), "HUM").unwrap();
         assert_eq!(human.animation_codes(), alone.animation_codes());
+        // The human's own archive holds its donor, so nothing else is read.
+        assert_eq!(donors.tried(), 0);
+    }
+
+    #[test]
+    fn an_unreadable_donor_archive_is_tried_once() {
+        let donors = super::DonorArchives::default();
+        let missing = std::path::Path::new("no-such-dir/global_chr.s3d");
+        for _ in 0..2 {
+            assert_eq!(donors.clone().with(missing, |_| unreachable!()), None::<()>);
+        }
+        assert_eq!(donors.tried(), 1);
     }
 }

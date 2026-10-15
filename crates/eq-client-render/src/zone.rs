@@ -49,8 +49,13 @@ impl Entry {
             .map_err(|error| format!("Zone {zone_name} could not be loaded: {error}"))?;
         let character =
             eq_client_core::races::model(player.race, player.gender).and_then(|model| {
+                // The player's own model is a single load, so its donor
+                // archives need not outlive it.
                 match eq_client_assets::characters::load_installed_character(
-                    directory, zone_name, model,
+                    directory,
+                    zone_name,
+                    model,
+                    &eq_client_assets::characters::DonorArchives::default(),
                 ) {
                     Ok(asset) => Some(asset),
                     Err(error) => {

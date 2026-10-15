@@ -402,6 +402,20 @@ pub(super) fn animate(
     }
 }
 
+impl AnimatedCharacter {
+    /// The casting gesture it is playing, if any: the seconds since it began
+    /// and the seconds left of its clip.
+    pub(super) fn casting_gesture(&self) -> Option<(f32, f32)> {
+        let (_, action, _) = self.swings.latest?;
+        if !(42..=44).contains(&action) {
+            return None;
+        }
+        let length = |clip: &str| self.asset.clip_seconds(clip);
+        let gesture = self.swings.gesture(length)?;
+        Some((gesture.since, length(gesture.clip)? - gesture.since))
+    }
+}
+
 /// What a character plays once over its stance and walk: a swing the
 /// server sent, or the casting gesture of a cast it completed.
 #[derive(Clone, Copy, Debug, PartialEq)]
