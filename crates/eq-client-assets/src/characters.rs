@@ -12,7 +12,8 @@ use libeq::{
 
 use crate::LoadError;
 
-/// Finds a classic model in the zone archive or the installation's global archives.
+/// Finds a classic model in the zone archive or the installation's global
+/// archives, with the movements it borrows from another model in any of them.
 ///
 /// # Errors
 /// Returns [`LoadError::InvalidZoneName`] for a zone name that could leave the
@@ -26,9 +27,20 @@ pub fn load_installed_character(
     let zone = crate::zone_name(zone)?;
     let mut archives = vec![format!("{zone}_chr.s3d"), "global_chr.s3d".into()];
     archives.extend((2..=7).map(|i| format!("global{i}_chr.s3d")));
+    let archives: Vec<_> = archives
+        .into_iter()
+        .map(|archive| directory.join(archive))
+        .collect();
     let mut last_error = None;
-    for archive in archives {
-        match load_character(&directory.join(archive), model) {
+    for (index, archive) in archives.iter().enumerate() {
+        // Another candidate may hold the movements this model borrows.
+        let others: Vec<_> = archives
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != index)
+            .map(|(_, path)| path.clone())
+            .collect();
+        match model::load_with_donors(archive, model, &others) {
             Ok(asset) => return Ok(asset),
             Err(error) => last_error = Some(error),
         }
@@ -231,5 +243,24 @@ mod tests {
         assert!(validate_parents(&[Some(1), Some(0)]).is_err());
         assert!(validate_parents(&[Some(0)]).is_err());
         assert!(validate_parents(&[Some(4)]).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
+    fn a_zone_model_borrows_movements_kept_in_a_global_archive() {
+        let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
+        let install = std::path::Path::new(&install);
+        for model in ["COM", "COF"] {
+            let coldain = super::load_installed_character(install, "thurgadina", model).unwrap();
+            let codes = coldain.animation_codes();
+            println!("{model} clips: {codes:?}");
+            assert!(codes.contains(&"P01") && codes.contains(&"L01"));
+            // The one-archive loader still sees only the zone archive's tracks.
+            let alone = super::load_character(&install.join("thurgadina_chr.s3d"), model).unwrap();
+            assert_eq!(alone.animation_codes(), [] as [&str; 0]);
+        }
+        let human = super::load_installed_character(install, "qeynos2", "HUM").unwrap();
+        let alone = super::load_character(&install.join("global_chr.s3d"), "HUM").unwrap();
+        assert_eq!(human.animation_codes(), alone.animation_codes());
     }
 }

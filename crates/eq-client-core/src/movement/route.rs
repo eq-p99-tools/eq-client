@@ -186,7 +186,7 @@ impl Route {
                     path
                 }
             };
-            self.waypoints = path.into();
+            self.waypoints = path::straighten(world, feet, &path, self.height).into();
             self.search = None;
         }
         while let Some(&waypoint) = self.waypoints.front() {
