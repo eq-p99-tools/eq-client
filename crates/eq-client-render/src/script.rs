@@ -65,8 +65,8 @@ pub struct Script {
     hovering: Option<Entity>,
     /// The spawn a `wait_dead` step waits on: the target as it started.
     awaited: Option<u16>,
-    /// The world container an `approach object` step walks toward, chosen
-    /// as it started.
+    /// The world container an `approach object` or `walk object` step walks
+    /// toward, chosen as it started.
     approached: Option<u32>,
 }
 
@@ -421,17 +421,24 @@ pub(super) fn drive(
                 }
                 distance <= *range
             }
-            Step::Walk(_, duration) => {
+            Step::Walk(_, duration) | Step::WalkObject { duration, .. } => {
                 use eq_client_core::movement::RouteStep;
+                // An object walk ends only within its range; a plain walk also
+                // ends at the end of a partial route or out of time.
+                let object_range = match &step {
+                    Step::WalkObject { range, .. } => Some(*range),
+                    _ => None,
+                };
+                // Only an object walk has chosen an object.
                 let ends = bodies
                     .single()
                     .ok()
-                    .and_then(|body| walk_ends(&online, *body));
+                    .and_then(|body| walk_ends(&online, *body, script.approached));
                 let world = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
                 let (Some((feet, goal)), Some(world)) = (ends, world) else {
-                    script.stop(&mut keys, &mut mouse, "walk lost its target or collision");
+                    script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
                     return;
                 };
                 let Some(route) = script.route.as_mut() else {
@@ -447,8 +454,25 @@ pub(super) fn drive(
                     let refused = observed.4.refused.as_deref();
                     info!(?refused, "Script walk stalled; searching again from here");
                 }
-                match step {
+                let distance = Vec2::new(goal.x - feet.x, goal.z - feet.z).length();
+                // Where an object walk ends, so a partial route shows in the log.
+                let log_end = |online: &super::online::OnlineState| {
+                    if object_range.is_some()
+                        && let Some(player) = online.world().player()
+                    {
+                        let at = player.position;
+                        info!(
+                            x = at.x,
+                            y = at.y,
+                            z = at.z,
+                            distance,
+                            "Script walk object ended"
+                        );
+                    }
+                };
+                let (arrived, out_of_time) = match step {
                     RouteStep::Unreachable => {
+                        log_end(&online);
                         script.stop(&mut keys, &mut mouse, "no walkable path from here");
                         return;
                     }
@@ -460,14 +484,15 @@ pub(super) fn drive(
                                 format!("walk made no progress; last step refused: {refused}")
                             },
                         );
+                        log_end(&online);
                         script.stop(&mut keys, &mut mouse, &reason);
                         return;
                     }
-                    RouteStep::Arrived => true,
+                    RouteStep::Arrived => (true, false),
                     RouteStep::Searching => {
                         // Stand still while a stalled route searches again.
                         script.release(&mut keys, &mut mouse);
-                        elapsed >= *duration
+                        (false, elapsed >= *duration)
                     }
                     RouteStep::Toward(next) => {
                         let to = next - feet;
@@ -479,7 +504,23 @@ pub(super) fn drive(
                             keys.press(KeyCode::KeyW);
                             script.held = vec![KeyCode::KeyW];
                         }
-                        elapsed >= *duration
+                        (false, elapsed >= *duration)
+                    }
+                };
+                match object_range
+                    .map(|range| object_walk_end(distance, range, arrived, out_of_time))
+                {
+                    None => arrived || out_of_time,
+                    Some(Ok(done)) => {
+                        if done {
+                            log_end(&online);
+                        }
+                        done
+                    }
+                    Some(Err(reason)) => {
+                        log_end(&online);
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
                     }
                 }
             }
@@ -775,11 +816,7 @@ pub(super) fn drive(
             script.held = vec![KeyCode::KeyW];
         }
         Step::ApproachObject { kind, .. } => {
-            let world = online.world();
-            script.approached = world.player().and_then(|player| {
-                eq_client_core::ground::nearest_container(world.objects(), *kind, player.position)
-                    .map(|object| object.drop_id)
-            });
+            script.approached = nearest_station(&online, *kind);
             if face_object(script.approached, &online, &players, &mut cameras).is_none() {
                 script.stop(
                     &mut keys,
@@ -791,9 +828,20 @@ pub(super) fn drive(
             keys.press(KeyCode::KeyW);
             script.held = vec![KeyCode::KeyW];
         }
-        Step::Walk(range, _) => {
+        Step::Walk(range, _) | Step::WalkObject { range, .. } => {
+            if let Step::WalkObject { kind, .. } = &step {
+                script.approached = nearest_station(&online, *kind);
+                if script.approached.is_none() {
+                    script.stop(
+                        &mut keys,
+                        &mut mouse,
+                        "walk object found no container of that kind",
+                    );
+                    return;
+                }
+            }
             let route = bodies.single().ok().and_then(|body| {
-                let (feet, goal) = walk_ends(&online, *body)?;
+                let (feet, goal) = walk_ends(&online, *body, script.approached)?;
                 // Ledges are routes only where the session simulates falls.
                 Some(
                     eq_client_core::movement::Route::new(feet, goal, *range, body.height)
@@ -1093,18 +1141,60 @@ fn displayed(entity: Entity, layout: &Layout) -> bool {
     true
 }
 
-/// The player's feet at its accepted position and the target's position, in
-/// render coordinates.
-fn walk_ends(online: &super::online::OnlineState, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
-    let player = online.world().player()?;
-    let spawn = online
-        .world()
-        .target()
-        .selected
-        .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state))?;
+/// The player's feet at its accepted position and the goal's position, in
+/// render coordinates: the world object `object` names, or else the target.
+fn walk_ends(
+    online: &super::online::OnlineState,
+    body: super::PlayerBody,
+    object: Option<u32>,
+) -> Option<(Vec3, Vec3)> {
+    let world = online.world();
+    let player = world.player()?;
+    let goal = match object {
+        Some(drop_id) => world.objects().entries().get(&drop_id)?.position,
+        None => {
+            world
+                .target()
+                .selected
+                .and_then(|id| world.spawn(id))?
+                .state
+                .position
+        }
+    };
     let origin = Vec3::from_array(eq_client_core::render_position(player.position));
-    let goal = Vec3::from_array(eq_client_core::render_position(spawn.position));
+    let goal = Vec3::from_array(eq_client_core::render_position(goal));
     Some((origin - Vec3::Y * body.feet_offset, goal))
+}
+
+/// The zone's nearest world container of a tradeskill kind to the player.
+fn nearest_station(online: &super::online::OnlineState, kind: u8) -> Option<u32> {
+    let world = online.world();
+    let player = world.player()?;
+    eq_client_core::ground::nearest_container(world.objects(), kind, player.position)
+        .map(|object| object.drop_id)
+}
+
+/// Whether a `walk object` step is done at a flat `distance` from its object:
+/// within `range` it is; short of it, the end of a partial route or running
+/// out of time stops the script, since a later step such as `press f` would
+/// act on nothing.
+fn object_walk_end(
+    distance: f32,
+    range: f32,
+    arrived: bool,
+    out_of_time: bool,
+) -> Result<bool, String> {
+    if distance <= range {
+        Ok(true)
+    } else if arrived {
+        Err(format!(
+            "walk object ended {distance:.1} from its object; no walkable path reaches it"
+        ))
+    } else if out_of_time {
+        Err("walk object ran out of time".to_owned())
+    } else {
+        Ok(false)
+    }
 }
 
 /// Points the camera from the player toward the target and returns the flat
@@ -1194,6 +1284,24 @@ fn fallen(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_object_walk_goes_on_only_within_its_range() {
+        // Within range it is done, whatever the route says.
+        assert_eq!(object_walk_end(12.0, 12.0, false, false), Ok(true));
+        assert_eq!(object_walk_end(3.0, 12.0, true, true), Ok(true));
+        // Short of it, it walks on until the route ends or time runs out,
+        // and either stops the script.
+        assert_eq!(object_walk_end(30.0, 12.0, false, false), Ok(false));
+        assert_eq!(
+            object_walk_end(18.34, 12.0, true, false),
+            Err("walk object ended 18.3 from its object; no walkable path reaches it".to_owned())
+        );
+        assert_eq!(
+            object_walk_end(30.0, 12.0, false, true),
+            Err("walk object ran out of time".to_owned())
+        );
+    }
 
     #[test]
     fn a_zone_wait_ends_once_the_loading_screen_has_lifted() {
