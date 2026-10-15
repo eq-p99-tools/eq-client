@@ -25,7 +25,7 @@ use super::{hud::hotbar, windows::WindowId};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_assets::{
-    sidl::{Align, ButtonLook, Element, Gauge, Label, Library, Piece, Screen},
+    sidl::{Align, Anchor, Anchors, ButtonLook, Element, Gauge, Label, Library, Piece, Screen},
     ui::Area,
 };
 use eq_client_core::{
@@ -3098,12 +3098,16 @@ fn label(
         font(label.font),
         label.color.map_or(theme::INK_BRIGHT, rgb),
     );
-    let node = at(
+    let mut node = at(
         inside.x + area.x,
         inside.y + area.y,
         area.width,
         area.height,
     );
+    // Wrapping words in a box stretching down the window start at its top.
+    if line_at_top(label.anchors, label.wraps) {
+        node.height = Val::Auto;
+    }
     let buff_name = buff_label(owner, label.eq_type);
     match (label.eq_type, bag) {
         (Some(_), _) if let Some((effects, index)) = buff_name => aligned(
@@ -3150,6 +3154,21 @@ fn label(
             None => aligned(window, node, label.align, text),
         },
     }
+}
+
+/// Whether a label's text sits at the top of its box: one whose words wrap
+/// in a box stretching down its window, from its top to near its foot, as
+/// the merchant window's name, which the skins follow with the list just
+/// under that top (inferred, recording item 6.220). Any other box,
+/// including a one-line row filling its container, centres its line.
+fn line_at_top(anchors: Option<Anchors>, wraps: bool) -> bool {
+    wraps
+        && anchors.is_some_and(|anchors| {
+            matches!(
+                (anchors.top, anchors.bottom),
+                (Anchor::Start(_), Anchor::End(_))
+            )
+        })
 }
 
 /// Text in a box the skin sizes, aligned in it as the skin aligns it, on
@@ -4856,6 +4875,78 @@ mod tests {
             let layout = app.world().get::<TextLayout>(line).unwrap();
             assert_eq!(layout.linebreak, LineBreak::NoWrap);
         }
+    }
+
+    #[test]
+    fn wrapping_words_in_a_box_stretching_down_the_window_start_at_its_top() {
+        use bevy::ecs::system::RunSystemOnce;
+        let stretched = |top, bottom| Anchors {
+            left: Anchor::Start(4.0),
+            top,
+            right: Anchor::End(4.0),
+            bottom,
+        };
+        // The merchant window's name: from 4 below the top to 24 above the
+        // foot, its words wrapping.
+        let name = stretched(Anchor::Start(4.0), Anchor::End(24.0));
+        assert!(line_at_top(Some(name), true));
+        // One-line rows filling their container, and fixed boxes, centre.
+        assert!(!line_at_top(Some(name), false));
+        assert!(!line_at_top(
+            Some(stretched(Anchor::Start(0.0), Anchor::End(0.0))),
+            false
+        ));
+        assert!(!line_at_top(
+            Some(stretched(Anchor::Start(4.0), Anchor::Start(20.0))),
+            true
+        ));
+        assert!(!line_at_top(None, true));
+        // Drawn in a merchant window 480 high, the name keeps to the top
+        // instead of the middle, where the list drawn after it covers it.
+        let mut app = App::new();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(|window| {
+                    let words = Label {
+                        area: Area {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 0.0,
+                            height: 0.0,
+                        },
+                        anchors: Some(name),
+                        eq_type: None,
+                        text: "Sample".into(),
+                        color: None,
+                        align: Align::Center,
+                        font: None,
+                        wraps: true,
+                    };
+                    let inside = Area {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 382.0,
+                        height: 456.0,
+                    };
+                    label(
+                        window,
+                        "MW_MerchantName",
+                        &words,
+                        &inside,
+                        WindowId::Merchant,
+                    );
+                });
+            })
+            .unwrap();
+        let mut boxes = app.world_mut().query::<(&Shows, &ChildOf)>();
+        let row = boxes
+            .iter(app.world())
+            .find(|(shows, _)| **shows == Shows::Merchant)
+            .map(|(_, parent)| parent.parent())
+            .unwrap();
+        let node = app.world().get::<Node>(row).unwrap();
+        assert_eq!((node.top, node.height), (Val::Px(4.0), Val::Auto));
+        assert_eq!(node.width, Val::Px(374.0));
     }
 
     #[test]
