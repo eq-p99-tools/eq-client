@@ -351,16 +351,6 @@ impl ClientWorld {
         self.zone.container = None;
     }
 
-    /// The player asked a merchant to trade; the server's word on it arrives
-    /// as news.
-    pub fn open_shop(&mut self, merchant_id: u16) {
-        self.zone.trade.merchant = Some(Merchant {
-            merchant_id,
-            stock: BTreeMap::new(),
-            rate: None,
-        });
-    }
-
     /// The player is done trading.
     pub fn close_shop(&mut self) {
         self.zone.trade.merchant = None;
