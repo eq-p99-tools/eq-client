@@ -106,6 +106,12 @@ impl Route {
         self.searched
     }
 
+    /// How near the goal the route counts as arrived.
+    #[must_use]
+    pub const fn reach(&self) -> f32 {
+        self.reach
+    }
+
     /// The collision height the route was searched for.
     #[must_use]
     pub const fn height(&self) -> f32 {

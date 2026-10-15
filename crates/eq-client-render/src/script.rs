@@ -457,9 +457,11 @@ pub(super) fn drive(
                     let (waypoints, partial) = (route.remaining(), route.partial());
                     let (expanded, open) = route.searched().unwrap_or_default();
                     let (height, drops) = (route.height(), observed.4.airborne.is_some());
+                    let reach = route.reach();
                     info!(
                         waypoints,
                         partial,
+                        reach,
                         expanded,
                         open,
                         ?feet,
@@ -474,7 +476,7 @@ pub(super) fn drive(
                             .as_mut()
                             .and_then(|collision| collision.bypass_change_detection().0.as_mut())
                     {
-                        log_partial_route(&online, world, feet, goal, end, height, drops);
+                        log_partial_route(&online, world, [feet, goal, end], reach, height, drops);
                     }
                 } else if !searching && route.is_searching() {
                     let refused = observed.4.refused.as_deref();
@@ -1230,14 +1232,14 @@ fn displayed(entity: Entity, layout: &Layout) -> bool {
 /// The player's feet at its accepted position and the goal's position, in
 /// render coordinates: the world object `object` names, or else the target.
 /// Diagnoses a partial route: the doors nearest where it ends, and whether the
-/// same search finds the goal with every door left out. Logging only; the walk
-/// keeps its own route.
+/// same search finds the goal with every door left out, once per partial route
+/// at the usual cap. Logging only; the walk keeps its own route. Diagnostic:
+/// the door-less repeat goes before the fix is marked.
 fn log_partial_route(
     online: &super::online::OnlineState,
     world: &mut eq_client_core::movement::CollisionWorld,
-    feet: Vec3,
-    goal: Vec3,
-    end: Vec3,
+    [feet, goal, end]: [Vec3; 3],
+    reach: f32,
     height: f32,
     drops: bool,
 ) {
@@ -1270,7 +1272,7 @@ fn log_partial_route(
         );
     }
     let obstacles = world.take_obstacles();
-    let mut search = PathSearch::new(feet, goal, 10.0, height).with_drops(drops);
+    let mut search = PathSearch::new(feet, goal, reach, height).with_drops(drops);
     let found = loop {
         match search.advance(world, 5000) {
             PathProgress::Searching => (),
