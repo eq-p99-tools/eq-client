@@ -205,6 +205,25 @@ pub fn drawn_feet_offset(race: u32, size: f32) -> f32 {
     0.625 * size_or_default(race, size)
 }
 
+/// Where a remote model's soles are drawn, in renderer coordinates: on the
+/// floor of `world` when one lies within 0.6 × size above or below `soles`
+/// (the reported position less [`drawn_feet_offset`]), else at `soles`.
+/// `EQEmu` places a spawn it has moved at its own per-model height, up to
+/// (0.625 − 0.2 × factor) × size under where a standing one sits, and nothing
+/// in the spawn says which rule produced its z, so the floor decides. A
+/// flyer, a swimmer or a mob over ground this geometry lacks has no floor in
+/// that window and stays where the server says. Inferred; recording item 6.231.
+#[must_use]
+pub fn grounded_soles(
+    world: &movement::CollisionWorld,
+    soles: glam::Vec3,
+    race: u32,
+    size: f32,
+) -> f32 {
+    let reach = 0.6 * size_or_default(race, size);
+    world.ground(soles, reach, reach).unwrap_or(soles.y)
+}
+
 /// The size sent, or the race's default when it is missing or not positive.
 fn size_or_default(race: u32, size: f32) -> f32 {
     if size.is_finite() && size > 0.0 {
@@ -256,6 +275,25 @@ mod tests {
         assert!((offset(183, 4.8) - 3.0).abs() < 0.0001); // Coldain
         assert!((offset(8, 0.0) - 2.5).abs() < 0.0001); // dwarf, default size 4
         assert!((offset(12, f32::NAN) - 1.875).abs() < 0.0001); // gnome, default 3
+    }
+
+    #[test]
+    fn remote_models_stand_on_a_floor_near_their_soles() {
+        let floor = [
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ];
+        let world = crate::movement::CollisionWorld::new(floor).unwrap();
+        let soles = |y: f32| super::grounded_soles(&world, glam::Vec3::Y * y, 183, 4.0);
+        // Reported two under the floor, as a walked mob's z puts it, or two over.
+        assert!(soles(-2.0).abs() < 0.001);
+        assert!(soles(2.0).abs() < 0.001);
+        // Within 0.6 × size it lands; past it, a flyer stays.
+        assert!(soles(2.39).abs() < 0.001);
+        assert!((soles(2.41) - 2.41).abs() < 0.001);
+        assert!((soles(5.0) - 5.0).abs() < 0.001);
+        // A size-less spawn reaches by its race's default size: 0.6 × 4 for a dwarf.
+        assert!(super::grounded_soles(&world, glam::Vec3::Y * 2.3, 8, 0.0).abs() < 0.001);
     }
 
     use super::{WorldPosition, render_position, world_position};
