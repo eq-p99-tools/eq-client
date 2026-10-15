@@ -1348,13 +1348,14 @@ fn the_liquid_probe_finds_a_wade_a_ledge_and_lava() {
 fn inspect_model_heights() {
     let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
     let zones = std::env::var("EQ_PROBE_ZONES").unwrap_or_else(|_| {
-        "thurgadin,halas,kaladima,akanon,rivervale,qeynos,everfrost,cobaltscar".into()
+        "thurgadina,halas,kaladima,akanon,rivervale,qeynos,everfrost,cobaltscar".into()
     });
     let races = std::env::var("EQ_PROBE_RACES").unwrap_or_else(|_| {
         "1:0,1:1,8:0,8:1,11:0,11:1,12:0,12:1,183:0,183:1,14:0,46:0,63:0,66:0,90:0,90:1,\
          147:0,158:0,175:0,187:0,190:0,216:0"
             .into()
     });
+    let donors = eq_client_assets::characters::DonorArchives::default();
     for pair in races.split(',') {
         let (race, gender) = pair.trim().split_once(':').unwrap();
         let (race, gender): (u32, u32) = (race.parse().unwrap(), gender.parse().unwrap());
@@ -1363,7 +1364,7 @@ fn inspect_model_heights() {
             continue;
         };
         let loaded = zones.split(',').find_map(|zone| {
-            eq_client_assets::characters::load_installed_character(&install, zone, code)
+            eq_client_assets::characters::load_installed_character(&install, zone, code, &donors)
                 .ok()
                 .map(|asset| (zone, asset))
         });
