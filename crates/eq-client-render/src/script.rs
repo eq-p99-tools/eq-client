@@ -546,6 +546,13 @@ pub(super) fn drive(
                                 script.door_wait = Some(wait);
                             }
                             DoorAction::Wait => script.door_wait = Some(wait),
+                            DoorAction::Reroute => {
+                                info!(id, "Script walk door open; searching around it");
+                                script.door_wait = Some(wait);
+                                if let Some(route) = script.route.as_mut() {
+                                    route.reroute(feet, goal);
+                                }
+                            }
                             DoorAction::Refuse(reason) => {
                                 info!(id, reason, "Script walk door did not open");
                                 script.door_wait = None;
@@ -1314,8 +1321,11 @@ fn log_partial_route(online: &super::online::OnlineState, end: Vec3) {
 /// How long a clicked door may take to start opening before the walk treats
 /// it as locked: longer than any server's answer to a click.
 const DOOR_WAIT: Duration = Duration::from_secs(3);
-/// How long an opening door may still block the way: the drawn quarter-turn
-/// swing (half a second) and a second to spare.
+/// How long a door takes to swing open as drawn: a quarter turn at half a
+/// turn a second, and a little to spare.
+const DOOR_SWUNG: Duration = Duration::from_millis(600);
+/// How long an opened door may still block the way, after the walk has
+/// searched around it once: the swing and a second to spare.
 const DOOR_SWING: Duration = Duration::from_millis(1500);
 /// Clicks one door may take in one walk: the first, and one more if it shut
 /// again before the walker got through.
@@ -1331,6 +1341,8 @@ struct DoorWait {
     clicked: Option<Duration>,
     opened: Option<Duration>,
     clicks: u8,
+    /// Whether the walk has searched again around the door as it stands open.
+    rerouted: bool,
 }
 
 /// What the walk does at a closed door this frame.
@@ -1338,6 +1350,9 @@ struct DoorWait {
 enum DoorAction {
     Click,
     Wait,
+    /// The door stands open but its leaf is in the way: search again from
+    /// here, around it, as a player steps round a door that swung toward them.
+    Reroute,
     /// The door is a wall for this route, for this reason.
     Refuse(&'static str),
 }
@@ -1350,6 +1365,7 @@ impl DoorWait {
             clicked: None,
             opened: None,
             clicks: 0,
+            rerouted: false,
         }
     }
 
@@ -1359,8 +1375,12 @@ impl DoorWait {
         match open {
             None => DoorAction::Refuse("its state is unknown"),
             Some(true) => {
-                let opened = *self.opened.get_or_insert(now);
-                if now.saturating_sub(opened) >= DOOR_SWING {
+                let since = now.saturating_sub(*self.opened.get_or_insert(now));
+                if since < DOOR_SWUNG {
+                    DoorAction::Wait
+                } else if !std::mem::replace(&mut self.rerouted, true) {
+                    DoorAction::Reroute
+                } else if since >= DOOR_SWING {
                     DoorAction::Refuse("it opened but still blocks the way")
                 } else {
                     DoorAction::Wait
@@ -1551,7 +1571,6 @@ mod tests {
         assert_eq!(wait.act(Some(false), true, at(11)), DoorAction::Wait);
         // Opening: never clicked, only waited on until the swing ends.
         assert_eq!(wait.act(Some(true), true, at(12)), DoorAction::Wait);
-        assert_eq!(wait.act(Some(true), true, at(13)), DoorAction::Wait);
         assert_eq!(wait.asked, Some(at(10)));
     }
 
@@ -1568,6 +1587,10 @@ mod tests {
         let mut stuck = DoorWait::new(4);
         stuck.act(Some(false), true, at(0));
         assert_eq!(stuck.act(Some(true), true, at(100)), DoorAction::Wait);
+        // Swung open but in the way: one search around it first.
+        assert_eq!(stuck.act(Some(true), true, at(700)), DoorAction::Reroute);
+        assert_eq!(stuck.act(Some(true), true, at(900)), DoorAction::Wait);
+        // Still across the way after that: the door is a wall.
         assert_eq!(
             stuck.act(Some(true), true, at(1_600)),
             DoorAction::Refuse("it opened but still blocks the way")
@@ -1588,7 +1611,7 @@ mod tests {
         let mut wait = DoorWait::new(4);
         assert_eq!(wait.act(Some(false), true, at(0)), DoorAction::Click);
         assert_eq!(wait.act(Some(true), true, at(500)), DoorAction::Wait);
-        // Shut before the walker got through.
+        // Shut again before the walker got through.
         assert_eq!(wait.act(Some(false), true, at(900)), DoorAction::Click);
         assert_eq!(wait.act(Some(true), true, at(1_400)), DoorAction::Wait);
         assert_eq!(

@@ -136,6 +136,13 @@ impl Route {
         ready
     }
 
+    /// A door the follower opened stands in the way as drawn: searches again
+    /// from `feet` in the world as it stands, the door still passable, outside
+    /// the stall's one replan.
+    pub fn reroute(&mut self, feet: Vec3, goal: Vec3) {
+        self.replan(feet, goal);
+    }
+
     fn replan(&mut self, feet: Vec3, goal: Vec3) {
         self.search = Some(
             PathSearch::new(feet, goal, self.reach, self.height)
@@ -478,6 +485,80 @@ mod tests {
         let (step, feet) = follow_to_door(&mut route, &world, feet, goal, tick + 1);
         assert_eq!(step, RouteStep::Arrived);
         assert!(feet.z > 8.0, "{feet:?}");
+    }
+
+    /// A floor split by a wall across z = 0 with a wide doorway, 6 < x < 14,
+    /// shut by door 7; and that door standing open with its leaf swung toward
+    /// the walker, across `leaf` (the x span it covers) at z = -1.5.
+    fn wide_doorway(leaf: (f32, f32)) -> (CollisionWorld, Vec<[[f32; 3]; 3]>) {
+        let mut triangles = quad(
+            [-30.0, 0.0, -30.0],
+            [30.0, 0.0, -30.0],
+            [30.0, 0.0, 30.0],
+            [-30.0, 0.0, 30.0],
+        )
+        .to_vec();
+        for (from, to) in [(-30.0, 6.0), (14.0, 30.0)] {
+            triangles.extend(quad(
+                [from, 0.0, 0.0],
+                [to, 0.0, 0.0],
+                [to, 10.0, 0.0],
+                [from, 10.0, 0.0],
+            ));
+        }
+        let shut = crate::movement::CollisionMesh::new(quad(
+            [6.0, 0.0, 0.0],
+            [14.0, 0.0, 0.0],
+            [14.0, 10.0, 0.0],
+            [6.0, 10.0, 0.0],
+        ))
+        .unwrap();
+        let mut world = CollisionWorld::new(triangles).unwrap();
+        world.set_door_obstacles(vec![(7, Arc::new(shut))]);
+        let open = quad(
+            [leaf.0, 0.0, -1.5],
+            [leaf.1, 0.0, -1.5],
+            [leaf.1, 10.0, -1.5],
+            [leaf.0, 10.0, -1.5],
+        )
+        .to_vec();
+        (world, open)
+    }
+
+    #[test]
+    fn a_door_that_swings_toward_the_walker_is_passed_around_its_open_leaf() {
+        let (mut world, leaf) = wide_doorway((10.0, 14.0));
+        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
+        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+        assert_eq!(step, RouteStep::OpenDoor(7));
+        // Open: the doorway is clear but the leaf now stands in the straight way.
+        let leaf = crate::movement::CollisionMesh::new(leaf).unwrap();
+        world.set_door_obstacles(vec![(7, Arc::new(leaf))]);
+        assert_eq!(
+            route.next(&world, feet, goal, 256, Duration::from_secs(100)),
+            RouteStep::OpenDoor(7)
+        );
+        route.reroute(feet, goal);
+        let (step, feet) = follow_to_door(&mut route, &world, feet, goal, 1000);
+        assert_eq!(step, RouteStep::Arrived);
+        assert!(feet.z > 8.0, "{feet:?}");
+    }
+
+    #[test]
+    fn a_door_whose_open_leaf_still_blocks_the_doorway_is_asked_for_again() {
+        let (mut world, leaf) = wide_doorway((5.0, 15.0));
+        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
+        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+        assert_eq!(step, RouteStep::OpenDoor(7));
+        let leaf = crate::movement::CollisionMesh::new(leaf).unwrap();
+        world.set_door_obstacles(vec![(7, Arc::new(leaf))]);
+        route.reroute(feet, goal);
+        // The search around it still has to pass the same door, so the walk
+        // refuses it ("it opened but still blocks the way").
+        let (step, _) = follow_to_door(&mut route, &world, feet, goal, 1000);
+        assert_eq!(step, RouteStep::OpenDoor(7));
     }
 
     #[test]
