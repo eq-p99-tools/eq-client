@@ -94,6 +94,7 @@ fn entered(session_id: u64) -> WorldEvent {
         zone: "qeytoqrg".into(),
         player: Box::new(player(9)),
         far_clip: None,
+        spell_landing_flag: Some(4),
     }
 }
 
@@ -831,6 +832,7 @@ fn the_players_own_cast_ends_where_their_cast_bar_does() {
             zone: "qeytoqrg".into(),
             player: Box::new(caster),
             far_clip: None,
+            spell_landing_flag: None,
         },
     );
     connection(&mut world, true, false);
@@ -888,6 +890,7 @@ fn the_profile_restores_gem_timers_and_vitals_at_admission() {
             zone: "qeytoqrg".into(),
             player: Box::new(caster),
             far_clip: None,
+            spell_landing_flag: None,
         }),
         now,
         &NoSpells,
@@ -1077,6 +1080,7 @@ fn bleeding(capabilities: Vec<crate::Capability>) -> ClientWorld {
             zone: "qeytoqrg".into(),
             player: Box::new(player(9)),
             far_clip: None,
+            spell_landing_flag: None,
         },
     );
     connection(&mut world, true, false);
@@ -1157,6 +1161,7 @@ fn the_dead_bleed_out_no_more_and_an_admission_forgets_the_threshold() {
             zone: "qeynos".into(),
             player: Box::new(player(9)),
             far_clip: None,
+            spell_landing_flag: None,
         },
     );
     game(&mut world, inventory(Vec::new()));
@@ -1558,6 +1563,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
             zone: "qeytoqrg".into(),
             player: Box::new(warrior),
             far_clip: None,
+            spell_landing_flag: None,
         }),
         Instant::now(),
         &NoSpells,
@@ -2077,6 +2083,7 @@ fn gems_read_the_admitted_players_memorized_spells() {
             zone: "qeytoqrg".into(),
             player: Box::new(caster),
             far_clip: None,
+            spell_landing_flag: None,
         },
     );
     assert_eq!(world.gem(2), Some(73));
@@ -2294,6 +2301,7 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
             zone: "qeynos".into(),
             player: Box::new(trainee),
             far_clip: None,
+            spell_landing_flag: None,
         },
     );
     connection(&mut world, true, false);
@@ -3145,4 +3153,78 @@ fn a_session_that_ends_forgets_the_list_and_a_new_one_keeps_only_the_players_cho
     }
     game(&mut world, entry);
     assert!(world.can(Capability::Falling));
+}
+
+#[test]
+fn a_cast_under_way_is_read_until_it_lands() {
+    let mut world = admitted();
+    let now = Instant::now();
+    let began = WorldEvent::Spell(SpellUpdate::Began {
+        caster_id: 5,
+        spell_id: 42,
+        duration_ms: 3000,
+    });
+    world.apply(&WorldUpdate::Game(began), now, &NoSpells);
+    assert_eq!(world.casting_of(5), Some(42));
+    assert_eq!(world.casting_of(9), None);
+    let mut landing = effect(9, 0);
+    landing.caster_id = 5;
+    world.apply(
+        &WorldUpdate::Game(WorldEvent::SpellEffect(landing)),
+        now,
+        &NoSpells,
+    );
+    assert_eq!(world.casting_of(5), None);
+}
+
+#[test]
+fn a_landing_is_the_action_with_the_servers_landing_flag() {
+    let mut world = admitted();
+    let land = |world: &mut ClientWorld, target_id, spell_id, flag| {
+        let mut landing = effect(target_id, flag);
+        landing.spell_id = spell_id;
+        landing.caster_level = 24;
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::SpellEffect(landing)),
+            Instant::now(),
+            &NoSpells,
+        )
+    };
+    // The cast's own completion action is no landing; the flagged one is,
+    // on the player and on a spawn in view, with the caster's level.
+    land(&mut world, 9, 42, 0);
+    assert_eq!(world.landing_on(9), None);
+    land(&mut world, 9, 42, 4);
+    let first = world.landing_on(9).unwrap();
+    assert_eq!(
+        (first.spell_id, first.caster_id, first.caster_level),
+        (42, 9, 24)
+    );
+    game(&mut world, swing(5, 5));
+    land(&mut world, 5, 42, 4);
+    assert_eq!(
+        world.landing_on(5).map(|landing| landing.spell_id),
+        Some(42)
+    );
+    // Each landing is a new one.
+    land(&mut world, 9, 42, 4);
+    assert_ne!(world.landing_on(9).unwrap().count, first.count);
+    // Not on a spawn out of view, and gone with the spawn and the zone.
+    land(&mut world, 77, 42, 4);
+    assert_eq!(world.landing_on(77), None);
+    game(&mut world, WorldEvent::Despawn(5));
+    assert_eq!(world.landing_on(5), None);
+    game(&mut world, entered(2));
+    assert_eq!(world.landing_on(9), None);
+    // A server type with no landing flag named records none.
+    let mut unchecked = entered(3);
+    if let WorldEvent::Entered {
+        spell_landing_flag, ..
+    } = &mut unchecked
+    {
+        *spell_landing_flag = None;
+    }
+    game(&mut world, unchecked);
+    land(&mut world, 9, 42, 4);
+    assert_eq!(world.landing_on(9), None);
 }

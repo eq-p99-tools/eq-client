@@ -167,6 +167,7 @@ fn admit(news: Res<News>, scene: Res<SceneInfo>, players: Query<&Transform, With
         zone: scene.zone_name.clone(),
         player: Box::new(player(origin, [None; 8])),
         far_clip: None,
+        spell_landing_flag: None,
     });
     news.tell(WorldUpdate::Connection(
         eq_client_core::world::Link::Connected,

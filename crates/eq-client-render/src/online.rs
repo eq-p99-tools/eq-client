@@ -699,6 +699,7 @@ pub(crate) mod testing {
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),
                 far_clip,
+                spell_landing_flag: None,
             }],
         );
         connect(state, true);
@@ -913,6 +914,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep the ordered integration scenario and its assertions together"
+    )]
     fn a_zone_entry_batch_keeps_doors_postures_and_the_new_session() {
         use eq_client_core::doors::{Door, DoorUpdate};
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -997,6 +1002,7 @@ mod tests {
                 zone: "example".into(),
                 player: Box::new(player),
                 far_clip: None,
+                spell_landing_flag: None,
             },
             WorldEvent::Spawns(vec![spawn]),
             WorldEvent::Posture {
@@ -1057,6 +1063,7 @@ mod tests {
                 zone: "qeytoqrg".into(),
                 player: Box::new(testing::player(7)),
                 far_clip: None,
+                spell_landing_flag: None,
             }))
             .unwrap();
         app.update();
@@ -1153,6 +1160,7 @@ mod tests {
                 zone: "qeynos2".into(),
                 player: Box::new(testing::player(7)),
                 far_clip: None,
+                spell_landing_flag: None,
             }))
             .unwrap();
         app.update();
@@ -1216,6 +1224,7 @@ mod tests {
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),
                 far_clip: None,
+                spell_landing_flag: None,
             }),
             WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {
@@ -1303,6 +1312,7 @@ mod tests {
                         zone: "qeytoqrg".into(),
                         player: Box::new(timed_player),
                         far_clip: None,
+                        spell_landing_flag: None,
                     },
                     WorldEvent::SpellBook(book),
                 ],
@@ -1593,6 +1603,7 @@ mod tests {
                 zone: "freportw".into(),
                 player: Box::new(player),
                 far_clip: Some(450.0),
+                spell_landing_flag: None,
             }))
             .unwrap();
         app.update();

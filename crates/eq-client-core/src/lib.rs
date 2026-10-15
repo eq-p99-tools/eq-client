@@ -97,6 +97,13 @@ pub fn render_position(position: WorldPosition) -> [f32; 3] {
     eq_client_axes::from_world(glam::Vec3::new(position.x, position.y, position.z)).to_array()
 }
 
+/// Converts an EQ direction or offset, such as a velocity, to the
+/// renderer's frame, by the same axes as [`render_position`].
+#[must_use]
+pub fn render_vector(vector: [f32; 3]) -> [f32; 3] {
+    eq_client_axes::from_world(glam::Vec3::from_array(vector)).to_array()
+}
+
 /// Heading conversions, derived from the same axes as [`render_position`].
 pub use eq_client_axes::{FULL_TURN, model_yaw, render_heading, static_yaw, world_heading};
 
