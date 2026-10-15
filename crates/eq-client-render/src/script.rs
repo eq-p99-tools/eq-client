@@ -914,6 +914,27 @@ fn dialog_control(
     }
 }
 
+/// Whether a control is the button in a window's own body that closes it:
+/// one that only closes the window, or the loot or merchant window's Done,
+/// which ends the loot or the shopping as it closes. The title bar's close
+/// box closes it too, but is `close_box`'s.
+fn done_button(
+    key: &str,
+    closes: Option<&super::skinned::Closes>,
+    trade: Option<&super::trade::Action>,
+    title_box: Option<&super::skinned::TitleBox>,
+) -> bool {
+    use super::trade::Action;
+    use super::windows::WindowId;
+    let window = match (closes, trade) {
+        (Some(closes), _) => closes.0,
+        (None, Some(Action::EndLoot)) => WindowId::Loot,
+        (None, Some(Action::EndShop)) => WindowId::Merchant,
+        _ => return false,
+    };
+    title_box.is_none() && window.key() == key
+}
+
 /// The first visible matching control in an open window, as a click or a
 /// hover reaches it.
 fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entity> {
@@ -960,6 +981,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Answer(_) | ClickTarget::Training(_) | ClickTarget::TitleBox(..) => {
                 dialog_control(target, dialog)
             }
+            ClickTarget::Done(key) => done_button(key, dialog.2, trade, dialog.4),
             ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
             ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),
             ClickTarget::Map(action) => map.is_some_and(|button| *button == action),
@@ -1207,6 +1229,41 @@ mod tests {
         assert!(arrived(&zone, &online, false));
         assert!(arrived(&Step::WaitOnline, &online, false));
         assert!(!arrived(&Step::WaitZone("qeynos2".into()), &online, false));
+    }
+
+    #[test]
+    fn done_is_a_window_body_button_that_closes_it() {
+        use super::super::skinned::{Closes, TitleBox};
+        use super::super::trade::Action;
+        use super::super::windows::WindowId;
+        let bank = Closes(WindowId::Bank);
+        let container = Closes(WindowId::WorldContainer);
+        assert!(done_button("bank", Some(&bank), None, None));
+        assert!(done_button("world-container", Some(&container), None, None));
+        // Another window's Done, or a button that does something else.
+        assert!(!done_button("bank", Some(&container), None, None));
+        assert!(!done_button("bank", None, Some(&Action::BuyChosen), None));
+        assert!(!done_button("bank", None, None, None));
+        // The loot and merchant windows' Done end the loot or the shopping.
+        assert!(done_button("loot", None, Some(&Action::EndLoot), None));
+        assert!(done_button("merchant", None, Some(&Action::EndShop), None));
+        assert!(!done_button("loot", None, Some(&Action::EndShop), None));
+        // The title bar's close box is `close_box`'s.
+        let close_box = TitleBox {
+            window: WindowId::Bank,
+            close: true,
+        };
+        assert!(!done_button("bank", Some(&bank), None, Some(&close_box)));
+        let close_box = TitleBox {
+            window: WindowId::Loot,
+            close: true,
+        };
+        assert!(!done_button(
+            "loot",
+            None,
+            Some(&Action::EndLoot),
+            Some(&close_box)
+        ));
     }
 
     /// A zone with the player (7) and three gnolls (9 to 11) in it, and a

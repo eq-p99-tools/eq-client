@@ -200,6 +200,9 @@ pub enum ClickTarget {
     /// A box on a skinned window's title bar, by the window's key: its
     /// close box (true) or its minimize box.
     TitleBox(&'static str, bool),
+    /// The button in a skinned window's own body that closes it, by the
+    /// window's key: its Done or Close, as a player presses it.
+    Done(&'static str),
     /// An arrow of a skinned window's scrollbar, by the window's key: the
     /// one that scrolls up (true) or down.
     Scroll(&'static str, bool),
@@ -637,6 +640,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["actions"] => ClickTarget::ActionsWindow,
         ["window", key] => ClickTarget::Toggle(window_key(key)?),
         ["close_box", key] => ClickTarget::TitleBox(window_key(key)?, true),
+        ["done", key] => ClickTarget::Done(window_key(key)?),
         ["minimize_box", key] => ClickTarget::TitleBox(window_key(key)?, false),
         ["scroll_up", key] => ClickTarget::Scroll(window_key(key)?, true),
         ["scroll_down", key] => ClickTarget::Scroll(window_key(key)?, false),
@@ -1051,7 +1055,7 @@ mod tests {
         let steps = parse(
             "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
              gm summon\ngm damage 10000\ngm givemoney 0 0 5 0\npress F1 # self\n\
-             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\nhover close_box chat\n\
+             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\nhover close_box chat\nclick done bank\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 0\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\ngive\nclick give\nreport after cast\nscreenshot a.png\nquit\n",
             base,
         )
@@ -1098,6 +1102,7 @@ mod tests {
                 Step::Click(ClickTarget::Slot(23)),
                 Step::RightClick(ClickTarget::Slot(22)),
                 Step::Hover(ClickTarget::TitleBox("chat", true)),
+                Step::Click(ClickTarget::Done("bank")),
                 Step::Click(ClickTarget::Scribe),
                 Step::Click(ClickTarget::Store),
                 Step::Click(ClickTarget::BookRow(0)),
