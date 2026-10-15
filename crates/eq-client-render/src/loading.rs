@@ -7,6 +7,12 @@
 //! background after its admission, and the cover waits for it before it
 //! waits for the spawns. Offline there is nothing to wait for.
 //!
+//! The one wait: a transfer that begins as the player's own cast completes,
+//! as Gate's does, lets the casting gesture finish before the cover is
+//! drawn, at most [`GESTURE_WAIT`] seconds. Only the drawing waits: the
+//! cover is up for everything else, the pointer included (inferred, recording
+//! checklist item 6.230).
+//!
 //! So the player never sees the old zone hang on while the transfer runs,
 //! the frame freeze while the new zone loads, or the new zone's windows and
 //! spawns pop in.
@@ -37,6 +43,13 @@ const MOST: f32 = 4.0;
 /// sees the old zone again, with the status box saying where the connection
 /// stands; a load that hangs this long shows the zone as far as it got.
 const STUCK: f32 = 30.0;
+/// The most the cover's drawing waits for the player's casting gesture when
+/// a transfer begins as it plays. Inferred (6.230).
+const GESTURE_WAIT: f32 = 1.5;
+/// How long after a transfer begins a casting gesture that started then still
+/// counts as having started with it: the landing and the transfer come
+/// together, and the gesture follows the landing within a frame.
+const GESTURE_WITH_TRANSFER: f32 = 0.1;
 /// Over every window and screen. The cover takes the pointer, so nothing
 /// under it reacts or shows a tooltip.
 pub(crate) const LAYER: i32 = 900;
@@ -133,11 +146,7 @@ pub(crate) fn cover<'a>(
             display,
             ..default()
         },
-        BackgroundColor(if screen.picture.is_some() {
-            Color::BLACK
-        } else {
-            theme::COVER
-        }),
+        BackgroundColor(screen.shade()),
     ));
     root.with_children(|root| {
         let Some((image, aspect)) = &screen.picture else {
@@ -224,6 +233,32 @@ impl Loading {
 #[derive(Component)]
 struct Cover;
 
+/// The colour behind the cover's picture or word, kept while its drawing
+/// waits.
+#[derive(Component)]
+struct Shade(Color);
+
+impl Screen {
+    /// The colour behind the picture, or the client's own cover colour.
+    fn shade(&self) -> Color {
+        if self.picture.is_some() {
+            Color::BLACK
+        } else {
+            theme::COVER
+        }
+    }
+}
+
+/// Whether the cover's drawing waits for the player's casting gesture: a
+/// transfer began `waited` seconds ago, as `gesture` (seconds since it began,
+/// seconds left) was starting, and it is still playing, for at most
+/// [`GESTURE_WAIT`] seconds.
+fn waits_for_gesture(waited: f32, gesture: Option<(f32, f32)>) -> bool {
+    gesture.is_some_and(|(since, left)| {
+        waited < GESTURE_WAIT && left > 0.0 && since + GESTURE_WITH_TRANSFER >= waited
+    })
+}
+
 /// Spawns the cover, hidden, and keeps it up while the player moves between
 /// zones.
 pub(crate) fn install(app: &mut App) {
@@ -232,16 +267,22 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(Startup, (prepare, spawn).chain())
         .add_systems(
             Update,
-            (track, show)
-                .chain()
-                .after(crate::Stage::Scene)
-                .before(crate::Stage::Typing),
+            (
+                track
+                    .after(crate::Stage::Scene)
+                    .before(crate::Stage::Typing),
+                // After the models are posed, so a casting gesture that
+                // began this frame is seen before the cover is drawn.
+                show.in_set(crate::Stage::Present)
+                    .after(crate::character::animate),
+            ),
         );
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn spawn(mut commands: Commands, screen: Res<Screen>) {
-    cover(&mut commands, &screen, Cover, Display::None);
+    let shade = screen.shade();
+    cover(&mut commands, &screen, (Cover, Shade(shade)), Display::None);
 }
 
 /// Follows the move between zones: a transfer the server offered puts the
@@ -332,17 +373,48 @@ fn report(before: Phase, after: Phase, settled: bool) {
 }
 
 /// Shows the cover while the player moves between zones, and hides it
-/// otherwise.
+/// otherwise. While its drawing waits for the player's casting gesture, it
+/// is there but clear, so it still takes the pointer.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-fn show(loading: Res<Loading>, mut covers: Query<&mut Node, With<Cover>>) {
+fn show(
+    time: Res<Time>,
+    loading: Res<Loading>,
+    player: Query<&crate::character::AnimatedCharacter, With<crate::Player>>,
+    mut covers: Query<(&mut Node, &mut BackgroundColor, &Shade, &Children), With<Cover>>,
+    mut parts: Query<&mut Visibility>,
+) {
     let display = if loading.covered() {
         Display::Flex
     } else {
         Display::None
     };
-    for mut node in &mut covers {
+    let clear = match loading.phase {
+        Phase::Moving(since) => waits_for_gesture(
+            time.elapsed_secs() - since,
+            player
+                .iter()
+                .next()
+                .and_then(crate::character::AnimatedCharacter::casting_gesture),
+        ),
+        _ => false,
+    };
+    for (mut node, mut background, shade, children) in &mut covers {
         if node.display != display {
             node.display = display;
+        }
+        let color = if clear { Color::NONE } else { shade.0 };
+        if background.0 != color {
+            background.0 = color;
+        }
+        let shown = if clear {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        for child in children {
+            if let Ok(mut visibility) = parts.get_mut(*child) {
+                visibility.set_if_neq(shown);
+            }
         }
     }
 }
@@ -597,6 +669,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Loading>()
             .init_resource::<Screen>()
+            .init_resource::<Time>()
             .add_systems(Startup, spawn)
             .add_systems(Update, show);
         app.update();
@@ -614,5 +687,23 @@ mod tests {
         app.world_mut().resource_mut::<Loading>().phase = Phase::Clear;
         app.update();
         assert_eq!(display(&mut app), Display::None);
+    }
+
+    #[test]
+    fn the_cover_waits_for_a_casting_gesture_that_began_with_the_transfer() {
+        // Gate's gesture, a second long, began with the transfer: the
+        // drawing waits until it ends.
+        assert!(waits_for_gesture(0.0, Some((0.0, 1.0))));
+        assert!(waits_for_gesture(0.6, Some((0.6, 0.4))));
+        assert!(!waits_for_gesture(1.0, Some((1.0, 0.0))));
+        // Never longer than its cap, however long the clip.
+        assert!(waits_for_gesture(1.4, Some((1.4, 2.0))));
+        assert!(!waits_for_gesture(1.5, Some((1.5, 2.0))));
+        // A gesture already under way when the transfer began counts too.
+        assert!(waits_for_gesture(0.2, Some((0.5, 0.3))));
+        // No gesture, or one that began after the transfer, waits for
+        // nothing.
+        assert!(!waits_for_gesture(0.0, None));
+        assert!(!waits_for_gesture(0.5, Some((0.1, 0.9))));
     }
 }
