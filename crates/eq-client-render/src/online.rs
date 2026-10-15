@@ -432,8 +432,9 @@ pub(super) fn receive(
         None => &NoSpells,
     };
     // A worker that stopped without saying so (for example after a panic) ends
-    // the session here, instead of leaving it looking connected.
-    let lost = (ended && !state.world.ended())
+    // the session here, instead of leaving it looking connected; once any
+    // held news has applied, so it is said once.
+    let lost = (ended && !state.world.ended() && state.held.is_empty())
         .then_some(WorldUpdate::Connection(eq_client_core::world::Link::Ended));
     if lost.is_some() {
         warn!("The session stopped without saying why");
@@ -1197,6 +1198,63 @@ mod tests {
         assert_eq!(world(&app).session_id(), Some(2));
         assert_eq!(world(&app).vitals().mana, Some(7));
         assert!(app.world().get_entity(old).is_err());
+    }
+
+    #[test]
+    fn a_session_that_stops_during_a_held_admission_ends_once_after_it() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig::default()))
+            .insert_resource(super::super::loading::Loading::waiting_for_gesture(true))
+            .init_resource::<hud::HudState>()
+            .init_resource::<super::super::motion::Controls>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<super::super::combat::CombatState>()
+            .init_resource::<super::super::trade::TradeState>()
+            .init_resource::<super::super::items::ItemState>()
+            .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        sender
+            .send(WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 2,
+                zone: "example".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }))
+            .unwrap();
+        drop(sender);
+        // The worker is gone while the admission waits: its end is said once,
+        // held behind the admission, however many frames the wait takes.
+        for _ in 0..3 {
+            app.update();
+        }
+        let state = app.world().resource::<OnlineState>();
+        assert!(matches!(
+            state.held[..],
+            [
+                WorldUpdate::Game(WorldEvent::Entered { .. }),
+                WorldUpdate::Connection(eq_client_core::world::Link::Ended)
+            ]
+        ));
+        assert!(!state.world.ended());
+        // After the wait the admission applies, and the session ends.
+        app.insert_resource(super::super::loading::Loading::waiting_for_gesture(false));
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(2));
+        assert!(world(&app).ended());
+        app.update();
+        assert!(app.world().resource::<OnlineState>().held.is_empty());
     }
 
     #[test]
