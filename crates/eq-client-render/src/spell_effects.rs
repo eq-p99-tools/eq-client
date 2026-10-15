@@ -73,8 +73,19 @@ struct Spray {
     /// Until when it starts particles; None while its cast runs.
     until: Option<f32>,
     particles: Particles,
-    /// The entity drawing it, once its image is ready.
-    drawn: Option<(Entity, Handle<Mesh>)>,
+    /// The entity drawing it, once its image is ready and it has a particle.
+    drawn: Option<Drawn>,
+}
+
+/// A spray's entity and mesh.
+struct Drawn {
+    entity: Entity,
+    mesh: Handle<Mesh>,
+    /// Whether it shows. A spray with no particles is hidden rather than
+    /// emptied: Bevy 0.19's mesh allocator skips a mesh with no vertex data
+    /// (`bevy_render` `mesh/allocator.rs:374`) but still copies it
+    /// (`allocator.rs:423`), logging a use-after-free error each frame.
+    shown: bool,
 }
 
 /// Loads the installation's effect files off the frame thread, once.
@@ -193,8 +204,8 @@ pub(super) fn update(
         }
         running.sprays.retain(|spray| {
             let done = spray.until.is_some_and(|until| now >= until) && spray.particles.len() == 0;
-            if done && let Some((entity, _)) = spray.drawn {
-                commands.entity(entity).despawn();
+            if done && let Some(drawn) = &spray.drawn {
+                commands.entity(drawn.entity).despawn();
             }
             !done
         });
@@ -312,39 +323,79 @@ fn draw(
     meshes: &mut Assets<Mesh>,
     (facing, layers): ((Vec3, Vec3), &bevy::camera::visibility::RenderLayers),
 ) {
-    if spray.drawn.is_none() {
-        let Some(material) = particles.material(&spray.emitter.image, materials, images) else {
-            return;
-        };
-        let mesh = meshes.add(spray_mesh());
-        let entity = commands
-            .spawn((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(material),
-                Transform::IDENTITY,
-                // The mesh moves every frame, so its first bounds say nothing.
-                NoFrustumCulling,
-                layers.clone(),
-            ))
-            .id();
-        spray.drawn = Some((entity, mesh));
-    }
-    let Some((_, handle)) = &spray.drawn else {
+    let quads = spray.particles.quads(&spray.emitter, facing);
+    let Some(drawn) = &mut spray.drawn else {
+        if let Some(material) = particles.material(&spray.emitter.image, materials, images)
+            && let Some(mesh) = spray_mesh(quads)
+        {
+            let mesh = meshes.add(mesh);
+            let entity = commands
+                .spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material),
+                    Transform::IDENTITY,
+                    // The mesh moves every frame, so its first bounds say nothing.
+                    NoFrustumCulling,
+                    layers.clone(),
+                ))
+                .id();
+            spray.drawn = Some(Drawn {
+                entity,
+                mesh,
+                shown: true,
+            });
+        }
         return;
     };
-    if let Some(mut mesh) = meshes.get_mut(handle) {
-        rewrite(&mut mesh, spray.particles.quads(&spray.emitter, facing));
+    let frame = Frame::of(drawn.shown, !quads.indices.is_empty());
+    if frame.rewrite
+        && let Some(mut mesh) = meshes.get_mut(&drawn.mesh)
+    {
+        rewrite(&mut mesh, quads);
+    }
+    if let Some(visibility) = frame.visibility {
+        drawn.shown = visibility != Visibility::Hidden;
+        commands.entity(drawn.entity).insert(visibility);
     }
 }
 
-/// A spray's mesh. It is rewritten every frame, so it keeps its data in the
-/// main world too: a render-world-only mesh gives its data up at extraction
-/// and the next rewrite would panic.
-fn spray_mesh() -> Mesh {
-    Mesh::new(
+/// What a drawn spray does this frame.
+#[derive(Debug, PartialEq)]
+struct Frame {
+    /// Whether its mesh takes this frame's particles.
+    rewrite: bool,
+    /// Its new visibility, when that changes.
+    visibility: Option<Visibility>,
+}
+
+impl Frame {
+    /// With particles it draws them, showing again if hidden; with none it
+    /// keeps its last mesh and hides, so no empty mesh is ever extracted.
+    fn of(shown: bool, particles: bool) -> Self {
+        Self {
+            rewrite: particles,
+            visibility: match (shown, particles) {
+                (false, true) => Some(Visibility::Inherited),
+                (true, false) => Some(Visibility::Hidden),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// A spray's mesh, None while it has no particles. It is rewritten every
+/// frame, so it keeps its data in the main world too: a render-world-only
+/// mesh gives its data up at extraction and the next rewrite would panic.
+fn spray_mesh(quads: Quads) -> Option<Mesh> {
+    if quads.indices.is_empty() {
+        return None;
+    }
+    let mut mesh = Mesh::new(
         bevy::mesh::PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
-    )
+    );
+    rewrite(&mut mesh, quads);
+    Some(mesh)
 }
 
 fn rewrite(mesh: &mut Mesh, quads: Quads) {
@@ -651,7 +702,11 @@ mod tests {
         let mut particles = Particles::new(6);
         let mut room = TOTAL_CAP;
         particles.step(&emitter, Vec3::ZERO, 0.5, true, &mut room);
-        let mut mesh = spray_mesh();
+        let empty = Particles::new(7);
+        assert!(spray_mesh(empty.quads(&emitter, (Vec3::X, Vec3::Y))).is_none());
+        let mut mesh =
+            spray_mesh(particles.quads(&emitter, (Vec3::X, Vec3::Y))).expect("it has particles");
+        assert!(mesh.get_vertex_buffer_size() > 0);
         for _ in 0..2 {
             rewrite(&mut mesh, particles.quads(&emitter, (Vec3::X, Vec3::Y)));
             // What extraction does each frame: a render-world-only mesh
@@ -661,5 +716,23 @@ mod tests {
             }
         }
         assert_eq!(mesh.count_vertices(), 4 * particles.len());
+    }
+
+    #[test]
+    fn a_spray_without_particles_hides_instead_of_emptying_its_mesh() {
+        let frame = |rewrite, visibility| Frame {
+            rewrite,
+            visibility,
+        };
+        assert_eq!(Frame::of(true, true), frame(true, None));
+        assert_eq!(
+            Frame::of(true, false),
+            frame(false, Some(Visibility::Hidden))
+        );
+        assert_eq!(Frame::of(false, false), frame(false, None));
+        assert_eq!(
+            Frame::of(false, true),
+            frame(true, Some(Visibility::Inherited))
+        );
     }
 }
