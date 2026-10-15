@@ -37,12 +37,27 @@ pub enum RouteStep {
     /// Following stopped making progress, and again after a fresh search from
     /// where the character stood.
     Stalled,
+    /// The next leg passes through this closed door: open it, then ask again.
+    OpenDoor(u8),
+}
+
+/// The one fresh search a route may make, after a stall or a refused door.
+#[derive(Clone, Copy, PartialEq)]
+enum Replan {
+    Ready,
+    Spent,
+    /// A door was refused with the search already spent: the route is over.
+    Stalled,
 }
 
 /// An incremental search, then the waypoints still ahead.
 pub struct Route {
     search: Option<PathSearch>,
     waypoints: VecDeque<Vec3>,
+    /// For each waypoint, the closed door the leg to it passes through.
+    crossings: VecDeque<Option<u8>>,
+    /// Closed doors the route may pass by opening them.
+    doors: Vec<u8>,
     reach: f32,
     height: f32,
     partial: bool,
@@ -52,7 +67,9 @@ pub struct Route {
     /// The shortest remaining route distance so far, and the steering time when
     /// it last shrank by a whole `PROGRESS`.
     best: Option<(f32, Duration)>,
-    replanned: bool,
+    /// Whether the one fresh search a route may make has been spent, and
+    /// whether a refused door came after that.
+    replan: Replan,
     /// Whether the route may step off ledges; see [`PathSearch::with_drops`].
     drops: bool,
     /// The last finished search's expansions, and whether positions remained.
@@ -68,13 +85,15 @@ impl Route {
             search: Some(PathSearch::new(feet, goal, reach, height)),
             drops: false,
             waypoints: VecDeque::new(),
+            crossings: VecDeque::new(),
+            doors: Vec::new(),
             reach,
             height,
             partial: false,
             steering: Duration::ZERO,
             last_call: None,
             best: None,
-            replanned: false,
+            replan: Replan::Ready,
             searched: None,
         }
     }
@@ -85,6 +104,48 @@ impl Route {
         self.drops = drops;
         self.search = self.search.map(|search| search.with_drops(drops));
         self
+    }
+
+    /// Lets the route pass these closed doors, for a follower that opens each
+    /// one as [`RouteStep::OpenDoor`] asks.
+    #[must_use]
+    pub fn with_doors(mut self, doors: Vec<u8>) -> Self {
+        self.search = self.search.map(|search| search.with_doors(doors.clone()));
+        self.doors = doors;
+        self
+    }
+
+    /// A door the follower could not open: it is a wall from now on, and the
+    /// route searches again once from `feet`, sharing the stall's one replan;
+    /// with that already spent, the route reports [`RouteStep::Stalled`].
+    pub fn refused(&mut self, door: u8, feet: Vec3, goal: Vec3) {
+        self.doors.retain(|open| *open != door);
+        if self.spend_replan() {
+            self.replan(feet, goal);
+        } else {
+            self.replan = Replan::Stalled;
+        }
+    }
+
+    /// Takes the one fresh search; false when it was already spent.
+    fn spend_replan(&mut self) -> bool {
+        let ready = self.replan == Replan::Ready;
+        if ready {
+            self.replan = Replan::Spent;
+        }
+        ready
+    }
+
+    fn replan(&mut self, feet: Vec3, goal: Vec3) {
+        self.search = Some(
+            PathSearch::new(feet, goal, self.reach, self.height)
+                .with_drops(self.drops)
+                .with_doors(self.doors.clone()),
+        );
+        self.waypoints.clear();
+        self.crossings.clear();
+        self.partial = false;
+        self.best = None;
     }
 
     /// Whether the search is still running.
@@ -148,6 +209,9 @@ impl Route {
             now.saturating_sub(last).min(MAX_TICK)
         });
         self.last_call = Some(now);
+        if self.replan == Replan::Stalled {
+            return RouteStep::Stalled;
+        }
         let step = self.steer(world, feet, goal, budget);
         if !matches!(step, RouteStep::Toward(_)) {
             return step;
@@ -158,16 +222,11 @@ impl Route {
             Some((best, since)) if left > best - PROGRESS => {
                 if self.steering.saturating_sub(since) < STALL {
                     step
-                } else if std::mem::replace(&mut self.replanned, true) {
-                    RouteStep::Stalled
-                } else {
-                    self.search = Some(
-                        PathSearch::new(feet, goal, self.reach, self.height).with_drops(self.drops),
-                    );
-                    self.waypoints.clear();
-                    self.partial = false;
-                    self.best = None;
+                } else if self.spend_replan() {
+                    self.replan(feet, goal);
                     RouteStep::Searching
+                } else {
+                    RouteStep::Stalled
                 }
             }
             _ => {
@@ -214,7 +273,13 @@ impl Route {
                     path
                 }
             };
-            self.waypoints = path::straighten(world, feet, &path, self.height).into();
+            let doors = search.doors_along();
+            let kept = path::straightened(world, feet, &path, self.height);
+            self.waypoints = kept.iter().map(|&index| path[index]).collect();
+            self.crossings = kept
+                .iter()
+                .map(|&index| doors.get(index).copied().flatten())
+                .collect();
             self.searched = Some((search.expanded(), search.has_open()));
             self.search = None;
         }
@@ -235,13 +300,21 @@ impl Route {
                 break;
             }
             self.waypoints.pop_front();
+            self.crossings.pop_front();
         }
-        match self.waypoints.front() {
-            Some(next) => RouteStep::Toward(*next),
+        match (self.waypoints.front(), self.crossings.front()) {
+            // A door still shut across the next leg is opened before going on.
+            (Some(next), Some(Some(door)))
+                if path::walk(world, feet, Vec2::new(next.x, next.z), self.height)
+                    .is_none_or(|end| (end.y - next.y).abs() > MAX_GROUNDED_STEP) =>
+            {
+                RouteStep::OpenDoor(*door)
+            }
+            (Some(next), _) => RouteStep::Toward(*next),
             // A full route's last waypoint lies within reach of the goal, so the
             // rest of the way is a short straight walk.
-            None if !self.partial => RouteStep::Toward(goal),
-            None => RouteStep::Arrived,
+            (None, _) if !self.partial => RouteStep::Toward(goal),
+            (None, _) => RouteStep::Arrived,
         }
     }
 }
@@ -254,6 +327,7 @@ fn flat(v: Vec3) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn quad(a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]) -> [[[f32; 3]; 3]; 2] {
         [[a, b, c], [a, c, d]]
@@ -272,12 +346,140 @@ mod tests {
                     }
                 }
                 RouteStep::Arrived => return feet,
-                end @ (RouteStep::Unreachable | RouteStep::Stalled) => {
+                end @ (RouteStep::Unreachable | RouteStep::Stalled | RouteStep::OpenDoor(_)) => {
                     panic!("{end:?} at {feet:?}")
                 }
             }
         }
         panic!("route did not finish");
+    }
+
+    /// A floor split by a wall across z = 0, with a doorway at 10 < x < 14 shut
+    /// by door 7, and an open gap at 16 < x < 20 when `gap` is set.
+    fn doorway(gap: bool) -> (CollisionWorld, Arc<crate::movement::CollisionMesh>) {
+        let mut triangles = quad(
+            [-30.0, 0.0, -30.0],
+            [30.0, 0.0, -30.0],
+            [30.0, 0.0, 30.0],
+            [-30.0, 0.0, 30.0],
+        )
+        .to_vec();
+        let mut wall = |from: f32, to: f32| {
+            triangles.extend(quad(
+                [from, 0.0, 0.0],
+                [to, 0.0, 0.0],
+                [to, 10.0, 0.0],
+                [from, 10.0, 0.0],
+            ));
+        };
+        wall(-30.0, 10.0);
+        if gap {
+            wall(14.0, 16.0);
+            wall(20.0, 30.0);
+        } else {
+            wall(14.0, 30.0);
+        }
+        let door = Arc::new(
+            crate::movement::CollisionMesh::new(quad(
+                [10.0, 0.0, 0.0],
+                [14.0, 0.0, 0.0],
+                [14.0, 10.0, 0.0],
+                [10.0, 10.0, 0.0],
+            ))
+            .unwrap(),
+        );
+        let mut world = CollisionWorld::new(triangles).unwrap();
+        world.set_door_obstacles(vec![(7, Arc::clone(&door))]);
+        (world, door)
+    }
+
+    /// Follows until the route asks for a door or ends.
+    fn follow_to_door(
+        route: &mut Route,
+        world: &CollisionWorld,
+        mut feet: Vec3,
+        goal: Vec3,
+        from: u64,
+    ) -> (RouteStep, Vec3) {
+        for tick in from..from + 500 {
+            match route.next(world, feet, goal, 256, Duration::from_millis(tick * 150)) {
+                RouteStep::Searching => (),
+                RouteStep::Toward(next) => {
+                    let to = Vec3::new(next.x - feet.x, 0.0, next.z - feet.z).clamp_length_max(3.0);
+                    for _ in 0..3 {
+                        feet = world.step(feet, to / 3.0, 6.0);
+                    }
+                }
+                end => return (end, feet),
+            }
+        }
+        panic!("route did not finish");
+    }
+
+    #[test]
+    fn a_route_opens_a_closed_door_from_beside_it_and_walks_through_once_it_is_open() {
+        let (mut world, _) = doorway(false);
+        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
+        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+        assert_eq!(step, RouteStep::OpenDoor(7));
+        // Asked from beside the door, not from across the room.
+        assert!(feet.z > -3.0 && feet.z < 0.0, "{feet:?}");
+        // Waiting at the door is not a stall, however long the door takes.
+        for tick in 0..100 {
+            let now = Duration::from_millis(100_000 + tick * 150);
+            assert_eq!(
+                route.next(&world, feet, goal, 256, now),
+                RouteStep::OpenDoor(7)
+            );
+        }
+        // The door swings open: its collider leaves the doorway.
+        world.set_door_obstacles(Vec::new());
+        let (step, feet) = follow_to_door(&mut route, &world, feet, goal, 1000);
+        assert_eq!(step, RouteStep::Arrived);
+        assert!(feet.z > 8.0, "{feet:?}");
+    }
+
+    #[test]
+    fn a_door_the_route_may_not_open_is_a_wall() {
+        let (world, _) = doorway(false);
+        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        let mut route = Route::new(start, goal, 1.0, 6.0);
+        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+        assert_eq!(step, RouteStep::Arrived);
+        assert!(route.partial());
+        assert!(feet.z < 0.0, "{feet:?}");
+    }
+
+    #[test]
+    fn a_door_that_does_not_open_turns_the_route_back_once() {
+        let (world, _) = doorway(false);
+        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
+        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+        assert_eq!(step, RouteStep::OpenDoor(7));
+        route.refused(7, feet, goal);
+        // Searched again without the door: only a partial route is left.
+        let (step, _) = follow_to_door(&mut route, &world, feet, goal, 1000);
+        assert_eq!(step, RouteStep::Arrived);
+        assert!(route.partial());
+        // A second refusal has no replan left.
+        route.refused(7, feet, goal);
+        assert_eq!(
+            route.next(&world, feet, goal, 256, Duration::from_mins(15)),
+            RouteStep::Stalled
+        );
+    }
+
+    #[test]
+    fn a_short_way_round_beats_opening_a_door() {
+        let (world, _) = doorway(true);
+        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
+        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+        assert_eq!(step, RouteStep::Arrived);
+        assert!(!route.partial());
+        assert!(feet.z > 8.0, "{feet:?}");
     }
 
     #[test]

@@ -60,6 +60,8 @@ pub struct Script {
     focus: Option<bool>,
     /// The route a `walk` step is searching for or following.
     route: Option<eq_client_core::movement::Route>,
+    /// The closed door the walk is opening, if any.
+    door_wait: Option<DoorWait>,
     /// The control a `hover` step rests the pointer on, until the next click
     /// or hover.
     hovering: Option<Entity>,
@@ -96,6 +98,7 @@ impl Script {
             offline: false,
             focus: None,
             route: None,
+            door_wait: None,
             hovering: None,
             awaited: None,
             approached: None,
@@ -310,7 +313,7 @@ pub(super) fn drive(
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
     bodies: Query<&super::PlayerBody, With<super::Player>>,
-    mut collision: Option<ResMut<super::Collision>>,
+    collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
     (mut buttons, layout, mut pointers, needs): (
         Buttons,
@@ -470,13 +473,8 @@ pub(super) fn drive(
                         drops,
                         "Script route ready"
                     );
-                    if partial
-                        && let Some(end) = route.end()
-                        && let Some(world) = collision
-                            .as_mut()
-                            .and_then(|collision| collision.bypass_change_detection().0.as_mut())
-                    {
-                        log_partial_route(&online, world, [feet, goal, end], reach, height, drops);
+                    if partial && let Some(end) = route.end() {
+                        log_partial_route(&online, end);
                     }
                 } else if !searching && route.is_searching() {
                     let refused = observed.4.refused.as_deref();
@@ -517,12 +515,63 @@ pub(super) fn drive(
                         return;
                     }
                     RouteStep::Arrived => (true, false),
+                    RouteStep::OpenDoor(id) => {
+                        // Stand at the door: click it as the use key would, then wait.
+                        script.release(&mut keys, &mut mouse);
+                        let door = online.world().doors().entries().get(&id);
+                        let within_use =
+                            door.zip(online.world().player())
+                                .is_some_and(|(door, player)| {
+                                    let at =
+                                        |p| Vec3::from_array(eq_client_core::render_position(p));
+                                    at(door.position).distance(at(player.position))
+                                        <= eq_client_core::doors::Doors::USE_DISTANCE
+                                });
+                        let wait = script
+                            .door_wait
+                            .filter(|wait| wait.id == id)
+                            .unwrap_or(DoorWait::new(id));
+                        let mut wait = wait;
+                        let open = door.and_then(eq_client_core::doors::Door::active_endpoint);
+                        match wait.act(open, within_use, now) {
+                            DoorAction::Click => {
+                                if let Some(door) = door {
+                                    info!(
+                                        id,
+                                        model = %door.model,
+                                        open_type = door.open_type,
+                                        "Script walk opening door"
+                                    );
+                                }
+                                super::doors::open(id, &online, &observed.1);
+                                script.door_wait = Some(wait);
+                            }
+                            DoorAction::Wait => script.door_wait = Some(wait),
+                            DoorAction::Refuse(reason) => {
+                                info!(id, reason, "Script walk door did not open");
+                                script.door_wait = None;
+                                if let Some(route) = script.route.as_mut() {
+                                    route.refused(id, feet, goal);
+                                }
+                            }
+                        }
+                        (false, elapsed >= *duration)
+                    }
                     RouteStep::Searching => {
                         // Stand still while a stalled route searches again.
                         script.release(&mut keys, &mut mouse);
                         (false, elapsed >= *duration)
                     }
                     RouteStep::Toward(next) => {
+                        if let Some(DoorWait {
+                            id,
+                            asked: Some(asked),
+                            ..
+                        }) = script.door_wait.take()
+                        {
+                            let waited = now.saturating_sub(asked).as_secs_f32();
+                            info!(id, waited, "Script walk door opened");
+                        }
                         let to = next - feet;
                         // W walks along the camera's forward direction, opposite its orbit offset.
                         for mut camera in &mut cameras {
@@ -879,7 +928,8 @@ pub(super) fn drive(
                 // Ledges are routes only where the session simulates falls.
                 Some(
                     eq_client_core::movement::Route::new(feet, goal, *range, body.height)
-                        .with_drops(observed.4.airborne.is_some()),
+                        .with_drops(observed.4.airborne.is_some())
+                        .with_doors(openable_doors(&online)),
                 )
             });
             let Some(route) = route else {
@@ -887,6 +937,7 @@ pub(super) fn drive(
                 return;
             };
             script.route = Some(route);
+            script.door_wait = None;
         }
         Step::WaitDead(_) => script.awaited = online.world().target().selected,
         Step::WaitServers
@@ -1231,19 +1282,9 @@ fn displayed(entity: Entity, layout: &Layout) -> bool {
 
 /// The player's feet at its accepted position and the goal's position, in
 /// render coordinates: the world object `object` names, or else the target.
-/// Diagnoses a partial route: the doors nearest where it ends, and whether the
-/// same search finds the goal with every door left out, once per partial route
-/// at the usual cap. Logging only; the walk keeps its own route. Diagnostic:
-/// the door-less repeat goes before the fix is marked.
-fn log_partial_route(
-    online: &super::online::OnlineState,
-    world: &mut eq_client_core::movement::CollisionWorld,
-    [feet, goal, end]: [Vec3; 3],
-    reach: f32,
-    height: f32,
-    drops: bool,
-) {
-    use eq_client_core::movement::{PathProgress, PathSearch};
+/// Logs the doors nearest where a partial route ends, the likeliest reason it
+/// ends short.
+fn log_partial_route(online: &super::online::OnlineState, end: Vec3) {
     // Renderer (EQ y, EQ z, -EQ x) back to EQ x, y, z.
     let end = Vec3::new(-end.z, end.x, end.y);
     let mut doors: Vec<_> = online
@@ -1271,21 +1312,92 @@ fn log_partial_route(
             "Script route doors"
         );
     }
-    let obstacles = world.take_obstacles();
-    let mut search = PathSearch::new(feet, goal, reach, height).with_drops(drops);
-    let found = loop {
-        match search.advance(world, 5000) {
-            PathProgress::Searching => (),
-            done => break matches!(done, PathProgress::Found(_)),
+}
+
+/// How long a clicked door may take to start opening before the walk treats
+/// it as locked: longer than any server's answer to a click.
+const DOOR_WAIT: Duration = Duration::from_secs(3);
+/// How long an opening door may still block the way: the drawn quarter-turn
+/// swing (half a second) and a second to spare.
+const DOOR_SWING: Duration = Duration::from_millis(1500);
+/// Clicks one door may take in one walk: the first, and one more if it shut
+/// again before the walker got through.
+const DOOR_CLICKS: u8 = 2;
+
+/// A walk waiting on a closed door across its next leg.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DoorWait {
+    id: u8,
+    /// When the walk first clicked it.
+    asked: Option<Duration>,
+    /// When the walk last clicked it, and when it was then seen opening.
+    clicked: Option<Duration>,
+    opened: Option<Duration>,
+    clicks: u8,
+}
+
+/// What the walk does at a closed door this frame.
+#[derive(Debug, PartialEq)]
+enum DoorAction {
+    Click,
+    Wait,
+    /// The door is a wall for this route, for this reason.
+    Refuse(&'static str),
+}
+
+impl DoorWait {
+    const fn new(id: u8) -> Self {
+        Self {
+            id,
+            asked: None,
+            clicked: None,
+            opened: None,
+            clicks: 0,
         }
-    };
-    world.set_obstacles(obstacles);
-    info!(
-        found,
-        expanded = search.expanded(),
-        open = search.has_open(),
-        "Script route without doors"
-    );
+    }
+
+    /// `open` is the door's state as drawn (None when unknown); a click is sent
+    /// only to a door shown shut, since a click toggles it.
+    fn act(&mut self, open: Option<bool>, within_use: bool, now: Duration) -> DoorAction {
+        match open {
+            None => DoorAction::Refuse("its state is unknown"),
+            Some(true) => {
+                let opened = *self.opened.get_or_insert(now);
+                if now.saturating_sub(opened) >= DOOR_SWING {
+                    DoorAction::Refuse("it opened but still blocks the way")
+                } else {
+                    DoorAction::Wait
+                }
+            }
+            Some(false) => match (self.clicked, self.opened) {
+                (Some(clicked), None) if now.saturating_sub(clicked) >= DOOR_WAIT => {
+                    DoorAction::Refuse("it did not open")
+                }
+                (Some(_), None) => DoorAction::Wait,
+                _ if self.clicks >= DOOR_CLICKS => DoorAction::Refuse("it shut again"),
+                _ if !within_use => DoorAction::Refuse("it is out of reach"),
+                _ => {
+                    self.clicks += 1;
+                    self.asked.get_or_insert(now);
+                    self.clicked = Some(now);
+                    self.opened = None;
+                    DoorAction::Click
+                }
+            },
+        }
+    }
+}
+
+/// The closed doors a walk may open on its way.
+fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
+    online
+        .world()
+        .doors()
+        .entries()
+        .values()
+        .filter(|door| super::doors::openable(door))
+        .map(|door| door.id)
+        .collect()
 }
 
 fn walk_ends(
@@ -1429,6 +1541,61 @@ fn fallen(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_walk_clicks_a_shut_door_once_then_waits_for_it_to_swing_open() {
+        let at = Duration::from_secs;
+        let mut wait = DoorWait::new(4);
+        assert_eq!(wait.act(Some(false), true, at(10)), DoorAction::Click);
+        // No second click while the server's answer is on its way: a click toggles.
+        assert_eq!(wait.act(Some(false), true, at(11)), DoorAction::Wait);
+        // Opening: never clicked, only waited on until the swing ends.
+        assert_eq!(wait.act(Some(true), true, at(12)), DoorAction::Wait);
+        assert_eq!(wait.act(Some(true), true, at(13)), DoorAction::Wait);
+        assert_eq!(wait.asked, Some(at(10)));
+    }
+
+    #[test]
+    fn a_door_that_does_not_open_or_still_blocks_is_given_up() {
+        let at = Duration::from_millis;
+        let mut locked = DoorWait::new(4);
+        assert_eq!(locked.act(Some(false), true, at(0)), DoorAction::Click);
+        assert_eq!(locked.act(Some(false), true, at(2_999)), DoorAction::Wait);
+        assert_eq!(
+            locked.act(Some(false), true, at(3_000)),
+            DoorAction::Refuse("it did not open")
+        );
+        let mut stuck = DoorWait::new(4);
+        stuck.act(Some(false), true, at(0));
+        assert_eq!(stuck.act(Some(true), true, at(100)), DoorAction::Wait);
+        assert_eq!(
+            stuck.act(Some(true), true, at(1_600)),
+            DoorAction::Refuse("it opened but still blocks the way")
+        );
+        assert_eq!(
+            DoorWait::new(4).act(Some(false), false, at(0)),
+            DoorAction::Refuse("it is out of reach")
+        );
+        assert_eq!(
+            DoorWait::new(4).act(None, true, at(0)),
+            DoorAction::Refuse("its state is unknown")
+        );
+    }
+
+    #[test]
+    fn a_door_that_shuts_again_is_clicked_once_more_then_given_up() {
+        let at = Duration::from_millis;
+        let mut wait = DoorWait::new(4);
+        assert_eq!(wait.act(Some(false), true, at(0)), DoorAction::Click);
+        assert_eq!(wait.act(Some(true), true, at(500)), DoorAction::Wait);
+        // Shut before the walker got through.
+        assert_eq!(wait.act(Some(false), true, at(900)), DoorAction::Click);
+        assert_eq!(wait.act(Some(true), true, at(1_400)), DoorAction::Wait);
+        assert_eq!(
+            wait.act(Some(false), true, at(1_800)),
+            DoorAction::Refuse("it shut again")
+        );
+    }
 
     #[test]
     fn an_object_walk_goes_on_only_within_its_range() {
