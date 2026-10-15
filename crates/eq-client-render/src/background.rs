@@ -7,9 +7,12 @@ pub(crate) struct ComputePool;
 
 impl eq_client_core::movement::Background for ComputePool {
     fn spawn(&self, job: Box<dyn FnOnce() + Send>) {
-        AsyncComputeTaskPool::get_or_init(TaskPool::new)
-            .spawn(async move { job() })
-            .detach();
+        static THREADS: std::sync::Once = std::sync::Once::new();
+        let pool = AsyncComputeTaskPool::get_or_init(TaskPool::new);
+        THREADS.call_once(|| {
+            bevy::log::info!(threads = pool.thread_num(), "Route search pool");
+        });
+        pool.spawn(async move { job() }).detach();
     }
 }
 
