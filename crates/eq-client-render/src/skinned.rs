@@ -343,6 +343,14 @@ impl Skinned {
     }
 }
 
+/// A skin's button by what its window's file calls it (`ScreenID`), as a
+/// script names it.
+#[derive(Component)]
+pub(crate) struct SkinId {
+    pub(crate) window: WindowId,
+    pub(crate) id: String,
+}
+
 /// A button drawn from the skin, with its piece for each state.
 #[derive(Component, Clone)]
 pub(crate) struct SkinButton(pub(crate) ButtonLook);
@@ -2039,6 +2047,12 @@ fn button(
         None => window.spawn(node),
     };
     behave(&mut drawn, does, button, owner);
+    if let Some(id) = &button.id {
+        drawn.insert(SkinId {
+            window: owner,
+            id: id.clone(),
+        });
+    }
     if let Some(shows) = paired(does, owner) {
         drawn.insert((shows, Visibility::Hidden));
     }
@@ -3989,6 +4003,20 @@ mod tests {
         assert_eq!(drawn.len(), 2);
         assert!(drawn.contains(&(Needs::Missing, true, false, true)));
         assert!(drawn.contains(&(Needs::Nothing, true, true, true)));
+        // Each keeps what the skin's file calls it, as a script names it.
+        let mut skins = app.world_mut().query::<&SkinId>();
+        let mut names: Vec<_> = skins
+            .iter(app.world())
+            .map(|skin| (skin.window, skin.id.clone()))
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                (WindowId::Actions, "HB_Button1".to_owned()),
+                (WindowId::Actions, "HB_PageLeftButton".to_owned()),
+            ]
+        );
     }
 
     /// An Options window with a checkbox the client keeps nothing for, one it
