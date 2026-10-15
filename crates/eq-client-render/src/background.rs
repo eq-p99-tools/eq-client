@@ -1,5 +1,17 @@
-//! One replaceable asset job, scoped to the admission that requested it.
+//! One replaceable asset job, scoped to the admission that requested it, and
+//! the pool route searches run on.
 use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool, block_on, poll_once};
+
+/// Runs route searches on the compute task pool, off the frame.
+pub(crate) struct ComputePool;
+
+impl eq_client_core::movement::Background for ComputePool {
+    fn spawn(&self, job: Box<dyn FnOnce() + Send>) {
+        AsyncComputeTaskPool::get_or_init(TaskPool::new)
+            .spawn(async move { job() })
+            .detach();
+    }
+}
 
 pub(crate) struct Background<T> {
     task: Option<(u64, Task<T>)>,

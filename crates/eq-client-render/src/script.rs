@@ -62,6 +62,9 @@ pub struct Script {
     route: Option<eq_client_core::movement::Route>,
     /// The closed door the walk is opening, if any.
     door_wait: Option<DoorWait>,
+    /// While a walk's route searches: the last frame, and the longest frame
+    /// so far, so the log shows whether the search held frames up.
+    search_frames: Option<(Duration, Duration)>,
     /// The control a `hover` step rests the pointer on, until the next click
     /// or hover.
     hovering: Option<Entity>,
@@ -99,6 +102,7 @@ impl Script {
             focus: None,
             route: None,
             door_wait: None,
+            search_frames: None,
             hovering: None,
             awaited: None,
             approached: None,
@@ -450,6 +454,19 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
                     return;
                 };
+                let slowest_frame = if script
+                    .route
+                    .as_ref()
+                    .is_some_and(eq_client_core::movement::Route::is_searching)
+                {
+                    let (last, slowest) = script.search_frames.get_or_insert((now, Duration::ZERO));
+                    *slowest = (*slowest).max(now.saturating_sub(*last));
+                    *last = now;
+                    slowest.as_secs_f32() * 1000.0
+                } else {
+                    script.search_frames = None;
+                    0.0
+                };
                 let Some(route) = script.route.as_mut() else {
                     script.stop(&mut keys, &mut mouse, "walk lost its route");
                     return;
@@ -462,14 +479,20 @@ pub(super) fn drive(
                 {
                     let (expanded, _) = route.searched().unwrap_or_default();
                     let waypoints = route.remaining();
-                    info!(found, expanded, waypoints, "Script walk detour ready");
+                    let waited = elapsed.as_secs_f32();
+                    info!(
+                        found,
+                        expanded, waypoints, waited, slowest_frame, "Script walk detour ready"
+                    );
                 } else if searching && !route.is_searching() {
                     let (waypoints, partial) = (route.remaining(), route.partial());
                     let (expanded, open) = route.searched().unwrap_or_default();
                     let (height, drops) = (route.height(), observed.4.airborne.is_some());
-                    let reach = route.reach();
+                    let (reach, waited) = (route.reach(), elapsed.as_secs_f32());
                     info!(
                         waypoints,
+                        waited,
+                        slowest_frame,
                         partial,
                         reach,
                         expanded,
@@ -942,7 +965,8 @@ pub(super) fn drive(
                 Some(
                     eq_client_core::movement::Route::new(feet, goal, *range, body.height)
                         .with_drops(observed.4.airborne.is_some())
-                        .with_doors(openable_doors(&online)),
+                        .with_doors(openable_doors(&online))
+                        .with_background(std::sync::Arc::new(super::background::ComputePool)),
                 )
             });
             let Some(route) = route else {
@@ -1405,6 +1429,8 @@ impl DoorWait {
                     self.asked.get_or_insert(now);
                     self.clicked = Some(now);
                     self.opened = None;
+                    // Each opening gets its own step round the leaf.
+                    self.rerouted = false;
                     DoorAction::Click
                 }
             },
@@ -1625,6 +1651,18 @@ mod tests {
             wait.act(Some(false), true, at(1_800)),
             DoorAction::Refuse("it shut again")
         );
+    }
+
+    #[test]
+    fn a_door_that_shuts_again_gets_its_own_step_round_its_leaf_once_reopened() {
+        let at = Duration::from_millis;
+        let mut wait = DoorWait::new(4);
+        assert_eq!(wait.act(Some(false), true, at(0)), DoorAction::Click);
+        assert_eq!(wait.act(Some(true), true, at(500)), DoorAction::Wait);
+        assert_eq!(wait.act(Some(true), true, at(1_100)), DoorAction::Reroute);
+        assert_eq!(wait.act(Some(false), true, at(1_300)), DoorAction::Click);
+        assert_eq!(wait.act(Some(true), true, at(1_500)), DoorAction::Wait);
+        assert_eq!(wait.act(Some(true), true, at(2_100)), DoorAction::Reroute);
     }
 
     #[test]

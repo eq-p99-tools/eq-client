@@ -124,6 +124,8 @@ pub struct PathSearch {
     found: Option<Key>,
     /// Whether routes may step off ledges and fall to the floor below.
     drops: bool,
+    /// How much the distance still to go counts against what a position cost.
+    weight: f32,
 }
 
 impl PathSearch {
@@ -161,6 +163,7 @@ impl PathSearch {
             doors: Vec::new(),
             found: None,
             drops: false,
+            weight: 1.0,
         }
     }
 
@@ -190,12 +193,28 @@ impl PathSearch {
         self
     }
 
+    /// Weighs the distance still to go by `weight` (at least 1), for measuring
+    /// how many expansions a weighted search saves and how much longer its
+    /// path is; routes the client walks never call it.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_weight(mut self, weight: f32) -> Self {
+        self.weight = weight.max(1.0);
+        self
+    }
+
     /// Lets routes step off ledges and fall, for sessions that simulate falls;
     /// without falls, grounded movement stops at every ledge a drop would need.
     #[must_use]
     pub fn with_drops(mut self, drops: bool) -> Self {
         self.drops = drops;
         self
+    }
+
+    /// The collision height the search walks for.
+    #[must_use]
+    pub const fn height(&self) -> f32 {
+        self.height
     }
 
     /// Expands up to `budget` positions.
@@ -267,7 +286,7 @@ impl PathSearch {
                     },
                 );
                 self.open.push(Open {
-                    estimate: next_cost + next_feet.distance(self.goal),
+                    estimate: next_cost + self.weight * next_feet.distance(self.goal),
                     key: next,
                 });
             }
@@ -701,6 +720,45 @@ mod tests {
         // Without falls, grounded movement stops at the ledge, so no route drops.
         let grounded = PathSearch::new(high, low, 2.0, 6.0);
         assert_eq!(search(grounded, &world), PathProgress::Failed);
+    }
+
+    #[test]
+    fn a_weighted_search_expands_less_and_stays_within_its_weight_of_the_shortest() {
+        // A wall across z = 0 with a gap for x > 10, so the way bends.
+        let mut triangles = floor();
+        triangles.extend(quad(
+            [-30.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 10.0, 0.0],
+            [-30.0, 10.0, 0.0],
+        ));
+        let world = CollisionWorld::new(triangles).unwrap();
+        let (start, goal) = (Vec3::new(-20.0, 0.0, -10.0), Vec3::new(-20.0, 0.0, 10.0));
+        // Without the wall toll a path's cost is its length, which the weight bounds.
+        let weighed = |weight: f32| {
+            let mut search = PathSearch::new(start, goal, 2.0, 6.0)
+                .with_limits(MAX_EXPANSIONS, false)
+                .with_weight(weight);
+            let PathProgress::Found(path) = search.advance(&world, MAX_EXPANSIONS) else {
+                panic!("expected a path at weight {weight}");
+            };
+            let length = std::iter::once(start)
+                .chain(path.iter().copied())
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|pair| pair[0].distance(pair[1]))
+                .sum::<f32>();
+            (length, search.expanded())
+        };
+        let (shortest, expanded) = weighed(1.0);
+        for weight in [1.25, 2.0] {
+            let (length, fewer) = weighed(weight);
+            assert!(
+                length <= weight * shortest + 0.01,
+                "{weight}: {length} vs {shortest}"
+            );
+            assert!(fewer <= expanded, "{weight}: {fewer} vs {expanded}");
+        }
     }
 
     #[test]
