@@ -233,6 +233,9 @@ struct OrbitCamera {
     radius: f32,
     yaw: f32,
     pitch: f32,
+    /// The distance shown while a roof or wall holds the camera short of
+    /// `radius`; None once it is back out at the chosen zoom.
+    pulled: Option<f32>,
 }
 
 /// Opens a window and renders a loaded zone until the user closes it.
@@ -985,6 +988,7 @@ fn spawn_camera(
         radius,
         yaw: 0.75,
         pitch: -60.0_f32.to_radians(),
+        pulled: None,
     };
     let mut projection = match projection_style {
         ProjectionStyle::Perspective => Projection::Perspective(PerspectiveProjection {
@@ -1515,6 +1519,7 @@ fn movement_help(
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 fn orbit_camera(
     collision: Option<Res<Collision>>,
+    time: Res<Time>,
     chat: Res<chat::ChatState>,
     items: Res<items::ItemState>,
     inventory: Res<inventory::InventoryState>,
@@ -1571,8 +1576,9 @@ fn orbit_camera(
             fit_projection(&mut projection, radius, clip);
         }
         *transform = unobstructed_orbit(
-            &camera,
+            &mut camera,
             collision.as_ref().and_then(|world| world.0.as_ref()),
+            time.delta_secs(),
         );
     }
 }
@@ -1619,21 +1625,52 @@ fn orbit_transform(camera: &OrbitCamera) -> Transform {
     Transform::from_translation(position).looking_at(camera.focus, Vec3::Y)
 }
 
-/// Keeps the camera on the player's side of roofs and walls without changing chosen zoom.
+/// Keeps the camera on the player's side of roofs and walls without changing
+/// the chosen zoom: it pulls in at once to just short of whatever stands
+/// between it and the player, then eases back out as the way clears, never
+/// past the chosen radius. Display only; inferred, item 6.233.
 fn unobstructed_orbit(
-    camera: &OrbitCamera,
+    camera: &mut OrbitCamera,
     collision: Option<&eq_client_core::movement::CollisionWorld>,
+    seconds: f32,
 ) -> Transform {
     let mut pose = orbit_transform(camera);
     let offset = pose.translation - camera.focus;
     let distance = offset.length();
-    if distance > 0.001
-        && let Some(hit) = collision
-            .and_then(|world| world.ray_distance(camera.focus, offset / distance, distance))
-    {
-        pose.translation = camera.focus + offset / distance * (hit - 0.5).max(0.01);
+    if distance <= 0.001 {
+        camera.pulled = None;
+        return pose;
+    }
+    let direction = offset / distance;
+    let allowed = collision
+        .and_then(|world| world.ray_distance(camera.focus, direction, distance))
+        .map_or(distance, |hit| (hit - 0.5).max(0.01));
+    camera.pulled = camera
+        .pulled
+        .map(|shown| eased_distance(shown, allowed, seconds))
+        .or((allowed < distance).then_some(allowed))
+        .filter(|shown| distance - shown > PULLED_DONE);
+    if let Some(shown) = camera.pulled {
+        pose.translation = camera.focus + direction * shown;
     }
     pose
+}
+
+/// How close to the chosen radius an easing camera counts as back out.
+const PULLED_DONE: f32 = 0.05;
+
+/// The camera's eased-out time constant: about 95% of the way back in 0.3 s.
+const PULL_OUT_SECONDS: f32 = 0.1;
+
+/// The shown distance one frame on: in at once to `allowed`, so geometry
+/// never sits between the camera and the player; out toward it eased, so
+/// it never passes `allowed` however long the frame.
+fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
+    if allowed <= shown {
+        allowed
+    } else {
+        shown + (allowed - shown) * (1.0 - (-seconds.max(0.0) / PULL_OUT_SECONDS).exp())
+    }
 }
 
 #[cfg(test)]
@@ -1734,25 +1771,116 @@ mod tests {
             radius: 40.0,
             yaw: 0.75,
             pitch: -60.0_f32.to_radians(),
+            pulled: None,
         };
         let requested = orbit_transform(&camera);
-        let inside = unobstructed_orbit(&camera, Some(&roof));
+        let mut under = OrbitCamera { ..camera };
+        let inside = unobstructed_orbit(&mut under, Some(&roof), 1.0 / 60.0);
         assert!(inside.translation.y < 8.0);
         assert!(
             (inside.translation.length() - (8.0 / 60.0_f32.to_radians().sin() - 0.5)).abs() < 0.001
         );
         assert_eq!(inside.rotation, requested.rotation);
-        assert_eq!(camera.radius, 40.0);
-        assert_eq!(unobstructed_orbit(&camera, None), requested);
-        let outside = OrbitCamera {
+        assert_eq!(under.radius, 40.0);
+        let mut open = OrbitCamera { ..camera };
+        assert_eq!(unobstructed_orbit(&mut open, None, 1.0 / 60.0), requested);
+        let mut outside = OrbitCamera {
             focus: Vec3::new(200.0, 0.0, 200.0),
             ..camera
         };
+        let expected = orbit_transform(&outside);
         assert_eq!(
-            unobstructed_orbit(&outside, Some(&roof)),
-            orbit_transform(&outside)
+            unobstructed_orbit(&mut outside, Some(&roof), 1.0 / 60.0),
+            expected
         );
     }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "Exact equality verifies the camera is back at the chosen zoom"
+    )]
+    fn camera_pulls_in_at_once_and_eases_back_out_to_the_chosen_zoom() {
+        use super::*;
+        let roof = eq_client_core::movement::CollisionWorld::new([
+            [
+                [-100.0, 8.0, -100.0],
+                [100.0, 8.0, -100.0],
+                [100.0, 8.0, 100.0],
+            ],
+            [
+                [-100.0, 8.0, -100.0],
+                [100.0, 8.0, 100.0],
+                [-100.0, 8.0, 100.0],
+            ],
+        ])
+        .unwrap();
+        let mut camera = OrbitCamera {
+            focus: Vec3::new(200.0, 0.0, 0.0),
+            radius: 40.0,
+            yaw: 0.75,
+            pitch: -60.0_f32.to_radians(),
+            pulled: None,
+        };
+        // Walking under the roof's edge and back out, a frame at a time.
+        let frame = 1.0 / 60.0;
+        let mut shown = Vec::new();
+        for step in 0..240 {
+            let x = if step < 120 {
+                140.0 - step as f32
+            } else {
+                20.0 + (step - 120) as f32 * 2.0
+            };
+            camera.focus.x = x;
+            let unobstructed = unobstructed_orbit(
+                &mut OrbitCamera {
+                    pulled: None,
+                    ..camera
+                },
+                Some(&roof),
+                frame,
+            );
+            let pose = unobstructed_orbit(&mut camera, Some(&roof), frame);
+            let distance = (pose.translation - camera.focus).length();
+            let limit = (unobstructed.translation - camera.focus).length();
+            assert!(
+                distance <= limit + 0.001,
+                "step {step}: {distance} past {limit}"
+            );
+            assert!(distance <= camera.radius + 0.001);
+            shown.push(distance);
+        }
+        // It went in under the roof and was easing out, not jumping, as it cleared.
+        assert!(shown.iter().any(|distance| *distance < 20.0));
+        assert!(
+            shown
+                .windows(2)
+                .any(|pair| pair[0] < pair[1] && pair[1] < 39.0)
+        );
+        // Out in the open again, a few frames later it is back at the radius.
+        for _ in 0..60 {
+            unobstructed_orbit(&mut camera, Some(&roof), frame);
+        }
+        assert_eq!(camera.pulled, None);
+        assert_eq!(
+            unobstructed_orbit(&mut camera, Some(&roof), frame),
+            orbit_transform(&camera)
+        );
+    }
+
+    #[test]
+    fn a_long_frame_never_eases_the_camera_past_the_way_clear() {
+        use super::*;
+        assert!((eased_distance(30.0, 12.0, 1.0 / 60.0) - 12.0).abs() < f32::EPSILON);
+        for seconds in [0.0, 1.0 / 60.0, 0.1, 0.3, 5.0, 1.0e6] {
+            let next = eased_distance(10.0, 40.0, seconds);
+            assert!((10.0..=40.0).contains(&next), "{seconds}: {next}");
+        }
+        // About 95% of the way out in 0.3 s.
+        let three_tenths = eased_distance(10.0, 40.0, 0.3);
+        assert!((38.0..40.0).contains(&three_tenths), "{three_tenths}");
+    }
+
     #[test]
     #[allow(
         clippy::float_cmp,
@@ -1774,6 +1902,7 @@ mod tests {
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()
             .init_resource::<options::OptionsState>()
+            .init_resource::<Time>()
             .insert_resource(online::OnlineState::new(false))
             .add_systems(Update, (windows::pointer::wheel, orbit_camera).chain());
         let mut window = Window {
@@ -1813,6 +1942,7 @@ mod tests {
                     yaw: 0.0,
                     pitch: -1.0,
                     radius: 100.0,
+                    pulled: None,
                 },
                 Transform::default(),
             ))
@@ -1922,6 +2052,7 @@ mod tests {
             radius: 10.0,
             yaw: 0.0,
             pitch: 0.0,
+            pulled: None,
         });
         let player = app
             .world_mut()
