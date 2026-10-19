@@ -198,6 +198,11 @@ impl Scene<'_, '_> {
         }
         commands.entity(player).insert(placed);
         self.focus(placed.translation);
+        // Each zone entry starts the camera behind the player's new heading;
+        // its pitch and zoom stay as chosen. Inferred, item 6.240.
+        for mut camera in &mut self.cameras {
+            super::start_behind(&mut camera, &placed);
+        }
         player
     }
 

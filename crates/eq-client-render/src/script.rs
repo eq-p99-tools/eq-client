@@ -725,9 +725,8 @@ pub(super) fn drive(
                             info!(id, waited, "Script walk door opened");
                         }
                         let to = next - feet;
-                        // W walks along the camera's forward direction, opposite its orbit offset.
                         for mut camera in &mut cameras {
-                            camera.yaw = to.x.atan2(to.z) + std::f32::consts::PI;
+                            camera.yaw = super::behind(to.x.atan2(to.z));
                         }
                         if script.held.is_empty() {
                             keys.press(KeyCode::KeyW);
@@ -996,8 +995,7 @@ pub(super) fn drive(
                 0.0
             };
             for mut camera in &mut cameras {
-                // W walks along the camera's forward direction, opposite its orbit offset.
-                camera.yaw = eq_client_core::render_heading(base + *heading) + std::f32::consts::PI;
+                camera.yaw = super::behind(eq_client_core::render_heading(base + *heading));
                 camera.pitch = pitch.to_radians().clamp(-1.45, -0.15);
             }
             return;
@@ -1870,8 +1868,7 @@ fn face_toward(
     let flat = Vec2::new(to.x, to.z);
     if flat.length() > f32::EPSILON {
         for mut camera in cameras.iter_mut() {
-            // W walks along the camera's forward direction, opposite its orbit offset.
-            camera.yaw = flat.x.atan2(flat.y) + std::f32::consts::PI;
+            camera.yaw = super::behind(flat.x.atan2(flat.y));
         }
     }
     Some(flat.length())
@@ -2381,7 +2378,7 @@ mod tests {
     #[test]
     fn camera_heading_makes_w_walk_along_that_heading() {
         for heading in [0.0_f32, 100.0, 256.0, 400.0] {
-            let yaw = eq_client_core::render_heading(heading) + std::f32::consts::PI;
+            let yaw = super::super::behind(eq_client_core::render_heading(heading));
             let walk = super::super::camera_relative_direction(0.0, 1.0, yaw);
             let expected = eq_client_core::world_heading(walk.x.atan2(walk.z));
             let error = (expected - heading).rem_euclid(512.0);
