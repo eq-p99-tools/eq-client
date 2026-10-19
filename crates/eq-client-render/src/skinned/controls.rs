@@ -12,9 +12,14 @@ use bevy::{prelude::*, ui::RelativeCursorPosition};
 use eq_client_assets::sidl::{Combobox, Listbox, Slider};
 use eq_client_core::options::Level;
 
+/// The quality-of-life page's interface scale slider and the label that shows its
+/// value, cut from the skin's own.
+pub(super) const UI_SCALE_SLIDER: &str = "EQC_QoL_UiScaleSlider";
+pub(super) const UI_SCALE_VALUE: &str = "EQC_QoL_UiScaleValueLabel";
+
 /// The Options window's sliders this client keeps settings for, with the
 /// labels that show their values, by screen ID.
-const LEVEL_SLIDERS: [(&str, &str, Level); 3] = [
+const LEVEL_SLIDERS: [(&str, &str, Level); 4] = [
     (
         "ODP_ClipPlaneSlider",
         "ODP_ClipPlaneValueLabel",
@@ -30,6 +35,7 @@ const LEVEL_SLIDERS: [(&str, &str, Level); 3] = [
         "OMP_MouseSensitivityValueLabel",
         Level::MouseSensitivity,
     ),
+    (UI_SCALE_SLIDER, UI_SCALE_VALUE, Level::UiScale),
 ];
 
 /// The Keyboard page's list of key assignments, and the drop-down that
@@ -54,7 +60,7 @@ pub(crate) enum Sets {
 }
 
 /// What a slider sets, if the client keeps something for it.
-fn slider_sets(id: Option<&str>, owner: WindowId) -> Option<Sets> {
+pub(super) fn slider_sets(id: Option<&str>, owner: WindowId) -> Option<Sets> {
     let id = id?;
     match owner {
         WindowId::Options => LEVEL_SLIDERS

@@ -311,6 +311,13 @@ impl Loading {
         self.waiting
     }
 
+    /// Whether the cover is drawn: up, and not waiting clear for the
+    /// player's casting gesture. What [`show`] draws, and what the
+    /// interface's scale follows.
+    pub(crate) fn drawn(&self) -> bool {
+        self.covered() && !self.waiting
+    }
+
     /// How much of the bar is filled: by the step the move has reached
     /// ([`FILLED`]); before any, as at Enter World, its first.
     fn filled(&self) -> f32 {
