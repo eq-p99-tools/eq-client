@@ -27,6 +27,8 @@ fn caster() -> PlayerState {
         endurance: None,
         skills: None,
         practice_points: None,
+        languages: None,
+        disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: gems,
         size: 6.0,

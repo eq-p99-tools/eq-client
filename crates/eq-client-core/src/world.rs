@@ -477,7 +477,10 @@ impl ClientWorld {
             // (the session puts a reward's coins in the purse), a sacrifice
             // or translocate offer and a player becoming a corpse wait for
             // their front ends too; until one answers, an offer goes
-            // unanswered, as it did unread.
+            // unanswered, as it did unread. A quest's change to the stats, a
+            // skill's button ready again, the reuse timers of disciplines and
+            // of spells that share one, and the discipline begun or ended
+            // are not shown yet either.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
@@ -499,7 +502,12 @@ impl ClientWorld {
             | WorldEvent::SacrificeRefused { .. }
             | WorldEvent::TranslocateOffer(_)
             | WorldEvent::TranslocateRefused { .. }
-            | WorldEvent::BecameCorpse { .. } => (),
+            | WorldEvent::BecameCorpse { .. }
+            | WorldEvent::StatsChanged(_)
+            | WorldEvent::SkillReady(_)
+            | WorldEvent::DisciplineReuse(_)
+            | WorldEvent::LinkedReuse(_)
+            | WorldEvent::Discipline(_) => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
@@ -581,6 +589,7 @@ impl ClientWorld {
                 ..
             } => self.level_news(*current, *experience, news),
             WorldEvent::Skill { skill_id, value } => self.skill_news(*skill_id, *value, news),
+            WorldEvent::Disciplines(list) => self.disciplines_news(list, news),
             WorldEvent::Mana(mana) => self.vitals.mana = Some(*mana),
             WorldEvent::Resources { mana, endurance } => {
                 self.vitals.mana = Some(*mana);

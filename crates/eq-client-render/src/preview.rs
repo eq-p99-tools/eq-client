@@ -138,6 +138,8 @@ pub(crate) fn player(
         endurance: Some(0),
         skills: None,
         practice_points: None,
+        languages: None,
+        disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: gems,
         size: 0.0,

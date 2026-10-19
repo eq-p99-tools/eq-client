@@ -131,6 +131,8 @@ mod tests {
             endurance: Some(20),
             skills: None,
             practice_points: None,
+            languages: None,
+            disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,

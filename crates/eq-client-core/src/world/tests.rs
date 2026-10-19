@@ -22,6 +22,8 @@ fn player(spawn_id: u16) -> PlayerState {
         endurance: Some(0),
         skills: None,
         practice_points: None,
+        languages: None,
+        disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: [None; 8],
         size: 0.0,
@@ -2359,6 +2361,11 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
     assert_eq!(
         world.player().and_then(|player| player.practice_points),
         Some(4)
+    );
+    game(&mut world, WorldEvent::Disciplines(vec![4585, 0]));
+    assert_eq!(
+        world.player().and_then(|player| player.disciplines.clone()),
+        Some(vec![4585, 0])
     );
     // A value that does not rise says nothing.
     let changes = game(
