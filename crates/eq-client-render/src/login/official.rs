@@ -1,10 +1,10 @@
 //! The installation's own login screens, drawn from the skin's login set
 //! (`EQLSUI.xml`) as the official client draws them: its login screen
 //! (`connect`) and its list of the login server's worlds (`serverselect`),
-//! at the skin's size, 640 by 480, unscaled and centred on black. The
-//! official client places these screens on a larger screen rather than
-//! stretching them (its `eqlsUIConfig.ini` keeps their places for each
-//! resolution); centring them is inferred.
+//! at the skin's size, 640 by 480 of the screen's own pixels, unscaled and
+//! centred on black, as a screenshot of the official client at 2560 by 1600
+//! shows (10-19; [`crate::device_pixels`] keeps them in device pixels on a
+//! scaled desktop).
 //!
 //! The keys and presses are the front end's own ([`super::form`],
 //! [`super::worlds`]): each control carries the action of the client's own
@@ -100,6 +100,17 @@ impl LoginLook {
     /// windows.
     pub(crate) const fn official(&self) -> bool {
         self.current.is_some()
+    }
+
+    /// Whether one of the skin's screens is drawn: its login screen, or its
+    /// list of worlds once the login server has sent one.
+    pub(crate) fn drawn(&self, front: &FrontEnd, online: &OnlineState) -> bool {
+        self.official()
+            && match front.screen(online) {
+                Showing::Login => front.has_login(),
+                Showing::Servers => online.world().servers().is_some(),
+                Showing::Characters | Showing::World => false,
+            }
     }
 }
 

@@ -35,6 +35,11 @@ impl Selection {
         self.selected
     }
 
+    /// Whether Enter World has been asked for with this list.
+    pub(crate) const fn entering(&self) -> bool {
+        self.submitted
+    }
+
     /// Highlights a listed character by exact server spelling, ignoring case.
     pub(super) fn choose_named(&mut self, name: &str) -> bool {
         let slot = self
@@ -193,11 +198,7 @@ pub(super) fn update(
     // Once Enter World is asked for, the loading screen covers the list
     // until the zone admits the character and the zone's own cover takes
     // over, so the two read as one (inferred, 6.222).
-    if online
-        .selection
-        .as_ref()
-        .is_some_and(|selection| selection.submitted)
-    {
+    if online.selection.as_ref().is_some_and(Selection::entering) {
         crate::loading::cover(&mut commands, &screen, Root, Display::Flex);
     } else {
         spawn(&mut commands, online.selection.as_ref(), status, skinned);

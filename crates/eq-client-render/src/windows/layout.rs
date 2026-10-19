@@ -115,6 +115,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_window_keeps_its_place_while_a_full_window_screen_lays_out_in_pixels() {
+        // A 1920 by 1080 screen at 150%: 1280 by 720 units at the desktop's
+        // scale, 1920 by 1080 while an official screen takes one unit to a
+        // pixel (device_pixels).
+        let mut app = App::new();
+        app.add_systems(Update, constrain);
+        app.world_mut().spawn((
+            Window {
+                resolution: bevy::window::WindowResolution::new(1920, 1080)
+                    .with_scale_factor_override(1.5),
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        let panel = app
+            .world_mut()
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(1000),
+                    top: px(600),
+                    ..default()
+                },
+                ComputedNode {
+                    size: Vec2::new(300.0, 150.0),
+                    inverse_scale_factor: 1.0 / 1.5,
+                    ..default()
+                },
+                Frame::default(),
+            ))
+            .id();
+        let laid_out = |app: &mut App, scale: f32| {
+            let mut computed = app.world_mut().get_mut::<ComputedNode>(panel).unwrap();
+            computed.size = Vec2::new(200.0, 100.0) * scale;
+            computed.inverse_scale_factor = scale.recip();
+            app.update();
+            let node = app.world().get::<Node>(panel).unwrap();
+            (node.left, node.top)
+        };
+        let place = (px(1000), px(600));
+        assert_eq!(laid_out(&mut app, 1.5), place);
+        assert_eq!(laid_out(&mut app, 1.0), place);
+        assert_eq!(laid_out(&mut app, 1.5), place);
+
+        // A scroll position is in logical pixels, which the toggle leaves
+        // alone: 1000 units of chat in a 300 unit view scroll 700 at either
+        // scale, so a part-scrolled chat keeps its place and a chat at its
+        // newest line stays there.
+        let scrolled = |state: crate::chat::ChatState, scales: &[f32]| {
+            let mut app = App::new();
+            app.insert_resource(state)
+                .add_systems(Update, crate::chat::scroll);
+            let list = app
+                .world_mut()
+                .spawn((
+                    ComputedNode::default(),
+                    ScrollPosition::default(),
+                    crate::chat::Viewport,
+                ))
+                .id();
+            scales
+                .iter()
+                .map(|&scale| {
+                    let mut computed = app.world_mut().get_mut::<ComputedNode>(list).unwrap();
+                    computed.size = Vec2::new(200.0, 300.0) * scale;
+                    computed.content_size = Vec2::new(200.0, 1000.0) * scale;
+                    computed.inverse_scale_factor = scale.recip();
+                    app.update();
+                    app.world().get::<ScrollPosition>(list).unwrap().y
+                })
+                .collect::<Vec<_>>()
+        };
+        let toggled = [1.5, 1.0, 1.5];
+        for y in scrolled(crate::chat::ChatState::scrolled_for_tests(250.0), &toggled) {
+            assert!((y - 250.0).abs() < 0.001, "{y}");
+        }
+        for y in scrolled(crate::chat::ChatState::default(), &toggled) {
+            assert!((y - 700.0).abs() < 0.001, "{y}");
+        }
+    }
+
+    #[test]
     fn resizing_keeps_moved_panels_reachable_without_changing_default_anchors() {
         let mut app = App::new();
         app.add_systems(Update, constrain);

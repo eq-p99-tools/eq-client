@@ -153,6 +153,16 @@ impl ChatState {
 
 #[cfg(test)]
 impl ChatState {
+    /// The chat scrolled `offset` logical pixels down its lines, away from
+    /// the newest, for tests of its place.
+    pub(crate) fn scrolled_for_tests(offset: f32) -> Self {
+        let mut state = Self::default();
+        let view = state.views.entry(state.active).or_default();
+        view.follow = false;
+        view.offset = offset;
+        state
+    }
+
     /// The newest line's words, for tests of what the chat says.
     pub(crate) fn newest(&self) -> String {
         self.history
