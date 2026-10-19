@@ -241,6 +241,7 @@ mod tests {
                 spell_id: 42,
                 spell_level: 1,
                 effect_flag: 4,
+                push: None,
             }),
             &NoSpells,
         );
@@ -294,6 +295,7 @@ mod tests {
                     spell_id: 42,
                     spell_level: 1,
                     effect_flag: 4,
+                    push: None,
                 }),
                 &names,
             );

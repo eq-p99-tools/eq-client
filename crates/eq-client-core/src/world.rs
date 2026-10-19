@@ -470,14 +470,36 @@ impl ClientWorld {
             // No front end creates characters yet; when one does, the news
             // lands here. Nothing here shows the world's rules, the
             // expansions it allows, its chat server, a zone it says is down,
-            // the zone's weather or the rest of its header yet either.
+            // the zone's weather or the rest of its header yet either, nor
+            // stops the player while stunned, charmed, held by the server or
+            // berserk, spins them, or shows their hiding's end. The target
+            // the server sets and whom it targets, a quest's reward and ding
+            // (the session puts a reward's coins in the purse), a sacrifice
+            // or translocate offer and a player becoming a corpse wait for
+            // their front ends too; until one answers, an offer goes
+            // unanswered, as it did unread.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::Weather(_)
-            | WorldEvent::ZoneDescription(_) => (),
+            | WorldEvent::ZoneDescription(_)
+            | WorldEvent::Stun(_)
+            | WorldEvent::Charm(_)
+            | WorldEvent::Controlled(_)
+            | WorldEvent::Berserk(_)
+            | WorldEvent::Spun
+            | WorldEvent::HideAndSneakEnded
+            | WorldEvent::Target(_)
+            | WorldEvent::TargetOfTarget(_)
+            | WorldEvent::Reward(_)
+            | WorldEvent::Ding
+            | WorldEvent::SacrificeOffer(_)
+            | WorldEvent::SacrificeRefused { .. }
+            | WorldEvent::TranslocateOffer(_)
+            | WorldEvent::TranslocateRefused { .. }
+            | WorldEvent::BecameCorpse { .. } => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
