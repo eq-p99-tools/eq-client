@@ -550,6 +550,7 @@ fn effect(target_id: u16, effect_flag: u8) -> crate::SpellEffect {
         spell_id: 42,
         spell_level: 1,
         effect_flag,
+        push: None,
     }
 }
 
@@ -1923,6 +1924,7 @@ fn news_for_the_player_comes_with_notices_and_others_news_without() {
         kind: 1,
         spell_id: None,
         outcome: DamageOutcome::Miss,
+        push: None,
     };
     assert!(game(&mut world, WorldEvent::Damage(damage)).ignored);
     damage.source_id = 9;

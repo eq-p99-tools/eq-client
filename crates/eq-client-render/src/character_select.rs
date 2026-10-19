@@ -371,6 +371,7 @@ mod tests {
                 name: "Example".into(),
                 level: Some(1),
                 zone_id: None,
+                look: None,
             }],
         ));
         let mut app = App::new();
@@ -449,6 +450,7 @@ mod tests {
                 name: "Example".into(),
                 level: Some(5),
                 zone_id: None,
+                look: None,
             }],
         ));
         let mut app = App::new();
@@ -513,6 +515,7 @@ mod tests {
                 name: "Example".into(),
                 level: Some(1),
                 zone_id: Some(22),
+                look: None,
             }],
         );
         selection.enter(&sender, &world);
