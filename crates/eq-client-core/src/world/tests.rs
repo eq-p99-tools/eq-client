@@ -3428,3 +3428,73 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
 }
+
+#[test]
+fn guild_news_changes_nothing_yet() {
+    use eq_network_game::guild::GuildUpdate;
+    use eq_network_game::listing::GuildRank;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        GuildUpdate::Members(Vec::new()),
+        GuildUpdate::MemberLocation {
+            guild_id: 1,
+            name: "Example".into(),
+            zone_id: Some(29),
+            last_on: 0,
+        },
+        GuildUpdate::MemberAdded {
+            guild_id: 1,
+            name: "Example".into(),
+            level: 10,
+            class: 1,
+            rank: GuildRank::Member,
+            zone_id: None,
+            last_on: 0,
+        },
+        GuildUpdate::MemberLevel {
+            guild_id: 1,
+            name: "Example".into(),
+            level: 10,
+        },
+        GuildUpdate::MemberRemoved {
+            guild_id: 1,
+            name: "Example".into(),
+        },
+        GuildUpdate::MemberNote {
+            guild_id: 1,
+            name: "Example".into(),
+            note: "Note".into(),
+        },
+        GuildUpdate::MemberRank {
+            guild_id: Some(1),
+            name: "Example".into(),
+            rank: GuildRank::Officer,
+            banker: true,
+            alt: false,
+        },
+        GuildUpdate::MemberRenamed {
+            guild_id: 1,
+            old_name: "Example".into(),
+            new_name: "Renamed".into(),
+        },
+        GuildUpdate::Renamed {
+            guild_id: 1,
+            name: "Guild".into(),
+        },
+        GuildUpdate::Disbanded { guild_id: 1 },
+        GuildUpdate::Invite {
+            inviter: "Example".into(),
+            guild_id: 1,
+            rank: GuildRank::Member,
+        },
+    ];
+    for event in events {
+        assert_eq!(
+            game(&mut world, WorldEvent::Guild(event)),
+            Changes::default()
+        );
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
+}

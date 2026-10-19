@@ -490,7 +490,9 @@ impl ClientWorld {
             // marquee, a yell for help, a voice macro, a request to inspect the
             // player and a duel wait for their front ends too; until one
             // answers, a popup, an inspection and a challenge go unanswered, as
-            // they did unread.
+            // they did unread. The guild's members and their changes, and an
+            // invitation to join or rise in it, wait for a guild window; until
+            // one answers, an invitation goes unanswered.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
@@ -524,7 +526,8 @@ impl ClientWorld {
             | WorldEvent::YellForHelp { .. }
             | WorldEvent::VoiceMacro(_)
             | WorldEvent::InspectRequest { .. }
-            | WorldEvent::Duel(_) => (),
+            | WorldEvent::Duel(_)
+            | WorldEvent::Guild(_) => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
