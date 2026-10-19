@@ -22,15 +22,18 @@
 //! spawns pop in.
 //!
 //! The cover is the installed client's own loading screen where its
-//! generation names one ([`InstalledClient::loading_screen`]): its picture,
-//! with its line from the string table over it. Character select draws the
-//! same screen once Enter World is asked for, so the two read as one. How
-//! the official client fits the picture to a wider window, where its line
-//! sits and in what colour, and whether Enter World shows the same screen
-//! are unrecorded (recording checklist item 6.222), so these are inferred:
-//! the picture keeps its shape at the window's height, centred on black,
-//! with the line near its foot. Without the picture, the cover is this
-//! client's own: a dark screen with one word on it.
+//! generation names one ([`InstalledClient::loading_screen`]): its picture
+//! at its own size in the screen's pixels, centred on black, with a bar
+//! along its foot that fills as the move comes on and says the world's
+//! message of the day, or the string table's line until that comes. The
+//! picture's size and place, the bar's size, place and colours, and the
+//! line's colour are as the official client draws them in a screenshot of
+//! it at 2560 by 1600 (10-19); the bar's fill for each step of the move,
+//! and the message of the day as its words, are inferred (recording
+//! checklist items 6.239 and 6.222). Character select draws the same screen
+//! once Enter World is asked for, so the two read as one (inferred, 6.222).
+//! Without the picture, the cover is this client's own: a dark screen with
+//! one word on it.
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_assets::ui::InstalledClient;
@@ -62,19 +65,60 @@ pub(crate) const LAYER: i32 = 900;
 /// installation's string table lacks the line.
 const WORD: &str = "Loading";
 
-/// How far up the picture its line sits, from the picture's foot, as a
-/// share of its height. Inferred (6.222).
-const LINE_RAISE: f32 = 8.0;
+/// The bar along the picture's foot, in the screen's pixels: its width and
+/// height, and where its words begin from its left edge. As the official
+/// client draws them (10-19).
+const BAR: (f32, f32) = (292.0, 14.0);
+const BAR_WORDS: f32 = 32.0;
+/// The bar's ground, its fill and its words, as the official client draws
+/// them (10-19, read off a screenshot).
+const BAR_GROUND: Color = Color::BLACK;
+const BAR_FILL: Color = Color::srgb(0.17, 0.15, 0.78);
+const BAR_INK: Color = Color::srgb(1.0, 1.0, 0.0);
+/// How much of the bar is filled at each step of the move: the transfer or
+/// Enter World asked for, the zone's admission, its scene drawn, the spawns
+/// around the player drawn. Inferred (6.239).
+const FILLED: [f32; 4] = [0.1, 0.4, 0.7, 1.0];
 
 /// What the covers draw: the installed client's loading screen, read once,
 /// or nothing of it where the installation has none.
 #[derive(Resource, Default)]
 pub(crate) struct Screen {
-    /// The picture, and its width over its height.
-    picture: Option<(Handle<Image>, f32)>,
-    /// The line over the picture, in the installed client's words.
+    /// The picture, and its width and height in pixels.
+    picture: Option<(Handle<Image>, Vec2)>,
+    /// The bar's line until the world's message of the day comes, in the
+    /// installed client's words.
     line: Option<String>,
 }
+
+impl Screen {
+    /// Whether the cover draws the installed client's picture.
+    pub(crate) const fn pictured(&self) -> bool {
+        self.picture.is_some()
+    }
+
+    /// A screen with a picture of 640 by 480 that was never read.
+    #[cfg(test)]
+    pub(crate) fn pictured_for_tests() -> Self {
+        Self {
+            picture: Some((Handle::default(), Vec2::new(640.0, 480.0))),
+            line: None,
+        }
+    }
+}
+
+/// Where the cover is shown or hidden for the frame, and whether its drawing
+/// waits: what follows reads [`Loading`] as the frame draws it.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Shown;
+
+/// The bar's fill.
+#[derive(Component)]
+struct BarFill;
+
+/// The bar's words.
+#[derive(Component)]
+struct BarWords;
 
 /// Reads the installed client's loading screen: its picture, and its line
 /// where the string table has it. A missing or unreadable picture leaves
@@ -118,12 +162,9 @@ fn prepare(
         return;
     }
     #[allow(clippy::cast_precision_loss)] // A picture's sides are far below f32's exact range.
-    let aspect = width as f32 / height as f32;
-    let mut picture = crate::sheets::image(pixels);
-    // Scaled up to the window, the picture is smoothed rather than blocky.
-    picture.sampler = bevy::image::ImageSampler::linear();
+    let size = Vec2::new(width as f32, height as f32);
     *screen = Screen {
-        picture: Some((images.add(picture), aspect)),
+        picture: Some((images.add(crate::sheets::image(pixels)), size)),
         line,
     };
 }
@@ -153,7 +194,7 @@ pub(crate) fn cover<'a>(
         BackgroundColor(screen.shade()),
     ));
     root.with_children(|root| {
-        let Some((image, aspect)) = &screen.picture else {
+        let Some((image, size)) = &screen.picture else {
             theme::label(root, WORD, Size::Large);
             return;
         };
@@ -164,40 +205,55 @@ pub(crate) fn cover<'a>(
                 ..default()
             },
             Node {
-                height: percent(100),
-                aspect_ratio: Some(*aspect),
+                width: px(size.x),
+                height: px(size.y),
+                flex_shrink: 0.0,
                 ..default()
             },
         ))
-        .with_children(|picture| {
-            // Placed by its foot: a bottom offset in percent is a share of
-            // the picture's height, where padding would take its width.
-            picture
-                .spawn(Node {
-                    position_type: PositionType::Absolute,
-                    bottom: percent(LINE_RAISE),
-                    width: percent(100),
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                })
-                .with_children(|line| {
-                    // A shadow keeps the line legible over the picture's
-                    // art. Ours, like its place and colour (6.222).
-                    line.spawn((
-                        theme::text(
-                            screen.line.as_deref().unwrap_or(WORD),
-                            Size::Large,
-                            theme::INK_BRIGHT,
-                        ),
-                        TextShadow {
-                            offset: Vec2::splat(2.0),
-                            color: Color::BLACK,
-                        },
-                    ));
-                });
-        });
+        .with_children(|picture| bar(picture, size.x, screen.line.as_deref()));
     });
     root
+}
+
+/// The bar along the picture's foot, empty, with the line in it.
+fn bar(picture: &mut ChildSpawnerCommands, width: f32, line: Option<&str>) {
+    picture
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px((width - BAR.0) / 2.0),
+                bottom: px(0),
+                width: px(BAR.0),
+                height: px(BAR.1),
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(BAR_GROUND),
+        ))
+        .with_children(|bar| {
+            bar.spawn((
+                BarFill,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(0),
+                    top: px(0),
+                    width: percent(0),
+                    height: percent(100),
+                    ..default()
+                },
+                BackgroundColor(BAR_FILL),
+            ));
+            bar.spawn((
+                BarWords,
+                theme::text(line.unwrap_or(WORD), Size::Small, BAR_INK),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(BAR_WORDS),
+                    ..default()
+                },
+            ));
+        });
 }
 
 /// Where the player stands between zones.
@@ -209,6 +265,8 @@ pub(crate) struct Loading {
     /// Whether the cover's drawing waited for the player's casting gesture
     /// in the last frame drawn.
     waiting: bool,
+    /// Whether the spawns around the player were all drawn at the last look.
+    settled: bool,
 }
 
 /// How far a move between zones has come.
@@ -240,10 +298,29 @@ impl Loading {
     pub(crate) const fn waiting(&self) -> bool {
         self.waiting
     }
+
+    /// How much of the bar is filled: by the step the move has reached
+    /// ([`FILLED`]); before any, as at Enter World, its first.
+    fn filled(&self) -> f32 {
+        match self.phase {
+            Phase::Arriving(_, None) => FILLED[1],
+            Phase::Arriving(_, Some(_)) if self.settled => FILLED[3],
+            Phase::Arriving(_, Some(_)) => FILLED[2],
+            Phase::Clear | Phase::Moving(_) | Phase::Stuck => FILLED[0],
+        }
+    }
 }
 
 #[cfg(test)]
 impl Loading {
+    /// Loading with the cover up over a transfer, drawn.
+    pub(crate) fn covering_for_tests() -> Self {
+        Self {
+            phase: Phase::Moving(0.0),
+            ..Self::default()
+        }
+    }
+
     /// Loading as the last frame drawn left it, its drawing waiting for the
     /// player's casting gesture or not.
     pub(crate) fn waiting_for_gesture(waiting: bool) -> Self {
@@ -299,9 +376,56 @@ pub(crate) fn install(app: &mut App) {
                 // After the models are posed, so a casting gesture that
                 // began this frame is seen before the cover is drawn.
                 show.in_set(crate::Stage::Present)
+                    .in_set(Shown)
                     .after(crate::character::animate),
+                fill.in_set(crate::Stage::Present),
             ),
         );
+}
+
+/// Fills the bar of every cover drawing it to the step the move has
+/// reached, and writes the world's latest message of the day in it once one
+/// has come, else the string table's line.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+fn fill(
+    loading: Res<Loading>,
+    screen: Res<Screen>,
+    chat: Option<Res<crate::chat::ChatState>>,
+    mut fills: Query<&mut Node, With<BarFill>>,
+    mut words: Query<(&mut Text, Ref<BarWords>)>,
+) {
+    let width = percent(loading.filled() * 100.0);
+    for mut node in &mut fills {
+        if node.width != width {
+            node.width = width;
+        }
+    }
+    // The words change only with the chat, or on a bar just drawn.
+    let fresh = words.iter().any(|(_, marker)| marker.is_added());
+    if !fresh && chat.as_ref().is_some_and(|chat| !chat.is_changed()) {
+        return;
+    }
+    let line = chat
+        .as_deref()
+        .and_then(|chat| motd(&chat.history))
+        .or(screen.line.as_deref())
+        .unwrap_or(WORD);
+    for (mut text, _) in &mut words {
+        if text.0 != line {
+            line.clone_into(&mut text.0);
+        }
+    }
+}
+
+/// The world's latest message of the day, as the chat holds it.
+fn motd(history: &eq_client_core::chat::ChatHistory) -> Option<&str> {
+    use eq_client_core::chat::{ChannelName, ChatTab};
+    history
+        .lines(ChatTab::for_channel(ChannelName::Motd))
+        .into_iter()
+        .rev()
+        .find(|(_, line)| line.channel == ChannelName::Motd)
+        .map(|(_, line)| line.message.text.as_str())
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -364,9 +488,10 @@ fn track(
     if loading.phase != phase {
         report(loading.phase, phase, settled);
     }
-    if loading.phase != phase || loading.admission != admission {
+    if loading.phase != phase || loading.admission != admission || loading.settled != settled {
         loading.phase = phase;
         loading.admission = admission;
+        loading.settled = settled;
     }
 }
 
@@ -634,13 +759,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&install);
         std::fs::create_dir_all(install.join("Resources")).unwrap();
         image::RgbImage::new(64, 48)
-            .save(install.join("Resources/loadscreen.bmp"))
+            .save(install.join("Resources/loadscreen.jpg"))
             .unwrap();
         let strings = crate::hud::messages::Messages::parse("EQST0002\n0 1\n12387 Example line\n");
         let titanium = read(Some(&install), InstalledClient::Titanium, Some(&strings));
         let no_line = read(Some(&install), InstalledClient::Titanium, None);
         let mac = read(Some(&install), InstalledClient::EqMac, Some(&strings));
-        std::fs::remove_file(install.join("Resources/loadscreen.bmp")).unwrap();
+        std::fs::remove_file(install.join("Resources/loadscreen.jpg")).unwrap();
         let missing = read(Some(&install), InstalledClient::Titanium, Some(&strings));
         std::fs::remove_dir_all(&install).unwrap();
         let (pixels, line) = titanium.unwrap();
@@ -675,7 +800,7 @@ mod tests {
     #[test]
     fn the_cover_draws_the_picture_with_its_line_or_the_word() {
         assert_eq!(drawn(Screen::default()), (vec![WORD.to_owned()], false));
-        let picture = Some((Handle::default(), 4.0 / 3.0));
+        let picture = Some((Handle::default(), Vec2::new(640.0, 480.0)));
         assert_eq!(
             drawn(Screen {
                 picture: picture.clone(),
@@ -690,6 +815,70 @@ mod tests {
             }),
             (vec![WORD.to_owned()], true)
         );
+    }
+
+    #[test]
+    fn the_bar_fills_with_the_move_and_says_the_message_of_the_day_once_it_comes() {
+        use eq_client_core::chat::{ChannelName, ChatHistory, ChatLine, Message, Source};
+        let mut app = App::new();
+        app.init_resource::<Loading>()
+            .insert_resource(Screen {
+                picture: Some((Handle::default(), Vec2::new(640.0, 480.0))),
+                line: Some("Example line".into()),
+            })
+            .add_systems(Startup, spawn)
+            .add_systems(Update, fill);
+        app.update();
+        let bar = |app: &mut App| {
+            let width = app
+                .world_mut()
+                .query_filtered::<&Node, With<BarFill>>()
+                .single(app.world())
+                .unwrap()
+                .width;
+            let words = app
+                .world_mut()
+                .query_filtered::<&Text, With<BarWords>>()
+                .single(app.world())
+                .unwrap()
+                .0
+                .clone();
+            (width, words)
+        };
+        assert_eq!(bar(&mut app), (percent(10), "Example line".to_owned()));
+        let steps = [
+            (Phase::Arriving(0.0, None), false, 40),
+            (Phase::Arriving(0.0, Some(1.0)), false, 70),
+            (Phase::Arriving(0.0, Some(1.0)), true, 100),
+        ];
+        for (phase, settled, filled) in steps {
+            let mut loading = app.world_mut().resource_mut::<Loading>();
+            loading.phase = phase;
+            loading.settled = settled;
+            app.update();
+            assert_eq!(bar(&mut app).0, percent(filled));
+        }
+        let mut history = ChatHistory::default();
+        for (channel, text) in [
+            (ChannelName::Motd, "Example message of the day"),
+            (ChannelName::Say, "Example say"),
+        ] {
+            history.push(ChatLine {
+                channel,
+                message_type: None,
+                sender: None,
+                target: None,
+                message: Message {
+                    message: None,
+                    message_hex: None,
+                    text: text.into(),
+                    item_links: vec![],
+                },
+                source: Source::Server,
+            });
+        }
+        assert_eq!(motd(&history), Some("Example message of the day"));
+        assert_eq!(motd(&ChatHistory::default()), None);
     }
 
     #[test]

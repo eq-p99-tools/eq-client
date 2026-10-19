@@ -221,7 +221,7 @@ impl InstalledClient {
     pub const fn loading_screen(self) -> Option<LoadingScreen> {
         match self {
             Self::Titanium => Some(LoadingScreen {
-                picture: &["Resources", "loadscreen.bmp"],
+                picture: &["Resources", "loadscreen.jpg"],
                 status: 12387,
             }),
             Self::EqMac => None,
@@ -1255,7 +1255,7 @@ MouseSensitivity=4
         ));
         std::fs::create_dir_all(install.join("Resources")).unwrap();
         image::RgbImage::new(64, 48)
-            .save(install.join("Resources/loadscreen.bmp"))
+            .save(install.join("Resources/loadscreen.jpg"))
             .unwrap();
         let picture = screen
             .read_picture(&install)

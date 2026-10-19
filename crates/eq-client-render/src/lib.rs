@@ -15,6 +15,7 @@ mod coins;
 mod combat;
 mod confirm;
 mod daylight;
+mod device_pixels;
 mod doors;
 mod entities;
 mod escape;
@@ -334,6 +335,7 @@ pub fn run(
         window_size::install(&mut app, size);
     }
     loading::install(&mut app);
+    device_pixels::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
         install_script(&mut app, steps, follow, (local_session, online));
