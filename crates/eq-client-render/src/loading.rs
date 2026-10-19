@@ -24,15 +24,19 @@
 //! The cover is the installed client's own loading screen where its
 //! generation names one ([`InstalledClient::loading_screen`]): its picture
 //! at its own size in the screen's pixels, centred on black, with a bar
-//! along its foot that fills as the move comes on and welcomes the player
-//! to the world by the name its server gives, or says the string table's
-//! line until that comes. The
+//! along its foot that fills as the move comes on and says, on one line,
+//! the first sentence of the world's message of the day, or the string
+//! table's line until that comes. The
 //! picture's size and place, the bar's size, place and colours, and the
 //! line's colour are as the official client draws them in a screenshot of
-//! it at 2560 by 1600 (10-19); the bar's fill for each step of the move,
-//! and the welcome as its words, are inferred (recording checklist items
-//! 6.239 and 6.222); the owner's description of the official bar, a
-//! welcome naming the server, rules out the message of the day. Character select draws the same screen
+//! it at 2560 by 1600 (10-19). The bar's fill for each step of the move
+//! is inferred (recording checklist item 6.239). That the words are the
+//! server's message of the day is from the program: the official client
+//! holds no welcome of its own to fill in, and its bar's welcome matches
+//! the message's opening. Cutting the message at its first sentence is
+//! inferred (6.222). The official bar also cycles through loading lines
+//! the program holds as it fills; this client's bar shows its one line
+//! throughout (6.222). Character select draws the same screen
 //! once Enter World is asked for, so the two read as one (inferred, 6.222).
 //! Without the picture, the cover is this client's own: a dark screen with
 //! one word on it.
@@ -72,9 +76,10 @@ const WORD: &str = "Loading";
 /// client draws them (10-19).
 const BAR: (f32, f32) = (292.0, 14.0);
 const BAR_WORDS: f32 = 32.0;
-/// The bar's ground, its fill and its words, as the official client draws
-/// them (10-19, read off a screenshot).
+/// The bar's ground, its one-pixel edge, its fill and its words, as the
+/// official client draws them (10-19, read off screenshots).
 const BAR_GROUND: Color = Color::BLACK;
+const BAR_EDGE: Color = Color::srgb(0.78, 0.78, 0.0);
 const BAR_FILL: Color = Color::srgb(0.17, 0.15, 0.78);
 const BAR_INK: Color = Color::srgb(1.0, 1.0, 0.0);
 /// How much of the bar is filled at each step of the move: the transfer or
@@ -229,9 +234,13 @@ fn bar(picture: &mut ChildSpawnerCommands, width: f32, line: Option<&str>) {
                 width: px(BAR.0),
                 height: px(BAR.1),
                 align_items: AlignItems::Center,
+                border: UiRect::all(px(1)),
+                // Words longer than the bar end at its edge.
+                overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(BAR_GROUND),
+            BorderColor::all(BAR_EDGE),
         ))
         .with_children(|bar| {
             bar.spawn((
@@ -249,6 +258,7 @@ fn bar(picture: &mut ChildSpawnerCommands, width: f32, line: Option<&str>) {
             bar.spawn((
                 BarWords,
                 theme::text(line.unwrap_or(WORD), Size::Small, BAR_INK),
+                TextLayout::new(Justify::Left, LineBreak::NoWrap),
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(BAR_WORDS),
@@ -386,13 +396,13 @@ pub(crate) fn install(app: &mut App) {
 }
 
 /// Fills the bar of every cover drawing it to the step the move has
-/// reached, and writes in it the welcome to the world by its server's name
-/// once the server has given it, else the string table's line.
+/// reached, and writes in it the first sentence of the world's latest
+/// message of the day once one has come, else the string table's line.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn fill(
     loading: Res<Loading>,
     screen: Res<Screen>,
-    online: Option<Res<crate::online::OnlineState>>,
+    chat: Option<Res<crate::chat::ChatState>>,
     mut fills: Query<&mut Node, With<BarFill>>,
     mut words: Query<(&mut Text, Ref<BarWords>)>,
 ) {
@@ -402,28 +412,44 @@ fn fill(
             node.width = width;
         }
     }
-    // The words change only with the session, or on a bar just drawn.
+    // The words change only with the chat, or on a bar just drawn.
     let fresh = words.iter().any(|(_, marker)| marker.is_added());
-    if !fresh && online.as_ref().is_some_and(|online| !online.is_changed()) {
+    if !fresh && chat.as_ref().is_some_and(|chat| !chat.is_changed()) {
         return;
     }
-    let line = online
+    let line = chat
         .as_deref()
-        .and_then(|online| online.world().world_name())
-        .map(welcome)
-        .or_else(|| screen.line.clone())
-        .unwrap_or_else(|| WORD.to_owned());
+        .and_then(|chat| motd(&chat.history))
+        .map(first_sentence)
+        .filter(|sentence| !sentence.is_empty())
+        .or(screen.line.as_deref())
+        .unwrap_or(WORD);
     for (mut text, _) in &mut words {
         if text.0 != line {
-            text.0.clone_from(&line);
+            line.clone_into(&mut text.0);
         }
     }
 }
 
-/// The bar's welcome to the world by the name its server gives it
-/// (inferred, 6.222).
-fn welcome(world: &str) -> String {
-    format!("Welcome to {world}")
+/// The world's latest message of the day, as the chat holds it.
+fn motd(history: &eq_client_core::chat::ChatHistory) -> Option<&str> {
+    use eq_client_core::chat::{ChannelName, ChatTab};
+    history
+        .lines(ChatTab::for_channel(ChannelName::Motd))
+        .into_iter()
+        .rev()
+        .find(|(_, line)| line.channel == ChannelName::Motd)
+        .map(|(_, line)| line.message.text.as_str())
+}
+
+/// A message's first sentence: its words before the first mark that ends
+/// one, or all of them where none does (inferred, 6.222).
+fn first_sentence(message: &str) -> &str {
+    message
+        .split(['!', '.', '?'])
+        .next()
+        .unwrap_or(message)
+        .trim()
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -816,7 +842,8 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_fills_with_the_move_and_welcomes_the_player_to_the_world_by_name() {
+    fn the_bar_fills_with_the_move_and_says_the_messages_first_sentence() {
+        use eq_client_core::chat::{ChannelName, ChatLine, Message, Source};
         let mut app = App::new();
         app.init_resource::<Loading>()
             .insert_resource(Screen {
@@ -855,18 +882,54 @@ mod tests {
             app.update();
             assert_eq!(bar(&mut app).0, percent(filled));
         }
-        app.insert_resource(crate::online::OnlineState::new(true));
+        app.init_resource::<crate::chat::ChatState>();
         app.update();
-        // A session with no world's name yet keeps the string table's line.
+        // A chat with no message of the day yet keeps the string table's line.
         assert_eq!(bar(&mut app).1, "Example line");
-        crate::online::testing::news(
-            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
-            [eq_client_core::WorldEvent::WorldName {
-                short_name: "Example World".into(),
-            }],
-        );
+        let said = |channel, text: &str| ChatLine {
+            channel,
+            message_type: None,
+            sender: None,
+            target: None,
+            message: Message {
+                message: None,
+                message_hex: None,
+                text: text.into(),
+                item_links: vec![],
+            },
+            source: Source::Server,
+        };
+        let mut chat = app.world_mut().resource_mut::<crate::chat::ChatState>();
+        chat.history.push(said(
+            ChannelName::Motd,
+            "Welcome to Example World! Please read the rules. See example.org.",
+        ));
+        chat.history.push(said(ChannelName::Say, "Example say"));
         app.update();
+        // The message's first sentence, on one line the bar ends.
         assert_eq!(bar(&mut app).1, "Welcome to Example World");
+        let layout = app
+            .world_mut()
+            .query_filtered::<&TextLayout, With<BarWords>>()
+            .single(app.world())
+            .unwrap()
+            .linebreak;
+        assert_eq!(layout, LineBreak::NoWrap);
+        let clipped = app
+            .world_mut()
+            .query_filtered::<&Node, (Without<BarFill>, Without<BarWords>)>()
+            .iter(app.world())
+            .any(|node| node.width == px(BAR.0) && node.overflow == Overflow::clip());
+        assert!(clipped, "the bar clips its words");
+    }
+
+    #[test]
+    fn the_bars_words_are_the_messages_first_sentence() {
+        assert_eq!(first_sentence("Welcome to X! Be nice."), "Welcome to X");
+        assert_eq!(first_sentence("Hello there. Bye"), "Hello there");
+        assert_eq!(first_sentence("Ready? Go"), "Ready");
+        assert_eq!(first_sentence("No mark at all"), "No mark at all");
+        assert_eq!(first_sentence("! starts with one"), "");
     }
 
     #[test]
