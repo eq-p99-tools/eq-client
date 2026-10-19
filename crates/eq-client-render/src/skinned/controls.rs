@@ -1,6 +1,6 @@
 //! The skin's sliders, drop-downs and lists, drawn with its own pieces and
 //! tied to what the client keeps: the Options window's Far Clip Plane, Max
-//! FPS and Mouselook Sensitivity sliders, its key list with the filter above
+//! FPS, Mouselook Sensitivity and Sound Volume sliders, its key list with the filter above
 //! it, and the quantity window's slider and number box. A control the client
 //! keeps nothing for is drawn greyed out, as its buttons are.
 use super::{Area, WindowId, at, border, picture, to_f32};
@@ -19,7 +19,7 @@ pub(super) const UI_SCALE_VALUE: &str = "EQC_QoL_UiScaleValueLabel";
 
 /// The Options window's sliders this client keeps settings for, with the
 /// labels that show their values, by screen ID.
-const LEVEL_SLIDERS: [(&str, &str, Level); 4] = [
+const LEVEL_SLIDERS: [(&str, &str, Level); 5] = [
     (
         "ODP_ClipPlaneSlider",
         "ODP_ClipPlaneValueLabel",
@@ -36,6 +36,11 @@ const LEVEL_SLIDERS: [(&str, &str, Level); 4] = [
         Level::MouseSensitivity,
     ),
     (UI_SCALE_SLIDER, UI_SCALE_VALUE, Level::UiScale),
+    (
+        "OGP_SoundVolumeSlider",
+        "OGP_SoundVolumeValueLabel",
+        Level::SoundVolume,
+    ),
 ];
 
 /// The Keyboard page's list of key assignments, and the drop-down that
@@ -1024,6 +1029,15 @@ mod tests {
         assert_eq!(
             slider_sets(Some("ODP_MaxFPSSlider"), WindowId::Options),
             Some(Sets::Level(Level::MaxFps))
+        );
+        assert_eq!(
+            slider_sets(Some("OGP_SoundVolumeSlider"), WindowId::Options),
+            Some(Sets::Level(Level::SoundVolume))
+        );
+        // Music and sound realism keep nothing yet.
+        assert_eq!(
+            slider_sets(Some("OGP_MusicVolumeSlider"), WindowId::Options),
+            None
         );
         assert_eq!(
             slider_sets(Some("ODP_GammaSlider"), WindowId::Options),

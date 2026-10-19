@@ -651,6 +651,18 @@ Development currently uses sibling path dependencies into
 `../network-refactor/eq-network`. Both checkouts contain local, unpublished API
 changes and must be kept together until a coordinated library release.
 
+## Sound
+
+Sounds come from the installed client's own files, read at runtime: for
+Titanium, the WAV files in its `snd*.pfs` archives and its `sounds` folder; the
+Mac-era client's are not read yet. Whether sounds play starts
+from `Sound` in `eqclient.ini`; the Options window's Sound Volume slider is this
+client's own, at 100% until the official `SoundVolume` scale is known. A file is read and test-decoded off
+the frame the first time it is asked for; one that cannot be decoded is logged
+once and never played. Without an audio device the client logs that sounds are
+off and plays on. Building on Linux needs ALSA's development files
+(`libasound2-dev` on Debian and Ubuntu).
+
 ## Checks
 
 Pull request CI checks only formatting; the full suite (clippy, tests on Linux and
@@ -908,7 +920,7 @@ login screen and connects; a script with it opens on the login screen),
 `right_click` with the same targets (a bag's slot opens its window),
 `hover` with the same targets (rests the pointer there, so its tooltip shows and what rides the cursor hangs there, until the next click or hover),
 `hold_click <ms>` with the same targets (holds the left button there that long, then lets it go there; held long enough, a gem, hotbutton, Actions window button or clicky item puts its hotkey on the cursor),
-`slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
+`slash camp|sit|stand`, `report <label>`, `sound <file.wav>` (plays one of the installation's sound files by name, to check that sounds are heard), `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
 window is focused (except offline, or on a local `EQEmu` or TAKP server), stop if focus is lost while a key is held, cap each hold, wait
 and the whole run, inject clicks only while the real pointer is outside the

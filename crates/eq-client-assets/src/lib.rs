@@ -5,6 +5,7 @@ pub mod items;
 pub mod maps;
 pub mod regions;
 pub mod sidl;
+pub mod sounds;
 pub mod spells;
 pub mod strings;
 pub mod ui;
