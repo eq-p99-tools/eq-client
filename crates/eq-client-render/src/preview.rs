@@ -174,9 +174,27 @@ fn admit(news: Res<News>, scene: Res<SceneInfo>, players: Query<&Transform, With
     ));
 }
 
-/// Offers two synthetic characters to choose from.
+/// Offers two synthetic characters to choose from, each with a synthetic
+/// look, so the select screen shows them in their zones.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn characters(news: Res<News>) {
+    // Chain on the body (material 2) or plate (3), and a held model number.
+    let look = |race, gender, class, material, held| {
+        let mut materials = [material; 9];
+        materials[7] = held;
+        materials[8] = 0;
+        eq_client_core::CharacterLook {
+            race,
+            gender,
+            class,
+            appearance: eq_client_core::outfit::Appearance {
+                materials,
+                show_helm: true,
+                ..default()
+            },
+            ..default()
+        }
+    };
     news.game(WorldEvent::CharacterSelection {
         selection_id: 1,
         characters: vec![
@@ -185,12 +203,14 @@ fn characters(news: Res<News>) {
                 name: "Examplewarrior".into(),
                 level: Some(12),
                 zone_id: Some(22),
+                look: Some(look(1, 0, 1, 2, 1)),
             },
             CharacterChoice {
                 slot: 3,
                 name: "Examplecleric".into(),
                 level: Some(5),
                 zone_id: Some(9),
+                look: Some(look(8, 1, 2, 3, 0)),
             },
         ],
     });

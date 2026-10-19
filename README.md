@@ -178,13 +178,25 @@ and returning home are greyed with the same reason, as this client has none of
 them yet. The window opens where the skin puts it and can be dragged, but its
 place is not kept between runs: no character is chosen yet whose files could
 hold it.
+The list opens with its first character chosen, and the chosen character
+stands in its own zone behind the list, dressed in its gear, turning slowly
+until you move the camera: right-drag orbits it and the wheel zooms. Where it
+stands in each zone comes from this client's spots file
+(`crates/eq-client-core/data/select-spots.txt`); a zone without a line there
+shows the character at the middle of the zone. The character shows where the
+server type's list is checked to carry its look (EQEmu and TAKP); elsewhere
+the list stays on its dark cover. Spots for the file are proposed from each
+installed zone's shape by
+`cargo run --release -p eq-client-render --example propose_select_spots -- <EverQuest folder> [zone ...]`,
+which reads the installation only and prints unreviewed lines to look over.
 `EQ_CHARACTER` is optional and retains automatic entry for existing launchers.
 An empty account displays guidance instead of entering a made-up character.
 Use a secret manager or a private launcher;
 do not put credentials in command arguments, scripts checked into Git, or screenshots.
 The local P99 installation supplies both assets and validation checksums. For Quarm,
 set `EQ_PROTOCOL=quarm` and point `--eq-dir` to your TAKP installation.
-Use `--demo-character-select` without `--online` for a synthetic UI preview.
+Use `--demo-character-select` without `--online` for a synthetic UI preview,
+whose two synthetic characters stand in their zones as above.
 
 Each bag and its contents share a tinted group. Click the small **+** color control
 beside its icon to choose a background color. Colors belong to the storage slot and
