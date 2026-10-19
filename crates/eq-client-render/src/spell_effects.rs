@@ -145,6 +145,7 @@ pub(super) fn update(
         Res<super::spellbook::SpellNames>,
     ),
     mut particles: ResMut<SpellParticles>,
+    mut sounds: ResMut<super::sounds::Sounds>,
     mut bodies: Bodies,
     places: Query<&GlobalTransform>,
     camera: Query<&GlobalTransform, With<super::OrbitCamera>>,
@@ -182,11 +183,17 @@ pub(super) fn update(
                 .spawn(id)
                 .map_or(0, |spawn| u16::from(spawn.state.level))
         };
-        running.follow(world, (id, level), (&effects, &spells), now);
+        let heard = running.follow(world, (id, level), (&effects, &spells), now);
         let Ok(model) = places.get(character.model) else {
             continue;
         };
         let body = Body::of(character, model);
+        // The player's own are heard on the listener, others' where they
+        // stand.
+        let place = (!own).then(|| body.at(Placement::Chest));
+        for number in heard {
+            sounds.play_number(number, place);
+        }
         for spray in &mut running.sprays {
             let starting = spray.until.is_none_or(|until| now < until);
             let at = body.at(spray.placement);
@@ -215,14 +222,17 @@ pub(super) fn update(
 
 impl Running {
     /// Starts and stops the stages: the caster stage follows the cast under
-    /// way, and each new landing starts the target stage.
+    /// way, and each new landing starts the target stage. Returns the sounds
+    /// those starts play, by number: the caster stage's as a cast starts and
+    /// the target stage's as a spell lands, each once (inferred, item 6.272).
     fn follow(
         &mut self,
         world: &eq_client_core::world::ClientWorld,
         (id, level): (u16, u16),
         (effects, spells): (&SpellEffects, &super::spellbook::SpellNames),
         now: f32,
-    ) {
+    ) -> Vec<u32> {
+        let mut heard = Vec::new();
         let effect_of = |spell: u16| {
             spells
                 .effect(u32::from(spell))
@@ -236,6 +246,7 @@ impl Running {
             if let Some(effect) = casting.and_then(effect_of) {
                 let started = start(effects, effect.caster_slots(level), true, None);
                 self.sprays.extend(started);
+                heard.extend(effect.caster_sound);
             }
             self.casting = casting;
         }
@@ -248,9 +259,11 @@ impl Running {
                 let slots = effect.target_slots(landing.caster_level);
                 let started = start(effects, slots, false, Some(now + TARGET_SECONDS));
                 self.sprays.extend(started);
+                heard.extend(effect.target_sound);
             }
             self.landing = count;
         }
+        heard
     }
 }
 
@@ -628,6 +641,75 @@ mod tests {
             colors: [[255, 255, 255], [0, 0, 255]],
             cells: 16,
         }
+    }
+
+    /// Effect 1 with a caster sound of 104 and a target sound of 137, its
+    /// slots empty; spell 42 names it.
+    fn sounding() -> (SpellEffects, super::super::spellbook::SpellNames) {
+        let mut effects = vec![0; 268 * 2];
+        effects[268 + 64..268 + 68].copy_from_slice(&104_u32.to_le_bytes());
+        effects[268 + 200..268 + 204].copy_from_slice(&137_u32.to_le_bytes());
+        let effects = SpellEffects::parse(&effects, b"EDD\x00110\x00").expect("parsed");
+        let mut fields = vec!["0"; 160];
+        fields[0] = "42";
+        fields[1] = "Synthetic spell";
+        fields[145] = "1";
+        (
+            effects,
+            super::super::spellbook::SpellNames::parse(&fields.join("^")),
+        )
+    }
+
+    #[test]
+    fn a_new_cast_and_a_new_landing_each_sound_once() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_core::{SpellUpdate, WorldEvent};
+        let (effects, spells) = sounding();
+        let mut online = OnlineState::new(true);
+        // Admitted where the server flags a landing with 4, as Titanium's do.
+        testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: Some(4),
+            }],
+        );
+        let mut running = Running::default();
+        let mut follow =
+            |online: &OnlineState| running.follow(online.world(), (7, 1), (&effects, &spells), 0.0);
+        assert!(follow(&online).is_empty());
+        testing::spell(
+            &mut online,
+            SpellUpdate::Began {
+                caster_id: 7,
+                spell_id: 42,
+                duration_ms: 3000,
+            },
+        );
+        assert_eq!(follow(&online), [104]);
+        // The same cast still under way is not heard again.
+        assert!(follow(&online).is_empty());
+        let landing = eq_client_core::SpellEffect {
+            target_id: 7,
+            caster_id: 7,
+            caster_level: 1,
+            instrument_modifier: 10,
+            spell_id: 42,
+            spell_level: 1,
+            effect_flag: 4,
+            push: None,
+        };
+        testing::news(&mut online, [WorldEvent::SpellEffect(landing.clone())]);
+        assert_eq!(follow(&online), [137]);
+        assert!(follow(&online).is_empty());
+        // Each landing is new, even of the same spell.
+        testing::news(&mut online, [WorldEvent::SpellEffect(landing)]);
+        assert_eq!(follow(&online), [137]);
     }
 
     #[test]

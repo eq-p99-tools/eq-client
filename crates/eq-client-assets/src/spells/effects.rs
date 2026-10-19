@@ -13,7 +13,7 @@ use thiserror::Error;
 
 /// One effect record: a 64-byte name, then three stages.
 const EFFECT_RECORD: usize = 268;
-/// A stage: its first number (perhaps a sound, unread), then four slots.
+/// A stage: its sound's number, then four slots.
 const STAGE_WORDS: usize = 17;
 /// Where an emitter file's records start, after "EDD\0" and its version.
 const EMITTER_HEADER: usize = 8;
@@ -102,6 +102,12 @@ pub struct Effect {
     pub caster: Vec<Slot>,
     /// On the target as the spell lands.
     pub target: Vec<Slot>,
+    /// The caster stage's sound, by its number in the installation's sound
+    /// numbers file ([`crate::sounds::SoundNumbers`]); None for 0. Every
+    /// non-zero stage number on the installation checked is one (10-19).
+    pub caster_sound: Option<u32>,
+    /// The target stage's sound, by its number as `caster_sound`'s.
+    pub target_sound: Option<u32>,
 }
 
 impl Effect {
@@ -266,10 +272,13 @@ fn parse_effect(record: &[u8]) -> Effect {
             })
             .collect()
     };
+    let sound = |index: usize| Some(word(record, 64 + index * STAGE_WORDS * 4)).filter(|n| *n != 0);
     Effect {
         name: name(&record[..64]),
         caster: stage(0),
         target: stage(2),
+        caster_sound: sound(0),
+        target_sound: sound(2),
     }
 }
 
@@ -342,6 +351,9 @@ mod tests {
         put(record, stage(1, 0), 2);
         put(record, stage(2, 0), 2);
         put(record, stage(2, 0) + 12, 2);
+        // The stages' sounds: the caster's and the target's, none between.
+        put(record, stage(0, 0) - 4, 104);
+        put(record, stage(2, 0) - 4, 137);
         bytes
     }
 
@@ -392,6 +404,8 @@ mod tests {
         );
         assert_eq!(effect.target.len(), 1);
         assert_eq!(effect.target[0].placement, Placement::Chest);
+        assert_eq!(effect.caster_sound, Some(104));
+        assert_eq!(effect.target_sound, Some(137));
     }
 
     #[test]
