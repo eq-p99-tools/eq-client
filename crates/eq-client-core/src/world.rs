@@ -467,6 +467,9 @@ impl ClientWorld {
                 self.zone_line_refused(*session_id, reason, news);
             }
             WorldEvent::Camp(status) => return self.camp_news(status, now),
+            // A sound the server names, for the front end to play.
+            WorldEvent::Effect(crate::effects::Effect::Sound(cue)) => news.sounds.push(cue.clone()),
+
             // No front end creates characters yet; when one does, the news
             // lands here. Nothing here shows the world's rules, the
             // expansions it allows, its chat server, a zone it says is down,
@@ -480,9 +483,10 @@ impl ClientWorld {
             // unanswered, as it did unread. A quest's change to the stats, a
             // skill's button ready again, the reuse timers of disciplines and
             // of spells that share one, and the discipline begun or ended
-            // are not shown yet either, nor the effects the server plays: a
-            // spell's nimbus, particles, a camera shake, a sound and a
-            // projectile.
+            // are not shown yet either, nor the effects the server plays
+            // besides a sound: a spell's nimbus, particles, a camera shake and
+            // a projectile. The official client's sound for a quest's ding is
+            // not known, so it stays silent (inferred, item 6.273).
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)

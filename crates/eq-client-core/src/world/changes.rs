@@ -99,6 +99,9 @@ pub struct Changes {
     pub trade: bool,
     /// What the news tells the player.
     pub notices: Vec<Notice>,
+    /// The sounds the server asks the player's client to play, in the order
+    /// sent.
+    pub sounds: Vec<crate::effects::Cue>,
     /// Answers to the front end's own requests.
     pub replies: Vec<Reply>,
     /// The update was for an earlier admission, or came when the world takes

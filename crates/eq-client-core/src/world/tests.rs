@@ -125,6 +125,25 @@ fn admitted() -> ClientWorld {
     world
 }
 
+#[test]
+fn a_sound_the_server_names_is_news_and_its_other_effects_are_not() {
+    use crate::effects::{Cue, Effect};
+    let mut world = admitted();
+    let file = Cue::File("quests/Plain.wav".into());
+    let sound = |cue: &Cue| WorldEvent::Effect(Effect::Sound(cue.clone()));
+    assert_eq!(game(&mut world, sound(&file)).sounds, [file]);
+    assert_eq!(
+        game(&mut world, sound(&Cue::Number(12))).sounds,
+        [Cue::Number(12)]
+    );
+    let shake = WorldEvent::Effect(Effect::CameraShake {
+        duration: std::time::Duration::from_millis(500),
+        intensity: 1.0,
+    });
+    assert_eq!(game(&mut world, shake).sounds, Vec::<Cue>::new());
+    assert_eq!(game(&mut world, WorldEvent::Ding).sounds, Vec::<Cue>::new());
+}
+
 fn zone_is_empty(world: &ClientWorld) -> bool {
     world.spawns().is_empty()
         && world.doors().entries().is_empty()
