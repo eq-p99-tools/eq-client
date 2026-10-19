@@ -482,7 +482,10 @@ impl ClientWorld {
             // of spells that share one, and the discipline begun or ended
             // are not shown yet either, nor the effects the server plays: a
             // spell's nimbus, particles, a camera shake, a sound and a
-            // projectile.
+            // projectile. A popup or marquee, a yell for help, a voice macro,
+            // a request to inspect the player and a duel wait for their front
+            // ends too; until one answers, a popup, an inspection and a
+            // challenge go unanswered, as they did unread.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
@@ -510,7 +513,13 @@ impl ClientWorld {
             | WorldEvent::DisciplineReuse(_)
             | WorldEvent::LinkedReuse(_)
             | WorldEvent::Discipline(_)
-            | WorldEvent::Effect(_) => (),
+            | WorldEvent::Effect(_)
+            | WorldEvent::Popup(_)
+            | WorldEvent::Marquee(_)
+            | WorldEvent::YellForHelp { .. }
+            | WorldEvent::VoiceMacro(_)
+            | WorldEvent::InspectRequest { .. }
+            | WorldEvent::Duel(_) => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
