@@ -518,8 +518,12 @@ pub(super) fn input(
                 typing.composing = true;
                 "/".clone_into(&mut state.draft);
             }
-            Key::Character(value) if typing.composing && state.draft.len() < 512 => {
-                state.draft.push_str(value);
+            // The line types what the key types, as the window reports it:
+            // the space bar is a named key, not a character, and a Ctrl
+            // chord types only a control character, which is dropped.
+            _ if typing.composing && state.draft.len() < 512 => {
+                let text = event.text.as_deref().unwrap_or_default();
+                state.draft.extend(text.chars().filter(|c| !c.is_control()));
                 let boundary = state.draft.floor_char_boundary(512);
                 state.draft.truncate(boundary);
             }
@@ -1848,6 +1852,34 @@ mod tests {
         press_slash_on(&mut app, KeyCode::NumpadDivide);
         assert!(app.world().resource::<crate::keys::Typing>().composing);
         assert_eq!(app.world().resource::<ChatState>().draft, "/");
+    }
+
+    #[test]
+    fn the_line_types_what_the_key_types() {
+        let (mut app, _receiver) = slash_app(true);
+        press_slash(&mut app);
+        let key = |key_code, logical_key, text: &str| KeyboardInput {
+            key_code,
+            logical_key,
+            state: bevy::input::ButtonState::Pressed,
+            text: Some(text.into()),
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        };
+        for event in [
+            // The window reports the space bar as a named key.
+            key(KeyCode::KeyT, Key::Character("t".into()), "t"),
+            key(KeyCode::Space, Key::Space, " "),
+            // Shift's letter, as the window types it.
+            key(KeyCode::KeyA, Key::Character("A".into()), "A"),
+            key(KeyCode::NumpadDivide, Key::Character("/".into()), "/"),
+            // Ctrl+A types only a control character, which is dropped.
+            key(KeyCode::KeyA, Key::Character("a".into()), "\u{1}"),
+        ] {
+            app.world_mut().write_message(event);
+        }
+        app.update();
+        assert_eq!(app.world().resource::<ChatState>().draft, "/t A/");
     }
 
     #[test]

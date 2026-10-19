@@ -182,23 +182,24 @@ fn take(
             Field::Password => &mut *front.password,
             Field::None => continue,
         };
-        match &key.logical_key {
-            Key::Backspace => {
-                field.pop();
+        if key.logical_key == Key::Backspace {
+            field.pop();
+            continue;
+        }
+        // A box types what the key types, as the window reports it; the
+        // space bar is a named key, not a character.
+        let Some(text) = key.text.as_deref() else {
+            continue;
+        };
+        // Room for the longest at the first character, so that the box never
+        // moves a password and leaves a copy behind.
+        if field.is_empty() {
+            field.reserve(LONGEST * 4);
+        }
+        for character in text.chars().filter(|c| !c.is_control()) {
+            if field.chars().count() < LONGEST {
+                field.push(character);
             }
-            Key::Character(text) => {
-                // Room for the longest at the first character, so that the
-                // box never moves a password and leaves a copy behind.
-                if field.is_empty() {
-                    field.reserve(LONGEST * 4);
-                }
-                for character in text.chars().filter(|c| !c.is_control()) {
-                    if field.chars().count() < LONGEST {
-                        field.push(character);
-                    }
-                }
-            }
-            _ => (),
         }
     }
     asked
@@ -391,9 +392,14 @@ mod tests {
         for character in text.chars() {
             app.world_mut().write_message(KeyboardInput {
                 key_code: KeyCode::KeyA,
-                logical_key: Key::Character(character.to_string().into()),
+                // The window reports the space bar as a named key.
+                logical_key: if character == ' ' {
+                    Key::Space
+                } else {
+                    Key::Character(character.to_string().into())
+                },
                 state: bevy::input::ButtonState::Pressed,
-                text: None,
+                text: Some(character.to_string().into()),
                 repeat: false,
                 window,
             });
@@ -419,22 +425,22 @@ mod tests {
         // what is typed there is the login screen's alone.
         assert_eq!(app.world().resource::<FrontEnd>().field, Field::Password);
         assert!(app.world().resource::<crate::keys::Typing>().logging_in);
-        type_text(&mut app, "secret");
+        type_text(&mut app, "se cret");
         let shown: Vec<String> = app
             .world_mut()
             .query::<&Text>()
             .iter(app.world())
             .map(|text| text.0.clone())
             .collect();
-        assert!(shown.iter().any(|text| text == "******_"));
-        assert!(!shown.iter().any(|text| text.contains("secret")));
+        assert!(shown.iter().any(|text| text == "*******_"));
+        assert!(!shown.iter().any(|text| text.contains("cret")));
         press(&mut app, KeyCode::Enter);
         let front = app.world().resource::<FrontEnd>();
         assert!(front.running());
         assert_eq!(front.password.as_str(), "");
         assert_eq!(
             heard.lock().unwrap().connects,
-            [(0, "remembered".to_owned(), "secret".to_owned())]
+            [(0, "remembered".to_owned(), "se cret".to_owned())]
         );
         // The window shows the login under way and takes no more typing.
         type_text(&mut app, "more");

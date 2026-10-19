@@ -1127,7 +1127,7 @@ mod tests {
                 key_code: KeyCode::KeyA,
                 logical_key: Key::Character(character.to_string().into()),
                 state: bevy::input::ButtonState::Pressed,
-                text: None,
+                text: Some(character.to_string().into()),
                 repeat: false,
                 window,
             });
