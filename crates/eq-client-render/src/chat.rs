@@ -127,6 +127,12 @@ struct Refusals {
 const REPEATED: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl ChatState {
+    /// The line being typed, for tests outside the chat.
+    #[cfg(test)]
+    pub(crate) fn draft(&self) -> &str {
+        &self.draft
+    }
+
     /// Says a refusal in the chat as a system line, where the official client
     /// says its refusals; the same refusal again within [`REPEATED`], as from
     /// a held key, is not said twice.

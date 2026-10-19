@@ -2,6 +2,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use bevy::input::keyboard::{Key, NativeKey};
 use bevy::prelude::KeyCode;
 
 /// Most steps one script may queue, counting steps appended while following.
@@ -986,61 +987,76 @@ fn keys_from(text: &str) -> Option<Vec<KeyCode>> {
     text.split('+').map(key).collect()
 }
 
+const LETTERS: [KeyCode; 26] = [
+    KeyCode::KeyA,
+    KeyCode::KeyB,
+    KeyCode::KeyC,
+    KeyCode::KeyD,
+    KeyCode::KeyE,
+    KeyCode::KeyF,
+    KeyCode::KeyG,
+    KeyCode::KeyH,
+    KeyCode::KeyI,
+    KeyCode::KeyJ,
+    KeyCode::KeyK,
+    KeyCode::KeyL,
+    KeyCode::KeyM,
+    KeyCode::KeyN,
+    KeyCode::KeyO,
+    KeyCode::KeyP,
+    KeyCode::KeyQ,
+    KeyCode::KeyR,
+    KeyCode::KeyS,
+    KeyCode::KeyT,
+    KeyCode::KeyU,
+    KeyCode::KeyV,
+    KeyCode::KeyW,
+    KeyCode::KeyX,
+    KeyCode::KeyY,
+    KeyCode::KeyZ,
+];
+const DIGITS: [KeyCode; 10] = [
+    KeyCode::Digit0,
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+];
+const FUNCTIONS: [KeyCode; 12] = [
+    KeyCode::F1,
+    KeyCode::F2,
+    KeyCode::F3,
+    KeyCode::F4,
+    KeyCode::F5,
+    KeyCode::F6,
+    KeyCode::F7,
+    KeyCode::F8,
+    KeyCode::F9,
+    KeyCode::F10,
+    KeyCode::F11,
+    KeyCode::F12,
+];
+const FUNCTION_KEYS: [Key; 12] = [
+    Key::F1,
+    Key::F2,
+    Key::F3,
+    Key::F4,
+    Key::F5,
+    Key::F6,
+    Key::F7,
+    Key::F8,
+    Key::F9,
+    Key::F10,
+    Key::F11,
+    Key::F12,
+];
+
 fn key(name: &str) -> Option<KeyCode> {
-    const LETTERS: [KeyCode; 26] = [
-        KeyCode::KeyA,
-        KeyCode::KeyB,
-        KeyCode::KeyC,
-        KeyCode::KeyD,
-        KeyCode::KeyE,
-        KeyCode::KeyF,
-        KeyCode::KeyG,
-        KeyCode::KeyH,
-        KeyCode::KeyI,
-        KeyCode::KeyJ,
-        KeyCode::KeyK,
-        KeyCode::KeyL,
-        KeyCode::KeyM,
-        KeyCode::KeyN,
-        KeyCode::KeyO,
-        KeyCode::KeyP,
-        KeyCode::KeyQ,
-        KeyCode::KeyR,
-        KeyCode::KeyS,
-        KeyCode::KeyT,
-        KeyCode::KeyU,
-        KeyCode::KeyV,
-        KeyCode::KeyW,
-        KeyCode::KeyX,
-        KeyCode::KeyY,
-        KeyCode::KeyZ,
-    ];
-    const DIGITS: [KeyCode; 10] = [
-        KeyCode::Digit0,
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-        KeyCode::Digit7,
-        KeyCode::Digit8,
-        KeyCode::Digit9,
-    ];
-    const FUNCTIONS: [KeyCode; 12] = [
-        KeyCode::F1,
-        KeyCode::F2,
-        KeyCode::F3,
-        KeyCode::F4,
-        KeyCode::F5,
-        KeyCode::F6,
-        KeyCode::F7,
-        KeyCode::F8,
-        KeyCode::F9,
-        KeyCode::F10,
-        KeyCode::F11,
-        KeyCode::F12,
-    ];
     let upper = name.to_ascii_uppercase();
     let bytes = upper.as_bytes();
     match upper.as_str() {
@@ -1050,6 +1066,7 @@ fn key(name: &str) -> Option<KeyCode> {
         "BACKSPACE" => Some(KeyCode::Backspace),
         "DELETE" => Some(KeyCode::Delete),
         "TAB" => Some(KeyCode::Tab),
+        "SLASH" => Some(KeyCode::Slash),
         "UP" => Some(KeyCode::ArrowUp),
         "DOWN" => Some(KeyCode::ArrowDown),
         "LEFT" => Some(KeyCode::ArrowLeft),
@@ -1067,6 +1084,51 @@ fn key(name: &str) -> Option<KeyCode> {
             .strip_prefix('F')
             .and_then(|number| number.parse::<usize>().ok())
             .and_then(|number| FUNCTIONS.get(number.checked_sub(1)?).copied()),
+    }
+}
+
+/// What a key on a US keyboard means and types, as the window reports it
+/// with the key's press: the logical key, and the text it types, which
+/// Shift makes upper case and Ctrl or Alt makes none.
+pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<String>) {
+    let character = |text: String| {
+        (
+            Key::Character(text.as_str().into()),
+            (!chorded).then_some(text),
+        )
+    };
+    if let Some(index) = LETTERS.iter().position(|letter| *letter == key) {
+        let letter = char::from(b'a' + u8::try_from(index).unwrap_or_default());
+        let letter = if shift {
+            letter.to_ascii_uppercase()
+        } else {
+            letter
+        };
+        return character(letter.to_string());
+    }
+    if let Some(index) = DIGITS.iter().position(|digit| *digit == key) {
+        return character(index.to_string());
+    }
+    if let Some(index) = FUNCTIONS.iter().position(|function| *function == key) {
+        return (FUNCTION_KEYS[index].clone(), None);
+    }
+    match key {
+        KeyCode::Slash if shift => character("?".to_owned()),
+        KeyCode::Slash => character("/".to_owned()),
+        KeyCode::Space => (Key::Space, (!chorded).then(|| " ".to_owned())),
+        KeyCode::Escape => (Key::Escape, None),
+        KeyCode::Enter => (Key::Enter, None),
+        KeyCode::Backspace => (Key::Backspace, None),
+        KeyCode::Delete => (Key::Delete, None),
+        KeyCode::Tab => (Key::Tab, None),
+        KeyCode::ArrowUp => (Key::ArrowUp, None),
+        KeyCode::ArrowDown => (Key::ArrowDown, None),
+        KeyCode::ArrowLeft => (Key::ArrowLeft, None),
+        KeyCode::ArrowRight => (Key::ArrowRight, None),
+        KeyCode::ShiftLeft => (Key::Shift, None),
+        KeyCode::ControlLeft => (Key::Control, None),
+        KeyCode::AltLeft => (Key::Alt, None),
+        _ => (Key::Unidentified(NativeKey::Unidentified), None),
     }
 }
 

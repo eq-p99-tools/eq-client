@@ -217,7 +217,7 @@ impl Script {
         }
     }
 
-    fn release(&mut self, keys: &mut ButtonInput<KeyCode>, mouse: &mut ButtonInput<MouseButton>) {
+    fn release(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>) {
         for key in self.held.drain(..) {
             keys.release(key);
         }
@@ -227,12 +227,7 @@ impl Script {
         self.pressed = None;
     }
 
-    fn stop(
-        &mut self,
-        keys: &mut ButtonInput<KeyCode>,
-        mouse: &mut ButtonInput<MouseButton>,
-        reason: &str,
-    ) {
+    fn stop(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>, reason: &str) {
         self.release(keys, mouse);
         self.steps.clear();
         self.current = None;
@@ -326,10 +321,56 @@ type Observed<'w> = (
     Option<Res<'w, super::doors::Hinges>>,
 );
 
-type Input<'w> = (
-    ResMut<'w, ButtonInput<KeyCode>>,
-    ResMut<'w, ButtonInput<MouseButton>>,
-);
+type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
+
+/// The keyboard as a script presses it: each press and release sets the
+/// key's state and sends the typed key the window would, so what reads
+/// typed keys (the chat line, the login boxes) takes a scripted key as it
+/// takes a real one.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct Keyboard<'w, 's> {
+    state: ResMut<'w, ButtonInput<KeyCode>>,
+    typed: MessageWriter<'w, bevy::input::keyboard::KeyboardInput>,
+    window: Query<'w, 's, Entity, With<PrimaryWindow>>,
+}
+
+impl Keyboard<'_, '_> {
+    fn press(&mut self, key: KeyCode) {
+        if !self.state.pressed(key) {
+            self.send(key, bevy::input::ButtonState::Pressed);
+        }
+        self.state.press(key);
+    }
+
+    fn release(&mut self, key: KeyCode) {
+        if self.state.pressed(key) {
+            self.send(key, bevy::input::ButtonState::Released);
+        }
+        self.state.release(key);
+    }
+
+    fn send(&mut self, key_code: KeyCode, state: bevy::input::ButtonState) {
+        let shift = self
+            .state
+            .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        let chorded = self.state.any_pressed([
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::AltLeft,
+            KeyCode::AltRight,
+        ]);
+        let (logical_key, text) = parse::typed(key_code, shift, chorded);
+        self.typed.write(bevy::input::keyboard::KeyboardInput {
+            key_code,
+            logical_key,
+            state,
+            // A release types nothing.
+            text: text.filter(|_| state.is_pressed()).map(Into::into),
+            repeat: false,
+            window: self.window.single().unwrap_or(Entity::PLACEHOLDER),
+        });
+    }
+}
 
 /// Runs after Bevy's keyboard and UI focus updates so injected input is seen this frame.
 #[allow(
@@ -2308,6 +2349,99 @@ mod tests {
             Some(&Action::EndLoot),
             Some(&close_box)
         ));
+    }
+
+    /// Keys for [`scripted_keyboard`]'s system to press (true) or release.
+    #[derive(Resource, Default)]
+    struct Queued(Vec<(KeyCode, bool)>);
+
+    /// A chat app whose line is open, with a system pressing and releasing
+    /// the queued keys through the keyboard a script's steps press.
+    fn scripted_keyboard() -> App {
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Queued>()
+            .init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::windows::pointer::Wheel>()
+            .add_message::<bevy::input::keyboard::KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(None))
+            .add_systems(
+                Update,
+                (
+                    |mut queued: ResMut<Queued>, mut keyboard: Keyboard| {
+                        for (key, down) in queued.0.drain(..) {
+                            if down {
+                                keyboard.press(key);
+                            } else {
+                                keyboard.release(key);
+                            }
+                        }
+                    },
+                    crate::chat::input,
+                )
+                    .chain(),
+            );
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        app
+    }
+
+    fn run_keys(app: &mut App, keys: &[(KeyCode, bool)]) {
+        app.world_mut().resource_mut::<Queued>().0 = keys.to_vec();
+        app.update();
+    }
+
+    #[test]
+    fn a_scripted_escape_closes_the_chat_line_as_a_real_one_does() {
+        let mut app = scripted_keyboard();
+        run_keys(&mut app, &[(KeyCode::Escape, true)]);
+        let typing = app.world().resource::<crate::keys::Typing>();
+        assert!(!typing.composing && typing.escape_consumed);
+    }
+
+    #[test]
+    fn scripted_keys_type_what_a_us_keyboard_types() {
+        let mut app = scripted_keyboard();
+        let draft = |app: &App| {
+            app.world()
+                .resource::<crate::chat::ChatState>()
+                .draft()
+                .to_owned()
+        };
+        // Shift makes the next letter upper case; a held key types once.
+        run_keys(
+            &mut app,
+            &[
+                (KeyCode::ShiftLeft, true),
+                (KeyCode::KeyH, true),
+                (KeyCode::KeyH, true),
+                (KeyCode::ShiftLeft, false),
+                (KeyCode::KeyH, false),
+                (KeyCode::KeyI, true),
+                (KeyCode::KeyI, false),
+                (KeyCode::Space, true),
+                (KeyCode::Digit2, true),
+                (KeyCode::Slash, true),
+            ],
+        );
+        assert_eq!(draft(&app), "Hi 2/");
+        // A Ctrl chord types nothing.
+        run_keys(
+            &mut app,
+            &[(KeyCode::ControlLeft, true), (KeyCode::KeyA, true)],
+        );
+        assert_eq!(draft(&app), "Hi 2/");
+        run_keys(
+            &mut app,
+            &[(KeyCode::ControlLeft, false), (KeyCode::KeyA, false)],
+        );
+        run_keys(&mut app, &[(KeyCode::Backspace, true)]);
+        assert_eq!(draft(&app), "Hi 2");
     }
 
     #[test]
