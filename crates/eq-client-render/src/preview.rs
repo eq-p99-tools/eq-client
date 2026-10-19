@@ -185,12 +185,14 @@ fn characters(news: Res<News>) {
                 name: "Examplewarrior".into(),
                 level: Some(12),
                 zone_id: Some(22),
+                look: None,
             },
             CharacterChoice {
                 slot: 3,
                 name: "Examplecleric".into(),
                 level: Some(5),
                 zone_id: Some(9),
+                look: None,
             },
         ],
     });

@@ -42,7 +42,7 @@ pub enum EffectWindow {
 }
 
 /// What a button of an effects window shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shown<'a> {
     /// A buff in the server slot the button stands for, and that slot.
     Slot(u32, &'a Buff),
@@ -272,6 +272,7 @@ mod tests {
             target_id: 7,
             caster_id: 7,
             spell_level: 1,
+            push: None,
         }
     }
 

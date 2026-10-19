@@ -241,7 +241,9 @@ pub(super) fn damage_text(
                 messages.format(12155, std::slice::from_ref(&defender))
             }
         }
-        DamageOutcome::Other(_) => return None,
+        // A spell's landing and a lifetap come in spell records, which the
+        // arm above takes; an unknown code has no line.
+        DamageOutcome::Landed | DamageOutcome::Tapped(_) | DamageOutcome::Other(_) => return None,
     };
     Some(messages.said(
         if own_attack { 12158 } else { 12159 },
@@ -286,6 +288,7 @@ mod tests {
             kind,
             spell_id: None,
             outcome,
+            push: None,
         }
     }
 
