@@ -682,7 +682,7 @@ mod tests {
         let mut running = Running::default();
         let mut follow =
             |online: &OnlineState| running.follow(online.world(), (7, 1), (&effects, &spells), 0.0);
-        assert!(follow(&online).is_empty());
+        assert_eq!(follow(&online), Vec::<u32>::new());
         testing::spell(
             &mut online,
             SpellUpdate::Began {
@@ -693,7 +693,7 @@ mod tests {
         );
         assert_eq!(follow(&online), [104]);
         // The same cast still under way is not heard again.
-        assert!(follow(&online).is_empty());
+        assert_eq!(follow(&online), Vec::<u32>::new());
         let landing = eq_client_core::SpellEffect {
             target_id: 7,
             caster_id: 7,
@@ -706,7 +706,7 @@ mod tests {
         };
         testing::news(&mut online, [WorldEvent::SpellEffect(landing.clone())]);
         assert_eq!(follow(&online), [137]);
-        assert!(follow(&online).is_empty());
+        assert_eq!(follow(&online), Vec::<u32>::new());
         // Each landing is new, even of the same spell.
         testing::news(&mut online, [WorldEvent::SpellEffect(landing)]);
         assert_eq!(follow(&online), [137]);
