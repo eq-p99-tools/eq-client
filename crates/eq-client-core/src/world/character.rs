@@ -37,6 +37,15 @@ impl ClientWorld {
         }
     }
 
+    /// The disciplines the player knows, which Titanium's server sends
+    /// whole after the profile and as one is learned.
+    pub(super) fn disciplines_news(&mut self, list: &[u32], changes: &mut Changes) {
+        match self.player.as_mut() {
+            Some(player) if self.connected => player.disciplines = Some(list.to_vec()),
+            _ => changes.ignored = true,
+        }
+    }
+
     /// Training at a guildmaster: the guildmaster's answer opens it, a
     /// practice raises a skill, and leaving closes it.
     pub(super) fn training_news(
