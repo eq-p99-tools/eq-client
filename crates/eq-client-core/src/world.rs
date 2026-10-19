@@ -527,6 +527,29 @@ impl ClientWorld {
                 spawn_id,
                 invisible,
             } => self.zone.visibility(*spawn_id, *invisible),
+            // How a spawn shows, its name and where a corpse lies are kept
+            // in the zone's table, as the session keeps them; a spawn already
+            // drawn shows an illusion or a new size when it is drawn anew. A
+            // face change that names no one changes no one.
+            WorldEvent::Appearance { spawn_id, change } => {
+                if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
+                    spawn.state.apply_appearance(change);
+                }
+                if self.is_player(*spawn_id)
+                    && let Some(player) = self.player.as_mut()
+                {
+                    player.appearance.apply_update(change);
+                }
+            }
+            WorldEvent::FaceChanged {
+                spawn_id, features, ..
+            } => self.zone.features(*spawn_id, *features),
+            WorldEvent::Renamed {
+                spawn_id, new_name, ..
+            } => self.zone.rename(*spawn_id, new_name),
+            WorldEvent::CorpseMoved { spawn_id, position } => {
+                self.zone.corpse_moved(*spawn_id, *position);
+            }
             // How /who lists a player, and the guilds it names.
             WorldEvent::Listing { spawn_id, change } => {
                 if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
