@@ -433,7 +433,7 @@ mod tests {
             "{} archives, {models} models, at most {most} bones; over 256: {over:?}",
             archives.len()
         );
-        assert!(over.is_empty());
+        assert_eq!(over, Vec::<String>::new());
     }
 
     /// Prints, for every model in a zone's character archive, which movement

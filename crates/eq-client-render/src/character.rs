@@ -914,13 +914,6 @@ mod tests {
 
     #[test]
     fn a_skin_that_does_not_fit_its_mesh_is_refused() {
-        let mut meshes = Assets::<Mesh>::default();
-        let mut mesh = Mesh::new(
-            bevy::mesh::PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD,
-        );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 3]);
-        let handle = meshes.add(mesh);
         fn skin(bones: &[usize]) -> eq_client_assets::characters::SkinBind<'_> {
             eq_client_assets::characters::SkinBind {
                 positions: &[[0.0; 3]; 3],
@@ -928,6 +921,13 @@ mod tests {
                 bones,
             }
         }
+        let mut meshes = Assets::<Mesh>::default();
+        let mut mesh = Mesh::new(
+            bevy::mesh::PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD,
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 3]);
+        let handle = meshes.add(mesh);
         // A bone past what a joint index holds, or too few bones, is refused.
         assert!(bind(&mut meshes.get_mut(&handle).unwrap(), skin(&[0, 70_000, 1])).is_none());
         assert!(bind(&mut meshes.get_mut(&handle).unwrap(), skin(&[0, 1])).is_none());
