@@ -480,7 +480,9 @@ impl ClientWorld {
             // unanswered, as it did unread. A quest's change to the stats, a
             // skill's button ready again, the reuse timers of disciplines and
             // of spells that share one, and the discipline begun or ended
-            // are not shown yet either.
+            // are not shown yet either, nor the effects the server plays: a
+            // spell's nimbus, particles, a camera shake, a sound and a
+            // projectile.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
@@ -507,7 +509,8 @@ impl ClientWorld {
             | WorldEvent::SkillReady(_)
             | WorldEvent::DisciplineReuse(_)
             | WorldEvent::LinkedReuse(_)
-            | WorldEvent::Discipline(_) => (),
+            | WorldEvent::Discipline(_)
+            | WorldEvent::Effect(_) => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
