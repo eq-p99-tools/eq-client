@@ -468,11 +468,11 @@ impl ClientWorld {
             }
             WorldEvent::Camp(status) => return self.camp_news(status, now),
             // No front end creates characters yet; when one does, the news
-            // lands here.
-            WorldEvent::CharacterCreation { .. } => (),
-            // The world's rules, the expansions it allows, its chat server
-            // and a zone it says is down: nothing here shows them yet.
-            WorldEvent::Rules(_)
+            // lands here. Nothing here shows the world's rules, the
+            // expansions it allows, its chat server or a zone it says is down
+            // yet either.
+            WorldEvent::CharacterCreation { .. }
+            | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. } => (),
