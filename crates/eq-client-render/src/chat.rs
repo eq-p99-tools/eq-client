@@ -470,7 +470,7 @@ pub(super) fn input(
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut typing: ResMut<crate::keys::Typing>,
-    mut keyboard: MessageReader<KeyboardInput>,
+    (mut keyboard, mouse): (MessageReader<KeyboardInput>, Res<ButtonInput<MouseButton>>),
     windows: Query<&Window, With<PrimaryWindow>>,
     panels: Query<(Entity, &UiGlobalTransform, &ComputedNode), With<Panel>>,
     wheel: Res<super::windows::pointer::Wheel>,
@@ -487,6 +487,28 @@ pub(super) fn input(
         typing.composing = false;
         state.hovered = false;
         return;
+    }
+    state.hovered = windows
+        .single()
+        .ok()
+        .and_then(Window::physical_cursor_position)
+        .is_some_and(|cursor| {
+            panels.iter().any(|(_, transform, node)| {
+                transform.try_inverse().is_some_and(|inverse| {
+                    let local = inverse.transform_point2(cursor).abs();
+                    local.cmple(node.size() * 0.5).all()
+                })
+            })
+        });
+    // A click on the game, anywhere outside the chat window, acts as any
+    // click does and gives the keyboard back to the game; the line keeps
+    // what was typed, which Enter brings back (Titanium per Adam, 10-19;
+    // EQMac inferred, recording checklist 6.243).
+    if typing.composing
+        && !state.hovered
+        && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right])
+    {
+        typing.composing = false;
     }
     if input_box.iter().any(|value| *value == Interaction::Pressed) {
         typing.composing = true;
@@ -544,18 +566,6 @@ pub(super) fn input(
             submit_draft(&mut state, &mut typing, &online, &outbox);
         }
     }
-    state.hovered = windows
-        .single()
-        .ok()
-        .and_then(Window::physical_cursor_position)
-        .is_some_and(|cursor| {
-            panels.iter().any(|(_, transform, node)| {
-                transform.try_inverse().is_some_and(|inverse| {
-                    let local = inverse.transform_point2(cursor).abs();
-                    local.cmple(node.size() * 0.5).all()
-                })
-            })
-        });
     for (interaction, TabButton(tab)) in &tabs {
         if *interaction == Interaction::Pressed {
             state.active = *tab;
@@ -1730,6 +1740,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(online)
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         let enter = KeyboardInput {
             key_code: KeyCode::Enter,
@@ -1775,6 +1786,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(online)
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         app.world_mut().resource_mut::<ChatState>().draft = "/tell Friend".into();
         app.world_mut()
@@ -1818,6 +1830,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(online)
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         (app, receiver)
     }
@@ -1889,6 +1902,52 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_the_game_gives_the_keyboard_back_and_keeps_the_line() {
+        let (mut app, receiver) = slash_app(true);
+        let mut window = Window {
+            focused: true,
+            resolution: bevy::window::WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::new(100.0, 100.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        // The chat window: 300 by 200 at (24, 110).
+        app.world_mut().spawn((
+            Panel,
+            ComputedNode {
+                size: Vec2::new(300.0, 200.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(
+                174.0, 210.0,
+            ))),
+        ));
+        press_slash(&mut app);
+        let click = |app: &mut App, at: (f64, f64)| {
+            app.world_mut()
+                .query::<&mut Window>()
+                .single_mut(app.world_mut())
+                .unwrap()
+                .set_physical_cursor_position(Some(bevy::math::DVec2::new(at.0, at.1)));
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.release(MouseButton::Left);
+            mouse.clear();
+            mouse.press(MouseButton::Left);
+            app.update();
+        };
+        let composing = |app: &App| app.world().resource::<crate::keys::Typing>().composing;
+        // A click in the chat window keeps the line open.
+        click(&mut app, (100.0, 200.0));
+        assert!(composing(&app));
+        // A click on the game outside it closes the line, keeping its text.
+        click(&mut app, (600.0, 500.0));
+        assert!(!composing(&app));
+        assert_eq!(app.world().resource::<ChatState>().draft, "/");
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
     fn a_slash_leaves_the_quantity_windows_number_and_character_select_alone() {
         let (mut app, _receiver) = slash_app(true);
         app.world_mut()
@@ -1916,6 +1975,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(online)
             .insert_resource(crate::outbox::Outbox::new(None))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
@@ -2078,6 +2138,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(true))
             .insert_resource(crate::outbox::Outbox::new(None))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         app.world_mut().write_message(KeyboardInput {
             key_code: KeyCode::Enter,
@@ -2110,6 +2171,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(false))
             .insert_resource(crate::outbox::Outbox::new(None))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, (input, refresh).chain());
         app.world_mut().spawn(Content::default());
         let button = app
