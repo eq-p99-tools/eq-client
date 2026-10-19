@@ -112,6 +112,7 @@ pub(super) struct Scene<'w, 's> {
     images: ResMut<'w, Assets<Image>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
+    bindposes: ResMut<'w, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     nearby: Option<ResMut<'w, super::entities::NearbyEntities>>,
 }
 
@@ -177,6 +178,17 @@ impl Scene<'_, '_> {
             &mut self.meshes,
             &mut self.materials,
         );
+        let character = character.and_then(|asset| {
+            character::prepare(
+                asset,
+                (
+                    &mut self.images,
+                    &mut self.meshes,
+                    &mut self.materials,
+                    &mut self.bindposes,
+                ),
+            )
+        });
         let player = spawn_player_and_hud(
             commands,
             placed.translation,
@@ -185,16 +197,8 @@ impl Scene<'_, '_> {
             &mut self.meshes,
             &mut self.materials,
         );
-        if let Some(asset) = character {
-            character::spawn(
-                commands,
-                player,
-                asset,
-                body.feet_offset,
-                &mut self.images,
-                &mut self.meshes,
-                &mut self.materials,
-            );
+        if let Some(prepared) = character {
+            character::spawn(commands, player, prepared, body.feet_offset);
         }
         commands.entity(player).insert(placed);
         self.focus(placed.translation);

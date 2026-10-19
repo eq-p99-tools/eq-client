@@ -135,6 +135,21 @@ pub struct CharacterPose {
     pub normals: Vec<[f32; 3]>,
 }
 
+/// A primitive's vertices as their bones hold them, for skinning wherever
+/// it is drawn: each vertex is placed by its one bone's transform from
+/// [`CharacterAsset::joints`], as [`CharacterAsset::pose`] places it.
+#[derive(Clone, Copy, Debug)]
+pub struct SkinBind<'a> {
+    /// Bone-local positions, in the renderer's frame.
+    pub positions: &'a [[f32; 3]],
+    /// Bone-local unit normals, in the renderer's frame.
+    pub normals: &'a [[f32; 3]],
+    /// Each vertex's bone, an index into the joints.
+    pub bones: &'a [usize],
+}
+
+/// A primitive's bone-local vertices in the renderer's frame, so that a
+/// joint from [`CharacterAsset::joints`] places them as they are.
 #[derive(Clone, Debug)]
 struct Skin {
     positions: Vec<[f32; 3]>,
@@ -143,19 +158,24 @@ struct Skin {
 }
 
 impl Skin {
-    /// Poses this primitive with these bone transforms.
-    fn pose(&self, world: &[Mat4]) -> CharacterPose {
+    /// Poses this primitive with these joints.
+    fn pose(&self, joints: &[Mat4]) -> CharacterPose {
         let mut positions = Vec::with_capacity(self.positions.len());
         let mut normals = Vec::with_capacity(self.normals.len());
         for ((position, normal), bone) in self.positions.iter().zip(&self.normals).zip(&self.bones)
         {
-            // Skinning occurs in native Z-up WLD coordinates.
-            let point = world[*bone].transform_point3(crate::wld(*position));
-            let normal = world[*bone]
-                .transform_vector3(crate::wld(*normal))
-                .normalize_or_zero();
-            positions.push(eq_client_axes::from_wld(point).to_array());
-            normals.push(eq_client_axes::from_wld(normal).to_array());
+            let joint = joints[*bone];
+            positions.push(
+                joint
+                    .transform_point3(Vec3::from_array(*position))
+                    .to_array(),
+            );
+            normals.push(
+                joint
+                    .transform_vector3(Vec3::from_array(*normal))
+                    .normalize_or_zero()
+                    .to_array(),
+            );
         }
         CharacterPose { positions, normals }
     }
@@ -233,24 +253,50 @@ impl CharacterAsset {
         (min <= max).then_some((min, max))
     }
 
-    /// The top of the head in a pose from [`Self::pose_with_attachments`]:
-    /// the highest point of its drawn head pieces, or of everything drawn
-    /// for a model without one, in the pose's units; None when nothing is
-    /// drawn.
+    /// The top of the head with these joints: the highest point of the
+    /// drawn head pieces (those `shown` marks), or of everything drawn for a
+    /// model without one, in the renderer's frame; None when nothing is
+    /// drawn. Only those pieces' positions are placed.
     #[must_use]
-    pub fn top(&self, poses: &[Option<CharacterPose>]) -> Option<f32> {
+    pub fn top(&self, joints: &[Mat4], shown: &[bool]) -> Option<f32> {
         let drawn = || {
-            poses
+            self.skins
                 .iter()
                 .zip(&self.pieces)
-                .filter_map(|(pose, piece)| Some((pose.as_ref()?, *piece)))
+                .zip(shown)
+                .filter_map(|(drawn, shown)| shown.then_some(drawn))
         };
         let head = drawn().any(|(_, piece)| matches!(piece, Piece::Head(_)));
         drawn()
             .filter(|(_, piece)| !head || matches!(piece, Piece::Head(_)))
-            .flat_map(|(pose, _)| &pose.positions)
-            .map(|position| position[1])
+            .flat_map(|(skin, _)| skin.positions.iter().zip(&skin.bones))
+            .filter_map(|(position, bone)| {
+                Some(
+                    joints
+                        .get(*bone)?
+                        .transform_point3(Vec3::from_array(*position))
+                        .y,
+                )
+            })
             .reduce(f32::max)
+    }
+
+    /// How many bones the skeleton has, which is how many joints
+    /// [`Self::joints`] gives.
+    #[must_use]
+    pub fn bone_count(&self) -> usize {
+        self.parents.len()
+    }
+
+    /// A primitive's vertices as their bones hold them; None past the last
+    /// primitive.
+    #[must_use]
+    pub fn skin(&self, primitive: usize) -> Option<SkinBind<'_>> {
+        self.skins.get(primitive).map(|skin| SkinBind {
+            positions: &skin.positions,
+            normals: &skin.normals,
+            bones: &skin.bones,
+        })
     }
 
     /// The archive the model came from.
@@ -328,12 +374,12 @@ impl CharacterAsset {
     /// Samples a clip, or the base pose when the clip is unavailable.
     /// No root motion is applied to the entity; movement remains owned by simulation.
     pub fn pose(&self, animation: &str, seconds: f32) -> Vec<CharacterPose> {
-        self.skin(&self.bones(animation, seconds, true))
+        self.skin_all(&self.joints(animation, seconds, true))
     }
 
     /// Plays a transition once and holds its final frame instead of looping it.
     pub fn pose_held(&self, animation: &str, seconds: f32) -> Vec<CharacterPose> {
-        self.skin(&self.bones(animation, seconds, false))
+        self.skin_all(&self.joints(animation, seconds, false))
     }
 
     /// Samples a clip, looping or held as [`Self::pose`] and [`Self::pose_held`]
@@ -347,11 +393,7 @@ impl CharacterAsset {
         looping: bool,
         shown: &[bool],
     ) -> (Vec<Option<CharacterPose>>, [Option<Mat4>; 3]) {
-        let bones = self.bones(animation, seconds, looping);
-        let attachments = self.attachments.map(|bone| {
-            bone.and_then(|bone| bones.get(bone))
-                .map(|matrix| eq_client_axes::wld_transform(*matrix))
-        });
+        let joints = self.joints(animation, seconds, looping);
         let poses = self
             .skins
             .iter()
@@ -361,10 +403,30 @@ impl CharacterAsset {
                     .get(index)
                     .copied()
                     .unwrap_or(false)
-                    .then(|| skin.pose(&bones))
+                    .then(|| skin.pose(&joints))
             })
             .collect();
-        (poses, attachments)
+        (poses, self.attachments(&joints))
+    }
+
+    /// Each bone's transform for a clip, looping or held as [`Self::pose`]
+    /// and [`Self::pose_held`] do, acting on the renderer's frame: placed by
+    /// its bone's joint, a vertex of [`Self::skin`] lands where the pose puts
+    /// it.
+    #[must_use]
+    pub fn joints(&self, animation: &str, seconds: f32, looping: bool) -> Vec<Mat4> {
+        self.bones(animation, seconds, looping)
+            .into_iter()
+            .map(eq_client_axes::wld_transform)
+            .collect()
+    }
+
+    /// Where each held item attaches with these joints, in [`Attachment`]
+    /// order, for the attachment points this skeleton has.
+    #[must_use]
+    pub fn attachments(&self, joints: &[Mat4]) -> [Option<Mat4>; 3] {
+        self.attachments
+            .map(|bone| bone.and_then(|bone| joints.get(bone)).copied())
     }
 
     /// Each bone's transform in native Z-up WLD space for a clip.
@@ -416,9 +478,74 @@ impl CharacterAsset {
         compose_hierarchy(&local, &self.parents)
     }
 
-    /// Skins every primitive with these bone transforms.
-    fn skin(&self, world: &[Mat4]) -> Vec<CharacterPose> {
-        self.skins.iter().map(|skin| skin.pose(world)).collect()
+    /// Skins every primitive with these joints.
+    fn skin_all(&self, joints: &[Mat4]) -> Vec<CharacterPose> {
+        self.skins.iter().map(|skin| skin.pose(joints)).collect()
+    }
+}
+
+#[cfg(feature = "testing")]
+impl CharacterAsset {
+    /// A one-triangle model for tests: a root bone and a child bone the
+    /// triangle hangs from, one unit up, whose `P01` turns it a quarter turn
+    /// about WLD up over a second and back.
+    #[must_use]
+    pub fn testing() -> Self {
+        let still = LocalTransform {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+        };
+        let raised = LocalTransform {
+            translation: Vec3::Z,
+            ..still
+        };
+        let turned = LocalTransform {
+            rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            ..raised
+        };
+        let positions = vec![[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let normals = vec![[0.0, 0.0, 1.0]; 3];
+        let mut asset = Self {
+            name: "TST".into(),
+            primitives: vec![ZonePrimitive {
+                positions: positions.clone(),
+                normals: normals.clone(),
+                texture_coordinates: Vec::new(),
+                indices: vec![0, 1, 2],
+                texture: None,
+                material_mode: MaterialMode::Opaque,
+            }],
+            textures: Vec::new(),
+            materials: vec![None],
+            pieces: vec![Piece::Body(0)],
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None, Some(0)],
+            base_pose: vec![still, raised],
+            clips: HashMap::from([(
+                "P01".into(),
+                vec![
+                    None,
+                    Some(AnimationTrack {
+                        frames: vec![raised, turned],
+                        interval: 1.0,
+                    }),
+                ],
+            )]),
+            skins: vec![Skin {
+                positions,
+                normals,
+                bones: vec![1; 3],
+            }],
+            attachments: [Some(1), None, None],
+        };
+        let pose = asset.pose("", 0.0);
+        for (primitive, pose) in asset.primitives.iter_mut().zip(pose) {
+            primitive.positions = pose.positions;
+            primitive.normals = pose.normals;
+        }
+        asset
     }
 }
 
@@ -575,10 +702,15 @@ pub(super) fn load_with_donors(
         let piece = Piece::of(&name, mesh_name);
         for staged in stage_mesh(&mesh) {
             let material = staged.material.clone();
-            // Skinning starts from libeq's axes; poses convert to the renderer's.
+            // Bone-local, in the renderer's frame, where the joints act.
             skins.push(Skin {
-                positions: staged.positions.clone(),
-                normals: staged.normals.clone(),
+                positions: staged
+                    .positions
+                    .iter()
+                    .copied()
+                    .map(crate::render)
+                    .collect(),
+                normals: staged.normals.iter().copied().map(crate::render).collect(),
                 bones: bones.clone(),
             });
             primitives.push(staged.realize(&mut archive, &mut textures, &mut texture_indices)?);
@@ -1035,11 +1167,10 @@ mod tests {
 
     #[test]
     fn the_top_is_the_drawn_heads_else_the_highest_drawn_point() {
-        let at = |heights: &[f32]| {
-            Some(CharacterPose {
-                positions: heights.iter().map(|y| [0.0, *y, 0.0]).collect(),
-                normals: Vec::new(),
-            })
+        let at = |heights: &[f32]| Skin {
+            positions: heights.iter().map(|y| [0.0, *y, 0.0]).collect(),
+            normals: vec![[0.0, 1.0, 0.0]; heights.len()],
+            bones: vec![0; heights.len()],
         };
         let asset = CharacterAsset {
             name: "synthetic".into(),
@@ -1049,20 +1180,72 @@ mod tests {
             pieces: vec![Piece::Body(0), Piece::Head(0), Piece::Head(1)],
             source: PathBuf::new(),
             catalog: HashMap::new(),
-            parents: Vec::new(),
+            parents: vec![None],
             base_pose: Vec::new(),
             clips: HashMap::new(),
-            skins: Vec::new(),
+            skins: vec![at(&[0.0, 6.0]), at(&[3.0, 4.5]), at(&[5.0])],
             attachments: [None; 3],
         };
+        let still = [Mat4::IDENTITY];
         // Arms raised over a lowered head: the name stays with the head.
-        let posed = [at(&[0.0, 6.0]), at(&[3.0, 4.5]), None];
-        assert_eq!(asset.top(&posed), Some(4.5));
+        assert_eq!(asset.top(&still, &[true, true, false]), Some(4.5));
         // A helmed head drawn instead of the bare one.
-        assert_eq!(asset.top(&[at(&[6.0]), None, at(&[5.0])]), Some(5.0));
+        assert_eq!(asset.top(&still, &[true, false, true]), Some(5.0));
         // No head drawn: the top of what is.
-        assert_eq!(asset.top(&[at(&[0.0, 6.0]), None, None]), Some(6.0));
-        assert_eq!(asset.top(&[None, None, None]), None);
+        assert_eq!(asset.top(&still, &[true, false, false]), Some(6.0));
+        assert_eq!(asset.top(&still, &[false, false, false]), None);
+        // The joints place the points: a head lifted by 2.
+        let lifted = [Mat4::from_translation(Vec3::Y * 2.0)];
+        assert_eq!(asset.top(&lifted, &[true, true, false]), Some(6.5));
+    }
+
+    #[test]
+    fn joints_place_the_bind_vertices_where_wld_skinning_puts_them() {
+        // One bone turned, scaled and moved in WLD space, as a track frame is.
+        let bone = LocalTransform {
+            translation: Vec3::new(1.0, -2.0, 3.0),
+            rotation: Quat::from_rotation_z(0.7) * Quat::from_rotation_x(-0.4),
+            scale: 1.5,
+        };
+        let libeq_position = [0.3, -1.2, 2.5];
+        let libeq_normal = [0.0, 0.6, 0.8];
+        let asset = CharacterAsset {
+            name: "synthetic".into(),
+            primitives: Vec::new(),
+            textures: Vec::new(),
+            materials: Vec::new(),
+            pieces: vec![Piece::Body(0)],
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None],
+            base_pose: vec![bone],
+            clips: HashMap::new(),
+            skins: vec![Skin {
+                positions: vec![crate::render(libeq_position)],
+                normals: vec![crate::render(libeq_normal)],
+                bones: vec![0],
+            }],
+            attachments: [None; 3],
+        };
+        // Skinning in WLD space, then converting to the renderer's frame.
+        let wld = bone.matrix();
+        let expected_position =
+            eq_client_axes::from_wld(wld.transform_point3(crate::wld(libeq_position)));
+        let expected_normal =
+            eq_client_axes::from_wld(wld.transform_vector3(crate::wld(libeq_normal)).normalize());
+        let joints = asset.joints("", 0.0, true);
+        assert_eq!(asset.bone_count(), 1);
+        let skin = asset.skin(0).unwrap();
+        let placed = joints[skin.bones[0]].transform_point3(Vec3::from_array(skin.positions[0]));
+        assert!((placed - expected_position).length() < 1e-5);
+        let pose = &asset.pose("", 0.0)[0];
+        assert!((Vec3::from_array(pose.positions[0]) - expected_position).length() < 1e-5);
+        assert!((Vec3::from_array(pose.normals[0]) - expected_normal).length() < 1e-5);
+        // A joint is a turn, a uniform scale and a move, which a transform
+        // holds as it is.
+        let (scale, _, _) = joints[0].to_scale_rotation_translation();
+        assert!((scale - Vec3::splat(1.5)).length() < 1e-5);
+        assert!(asset.skin(1).is_none());
     }
 
     #[test]

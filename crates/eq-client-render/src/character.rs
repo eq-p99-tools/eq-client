@@ -1,6 +1,16 @@
-//! CPU skinning for the small classic models; asset and pose math stay renderer independent.
+//! Skinning for the small classic models: the GPU places each vertex by its
+//! bone's joint, so animating moves only the joints and never a mesh; asset
+//! and pose math stay renderer independent.
 
-use bevy::{asset::RenderAssetUsages, prelude::*};
+use bevy::{
+    asset::RenderAssetUsages,
+    camera::visibility::DynamicSkinnedMeshBounds,
+    mesh::{
+        VertexAttributeValues,
+        skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
+    },
+    prelude::*,
+};
 use eq_client_assets::characters::CharacterAsset;
 use std::sync::Arc;
 
@@ -9,8 +19,9 @@ use super::{create_render_primitives, create_texture_images};
 #[derive(Component)]
 pub(super) struct AnimatedCharacter {
     pub(super) asset: Arc<CharacterAsset>,
-    /// Per drawn primitive, its asset index and this instance's posed mesh.
-    meshes: Vec<(usize, Handle<Mesh>)>,
+    /// The entities its bones' joints are, in bone order: what the GPU
+    /// places its vertices by.
+    joints: Vec<Entity>,
     /// The entities drawing the primitives.
     pub(super) parts: Vec<Part>,
     /// The gear last drawn and whether its helm showed, if dressed yet.
@@ -88,6 +99,18 @@ pub(super) struct Held {
 #[derive(Component)]
 pub(super) struct HeldItem;
 
+/// Marks a bone's joint, which animation moves.
+#[derive(Component)]
+pub(super) struct Joint;
+
+/// Joints, moved by their character's animation.
+type Joints<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Transform,
+    (With<Joint>, Without<AnimatedCharacter>, Without<HeldItem>),
+>;
+
 /// Held items, placed and shown by their character's animation.
 type HeldItems<'w, 's> = Query<
     'w,
@@ -104,25 +127,34 @@ pub(super) struct Model(pub PreparedCharacter);
 pub(super) fn spawn(
     commands: &mut Commands,
     parent: Entity,
-    asset: CharacterAsset,
+    prepared: PreparedCharacter,
     feet_offset: f32,
-    images: &mut Assets<Image>,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
 ) {
-    let prepared = prepare(asset, images, meshes, materials);
-    spawn_prepared(commands, parent, &prepared, feet_offset, meshes);
+    spawn_prepared(commands, parent, &prepared, feet_offset);
     commands.entity(parent).insert(Model(prepared));
 }
 
-/// Shared immutable model, texture, and material data for nearby instances.
+/// Shared immutable model, mesh, texture, and material data for nearby
+/// instances: every instance draws the same meshes, each placed by its own
+/// joints.
 #[derive(Clone)]
 pub(super) struct PreparedCharacter {
     asset: Arc<CharacterAsset>,
     /// Drawable primitives, each with the index of its asset primitive, which
-    /// also indexes its pose and base material name.
+    /// also indexes its skin and base material name.
     primitives: Vec<(usize, Handle<Mesh>, Handle<StandardMaterial>)>,
+    /// The model's inverse bind poses: identities, as its vertices are
+    /// already bone-local.
+    bindposes: Handle<SkinnedMeshInverseBindposes>,
 }
+
+/// The stores a model's textures, meshes, materials and bind poses go in.
+pub(super) type ModelStores<'a> = (
+    &'a mut Assets<Image>,
+    &'a mut Assets<Mesh>,
+    &'a mut Assets<StandardMaterial>,
+    &'a mut Assets<SkinnedMeshInverseBindposes>,
+);
 
 impl PreparedCharacter {
     pub fn height(&self) -> f32 {
@@ -132,17 +164,26 @@ impl PreparedCharacter {
 
 /// Where the meshes of models hung under a spawn, its body and the items it
 /// holds, keep their data: in the main world as well as for drawing, since
-/// clicks are picked against them there and bodies are posed from it.
+/// clicks are picked against them there.
 pub(super) const ON_A_SPAWN: RenderAssetUsages =
     RenderAssetUsages::MAIN_WORLD.union(RenderAssetUsages::RENDER_WORLD);
 
-/// Uploads model textures once; posed vertex buffers remain per-instance.
+/// Uploads a model's textures and meshes once, each mesh holding its
+/// vertices bone-local with the bone that places them. None, with a
+/// warning, for a model the GPU cannot skin: more bones than a skin may
+/// have joints, or a skin that does not match its mesh.
 pub(super) fn prepare(
     asset: CharacterAsset,
-    images: &mut Assets<Image>,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-) -> PreparedCharacter {
+    (images, meshes, materials, bindposes): ModelStores,
+) -> Option<PreparedCharacter> {
+    let bones = asset.bone_count();
+    if bones > bevy::pbr::MAX_JOINTS {
+        warn!(
+            model = asset.name,
+            bones, "Model not drawn: more bones than a skin may have joints"
+        );
+        return None;
+    }
     let textures = create_texture_images(asset.textures.clone(), images);
     // Empty primitives draw nothing; the rest keep their asset index.
     let drawn: Vec<usize> = (0..asset.primitives.len())
@@ -162,30 +203,80 @@ pub(super) fn prepare(
         true,
         ON_A_SPAWN,
     );
-    PreparedCharacter {
+    for (index, (handle, _)) in drawn.iter().zip(&rendered) {
+        let skinned = meshes
+            .get_mut(handle)
+            .and_then(|mut mesh| asset.skin(*index).and_then(|skin| bind(&mut mesh, skin)));
+        if skinned.is_none() {
+            warn!(
+                model = asset.name,
+                primitive = index,
+                "Model not drawn: a skin does not match its mesh"
+            );
+            for (handle, _) in &rendered {
+                meshes.remove(handle);
+            }
+            return None;
+        }
+    }
+    Some(PreparedCharacter {
         asset: Arc::new(asset),
         primitives: drawn
             .into_iter()
             .zip(rendered)
             .map(|(index, (mesh, material))| (index, mesh, material))
             .collect(),
-    }
+        bindposes: bindposes.add(SkinnedMeshInverseBindposes::from(vec![
+            Mat4::IDENTITY;
+            bones
+        ])),
+    })
 }
 
-/// Creates an independently animated instance sharing its model's textures/materials.
+/// Gives a mesh its skin: its vertices bone-local, each with its one bone
+/// at full weight, and the bounds the joints carry it within. None when the
+/// skin and the mesh differ in their vertices.
+fn bind(mesh: &mut Mesh, skin: eq_client_assets::characters::SkinBind) -> Option<()> {
+    let vertices = mesh.count_vertices();
+    let normals = mesh.contains_attribute(Mesh::ATTRIBUTE_NORMAL);
+    if skin.positions.len() != vertices
+        || skin.bones.len() < vertices
+        || (normals && skin.normals.len() != vertices)
+    {
+        return None;
+    }
+    let joints = skin.bones[..vertices]
+        .iter()
+        .map(|bone| Some([u16::try_from(*bone).ok()?, 0, 0, 0]))
+        .collect::<Option<Vec<_>>>()?;
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, skin.positions.to_vec());
+    if normals {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, skin.normals.to_vec());
+    }
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_JOINT_INDEX,
+        VertexAttributeValues::Uint16x4(joints),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_JOINT_WEIGHT,
+        vec![[1.0_f32, 0.0, 0.0, 0.0]; vertices],
+    );
+    mesh.generate_skinned_mesh_bounds().ok()
+}
+
+/// Creates an independently animated instance sharing its model's meshes,
+/// textures and materials.
 pub(super) fn spawn_prepared(
     commands: &mut Commands,
     parent: Entity,
     prepared: &PreparedCharacter,
     feet_offset: f32,
-    meshes: &mut Assets<Mesh>,
 ) {
     spawn_on_layers(
         commands,
         parent,
         prepared,
         feet_offset,
-        meshes,
         &bevy::camera::visibility::RenderLayers::default(),
     );
 }
@@ -196,27 +287,15 @@ pub(super) fn spawn_on_layers(
     parent: Entity,
     prepared: &PreparedCharacter,
     feet_offset: f32,
-    meshes: &mut Assets<Mesh>,
     layers: &bevy::camera::visibility::RenderLayers,
 ) {
     let asset = prepared.asset.clone();
-    let primitives: Vec<_> = prepared
-        .primitives
-        .iter()
-        .filter_map(|(index, handle, material)| {
-            let mesh = meshes.get(handle)?.clone();
-            Some((*index, meshes.add(mesh), material.clone()))
-        })
-        .collect();
-    let handles = primitives
-        .iter()
-        .map(|(index, mesh, _)| (*index, mesh.clone()))
-        .collect();
     let (bottom, top) = asset.span().unwrap_or_default();
     let lift = -feet_offset - bottom;
     // Until gear says otherwise, only the base body and bare head show.
     let shown: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
-    let mut parts = Vec::with_capacity(primitives.len());
+    let mut parts = Vec::with_capacity(prepared.primitives.len());
+    let mut joints = Vec::with_capacity(asset.bone_count());
     let child = commands
         .spawn((
             // Classic character meshes face heading 0 as stored, like all WLD
@@ -228,24 +307,34 @@ pub(super) fn spawn_on_layers(
             Visibility::Inherited,
         ))
         .with_children(|parent| {
-            for (index, mesh, material) in primitives {
-                let visibility = if shown.get(index).copied().unwrap_or(true) {
+            // The joints hang from the model beside its parts, in the base
+            // pose until the first pose moves them.
+            for joint in asset.joints("", 0.0, true) {
+                joints.push(parent.spawn((Joint, Transform::from_matrix(joint))).id());
+            }
+            for (index, mesh, material) in &prepared.primitives {
+                let visibility = if shown.get(*index).copied().unwrap_or(true) {
                     Visibility::Inherited
                 } else {
                     Visibility::Hidden
                 };
                 let part = parent
                     .spawn((
-                        Mesh3d(mesh),
+                        Mesh3d(mesh.clone()),
                         MeshMaterial3d(material.clone()),
+                        SkinnedMesh {
+                            inverse_bindposes: prepared.bindposes.clone(),
+                            joints: joints.clone(),
+                        },
+                        DynamicSkinnedMeshBounds,
                         visibility,
                         layers.clone(),
                     ))
                     .id();
                 parts.push(Part {
-                    index,
+                    index: *index,
                     entity: part,
-                    base: material,
+                    base: material.clone(),
                 });
             }
         })
@@ -258,7 +347,7 @@ pub(super) fn spawn_on_layers(
         .insert(super::names::Overhead(top + lift))
         .insert(AnimatedCharacter {
             asset,
-            meshes: handles,
+            joints,
             parts,
             dressed: None,
             model: child,
@@ -304,7 +393,7 @@ pub(super) fn animate(
     ),
     mut characters: Animated,
     mut held_items: HeldItems,
-    mut meshes: ResMut<Assets<Mesh>>,
+    mut joints: Joints,
 ) {
     let now = std::time::Instant::now();
     let world = online.world();
@@ -369,15 +458,15 @@ pub(super) fn animate(
             character.elapsed = seconds;
         }
         let (clip, held) = selected;
-        let (mut poses, attachments) =
-            character
-                .asset
-                .pose_with_attachments(clip, character.elapsed, !held, &character.shown);
+        let posed = character.asset.joints(clip, character.elapsed, !held);
+        let attachments = character.asset.attachments(&posed);
         // The name rides just over the head as the pose moves it (inferred,
         // a recording item); a corpse's stays where its lying body puts it.
-        if let (Some(mut overhead), Some(top), None) =
-            (overhead, character.asset.top(&poses), lying)
-        {
+        if let (Some(mut overhead), Some(top), None) = (
+            overhead,
+            character.asset.top(&posed, &character.shown),
+            lying,
+        ) {
             overhead.set_if_neq(super::names::Overhead(top + character.lift));
         }
         // Held items follow their hand or shield point, and stay hidden on a
@@ -398,13 +487,10 @@ pub(super) fn animate(
             };
             shown.set_if_neq(visibility);
         }
-        for (index, handle) in &character.meshes {
-            let Some(pose) = poses.get_mut(*index).and_then(Option::take) else {
-                continue;
-            };
-            if let Some(mut mesh) = meshes.get_mut(handle) {
-                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pose.positions);
-                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, pose.normals);
+        // The GPU places the vertices by the joints; no mesh changes.
+        for (entity, joint) in character.joints.iter().zip(&posed) {
+            if let Ok(mut transform) = joints.get_mut(*entity) {
+                transform.set_if_neq(Transform::from_matrix(*joint));
             }
         }
     }
@@ -690,8 +776,163 @@ fn posture_clip(
 }
 
 #[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// The stores a model goes in, empty, on an app or world.
+    pub(crate) fn stores(world: &mut World) {
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<SkinnedMeshInverseBindposes>>();
+    }
+
+    /// The test model, prepared in the world's stores.
+    pub(crate) fn prepared(world: &mut World) -> PreparedCharacter {
+        world
+            .run_system_once(
+                |mut images: ResMut<Assets<Image>>,
+                 mut meshes: ResMut<Assets<Mesh>>,
+                 mut materials: ResMut<Assets<StandardMaterial>>,
+                 mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>| {
+                    prepare(
+                        CharacterAsset::testing(),
+                        (&mut images, &mut meshes, &mut materials, &mut bindposes),
+                    )
+                },
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Draws the prepared model under a new root; the root.
+    pub(crate) fn drawn(world: &mut World, prepared: &PreparedCharacter) -> Entity {
+        let prepared = prepared.clone();
+        world
+            .run_system_once(move |mut commands: Commands| {
+                let root = commands.spawn(Transform::IDENTITY).id();
+                spawn_prepared(&mut commands, root, &prepared, 0.0);
+                root
+            })
+            .unwrap()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_is_skinned_once_and_its_instances_share_its_meshes() {
+        let mut world = World::new();
+        testing::stores(&mut world);
+        let prepared = testing::prepared(&mut world);
+        let first = testing::drawn(&mut world, &prepared);
+        let second = testing::drawn(&mut world, &prepared);
+        let parts = |world: &mut World, root: Entity| {
+            let character = world.get::<AnimatedCharacter>(root).unwrap();
+            let joints = character.joints.clone();
+            let parts: Vec<_> = character.parts.iter().map(|part| part.entity).collect();
+            let meshes: Vec<_> = parts
+                .iter()
+                .map(|part| world.get::<Mesh3d>(*part).unwrap().0.clone())
+                .collect();
+            let skinned = world.get::<SkinnedMesh>(parts[0]).unwrap().joints.clone();
+            (joints, meshes, skinned)
+        };
+        let (first_joints, first_meshes, first_skin) = parts(&mut world, first);
+        let (second_joints, second_meshes, _) = parts(&mut world, second);
+        // One mesh per piece, shared; each instance has joints of its own.
+        assert_eq!(first_meshes, second_meshes);
+        assert_eq!(world.resource::<Assets<Mesh>>().len(), 1);
+        assert_eq!(first_joints.len(), 2);
+        assert_eq!(first_skin, first_joints);
+        assert!(
+            first_joints
+                .iter()
+                .all(|joint| !second_joints.contains(joint))
+        );
+        // The mesh holds its vertices bone-local, each with its bone at full
+        // weight, and the bounds the joints carry it within.
+        let meshes = world.resource::<Assets<Mesh>>();
+        let mesh = meshes.get(&first_meshes[0]).unwrap();
+        let Some(VertexAttributeValues::Uint16x4(joints)) =
+            mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)
+        else {
+            panic!("no joint indices");
+        };
+        assert_eq!(joints, &vec![[1, 0, 0, 0]; 3]);
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("no positions");
+        };
+        assert_eq!(positions[2], [0.0, 1.0, 0.0]);
+        assert!(mesh.skinned_mesh_bounds().is_some());
+    }
+
+    #[test]
+    fn animation_moves_the_joints_and_leaves_the_meshes_alone() {
+        let mut app = crate::testing::app();
+        testing::stores(app.world_mut());
+        app.init_resource::<Time>().add_systems(Update, animate);
+        let prepared = testing::prepared(app.world_mut());
+        let root = testing::drawn(app.world_mut(), &prepared);
+        let (joint, handle) = {
+            let world = app.world();
+            let character = world.get::<AnimatedCharacter>(root).unwrap();
+            let part = character.parts[0].entity;
+            (
+                character.joints[1],
+                world.get::<Mesh3d>(part).unwrap().0.clone(),
+            )
+        };
+        let positions = |app: &App| {
+            app.world()
+                .resource::<Assets<Mesh>>()
+                .get(&handle)
+                .unwrap()
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .and_then(VertexAttributeValues::as_float3)
+                .unwrap()
+                .to_vec()
+        };
+        let before = positions(&app);
+        let rest = *app.world().get::<Transform>(joint).unwrap();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        // The stance turns the bone a tenth of its quarter turn in its first
+        // tenth of a second; the mesh keeps its vertices as they were.
+        let turned = *app.world().get::<Transform>(joint).unwrap();
+        assert!(turned.rotation.angle_between(rest.rotation) > 0.1);
+        assert_eq!(turned.translation, rest.translation);
+        assert_eq!(positions(&app), before);
+    }
+
+    #[test]
+    fn a_skin_that_does_not_fit_its_mesh_is_refused() {
+        let mut meshes = Assets::<Mesh>::default();
+        let mut mesh = Mesh::new(
+            bevy::mesh::PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD,
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 3]);
+        let handle = meshes.add(mesh);
+        fn skin(bones: &[usize]) -> eq_client_assets::characters::SkinBind<'_> {
+            eq_client_assets::characters::SkinBind {
+                positions: &[[0.0; 3]; 3],
+                normals: &[],
+                bones,
+            }
+        }
+        // A bone past what a joint index holds, or too few bones, is refused.
+        assert!(bind(&mut meshes.get_mut(&handle).unwrap(), skin(&[0, 70_000, 1])).is_none());
+        assert!(bind(&mut meshes.get_mut(&handle).unwrap(), skin(&[0, 1])).is_none());
+        assert!(bind(&mut meshes.get_mut(&handle).unwrap(), skin(&[0, 1, 1])).is_some());
+    }
 
     #[test]
     fn a_corpse_falls_from_its_death_or_lies_in_the_death_clips_last_frame() {

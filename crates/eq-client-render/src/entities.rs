@@ -90,6 +90,7 @@ pub(super) fn reconcile(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     if !state.world().connected() {
         nearby_state.loading = None;
@@ -113,8 +114,12 @@ pub(super) fn reconcile(
         && let Some(asset) = job.poll(state.world().session_id())
     {
         let code = *code;
-        let prepared =
-            asset.map(|asset| character::prepare(asset, &mut images, &mut meshes, &mut materials));
+        let prepared = asset.and_then(|asset| {
+            character::prepare(
+                asset,
+                (&mut images, &mut meshes, &mut materials, &mut bindposes),
+            )
+        });
         nearby_state.models.insert(code, prepared);
         nearby_state.loading = None;
     }
@@ -250,7 +255,7 @@ fn draw(
         // model hangs by it in model units, as it is scaled below its root, and
         // `interpolate` stands its root on the floor by it in world units.
         let feet = eq_client_core::drawn_feet_offset(spawn.race, spawn.size);
-        character::spawn_prepared(commands, entity, &asset, feet / scale, meshes);
+        character::spawn_prepared(commands, entity, &asset, feet / scale);
         commands.entity(entity).insert((
             RemoteEntity {
                 id,
@@ -374,6 +379,7 @@ mod tests {
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
             .add_systems(Update, reconcile);
         app.update();
         // So the loading screen lifts as soon as the zone has laid out.
