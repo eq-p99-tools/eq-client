@@ -469,13 +469,15 @@ impl ClientWorld {
             WorldEvent::Camp(status) => return self.camp_news(status, now),
             // No front end creates characters yet; when one does, the news
             // lands here. Nothing here shows the world's rules, the
-            // expansions it allows, its chat server or a zone it says is down
-            // yet either.
+            // expansions it allows, its chat server, a zone it says is down,
+            // the zone's weather or the rest of its header yet either.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
             | WorldEvent::ChatServer(_)
-            | WorldEvent::ZoneUnavailable { .. } => (),
+            | WorldEvent::ZoneUnavailable { .. }
+            | WorldEvent::Weather(_)
+            | WorldEvent::ZoneDescription(_) => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
