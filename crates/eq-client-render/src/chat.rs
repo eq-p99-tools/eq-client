@@ -510,6 +510,14 @@ pub(super) fn input(
             Key::Backspace if typing.composing => {
                 state.draft.pop();
             }
+            // A slash opens the line with only itself typed, so a command is
+            // one keystroke away, as in the official client (Titanium checked;
+            // EQMac inferred, recording checklist 6.241). A line left with
+            // Escape gives way to it, as Enter alone brings that line back.
+            Key::Character(value) if !typing.composing && value.as_str() == "/" => {
+                typing.composing = true;
+                "/".clone_into(&mut state.draft);
+            }
             Key::Character(value) if typing.composing && state.draft.len() < 512 => {
                 state.draft.push_str(value);
                 let boundary = state.draft.floor_char_boundary(512);
@@ -1783,6 +1791,80 @@ mod tests {
             Some((ChannelName::System, "Use /tell Name message"))
         );
         assert!(app.world().resource::<crate::keys::Typing>().composing);
+    }
+
+    /// A chat app for the slash tests, admitted to the zone or not, with the
+    /// outbox's receiver.
+    fn slash_app(admitted: bool) -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = super::super::online::OnlineState::new(true);
+        if admitted {
+            crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        }
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ChatState>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
+            .add_message::<KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, input);
+        (app, receiver)
+    }
+
+    fn press_slash(app: &mut App) {
+        press_slash_on(app, KeyCode::Slash);
+    }
+
+    fn press_slash_on(app: &mut App, key_code: KeyCode) {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key: Key::Character("/".into()),
+            state: bevy::input::ButtonState::Pressed,
+            text: Some("/".into()),
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+    }
+
+    #[test]
+    fn a_slash_opens_the_line_with_itself_typed() {
+        let (mut app, receiver) = slash_app(true);
+        // A line left with Escape gives way to the slash.
+        app.world_mut().resource_mut::<ChatState>().draft = "hello".into();
+        press_slash(&mut app);
+        assert!(app.world().resource::<crate::keys::Typing>().composing);
+        assert_eq!(app.world().resource::<ChatState>().draft, "/");
+        assert!(receiver.try_recv().is_err());
+        // In the line, a slash types as any character does.
+        press_slash(&mut app);
+        assert_eq!(app.world().resource::<ChatState>().draft, "//");
+    }
+
+    #[test]
+    fn the_keypads_slash_opens_the_line_too() {
+        let (mut app, _receiver) = slash_app(true);
+        press_slash_on(&mut app, KeyCode::NumpadDivide);
+        assert!(app.world().resource::<crate::keys::Typing>().composing);
+        assert_eq!(app.world().resource::<ChatState>().draft, "/");
+    }
+
+    #[test]
+    fn a_slash_leaves_the_quantity_windows_number_and_character_select_alone() {
+        let (mut app, _receiver) = slash_app(true);
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .counting = true;
+        press_slash(&mut app);
+        let typing = app.world().resource::<crate::keys::Typing>();
+        assert!(typing.counting && !typing.composing);
+        assert_eq!(app.world().resource::<ChatState>().draft, "");
+
+        let (mut app, _receiver) = slash_app(false);
+        press_slash(&mut app);
+        assert!(!app.world().resource::<crate::keys::Typing>().composing);
+        assert_eq!(app.world().resource::<ChatState>().draft, "");
     }
 
     #[test]
