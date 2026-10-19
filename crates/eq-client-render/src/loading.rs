@@ -24,13 +24,15 @@
 //! The cover is the installed client's own loading screen where its
 //! generation names one ([`InstalledClient::loading_screen`]): its picture
 //! at its own size in the screen's pixels, centred on black, with a bar
-//! along its foot that fills as the move comes on and says the world's
-//! message of the day, or the string table's line until that comes. The
+//! along its foot that fills as the move comes on and welcomes the player
+//! to the world by the name its server gives, or says the string table's
+//! line until that comes. The
 //! picture's size and place, the bar's size, place and colours, and the
 //! line's colour are as the official client draws them in a screenshot of
 //! it at 2560 by 1600 (10-19); the bar's fill for each step of the move,
-//! and the message of the day as its words, are inferred (recording
-//! checklist items 6.239 and 6.222). Character select draws the same screen
+//! and the welcome as its words, are inferred (recording checklist items
+//! 6.239 and 6.222); the owner's description of the official bar, a
+//! welcome naming the server, rules out the message of the day. Character select draws the same screen
 //! once Enter World is asked for, so the two read as one (inferred, 6.222).
 //! Without the picture, the cover is this client's own: a dark screen with
 //! one word on it.
@@ -384,13 +386,13 @@ pub(crate) fn install(app: &mut App) {
 }
 
 /// Fills the bar of every cover drawing it to the step the move has
-/// reached, and writes the world's latest message of the day in it once one
-/// has come, else the string table's line.
+/// reached, and writes in it the welcome to the world by its server's name
+/// once the server has given it, else the string table's line.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn fill(
     loading: Res<Loading>,
     screen: Res<Screen>,
-    chat: Option<Res<crate::chat::ChatState>>,
+    online: Option<Res<crate::online::OnlineState>>,
     mut fills: Query<&mut Node, With<BarFill>>,
     mut words: Query<(&mut Text, Ref<BarWords>)>,
 ) {
@@ -400,32 +402,28 @@ fn fill(
             node.width = width;
         }
     }
-    // The words change only with the chat, or on a bar just drawn.
+    // The words change only with the session, or on a bar just drawn.
     let fresh = words.iter().any(|(_, marker)| marker.is_added());
-    if !fresh && chat.as_ref().is_some_and(|chat| !chat.is_changed()) {
+    if !fresh && online.as_ref().is_some_and(|online| !online.is_changed()) {
         return;
     }
-    let line = chat
+    let line = online
         .as_deref()
-        .and_then(|chat| motd(&chat.history))
-        .or(screen.line.as_deref())
-        .unwrap_or(WORD);
+        .and_then(|online| online.world().world_name())
+        .map(welcome)
+        .or_else(|| screen.line.clone())
+        .unwrap_or_else(|| WORD.to_owned());
     for (mut text, _) in &mut words {
         if text.0 != line {
-            line.clone_into(&mut text.0);
+            text.0.clone_from(&line);
         }
     }
 }
 
-/// The world's latest message of the day, as the chat holds it.
-fn motd(history: &eq_client_core::chat::ChatHistory) -> Option<&str> {
-    use eq_client_core::chat::{ChannelName, ChatTab};
-    history
-        .lines(ChatTab::for_channel(ChannelName::Motd))
-        .into_iter()
-        .rev()
-        .find(|(_, line)| line.channel == ChannelName::Motd)
-        .map(|(_, line)| line.message.text.as_str())
+/// The bar's welcome to the world by the name its server gives it
+/// (inferred, 6.222).
+fn welcome(world: &str) -> String {
+    format!("Welcome to {world}")
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -818,8 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_fills_with_the_move_and_says_the_message_of_the_day_once_it_comes() {
-        use eq_client_core::chat::{ChannelName, ChatHistory, ChatLine, Message, Source};
+    fn the_bar_fills_with_the_move_and_welcomes_the_player_to_the_world_by_name() {
         let mut app = App::new();
         app.init_resource::<Loading>()
             .insert_resource(Screen {
@@ -858,27 +855,18 @@ mod tests {
             app.update();
             assert_eq!(bar(&mut app).0, percent(filled));
         }
-        let mut history = ChatHistory::default();
-        for (channel, text) in [
-            (ChannelName::Motd, "Example message of the day"),
-            (ChannelName::Say, "Example say"),
-        ] {
-            history.push(ChatLine {
-                channel,
-                message_type: None,
-                sender: None,
-                target: None,
-                message: Message {
-                    message: None,
-                    message_hex: None,
-                    text: text.into(),
-                    item_links: vec![],
-                },
-                source: Source::Server,
-            });
-        }
-        assert_eq!(motd(&history), Some("Example message of the day"));
-        assert_eq!(motd(&ChatHistory::default()), None);
+        app.insert_resource(crate::online::OnlineState::new(true));
+        app.update();
+        // A session with no world's name yet keeps the string table's line.
+        assert_eq!(bar(&mut app).1, "Example line");
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [eq_client_core::WorldEvent::WorldName {
+                short_name: "Example World".into(),
+            }],
+        );
+        app.update();
+        assert_eq!(bar(&mut app).1, "Welcome to Example World");
     }
 
     #[test]
