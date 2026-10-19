@@ -470,6 +470,12 @@ impl ClientWorld {
             // No front end creates characters yet; when one does, the news
             // lands here.
             WorldEvent::CharacterCreation { .. } => (),
+            // The world's rules, the expansions it allows, its chat server
+            // and a zone it says is down: nothing here shows them yet.
+            WorldEvent::Rules(_)
+            | WorldEvent::Expansions(_)
+            | WorldEvent::ChatServer(_)
+            | WorldEvent::ZoneUnavailable { .. } => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
