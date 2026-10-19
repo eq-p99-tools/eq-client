@@ -443,13 +443,18 @@ fn motd(history: &eq_client_core::chat::ChatHistory) -> Option<&str> {
 }
 
 /// A message's first sentence: its words before the first mark that ends
-/// one, or all of them where none does (inferred, 6.222).
+/// one, a "!", "." or "?" followed by a space or the message's end, or all
+/// of them where none does; a mark inside a word, as in a web address, ends
+/// nothing (inferred, 6.222).
 fn first_sentence(message: &str) -> &str {
-    message
-        .split(['!', '.', '?'])
-        .next()
-        .unwrap_or(message)
-        .trim()
+    let mut marks = message.char_indices().peekable();
+    while let Some((at, mark)) = marks.next() {
+        let ends = marks.peek().is_none_or(|(_, next)| next.is_whitespace());
+        if matches!(mark, '!' | '.' | '?') && ends {
+            return message[..at].trim();
+        }
+    }
+    message.trim()
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -929,6 +934,8 @@ mod tests {
         assert_eq!(first_sentence("Hello there. Bye"), "Hello there");
         assert_eq!(first_sentence("Ready? Go"), "Ready");
         assert_eq!(first_sentence("No mark at all"), "No mark at all");
+        assert_eq!(first_sentence("See example.org. Bye"), "See example.org");
+        assert_eq!(first_sentence("Ends here."), "Ends here");
         assert_eq!(first_sentence("! starts with one"), "");
     }
 
