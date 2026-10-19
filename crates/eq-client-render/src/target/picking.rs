@@ -1,5 +1,14 @@
-//! Click-time intersections with the current CPU-skinned character geometry.
-use bevy::{ecs::system::SystemParam, mesh::VertexAttributeValues, prelude::*};
+//! Click-time intersections with the characters' geometry as drawn: a
+//! skinned mesh's vertices are placed by their joints here, at the click, as
+//! the GPU places them each frame.
+use bevy::{
+    ecs::system::SystemParam,
+    mesh::{
+        VertexAttributeValues,
+        skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
+    },
+    prelude::*,
+};
 
 #[derive(SystemParam)]
 pub(crate) struct Picker<'w, 's> {
@@ -12,9 +21,11 @@ pub(crate) struct Picker<'w, 's> {
             Option<&'static Children>,
             Option<&'static Mesh3d>,
             Option<&'static Visibility>,
+            Option<&'static SkinnedMesh>,
         ),
     >,
     meshes: Option<Res<'w, Assets<Mesh>>>,
+    bindposes: Option<Res<'w, Assets<SkinnedMeshInverseBindposes>>>,
 }
 
 impl Picker<'_, '_> {
@@ -24,15 +35,21 @@ impl Picker<'_, '_> {
         let mut nearest: Option<f32> = None;
         let mut pending = vec![(root, Mat4::IDENTITY)];
         while let Some((entity, parent)) = pending.pop() {
-            let Ok((transform, children, mesh, visibility)) = self.nodes.get(entity) else {
+            let Ok((transform, children, mesh, visibility, skinned)) = self.nodes.get(entity)
+            else {
                 continue;
             };
             if visibility == Some(&Visibility::Hidden) {
                 continue;
             }
             let world = parent * transform.map_or(Mat4::IDENTITY, Transform::to_matrix);
-            if let Some(mesh) = mesh.and_then(|handle| meshes.get(&handle.0))
-                && let Some(hit) = mesh_distance(mesh, world, ray)
+            let hit =
+                mesh.and_then(|handle| meshes.get(&handle.0))
+                    .and_then(|mesh| match skinned {
+                        Some(skinned) => self.skinned_distance(mesh, skinned, parent, ray),
+                        None => mesh_distance(mesh, world, ray),
+                    });
+            if let Some(hit) = hit
                 && nearest.is_none_or(|previous| hit < previous)
             {
                 nearest = Some(hit);
@@ -45,11 +62,63 @@ impl Picker<'_, '_> {
     }
 }
 
+impl Picker<'_, '_> {
+    /// A skinned mesh's nearest hit, its vertices placed by their joints,
+    /// which hang beside it from the same parent, as a character's do.
+    fn skinned_distance(
+        &self,
+        mesh: &Mesh,
+        skinned: &SkinnedMesh,
+        parent: Mat4,
+        ray: Ray3d,
+    ) -> Option<f32> {
+        let bindposes = self.bindposes.as_ref()?.get(&skinned.inverse_bindposes)?;
+        let joints = skinned
+            .joints
+            .iter()
+            .zip(bindposes.iter())
+            .map(|(joint, bindpose)| {
+                let (transform, ..) = self.nodes.get(*joint).ok()?;
+                Some(parent * transform?.to_matrix() * *bindpose)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let VertexAttributeValues::Uint16x4(bones) = mesh
+            .try_attribute_option(Mesh::ATTRIBUTE_JOINT_INDEX)
+            .ok()
+            .flatten()?
+        else {
+            return None;
+        };
+        let placed = positions(mesh)?
+            .iter()
+            .zip(bones)
+            .map(|(position, [bone, ..])| {
+                Some(
+                    joints
+                        .get(usize::from(*bone))?
+                        .transform_point3(Vec3::from_array(*position)),
+                )
+            })
+            .collect::<Option<Vec<_>>>()?;
+        triangles_distance(mesh, &placed, ray.origin, *ray.direction)
+    }
+}
+
+/// A mesh's positions; None for a mesh without them, or whose data went to
+/// the render world.
+fn positions(mesh: &Mesh) -> Option<&[[f32; 3]]> {
+    match mesh
+        .try_attribute_option(Mesh::ATTRIBUTE_POSITION)
+        .ok()
+        .flatten()?
+    {
+        VertexAttributeValues::Float32x3(vertices) => Some(vertices),
+        _ => None,
+    }
+}
+
 /// Leaves the transformed direction unnormalized, preserving world-distance parameters.
 fn mesh_distance(mesh: &Mesh, world: Mat4, ray: Ray3d) -> Option<f32> {
-    if mesh.primitive_topology() != bevy::mesh::PrimitiveTopology::TriangleList {
-        return None;
-    }
     let inverse = world.inverse();
     if !inverse.is_finite() {
         return None;
@@ -58,18 +127,28 @@ fn mesh_distance(mesh: &Mesh, world: Mat4, ray: Ray3d) -> Option<f32> {
     let direction = inverse.transform_vector3(*ray.direction);
     // A mesh whose data went to the render world is skipped like one
     // without positions.
-    let VertexAttributeValues::Float32x3(vertices) = mesh
-        .try_attribute_option(Mesh::ATTRIBUTE_POSITION)
-        .ok()
-        .flatten()?
-    else {
+    let vertices: Vec<Vec3> = positions(mesh)?
+        .iter()
+        .copied()
+        .map(Vec3::from_array)
+        .collect();
+    triangles_distance(mesh, &vertices, origin, direction)
+}
+
+/// The nearest hit along a ray among a mesh's triangles, with its vertices
+/// where they are placed, in the ray's frame.
+fn triangles_distance(
+    mesh: &Mesh,
+    vertices: &[Vec3],
+    origin: Vec3,
+    direction: Vec3,
+) -> Option<f32> {
+    if mesh.primitive_topology() != bevy::mesh::PrimitiveTopology::TriangleList {
         return None;
-    };
+    }
     let mut nearest: Option<f32> = None;
     let mut visit = |indices: [usize; 3]| {
-        let [Some(a), Some(b), Some(c)] =
-            indices.map(|index| vertices.get(index).copied().map(Vec3::from_array))
-        else {
+        let [Some(a), Some(b), Some(c)] = indices.map(|index| vertices.get(index).copied()) else {
             return;
         };
         if let Some(hit) = triangle_distance(origin, direction, [a, b, c])
@@ -210,6 +289,31 @@ mod tests {
             .id();
         world.entity_mut(root).add_child(figure);
         assert!((system.get(&world).unwrap().distance(root, ray).unwrap() - 9.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_skinned_character_is_picked_where_its_joints_put_it() {
+        use crate::character::{AnimatedCharacter, testing};
+        let mut world = World::new();
+        testing::stores(&mut world);
+        let prepared = testing::prepared(&mut world);
+        let root = testing::drawn(&mut world, &prepared);
+        let character = world.get::<AnimatedCharacter>(root).unwrap();
+        let (model, part) = (character.model, character.parts[0].entity);
+        let placement = world.get::<Transform>(model).unwrap().to_matrix();
+        // The triangle's bone is the second joint; its middle sits a third
+        // of the way up its bone-local triangle.
+        let bone = world.get::<SkinnedMesh>(part).unwrap().joints[1];
+        let held = world.get::<Transform>(bone).unwrap().to_matrix();
+        let middle = (placement * held).transform_point3(Vec3::new(0.0, 1.0 / 3.0, 0.0));
+        let facing = (placement * held).transform_vector3(Vec3::Z).normalize();
+        let ray = Ray3d::new(middle + facing * 10.0, Dir3::new(-facing).unwrap());
+        let mut system = SystemState::<Picker>::new(&mut world);
+        assert!((system.get(&world).unwrap().distance(root, ray).unwrap() - 10.0).abs() < 0.001);
+        // The joint moves the triangle aside, out of the ray's way, though
+        // the mesh is unchanged.
+        world.get_mut::<Transform>(bone).unwrap().translation.x += 5.0;
+        assert!(system.get(&world).unwrap().distance(root, ray).is_none());
     }
 
     #[test]

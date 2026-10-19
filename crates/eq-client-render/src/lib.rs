@@ -2010,7 +2010,8 @@ mod tests {
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
             .init_asset::<Image>()
             .init_asset::<Mesh>()
-            .init_asset::<StandardMaterial>();
+            .init_asset::<StandardMaterial>()
+            .init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
         let camera = |app: &mut App| {
             let world = app.world_mut();
             let mut cameras = world.query::<&OrbitCamera>();

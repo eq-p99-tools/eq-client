@@ -1,7 +1,7 @@
 //! Classic character archive discovery, independent of the renderer and session.
 
 mod model;
-pub use model::{Attachment, CharacterAsset, CharacterPose, Piece, load_character};
+pub use model::{Attachment, CharacterAsset, CharacterPose, Piece, SkinBind, load_character};
 
 use std::{
     collections::HashMap,
@@ -383,6 +383,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Prints how many bones the skeletons of every character archive in the
+    /// installation have, the most in each archive and every model over 256,
+    /// the most joints a skin may have where it is drawn; fails if any is.
+    #[test]
+    #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
+    fn inspect_bone_counts() {
+        let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
+        let mut archives: Vec<_> = std::fs::read_dir(&install)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.to_ascii_lowercase().ends_with("_chr.s3d"))
+            })
+            .collect();
+        archives.sort();
+        let (mut models, mut most, mut over) = (0, 0, Vec::new());
+        for archive in &archives {
+            let Ok(characters) = super::inspect_archive(archive) else {
+                continue;
+            };
+            let mut names: Vec<String> = characters
+                .into_iter()
+                .filter_map(|character| character.name.split('_').next().map(str::to_owned))
+                .collect();
+            names.sort();
+            names.dedup();
+            let mut archive_most = 0;
+            for name in names {
+                let Ok(asset) = super::load_character(archive, &name) else {
+                    continue;
+                };
+                models += 1;
+                archive_most = archive_most.max(asset.bone_count());
+                if asset.bone_count() > 256 {
+                    over.push(format!("{name} ({})", asset.bone_count()));
+                }
+            }
+            most = usize::max(most, archive_most);
+            let file = archive.file_name().unwrap_or_default().to_string_lossy();
+            println!("{file}: at most {archive_most} bones");
+        }
+        println!(
+            "{} archives, {models} models, at most {most} bones; over 256: {over:?}",
+            archives.len()
+        );
+        assert_eq!(over, Vec::<String>::new());
     }
 
     /// Prints, for every model in a zone's character archive, which movement

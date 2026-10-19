@@ -83,7 +83,6 @@ fn sync(
     players: Query<&character::Model, (With<Player>, Changed<character::Model>)>,
     figures: Query<Entity, With<Figure>>,
     mut cameras: Query<&mut Transform, With<PaperdollCamera>>,
-    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let Ok(model) = players.single() else {
         return;
@@ -99,7 +98,6 @@ fn sync(
         root,
         &model.0,
         0.0,
-        &mut meshes,
         &RenderLayers::layer(LAYER),
     );
     for mut camera in &mut cameras {

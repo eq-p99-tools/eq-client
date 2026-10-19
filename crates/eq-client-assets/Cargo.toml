@@ -15,5 +15,9 @@ libeq.workspace = true
 roxmltree.workspace = true
 thiserror.workspace = true
 
+[features]
+# A small built-in model, for other crates' tests.
+testing = []
+
 [lints]
 workspace = true

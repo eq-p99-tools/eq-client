@@ -17,6 +17,7 @@ image.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+eq-client-assets = { workspace = true, features = ["testing"] }
 eq-network-game.workspace = true
 
 [lints]
