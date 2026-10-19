@@ -2363,6 +2363,7 @@ mod tests {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<Queued>()
             .init_resource::<crate::chat::ChatState>()
             .init_resource::<crate::windows::pointer::Wheel>()
