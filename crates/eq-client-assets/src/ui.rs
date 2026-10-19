@@ -244,6 +244,19 @@ impl InstalledClient {
         }
     }
 
+    /// Where this client keeps its sound files; None until that is checked
+    /// for this client.
+    #[must_use]
+    pub const fn sound_files(self) -> Option<crate::sounds::SoundFiles> {
+        match self {
+            Self::Titanium => Some(crate::sounds::SoundFiles {
+                archive_stem: "snd",
+                folders: &["sounds"],
+            }),
+            Self::EqMac => None,
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
@@ -459,6 +472,8 @@ pub struct OfficialOptions {
     /// Whether the chat is logged from login: `Log` in `[Defaults]`, which
     /// the official `/log` saves.
     pub log: Option<bool>,
+    /// Whether sounds play: `Sound` in `[Defaults]`.
+    pub sound: Option<bool>,
     /// The Display page's Show PC Names: `PCNames` in `[Options]`.
     pub pc_names: Option<bool>,
     /// The Display page's Show NPC Names: `NPCNames` in `[Options]`.
@@ -485,6 +500,7 @@ fn options_from_ini(text: &str) -> OfficialOptions {
     };
     OfficialOptions {
         log: flag("Defaults", "Log"),
+        sound: flag("Defaults", "Sound"),
         pc_names: flag("Options", "PCNames"),
         npc_names: flag("Options", "NPCNames"),
         show_names_level: ini_value(text, "Defaults", "ShowNamesLevel")
@@ -972,6 +988,14 @@ Log=maybe
     }
 
     #[test]
+    fn eqclient_ini_says_whether_sounds_play() {
+        let sound = |text| options_from_ini(text).sound;
+        assert_eq!(sound("[Defaults]\nSound=TRUE\nSoundVolume=0\n"), Some(true));
+        assert_eq!(sound("[Defaults]\nSound=FALSE\n"), Some(false));
+        assert_eq!(sound("[Options]\nSound=TRUE\n"), None);
+    }
+
+    #[test]
     fn eqclient_ini_says_whose_names_show_and_how_far_and_fast_the_view_goes() {
         assert_eq!(
             options_from_ini(
@@ -987,6 +1011,7 @@ MouseSensitivity=4
             ),
             OfficialOptions {
                 log: None,
+                sound: None,
                 pc_names: Some(true),
                 npc_names: Some(false),
                 show_names_level: Some(4),

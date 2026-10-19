@@ -175,6 +175,9 @@ pub enum Step {
     HoldClick(ClickTarget, Duration),
     /// Logs a numeric summary of player, resource, cast and buff state.
     Report(String),
+    /// Plays one of the installation's sound files by its name, on the
+    /// listener, as a check that sounds are heard.
+    Sound(String),
     /// Saves the primary window to a PNG beside the script.
     Screenshot(PathBuf),
     /// Closes the client.
@@ -376,6 +379,12 @@ pub enum TradeClick {
     SellChosen,
 }
 
+/// Whether a name is a WAV file's, such as `levelup.wav`.
+fn wav_name(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(stem, extension)| !stem.is_empty() && extension.eq_ignore_ascii_case("wav"))
+}
+
 /// Parses a script: one step per line, `#` starts a comment.
 ///
 /// # Errors
@@ -488,6 +497,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
             Step::HoldClick(parse_click(target)?, millis(duration, MAX_HOLD)?)
         }
         ("report", label) => Step::Report(label.join(" ")),
+        ("sound", [name]) if wav_name(name) => Step::Sound((*name).to_owned()),
         ("screenshot", [name])
             if Path::new(name)
                 .file_name()
@@ -1506,6 +1516,23 @@ chat tell Friend inc now
             "click pet dance",
             "click option",
             "click option shiny",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parses_a_sound_by_its_file_name() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("sound LevelUp.WAV\n", base).unwrap(),
+            [Step::Sound("LevelUp.WAV".into())]
+        );
+        for bad in [
+            "sound",
+            "sound .wav",
+            "sound theme.mp3",
+            "sound a.wav b.wav",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }

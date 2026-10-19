@@ -57,6 +57,7 @@ mod sheets;
 mod skills;
 mod skin;
 mod skinned;
+mod sounds;
 mod spell_effects;
 mod spell_icons;
 mod spellbook;
@@ -259,6 +260,7 @@ pub fn run(
         let official = settings.options();
         for (toggle, setting) in [
             (Toggle::Log, official.log),
+            (Toggle::Sound, official.sound),
             (Toggle::PcNames, official.pc_names),
             (Toggle::NpcNames, official.npc_names),
         ] {
@@ -354,6 +356,7 @@ pub fn run(
 /// list that the tests' app starts from too.
 fn init_presentation(app: &mut App) {
     app.init_resource::<spell_effects::SpellParticles>()
+        .init_resource::<sounds::Sounds>()
         .init_resource::<doors::Hinges>()
         .init_resource::<options::OptionsState>()
         .init_resource::<logs::ChatLog>()
@@ -507,6 +510,7 @@ fn schedule(app: &mut App) {
                 online::tick,
                 daylight::update,
                 spell_effects::load,
+                sounds::load,
             )
                 .chain()
                 .in_set(Stage::Receive),
@@ -702,6 +706,7 @@ fn schedule(app: &mut App) {
                 outfit::dress,
                 character::animate,
                 spell_effects::update,
+                sounds::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
                 schedule_screenshot,
@@ -1024,6 +1029,7 @@ fn spawn_camera(
         projection,
         orbit_transform(&orbit),
         orbit,
+        sounds::listener(),
     ));
 }
 

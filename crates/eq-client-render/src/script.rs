@@ -384,10 +384,11 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    (mut chat, mut moves, mut front): (
+    (mut chat, mut moves, mut front, mut sounds): (
         ResMut<super::chat::ChatState>,
         ResMut<super::windows::Moves>,
         ResMut<super::login::FrontEnd>,
+        ResMut<super::sounds::Sounds>,
     ),
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
@@ -1096,6 +1097,11 @@ pub(super) fn drive(
             report::state(label, &online, &observed, players.single().ok());
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
+            return;
+        }
+        Step::Sound(name) => {
+            info!(name, "Script plays a sound");
+            sounds.play(name, None);
             return;
         }
         Step::Screenshot(path) => {
