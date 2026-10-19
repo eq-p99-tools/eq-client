@@ -394,6 +394,7 @@ mod tests {
         let files = eq_client_assets::sounds::SoundFiles {
             archive_stem: "snd",
             folders: &[],
+            numbers: "SoundAssets.txt",
         };
         let mut app = App::new();
         app.add_plugins((
@@ -492,6 +493,7 @@ mod tests {
         let files = eq_client_assets::sounds::SoundFiles {
             archive_stem: "snd",
             folders: &[],
+            numbers: "SoundAssets.txt",
         };
         sounds.bank = Some(Arc::new(Mutex::new(
             SoundBank::open(&empty, files).unwrap(),
