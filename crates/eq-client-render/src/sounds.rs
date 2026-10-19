@@ -10,7 +10,7 @@ use bevy::{
     audio::{AudioSink, PlaybackMode, SpatialAudioSink, SpatialScale, Volume},
     prelude::*,
 };
-use eq_client_assets::sounds::{SoundBank, SoundError};
+use eq_client_assets::sounds::{SoundBank, SoundError, SoundNumbers};
 use std::{
     collections::HashMap,
     io::Cursor,
@@ -52,10 +52,12 @@ pub(super) struct Sounds {
     /// The installation, once its sounds are asked for.
     directory: Option<PathBuf>,
     /// The bank's opening, under way.
-    open: Background<Option<SoundBank>>,
+    open: Background<Option<(SoundBank, SoundNumbers)>>,
     /// The bank, once open; None while opening, or when this client has no
     /// sound files checked or they could not be read.
     bank: Option<Arc<Mutex<SoundBank>>>,
+    /// Each sound's file name by its number; empty until the bank is open.
+    numbers: SoundNumbers,
     /// Each file asked for, by its lower-cased name.
     clips: HashMap<String, Clip>,
     /// The bytes of the files kept ready.
@@ -77,6 +79,7 @@ impl Default for Sounds {
             directory: None,
             open: Background::default(),
             bank: None,
+            numbers: SoundNumbers::default(),
             clips: HashMap::new(),
             kept: 0,
             plays: 0,
@@ -132,6 +135,15 @@ impl Sounds {
         }
     }
 
+    /// Asks for a sound by its number in the installation's numbers file, as
+    /// [`Sounds::play`] asks by name; a number that names no file is not
+    /// heard.
+    pub(super) fn play_number(&mut self, number: u32, at: Option<Vec3>) {
+        if let Some(name) = self.numbers.name(number).map(str::to_owned) {
+            self.play(&name, at);
+        }
+    }
+
     /// Lets go of the least recently played files until those kept fit the
     /// budget. A sound playing keeps its own hold on its file.
     fn trim(&mut self) {
@@ -165,7 +177,15 @@ pub(super) fn load(settings: Res<super::ViewerSettings>, mut sounds: ResMut<Soun
             sounds
                 .open
                 .start(0, move || match SoundBank::open(&path, files) {
-                    Ok(bank) => Some(bank),
+                    Ok(bank) => {
+                        // Without the numbers, sounds named by number are
+                        // not heard; those named by file still are.
+                        let numbers = SoundNumbers::read(&path, files).unwrap_or_else(|error| {
+                            warn!("sounds named by number are off: {error}");
+                            SoundNumbers::default()
+                        });
+                        Some((bank, numbers))
+                    }
                     Err(error) => {
                         warn!("sounds are off: {error}");
                         None
@@ -174,11 +194,10 @@ pub(super) fn load(settings: Res<super::ViewerSettings>, mut sounds: ResMut<Soun
         }
         sounds.directory = Some(directory);
     }
-    if let Some(bank) = sounds.open.poll(Some(0)) {
-        if let Some(bank) = &bank {
-            info!(files = bank.len(), "Sound files");
-        }
-        sounds.bank = bank.map(|bank| Arc::new(Mutex::new(bank)));
+    if let Some(Some((bank, numbers))) = sounds.open.poll(Some(0)) {
+        info!(files = bank.len(), numbered = numbers.len(), "Sound files");
+        sounds.bank = Some(Arc::new(Mutex::new(bank)));
+        sounds.numbers = numbers;
     }
 }
 
@@ -394,6 +413,7 @@ mod tests {
         let files = eq_client_assets::sounds::SoundFiles {
             archive_stem: "snd",
             folders: &[],
+            numbers: "SoundAssets.txt",
         };
         let mut app = App::new();
         app.add_plugins((
@@ -492,6 +512,7 @@ mod tests {
         let files = eq_client_assets::sounds::SoundFiles {
             archive_stem: "snd",
             folders: &[],
+            numbers: "SoundAssets.txt",
         };
         sounds.bank = Some(Arc::new(Mutex::new(
             SoundBank::open(&empty, files).unwrap(),

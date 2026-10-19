@@ -23,6 +23,9 @@ pub struct SoundFiles {
     pub archive_stem: &'static str,
     /// Folders under the installation holding loose WAV files.
     pub folders: &'static [&'static str],
+    /// The text file naming each sound by its number, one `number^name`
+    /// a line, such as `100^example.wav`.
+    pub numbers: &'static str,
 }
 
 impl SoundFiles {
@@ -109,6 +112,65 @@ fn chunk(bytes: &[u8], kind: [u8; 4]) -> Option<&[u8]> {
         at = body.checked_add(size)?.checked_add(size % 2)?;
     }
     None
+}
+
+/// Each sound's file name by its number, as the installation's numbers file
+/// gives them; a number whose name is `Unknown` names no file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SoundNumbers(HashMap<u32, String>);
+
+impl SoundNumbers {
+    /// Reads the numbers file a client generation keeps in `eq_directory`.
+    ///
+    /// # Errors
+    /// Fails when the file cannot be read.
+    pub fn read(eq_directory: &Path, files: SoundFiles) -> Result<Self, SoundError> {
+        let path = eq_directory.join(files.numbers);
+        let bytes = std::fs::read(&path).map_err(|source| SoundError::Io { path, source })?;
+        Ok(Self::parse(&String::from_utf8_lossy(&bytes)))
+    }
+
+    /// The numbers in a numbers file's text; a line it cannot read is left
+    /// out, and the first line for a number is the one kept.
+    #[must_use]
+    pub fn parse(text: &str) -> Self {
+        let mut names = HashMap::new();
+        for line in text.lines() {
+            let Some((number, name)) = line.split_once('^') else {
+                continue;
+            };
+            let name = name.trim();
+            let Ok(number) = number.trim().parse() else {
+                continue;
+            };
+            if name.is_empty() || name.eq_ignore_ascii_case("unknown") {
+                continue;
+            }
+            names
+                .entry(number)
+                .or_insert_with(|| name.to_ascii_lowercase());
+        }
+        Self(names)
+    }
+
+    /// The file name of a sound's number, lower-cased; None when the file
+    /// names none.
+    #[must_use]
+    pub fn name(&self, number: u32) -> Option<&str> {
+        self.0.get(&number).map(String::as_str)
+    }
+
+    /// How many numbers name a file.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether no number names a file.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// One sound file, read whole.
@@ -285,7 +347,18 @@ mod tests {
     const FILES: SoundFiles = SoundFiles {
         archive_stem: "snd",
         folders: &["sounds"],
+        numbers: "SoundAssets.txt",
     };
+
+    #[test]
+    fn numbers_name_files_except_unknown_ones() {
+        let numbers =
+            SoundNumbers::parse("1^Unknown\n100^First.WAV\r\n100^later.wav\nx^bad.wav\n7\n8^\n");
+        assert_eq!(numbers.name(100), Some("first.wav"));
+        assert_eq!(numbers.name(1), None);
+        assert_eq!(numbers.name(8), None);
+        assert_eq!(numbers.len(), 1);
+    }
 
     /// A WAV file with a format chunk and `samples` bytes of 8-bit samples,
     /// after a padded odd-length chunk the reader must step over.

@@ -252,6 +252,7 @@ impl InstalledClient {
             Self::Titanium => Some(crate::sounds::SoundFiles {
                 archive_stem: "snd",
                 folders: &["sounds"],
+                numbers: "SoundAssets.txt",
             }),
             Self::EqMac => None,
         }
