@@ -15,11 +15,13 @@ pub(super) struct Selection {
 }
 
 impl Selection {
+    /// A list as it arrives, with its first character highlighted, so the
+    /// screen shows a character at once (inferred, 6.255).
     pub fn new(id: u64, entries: Vec<CharacterChoice>) -> Self {
         Self {
             id,
+            selected: entries.first().map(|entry| entry.slot),
             entries,
-            selected: None,
             submitted: false,
             message: String::new(),
         }
@@ -33,6 +35,11 @@ impl Selection {
     /// The slot of the character chosen, if any.
     pub(crate) const fn chosen(&self) -> Option<u8> {
         self.selected
+    }
+
+    /// The listed character in a slot, if any.
+    pub(crate) fn entry(&self, slot: u8) -> Option<&CharacterChoice> {
+        self.entries.iter().find(|entry| entry.slot == slot)
     }
 
     /// Whether Enter World has been asked for with this list.
@@ -119,6 +126,7 @@ pub(super) fn update(
         Res<crate::login::FrontEnd>,
         Res<crate::loading::Screen>,
     ),
+    preview: Res<crate::select_preview::Preview>,
 ) {
     let focused = keys.focused();
     let keys = navigation.sample(&keys.input);
@@ -175,8 +183,9 @@ pub(super) fn update(
     }
     let status = lines.status.text();
     let skinned = skinned.has(WindowId::CharacterSelect);
+    let showing = preview.showing();
     let signature = format!(
-        "{visible}:{skinned}:{status}:{:?}",
+        "{visible}:{skinned}:{showing}:{status}:{:?}",
         online.selection.as_ref().map(|s| (
             s.id,
             s.selected,
@@ -201,7 +210,12 @@ pub(super) fn update(
     if online.selection.as_ref().is_some_and(Selection::entering) {
         crate::loading::cover(&mut commands, &screen, Root, Display::Flex);
     } else {
-        spawn(&mut commands, online.selection.as_ref(), status, skinned);
+        spawn(
+            &mut commands,
+            online.selection.as_ref(),
+            status,
+            (skinned, showing),
+        );
     }
 }
 
@@ -265,85 +279,100 @@ fn guidance<'a>(selection: Option<&'a Selection>, status: &'a str) -> &'a str {
     }
 }
 
-/// Covers the zone preview until a character has completed zone admission:
-/// under the skin's list, with the list's guidance at its foot, or with the
-/// client's own panel on it.
-fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str, skinned: bool) {
+/// Covers the scene behind the screen until a character has completed zone
+/// admission: under the skin's list, with the list's guidance at its foot,
+/// or with the client's own panel on it. While the highlighted character
+/// stands in the scene (`showing`), the cover is clear and lets the pointer
+/// through to the camera, and the client's own panel moves to the left.
+fn spawn(
+    commands: &mut Commands,
+    selection: Option<&Selection>,
+    status: &str,
+    (skinned, showing): (bool, bool),
+) {
+    let backdrop = BackgroundColor(if showing { Color::NONE } else { theme::COVER });
     if skinned {
-        commands
-            .spawn((
-                Root,
-                Button,
-                // Under the skin's list, which is drawn at the screen's layer.
-                GlobalZIndex(super::windows::Layer::Screen.base() - 1),
-                Node {
-                    position_type: PositionType::Absolute,
-                    width: percent(100),
-                    height: percent(100),
-                    align_items: AlignItems::FlexEnd,
-                    justify_content: JustifyContent::Center,
-                    padding: UiRect::bottom(px(40)),
-                    ..default()
-                },
-                BackgroundColor(theme::COVER),
-            ))
-            .with_children(|root| {
-                theme::label(root, guidance(selection, status), Size::Label);
-            });
-        return;
-    }
-    commands
-        .spawn((
+        let mut root = commands.spawn((
             Root,
-            Button,
+            // Under the skin's list, which is drawn at the screen's layer.
             GlobalZIndex(super::windows::Layer::Screen.base() - 1),
             Node {
                 position_type: PositionType::Absolute,
                 width: percent(100),
                 height: percent(100),
-                align_items: AlignItems::Center,
+                align_items: AlignItems::FlexEnd,
                 justify_content: JustifyContent::Center,
+                padding: UiRect::bottom(px(40)),
                 ..default()
             },
-            BackgroundColor(theme::COVER),
-        ))
-        .with_children(|root| {
-            root.spawn((
-                Node {
-                    width: px(440),
-                    max_width: percent(95),
-                    padding: UiRect::all(px(24)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(12),
-                    border_radius: BorderRadius::all(px(8)),
-                    ..default()
-                },
-                BackgroundColor(theme::TITLE_BAR),
-            ))
-            .with_children(|panel| {
-                theme::label(panel, "CHARACTER SELECT", Size::Display);
-                let Some(selection) = selection.filter(|selection| !selection.entries.is_empty())
-                else {
-                    theme::label(panel, guidance(selection, status), Size::Large);
-                    return;
-                };
-                for entry in &selection.entries {
-                    let detail = entry
-                        .level
-                        .map_or_else(String::new, |level| format!("  |  Level {level}"));
-                    button(
-                        panel,
-                        Action::Choose(entry.slot),
-                        &format!("{}{detail}", entry.name),
-                        selection.selected == Some(entry.slot),
-                    );
-                }
-                if selection.selected.is_some() && !selection.submitted {
-                    button(panel, Action::Enter, "Enter World", true);
-                }
-                theme::label(panel, guidance(Some(selection), status), Size::Label);
-            });
+            backdrop,
+        ));
+        if !showing {
+            root.insert(Button);
+        }
+        root.with_children(|root| {
+            theme::label(root, guidance(selection, status), Size::Label);
         });
+        return;
+    }
+    let mut root = commands.spawn((
+        Root,
+        GlobalZIndex(super::windows::Layer::Screen.base() - 1),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            align_items: AlignItems::Center,
+            justify_content: if showing {
+                JustifyContent::FlexStart
+            } else {
+                JustifyContent::Center
+            },
+            padding: UiRect::left(px(if showing { 40 } else { 0 })),
+            ..default()
+        },
+        backdrop,
+    ));
+    if !showing {
+        root.insert(Button);
+    }
+    root.with_children(|root| {
+        root.spawn((
+            Node {
+                width: px(440),
+                max_width: percent(95),
+                padding: UiRect::all(px(24)),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(12),
+                border_radius: BorderRadius::all(px(8)),
+                ..default()
+            },
+            BackgroundColor(theme::TITLE_BAR),
+        ))
+        .with_children(|panel| {
+            theme::label(panel, "CHARACTER SELECT", Size::Display);
+            let Some(selection) = selection.filter(|selection| !selection.entries.is_empty())
+            else {
+                theme::label(panel, guidance(selection, status), Size::Large);
+                return;
+            };
+            for entry in &selection.entries {
+                let detail = entry
+                    .level
+                    .map_or_else(String::new, |level| format!("  |  Level {level}"));
+                button(
+                    panel,
+                    Action::Choose(entry.slot),
+                    &format!("{}{detail}", entry.name),
+                    selection.selected == Some(entry.slot),
+                );
+            }
+            if selection.selected.is_some() && !selection.submitted {
+                button(panel, Action::Enter, "Enter World", true);
+            }
+            theme::label(panel, guidance(Some(selection), status), Size::Label);
+        });
+    });
 }
 
 fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selected: bool) {
@@ -385,6 +414,7 @@ mod tests {
             .init_resource::<crate::skinned::Skinned>()
             .init_resource::<crate::login::FrontEnd>()
             .init_resource::<crate::loading::Screen>()
+            .init_resource::<crate::select_preview::Preview>()
             .add_message::<AppExit>()
             .add_systems(Update, update);
         app.world_mut().spawn((
@@ -518,6 +548,9 @@ mod tests {
                 look: None,
             }],
         );
+        // The list arrives with its first character highlighted.
+        assert_eq!(selection.chosen(), Some(3));
+        selection.selected = None;
         selection.enter(&sender, &world);
         assert!(rx.try_recv().is_err());
         selection.selected = Some(3);

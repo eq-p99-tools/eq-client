@@ -1,0 +1,17 @@
+# Where each zone's character stands at character select (eq-client's own
+# data: values from the spot tool, or picked by hand; never a server's or a
+# database's).
+#
+# frame: y x z as /loc prints them (EQ world units, the server's y first);
+#   the character stands on the first floor at or below z + 5. heading: the
+#   way the character faces, in the server's 0-512 units. distance: the
+#   camera's distance from the character, in world units. pitch: how far the
+#   camera looks down at the character, in degrees.
+#
+# One zone a line: short name, y, x, z, heading, distance, pitch, and
+# "reviewed" once a render of the spot has been looked at, "unreviewed"
+# while it is the tool's untouched proposal. Anything after "#" is a
+# comment. A zone without a line uses the fallback: the highest surface at
+# the centre of the zone's bounds.
+#
+# zone          y         x         z       heading  distance  pitch  state

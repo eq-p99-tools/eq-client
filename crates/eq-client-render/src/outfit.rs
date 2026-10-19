@@ -98,7 +98,8 @@ fn shape_of(asset: &CharacterAsset, race: u32, look: &Appearance, helm: bool) ->
 }
 
 /// Redraws a character's parts and held items whenever its gear changes:
-/// other spawns from their spawn record and wear changes, the player and the
+/// other spawns from their spawn record and wear changes, a character
+/// shown at character select from its list's look, the player and the
 /// paperdoll figure from the player's.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Bevy system parameters.
 pub(super) fn dress(
@@ -112,27 +113,13 @@ pub(super) fn dress(
     mut characters: Query<(
         &mut super::character::AnimatedCharacter,
         Option<&super::entities::RemoteEntity>,
+        Option<&super::select_preview::Look>,
     )>,
     mut parts: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
     (mut images, mut meshes, mut materials): super::item_models::GpuAssets,
 ) {
-    for (mut character, remote) in &mut characters {
-        let (race, look) = match remote {
-            Some(remote) => online
-                .world()
-                .spawn(remote.id)
-                .map(|spawn| &spawn.state)
-                .map(|spawn| (spawn.race, spawn.appearance)),
-            // The player's model and its paperdoll copy.
-            None => online
-                .world()
-                .player()
-                .map(|player| (player.race, player.appearance)),
-        }
-        .unwrap_or_default();
-        // Other characters always show their helms; the player's own follows
-        // the Show My Helm option.
-        let helm = remote.is_some() || options.options.show_helm;
+    for (mut character, remote, listed) in &mut characters {
+        let ((race, look), helm) = worn(listed, remote, online.world(), options.options.show_helm);
         if character.dressed == Some((look, helm)) {
             continue;
         }
@@ -180,6 +167,32 @@ pub(super) fn dress(
             }
         }
     }
+}
+
+/// What a character wears, by race and appearance, and whether its helm
+/// shows: a character shown at select wears its list's look, other spawns
+/// their spawn record's, and the player (and the paperdoll copy) the
+/// player's. Other characters always show their helms, and so does a
+/// listed one, whose list says nothing of it; the player's own follows the
+/// Show My Helm option.
+fn worn(
+    listed: Option<&super::select_preview::Look>,
+    remote: Option<&super::entities::RemoteEntity>,
+    world: &eq_client_core::world::ClientWorld,
+    show_helm: bool,
+) -> ((u32, Appearance), bool) {
+    let look = match (listed, remote) {
+        (Some(listed), _) => Some((listed.race, listed.appearance)),
+        (None, Some(remote)) => world
+            .spawn(remote.id)
+            .map(|spawn| &spawn.state)
+            .map(|spawn| (spawn.race, spawn.appearance)),
+        (None, None) => world
+            .player()
+            .map(|player| (player.race, player.appearance)),
+    }
+    .unwrap_or_default();
+    (look, remote.is_some() || listed.is_some() || show_helm)
 }
 
 /// Puts the items this appearance holds in the character's hands, replacing
@@ -239,5 +252,31 @@ fn hold(
             entity,
             point,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_character_shown_at_select_wears_its_lists_look_with_its_helm() {
+        let world = eq_client_core::world::ClientWorld::default();
+        let mut appearance = Appearance::default();
+        appearance.materials[1] = 3;
+        let listed = super::super::select_preview::Look {
+            race: 8,
+            appearance,
+        };
+        assert_eq!(
+            worn(Some(&listed), None, &world, false),
+            ((8, appearance), true)
+        );
+        // The player's own model, with no player yet, wears nothing and
+        // follows Show My Helm.
+        assert_eq!(
+            worn(None, None, &world, false),
+            ((0, Appearance::default()), false)
+        );
     }
 }

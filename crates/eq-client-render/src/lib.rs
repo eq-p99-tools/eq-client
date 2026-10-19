@@ -53,6 +53,7 @@ mod reading;
 mod resources;
 mod resurrection;
 pub mod script;
+mod select_preview;
 mod sheets;
 mod skills;
 mod skin;
@@ -391,6 +392,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<names::NameTags>()
         .init_resource::<item_models::ItemLibrary>()
         .init_resource::<outfit::Wardrobe>()
+        .init_resource::<select_preview::Preview>()
         .init_resource::<windows::DragState>()
         .init_resource::<windows::Layouts>()
         .init_resource::<windows::Shown>()
@@ -519,6 +521,8 @@ fn schedule(app: &mut App) {
                 entities::interpolate,
                 doors::reconcile,
                 ground::reconcile,
+                select_preview::show,
+                select_preview::turn,
             )
                 .chain()
                 .in_set(Stage::Scene),
@@ -703,6 +707,7 @@ fn schedule(app: &mut App) {
                 outbox::grey_out,
                 tooltip::end_scripted_presses,
                 tooltip::show,
+                select_preview::veil,
                 outfit::dress,
                 character::animate,
                 spell_effects::update,
@@ -1286,6 +1291,15 @@ fn movement_liquid(liquid: eq_client_assets::regions::Liquid) -> eq_client_core:
 
 /// Includes solid terrain and transformed object geometry, including hidden boundaries,
 /// and the zone's water and lava.
+/// A zone's solid geometry as movement and the camera meet it: its own
+/// collision with its placed objects', and its water and lava; None where
+/// it has none that can be built. For tools that weigh a zone's shape, such
+/// as the character select spot proposer.
+#[must_use]
+pub fn zone_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
+    build_collision(zone)
+}
+
 fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
     let mut triangles = zone.collision.clone();
     for object in &zone.objects {

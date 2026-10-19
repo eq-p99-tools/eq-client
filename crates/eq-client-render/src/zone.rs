@@ -35,6 +35,48 @@ impl PreparedEntry {
     pub(super) fn place(&mut self, position: eq_client_core::WorldPosition) {
         self.entry.placed = placement(position);
     }
+
+    /// The renderer yaw the placed character faces.
+    pub(super) fn facing(&self) -> f32 {
+        self.entry.placed.rotation.to_euler(EulerRot::YXZ).0
+    }
+
+    /// Stands the character on the floor at a character select spot: the
+    /// first floor at or below the spot's height and a little above it, or
+    /// without a spot (or a floor under it) the highest surface at the
+    /// centre of the zone's bounds, as the offline viewer starts.
+    pub(super) fn stand(&mut self, spot: Option<&eq_client_core::select_spots::Spot>) {
+        let (min, max) = self
+            .entry
+            .zone
+            .bounds()
+            .map_or((Vec3::splat(-100.0), Vec3::splat(100.0)), |(min, max)| {
+                (Vec3::from_array(min), Vec3::from_array(max))
+            });
+        let centre = (min + max) * 0.5;
+        let on_spot = spot.and_then(|spot| {
+            let position = spot.position();
+            let point = Vec3::from_array(render_position(position));
+            let floor = self.terrain.height_below(
+                point.x,
+                point.z,
+                point.y + eq_client_core::select_spots::ABOVE_FLOOR,
+            )?;
+            Some((Vec3::new(point.x, floor, point.z), position.heading))
+        });
+        let (feet, heading) = on_spot.unwrap_or_else(|| {
+            let floor = self
+                .terrain
+                .height_at(centre.x, centre.z)
+                .unwrap_or(centre.y);
+            (Vec3::new(centre.x, floor, centre.z), 0.0)
+        });
+        self.entry.placed =
+            Transform::from_translation(feet + Vec3::Y * self.entry.body.feet_offset)
+                .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
+                    heading,
+                )));
+    }
 }
 
 impl Entry {
@@ -79,6 +121,40 @@ impl Entry {
             placed: placement(player.position),
             body: PlayerBody {
                 feet_offset,
+                height,
+            },
+        })
+    }
+
+    /// A listed character's zone at character select, with the character's
+    /// model standing in it once [`PreparedEntry::stand`] places it, or why
+    /// it cannot be shown.
+    pub(super) fn preview(
+        zone_name: &str,
+        (race, gender): (u32, u8),
+        directory: &std::path::Path,
+    ) -> Result<Self, String> {
+        let zone = eq_client_assets::load_zone(directory, zone_name)
+            .map_err(|error| format!("Zone {zone_name} could not be loaded: {error}"))?;
+        let character = eq_client_core::races::model(race, u32::from(gender))
+            .ok_or_else(|| format!("No model for race {race}"))
+            .and_then(|model| {
+                eq_client_assets::characters::load_installed_character(
+                    directory,
+                    zone_name,
+                    model,
+                    &eq_client_assets::characters::DonorArchives::default(),
+                )
+                .map_err(|error| format!("Character model: {error}"))
+            })?;
+        let height = character.height();
+        Ok(Self {
+            zone,
+            character: Some(character),
+            placed: Transform::IDENTITY,
+            body: PlayerBody {
+                // The racial default size, as no list gives one.
+                feet_offset: eq_client_core::z_offset(race, 0.0),
                 height,
             },
         })
