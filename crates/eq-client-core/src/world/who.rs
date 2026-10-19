@@ -54,11 +54,7 @@ impl ZonePlayer {
 pub(super) fn relist(change: ListingChange, level: &mut u8, listing: &mut Listing) {
     match change {
         ListingChange::Level(new) => *level = new,
-        ListingChange::Guild(guild) => listing.guild = guild,
-        ListingChange::Anonymity(anonymity) => listing.anonymity = anonymity,
-        ListingChange::GameMaster(on) => listing.game_master = on,
-        ListingChange::Away(on) => listing.away = on,
-        ListingChange::Looking(on) => listing.looking = on,
+        other => listing.apply(other),
     }
 }
 

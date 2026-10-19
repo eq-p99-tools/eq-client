@@ -5,7 +5,7 @@
 //! looks for each part, plus whole bodies and heads to swap in for robes and
 //! helms ([`shape`]). This module only chooses: the renderer loads what it
 //! names and keeps the base look when a model lacks one.
-pub use eq_network_game::appearance::{Appearance, TextureSlot, WearChange};
+pub use eq_network_game::appearance::{Appearance, Features, TextureSlot, WearChange};
 
 /// Armor materials classic models ship textures for: leather, chain, plate
 /// and, on some models, a fourth look. Robes (10 and up) swap the whole body

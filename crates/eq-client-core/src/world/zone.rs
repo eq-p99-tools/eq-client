@@ -8,7 +8,7 @@ use crate::{
     combat::{ConColor, Consideration},
     doors::DoorTable,
     ground::Objects,
-    outfit::WearChange,
+    outfit::{Features, WearChange},
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -126,6 +126,28 @@ impl Zone {
     pub(super) fn wear(&mut self, change: &WearChange) {
         if let Some(spawn) = self.spawns.get_mut(&change.spawn_id) {
             spawn.state.appearance.apply(change);
+        }
+    }
+
+    /// A named spawn's face or hair changed.
+    pub(super) fn features(&mut self, id: Option<u16>, features: Features) {
+        if let Some(spawn) = id.and_then(|id| self.spawns.get_mut(&id)) {
+            spawn.state.appearance.set_features(features);
+        }
+    }
+
+    /// A spawn the session named took a new name.
+    pub(super) fn rename(&mut self, id: Option<u16>, name: &str) {
+        if let Some(spawn) = id.and_then(|id| self.spawns.get_mut(&id)) {
+            name.clone_into(&mut spawn.state.name);
+        }
+    }
+
+    /// A corpse lies somewhere new, facing as it did.
+    pub(super) fn corpse_moved(&mut self, id: u16, [x, y, z]: [f32; 3]) {
+        if let Some(spawn) = self.spawns.get_mut(&id) {
+            let position = &mut spawn.state.position;
+            (position.x, position.y, position.z) = (x, y, z);
         }
     }
 
