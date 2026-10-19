@@ -818,12 +818,13 @@ fn setup_scene(
         .camera_distance
         .unwrap_or(default_radius)
         .clamp(20.0, 20_000.0);
+    let placed = Transform::from_translation(player_position);
     scene.enter(
         &mut commands,
         zone::Entry {
             zone,
             character,
-            placed: Transform::from_translation(player_position),
+            placed,
             body,
         }
         .prepare(),
@@ -831,12 +832,7 @@ fn setup_scene(
         &mut online.regions,
     );
     spawn_lighting(&mut commands, &mut ambient_light);
-    spawn_camera(
-        &mut commands,
-        player_position,
-        radius,
-        settings.0.projection,
-    );
+    spawn_camera(&mut commands, placed, radius, settings.0.projection);
 }
 
 fn spawn_static_zone(
@@ -978,19 +974,39 @@ fn spawn_lighting(commands: &mut Commands, ambient_light: &mut GlobalAmbientLigh
     };
 }
 
+/// The chase view's pitch as it first opens: a little above the player,
+/// looking down past them. Inferred, item 6.240.
+const CHASE_PITCH: f32 = -20.0_f32.to_radians();
+
+/// The orbit yaw that puts the camera behind whatever faces the render yaw
+/// `facing`, looking along it, so W walks that way: the camera sits opposite
+/// the direction it looks.
+fn behind(facing: f32) -> f32 {
+    facing + std::f32::consts::PI
+}
+
+/// Turns the camera to start behind a placed player, looking the way they
+/// face, keeping the pitch and zoom the player chose.
+fn start_behind(camera: &mut OrbitCamera, placed: &Transform) {
+    camera.yaw = behind(placed.rotation.to_euler(EulerRot::YXZ).0);
+}
+
 fn spawn_camera(
     commands: &mut Commands,
-    player_position: Vec3,
+    placed: Transform,
     radius: f32,
     projection_style: ProjectionStyle,
 ) {
-    let orbit = OrbitCamera {
-        focus: player_position,
+    let mut orbit = OrbitCamera {
+        focus: placed.translation,
         radius,
-        yaw: 0.75,
-        pitch: -60.0_f32.to_radians(),
+        yaw: 0.0,
+        pitch: CHASE_PITCH,
         pulled: None,
     };
+    // The first zone is entered before this camera exists, so it starts
+    // behind the player here; later entries turn it in `Scene::enter`.
+    start_behind(&mut orbit, &placed);
     let mut projection = match projection_style {
         ProjectionStyle::Perspective => Projection::Perspective(PerspectiveProjection {
             near: 1.0,
@@ -1957,6 +1973,113 @@ mod tests {
                 .is_none()
         );
         assert!(both.pulled.is_some_and(|shown| shown < 40.0));
+    }
+
+    /// The EQ heading W walks along with the camera at `yaw`, as the script's
+    /// `camera` step test reads it.
+    fn walked_heading(yaw: f32) -> f32 {
+        let walk = super::camera_relative_direction(0.0, 1.0, yaw);
+        eq_client_core::world_heading(walk.x.atan2(walk.z))
+    }
+
+    fn assert_walks_along(yaw: f32, heading: f32) {
+        let walked = walked_heading(yaw);
+        let error = (walked - heading).rem_euclid(512.0);
+        assert!(error.min(512.0 - error) < 0.01, "{heading} -> {walked}");
+    }
+
+    /// The player placed at `heading`, as the server's position places them.
+    fn placed_facing(heading: f32) -> bevy::prelude::Transform {
+        use super::*;
+        Transform::from_xyz(10.0, 2.0, -5.0).with_rotation(Quat::from_rotation_y(
+            eq_client_core::render_heading(heading),
+        ))
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "Exact equality verifies the pitch and zoom are left as chosen"
+    )]
+    fn the_camera_starts_behind_the_player_and_turns_behind_them_on_each_zone_entry() {
+        use super::*;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>();
+        let camera = |app: &mut App| {
+            let world = app.world_mut();
+            let mut cameras = world.query::<&OrbitCamera>();
+            let camera = cameras.single(world).unwrap();
+            (camera.yaw, camera.pitch, camera.radius)
+        };
+        // Entering the world: the first zone, then the camera, as `setup_scene`
+        // does them.
+        app.world_mut()
+            .run_system_once(|mut commands: Commands| {
+                spawn_camera(
+                    &mut commands,
+                    placed_facing(100.0),
+                    120.0,
+                    ProjectionStyle::Perspective,
+                );
+            })
+            .unwrap();
+        let (yaw, pitch, radius) = camera(&mut app);
+        assert_walks_along(yaw, 100.0);
+        assert_eq!((pitch, radius), (CHASE_PITCH, 120.0));
+        assert!((CHASE_PITCH - (-20.0_f32).to_radians()).abs() < f32::EPSILON);
+        // The player has turned the camera and zoomed; a zone entry facing 400
+        // turns it behind them again and keeps the rest.
+        app.world_mut()
+            .run_system_once(|mut cameras: Query<&mut OrbitCamera>| {
+                let mut camera = cameras.single_mut().unwrap();
+                camera.pitch = -0.9;
+                camera.radius = 60.0;
+            })
+            .unwrap();
+        app.world_mut()
+            .run_system_once(|mut commands: Commands, mut scene: zone::Scene| {
+                let zone = eq_client_assets::ZoneAsset {
+                    regions: eq_client_assets::regions::ZoneRegions::default(),
+                    short_name: "test".to_owned(),
+                    primitives: Vec::new(),
+                    textures: Vec::new(),
+                    models: Vec::new(),
+                    objects: Vec::new(),
+                    collision: Vec::new(),
+                };
+                scene.enter(
+                    &mut commands,
+                    zone::Entry {
+                        zone,
+                        character: None,
+                        placed: placed_facing(400.0),
+                        body: PlayerBody {
+                            feet_offset: 3.0,
+                            height: 6.0,
+                        },
+                    }
+                    .prepare(),
+                    true,
+                    &mut eq_client_assets::regions::ZoneRegions::default(),
+                );
+            })
+            .unwrap();
+        app.update();
+        let (yaw, pitch, radius) = camera(&mut app);
+        assert_walks_along(yaw, 400.0);
+        assert_eq!((pitch, radius), (-0.9, 60.0));
+        // A server correction mid-zone moves the player, never the camera's turn.
+        app.world_mut()
+            .run_system_once(|mut commands: Commands, mut scene: zone::Scene| {
+                scene.place(&mut commands, placed_facing(256.0), None);
+            })
+            .unwrap();
+        app.update();
+        assert_eq!(camera(&mut app), (yaw, -0.9, 60.0));
     }
 
     #[test]
