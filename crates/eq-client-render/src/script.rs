@@ -83,11 +83,15 @@ pub struct Script {
     /// The control a `hover` step rests the pointer on, until the next click
     /// or hover.
     hovering: Option<Entity>,
-    /// The spawn a `wait_dead` step waits on: the target as it started.
+    /// The spawn a `wait_dead` or `chase` step waits on: the target as it
+    /// started.
     awaited: Option<u16>,
     /// The world container an `approach object` or `walk object` step walks
     /// toward, chosen as it started.
     approached: Option<u32>,
+    /// A `chase` step's view of its target: the last report it saw and when,
+    /// so the aim carries that report forward as the target is drawn.
+    chase_seen: Option<(eq_client_core::WorldPosition, Duration)>,
 }
 
 /// A walk's frames while its route searches.
@@ -134,6 +138,7 @@ impl Script {
             hovering: None,
             awaited: None,
             approached: None,
+            chase_seen: None,
         }
     }
 
@@ -464,6 +469,33 @@ pub(super) fn drive(
                 let distance = face(&online, &players, &mut cameras);
                 distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
             }
+            Step::Chase(range, limit) => match chase(
+                online.world(),
+                script.awaited,
+                &mut script.chase_seen,
+                elapsed,
+                *limit,
+            ) {
+                Ok(Chase::Caught) => true,
+                Ok(Chase::OutOfTime) => {
+                    info!("Script chase ended without a kill");
+                    true
+                }
+                Ok(Chase::Aim(aim)) => {
+                    let running = runs(face_toward(aim, &players, &mut cameras), *range);
+                    if running && script.held.is_empty() {
+                        keys.press(KeyCode::KeyW);
+                        script.held = vec![KeyCode::KeyW];
+                    } else if !running && !script.held.is_empty() {
+                        script.release(&mut keys, &mut mouse);
+                    }
+                    false
+                }
+                Err(reason) => {
+                    script.stop(&mut keys, &mut mouse, reason);
+                    return;
+                }
+            },
             Step::ApproachObject {
                 range, duration, ..
             } => {
@@ -1049,6 +1081,14 @@ pub(super) fn drive(
             }
             keys.press(KeyCode::KeyW);
             script.held = vec![KeyCode::KeyW];
+        }
+        Step::Chase(..) => {
+            script.awaited = online.world().target().selected;
+            script.chase_seen = None;
+            if face(&online, &players, &mut cameras).is_none() {
+                script.stop(&mut keys, &mut mouse, "chase needs a visible target");
+                return;
+            }
         }
         Step::ApproachObject { kind, .. } => {
             script.approached = nearest_station(&online, *kind);
@@ -1912,9 +1952,124 @@ fn fallen(
     }
 }
 
+/// What a `chase` step does on one frame.
+#[derive(Debug, PartialEq)]
+enum Chase {
+    /// The target died or left the zone: the chase is over.
+    Caught,
+    /// The time ran out with the target still alive: the chase is over.
+    OutOfTime,
+    /// Keep after the target, facing where it is drawn now.
+    Aim(eq_client_core::WorldPosition),
+}
+
+/// One frame of a `chase` step. A chase ends only on the target's death,
+/// its leaving the zone, or the time limit; otherwise it aims where the
+/// target is drawn: its last report carried forward at the reported
+/// velocity from when that report was first seen.
+fn chase(
+    world: &eq_client_core::world::ClientWorld,
+    awaited: Option<u16>,
+    seen: &mut Option<(eq_client_core::WorldPosition, Duration)>,
+    elapsed: Duration,
+    limit: Duration,
+) -> Result<Chase, &'static str> {
+    let Some(id) = awaited else {
+        return Err("chase needs a target");
+    };
+    let spawn = match world.spawn(id) {
+        Some(spawn) if spawn.state.kind != eq_client_core::SpawnKind::NpcCorpse => &spawn.state,
+        _ => return Ok(Chase::Caught),
+    };
+    if elapsed >= limit {
+        return Ok(Chase::OutOfTime);
+    }
+    let since = match *seen {
+        Some((position, at)) if position == spawn.position => at,
+        _ => {
+            *seen = Some((spawn.position, elapsed));
+            elapsed
+        }
+    };
+    Ok(Chase::Aim(eq_client_core::entities::extrapolate(
+        spawn,
+        elapsed.saturating_sub(since),
+    )))
+}
+
+/// Whether a chase holds W: only while its target is beyond the distance.
+/// Within it the player stands, auto-attack doing the rest.
+fn runs(distance: Option<f32>, range: f32) -> bool {
+    distance.is_some_and(|distance| distance > range)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chase_aims_where_its_target_is_drawn_and_ends_only_on_death_leaving_or_time() {
+        use eq_client_core::{SpawnKind, WorldEvent, WorldPosition};
+        let at = Duration::from_millis;
+        let mut online = super::super::online::OnlineState::new(true);
+        super::super::online::testing::admit(
+            &mut online,
+            1,
+            super::super::online::testing::player(1),
+        );
+        let mut gnoll = super::super::online::testing::pet(9, 0);
+        gnoll.pet_owner = None;
+        gnoll.kind = SpawnKind::Npc;
+        gnoll.position = WorldPosition {
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+            heading: 0.0,
+        };
+        gnoll.velocity = [4.0, 0.0, 0.0];
+        super::super::online::testing::news(&mut online, [WorldEvent::Spawns(vec![gnoll.clone()])]);
+        let limit = at(90_000);
+        let mut seen = None;
+        let aim = |chase: Result<Chase, &'static str>| match chase {
+            Ok(Chase::Aim(aim)) => aim.x,
+            other => panic!("expected an aim, got {other:?}"),
+        };
+        // The aim carries the last report forward at its velocity.
+        let world = online.world();
+        assert!((aim(chase(world, Some(9), &mut seen, at(1_000), limit)) - 10.0).abs() < 1e-3);
+        assert!((aim(chase(world, Some(9), &mut seen, at(1_500), limit)) - 12.0).abs() < 1e-3);
+        // Beyond the distance the player runs; within it, it stands and the
+        // chase goes on, never ending merely on reaching the target.
+        assert!(runs(Some(12.0), 10.0));
+        assert!(!runs(Some(8.0), 10.0));
+        assert!(!runs(None, 10.0));
+        assert!(matches!(
+            chase(world, Some(9), &mut seen, at(2_000), limit),
+            Ok(Chase::Aim(_))
+        ));
+        // Out of time with the target alive ends the chase.
+        assert_eq!(
+            chase(world, Some(9), &mut seen, limit, limit),
+            Ok(Chase::OutOfTime)
+        );
+        // Its corpse, or its leaving the zone, ends it before the limit.
+        let mut corpse = gnoll.clone();
+        corpse.kind = SpawnKind::NpcCorpse;
+        super::super::online::testing::news(&mut online, [WorldEvent::Spawns(vec![corpse])]);
+        assert_eq!(
+            chase(online.world(), Some(9), &mut seen, at(3_000), limit),
+            Ok(Chase::Caught)
+        );
+        super::super::online::testing::news(&mut online, [WorldEvent::Despawn(9)]);
+        assert_eq!(
+            chase(online.world(), Some(9), &mut seen, at(3_000), limit),
+            Ok(Chase::Caught)
+        );
+        assert_eq!(
+            chase(online.world(), None, &mut seen, at(3_000), limit),
+            Err("chase needs a target")
+        );
+    }
 
     #[test]
     fn a_walk_clicks_a_shut_door_once_then_waits_for_it_to_swing_open() {

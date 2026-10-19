@@ -124,6 +124,14 @@ pub enum Step {
     /// Holds W toward the current target until it is within a distance, for a
     /// bounded duration.
     Approach(f32, Duration),
+    /// Chases the current target as a player's hands would: every frame it
+    /// faces where the target is drawn now (its last reported position
+    /// carried forward at its reported velocity) and holds W while the target
+    /// is beyond the distance, standing within it. It ends only when the
+    /// target dies or leaves the zone, or when the time runs out, never
+    /// merely on reaching the target; auto-attack is the script's to turn on
+    /// first.
+    Chase(f32, Duration),
     /// Holds W toward the nearest world container of one tradeskill kind
     /// (its container type, such as a pottery wheel's), chosen as the step
     /// starts, until it is within a distance, for a bounded duration.
@@ -459,6 +467,9 @@ fn parse_step(line: &str) -> Result<Step, String> {
         },
         ("approach", [range, duration]) => {
             Step::Approach(number(range, 1.0, 200.0)?, millis(duration, MAX_HOLD)?)
+        }
+        ("chase", [range, limit]) => {
+            Step::Chase(number(range, 1.0, 200.0)?, millis(limit, MAX_WAIT)?)
         }
         ("walk", ["object", kind, range, duration]) => Step::WalkObject {
             kind: station(kind)?,
