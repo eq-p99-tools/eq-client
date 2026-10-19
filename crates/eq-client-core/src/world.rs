@@ -486,7 +486,11 @@ impl ClientWorld {
             // are not shown yet either, nor the effects the server plays
             // besides a sound: a spell's nimbus, particles, a camera shake and
             // a projectile. The official client's sound for a quest's ding is
-            // not known, so it stays silent (inferred, item 6.273).
+            // not known, so it stays silent (inferred, item 6.273). A popup or
+            // marquee, a yell for help, a voice macro, a request to inspect the
+            // player and a duel wait for their front ends too; until one
+            // answers, a popup, an inspection and a challenge go unanswered, as
+            // they did unread.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
@@ -514,7 +518,13 @@ impl ClientWorld {
             | WorldEvent::DisciplineReuse(_)
             | WorldEvent::LinkedReuse(_)
             | WorldEvent::Discipline(_)
-            | WorldEvent::Effect(_) => (),
+            | WorldEvent::Effect(_)
+            | WorldEvent::Popup(_)
+            | WorldEvent::Marquee(_)
+            | WorldEvent::YellForHelp { .. }
+            | WorldEvent::VoiceMacro(_)
+            | WorldEvent::InspectRequest { .. }
+            | WorldEvent::Duel(_) => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),

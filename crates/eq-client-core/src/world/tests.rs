@@ -3380,3 +3380,51 @@ fn the_zone_keeps_how_spawns_show_their_names_and_where_corpses_lie() {
     assert_eq!([position.x, position.y, position.z], [1.0, 2.0, 3.0]);
     assert!(world.player().unwrap().appearance.pvp);
 }
+
+#[test]
+fn what_other_players_ask_of_the_player_changes_nothing_yet() {
+    use eq_network_game::popups::{Marquee, Popup};
+    use eq_network_game::socials::{DuelRefusal, DuelUpdate, VoiceKind, VoiceMacro};
+    use std::time::Duration;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        WorldEvent::Popup(Popup {
+            title: "Title".into(),
+            text: "Text".into(),
+            buttons: 0,
+            duration: None,
+            popup_id: 1,
+        }),
+        WorldEvent::Marquee(Marquee {
+            message_type: 15,
+            priority: 1,
+            fade_in: Duration::from_millis(100),
+            fade_out: Duration::from_millis(100),
+            duration: Duration::from_secs(3),
+            text: "Text".into(),
+        }),
+        WorldEvent::YellForHelp { spawn_id: 5 },
+        WorldEvent::VoiceMacro(VoiceMacro {
+            from: "Example".into(),
+            kind: VoiceKind::Group,
+            voice: 1,
+            number: 2,
+        }),
+        WorldEvent::InspectRequest { inspector_id: 5 },
+        WorldEvent::Duel(DuelUpdate::Challenge { from: 5 }),
+        WorldEvent::Duel(DuelUpdate::Accepted {
+            challenger: 5,
+            accepter: 9,
+        }),
+        WorldEvent::Duel(DuelUpdate::Refused {
+            from: 5,
+            reason: DuelRefusal::Declined,
+        }),
+    ];
+    for event in events {
+        assert_eq!(game(&mut world, event), Changes::default());
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
+}
