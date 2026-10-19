@@ -876,6 +876,7 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
     use eq_client_core::PlayerState;
 
     #[test]
@@ -939,6 +940,7 @@ mod tests {
             .init_resource::<crate::inventory::InventoryState>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         // More than the queue's capacity over multiple frames while I/O is blocked.
@@ -1006,6 +1008,7 @@ mod tests {
             .init_resource::<super::super::inventory::InventoryState>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         let player = PlayerState {
@@ -1118,6 +1121,7 @@ mod tests {
             .init_resource::<super::super::inventory::InventoryState>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         // What the last zone left on screen.
@@ -1197,6 +1201,7 @@ mod tests {
             .init_resource::<super::super::inventory::InventoryState>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         // What the zone being left shows, the player's body among it.
@@ -1256,6 +1261,7 @@ mod tests {
             .init_resource::<super::super::inventory::InventoryState>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         sender
@@ -1314,6 +1320,7 @@ mod tests {
             .init_resource::<super::super::spellbook::BookView>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         let item = crate::preview::items().remove(0).details;
@@ -1434,6 +1441,7 @@ mod tests {
             .init_resource::<super::super::inventory::InventoryState>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         let buff = eq_client_core::Buff {
