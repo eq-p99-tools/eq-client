@@ -103,7 +103,8 @@ impl LoginLook {
     }
 
     /// Whether one of the skin's screens is drawn: its login screen, or its
-    /// list of worlds once the login server has sent one.
+    /// list of worlds once the login server has sent one. The screens' own
+    /// drawing and the interface's scale for them both ask this.
     pub(crate) fn drawn(&self, front: &FrontEnd, online: &OnlineState) -> bool {
         self.official()
             && match front.screen(online) {
@@ -192,7 +193,7 @@ pub(crate) fn login_screen(
     let screens = look
         .current
         .as_ref()
-        .filter(|_| front.has_login() && front.screen(&online) == Showing::Login);
+        .filter(|_| front.screen(&online) == Showing::Login && look.drawn(&front, &online));
     // The window's height as the UI lays out, which places the picker.
     let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
     let height = windows.single().ok().map(|window| window.height() / factor);
@@ -261,7 +262,7 @@ pub(crate) fn worlds_screen(
     let shown = look
         .current
         .as_ref()
-        .filter(|_| front.screen(&online) == Showing::Servers)
+        .filter(|_| front.screen(&online) == Showing::Servers && look.drawn(&front, &online))
         .zip(list);
     let signature = shown.map(|(screens, list)| {
         format!(

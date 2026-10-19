@@ -117,6 +117,10 @@ pub enum Level {
     /// where 50 is the client's own speed (the Mouse page's Mouselook
     /// Sensitivity).
     MouseSensitivity,
+    /// How large this client's windows are drawn, as a percentage of the
+    /// desktop's scaling (the Interface scale on the quality-of-life page); the installation's
+    /// own full-window screens keep the official client's size.
+    UiScale,
 }
 
 /// The fewest frames a second the Max FPS slider offers.
@@ -126,10 +130,20 @@ const MIN_FPS: u16 = 10;
 const MAX_FPS: u16 = 200;
 /// The steps between the Max FPS slider's rates.
 const FPS_STEP: usize = 5;
+/// The smallest and largest interface scales, in percent, and the steps
+/// between them.
+const MIN_UI_SCALE: u16 = 50;
+const MAX_UI_SCALE: u16 = 200;
+const UI_SCALE_STEP: usize = 5;
 
 impl Level {
     /// Every level, in the order a file lists them.
-    pub const ALL: [Self; 3] = [Self::ClipPlane, Self::MaxFps, Self::MouseSensitivity];
+    pub const ALL: [Self; 4] = [
+        Self::ClipPlane,
+        Self::MaxFps,
+        Self::MouseSensitivity,
+        Self::UiScale,
+    ];
 
     /// The name a file keeps it under.
     #[must_use]
@@ -138,6 +152,7 @@ impl Level {
             Self::ClipPlane => "clip_plane",
             Self::MaxFps => "max_fps",
             Self::MouseSensitivity => "mouse_sensitivity",
+            Self::UiScale => "ui_scale",
         }
     }
 
@@ -148,6 +163,9 @@ impl Level {
             Self::MaxFps => (MIN_FPS..=MAX_FPS)
                 .step_by(FPS_STEP)
                 .chain(std::iter::once(0))
+                .collect(),
+            Self::UiScale => (MIN_UI_SCALE..=MAX_UI_SCALE)
+                .step_by(UI_SCALE_STEP)
                 .collect(),
         }
     }
@@ -164,6 +182,10 @@ impl Level {
                 // The far right is the display's rate, so a rate the slider
                 // does not offer stops just short of it.
                 (f32::from(value.clamp(MIN_FPS, MAX_FPS) - MIN_FPS) / span) * 0.975
+            }
+            Self::UiScale => {
+                let span = f32::from(MAX_UI_SCALE - MIN_UI_SCALE);
+                f32::from(value.clamp(MIN_UI_SCALE, MAX_UI_SCALE) - MIN_UI_SCALE) / span
             }
         }
     }
@@ -191,7 +213,7 @@ impl Level {
     #[must_use]
     pub fn words(self, value: u16) -> String {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity => format!("{value} %"),
+            Self::ClipPlane | Self::MouseSensitivity | Self::UiScale => format!("{value} %"),
             Self::MaxFps if value == 0 => "Display".to_owned(),
             Self::MaxFps => value.to_string(),
         }
@@ -202,6 +224,7 @@ impl Level {
         match self {
             Self::ClipPlane | Self::MouseSensitivity => value <= 100,
             Self::MaxFps => value == 0 || (1..=1000).contains(&value),
+            Self::UiScale => (MIN_UI_SCALE..=MAX_UI_SCALE).contains(&value),
         }
     }
 }
@@ -241,6 +264,8 @@ pub struct Options {
     pub max_fps: u16,
     /// See [`Level::MouseSensitivity`].
     pub mouse_sensitivity: u16,
+    /// See [`Level::UiScale`].
+    pub ui_scale: u16,
 }
 
 impl Default for Options {
@@ -248,8 +273,9 @@ impl Default for Options {
     /// player's helm and everyone's names show, the mouse is not inverted and its wheel
     /// zooms, the chat is logged, each quality-of-life fix starts as it is
     /// defined, players' names show in full, spawns draw as far as the zone
-    /// allows, at most 60 frames a second ([`Fix::FrameCap`]), and the
-    /// camera turns at the client's own speed.
+    /// allows, at most 60 frames a second ([`Fix::FrameCap`]), the camera
+    /// turns at the client's own speed, and windows are drawn at the
+    /// desktop's scaling.
     fn default() -> Self {
         let qol = qol::Settings::default();
         Self {
@@ -266,6 +292,7 @@ impl Default for Options {
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
             mouse_sensitivity: 50,
+            ui_scale: 100,
         }
     }
 }
@@ -313,6 +340,7 @@ impl Options {
             Level::ClipPlane => self.clip_plane,
             Level::MaxFps => self.max_fps,
             Level::MouseSensitivity => self.mouse_sensitivity,
+            Level::UiScale => self.ui_scale,
         }
     }
 
@@ -322,6 +350,7 @@ impl Options {
             Level::ClipPlane => &mut self.clip_plane,
             Level::MaxFps => &mut self.max_fps,
             Level::MouseSensitivity => &mut self.mouse_sensitivity,
+            Level::UiScale => &mut self.ui_scale,
         };
         *option = value;
     }
@@ -504,6 +533,26 @@ mod tests {
         options.set_level(Level::ClipPlane, 50);
         assert_eq!(options.clip_distance(Some(2400.0)), Some(1200.0));
         assert_eq!(options.clip_distance(None), None);
+    }
+
+    #[test]
+    fn the_interface_scale_runs_from_half_to_double_in_fives_and_starts_at_the_desktops() {
+        assert_eq!(Options::default().ui_scale, 100);
+        assert_eq!(Level::UiScale.at(0.0), 50);
+        assert_eq!(Level::UiScale.at(1.0), 200);
+        assert_eq!(Level::UiScale.at(Level::UiScale.fraction(150)), 150);
+        // Between stops, the nearest.
+        assert_eq!(Level::UiScale.at(Level::UiScale.fraction(100) + 0.01), 100);
+        assert_eq!(Level::UiScale.words(125), "125 %");
+        let mut options = Options::default();
+        options.set_level(Level::UiScale, 175);
+        let text = options.text();
+        assert!(text.contains("ui_scale = 175\n"));
+        assert_eq!(Options::read(&text, Options::default()), options);
+        // A scale the slider cannot hold keeps the default.
+        for bad in ["ui_scale = 20\n", "ui_scale = 500\n", "ui_scale = big\n"] {
+            assert_eq!(Options::read(bad, Options::default()).ui_scale, 100);
+        }
     }
 
     #[test]

@@ -1795,12 +1795,70 @@ fn with_qol_page(
     };
     // The page's room under the row of tabs, its own tab among them.
     let room = inside_height - tab_strip(pages.iter().chain([&qol]));
+    let mut pieces = qol_checkboxes(&checkbox, room);
+    pieces.extend(qol_scale(pages, &checkbox, room));
     let mut all = pages.to_vec();
-    all.push(eq_client_assets::sidl::Page {
-        pieces: qol_checkboxes(&checkbox, room),
-        ..qol
-    });
+    all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
+}
+
+/// The quality-of-life page's interface scale, in the next place after its checkboxes:
+/// a caption, a slider cut from the skin's first slider on the Options
+/// window's pages, and the label that shows its value, cut from that
+/// slider's own; none where the skin has no slider and value label.
+fn qol_scale(
+    pages: &[eq_client_assets::sidl::Page],
+    checkbox: &eq_client_assets::sidl::Button,
+    room: f32,
+) -> Vec<(String, eq_client_assets::sidl::Element)> {
+    use eq_client_assets::sidl::Element;
+    let pieces = || pages.iter().flat_map(|page| &page.pieces);
+    let slider = pieces().find_map(|(_, element)| match element {
+        Element::Slider(slider) => Some(slider.clone()),
+        _ => None,
+    });
+    let label = pieces().find_map(|(name, element)| match element {
+        Element::Label(label) if name.ends_with("ValueLabel") => Some(label.clone()),
+        _ => None,
+    });
+    let (Some(mut slider), Some(mut value)) = (slider, label) else {
+        return Vec::new();
+    };
+    // The caption over the slider, in the next place with room for both
+    // down the page, else at the top of the next column.
+    let tall = value.area.height + 2.0 + slider.area.height;
+    let first = eq_client_core::qol::Fix::settings().count();
+    let (x, y, width) = (first..first + 64)
+        .map(|index| qol_place(checkbox, room, index))
+        .find(|&(_, y, _)| y + tall <= room - 10.0 || y <= 10.0)
+        .unwrap_or_default();
+    let mut caption = value.clone();
+    caption.eq_type = None;
+    "Interface scale".clone_into(&mut caption.text);
+    caption.area = Area {
+        x,
+        y,
+        width,
+        height: value.area.height,
+    };
+    slider.id = Some(controls::UI_SCALE_SLIDER.to_owned());
+    slider.area.x = x;
+    slider.area.y = y + value.area.height + 2.0;
+    slider.area.width = slider
+        .area
+        .width
+        .min(width - value.area.width.max(40.0) - 4.0);
+    value.eq_type = None;
+    value.area.x = slider.area.x + slider.area.width + 4.0;
+    value.area.y = slider.area.y;
+    vec![
+        ("EQC_QoL_UiScaleLabel".to_owned(), Element::Label(caption)),
+        (
+            controls::UI_SCALE_SLIDER.to_owned(),
+            Element::Slider(slider),
+        ),
+        (controls::UI_SCALE_VALUE.to_owned(), Element::Label(value)),
+    ]
 }
 
 /// A checkbox cut from the skin's own for each quality-of-life setting, in
@@ -1815,28 +1873,49 @@ fn qol_checkboxes(
     checkbox: &eq_client_assets::sidl::Button,
     room: f32,
 ) -> Vec<(String, eq_client_assets::sidl::Element)> {
-    /// Room left around the checkboxes, and between columns.
-    const MARGIN: f32 = 10.0;
-    /// Room between one checkbox and the next one down.
-    const GAP: f32 = 6.0;
-    let row = checkbox.area.height + GAP;
-    let width = checkbox.area.width.max(190.0);
-    // As many rows as fit inside the margins, and at least one.
-    let rows = (((room - 2.0 * MARGIN + GAP) / row).floor() as u32).max(1);
-    (0u32..)
-        .zip(eq_client_core::qol::Fix::settings())
+    eq_client_core::qol::Fix::settings()
+        .enumerate()
         .map(|(index, fix)| {
             let mut checkbox = checkbox.clone();
             let id = qol_checkbox_id(fix);
+            let (x, y, width) = qol_place(&checkbox, room, index);
             checkbox.id = Some(id.clone());
             checkbox.text = Some(fix.label().to_owned());
             checkbox.tooltip = Some(fix.tooltip().to_owned());
-            checkbox.area.x = MARGIN + to_f32(index / rows) * (width + MARGIN);
-            checkbox.area.y = MARGIN + to_f32(index % rows) * row;
+            checkbox.area.x = x;
+            checkbox.area.y = y;
             checkbox.area.width = width;
             (id, eq_client_assets::sidl::Element::Button(checkbox))
         })
         .collect()
+}
+
+/// Where the quality-of-life page's place this far along sits, and how wide it is: one
+/// under another down a page this tall, then on down the next column, each
+/// as tall as the skin's checkbox and two such rows for the scale.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a page holds few rows"
+)]
+fn qol_place(
+    checkbox: &eq_client_assets::sidl::Button,
+    room: f32,
+    index: usize,
+) -> (f32, f32, f32) {
+    /// Room left around the places, and between columns.
+    const MARGIN: f32 = 10.0;
+    /// Room between one place and the next one down.
+    const GAP: f32 = 6.0;
+    let row = checkbox.area.height + GAP;
+    let width = checkbox.area.width.max(190.0);
+    // As many rows as fit inside the margins, and at least one.
+    let rows = (((room - 2.0 * MARGIN + GAP) / row).floor() as usize).max(1);
+    (
+        MARGIN + to_f32(u32::try_from(index / rows).unwrap_or(u32::MAX)) * (width + MARGIN),
+        MARGIN + to_f32(u32::try_from(index % rows).unwrap_or(u32::MAX)) * row,
+        width,
+    )
 }
 
 /// The Pet Info window's command buttons, by screen ID, with the `/pet`
@@ -4517,6 +4596,110 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn the_qol_page_ends_with_the_interface_scale_cut_from_the_skins_slider() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element, Page};
+        let area = |x, y, width, height| Area {
+            x,
+            y,
+            width,
+            height,
+        };
+        let checkbox = Button {
+            id: Some("OGP_PetWindowPopupCheckbox".into()),
+            area: area(10.0, 175.0, 150.0, 20.0),
+            placed: true,
+            anchors: None,
+            look: ButtonLook::default(),
+            checkbox: true,
+            text: Some("Pet Window Popup".into()),
+            text_color: None,
+            font: None,
+            decal: None,
+            decal_area: None,
+            tooltip: None,
+        };
+        let general = Page {
+            name: "OptionsGeneralPage".into(),
+            title: Some("General".into()),
+            area: None,
+            template: None,
+            pieces: vec![("checkbox".into(), Element::Button(checkbox))],
+            icon: [None, None],
+            title_colors: [None, None],
+            tooltip: None,
+        };
+        let settings: Vec<_> = eq_client_core::qol::Fix::settings().collect();
+        // With the skin's slider and its value label on a page, the QoL page
+        // ends with the interface scale: a caption over a slider cut from
+        // the skin's, its value beside it, all inside the page.
+        let display = Page {
+            name: "OptionsDisplayPage".into(),
+            title: Some("Display".into()),
+            pieces: vec![
+                (
+                    "ODP_ClipPlaneSlider".into(),
+                    Element::Slider(eq_client_assets::sidl::Slider {
+                        id: Some("ODP_ClipPlaneSlider".into()),
+                        area: area(20.0, 40.0, 150.0, 16.0),
+                        look: eq_client_assets::sidl::SliderLook::default(),
+                    }),
+                ),
+                (
+                    "ODP_ClipPlaneValueLabel".into(),
+                    Element::Label(eq_client_assets::sidl::Label {
+                        area: area(180.0, 40.0, 40.0, 14.0),
+                        anchors: None,
+                        eq_type: None,
+                        text: "100 %".into(),
+                        color: None,
+                        align: eq_client_assets::sidl::Align::Left,
+                        font: None,
+                        wraps: false,
+                    }),
+                ),
+            ],
+            ..general.clone()
+        };
+        let skin = [general.clone(), display];
+        let pages = with_qol_page(&skin, WindowId::Options, 400.0);
+        let qol = &pages[2].pieces;
+        assert_eq!(qol.len(), settings.len() + 3);
+        let last_checkbox = match &qol[settings.len() - 1].1 {
+            Element::Button(checkbox) => checkbox.area,
+            _ => panic!("a checkbox"),
+        };
+        let [
+            (_, Element::Label(caption)),
+            (slider_id, Element::Slider(slider)),
+            (value_id, Element::Label(value)),
+        ] = &qol[settings.len()..]
+        else {
+            panic!("a caption, a slider and its value")
+        };
+        assert_eq!(caption.text, "Interface scale");
+        assert_eq!(slider.id.as_deref(), Some(slider_id.as_str()));
+        assert_eq!(
+            controls::slider_sets(slider.id.as_deref(), WindowId::Options),
+            Some(controls::Sets::Level(
+                eq_client_core::options::Level::UiScale
+            ))
+        );
+        assert!(matches!(
+            controls::value_label(value_id, WindowId::Options),
+            Some(controls::ValueLabel::Shows(
+                eq_client_core::options::Level::UiScale
+            ))
+        ));
+        let below = |area: Area| {
+            area.y >= last_checkbox.y + last_checkbox.height || area.x > last_checkbox.x
+        };
+        assert!(below(caption.area) && below(slider.area));
+        assert!(slider.area.y >= caption.area.y + caption.area.height);
+        assert!(value.area.x >= slider.area.x + slider.area.width);
+        assert!(slider.area.y + slider.area.height <= 400.0);
     }
 
     #[test]
