@@ -221,12 +221,13 @@ pub(super) struct Panels<'w> {
     items: ResMut<'w, super::items::ItemState>,
     book: Option<ResMut<'w, super::spellbook::BookSelection>>,
     book_view: Option<ResMut<'w, super::spellbook::BookView>>,
+    sounds: ResMut<'w, super::sounds::Sounds>,
 }
 
 impl Panels<'_> {
     /// Shows what the world's changes mean for the panels: the inventory, the
     /// notices, motion, the trade windows and the answers to the panels' own
-    /// requests.
+    /// requests; and plays the sounds the server names.
     fn show(
         &mut self,
         changes: &Changes,
@@ -239,6 +240,9 @@ impl Panels<'_> {
         }
         for notice in &changes.notices {
             self.tell(notice, messages, chat);
+        }
+        for cue in &changes.sounds {
+            self.sounds.play_cue(cue);
         }
         if changes.characters {
             state.selection = state.world.characters().map(|list| {
@@ -940,6 +944,7 @@ mod tests {
             .init_resource::<crate::trade::TradeState>()
             .init_resource::<crate::items::ItemState>()
             .init_resource::<crate::inventory::InventoryState>()
+            .init_resource::<crate::sounds::Sounds>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
@@ -1008,6 +1013,7 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
@@ -1123,6 +1129,7 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
@@ -1203,6 +1210,7 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
@@ -1263,6 +1271,7 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
@@ -1320,6 +1329,7 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<super::super::spellbook::BookSelection>()
             .init_resource::<super::super::spellbook::BookView>()
             .init_resource::<Assets<Image>>()
@@ -1445,6 +1455,7 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
