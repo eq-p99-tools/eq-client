@@ -269,21 +269,8 @@ impl CharacterAsset {
             return Some(bottom);
         };
         let lowest = |seconds: f32| {
-            let joints = self.joints(STANDING_CLIP, seconds, true);
-            self.skins
-                .iter()
-                .zip(&self.pieces)
-                .filter(|(_, piece)| piece.base())
-                .flat_map(|(skin, _)| skin.positions.iter().zip(&skin.bones))
-                .filter_map(|(position, bone)| {
-                    Some(
-                        joints
-                            .get(*bone)?
-                            .transform_point3(Vec3::from_array(*position))
-                            .y,
-                    )
-                })
-                .reduce(f32::min)
+            self.bottom(&self.joints(STANDING_CLIP, seconds, true))
+                .map(|point| point.y)
         };
         std::iter::successors(Some(0.0_f32), |seconds| {
             Some(seconds + 1.0 / 30.0).filter(|next| *next < length)
@@ -291,6 +278,27 @@ impl CharacterAsset {
         .filter_map(lowest)
         .reduce(f32::min)
         .or(Some(bottom))
+    }
+
+    /// The lowest point of the base pieces placed by these joints, in the
+    /// joints' frame: the model's own for [`Self::joints`], the world's for
+    /// joints already hung where the model is drawn. None without base
+    /// pieces.
+    #[must_use]
+    pub fn bottom(&self, joints: &[Mat4]) -> Option<Vec3> {
+        self.skins
+            .iter()
+            .zip(&self.pieces)
+            .filter(|(_, piece)| piece.base())
+            .flat_map(|(skin, _)| skin.positions.iter().zip(&skin.bones))
+            .filter_map(|(position, bone)| {
+                Some(
+                    joints
+                        .get(*bone)?
+                        .transform_point3(Vec3::from_array(*position)),
+                )
+            })
+            .reduce(|lowest, point| if point.y < lowest.y { point } else { lowest })
     }
 
     /// The top of the head with these joints: the highest point of the
