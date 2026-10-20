@@ -205,12 +205,14 @@ impl InstalledClient {
     }
 
     /// The face this client writes its windows in, by its file among
-    /// Windows' fonts; None until it is checked for this client.
+    /// Windows' fonts; None until it is checked for this client. The
+    /// Mac-era client's face is unchecked, and its installation carries no
+    /// font files, so it writes in the Titanium client's face rather than
+    /// a monospace placeholder: inferred, recording checklist item 6.152.
     #[must_use]
     pub const fn font_file(self) -> Option<&'static str> {
         match self {
-            Self::Titanium => Some("arial.ttf"),
-            Self::EqMac => None,
+            Self::Titanium | Self::EqMac => Some("arial.ttf"),
         }
     }
 
