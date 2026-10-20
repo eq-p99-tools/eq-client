@@ -480,7 +480,15 @@ impl ClientWorld {
             // unanswered, as it did unread. A quest's change to the stats, a
             // skill's button ready again, the reuse timers of disciplines and
             // of spells that share one, and the discipline begun or ended
-            // are not shown yet either.
+            // are not shown yet either, nor the effects the server plays: a
+            // spell's nimbus, particles, a camera shake, a sound and a
+            // projectile. A popup or marquee, a yell for help, a voice macro,
+            // a request to inspect the player and a duel wait for their front
+            // ends too; until one answers, a popup, an inspection and a
+            // challenge go unanswered, as they did unread. The guild's
+            // members and their changes, and an invitation to join or rise
+            // in it, wait for a guild window; until one answers, an
+            // invitation goes unanswered.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
@@ -507,7 +515,15 @@ impl ClientWorld {
             | WorldEvent::SkillReady(_)
             | WorldEvent::DisciplineReuse(_)
             | WorldEvent::LinkedReuse(_)
-            | WorldEvent::Discipline(_) => (),
+            | WorldEvent::Discipline(_)
+            | WorldEvent::Effect(_)
+            | WorldEvent::Popup(_)
+            | WorldEvent::Marquee(_)
+            | WorldEvent::YellForHelp { .. }
+            | WorldEvent::VoiceMacro(_)
+            | WorldEvent::InspectRequest { .. }
+            | WorldEvent::Duel(_)
+            | WorldEvent::Guild(_) => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
@@ -527,6 +543,29 @@ impl ClientWorld {
                 spawn_id,
                 invisible,
             } => self.zone.visibility(*spawn_id, *invisible),
+            // How a spawn shows, its name and where a corpse lies are kept
+            // in the zone's table, as the session keeps them; a spawn already
+            // drawn shows an illusion or a new size when it is drawn anew. A
+            // face change that names no one changes no one.
+            WorldEvent::Appearance { spawn_id, change } => {
+                if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
+                    spawn.state.apply_appearance(change);
+                }
+                if self.is_player(*spawn_id)
+                    && let Some(player) = self.player.as_mut()
+                {
+                    player.appearance.apply_update(change);
+                }
+            }
+            WorldEvent::FaceChanged {
+                spawn_id, features, ..
+            } => self.zone.features(*spawn_id, *features),
+            WorldEvent::Renamed {
+                spawn_id, new_name, ..
+            } => self.zone.rename(*spawn_id, new_name),
+            WorldEvent::CorpseMoved { spawn_id, position } => {
+                self.zone.corpse_moved(*spawn_id, *position);
+            }
             // How /who lists a player, and the guilds it names.
             WorldEvent::Listing { spawn_id, change } => {
                 if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {

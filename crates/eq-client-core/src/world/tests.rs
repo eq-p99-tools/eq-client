@@ -3301,3 +3301,181 @@ fn a_spawn_seen_dying_keeps_when_it_fell_and_one_arriving_dead_has_none() {
     game(&mut world, entered(2));
     assert_eq!(world.died_at(8), None);
 }
+
+#[test]
+fn the_zone_keeps_how_spawns_show_their_names_and_where_corpses_lie() {
+    use crate::outfit::Features;
+    use eq_network_game::appearance::AppearanceChange;
+    let mut world = admitted();
+    for spawn_id in [5, 9] {
+        game(
+            &mut world,
+            WorldEvent::Appearance {
+                spawn_id,
+                change: AppearanceChange::Pvp(true),
+            },
+        );
+    }
+    game(
+        &mut world,
+        WorldEvent::Appearance {
+            spawn_id: 5,
+            change: AppearanceChange::Size(9.0),
+        },
+    );
+    let features = Features {
+        face: 3,
+        ..Features::default()
+    };
+    for spawn_id in [Some(5), None] {
+        game(
+            &mut world,
+            WorldEvent::FaceChanged {
+                spawn_id,
+                features,
+                eye_colors: None,
+            },
+        );
+    }
+    game(
+        &mut world,
+        WorldEvent::Renamed {
+            spawn_id: Some(5),
+            old_name: "Example".into(),
+            new_name: "Renamed".into(),
+        },
+    );
+    game(
+        &mut world,
+        WorldEvent::CorpseMoved {
+            spawn_id: 5,
+            position: [1.0, 2.0, 3.0],
+        },
+    );
+    let state = &world.spawn(5).unwrap().state;
+    assert!(state.appearance.pvp);
+    assert!((state.size - 9.0).abs() < f32::EPSILON);
+    assert_eq!(state.appearance.features(), features);
+    assert_eq!(state.name, "Renamed");
+    let position = state.position;
+    assert_eq!([position.x, position.y, position.z], [1.0, 2.0, 3.0]);
+    assert!(world.player().unwrap().appearance.pvp);
+}
+
+#[test]
+fn what_other_players_ask_of_the_player_changes_nothing_yet() {
+    use eq_network_game::popups::{Marquee, Popup};
+    use eq_network_game::socials::{DuelRefusal, DuelUpdate, VoiceKind, VoiceMacro};
+    use std::time::Duration;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        WorldEvent::Popup(Popup {
+            title: "Title".into(),
+            text: "Text".into(),
+            buttons: 0,
+            duration: None,
+            popup_id: 1,
+        }),
+        WorldEvent::Marquee(Marquee {
+            message_type: 15,
+            priority: 1,
+            fade_in: Duration::from_millis(100),
+            fade_out: Duration::from_millis(100),
+            duration: Duration::from_secs(3),
+            text: "Text".into(),
+        }),
+        WorldEvent::YellForHelp { spawn_id: 5 },
+        WorldEvent::VoiceMacro(VoiceMacro {
+            from: "Example".into(),
+            kind: VoiceKind::Group,
+            voice: 1,
+            number: 2,
+        }),
+        WorldEvent::InspectRequest { inspector_id: 5 },
+        WorldEvent::Duel(DuelUpdate::Challenge { from: 5 }),
+        WorldEvent::Duel(DuelUpdate::Accepted {
+            challenger: 5,
+            accepter: 9,
+        }),
+        WorldEvent::Duel(DuelUpdate::Refused {
+            from: 5,
+            reason: DuelRefusal::Declined,
+        }),
+    ];
+    for event in events {
+        assert_eq!(game(&mut world, event), Changes::default());
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
+}
+
+#[test]
+fn guild_news_changes_nothing_yet() {
+    use eq_network_game::guild::GuildUpdate;
+    use eq_network_game::listing::GuildRank;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        GuildUpdate::Members(Vec::new()),
+        GuildUpdate::MemberLocation {
+            guild_id: 1,
+            name: "Example".into(),
+            zone_id: Some(29),
+            last_on: 0,
+        },
+        GuildUpdate::MemberAdded {
+            guild_id: 1,
+            name: "Example".into(),
+            level: 10,
+            class: 1,
+            rank: GuildRank::Member,
+            zone_id: None,
+            last_on: 0,
+        },
+        GuildUpdate::MemberLevel {
+            guild_id: 1,
+            name: "Example".into(),
+            level: 10,
+        },
+        GuildUpdate::MemberRemoved {
+            guild_id: 1,
+            name: "Example".into(),
+        },
+        GuildUpdate::MemberNote {
+            guild_id: 1,
+            name: "Example".into(),
+            note: "Note".into(),
+        },
+        GuildUpdate::MemberRank {
+            guild_id: Some(1),
+            name: "Example".into(),
+            rank: GuildRank::Officer,
+            banker: true,
+            alt: false,
+        },
+        GuildUpdate::MemberRenamed {
+            guild_id: 1,
+            old_name: "Example".into(),
+            new_name: "Renamed".into(),
+        },
+        GuildUpdate::Renamed {
+            guild_id: 1,
+            name: "Guild".into(),
+        },
+        GuildUpdate::Disbanded { guild_id: 1 },
+        GuildUpdate::Invite {
+            inviter: "Example".into(),
+            guild_id: 1,
+            rank: GuildRank::Member,
+        },
+    ];
+    for event in events {
+        assert_eq!(
+            game(&mut world, WorldEvent::Guild(event)),
+            Changes::default()
+        );
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
+}
