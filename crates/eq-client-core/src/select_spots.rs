@@ -173,7 +173,9 @@ struct Floor {
 
 /// Proposes a spot in a zone from its shape alone: the most open flat floor
 /// near the middle of the zone's floors, with room for the camera in front
-/// of the character and the longest view behind them. In a zone where at least
+/// of the character and the longest view behind them; between views equally
+/// long, the character faces away from the middle, so the camera in front
+/// looks back across the zone. In a zone where at least
 /// half the floors are covered (a dungeon) only covered floors count, so the outside
 /// of its shell is never chosen; elsewhere only open ones. `bounds` is the
 /// zone's in the renderer's frame, and `wet` says whether a point is in
@@ -206,7 +208,8 @@ pub fn propose(
             let views = views(world, floor.feet);
             #[allow(clippy::cast_precision_loss)] // Sixteen directions.
             let open = views.iter().sum::<f32>() / DIRECTIONS as f32;
-            let (front, behind) = facing(&views)?;
+            let outward = (floor.feet - middle).with_y(0.0).normalize_or_zero();
+            let (front, behind) = facing(&views, outward)?;
             let away = floor.feet.distance(middle) / reach;
             Some((open * (1.0 - away), floor.feet, front, behind))
         })
@@ -295,13 +298,18 @@ fn views(world: &CollisionWorld, feet: Vec3) -> [f32; DIRECTIONS] {
 
 /// The way the character faces and the room in front for the camera: the
 /// direction whose opposite view is longest, among those with room for the
-/// camera in front.
-fn facing(views: &[f32; DIRECTIONS]) -> Option<(usize, f32)> {
+/// camera in front, and between views equally long (in the open every view
+/// reaches its limit) the one nearest `outward`, away from the zone's middle.
+fn facing(views: &[f32; DIRECTIONS], outward: Vec3) -> Option<(usize, f32)> {
+    let behind = |front: usize| views[(front + DIRECTIONS / 2) % DIRECTIONS];
     (0..DIRECTIONS)
         .filter(|front| views[*front] >= DISTANCE * 0.6 + 2.0)
         .max_by(|a, b| {
-            views[(a + DIRECTIONS / 2) % DIRECTIONS]
-                .total_cmp(&views[(b + DIRECTIONS / 2) % DIRECTIONS])
+            behind(*a).total_cmp(&behind(*b)).then_with(|| {
+                direction(*a)
+                    .dot(outward)
+                    .total_cmp(&direction(*b).dot(outward))
+            })
         })
         .map(|front| (front, views[front]))
 }
@@ -384,20 +392,26 @@ mod tests {
     }
 
     #[test]
-    fn an_open_field_with_a_wall_faces_the_character_toward_the_wall() {
+    fn a_strip_walled_but_to_the_south_faces_the_character_toward_the_wall() {
         // The character faces the camera's room and the camera sees the
-        // long view behind them: with a wall close to the north (+Z), the
-        // long view lies south, so the character faces north-ish, toward
-        // the wall, with room left for the camera.
-        let mut triangles = floor(200.0, 0.0);
-        triangles.extend(wall([-200.0, 60.0], [200.0, 60.0], 40.0));
+        // long view behind them: on a strip of floor walled to the north
+        // (+Z), east and west and open to the south, the long view lies
+        // south, so the character faces north, toward the wall, with room
+        // left for the camera.
+        let (a, b, c, d) = (
+            [-80.0, 0.0, -200.0],
+            [80.0, 0.0, -200.0],
+            [80.0, 0.0, 60.0],
+            [-80.0, 0.0, 60.0],
+        );
+        let mut triangles = vec![[a, b, c], [a, c, d]];
+        triangles.extend(wall([-80.0, 60.0], [80.0, 60.0], 40.0));
+        triangles.extend(wall([-80.0, -200.0], [-80.0, 60.0], 40.0));
+        triangles.extend(wall([80.0, -200.0], [80.0, 60.0], 40.0));
         let world = CollisionWorld::new(triangles).unwrap();
         let spot = propose(
             &world,
-            (
-                Vec3::new(-200.0, 0.0, -200.0),
-                Vec3::new(200.0, 40.0, 200.0),
-            ),
+            (Vec3::new(-80.0, 0.0, -200.0), Vec3::new(80.0, 40.0, 60.0)),
             |_| false,
         )
         .unwrap();
@@ -409,6 +423,21 @@ mod tests {
         assert!(toward.z > 0.5, "faces the wall: {toward}");
         assert!(spot.distance > 0.0 && spot.distance <= DISTANCE);
         assert!(!spot.reviewed);
+    }
+
+    #[test]
+    fn in_the_open_the_character_faces_away_from_the_zones_middle() {
+        // Every view reaches its limit, so only the way out from the middle
+        // tells the directions apart: a quarter turn from the first.
+        assert_eq!(facing(&[VIEW; DIRECTIONS], Vec3::X), Some((4, VIEW)));
+        assert_eq!(facing(&[VIEW; DIRECTIONS], Vec3::NEG_Z), Some((8, VIEW)));
+        // A longer view behind still comes first.
+        let mut views = [100.0; DIRECTIONS];
+        views[12] = VIEW;
+        assert_eq!(facing(&views, Vec3::X), Some((4, 100.0)));
+        views[12] = 100.0;
+        views[0] = VIEW;
+        assert_eq!(facing(&views, Vec3::Z).map(|(front, _)| front), Some(8));
     }
 
     #[test]
