@@ -528,6 +528,7 @@ fn schedule(app: &mut App) {
             (
                 entities::reconcile,
                 entities::interpolate,
+                character::lie,
                 doors::reconcile,
                 ground::reconcile,
                 select_preview::show,

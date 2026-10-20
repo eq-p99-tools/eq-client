@@ -259,6 +259,118 @@ pub fn carried_soles(
         .unwrap_or_else(|| grounded_soles(world, soles, race, size))
 }
 
+/// How far a corpse leans to lie along the floor under it, each way, at
+/// most: 35°.
+pub const MOST_TILT: f32 = 35.0 * std::f32::consts::PI / 180.0;
+
+/// How a corpse's body leans to lie along the floor under it, in the
+/// renderer's frame, as turns about its root's own axes after its heading:
+/// the root's rotation becomes heading × pitch × roll ([`Self::rotation`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tilt {
+    /// The turn about the root's side-to-side axis (its X), in radians: a
+    /// negative pitch raises the way it faces (its Z).
+    pub pitch: f32,
+    /// The turn about the way it faces (its Z), in radians: a positive roll
+    /// raises its X side.
+    pub roll: f32,
+}
+
+impl Tilt {
+    /// The lean as a rotation in the root's own frame, pitch then roll, to
+    /// follow its heading.
+    #[must_use]
+    pub fn rotation(self) -> glam::Quat {
+        glam::Quat::from_rotation_x(self.pitch) * glam::Quat::from_rotation_z(self.roll)
+    }
+
+    /// This share of the lean, from none at 0 to all of it at 1, as a body
+    /// falling into it.
+    #[must_use]
+    pub fn share(self, share: f32) -> Self {
+        let share = share.clamp(0.0, 1.0);
+        Self {
+            pitch: self.pitch * share,
+            roll: self.roll * share,
+        }
+    }
+
+    /// Whether it leans not at all, as a body on flat ground.
+    #[must_use]
+    pub fn upright(self) -> bool {
+        self.pitch == 0.0 && self.roll == 0.0
+    }
+}
+
+/// How a corpse leans to lie along the floor of `world` under it: its soles
+/// at `soles` (as [`carried_soles`] draws them), its root turned `yaw` about
+/// the renderer's Y, and its body lying `length` from its soles along the
+/// way it faces in its death clip's last frame (negative where it lies
+/// behind them), in world units. The floor is sampled where the body is: at
+/// the soles, at half the length and at the length along the side the body
+/// lies, and at two points across the body from its middle, an eighth of
+/// the length to each side (half of a side span a quarter of the length),
+/// each with the reach
+/// [`carried_soles`] gives a step that far across the ground: up 0.6 × size
+/// and down 0.5 plus the distance from the soles. The pitch is the
+/// least-squares slope of the floor along the body over the samples it has,
+/// and the roll the slope between the two side samples, each clamped to
+/// [`MOST_TILT`]. A sample with no floor in reach is skipped: with no floor
+/// at the soles the body stays upright, with no other sample along the body
+/// the pitch stays level, and with either side sample missing the roll
+/// stays level. Adam's choice (10-20); what the official client does is
+/// inferred, checklist item 6.282.
+#[must_use]
+pub fn corpse_tilt(
+    world: &movement::CollisionWorld,
+    soles: glam::Vec3,
+    yaw: f32,
+    length: f32,
+    race: u32,
+    size: f32,
+) -> Tilt {
+    let reach = 0.6 * size_or_default(race, size);
+    let floor =
+        |offset: glam::Vec3| world.nearest_ground(soles + offset, reach, 0.5 + offset.length());
+    if !length.is_finite() || length == 0.0 || floor(glam::Vec3::ZERO).is_none() {
+        return Tilt::default();
+    }
+    let facing = glam::Vec3::new(yaw.sin(), 0.0, yaw.cos());
+    let across = glam::Vec3::new(yaw.cos(), 0.0, -yaw.sin());
+    // The way the body lies from its soles, as its death clip lays it.
+    let body = facing * length.signum();
+    let reach_along = length.abs();
+    // The floor along the body, by distance from the soles, fitted by least
+    // squares; a fit needs the soles and one more.
+    let along: Vec<(f32, f32)> = [0.0, reach_along / 2.0, reach_along]
+        .into_iter()
+        .filter_map(|distance| Some((distance, floor(body * distance)?)))
+        .collect();
+    let rise = (along.len() >= 2).then(|| {
+        #[allow(clippy::cast_precision_loss, reason = "at most three samples")]
+        let count = along.len() as f32;
+        let mean = |pick: fn(&(f32, f32)) -> f32| along.iter().map(pick).sum::<f32>() / count;
+        let (x, y) = (mean(|sample| sample.0), mean(|sample| sample.1));
+        let covariance: f32 = along.iter().map(|(at, h)| (at - x) * (h - y)).sum();
+        let variance: f32 = along.iter().map(|(at, _)| (at - x).powi(2)).sum();
+        covariance / variance
+    });
+    // The rise toward the root's Z is what the pitch lowers.
+    let pitch = rise.map_or(0.0, |rise| {
+        -(rise * length.signum()).atan().clamp(-MOST_TILT, MOST_TILT)
+    });
+    let middle = body * (reach_along / 2.0);
+    let offset = reach_along / 8.0;
+    let roll = floor(middle + across * offset)
+        .zip(floor(middle - across * offset))
+        .map_or(0.0, |(raised, lowered)| {
+            (raised - lowered)
+                .atan2(2.0 * offset)
+                .clamp(-MOST_TILT, MOST_TILT)
+        });
+    Tilt { pitch, roll }
+}
+
 /// The size sent, or the race's default when it is missing or not positive.
 fn size_or_default(race: u32, size: f32) -> f32 {
     if size.is_finite() && size > 0.0 {
@@ -456,6 +568,185 @@ mod tests {
         assert!((soles(5.0) - 5.0).abs() < 0.001);
         // A size-less spawn reaches by its race's default size: 0.6 × 4 for a dwarf.
         assert!(super::grounded_soles(&world, glam::Vec3::Y * -2.3, 8, 0.0).abs() < 0.001);
+    }
+
+    /// The soles on the ramp at a world x and y, in renderer coordinates.
+    fn on_ramp(grade: f32, x: f32, y: f32) -> glam::Vec3 {
+        glam::Vec3::from_array(super::render_position(super::WorldPosition {
+            x,
+            y,
+            z: grade * x,
+            heading: 0.0,
+        }))
+    }
+
+    #[test]
+    fn a_corpse_pitches_to_the_slope_it_lies_along() {
+        // A size 6 skeleton lying 6 behind its soles, facing up the ramp
+        // (world +x, the renderer's -Z), then down it.
+        for grade in [0.1_f32, 0.3, 0.45, -0.45] {
+            let world = ramp(grade);
+            let slope = grade.atan();
+            let soles = on_ramp(grade, 0.0, 0.0);
+            for (yaw, raised) in [(std::f32::consts::PI, slope), (0.0, -slope)] {
+                let tilt = super::corpse_tilt(&world, soles, yaw, -6.0, 60, 6.0);
+                // A negative pitch raises the way it faces.
+                assert!(
+                    (-tilt.pitch - raised).abs() < 1.0_f32.to_radians(),
+                    "grade {grade}, yaw {yaw}: {tilt:?}"
+                );
+                assert!(tilt.roll.abs() < 1e-4, "{tilt:?}");
+                // Turned by it, the way it faces runs up the slope as the
+                // floor does.
+                let facing = glam::Quat::from_rotation_y(yaw) * tilt.rotation() * glam::Vec3::Z;
+                let along = glam::Vec2::new(facing.x, facing.z).length();
+                assert!(((facing.y / along).atan() - raised).abs() < 1.0_f32.to_radians());
+            }
+            // Lying ahead of its soles instead, on an even slope, it leans
+            // the same.
+            let ahead = super::corpse_tilt(&world, soles, std::f32::consts::PI, 6.0, 60, 6.0);
+            assert!(
+                (-ahead.pitch - slope).abs() < 1.0_f32.to_radians(),
+                "grade {grade}: {ahead:?}"
+            );
+        }
+        // A slope steeper than 35° is followed only so far.
+        let world = ramp(0.9);
+        let tilt = super::corpse_tilt(
+            &world,
+            glam::Vec3::ZERO,
+            std::f32::consts::PI,
+            -6.0,
+            60,
+            6.0,
+        );
+        assert!((tilt.pitch + super::MOST_TILT).abs() < 1e-5, "{tilt:?}");
+    }
+
+    #[test]
+    fn a_corpse_samples_the_floor_where_its_body_lies() {
+        // Level ground behind a crest at world x = 0, falling 0.3 a unit
+        // past it; the corpse faces over the crest (world +x).
+        let grade = 0.3_f32;
+        let corner = |x: f32, y: f32| {
+            super::render_position(super::WorldPosition {
+                x,
+                y,
+                z: if x > 0.0 { -grade * x } else { 0.0 },
+                heading: 0.0,
+            })
+        };
+        let world = crate::movement::CollisionWorld::new([
+            [corner(-50.0, -20.0), corner(0.0, -20.0), corner(0.0, 20.0)],
+            [corner(-50.0, -20.0), corner(0.0, 20.0), corner(-50.0, 20.0)],
+            [corner(0.0, -20.0), corner(50.0, -20.0), corner(50.0, 20.0)],
+            [corner(0.0, -20.0), corner(50.0, 20.0), corner(0.0, 20.0)],
+        ])
+        .unwrap();
+        let yaw = std::f32::consts::PI;
+        // Lying behind, on the level, it lies level; lying ahead, over the
+        // crest, it pitches down the fall.
+        let behind = super::corpse_tilt(&world, glam::Vec3::ZERO, yaw, -6.0, 60, 6.0);
+        assert!(behind.upright(), "{behind:?}");
+        let ahead = super::corpse_tilt(&world, glam::Vec3::ZERO, yaw, 6.0, 60, 6.0);
+        assert!(
+            (ahead.pitch - grade.atan()).abs() < 1.0_f32.to_radians(),
+            "{ahead:?}"
+        );
+        assert!(ahead.roll.abs() < 1e-4, "{ahead:?}");
+    }
+
+    #[test]
+    fn a_corpse_rolls_to_a_slope_across_it() {
+        // Facing world +y, the ramp rises to its X side.
+        for grade in [0.2_f32, -0.4] {
+            let world = ramp(grade);
+            let yaw = std::f32::consts::FRAC_PI_2;
+            let tilt = super::corpse_tilt(&world, on_ramp(grade, 0.0, 0.0), yaw, -6.0, 60, 6.0);
+            assert!(
+                (tilt.roll - grade.atan()).abs() < 1.0_f32.to_radians(),
+                "grade {grade}: {tilt:?}"
+            );
+            assert!(tilt.pitch.abs() < 1e-4, "{tilt:?}");
+        }
+    }
+
+    #[test]
+    fn a_corpse_on_flat_ground_lies_level() {
+        let world = ramp(0.0);
+        for yaw in [0.0_f32, 0.7, 2.0, -2.9] {
+            let tilt = super::corpse_tilt(&world, glam::Vec3::ZERO, yaw, -5.0, 60, 6.0);
+            assert!(tilt.upright(), "yaw {yaw}: {tilt:?}");
+            assert_eq!(tilt.rotation(), glam::Quat::IDENTITY);
+        }
+    }
+
+    #[test]
+    fn a_corpse_missing_a_floor_sample_stays_upright_on_that_axis() {
+        let grade = 0.3;
+        let world = ramp(grade);
+        // Behind its soles, where its body lies, the ramp has ended: no
+        // pitch, though it slopes; lying ahead instead, it has the floor.
+        let edge = on_ramp(grade, -99.5, 0.0);
+        let tilt = super::corpse_tilt(&world, edge, std::f32::consts::PI, -6.0, 60, 6.0);
+        assert!(tilt.upright(), "{tilt:?}");
+        let tilt = super::corpse_tilt(&world, edge, std::f32::consts::PI, 6.0, 60, 6.0);
+        assert!(
+            (-tilt.pitch - grade.atan()).abs() < 1.0_f32.to_radians(),
+            "{tilt:?}"
+        );
+        // With only its middle on the floor it still pitches, fitted to
+        // the soles and the middle.
+        let tilt = super::corpse_tilt(
+            &world,
+            on_ramp(grade, -96.5, 0.0),
+            std::f32::consts::PI,
+            -6.0,
+            60,
+            6.0,
+        );
+        assert!(
+            (-tilt.pitch - grade.atan()).abs() < 1.0_f32.to_radians(),
+            "{tilt:?}"
+        );
+        // Facing along that edge, one side is off the ramp: no roll, though
+        // the ramp rises to its side.
+        let tilt = super::corpse_tilt(&world, edge, std::f32::consts::FRAC_PI_2, -6.0, 60, 6.0);
+        assert!(tilt.upright(), "{tilt:?}");
+        // Facing up the ramp by its side edge, the pitch still follows it
+        // with a side off the ramp.
+        let along = on_ramp(grade, 0.0, 19.5);
+        let tilt = super::corpse_tilt(&world, along, std::f32::consts::PI, -6.0, 60, 6.0);
+        assert!(
+            (-tilt.pitch - grade.atan()).abs() < 1.0_f32.to_radians(),
+            "{tilt:?}"
+        );
+        assert!(tilt.roll.abs() < f32::EPSILON, "{tilt:?}");
+        // With no floor at its soles, it stays upright.
+        let over = on_ramp(grade, 0.0, 0.0) + glam::Vec3::Y * 9.0;
+        let tilt = super::corpse_tilt(&world, over, std::f32::consts::PI, -6.0, 60, 6.0);
+        assert_eq!(tilt, super::Tilt::default());
+        // A model with no death clip to measure has no length to lie along.
+        let tilt = super::corpse_tilt(&world, on_ramp(grade, 0.0, 0.0), 0.0, 0.0, 60, 6.0);
+        assert!(tilt.upright());
+    }
+
+    #[test]
+    fn a_falling_corpse_takes_a_share_of_its_lean() {
+        let tilt = super::Tilt {
+            pitch: -0.4,
+            roll: 0.2,
+        };
+        assert!(tilt.share(0.0).upright());
+        assert_eq!(
+            tilt.share(0.5),
+            super::Tilt {
+                pitch: -0.2,
+                roll: 0.1
+            }
+        );
+        assert_eq!(tilt.share(1.0), tilt);
+        assert_eq!(tilt.share(3.0), tilt);
     }
 
     use super::{WorldPosition, render_position, world_position};

@@ -76,6 +76,11 @@ pub enum Fix {
     /// A server may notice a character that never takes the damage, so the
     /// label calls the setting unsafe.
     TakeEnvironmentalDamage,
+    /// Lays a corpse's body along the floor under it, pitched and rolled to
+    /// the slope, rather than level with its soles, where it sinks into a
+    /// hillside ([`crate::corpse_tilt`]). Adam's choice (10-20); what the
+    /// official client does is inferred, checklist item 6.282.
+    CorpsesAlongGround,
     /// Starts the Options window's Max FPS at 60 frames a second rather than
     /// as fast as vsync allows; the slider and the installation's
     /// `eqclient.ini` still set another cap. What the official client does
@@ -111,7 +116,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::MapWhereOff,
@@ -119,6 +124,7 @@ impl Fix {
         Self::ShowTimesInChat,
         Self::FlashOnTells,
         Self::TakeEnvironmentalDamage,
+        Self::CorpsesAlongGround,
         Self::FrameCap,
         Self::GreyedControls,
         Self::CampCountdown,
@@ -140,6 +146,7 @@ impl Fix {
             Self::ShowTimesInChat => "chat_times",
             Self::FlashOnTells => "flash_on_tells",
             Self::TakeEnvironmentalDamage => "take_environmental_damage",
+            Self::CorpsesAlongGround => "corpses_along_ground",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -169,6 +176,7 @@ impl Fix {
             Self::ShowTimesInChat => "Show Times in Chat",
             Self::FlashOnTells => "Flash on Tells",
             Self::TakeEnvironmentalDamage => "Take Environmental Damage (unsafe)",
+            Self::CorpsesAlongGround => "Corpses Lie Along the Ground",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -205,6 +213,9 @@ impl Fix {
             Self::TakeEnvironmentalDamage => {
                 "Report the damage the world does to you, such as a fall's, to the server, as the official client does. Turning this off is unsafe: a server may notice a character that never takes it."
             }
+            Self::CorpsesAlongGround => {
+                "Lay each corpse along the slope of the ground under it, instead of level with its feet."
+            }
             Self::FrameCap => {
                 "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
             }
@@ -237,6 +248,7 @@ impl Fix {
             Self::HiddenWindows
             | Self::ShowTimesInChat
             | Self::FlashOnTells
+            | Self::CorpsesAlongGround
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -265,6 +277,7 @@ impl Fix {
             Self::TakeEnvironmentalDamage => Some(Capability::EnvironmentalDamage),
             Self::HiddenWindows
             | Self::ShowTimesInChat
+            | Self::CorpsesAlongGround
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -299,7 +312,8 @@ impl Fix {
     /// client keeps it off, unless the player asks for them, as Adam chose;
     /// chat lines read as the official client's do until the player asks
     /// for their times; the world's damage is taken until the player turns
-    /// it off, as Adam chose; windows open apart, as Adam asked; and what
+    /// it off, as Adam chose; corpses lie along the ground until the player
+    /// turns it off, as Adam chose; windows open apart, as Adam asked; and what
     /// only adds what the player could work out, or stops a plain mistake,
     /// is always on.
     #[must_use]
@@ -308,7 +322,8 @@ impl Fix {
             Self::SkipModifiedFood
             | Self::AskBeforeDeletingSpells
             | Self::FlashOnTells
-            | Self::TakeEnvironmentalDamage => Availability::Setting { default: true },
+            | Self::TakeEnvironmentalDamage
+            | Self::CorpsesAlongGround => Availability::Setting { default: true },
             Self::HiddenWindows | Self::MapWhereOff | Self::ShowTimesInChat => {
                 Availability::Setting { default: false }
             }
@@ -443,7 +458,8 @@ mod tests {
                 Fix::AskBeforeDeletingSpells,
                 Fix::ShowTimesInChat,
                 Fix::FlashOnTells,
-                Fix::TakeEnvironmentalDamage
+                Fix::TakeEnvironmentalDamage,
+                Fix::CorpsesAlongGround
             ]
         );
         // A fix that is always on stays on whatever is asked.

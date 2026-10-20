@@ -278,6 +278,8 @@ fn draw(
             commands.entity(entity).insert((
                 character::Corpse {
                     fell: state.world().died_at(id),
+                    length: asset.lying().map(|length| length * scale),
+                    tilt: None,
                 },
                 super::names::Overhead(character::CORPSE_NAME_HEIGHT / scale),
             ));
@@ -315,20 +317,27 @@ fn draw(
     true
 }
 
-/// Interpolates between received locations without extrapolating beyond the server.
+/// Interpolates between received locations without extrapolating beyond
+/// the server. A drawn corpse finds how it leans to lie along the floor
+/// under it as it is first drawn and when a report moves it
+/// ([`eq_client_core::corpse_tilt`]), for [`character::lie`] to lay it by.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn interpolate(
     state: Res<OnlineState>,
     time: Res<Time>,
     collision: Option<Res<super::Collision>>,
-    mut entities: Query<(&mut RemoteEntity, &mut Transform)>,
+    mut entities: Query<(
+        &mut RemoteEntity,
+        &mut Transform,
+        Option<&mut character::Corpse>,
+    )>,
 ) {
     let world = collision
         .as_ref()
         .and_then(|collision| collision.0.as_ref());
     let weight = 1.0 - (-time.delta_secs().min(0.1) / 0.1).exp();
     let now = std::time::Instant::now();
-    for (mut entity, mut transform) in &mut entities {
+    for (mut entity, mut transform, corpse) in &mut entities {
         let Some(spawn) = state.world().spawn(entity.id) else {
             continue;
         };
@@ -350,6 +359,18 @@ pub(super) fn interpolate(
                 eq_client_core::carried_soles(world, entity.soles, soles, spawn.race, spawn.size);
             entity.soles = Some((height, Vec2::new(soles.x, soles.z)));
             target.y += height - soles.y;
+            if let (true, Some(mut corpse)) = (fresh, corpse)
+                && let Some(length) = corpse.length
+            {
+                corpse.tilt = Some(eq_client_core::corpse_tilt(
+                    world,
+                    Vec3::new(soles.x, height, soles.z),
+                    eq_client_core::render_heading(spawn.position.heading),
+                    length,
+                    spawn.race,
+                    spawn.size,
+                ));
+            }
         }
         if first {
             report_drawn(entity.id, spawn);
@@ -423,6 +444,100 @@ mod tests {
         app.update();
         // So the loading screen lifts as soon as the zone has laid out.
         assert!(app.world().resource::<NearbyEntities>().settled());
+    }
+
+    #[test]
+    fn a_corpse_on_a_slope_lies_along_it() {
+        use eq_client_core::WorldPosition;
+        // A floor rising 0.3 a unit toward the renderer's +X, the way
+        // heading 0 faces.
+        let grade = 0.3_f32;
+        let corner = |x: f32, z: f32| [x, grade * x, z];
+        let floor = eq_client_core::movement::CollisionWorld::new([
+            [
+                corner(-50.0, -50.0),
+                corner(50.0, -50.0),
+                corner(50.0, 50.0),
+            ],
+            [
+                corner(-50.0, -50.0),
+                corner(50.0, 50.0),
+                corner(-50.0, 50.0),
+            ],
+        ])
+        .unwrap();
+        let mut corpse = testing::pet(5, 0);
+        corpse.pet_owner = None;
+        corpse.size = 6.0;
+        let feet = eq_client_core::drawn_feet_offset(corpse.race, corpse.size);
+        corpse.position = WorldPosition {
+            z: feet,
+            ..WorldPosition::default()
+        };
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::spawns(&mut online, vec![corpse]);
+        let mut app = App::new();
+        character::testing::stores(app.world_mut());
+        app.insert_resource(online)
+            .insert_resource(super::super::Collision(Some(floor)))
+            .init_resource::<crate::options::OptionsState>()
+            .init_resource::<Time>()
+            .add_systems(Update, (interpolate, character::lie).chain());
+        let prepared = character::testing::prepared(app.world_mut());
+        let root = character::testing::drawn(app.world_mut(), &prepared);
+        app.world_mut().entity_mut(root).insert((
+            RemoteEntity {
+                id: 5,
+                seen: None,
+                soles: None,
+                feet: Some(feet),
+            },
+            character::Corpse {
+                fell: None,
+                length: prepared.lying(),
+                tilt: None,
+            },
+        ));
+        app.update();
+        // As first drawn it finds its tilt: the slope ahead, nothing across.
+        let tilt = app
+            .world()
+            .get::<character::Corpse>(root)
+            .unwrap()
+            .tilt
+            .unwrap();
+        assert!(
+            (-tilt.pitch - grade.atan()).abs() < 1.0_f32.to_radians(),
+            "{tilt:?}"
+        );
+        assert!(tilt.roll.abs() < 1e-4, "{tilt:?}");
+        // Its model's facing, turned by its heading and tilt, runs up the
+        // slope as the floor does.
+        let model = app
+            .world()
+            .get::<character::AnimatedCharacter>(root)
+            .unwrap()
+            .model;
+        let root_turn = app.world().get::<Transform>(root).unwrap().rotation;
+        let hung = app.world().get::<Transform>(model).unwrap().rotation;
+        let facing =
+            root_turn * hung * Quat::from_rotation_y(-eq_client_core::model_yaw()) * Vec3::Z;
+        let rise = facing.y.atan2(Vec2::new(facing.x, facing.z).length());
+        assert!(
+            (rise - grade.atan()).abs() < 1.0_f32.to_radians(),
+            "{facing}"
+        );
+        // Without a new report it is not found again.
+        app.world_mut()
+            .get_mut::<character::Corpse>(root)
+            .unwrap()
+            .tilt = Some(eq_client_core::Tilt::default());
+        app.update();
+        assert_eq!(
+            app.world().get::<character::Corpse>(root).unwrap().tilt,
+            Some(eq_client_core::Tilt::default())
+        );
     }
 
     #[test]

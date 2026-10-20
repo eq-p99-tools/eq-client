@@ -60,11 +60,21 @@ pub(super) struct AnimatedCharacter {
 }
 
 /// A corpse: drawn with its race's model, falling from when it died if the
-/// player saw it die, else lying as it fell.
+/// player saw it die, else lying as it fell; where the setting is on, along
+/// the floor under it ([`lie`]).
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub(super) struct Corpse {
     /// When it died, for a death the player saw.
     pub(super) fell: Option<std::time::Instant>,
+    /// How far its body lies from its soles along the way it faces, in
+    /// world units, negative where it lies behind them
+    /// ([`PreparedCharacter::lying`] scaled as drawn); None for a model
+    /// without a death clip, which never leans.
+    pub(super) length: Option<f32>,
+    /// How it leans to lie along the floor under it, found when it is first
+    /// drawn and again when a report moves it; None until then, or without
+    /// a floor to find it on.
+    pub(super) tilt: Option<eq_client_core::Tilt>,
 }
 
 impl Corpse {
@@ -74,6 +84,18 @@ impl Corpse {
         self.fell.map_or(1.0e6, |fell| {
             now.saturating_duration_since(fell).as_secs_f32()
         })
+    }
+}
+
+impl Corpse {
+    /// How much of its lean it shows: it leans into the floor as it falls,
+    /// over the death clip's `seconds`, and one that arrived dead leans all
+    /// the way from its first frame.
+    fn leaning(self, now: std::time::Instant, seconds: Option<f32>) -> f32 {
+        let lying = self.lying(now);
+        seconds
+            .filter(|seconds| *seconds > 0.0)
+            .map_or(1.0, |seconds| (lying / seconds).clamp(0.0, 1.0))
     }
 }
 
@@ -164,6 +186,9 @@ pub(super) struct PreparedCharacter {
     /// The lowest point its base pieces reach standing, which its soles
     /// hang by.
     soles: f32,
+    /// How far its body lies from its soles along the way it faces, in
+    /// model units, in the death clip's last frame ([`lying_length`]).
+    lying: Option<f32>,
 }
 
 /// The stores a model's textures, meshes, materials and bind poses go in.
@@ -178,6 +203,29 @@ impl PreparedCharacter {
     pub fn height(&self) -> f32 {
         self.asset.height()
     }
+
+    /// How far its body lies from its soles along the way it faces, in
+    /// model units, negative where it lies behind them, read once from the
+    /// death clip's last frame; None for a model without that clip.
+    pub fn lying(&self) -> Option<f32> {
+        self.lying
+    }
+}
+
+/// How far a model's body lies from its soles along the way it faces, in
+/// model units, in the death clip's last frame: of the base pieces' reach
+/// behind and ahead along the heading axis in the model's frame, from its
+/// soles' vertical, the farther, negative where that is behind. The pose
+/// says which way the body falls, not an assumption. None for a model
+/// without the death clip, or with no reach either way.
+fn lying_length(asset: &CharacterAsset) -> Option<f32> {
+    let (clip, _) = DEATH;
+    let seconds = asset.clip_seconds(clip)?;
+    // The model is turned by `model_yaw` to face its root's +Z.
+    let axis = Quat::from_rotation_y(-eq_client_core::model_yaw()) * Vec3::Z;
+    let (behind, ahead) = asset.extent(&asset.joints(clip, seconds, false), axis)?;
+    let length = if ahead >= -behind { ahead } else { behind };
+    (length.is_finite() && length != 0.0).then_some(length)
 }
 
 /// Where the meshes of models hung under a spawn, its body and the items it
@@ -238,8 +286,10 @@ pub(super) fn prepare(
         }
     }
     let soles = asset.standing_bottom().unwrap_or_default();
+    let lying = lying_length(&asset);
     Some(PreparedCharacter {
         soles,
+        lying,
         asset: Arc::new(asset),
         primitives: drawn
             .into_iter()
@@ -560,6 +610,57 @@ impl AnimatedCharacter {
         let length = |clip: &str| self.asset.clip_seconds(clip);
         let gesture = self.swings.gesture(length)?;
         Some((gesture.since, length(gesture.clip)? - gesture.since))
+    }
+}
+
+impl AnimatedCharacter {
+    /// Where its model hangs from its root, leaning by `tilt` about its
+    /// soles' point under the root, which stays where the root puts it.
+    /// Upright, exactly as it was first hung.
+    fn hung(&self, tilt: eq_client_core::Tilt) -> Transform {
+        let upright = Transform::from_xyz(0.0, self.lift, 0.0)
+            .with_rotation(Quat::from_rotation_y(eq_client_core::model_yaw()));
+        if tilt.upright() {
+            return upright;
+        }
+        let turn = tilt.rotation();
+        let soles = Vec3::Y * (self.lift + self.soles);
+        Transform {
+            translation: soles + turn * (upright.translation - soles),
+            rotation: turn * upright.rotation,
+            ..upright
+        }
+    }
+}
+
+/// Lays each drawn corpse along the floor under it, where the
+/// quality-of-life setting is on ([`Fix::CorpsesAlongGround`]): its model
+/// leans about its soles by the tilt found for it, heading × pitch × roll
+/// with its root's heading, a share of it while it falls. Off, or with no
+/// tilt found, it lies level as before. Adam's choice (10-20); what the
+/// official client does is inferred, checklist item 6.282.
+///
+/// [`Fix::CorpsesAlongGround`]: eq_client_core::qol::Fix::CorpsesAlongGround
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn lie(
+    options: Res<crate::options::OptionsState>,
+    corpses: Query<(&AnimatedCharacter, &Corpse)>,
+    mut models: Query<&mut Transform>,
+) {
+    let on = options
+        .options
+        .qol
+        .on(eq_client_core::qol::Fix::CorpsesAlongGround);
+    let now = std::time::Instant::now();
+    for (character, corpse) in &corpses {
+        let tilt = corpse
+            .tilt
+            .filter(|_| on)
+            .map(|tilt| tilt.share(corpse.leaning(now, character.asset.clip_seconds(DEATH.0))))
+            .unwrap_or_default();
+        if let Ok(mut model) = models.get_mut(character.model) {
+            model.set_if_neq(character.hung(tilt));
+        }
     }
 }
 
@@ -1147,7 +1248,7 @@ mod tests {
         };
         // One that arrived dead lies; one seen dying falls from its death.
         let now = std::time::Instant::now();
-        let arrived = Corpse { fell: None }.lying(now);
+        let arrived = Corpse::default().lying(now);
         let (clip, pinned) = chosen_clip(
             Some(arrived),
             Some(PostureState::Standing),
@@ -1159,6 +1260,7 @@ mod tests {
         assert!(pinned.is_some_and(|seconds| seconds > 1000.0));
         let seen = Corpse {
             fell: now.checked_sub(std::time::Duration::from_millis(400)),
+            ..Corpse::default()
         };
         assert_eq!(
             chosen_clip(Some(seen.lying(now)), None, false, None, None),
@@ -1168,6 +1270,163 @@ mod tests {
             chosen_clip(None, Some(PostureState::Sitting), false, None, None),
             (("P02", true), None)
         );
+    }
+
+    #[test]
+    fn a_body_lies_as_far_as_the_death_clips_last_frame_lays_it() {
+        let mut world = World::new();
+        testing::stores(&mut world);
+        let prepared = testing::prepared(&mut world);
+        // The test model falls back: its last frame lays it two to four
+        // behind its soles, so it lies four behind them.
+        let length = prepared.lying().unwrap();
+        assert!((length + 4.0).abs() < 1e-4, "{length}");
+    }
+
+    /// The test model drawn under a root placed and turned on the floor,
+    /// with `lie` laying it, and the model's upright hang.
+    fn lain() -> (App, Entity, Transform) {
+        let mut app = App::new();
+        testing::stores(app.world_mut());
+        app.init_resource::<crate::options::OptionsState>()
+            .add_systems(Update, lie);
+        let prepared = testing::prepared(app.world_mut());
+        let root = testing::drawn(app.world_mut(), &prepared);
+        app.world_mut().entity_mut(root).insert(
+            Transform::from_xyz(4.0, 2.0, 7.0)
+                .with_rotation(Quat::from_rotation_y(0.9))
+                .with_scale(Vec3::splat(0.7)),
+        );
+        let model = app.world().get::<AnimatedCharacter>(root).unwrap().model;
+        let upright = *app.world().get::<Transform>(model).unwrap();
+        (app, root, upright)
+    }
+
+    /// The model's hang once `lie` has laid a corpse that fell then.
+    fn laid(app: &mut App, root: Entity, corpse: Corpse) -> Transform {
+        app.world_mut().entity_mut(root).insert(corpse);
+        app.update();
+        let model = app.world().get::<AnimatedCharacter>(root).unwrap().model;
+        *app.world().get::<Transform>(model).unwrap()
+    }
+
+    #[test]
+    fn a_corpse_seen_dying_leans_into_the_floor_as_it_falls() {
+        use std::time::{Duration, Instant};
+        let (mut app, root, upright) = lain();
+        let tilt = eq_client_core::Tilt {
+            pitch: -0.3,
+            roll: 0.2,
+        };
+        let fell = |ago: u64| Corpse {
+            fell: Instant::now().checked_sub(Duration::from_millis(ago)),
+            length: Some(-4.0),
+            tilt: Some(tilt),
+        };
+        let lean = |hung: Transform| hung.rotation * upright.rotation.inverse();
+        // Just fallen it stands upright, half way through the one-second
+        // death clip it leans half way, and once it lies it leans all the
+        // way, as one that arrived dead does from its first frame.
+        let now = lean(laid(&mut app, root, fell(0)));
+        assert!(now.angle_between(Quat::IDENTITY) < 0.01, "{now}");
+        let half = lean(laid(&mut app, root, fell(500)));
+        assert!(
+            half.angle_between(tilt.share(0.5).rotation()) < 0.02,
+            "{half}"
+        );
+        for corpse in [
+            fell(1000),
+            Corpse {
+                fell: None,
+                ..fell(0)
+            },
+        ] {
+            let hung = laid(&mut app, root, corpse);
+            assert!(lean(hung).angle_between(tilt.rotation()) < 1e-3);
+            // It leans about its soles, which stay under the root.
+            let character = app.world().get::<AnimatedCharacter>(root).unwrap();
+            let soles = Vec3::Y * character.soles;
+            assert!((hung.transform_point(soles) - upright.transform_point(soles)).length() < 1e-5);
+        }
+        // A model without a death clip, or without a floor found, stays
+        // upright.
+        for corpse in [
+            Corpse {
+                tilt: None,
+                ..fell(1000)
+            },
+            Corpse::default(),
+        ] {
+            assert_eq!(laid(&mut app, root, corpse), upright);
+        }
+    }
+
+    #[test]
+    fn with_the_setting_off_a_corpse_lies_level_as_before() {
+        use eq_client_core::qol::Fix;
+        let (mut app, root, upright) = lain();
+        let corpse = Corpse {
+            fell: None,
+            length: Some(-4.0),
+            tilt: Some(eq_client_core::Tilt {
+                pitch: -0.3,
+                roll: 0.2,
+            }),
+        };
+        assert_ne!(laid(&mut app, root, corpse), upright);
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::CorpsesAlongGround, false);
+        assert_eq!(laid(&mut app, root, corpse), upright);
+    }
+
+    #[test]
+    fn on_flat_ground_a_corpse_lying_along_it_logs_the_same_soles() {
+        use eq_client_core::qol::Fix;
+        let (mut app, root, upright) = lain();
+        let corners = [
+            [-50.0, 2.0, -50.0],
+            [50.0, 2.0, -50.0],
+            [50.0, 2.0, 50.0],
+            [-50.0, 2.0, 50.0],
+        ];
+        let floor = eq_client_core::movement::CollisionWorld::new([
+            [corners[0], corners[1], corners[2]],
+            [corners[0], corners[2], corners[3]],
+        ])
+        .unwrap();
+        // Its soles hang at the root, on the floor, as `interpolate` finds
+        // its tilt there.
+        let placed = *app.world().get::<Transform>(root).unwrap();
+        let length = -4.0 * 0.7;
+        let tilt = eq_client_core::corpse_tilt(&floor, placed.translation, 0.9, length, 60, 6.0);
+        assert!(tilt.upright(), "{tilt:?}");
+        let corpse = Corpse {
+            fell: None,
+            length: Some(length),
+            tilt: Some(tilt),
+        };
+        let line = |app: &mut App, on: bool| {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .qol
+                .set(Fix::CorpsesAlongGround, on);
+            let hung = laid(app, root, corpse);
+            assert_eq!(hung, upright);
+            let asset = &app.world().get::<AnimatedCharacter>(root).unwrap().asset;
+            let posed = asset.joints(DEATH.0, 1.0e6, false);
+            let model = GlobalTransform::from(placed).mul_transform(hung);
+            DrawnSoles::of(asset, &model, &posed, Some(&floor), 3.75)
+                .unwrap()
+                .to_string()
+        };
+        // The soles line reads the same with the setting on as off.
+        let off = line(&mut app, false);
+        assert_eq!(line(&mut app, true), off);
+        assert_eq!(off, "1.30, -0.70 from the floor at 2.00");
     }
 
     #[test]
