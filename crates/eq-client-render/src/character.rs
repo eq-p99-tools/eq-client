@@ -462,6 +462,8 @@ pub(super) fn animate(
             (world, id, own, controls.as_deref()),
         );
         if selected != character.clip {
+            // Which clip a drawn spawn plays, for reading a look against.
+            debug!(spawn = id, clip = selected.0, held = selected.1, "Clip");
             character.clip = selected;
             character.elapsed = 0.0;
         }
