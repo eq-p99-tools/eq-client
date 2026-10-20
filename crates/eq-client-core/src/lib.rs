@@ -349,8 +349,8 @@ mod tests {
             let world = ramp(grade);
             for fps in [60_u16, 10] {
                 let mut previous = None;
-                for frame in 0..=u32::from(fps) * 10 {
-                    let t = frame as f32 / f32::from(fps);
+                for frame in 0..=fps * 10 {
+                    let t = f32::from(frame) / f32::from(fps);
                     let report = (t / 5.0).floor() * 5.0;
                     if (t - report).abs() < 1e-6 {
                         previous = None;
