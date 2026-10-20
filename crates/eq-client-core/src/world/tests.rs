@@ -2249,6 +2249,62 @@ fn the_clock_runs_on_from_the_time_the_server_gave() {
 }
 
 #[test]
+fn a_zone_header_sent_again_changes_the_sky_fog_and_far_clip() {
+    use crate::clock::{Fog, ZoneSky};
+    use crate::zones::ZoneDescription;
+    let mut world = ClientWorld::default();
+    let header = |sky: u8, far: f32, max_clip: f32| {
+        let sky = ZoneSky {
+            sky,
+            time_type: 0,
+            fog: [Fog {
+                color: [200, 200, 220],
+                near: 10.0,
+                far,
+            }; 4],
+        };
+        let description = ZoneDescription {
+            long_name: "Example".into(),
+            zone_type: 0,
+            gravity: 0.4,
+            safe_point: [0.0; 3],
+            max_z: 0.0,
+            underworld: -1000.0,
+            min_clip: 50.0,
+            max_clip,
+            experience_multiplier: 1.0,
+            weather: Default::default(),
+            music: None,
+            sky_lock: None,
+            graveyard_minutes: None,
+        };
+        (sky, description)
+    };
+    // At entry the session gives the far clip with the admission, then the
+    // header's sky and description; the clip is there from the first frame.
+    let mut admission = entered(1);
+    if let WorldEvent::Entered { far_clip, .. } = &mut admission {
+        *far_clip = Some(1400.0);
+    }
+    game(&mut world, admission);
+    assert_eq!(world.far_clip(), Some(1400.0));
+    let (sky, description) = header(1, 800.0, 1400.0);
+    game(&mut world, WorldEvent::Sky(sky));
+    game(&mut world, WorldEvent::ZoneDescription(description));
+    assert_eq!((world.sky(), world.far_clip()), (Some(sky), Some(1400.0)));
+    // A game master's change sends the header again mid-zone: every field it
+    // carries takes effect, the clip as well as the sky and fog.
+    let (sky, description) = header(0, 500.0, 600.0);
+    game(&mut world, WorldEvent::Sky(sky));
+    game(&mut world, WorldEvent::ZoneDescription(description));
+    assert_eq!((world.sky(), world.far_clip()), (Some(sky), Some(600.0)));
+    // A header with no clip leaves the one the world has.
+    let (_, description) = header(0, 500.0, 0.0);
+    game(&mut world, WorldEvent::ZoneDescription(description));
+    assert_eq!(world.far_clip(), Some(600.0));
+}
+
+#[test]
 fn the_player_has_the_pet_they_own_and_its_buffs() {
     use crate::pets::{PetBuff, PetBuffs};
     let mut world = admitted();
