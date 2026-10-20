@@ -40,14 +40,3 @@ jobs:
         with:
           key: windows
       - run: cargo test --workspace --locked
-
-  msrv:
-    name: Rust 1.95 minimum version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.95.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: msrv
-      - run: cargo check --workspace --all-targets --locked

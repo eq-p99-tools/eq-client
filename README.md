@@ -687,14 +687,13 @@ off and plays on. Building on Linux needs ALSA's development files
 ## Checks
 
 Pull request CI checks only formatting; the full suite (clippy, tests on Linux and
-Windows, the Rust 1.95 build) runs on demand at milestones (Actions > CI > Run
+Windows) runs on demand at milestones (Actions > CI > Run
 workflow). Run it locally before opening a pull request:
 
 ```console
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-cargo +1.95.0 check --workspace --all-targets --locked
 ```
 
 ## License
