@@ -8,6 +8,8 @@ pub mod sidl;
 pub mod sounds;
 pub mod spells;
 pub mod strings;
+#[cfg(test)]
+mod test_world;
 pub mod ui;
 
 use std::collections::HashMap;
@@ -662,19 +664,21 @@ mod tests {
         ));
     }
 
-    /// A world file whose one material names a render method no material
-    /// has, which libeq's parser stops on with a panic.
+    /// A world file whose one mesh claims more faces for its material than it
+    /// has, which libeq's model view stops on with a panic.
     fn world_the_reader_stops_on() -> Vec<u8> {
-        let words: [u32; 7] = [0x5450_3D02, 0x0001_5500, 1, 0, 0, 4, 0];
-        let mut bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
-        bytes.extend_from_slice(&[0; 4]);
-        // The fragment: its size and type (a material), then its name, flags,
-        // render method (user-defined, kind 99), pen, brightness, ambient
-        // and texture reference.
-        let fragment: [u32; 9] = [28, 0x30, 0, 0, 0x8000_0063, 0, 0, 0, 0];
-        bytes.extend(fragment.iter().flat_map(|word| word.to_le_bytes()));
-        bytes.extend_from_slice(&[0xff; 4]);
-        bytes
+        use crate::test_world::{Coordinates, OLD_FORMAT, WorldFile, material, palette, triangle};
+        let mut world = WorldFile::new(OLD_FORMAT);
+        let (m, p, t) = (
+            world.name("M_MDF"),
+            world.name("P_MP"),
+            world.name("T_DMSPRITEDEF"),
+        );
+        let material = world.fragment(0x30, material(m, 0x8000_0001));
+        let palette = world.fragment(0x31, palette(p, material));
+        let coordinates = Coordinates::Old([(0, 0), (256, 0), (0, 256)]);
+        world.fragment(0x36, triangle(t, palette, &coordinates, 2));
+        world.bytes()
     }
 
     #[test]
@@ -700,6 +704,117 @@ mod tests {
         };
         assert_eq!(zone, "broken");
         assert_ne!(message, "");
+    }
+
+    /// A zone in the new WLD format, with an object file holding an
+    /// unlisted user-defined material and vertex animations of both
+    /// alignments.
+    fn write_new_format_zone(install: &Path) {
+        use crate::test_world::{
+            Coordinates, NEW_FORMAT, OLD_FORMAT, WorldFile, material, palette, triangle,
+            vertex_animation, write_archive,
+        };
+        let words = |words: &[u32]| -> Vec<u8> {
+            words.iter().flat_map(|word| word.to_le_bytes()).collect()
+        };
+
+        let mut zone = WorldFile::new(NEW_FORMAT);
+        let (m, p, t) = (
+            zone.name("M_MDF"),
+            zone.name("P_MP"),
+            zone.name("R1_DMSPRITEDEF"),
+        );
+        let terrain = zone.fragment(0x30, material(m, 0x8000_0001));
+        let terrain_palette = zone.fragment(0x31, palette(p, terrain));
+        let coordinates = Coordinates::New([(0.0, 0.0), (1.0, 0.0), (0.5, -2.25)]);
+        zone.fragment(0x36, triangle(t, terrain_palette, &coordinates, 1));
+
+        // One placement of the object: name, model, flags (a location),
+        // sphere, the location, and no user data.
+        let mut placements = WorldFile::new(OLD_FORMAT);
+        let model = placements.name("OBJ_ACTORDEF");
+        let mut placement = words(&[0, model.cast_unsigned(), 0x02, 0]);
+        for value in [10.0_f32, 20.0, 30.0, 0.0, 0.0, 0.0] {
+            placement.extend(value.to_le_bytes());
+        }
+        placement.extend(words(&[0, 0]));
+        placements.fragment(0x15, placement);
+
+        let mut objects = WorldFile::new(OLD_FORMAT);
+        let (w, p, t) = (
+            objects.name("W_MDF"),
+            objects.name("P_MP"),
+            objects.name("OBJ_DMSPRITEDEF"),
+        );
+        let (model, a1, a2) = (
+            objects.name("OBJ_ACTORDEF"),
+            objects.name("A1_DMTRACKDEF"),
+            objects.name("A2_DMTRACKDEF"),
+        );
+        let water = objects.fragment(0x30, material(w, 0x8000_0018));
+        let object_palette = objects.fragment(0x31, palette(p, water));
+        let coordinates = Coordinates::Old([(0, 0), (256, 0), (0, 256)]);
+        let mesh = objects.fragment(0x36, triangle(t, object_palette, &coordinates, 1));
+        // A sprite naming the mesh, then the model: name, flags, callback,
+        // no actions, one sprite reference, no bounds, the sprite, unknown.
+        let sprite = objects.fragment(0x2d, words(&[0, mesh.cast_unsigned(), 0]));
+        objects.fragment(
+            0x14,
+            words(&[
+                model.cast_unsigned(),
+                0,
+                0,
+                0,
+                1,
+                0,
+                sprite.cast_unsigned(),
+                0,
+            ]),
+        );
+        // 18 + 6 bytes ends on a word; 18 + 12 is padded with two more.
+        objects.fragment(0x37, vertex_animation(a1, 1));
+        objects.fragment(0x37, vertex_animation(a2, 2));
+
+        write_archive(
+            install,
+            "newzone.s3d",
+            &[
+                ("newzone.wld", zone.bytes()),
+                ("objects.wld", placements.bytes()),
+            ],
+        );
+        write_archive(
+            install,
+            "newzone_obj.s3d",
+            &[("newzone_obj.wld", objects.bytes())],
+        );
+    }
+
+    #[test]
+    fn a_new_format_zone_with_its_objects_loads_whole() {
+        let install =
+            std::env::temp_dir().join(format!("eq-zone-new-format-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        write_new_format_zone(&install);
+        let result = load_zone(&install, "newzone");
+        std::fs::remove_dir_all(&install).unwrap();
+        let zone = result.unwrap();
+
+        assert_eq!(zone.primitives.len(), 1);
+        assert_eq!(
+            zone.primitives[0].texture_coordinates,
+            vec![[0.0, 0.0], [1.0, 0.0], [0.5, -2.25]]
+        );
+        assert_eq!(zone.models.len(), 1);
+        assert_eq!(zone.models[0].name, "OBJ_ACTORDEF");
+        assert_eq!(zone.models[0].primitives.len(), 1);
+        // A user-defined type with no transparency mapping draws opaque.
+        assert_eq!(
+            zone.models[0].primitives[0].material_mode,
+            MaterialMode::Opaque
+        );
+        assert_eq!(zone.objects.len(), 1);
+        assert_eq!(zone.objects[0].model, 0);
     }
 
     #[test]
