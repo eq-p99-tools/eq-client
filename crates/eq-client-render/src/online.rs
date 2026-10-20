@@ -249,6 +249,11 @@ impl Panels<'_> {
                 super::character_select::Selection::new(list.selection_id, list.characters.clone())
             });
         }
+        if let Some(selection) = state.selection.as_mut() {
+            for notice in &changes.notices {
+                selection.hear(notice);
+            }
+        }
         if changes.motion
             && let Some(grant) = state.world.motion()
         {
