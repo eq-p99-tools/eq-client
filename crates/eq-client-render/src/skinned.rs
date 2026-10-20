@@ -675,6 +675,9 @@ fn pieces(
 ) {
     let inside = *inside;
     for (name, element) in pieces {
+        if augment_section(context.id, name, element) {
+            continue;
+        }
         match element {
             Element::Gauge(gauge) => self::gauge(window, art, gauge, &inside),
             Element::Label(label) => self::label(window, name, label, &inside, context.id),
@@ -1028,6 +1031,27 @@ fn view(
 /// A window within a window that scrolls its pieces.
 #[derive(Component)]
 pub(crate) struct ScrolledView;
+
+/// Whether a piece is part of a container window's augment section: its
+/// list, its two labels (named by piece, as labels keep no `ScreenID`) and
+/// its Insert, Remove and Delete buttons. The client does not augment, so
+/// the section is not drawn at all rather than drawn greyed, as the project
+/// owner asked; a skin parks it beside the slots, where a window fitted to
+/// its bag ([`fit`]) would otherwise show its edge.
+fn augment_section(owner: WindowId, name: &str, element: &Element) -> bool {
+    if !matches!(owner, WindowId::Bag(_) | WindowId::WorldContainer) {
+        return false;
+    }
+    match element {
+        Element::Button(button) => matches!(
+            button.id.as_deref(),
+            Some("InsertButton" | "RemoveButton" | "DeleteButton")
+        ),
+        Element::Listbox(list) => list.id.as_deref() == Some("AugmentList"),
+        Element::Label(_) => matches!(name, "Augment_Label" | "AugmentInfoLabel"),
+        _ => false,
+    }
+}
 
 /// Where a piece sits in its container, when the skin places it.
 const fn placed_area(element: &Element) -> Option<Area> {
@@ -4115,6 +4139,135 @@ mod tests {
                 (WindowId::Actions, "HB_PageLeftButton".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn a_containers_augment_section_is_not_drawn() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element};
+        let button = |id: &str, x| {
+            Element::Button(Button {
+                id: Some(id.into()),
+                area: Area {
+                    x,
+                    y: 0.0,
+                    width: 20.0,
+                    height: 20.0,
+                },
+                placed: true,
+                anchors: None,
+                look: ButtonLook::default(),
+                checkbox: false,
+                text: None,
+                text_color: None,
+                font: None,
+                decal: None,
+                decal_area: None,
+                tooltip: None,
+            })
+        };
+        let screen = Screen {
+            name: "Container".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 30.0,
+            },
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![
+                ("combine".into(), button("Container_Combine", 0.0)),
+                ("insert".into(), button("InsertButton", 20.0)),
+                ("delete".into(), button("DeleteButton", 40.0)),
+            ],
+            tab_frame: None,
+            transparent: false,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    for id in [
+                        WindowId::Bag(23),
+                        WindowId::WorldContainer,
+                        WindowId::Actions,
+                    ] {
+                        let context = Context {
+                            id,
+                            paperdoll: None,
+                            depth: 0,
+                            tab_frame: None,
+                        };
+                        commands.spawn(Node::default()).with_children(|window| {
+                            draw(window, &screen, &mut art, &context);
+                        });
+                    }
+                },
+            );
+        app.update();
+        let mut skins = app.world_mut().query::<&SkinId>();
+        let mut names: Vec<_> = skins
+            .iter(app.world())
+            .map(|skin| (skin.window, skin.id.clone()))
+            .collect();
+        names.sort();
+        // A bag and a world container keep Combine and draw no augment
+        // button; another window with buttons of those names draws them.
+        assert_eq!(
+            names,
+            [
+                (WindowId::Actions, "Container_Combine".to_owned()),
+                (WindowId::Actions, "DeleteButton".to_owned()),
+                (WindowId::Actions, "InsertButton".to_owned()),
+                (WindowId::Bag(23), "Container_Combine".to_owned()),
+                (WindowId::WorldContainer, "Container_Combine".to_owned()),
+            ]
+        );
+        // The section's list and labels go with its buttons.
+        let label = Element::Label(eq_client_assets::sidl::Label {
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            anchors: None,
+            eq_type: None,
+            text: String::new(),
+            color: None,
+            align: eq_client_assets::sidl::Align::Left,
+            font: None,
+            wraps: false,
+        });
+        assert!(augment_section(
+            WindowId::Bag(23),
+            "AugmentInfoLabel",
+            &label
+        ));
+        assert!(augment_section(
+            WindowId::WorldContainer,
+            "Augment_Label",
+            &label
+        ));
+        assert!(!augment_section(
+            WindowId::Bag(23),
+            "Container_Label",
+            &label
+        ));
+        assert!(!augment_section(
+            WindowId::Merchant,
+            "Augment_Label",
+            &label
+        ));
     }
 
     /// An Options window with a checkbox the client keeps nothing for, one it
