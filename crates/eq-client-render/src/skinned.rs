@@ -4232,7 +4232,10 @@ mod tests {
                 (WindowId::WorldContainer, "Container_Combine".to_owned()),
             ]
         );
-        // The section's list and labels go with its buttons.
+    }
+
+    #[test]
+    fn a_containers_augment_labels_go_with_its_buttons() {
         let label = Element::Label(eq_client_assets::sidl::Label {
             area: Area {
                 x: 0.0,
