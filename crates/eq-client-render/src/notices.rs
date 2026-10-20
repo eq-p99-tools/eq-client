@@ -148,7 +148,7 @@ fn connection_text(link: Link, dead: bool) -> String {
 /// says only which step it refused, never why, and the official client's
 /// words for each are not known, so these are this client's (inferred,
 /// item 6.278).
-fn creation_refusal(name: &str, outcome: CreationOutcome) -> String {
+pub(crate) fn creation_refusal(name: &str, outcome: CreationOutcome) -> String {
     match outcome {
         CreationOutcome::NameRefused => format!("The server refused the name {name}."),
         CreationOutcome::CreationRefused => {

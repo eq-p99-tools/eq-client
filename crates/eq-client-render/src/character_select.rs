@@ -60,6 +60,16 @@ impl Selection {
         slot.is_some()
     }
 
+    /// Shows what the session's news says of this list on its guidance
+    /// line, where the player looks: a refused character creation, in the
+    /// status line's words, until the next key or click on the list or the
+    /// world's next answer (inferred, 6.278).
+    pub(super) fn hear(&mut self, notice: &eq_client_core::world::Notice) {
+        if let eq_client_core::world::Notice::CreationRefused { name, outcome } = notice {
+            self.message = crate::notices::creation_refusal(name, *outcome);
+        }
+    }
+
     /// Asks once; a refused request leaves the choice available for another
     /// click, and the outbox says why.
     fn enter(&mut self, outbox: &Outbox, world: &eq_client_core::world::ClientWorld) {
@@ -152,6 +162,7 @@ pub(super) fn update(
             match action {
                 // An empty slot of the skin's list chooses nothing.
                 Action::Choose(slot) => {
+                    selection.message.clear();
                     if selection.entries.iter().any(|entry| entry.slot == *slot) {
                         selection.selected = Some(*slot);
                     }
@@ -161,6 +172,7 @@ pub(super) fn update(
             }
         }
         if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::ArrowUp) {
+            selection.message.clear();
             let index = selection
                 .entries
                 .iter()
@@ -574,5 +586,69 @@ mod tests {
             }
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_refused_creation_shows_on_the_list_until_the_next_key() {
+        use eq_client_core::{creation::CreationOutcome, world::Notice};
+        let mut state = OnlineState::new(true);
+        let mut selection = Selection::new(
+            7,
+            vec![CharacterChoice {
+                slot: 3,
+                name: "Example".into(),
+                level: Some(1),
+                zone_id: None,
+                look: None,
+            }],
+        );
+        let browse = "Select a character | Up/Down: browse | Enter: connect";
+        assert_eq!(guidance(Some(&selection), "Connected"), browse);
+        // Other news leaves the line alone.
+        selection.hear(&Notice::Connection {
+            link: eq_client_core::world::Link::Connected,
+            dead: false,
+        });
+        assert_eq!(guidance(Some(&selection), "Connected"), browse);
+        selection.hear(&Notice::CreationRefused {
+            name: "Newname".into(),
+            outcome: CreationOutcome::NameRefused,
+        });
+        let refused = crate::notices::creation_refusal("Newname", CreationOutcome::NameRefused);
+        assert_eq!(guidance(Some(&selection), "Connected"), refused);
+        state.selection = Some(selection);
+        let (tx, _rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.insert_resource(state)
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<super::super::navigation::NavigationKeys>()
+            .init_resource::<crate::windows::Shown>()
+            .init_resource::<crate::skinned::Skinned>()
+            .init_resource::<crate::login::FrontEnd>()
+            .init_resource::<crate::loading::Screen>()
+            .init_resource::<crate::select_preview::Preview>()
+            .add_message::<AppExit>()
+            .add_systems(Update, update);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+        let shown = |app: &App| {
+            let selection = app.world().resource::<OnlineState>().selection.as_ref();
+            guidance(selection, "Connected").to_owned()
+        };
+        assert_eq!(shown(&app), refused);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ArrowDown);
+        app.update();
+        assert_eq!(shown(&app), browse);
     }
 }
