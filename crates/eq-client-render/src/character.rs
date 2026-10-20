@@ -52,6 +52,8 @@ pub(super) struct AnimatedCharacter {
     /// Where its soles are in the model's own frame: the lowest point it
     /// reaches standing.
     pub(super) soles: f32,
+    /// When its soles were last logged while it stood still.
+    measured: Option<std::time::Instant>,
 }
 
 /// A corpse: drawn with its race's model, falling from when it died if the
@@ -121,6 +123,13 @@ type HeldItems<'w, 's> = Query<
     (&'static mut Transform, &'static mut Visibility),
     (With<HeldItem>, Without<AnimatedCharacter>),
 >;
+
+/// Where the models were last placed, and the zone's floors: what a look's
+/// debug lines measure the drawn soles by.
+type Placed<'w, 's> = (
+    Query<'w, 's, &'static GlobalTransform>,
+    Option<Res<'w, super::Collision>>,
+);
 
 /// The model a movement root wears, for views that draw it again elsewhere.
 #[derive(Component)]
@@ -373,6 +382,7 @@ pub(super) fn spawn_on_layers(
             swings: Swings::default(),
             lift,
             soles: prepared.soles,
+            measured: None,
         });
 }
 
@@ -404,10 +414,11 @@ pub(super) fn animate(
     ),
     mut characters: Animated,
     mut held_items: HeldItems,
-    mut joints: Joints,
+    (mut joints, placed): (Joints, Placed),
 ) {
     let now = std::time::Instant::now();
     let world = online.world();
+    let measuring = bevy::log::tracing::enabled!(bevy::log::Level::DEBUG);
     for (transform, mut character, overhead, remote, own, corpse) in &mut characters {
         let id = remote.map(|entity| entity.id).or_else(|| {
             own.then(|| world.player().map(|player| player.spawn_id))
@@ -461,9 +472,8 @@ pub(super) fn animate(
             &character.asset,
             (world, id, own, controls.as_deref()),
         );
-        if selected != character.clip {
-            // Which clip a drawn spawn plays, for reading a look against.
-            debug!(spawn = id, clip = selected.0, held = selected.1, "Clip");
+        let changed = selected != character.clip;
+        if changed {
             character.clip = selected;
             character.elapsed = 0.0;
         }
@@ -472,6 +482,14 @@ pub(super) fn animate(
         }
         let (clip, held) = selected;
         let posed = character.asset.joints(clip, character.elapsed, !held);
+        if measuring {
+            log_soles(
+                &mut character,
+                (id, id.and_then(|id| world.spawn(id)), remote.is_some()),
+                (&posed, &placed),
+                (transform.translation, changed, now),
+            );
+        }
         let attachments = character.asset.attachments(&posed);
         // The name rides just over the head as the pose moves it (inferred,
         // a recording item); a corpse's stays where its lying body puts it.
@@ -520,6 +538,116 @@ impl AnimatedCharacter {
         let length = |clip: &str| self.asset.clip_seconds(clip);
         let gesture = self.swings.gesture(length)?;
         Some((gesture.since, length(gesture.clip)? - gesture.since))
+    }
+}
+
+/// Logs at debug level where a posed character's soles are drawn: on its
+/// "Clip" line when its clip changed, and once a second while a remote
+/// spawn stands where its latest report left it, with how far its root is
+/// drawn across the ground from that report, for reading a shot taken then
+/// against. It changes nothing drawn.
+fn log_soles(
+    character: &mut AnimatedCharacter,
+    (id, spawn, remote): (Option<u16>, Option<&eq_client_core::world::Spawn>, bool),
+    (posed, (placed, collision)): (&[Mat4], &Placed),
+    (root, changed, now): (Vec3, bool, std::time::Instant),
+) {
+    let (clip, held) = character.clip;
+    let model = placed.get(character.model).ok();
+    let floors = collision
+        .as_ref()
+        .and_then(|collision| collision.0.as_ref());
+    let soles = || {
+        let reach = spawn.map_or(0.0, |spawn| {
+            eq_client_core::drawn_feet_offset(spawn.state.race, spawn.state.size)
+        });
+        DrawnSoles::of(&character.asset, model?, posed, floors, reach)
+    };
+    if changed {
+        // Which clip a drawn spawn plays and where its soles are drawn in
+        // it, for reading a look against.
+        let soles = soles();
+        debug!(
+            spawn = id,
+            clip,
+            held,
+            soles = soles.as_ref().map(bevy::log::tracing::field::display),
+            "Clip"
+        );
+    }
+    let (Some(id), Some(spawn), true) = (id, spawn, remote) else {
+        return;
+    };
+    let since = now.saturating_duration_since(spawn.reported);
+    let still = spawn.state.velocity.iter().all(|speed| *speed == 0.0);
+    let due = character
+        .measured
+        .is_none_or(|last| now.saturating_duration_since(last) >= STILL_EVERY);
+    if !(still && since <= STILL_FOR && due) {
+        return;
+    }
+    let reported = Vec3::from_array(eq_client_core::render_position(spawn.state.position));
+    let across = Vec2::new(root.x, root.z).distance(Vec2::new(reported.x, reported.z));
+    let soles = soles().map_or_else(|| "none".to_owned(), |soles| soles.to_string());
+    character.measured = Some(now);
+    debug!(
+        "spawn {id} still {:.1} s after its report in {clip}: root {across:.2} across \
+         from the report, soles {soles}",
+        since.as_secs_f32(),
+    );
+}
+
+/// How often a still spawn's soles are logged, and for how long after its
+/// latest report.
+const STILL_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+const STILL_FOR: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Where a posed character's soles are drawn and the floor under them, in
+/// the renderer's frame, for a debug line a look reads; it changes nothing
+/// drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DrawnSoles {
+    /// The height of the lowest point of its base pieces.
+    height: f32,
+    /// The collision floor nearest that point, straight under or over it,
+    /// within the reach it was looked for in.
+    floor: Option<f32>,
+}
+
+impl DrawnSoles {
+    /// The soles of `posed` hung from the model where it was last placed
+    /// (its `GlobalTransform`, as the GPU places the vertices by, one frame
+    /// old), and the floor of `floors` nearest them within `reach` either
+    /// way. None for a model without base pieces.
+    fn of(
+        asset: &CharacterAsset,
+        model: &GlobalTransform,
+        posed: &[Mat4],
+        floors: Option<&eq_client_core::movement::CollisionWorld>,
+        reach: f32,
+    ) -> Option<Self> {
+        let model = model.to_matrix();
+        let hung: Vec<Mat4> = posed.iter().map(|joint| model * *joint).collect();
+        let lowest = asset.bottom(&hung)?;
+        let floor = floors.and_then(|floors| floors.nearest_ground(lowest, reach, reach));
+        Some(Self {
+            height: lowest.y,
+            floor,
+        })
+    }
+}
+
+impl std::fmt::Display for DrawnSoles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.floor {
+            Some(floor) => write!(
+                f,
+                "{:.2}, {:+.2} from the floor at {floor:.2}",
+                self.height,
+                self.height - floor
+            ),
+            None => write!(f, "{:.2} with no floor in reach", self.height),
+        }
     }
 }
 
@@ -1162,6 +1290,44 @@ mod tests {
             posture_clip(Some(PostureState::Unknown(999)), false),
             ("P01", false)
         );
+    }
+
+    #[test]
+    fn the_drawn_soles_are_the_lowest_placed_point_over_the_floor_under_it() {
+        // The test model's triangle hangs from a bone a unit up, its lowest
+        // edge on the bone; hung half size two under a root, it is drawn
+        // at -1.5, 1.5 over a floor at -3.
+        let asset = CharacterAsset::testing();
+        let posed = asset.joints("", 0.0, true);
+        let model =
+            GlobalTransform::from(Transform::from_xyz(4.0, -2.0, 7.0).with_scale(Vec3::splat(0.5)));
+        let floor = |y: f32| {
+            let corners = [
+                [-50.0, y, -50.0],
+                [50.0, y, -50.0],
+                [50.0, y, 50.0],
+                [-50.0, y, 50.0],
+            ];
+            eq_client_core::movement::CollisionWorld::new([
+                [corners[0], corners[1], corners[2]],
+                [corners[0], corners[2], corners[3]],
+            ])
+            .unwrap()
+        };
+        let ground = floor(-3.0);
+        let soles = DrawnSoles::of(&asset, &model, &posed, Some(&ground), 2.0).unwrap();
+        assert!((soles.height + 1.5).abs() < 1e-4, "{soles:?}");
+        assert!(
+            soles.floor.is_some_and(|floor| (floor + 3.0).abs() < 1e-3),
+            "{soles:?}"
+        );
+        assert_eq!(soles.to_string(), "-1.50, +1.50 from the floor at -3.00");
+        // A floor beyond the reach either way is not the soles' floor.
+        let far = DrawnSoles::of(&asset, &model, &posed, Some(&ground), 1.0).unwrap();
+        assert_eq!(far.to_string(), "-1.50 with no floor in reach");
+        let over = floor(-1.0);
+        let sunk = DrawnSoles::of(&asset, &model, &posed, Some(&over), 2.0).unwrap();
+        assert_eq!(sunk.to_string(), "-1.50, -0.50 from the floor at -1.00");
     }
 
     #[test]
