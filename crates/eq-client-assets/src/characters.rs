@@ -1,7 +1,9 @@
 //! Classic character archive discovery, independent of the renderer and session.
 
 mod model;
-pub use model::{Attachment, CharacterAsset, CharacterPose, Piece, SkinBind, load_character};
+pub use model::{
+    Attachment, CharacterAsset, CharacterPose, Piece, STANDING_CLIP, SkinBind, load_character,
+};
 
 use std::{
     collections::HashMap,

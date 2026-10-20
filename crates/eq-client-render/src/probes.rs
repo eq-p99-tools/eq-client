@@ -1431,6 +1431,78 @@ fn the_liquid_probe_finds_a_wade_a_ledge_and_lava() {
     assert_eq!(script[script.len() - 2], "hold w+space 2000");
 }
 
+/// Prints, for every race and gender in `EQ_PROBE_RACES` (as
+/// [`inspect_model_heights`] reads them, defaulting to the playable races
+/// and the Coldain), how far the lowest drawn point of
+/// each standing and moving clip (`P01`, `L01`, `L02`) falls from the
+/// base pose's, which is where a model's soles are hung: the lowest and
+/// highest of the clip's bottoms over its frames at 30 a second, in model
+/// units and in world units at size 4. A negative bottom draws the feet
+/// that far under the floor the base pose stands on.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL"]
+fn inspect_clip_soles() {
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zones = std::env::var("EQ_PROBE_ZONES").unwrap_or_else(|_| {
+        "thurgadina,halas,kaladima,akanon,rivervale,qeynos,everfrost,cobaltscar".into()
+    });
+    let races = std::env::var("EQ_PROBE_RACES").unwrap_or_else(|_| {
+        "1:0,1:1,2:0,2:1,3:0,3:1,4:0,4:1,5:0,5:1,6:0,6:1,7:0,7:1,8:0,8:1,9:0,9:1,\
+             10:0,10:1,11:0,11:1,12:0,12:1,128:0,128:1,183:0,183:1"
+            .into()
+    });
+    let donors = eq_client_assets::characters::DonorArchives::default();
+    for pair in races.split(',') {
+        let (race, gender) = pair.trim().split_once(':').unwrap();
+        let (race, gender): (u32, u32) = (race.parse().unwrap(), gender.parse().unwrap());
+        let Some(code) = eq_client_core::races::model(race, gender) else {
+            continue;
+        };
+        let Some((zone, asset)) = zones.split(',').find_map(|zone| {
+            eq_client_assets::characters::load_installed_character(&install, zone, code, &donors)
+                .ok()
+                .map(|asset| (zone, asset))
+        }) else {
+            println!("race={race} gender={gender} model={code} loaded=no");
+            continue;
+        };
+        let (base, _) = asset.span().unwrap_or_default();
+        let world = 4.0 / asset.height();
+        let lowest = |clip: &str, seconds: f32| {
+            asset
+                .pose(clip, seconds)
+                .iter()
+                .zip(&asset.pieces)
+                .filter(|(_, piece)| piece.base())
+                .flat_map(|(pose, _)| &pose.positions)
+                .map(|position| position[1])
+                .reduce(f32::min)
+                .unwrap_or(base)
+        };
+        for clip in ["P01", "L01", "L02"] {
+            let Some(length) = asset.clip_seconds(clip) else {
+                println!("race={race} gender={gender} model={code} zone={zone} clip={clip} none");
+                continue;
+            };
+            let (low, high) = std::iter::successors(Some(0.0_f32), |seconds| {
+                Some(seconds + 1.0 / 30.0).filter(|next| *next < length)
+            })
+            .map(|seconds| lowest(clip, seconds) - base)
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), bottom| {
+                (low.min(bottom), high.max(bottom))
+            });
+            println!(
+                "race={race} gender={gender} model={code} zone={zone} clip={clip} \
+                 seconds={length:.2} base_bottom={base:.3} height={:.3} \
+                 bottom_from_base={low:.3}..{high:.3} at_size_4={:.3}..{:.3}",
+                asset.height(),
+                low * world,
+                high * world
+            );
+        }
+    }
+}
+
 /// Prints each model's base-pose span against the z offset table, to tell
 /// whether the table's factors are the meshes' own geometry: for every race
 /// and gender in `EQ_PROBE_RACES` (`race:gender` pairs, defaulting to the

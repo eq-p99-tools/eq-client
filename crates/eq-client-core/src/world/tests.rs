@@ -125,6 +125,25 @@ fn admitted() -> ClientWorld {
     world
 }
 
+#[test]
+fn a_sound_the_server_names_is_news_and_its_other_effects_are_not() {
+    use crate::effects::{Cue, Effect};
+    let mut world = admitted();
+    let file = Cue::File("quests/Plain.wav".into());
+    let sound = |cue: &Cue| WorldEvent::Effect(Effect::Sound(cue.clone()));
+    assert_eq!(game(&mut world, sound(&file)).sounds, [file]);
+    assert_eq!(
+        game(&mut world, sound(&Cue::Number(12))).sounds,
+        [Cue::Number(12)]
+    );
+    let shake = WorldEvent::Effect(Effect::CameraShake {
+        duration: std::time::Duration::from_millis(500),
+        intensity: 1.0,
+    });
+    assert_eq!(game(&mut world, shake).sounds, Vec::<Cue>::new());
+    assert_eq!(game(&mut world, WorldEvent::Ding).sounds, Vec::<Cue>::new());
+}
+
 fn zone_is_empty(world: &ClientWorld) -> bool {
     world.spawns().is_empty()
         && world.doors().entries().is_empty()
@@ -3475,4 +3494,120 @@ fn a_spawn_that_dies_moving_lies_where_it_was_carried_and_moves_no_more() {
     arriving.velocity = [4.0, 0.0, 0.0];
     game(&mut world, WorldEvent::Spawns(vec![arriving]));
     assert_eq!(world.spawn(6).unwrap().state.velocity, [0.0; 3]);
+}
+
+#[test]
+fn guild_news_changes_nothing_yet() {
+    use eq_network_game::guild::GuildUpdate;
+    use eq_network_game::listing::GuildRank;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        GuildUpdate::Members(Vec::new()),
+        GuildUpdate::MemberLocation {
+            guild_id: 1,
+            name: "Example".into(),
+            zone_id: Some(29),
+            last_on: 0,
+        },
+        GuildUpdate::MemberAdded {
+            guild_id: 1,
+            name: "Example".into(),
+            level: 10,
+            class: 1,
+            rank: GuildRank::Member,
+            zone_id: None,
+            last_on: 0,
+        },
+        GuildUpdate::MemberLevel {
+            guild_id: 1,
+            name: "Example".into(),
+            level: 10,
+        },
+        GuildUpdate::MemberRemoved {
+            guild_id: 1,
+            name: "Example".into(),
+        },
+        GuildUpdate::MemberNote {
+            guild_id: 1,
+            name: "Example".into(),
+            note: "Note".into(),
+        },
+        GuildUpdate::MemberRank {
+            guild_id: Some(1),
+            name: "Example".into(),
+            rank: GuildRank::Officer,
+            banker: true,
+            alt: false,
+        },
+        GuildUpdate::MemberRenamed {
+            guild_id: 1,
+            old_name: "Example".into(),
+            new_name: "Renamed".into(),
+        },
+        GuildUpdate::Renamed {
+            guild_id: 1,
+            name: "Guild".into(),
+        },
+        GuildUpdate::Disbanded { guild_id: 1 },
+        GuildUpdate::Invite {
+            inviter: "Example".into(),
+            guild_id: 1,
+            rank: GuildRank::Member,
+        },
+    ];
+    for event in events {
+        assert_eq!(
+            game(&mut world, WorldEvent::Guild(event)),
+            Changes::default()
+        );
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
+}
+
+#[test]
+fn titles_and_suffixes_change_the_spawn_and_the_players_own() {
+    use eq_network_game::names::TitleChange;
+    let mut world = admitted();
+    for (spawn_id, change) in [
+        (5, TitleChange::Title("Baron".into())),
+        (5, TitleChange::Suffix("the Bold".into())),
+        (5, TitleChange::Unspecified),
+        (9, TitleChange::Title("Lady".into())),
+        (12, TitleChange::Title("Nobody".into())),
+    ] {
+        game(&mut world, WorldEvent::TitleChanged { spawn_id, change });
+    }
+    let parts = &world.spawn(5).unwrap().state.name_parts;
+    assert_eq!(
+        (parts.title.as_str(), parts.suffix.as_str()),
+        ("Baron", "the Bold")
+    );
+    assert_eq!(world.player().unwrap().name_parts.title, "Lady");
+}
+
+#[test]
+fn new_titles_and_game_masters_notices_change_nothing_yet() {
+    use eq_network_game::gm::GmNotice;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        WorldEvent::NewTitles,
+        WorldEvent::Gm(GmNotice::Kicked {
+            name: "Example".into(),
+            gm_name: Some("Guide".into()),
+        }),
+        WorldEvent::Gm(GmNotice::Killed {
+            name: "Example".into(),
+            gm_name: None,
+        }),
+        WorldEvent::Gm(GmNotice::BecameNpc { max_level: 50 }),
+        WorldEvent::Gm(GmNotice::Petition(None)),
+    ];
+    for event in events {
+        assert_eq!(game(&mut world, event), Changes::default());
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
 }
