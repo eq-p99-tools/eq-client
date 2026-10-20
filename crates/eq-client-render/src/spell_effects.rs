@@ -279,8 +279,8 @@ struct Body {
 impl Body {
     fn of(character: &super::character::AnimatedCharacter, model: &GlobalTransform) -> Self {
         use eq_client_assets::characters::Attachment;
-        let (bottom, top) = character.asset.span().unwrap_or_default();
-        let feet = model.transform_point(Vec3::new(0.0, bottom, 0.0));
+        let (_, top) = character.asset.span().unwrap_or_default();
+        let feet = model.transform_point(Vec3::new(0.0, character.soles, 0.0));
         let head = model.transform_point(Vec3::new(0.0, top, 0.0));
         let hand = |attachment: Attachment| {
             character.attachments[attachment.index()].map_or(feet.lerp(head, CHEST), |point| {

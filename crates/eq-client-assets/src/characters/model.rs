@@ -15,6 +15,9 @@ use libeq::{
 use super::{invalid, resolve, validate_parents};
 use crate::{LoadError, MaterialMode, ZonePrimitive, ZoneTexture, load_texture, stage_mesh};
 
+/// The clip a model plays standing still.
+pub const STANDING_CLIP: &str = "P01";
+
 /// A renderer-independent character with original bone-local mesh data.
 #[derive(Clone, Debug)]
 pub struct CharacterAsset {
@@ -251,6 +254,43 @@ impl CharacterAsset {
                 (min.min(p[1]), max.max(p[1]))
             });
         (min <= max).then_some((min, max))
+    }
+
+    /// The lowest point the base pieces reach while the model stands: the
+    /// lowest of its standing clip's (`P01`) bottoms over the clip's frames
+    /// at 30 a second, in the renderer's frame; the base pose's bottom for a
+    /// model without that clip, and None without base pieces. A standing
+    /// model is drawn in that clip, not in its base pose, so its soles are
+    /// hung by this point.
+    #[must_use]
+    pub fn standing_bottom(&self) -> Option<f32> {
+        let (bottom, _) = self.span()?;
+        let Some(length) = self.clip_seconds(STANDING_CLIP) else {
+            return Some(bottom);
+        };
+        let lowest = |seconds: f32| {
+            let joints = self.joints(STANDING_CLIP, seconds, true);
+            self.skins
+                .iter()
+                .zip(&self.pieces)
+                .filter(|(_, piece)| piece.base())
+                .flat_map(|(skin, _)| skin.positions.iter().zip(&skin.bones))
+                .filter_map(|(position, bone)| {
+                    Some(
+                        joints
+                            .get(*bone)?
+                            .transform_point3(Vec3::from_array(*position))
+                            .y,
+                    )
+                })
+                .reduce(f32::min)
+        };
+        std::iter::successors(Some(0.0_f32), |seconds| {
+            Some(seconds + 1.0 / 30.0).filter(|next| *next < length)
+        })
+        .filter_map(lowest)
+        .reduce(f32::min)
+        .or(Some(bottom))
     }
 
     /// The top of the head with these joints: the highest point of the
@@ -1197,6 +1237,69 @@ mod tests {
         // The joints place the points: a head lifted by 2.
         let lifted = [Mat4::from_translation(Vec3::Y * 2.0)];
         assert_eq!(asset.top(&lifted, &[true, true, false]), Some(6.5));
+    }
+
+    #[test]
+    fn a_model_stands_on_the_lowest_point_its_standing_clip_reaches() {
+        // A foot hung a unit under a hip bone, which the standing clip
+        // lowers by half a unit and back.
+        let hip = LocalTransform {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+        };
+        let lowered = LocalTransform {
+            translation: Vec3::NEG_Z * 0.5,
+            ..hip
+        };
+        // In the renderer's frame, where skins hold their vertices.
+        let foot = [0.0, -1.0, 0.0];
+        let model = |clips: HashMap<String, Vec<Option<AnimationTrack>>>| {
+            let mut asset = CharacterAsset {
+                name: "synthetic".into(),
+                primitives: vec![ZonePrimitive {
+                    positions: vec![[0.0; 3]],
+                    normals: vec![[0.0, 1.0, 0.0]],
+                    texture_coordinates: Vec::new(),
+                    indices: Vec::new(),
+                    texture: None,
+                    material_mode: MaterialMode::Opaque,
+                }],
+                textures: Vec::new(),
+                materials: vec![None],
+                pieces: vec![Piece::Body(0)],
+                source: PathBuf::new(),
+                catalog: HashMap::new(),
+                parents: vec![None, Some(0)],
+                base_pose: vec![hip, hip],
+                clips,
+                skins: vec![Skin {
+                    positions: vec![foot],
+                    normals: vec![[0.0, 1.0, 0.0]],
+                    bones: vec![1],
+                }],
+                attachments: [None; 3],
+            };
+            let pose = asset.pose("", 0.0);
+            asset.primitives[0].positions = pose[0].positions.clone();
+            asset
+        };
+        let standing = HashMap::from([(
+            STANDING_CLIP.into(),
+            vec![
+                None,
+                Some(AnimationTrack {
+                    frames: vec![hip, lowered],
+                    interval: 1.0,
+                }),
+            ],
+        )]);
+        let asset = model(standing);
+        assert_eq!(asset.span().map(|(bottom, _)| bottom), Some(-1.0));
+        let soles = asset.standing_bottom().unwrap();
+        assert!((soles + 1.5).abs() < 1e-5, "{soles}");
+        // Without a standing clip, the base pose's bottom.
+        assert_eq!(model(HashMap::new()).standing_bottom(), Some(-1.0));
     }
 
     #[test]
