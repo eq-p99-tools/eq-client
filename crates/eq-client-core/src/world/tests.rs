@@ -3486,6 +3486,73 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
 }
 
 #[test]
+fn a_spawn_that_dies_moving_lies_where_it_was_carried_and_moves_no_more() {
+    let mut world = admitted();
+    let reported = Instant::now();
+    let at = |world: &mut ClientWorld, event, now| {
+        world.apply(&WorldUpdate::Game(event), now, &NoSpells);
+    };
+    at(
+        &mut world,
+        WorldEvent::Position {
+            spawn_id: 5,
+            position: WorldPosition::default(),
+            velocity: [4.0, 0.0, 0.0],
+        },
+        reported,
+    );
+    // Drawn late, it is carried from when its report came.
+    let carried = world
+        .spawn(5)
+        .unwrap()
+        .carried(reported + std::time::Duration::from_secs(1));
+    assert!((carried.x - 4.0).abs() < 0.001);
+    let died = reported + std::time::Duration::from_secs(2);
+    at(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 5,
+            killer_id: 9,
+            corpse_id: 5,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+        died,
+    );
+    let corpse = world.spawn(5).unwrap();
+    assert_eq!(corpse.state.kind, SpawnKind::NpcCorpse);
+    assert!((corpse.state.position.x - 8.0).abs() < 0.001);
+    assert_eq!(corpse.state.velocity, [0.0; 3]);
+    let later = corpse.carried(died + std::time::Duration::from_secs(10));
+    assert!((later.x - 8.0).abs() < 0.001);
+    // A position for the corpse places it, and still it does not move on.
+    let dragged = WorldPosition {
+        x: 20.0,
+        ..WorldPosition::default()
+    };
+    at(
+        &mut world,
+        WorldEvent::Position {
+            spawn_id: 5,
+            position: dragged,
+            velocity: [4.0, 0.0, 0.0],
+        },
+        died,
+    );
+    let corpse = world.spawn(5).unwrap();
+    assert_eq!(
+        corpse.carried(died + std::time::Duration::from_secs(3)),
+        dragged
+    );
+    // One arriving as a corpse is as still.
+    let mut arriving = spawn(6);
+    arriving.kind = SpawnKind::NpcCorpse;
+    arriving.velocity = [4.0, 0.0, 0.0];
+    game(&mut world, WorldEvent::Spawns(vec![arriving]));
+    assert_eq!(world.spawn(6).unwrap().state.velocity, [0.0; 3]);
+}
+
+#[test]
 fn guild_news_changes_nothing_yet() {
     use eq_network_game::guild::GuildUpdate;
     use eq_network_game::listing::GuildRank;

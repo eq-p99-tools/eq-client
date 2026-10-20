@@ -239,6 +239,52 @@ impl CollisionWorld {
             .then(|| floor.clamp(position.y - drop, position.y + step_up))
     }
 
+    /// Finds the floor nearest `position`'s height between `step_up` above
+    /// it and `drop` below, never a wall. Where floors are stacked in that
+    /// window, as a bridge over the ground, the one closest to `position`
+    /// wins, not simply the highest.
+    pub fn nearest_ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
+        // The window's edges are inclusive, as in `ground`; each next ray
+        // starts a hair under the surface the last one met.
+        const EDGE: f32 = 0.000_1;
+        const SURFACES: usize = 32;
+        let bottom = position.y - drop - EDGE;
+        let mut from = position.y + step_up + EDGE;
+        let mut nearest: Option<f32> = None;
+        for _ in 0..SURFACES {
+            if from <= bottom {
+                break;
+            }
+            let origin = Vector::from_array(Vec3::new(position.x, from, position.z).to_array());
+            let Some(hit) = self
+                .meshes()
+                .filter_map(|mesh| {
+                    mesh.cast_local_ray_and_get_normal(
+                        &Ray::new(origin, -Vector::Y),
+                        from - bottom + EDGE,
+                        false,
+                    )
+                })
+                .min_by(|a, b| a.time_of_impact.total_cmp(&b.time_of_impact))
+            else {
+                break;
+            };
+            let met = from - hit.time_of_impact;
+            if met < bottom {
+                break;
+            }
+            if hit.normal.y.abs() >= 0.7 {
+                let floor = met.clamp(position.y - drop, position.y + step_up);
+                if nearest.is_none_or(|best| (floor - position.y).abs() < (best - position.y).abs())
+                {
+                    nearest = Some(floor);
+                }
+            }
+            from = met - EDGE;
+        }
+        nearest
+    }
+
     /// Signed distance from the character's collision capsule to the nearest solid
     /// within `range`; a negative value is how deep the capsule overlaps it.
     pub fn clearance(&self, feet: Vec3, height: f32, range: f32) -> Option<f32> {

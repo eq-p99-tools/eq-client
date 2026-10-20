@@ -4,7 +4,7 @@
 //! in one step.
 use super::{Notice, Spawn, trade::Trade};
 use crate::{
-    PostureState, SpawnState, WorldPosition,
+    PostureState, SpawnKind, SpawnState, WorldPosition,
     combat::{ConColor, Consideration},
     doors::DoorTable,
     ground::Objects,
@@ -50,7 +50,7 @@ pub(super) struct Zone {
 
 impl Zone {
     /// Spawns appear, or replace what had their IDs; each is drawn anew.
-    pub(super) fn appear(&mut self, spawns: &[SpawnState], revision: &mut u64) {
+    pub(super) fn appear(&mut self, spawns: &[SpawnState], revision: &mut u64, now: Instant) {
         for spawn in spawns {
             // A new spawn has not been considered, whatever had its ID, and
             // one arriving as a corpse was not seen dying.
@@ -60,10 +60,14 @@ impl Zone {
             self.spawns.insert(
                 spawn.spawn_id,
                 Spawn {
-                    state: spawn.clone(),
+                    state: SpawnState {
+                        velocity: still_if_corpse(spawn.kind, spawn.velocity),
+                        ..spawn.clone()
+                    },
                     health: spawn.hp_percent,
                     posture: None,
                     revision: *revision,
+                    reported: now,
                 },
             );
         }
@@ -114,11 +118,17 @@ impl Zone {
         }
     }
 
-    /// A spawn moved.
-    pub(super) fn moved(&mut self, id: u16, position: WorldPosition, velocity: [f32; 3]) {
+    /// A spawn moved, as of `now`.
+    pub(super) fn moved(
+        &mut self,
+        id: u16,
+        (position, velocity): (WorldPosition, [f32; 3]),
+        now: Instant,
+    ) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
             spawn.state.position = position;
-            spawn.state.velocity = velocity;
+            spawn.state.velocity = still_if_corpse(spawn.state.kind, velocity);
+            spawn.reported = now;
         }
     }
 
@@ -155,7 +165,9 @@ impl Zone {
     /// death gives it (the session's, by the client generation's rule) or
     /// its living name where the death gives none. Titanium corpses keep the
     /// spawn ID. A living spawn's death is when it fell; a repeated death
-    /// changes nothing of that.
+    /// changes nothing of that. The death says nothing of where, so the
+    /// corpse lies where the client had carried the spawn to when the death
+    /// came, and moves no more on its own. Inferred; recording item 6.275.
     pub(super) fn corpse(&mut self, id: u16, name: Option<&str>, now: Instant, revision: &mut u64) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
             *revision = revision.wrapping_add(1);
@@ -166,8 +178,11 @@ impl Zone {
                 if let Some(name) = name {
                     spawn.state.name = name.into();
                 }
+                spawn.state.position = spawn.carried(now);
+                spawn.reported = now;
             }
             spawn.state.kind = kind;
+            spawn.state.velocity = still_if_corpse(kind, spawn.state.velocity);
             spawn.revision = *revision;
         }
     }
@@ -175,6 +190,16 @@ impl Zone {
     /// A spawn's server name, when it is known.
     pub(super) fn name(&self, id: u16) -> Option<String> {
         self.spawns.get(&id).map(|spawn| spawn.state.name.clone())
+    }
+}
+
+/// A spawn's velocity, or none for a corpse, which never moves on its own:
+/// a drag places it anew. Inferred; recording item 6.275.
+fn still_if_corpse(kind: SpawnKind, velocity: [f32; 3]) -> [f32; 3] {
+    if matches!(kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse) {
+        [0.0; 3]
+    } else {
+        velocity
     }
 }
 
@@ -237,9 +262,10 @@ impl super::ClientWorld {
         &mut self,
         spawn_id: u16,
         (position, velocity): (WorldPosition, [f32; 3]),
+        now: Instant,
         changes: &mut super::Changes,
     ) {
-        self.zone.moved(spawn_id, position, velocity);
+        self.zone.moved(spawn_id, (position, velocity), now);
         if let Some(player) = self
             .player
             .as_mut()

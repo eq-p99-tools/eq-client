@@ -84,6 +84,19 @@ pub struct Spawn {
     /// Changes whenever the spawn must be drawn again: it appeared, was
     /// replaced or became a corpse.
     pub revision: u64,
+    /// When the server last said where the spawn is, from which the client
+    /// carries it on.
+    pub reported: Instant,
+}
+
+impl Spawn {
+    /// Where the client has the spawn at `now`: carried on from its latest
+    /// report at its reported velocity ([`crate::entities::extrapolate`]),
+    /// from when that report came, however late the spawn is drawn.
+    #[must_use]
+    pub fn carried(&self, now: Instant) -> crate::WorldPosition {
+        crate::entities::extrapolate(&self.state, now.saturating_duration_since(self.reported))
+    }
 }
 
 /// Camping under way.
@@ -536,7 +549,7 @@ impl ClientWorld {
             | WorldEvent::Gm(_) => (),
 
             // The zone and what is in it.
-            WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
+            WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision, now),
             WorldEvent::Despawn(id) => self.zone.vanish(*id),
             WorldEvent::Consideration(consideration) => {
                 news.notices.push(self.zone.consider(consideration));
@@ -619,7 +632,7 @@ impl ClientWorld {
                 spawn_id,
                 position,
                 velocity,
-            } => self.position(*spawn_id, (*position, *velocity), news),
+            } => self.position(*spawn_id, (*position, *velocity), now, news),
             WorldEvent::WearChange(change) => self.wear(change),
             WorldEvent::Doors(update) => self.zone.doors.apply(update, now),
             WorldEvent::DoorAction {
