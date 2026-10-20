@@ -978,12 +978,7 @@ fn spawn_lighting(commands: &mut Commands, ambient_light: &mut GlobalAmbientLigh
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.0, -0.8, 0.0)),
         daylight::Sun,
     ));
-    let [red, green, blue] = daylight::DAY_AMBIENT_COLOR;
-    *ambient_light = GlobalAmbientLight {
-        color: Color::srgb(red, green, blue),
-        brightness: daylight::DAY_AMBIENT,
-        affects_lightmapped_meshes: true,
-    };
+    *ambient_light = daylight::launch_ambient();
 }
 
 /// The chase view's pitch as it first opens: a little above the player,
