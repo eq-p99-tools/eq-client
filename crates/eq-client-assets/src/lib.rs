@@ -168,6 +168,15 @@ pub enum LoadError {
     /// The WLD payload could not be parsed.
     #[error("could not parse WLD data: {0}")]
     ParseWorld(String),
+    /// The zone's files stopped libeq's reader part way, on data it cannot
+    /// read; its message says where.
+    #[error("could not read zone {zone}: the zone reader stopped: {message}")]
+    Unreadable {
+        /// The zone's short name.
+        zone: String,
+        /// What the reader said as it stopped.
+        message: String,
+    },
     /// A texture could not be decoded.
     #[error("could not decode texture {name}: {source}")]
     DecodeTexture {
@@ -204,6 +213,32 @@ pub(crate) fn zone_name(short_name: &str) -> Result<&str, LoadError> {
 /// unreadable, or an archive, world, or texture cannot be decoded.
 pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
     let short_name = zone_name(short_name)?;
+    guarded(short_name, || read_zone(eq_directory, short_name))
+}
+
+/// Runs a zone's read through libeq, whose parser and model view panic on
+/// some data they cannot read (a count or index past the end of a list), and
+/// turns such a panic into [`LoadError::Unreadable`] carrying its message, so
+/// a zone the reader stops on is a zone that can't be loaded, said as such,
+/// rather than a panic in the loading task.
+fn guarded<T>(
+    zone: &str,
+    read: impl FnOnce() -> Result<T, LoadError> + std::panic::UnwindSafe,
+) -> Result<T, LoadError> {
+    std::panic::catch_unwind(read).unwrap_or_else(|panic| {
+        let message = panic
+            .downcast_ref::<&str>()
+            .map(|message| (*message).to_owned())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "no message".to_owned());
+        Err(LoadError::Unreadable {
+            zone: zone.to_owned(),
+            message,
+        })
+    })
+}
+
+fn read_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
     let archive_path = eq_directory.join(format!("{short_name}.s3d"));
     let file = File::open(&archive_path).map_err(|source| LoadError::OpenArchive {
         path: archive_path,
@@ -625,6 +660,46 @@ mod tests {
             super::parse_wld(b"not a world file", "broken.wld"),
             Err(LoadError::ParseWorld(_))
         ));
+    }
+
+    /// A world file whose one material names a render method no material
+    /// has, which libeq's parser stops on with a panic.
+    fn world_the_reader_stops_on() -> Vec<u8> {
+        let words: [u32; 7] = [0x5450_3D02, 0x0001_5500, 1, 0, 0, 4, 0];
+        let mut bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        bytes.extend_from_slice(&[0; 4]);
+        // The fragment: its size and type (a material), then its name, flags,
+        // render method (user-defined, kind 99), pen, brightness, ambient
+        // and texture reference.
+        let fragment: [u32; 9] = [28, 0x30, 0, 0, 0x8000_0063, 0, 0, 0, 0];
+        bytes.extend(fragment.iter().flat_map(|word| word.to_le_bytes()));
+        bytes.extend_from_slice(&[0xff; 4]);
+        bytes
+    }
+
+    #[test]
+    fn a_zone_the_reader_stops_on_is_an_error_not_a_panic() {
+        use libeq::pfs::PfsWriter;
+        use std::io::Cursor;
+        let install =
+            std::env::temp_dir().join(format!("eq-zone-unreadable-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        let mut writer = PfsWriter::create(Cursor::new(Vec::new())).unwrap();
+        writer
+            .insert("broken.wld", world_the_reader_stops_on().as_slice())
+            .unwrap();
+        std::fs::write(
+            install.join("broken.s3d"),
+            writer.finish().unwrap().into_inner(),
+        )
+        .unwrap();
+        let result = load_zone(&install, "broken");
+        std::fs::remove_dir_all(&install).unwrap();
+        let Err(LoadError::Unreadable { zone, message }) = result else {
+            panic!("expected the zone to be unreadable");
+        };
+        assert_eq!(zone, "broken");
+        assert_ne!(message, "");
     }
 
     #[test]
