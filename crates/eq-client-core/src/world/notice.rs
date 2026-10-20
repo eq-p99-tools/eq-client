@@ -272,4 +272,11 @@ pub enum Notice {
         /// The caster's name, as the server sent it.
         caster: String,
     },
+    /// A character the player asked for was not created.
+    CreationRefused {
+        /// The name asked for.
+        name: String,
+        /// Which refusal: the name, the creation, or the client's own.
+        outcome: crate::creation::CreationOutcome,
+    },
 }

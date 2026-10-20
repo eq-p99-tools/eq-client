@@ -92,6 +92,9 @@ pub struct Script {
     /// A `chase` step's view of its target: the last report it saw and when,
     /// so the aim carries that report forward as the target is drawn.
     chase_seen: Option<(eq_client_core::WorldPosition, Duration)>,
+    /// The count of the world's creation answers when a `create` step sent
+    /// its request, so the step waits for the next.
+    created_before: Option<u64>,
 }
 
 /// A walk's frames while its route searches.
@@ -139,6 +142,7 @@ impl Script {
             awaited: None,
             approached: None,
             chase_seen: None,
+            created_before: None,
         }
     }
 
@@ -498,6 +502,15 @@ pub(super) fn drive(
         let elapsed = now.saturating_sub(since);
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
+            Step::Create(character) => {
+                match answered(online.world(), script.created_before, &character.name) {
+                    Ok(done) => done,
+                    Err(reason) => {
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
+                    }
+                }
+            }
             Step::WaitDead(limit) => {
                 match fallen(online.world(), script.awaited, elapsed, *limit) {
                     Ok(done) => done,
@@ -952,8 +965,10 @@ pub(super) fn drive(
                     &mut mouse,
                     "character creation could not be sent",
                 );
+                return;
             }
-            return;
+            // The step waits for the world's answer to this request.
+            script.created_before = online.world().creation().map(|last| last.count);
         }
         Step::Slash(_) | Step::Gm(_) | Step::Chat(_) if !online.in_world() => {
             // The worker discards commands while zoning, dead or disconnected.
@@ -1198,6 +1213,27 @@ pub(super) fn drive(
         | Step::Trace(_) => (),
     }
     script.current = Some((step, now));
+}
+
+/// Whether the world answered a `create` step's request since it was sent:
+/// done once it created the character, and the step's failure when it
+/// refused it.
+fn answered(
+    world: &eq_client_core::world::ClientWorld,
+    before: Option<u64>,
+    name: &str,
+) -> Result<bool, String> {
+    use eq_client_core::creation::CreationOutcome;
+    let Some(answer) = world
+        .creation()
+        .filter(|answer| Some(answer.count) != before && answer.name == name)
+    else {
+        return Ok(false);
+    };
+    match answer.outcome {
+        CreationOutcome::Created => Ok(true),
+        refused => Err(format!("character creation refused: {refused:?}")),
+    }
 }
 
 /// Steps run only while someone watches the window, unless the session is
@@ -2053,6 +2089,41 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_create_step_waits_for_the_worlds_answer_and_fails_on_a_refusal() {
+        use eq_client_core::{
+            WorldEvent, WorldUpdate,
+            creation::CreationOutcome,
+            world::{ClientWorld, NoSpells},
+        };
+        let mut world = ClientWorld::default();
+        let answer = |world: &mut ClientWorld, name: &str, outcome| {
+            world.apply(
+                &WorldUpdate::Game(WorldEvent::CharacterCreation {
+                    name: name.into(),
+                    outcome,
+                }),
+                std::time::Instant::now(),
+                &NoSpells,
+            );
+        };
+        // No answer yet, then a refusal: the step fails, naming it.
+        assert_eq!(answered(&world, None, "Testcleric"), Ok(false));
+        answer(&mut world, "Testcleric", CreationOutcome::CreationRefused);
+        assert_eq!(
+            answered(&world, None, "Testcleric"),
+            Err("character creation refused: CreationRefused".into())
+        );
+        // A later step waits past the answer it saw sent, and past another
+        // name's, then finishes on its own character's creation.
+        let before = world.creation().map(|last| last.count);
+        assert_eq!(answered(&world, before, "Testcleric"), Ok(false));
+        answer(&mut world, "Othername", CreationOutcome::Created);
+        assert_eq!(answered(&world, before, "Testcleric"), Ok(false));
+        answer(&mut world, "Testcleric", CreationOutcome::Created);
+        assert_eq!(answered(&world, before, "Testcleric"), Ok(true));
+    }
 
     #[test]
     fn a_chase_aims_where_its_target_is_drawn_and_ends_only_on_death_leaving_or_time() {

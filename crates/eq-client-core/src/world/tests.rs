@@ -2249,6 +2249,36 @@ fn the_clock_runs_on_from_the_time_the_server_gave() {
 }
 
 #[test]
+fn a_refused_character_creation_tells_the_player_and_a_created_one_does_not() {
+    use crate::creation::CreationOutcome;
+    let mut world = ClientWorld::default();
+    let answer = |world: &mut ClientWorld, outcome| {
+        game(
+            world,
+            WorldEvent::CharacterCreation {
+                name: "Testcleric".into(),
+                outcome,
+            },
+        )
+    };
+    let refused = answer(&mut world, CreationOutcome::NameRefused);
+    assert_eq!(
+        refused.notices,
+        [Notice::CreationRefused {
+            name: "Testcleric".into(),
+            outcome: CreationOutcome::NameRefused,
+        }]
+    );
+    assert_eq!(world.creation().map(|last| last.count), Some(1));
+    assert_eq!(answer(&mut world, CreationOutcome::Created).notices, []);
+    let last = world.creation().unwrap();
+    assert_eq!(
+        (last.count, last.name.as_str(), last.outcome),
+        (2, "Testcleric", CreationOutcome::Created)
+    );
+}
+
+#[test]
 fn a_zone_header_sent_again_changes_the_sky_fog_and_far_clip() {
     use crate::clock::{Fog, ZoneSky};
     use crate::zones::ZoneDescription;
