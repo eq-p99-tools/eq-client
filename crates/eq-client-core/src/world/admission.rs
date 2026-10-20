@@ -63,6 +63,28 @@ impl ClientWorld {
         changes.characters = true;
     }
 
+    /// The world answered a character the player asked for: a refusal is
+    /// news for the player, and a creation comes with the new list.
+    pub(super) fn created(
+        &mut self,
+        name: &str,
+        outcome: crate::creation::CreationOutcome,
+        changes: &mut Changes,
+    ) {
+        let count = self.creation.as_ref().map_or(0, |last| last.count) + 1;
+        self.creation = Some(super::Creation {
+            count,
+            name: name.to_owned(),
+            outcome,
+        });
+        if outcome != crate::creation::CreationOutcome::Created {
+            changes.notices.push(Notice::CreationRefused {
+                name: name.to_owned(),
+                outcome,
+            });
+        }
+    }
+
     /// A zone header, at entry or sent again mid-zone, sets the far clip to
     /// its maximum clip when it gives one.
     pub(super) fn described(&mut self, description: &ZoneDescription) {

@@ -56,6 +56,12 @@ impl ClientWorld {
         self.characters.as_ref()
     }
 
+    /// The world's last answer to a character the player asked for.
+    #[must_use]
+    pub const fn creation(&self) -> Option<&super::Creation> {
+        self.creation.as_ref()
+    }
+
     /// What the admission lets the player do: a front end greys out or hides
     /// the rest.
     #[must_use]

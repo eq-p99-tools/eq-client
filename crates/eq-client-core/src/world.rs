@@ -57,6 +57,17 @@ pub struct CharacterList {
     pub characters: Vec<CharacterChoice>,
 }
 
+/// The world's last answer to a character the player asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Creation {
+    /// Counts the answers, so that two alike still differ.
+    pub count: u64,
+    /// The name asked for.
+    pub name: String,
+    /// How the world took it.
+    pub outcome: crate::creation::CreationOutcome,
+}
+
 /// The worlds the login server listed for the player to choose from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerList {
@@ -143,6 +154,9 @@ pub struct ClientWorld {
     /// The login server's worlds, until the chosen world lists characters.
     servers: Option<ServerList>,
     characters: Option<CharacterList>,
+    /// The world's answers to the player's character creations, counted, and
+    /// the last of them.
+    creation: Option<Creation>,
     /// The last revision given to a spawn, which never repeats.
     revision: u64,
     /// The last count given to a spawn's motion, which never repeats.
@@ -484,13 +498,16 @@ impl ClientWorld {
             // A sound the server names, for the front end to play.
             WorldEvent::Effect(crate::effects::Effect::Sound(cue)) => news.sounds.push(cue.clone()),
 
-            // No front end creates characters yet; when one does, the news
-            // lands here. Nothing here shows the world's rules, the
-            // expansions it allows, its chat server, a zone it says is down,
-            // the zone's weather or its header beyond the sky and the clip
-            // yet either, nor
-            // stops the player while stunned, charmed, held by the server or
-            // berserk, spins them, or shows their hiding's end. The target
+            // The world's answer to a character the player asked for.
+            WorldEvent::CharacterCreation { name, outcome } => {
+                self.created(name, *outcome, news);
+            }
+
+            // Nothing here shows the world's rules, the expansions it allows,
+            // its chat server, a zone it says is down, the zone's weather or
+            // its header beyond the sky and the clip yet, nor stops the
+            // player while stunned, charmed, held by the server or berserk,
+            // spins them, or shows their hiding's end. The target
             // the server sets and whom it targets, a quest's reward and ding
             // (the session puts a reward's coins in the purse), a sacrifice
             // or translocate offer and a player becoming a corpse wait for
@@ -511,8 +528,7 @@ impl ClientWorld {
             // wait for a window to choose one from, and what a game master did
             // to a player, or the petitions in the queue, for a front end that
             // shows them.
-            WorldEvent::CharacterCreation { .. }
-            | WorldEvent::Rules(_)
+            WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }

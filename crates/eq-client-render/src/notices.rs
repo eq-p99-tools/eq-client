@@ -9,6 +9,7 @@ use super::{
 use eq_client_core::{
     CampStatus,
     bind_wound::{BindWoundUpdate, strings},
+    creation::CreationOutcome,
     entities::display_name,
     food::Shortage,
     loot::LootResponse,
@@ -143,6 +144,23 @@ fn connection_text(link: Link, dead: bool) -> String {
     }
 }
 
+/// What the select screen says of a character not created. The world
+/// says only which step it refused, never why, and the official client's
+/// words for each are not known, so these are this client's (inferred,
+/// item 6.278).
+fn creation_refusal(name: &str, outcome: CreationOutcome) -> String {
+    match outcome {
+        CreationOutcome::NameRefused => format!("The server refused the name {name}."),
+        CreationOutcome::CreationRefused => {
+            format!("The server approved the name {name} but could not create the character.")
+        }
+        CreationOutcome::NotSent => {
+            format!("{name} was not sent: this client cannot create that character on this server.")
+        }
+        CreationOutcome::Created => format!("{name} was created."),
+    }
+}
+
 /// Why a corpse could not be looted: this client's words, and the official
 /// client's string for the server's answer where it has its own: 12073
 /// for someone else looting it, 12070 for a corpse not to be looted yet,
@@ -233,6 +251,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
     let status = |text: String| vec![(Place::Status, Said::own(text))];
     match notice {
         Notice::Connection { link, dead } => status(connection_text(*link, *dead)),
+        Notice::CreationRefused { name, outcome } => status(creation_refusal(name, *outcome)),
         Notice::ServerString { id, arguments, .. } => chat(
             messages
                 .unwrap_or(&Messages::default())
@@ -640,6 +659,42 @@ const fn link_text(link: Link) -> &'static str {
 mod tests {
     use super::*;
     use eq_client_core::Coins;
+
+    #[test]
+    fn a_refused_creation_says_which_step_on_the_status_line() {
+        let line = |outcome| {
+            wording(
+                &Notice::CreationRefused {
+                    name: "Testcleric".into(),
+                    outcome,
+                },
+                None,
+            )
+        };
+        assert_eq!(
+            line(CreationOutcome::NameRefused),
+            [(
+                Place::Status,
+                "The server refused the name Testcleric.".into()
+            )]
+        );
+        assert_eq!(
+            line(CreationOutcome::CreationRefused),
+            [(
+                Place::Status,
+                "The server approved the name Testcleric but could not create the character."
+                    .into()
+            )]
+        );
+        assert_eq!(
+            line(CreationOutcome::NotSent),
+            [(
+                Place::Status,
+                "Testcleric was not sent: this client cannot create that character on this server."
+                    .into()
+            )]
+        );
+    }
 
     #[test]
     fn loot_replies_say_what_the_corpse_gave_or_refused() {
