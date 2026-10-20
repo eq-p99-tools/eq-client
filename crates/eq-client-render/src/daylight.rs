@@ -24,11 +24,11 @@ pub(super) const DAY_SUN: f32 = 12_000.0;
 /// The moon's.
 const NIGHT_SUN: f32 = 600.0;
 /// The ambient brightness by day, as the scene is lit without a time.
-pub(super) const DAY_AMBIENT: f32 = 150.0;
+const DAY_AMBIENT: f32 = 150.0;
 /// And by night.
 const NIGHT_AMBIENT: f32 = 40.0;
 /// The ambient color by day, as the scene is lit without a time.
-pub(super) const DAY_AMBIENT_COLOR: [f32; 3] = [0.62, 0.68, 0.8];
+const DAY_AMBIENT_COLOR: [f32; 3] = [0.62, 0.68, 0.8];
 const NIGHT_AMBIENT_COLOR: [f32; 3] = [0.25, 0.3, 0.5];
 const MOONLIGHT: [f32; 3] = [0.6, 0.7, 1.0];
 const SUNSET: [f32; 3] = [1.0, 0.6, 0.4];
@@ -136,22 +136,57 @@ type Cameras<'w, 's> = Query<
     With<OrbitCamera>,
 >;
 
+/// The ambient light the scene has at launch, before any zone has said how
+/// it is lit.
+pub(super) fn launch_ambient() -> GlobalAmbientLight {
+    let [red, green, blue] = DAY_AMBIENT_COLOR;
+    GlobalAmbientLight {
+        color: Color::srgb(red, green, blue),
+        brightness: DAY_AMBIENT,
+        affects_lightmapped_meshes: true,
+    }
+}
+
 /// Lights the scene for the zone and the time of day.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn update(
     mut commands: Commands,
     online: Res<super::online::OnlineState>,
     options: Res<super::options::OptionsState>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    clear: Option<ResMut<ClearColor>>,
+    mut clear: Option<ResMut<ClearColor>>,
     mut suns: Query<&mut DirectionalLight, With<Sun>>,
     mut cameras: Cameras,
+    mut lit: Local<bool>,
 ) {
     let world = online.world();
     // Offline, or before the zone has said, the scene stays as it was lit.
+    // Leaving the world, as a camp back to character select does, forgets
+    // the zone's sky: the scene goes back to the light it had at launch, so
+    // the character shown at select (item 6.256) stands in the same light
+    // after a camp as after a fresh login, not in the last zone's.
     let Some(sky) = world.sky() else {
+        if std::mem::take(&mut *lit) {
+            for mut sun in &mut suns {
+                sun.illuminance = DAY_SUN;
+                sun.color = DirectionalLight::default().color;
+            }
+            *ambient = launch_ambient();
+            if let Some(clear) = clear.as_mut() {
+                clear.0 = ClearColor::default().0;
+            }
+            for (camera, fog, grading) in &mut cameras {
+                if fog.is_some() {
+                    commands.entity(camera).remove::<DistanceFog>();
+                }
+                if let Some(mut grading) = grading {
+                    *grading = ColorGrading::default();
+                }
+            }
+        }
         return;
     };
+    *lit = true;
     let mut lit = lighting(&sky, world.game_time(std::time::Instant::now()));
     lit.fog = closed_in(
         lit.fog,
@@ -205,6 +240,80 @@ pub(super) fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaving_the_world_puts_back_the_launch_lighting() {
+        let mut app = App::new();
+        app.insert_resource(crate::online::OnlineState::new(true))
+            .init_resource::<crate::options::OptionsState>()
+            .insert_resource(launch_ambient())
+            .init_resource::<ClearColor>()
+            .add_systems(Update, update);
+        let sun = app
+            .world_mut()
+            .spawn((
+                Sun,
+                DirectionalLight {
+                    illuminance: DAY_SUN,
+                    ..default()
+                },
+            ))
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn(OrbitCamera {
+                focus: Vec3::ZERO,
+                radius: 120.0,
+                yaw: 0.0,
+                pitch: -0.5,
+                pulled: None,
+            })
+            .id();
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [
+                eq_client_core::WorldEvent::Sky(zone(1, [120, 140, 160])),
+                eq_client_core::WorldEvent::TimeOfDay(at(0)),
+            ],
+        );
+        app.update();
+        // A zone at midnight: its night sky, fog and moonlight.
+        assert_ne!(
+            app.world().resource::<ClearColor>().0,
+            ClearColor::default().0
+        );
+        assert!(app.world().get::<DistanceFog>(camera).is_some());
+        assert!(
+            (app.world().resource::<GlobalAmbientLight>().brightness - DAY_AMBIENT).abs() > 1.0
+        );
+        // A camp forgets the zone's sky.
+        crate::online::testing::set_world(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::world::ClientWorld::default(),
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<ClearColor>().0,
+            ClearColor::default().0
+        );
+        assert!(app.world().get::<DistanceFog>(camera).is_none());
+        assert_eq!(
+            app.world()
+                .get::<ColorGrading>(camera)
+                .map(|grading| grading.global.exposure),
+            Some(ColorGrading::default().global.exposure)
+        );
+        let ambient = app.world().resource::<GlobalAmbientLight>();
+        assert_eq!(
+            (ambient.color, ambient.brightness),
+            (launch_ambient().color, launch_ambient().brightness)
+        );
+        let light = app.world().get::<DirectionalLight>(sun).unwrap();
+        assert_eq!(
+            (light.illuminance, light.color),
+            (DAY_SUN, DirectionalLight::default().color)
+        );
+    }
 
     #[test]
     fn the_fog_closes_in_with_the_clip_plane() {
