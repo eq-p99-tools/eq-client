@@ -467,6 +467,9 @@ impl ClientWorld {
                 self.zone_line_refused(*session_id, reason, news);
             }
             WorldEvent::Camp(status) => return self.camp_news(status, now),
+            // A sound the server names, for the front end to play.
+            WorldEvent::Effect(crate::effects::Effect::Sound(cue)) => news.sounds.push(cue.clone()),
+
             // No front end creates characters yet; when one does, the news
             // lands here. Nothing here shows the world's rules, the
             // expansions it allows, its chat server, a zone it says is down,
@@ -480,15 +483,19 @@ impl ClientWorld {
             // unanswered, as it did unread. A quest's change to the stats, a
             // skill's button ready again, the reuse timers of disciplines and
             // of spells that share one, and the discipline begun or ended
-            // are not shown yet either, nor the effects the server plays: a
-            // spell's nimbus, particles, a camera shake, a sound and a
-            // projectile. A popup or marquee, a yell for help, a voice macro,
-            // a request to inspect the player and a duel wait for their front
-            // ends too; until one answers, a popup, an inspection and a
-            // challenge go unanswered, as they did unread. The guild's
-            // members and their changes, and an invitation to join or rise
-            // in it, wait for a guild window; until one answers, an
-            // invitation goes unanswered.
+            // are not shown yet either, nor the effects the server plays
+            // besides a sound: a spell's nimbus, particles, a camera shake and
+            // a projectile. The official client's sound for a quest's ding is
+            // not known, so it stays silent (inferred, item 6.273). A popup or
+            // marquee, a yell for help, a voice macro, a request to inspect the
+            // player and a duel wait for their front ends too; until one
+            // answers, a popup, an inspection and a challenge go unanswered, as
+            // they did unread. The guild's members and their changes, and an
+            // invitation to join or rise in it, wait for a guild window; until
+            // one answers, an invitation goes unanswered. Newly earned titles
+            // wait for a window to choose one from, and what a game master did
+            // to a player, or the petitions in the queue, for a front end that
+            // shows them.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
@@ -523,7 +530,9 @@ impl ClientWorld {
             | WorldEvent::VoiceMacro(_)
             | WorldEvent::InspectRequest { .. }
             | WorldEvent::Duel(_)
-            | WorldEvent::Guild(_) => (),
+            | WorldEvent::Guild(_)
+            | WorldEvent::NewTitles
+            | WorldEvent::Gm(_) => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
@@ -566,6 +575,7 @@ impl ClientWorld {
             WorldEvent::CorpseMoved { spawn_id, position } => {
                 self.zone.corpse_moved(*spawn_id, *position);
             }
+            WorldEvent::TitleChanged { spawn_id, change } => self.retitle(*spawn_id, change),
             // How /who lists a player, and the guilds it names.
             WorldEvent::Listing { spawn_id, change } => {
                 if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {

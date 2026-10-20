@@ -144,6 +144,22 @@ impl Sounds {
         }
     }
 
+    /// Asks for a sound the server names for the player alone, on the
+    /// listener: a file by its file name, any folder a quest put before it
+    /// dropped, or a number in the numbers file. An empty name is not heard.
+    pub(super) fn play_cue(&mut self, cue: &eq_client_core::effects::Cue) {
+        use eq_client_core::effects::Cue;
+        match cue {
+            Cue::File(name) => {
+                let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+                if !file.is_empty() {
+                    self.play(file, None);
+                }
+            }
+            Cue::Number(number) => self.play_number(u32::from(*number), None),
+        }
+    }
+
     /// Lets go of the least recently played files until those kept fit the
     /// budget. A sound playing keeps its own hold on its file.
     fn trim(&mut self) {
@@ -523,6 +539,50 @@ mod tests {
         sounds.volume = 0.0;
         sounds.play("Swing.wav", None);
         assert_eq!(sounds.asked.len(), 1);
+        std::fs::remove_dir_all(&empty).unwrap();
+    }
+
+    #[test]
+    fn a_sound_the_server_names_plays_on_the_listener_by_file_name_or_number() {
+        use eq_client_core::effects::Cue;
+        let mut sounds = Sounds::default();
+        let empty =
+            std::env::temp_dir().join(format!("eq-render-sound-cues-{}", std::process::id()));
+        std::fs::create_dir_all(&empty).unwrap();
+        let files = eq_client_assets::sounds::SoundFiles {
+            archive_stem: "snd",
+            folders: &[],
+            numbers: "SoundAssets.txt",
+        };
+        sounds.bank = Some(Arc::new(Mutex::new(
+            SoundBank::open(&empty, files).unwrap(),
+        )));
+        sounds.numbers = SoundNumbers::parse("12^Numbered.WAV\n");
+        for cue in [
+            Cue::File("Plain.WAV".into()),
+            Cue::File("quests/Foldered.wav".into()),
+            Cue::File("C:\\sounds\\Windowed.mp3".into()),
+            Cue::File(String::new()),
+            Cue::File("folder/".into()),
+            Cue::Number(12),
+            Cue::Number(13),
+        ] {
+            sounds.play_cue(&cue);
+        }
+        let asked: Vec<_> = sounds
+            .asked
+            .iter()
+            .map(|asked| (asked.name.as_str(), asked.at))
+            .collect();
+        assert_eq!(
+            asked,
+            [
+                ("plain.wav", None),
+                ("foldered.wav", None),
+                ("windowed.mp3", None),
+                ("numbered.wav", None),
+            ]
+        );
         std::fs::remove_dir_all(&empty).unwrap();
     }
 }
