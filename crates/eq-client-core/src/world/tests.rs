@@ -3498,3 +3498,49 @@ fn guild_news_changes_nothing_yet() {
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
 }
+
+#[test]
+fn titles_and_suffixes_change_the_spawn_and_the_players_own() {
+    use eq_network_game::names::TitleChange;
+    let mut world = admitted();
+    for (spawn_id, change) in [
+        (5, TitleChange::Title("Baron".into())),
+        (5, TitleChange::Suffix("the Bold".into())),
+        (5, TitleChange::Unspecified),
+        (9, TitleChange::Title("Lady".into())),
+        (12, TitleChange::Title("Nobody".into())),
+    ] {
+        game(&mut world, WorldEvent::TitleChanged { spawn_id, change });
+    }
+    let parts = &world.spawn(5).unwrap().state.name_parts;
+    assert_eq!(
+        (parts.title.as_str(), parts.suffix.as_str()),
+        ("Baron", "the Bold")
+    );
+    assert_eq!(world.player().unwrap().name_parts.title, "Lady");
+}
+
+#[test]
+fn new_titles_and_game_masters_notices_change_nothing_yet() {
+    use eq_network_game::gm::GmNotice;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        WorldEvent::NewTitles,
+        WorldEvent::Gm(GmNotice::Kicked {
+            name: "Example".into(),
+            gm_name: Some("Guide".into()),
+        }),
+        WorldEvent::Gm(GmNotice::Killed {
+            name: "Example".into(),
+            gm_name: None,
+        }),
+        WorldEvent::Gm(GmNotice::BecameNpc { max_level: 50 }),
+        WorldEvent::Gm(GmNotice::Petition(None)),
+    ];
+    for event in events {
+        assert_eq!(game(&mut world, event), Changes::default());
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
+}

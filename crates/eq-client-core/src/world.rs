@@ -492,7 +492,10 @@ impl ClientWorld {
             // answers, a popup, an inspection and a challenge go unanswered, as
             // they did unread. The guild's members and their changes, and an
             // invitation to join or rise in it, wait for a guild window; until
-            // one answers, an invitation goes unanswered.
+            // one answers, an invitation goes unanswered. Newly earned titles
+            // wait for a window to choose one from, and what a game master did
+            // to a player, or the petitions in the queue, for a front end that
+            // shows them.
             WorldEvent::CharacterCreation { .. }
             | WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
@@ -527,7 +530,9 @@ impl ClientWorld {
             | WorldEvent::VoiceMacro(_)
             | WorldEvent::InspectRequest { .. }
             | WorldEvent::Duel(_)
-            | WorldEvent::Guild(_) => (),
+            | WorldEvent::Guild(_)
+            | WorldEvent::NewTitles
+            | WorldEvent::Gm(_) => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
@@ -570,6 +575,7 @@ impl ClientWorld {
             WorldEvent::CorpseMoved { spawn_id, position } => {
                 self.zone.corpse_moved(*spawn_id, *position);
             }
+            WorldEvent::TitleChanged { spawn_id, change } => self.retitle(*spawn_id, change),
             // How /who lists a player, and the guilds it names.
             WorldEvent::Listing { spawn_id, change } => {
                 if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
