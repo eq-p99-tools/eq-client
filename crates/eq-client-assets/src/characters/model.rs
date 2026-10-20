@@ -301,6 +301,32 @@ impl CharacterAsset {
             .reduce(|lowest, point| if point.y < lowest.y { point } else { lowest })
     }
 
+    /// How far the base pieces placed by these joints reach along `axis`, a
+    /// unit direction in the joints' frame: the least and the greatest of
+    /// their points' distances along it from the frame's origin, such as how
+    /// far behind and ahead of its soles a body lies. None without base
+    /// pieces.
+    #[must_use]
+    pub fn extent(&self, joints: &[Mat4], axis: Vec3) -> Option<(f32, f32)> {
+        self.skins
+            .iter()
+            .zip(&self.pieces)
+            .filter(|(_, piece)| piece.base())
+            .flat_map(|(skin, _)| skin.positions.iter().zip(&skin.bones))
+            .filter_map(|(position, bone)| {
+                Some(
+                    joints
+                        .get(*bone)?
+                        .transform_point3(Vec3::from_array(*position))
+                        .dot(axis),
+                )
+            })
+            .fold(None, |extent, along| match extent {
+                None => Some((along, along)),
+                Some((least, most)) => Some((f32::min(least, along), f32::max(most, along))),
+            })
+    }
+
     /// The top of the head with these joints: the highest point of the
     /// drawn head pieces (those `shown` marks), or of everything drawn for a
     /// model without one, in the renderer's frame; None when nothing is
@@ -536,7 +562,9 @@ impl CharacterAsset {
 impl CharacterAsset {
     /// A one-triangle model for tests: a root bone and a child bone the
     /// triangle hangs from, one unit up, whose `P01` turns it a quarter turn
-    /// about WLD up over a second and back.
+    /// about WLD up over a second and back, and whose `D05` lays it on the
+    /// ground behind the soles over a second, two to four units back along
+    /// heading 0.
     #[must_use]
     pub fn testing() -> Self {
         let still = LocalTransform {
@@ -551,6 +579,10 @@ impl CharacterAsset {
         let turned = LocalTransform {
             rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
             ..raised
+        };
+        let lain = LocalTransform {
+            translation: Vec3::new(-3.0, 0.0, 0.0),
+            ..still
         };
         let positions = vec![[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
         let normals = vec![[0.0, 0.0, 1.0]; 3];
@@ -571,16 +603,28 @@ impl CharacterAsset {
             catalog: HashMap::new(),
             parents: vec![None, Some(0)],
             base_pose: vec![still, raised],
-            clips: HashMap::from([(
-                "P01".into(),
-                vec![
-                    None,
-                    Some(AnimationTrack {
-                        frames: vec![raised, turned],
-                        interval: 1.0,
-                    }),
-                ],
-            )]),
+            clips: HashMap::from([
+                (
+                    "P01".into(),
+                    vec![
+                        None,
+                        Some(AnimationTrack {
+                            frames: vec![raised, turned],
+                            interval: 1.0,
+                        }),
+                    ],
+                ),
+                (
+                    "D05".into(),
+                    vec![
+                        None,
+                        Some(AnimationTrack {
+                            frames: vec![raised, lain],
+                            interval: 0.5,
+                        }),
+                    ],
+                ),
+            ]),
             skins: vec![Skin {
                 positions,
                 normals,

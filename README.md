@@ -784,6 +784,12 @@ offer is greyed, with the reason on hover. The settings:
   takes none, which is unsafe: a server may notice a character that never
   takes it. The water and lava guard stays on either way. Greyed where the
   session takes no damage from the client (`EnvironmentalDamage`).
+- **Corpses Lie Along the Ground** (`corpses_along_ground`, on): a corpse's
+  body is pitched and rolled to the slope of the floor under its soles, up to
+  35° each way, so it lies along a hillside rather than sinking into it; a
+  corpse seen dying leans into the slope as it falls. Turned off, corpses lie
+  level with their soles, as before. What the official client does is
+  inferred.
 
 Always on:
 
