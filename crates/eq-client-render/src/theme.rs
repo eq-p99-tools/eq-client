@@ -267,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn the_face_is_read_from_the_windows_fonts_for_a_checked_client() {
+    fn the_face_is_read_from_the_windows_fonts_for_either_client() {
         use eq_client_assets::ui::InstalledClient;
         let face = InstalledClient::Titanium.font_file().unwrap();
         assert_eq!(
@@ -275,8 +275,9 @@ mod tests {
             Some(Path::new("C:/Windows").join("Fonts").join("arial.ttf"))
         );
         assert_eq!(font_path(None, face), None);
-        // The Mac-era client's face is not checked yet.
-        assert_eq!(InstalledClient::EqMac.font_file(), None);
+        // The Mac-era client's face is unchecked (item 6.152): it writes in
+        // the same face, never the built-in monospace one.
+        assert_eq!(InstalledClient::EqMac.font_file(), Some(face));
     }
 
     #[test]
