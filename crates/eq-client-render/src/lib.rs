@@ -488,7 +488,12 @@ fn install_script(
     app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus))
         .add_systems(Update, script::pointer::draw);
     if arrow {
-        app.add_systems(Startup, script::pointer::spawn);
+        app.init_resource::<script::pointer::SkinArrow>()
+            .add_systems(Startup, script::pointer::spawn)
+            .add_systems(
+                Update,
+                script::pointer::read_arrow.before(script::pointer::draw),
+            );
     }
 }
 
