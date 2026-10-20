@@ -228,6 +228,36 @@ pub fn grounded_soles(
     world.ground(soles, reach, 0.5).unwrap_or(soles.y)
 }
 
+/// Where a remote model's soles are drawn, in renderer coordinates, as the
+/// client carries it on between the server's reports: on the floor found
+/// from where its soles were drawn the frame before (`previous`: their
+/// height, and their spot across the ground), reaching up 0.6 × size as
+/// [`grounded_soles`] does and down 0.5 plus the distance moved across the
+/// ground since, so it follows a slope down as steep as 45° at any frame
+/// time. Of the floors in that reach, the one nearest those soles: a spawn
+/// on a bridge or a ledge stays on it while the ground runs on below. With no frame since the latest report, or no floor in that reach
+/// (a ledge, a flyer, water), [`grounded_soles`] decides from `soles`, the
+/// reported height carried on. `EQEmu` sends no vertical motion while its
+/// own z follows the floor, so a spawn carried at its reported height would
+/// float down a slope and sink into one going up until the next report.
+/// Inferred; recording item 6.276.
+#[must_use]
+pub fn carried_soles(
+    world: &movement::CollisionWorld,
+    previous: Option<(f32, glam::Vec2)>,
+    soles: glam::Vec3,
+    race: u32,
+    size: f32,
+) -> f32 {
+    previous
+        .and_then(|(height, spot)| {
+            let step = glam::Vec2::new(soles.x, soles.z).distance(spot);
+            let from = glam::Vec3::new(soles.x, height, soles.z);
+            world.nearest_ground(from, 0.6 * size_or_default(race, size), 0.5 + step)
+        })
+        .unwrap_or_else(|| grounded_soles(world, soles, race, size))
+}
+
 /// The size sent, or the race's default when it is missing or not positive.
 fn size_or_default(race: u32, size: f32) -> f32 {
     if size.is_finite() && size > 0.0 {
@@ -279,6 +309,129 @@ mod tests {
         assert!((offset(183, 4.8) - 3.0).abs() < 0.0001); // Coldain
         assert!((offset(8, 0.0) - 2.5).abs() < 0.0001); // dwarf, default size 4
         assert!((offset(12, f32::NAN) - 1.875).abs() < 0.0001); // gnome, default 3
+    }
+
+    /// A ramp rising `grade` units per unit along world x, in renderer
+    /// coordinates, and the floor's height at a world x.
+    fn ramp(grade: f32) -> crate::movement::CollisionWorld {
+        let corner = |x: f32, y: f32| {
+            glam::Vec3::from_array(super::render_position(super::WorldPosition {
+                x,
+                y,
+                z: grade * x,
+                heading: 0.0,
+            }))
+            .to_array()
+        };
+        crate::movement::CollisionWorld::new([
+            [
+                corner(-100.0, -20.0),
+                corner(300.0, -20.0),
+                corner(300.0, 20.0),
+            ],
+            [
+                corner(-100.0, -20.0),
+                corner(300.0, 20.0),
+                corner(-100.0, 20.0),
+            ],
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn a_carried_spawn_keeps_to_the_floor_up_and_down_a_slope() {
+        // A size 6 skeleton (race 60) walking 11.8 units a second, reported
+        // on the floor every 5 s with no vertical motion, as EQEmu reports a
+        // walking NPC; drawn at 60 and at 10 frames a second.
+        let (race, size, speed) = (60, 6.0, 11.8);
+        let feet = super::drawn_feet_offset(race, size);
+        for grade in [0.05_f32, -0.05, 0.19, -0.19, 0.45, -0.45, 0.99, -0.99] {
+            let world = ramp(grade);
+            for fps in [60_u16, 10] {
+                let mut previous = None;
+                for frame in 0..=u32::from(fps) * 10 {
+                    let t = frame as f32 / f32::from(fps);
+                    let report = (t / 5.0).floor() * 5.0;
+                    if (t - report).abs() < 1e-6 {
+                        previous = None;
+                    }
+                    let x = speed * t;
+                    let reported_z = grade * speed * report + feet;
+                    let soles =
+                        glam::Vec3::from_array(super::render_position(super::WorldPosition {
+                            x,
+                            y: 0.0,
+                            z: reported_z - feet,
+                            heading: 0.0,
+                        }));
+                    let drawn = super::carried_soles(&world, previous, soles, race, size);
+                    let floor = super::render_position(super::WorldPosition {
+                        x,
+                        y: 0.0,
+                        z: grade * x,
+                        heading: 0.0,
+                    })[1];
+                    assert!(
+                        (drawn - floor).abs() < 0.01,
+                        "grade {grade} at {fps} fps, {t:.2} s: drawn {drawn}, floor {floor}"
+                    );
+                    previous = Some((drawn, glam::Vec2::new(soles.x, soles.z)));
+                }
+            }
+        }
+        // Held at the reported height, as before, it loses the floor two
+        // seconds into a 19% climb and is drawn 4.5 under the hill.
+        let world = ramp(0.19);
+        let soles = glam::Vec3::from_array(super::render_position(super::WorldPosition {
+            x: speed * 2.0,
+            ..Default::default()
+        }));
+        assert!((super::grounded_soles(&world, soles, race, size) - soles.y).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_carried_spawn_keeps_to_the_floor_nearest_its_soles() {
+        // A deck two over the ground, and a slab three over the deck.
+        let plate = |y: f32, half: f32| {
+            [
+                [[-half, y, -half], [half, y, -half], [half, y, half]],
+                [[-half, y, -half], [half, y, half], [-half, y, half]],
+            ]
+        };
+        let world = crate::movement::CollisionWorld::new(
+            [plate(0.0, 50.0), plate(2.0, 20.0), plate(5.0, 10.0)].concat(),
+        )
+        .unwrap();
+        // Two units a frame, a long frame: the reach down takes in the ground
+        // under the deck and the reach up the slab, yet it stays on the deck.
+        let on = super::carried_soles(
+            &world,
+            Some((2.0, glam::Vec2::ZERO)),
+            glam::Vec3::new(2.0, 2.0, 0.0),
+            60,
+            6.0,
+        );
+        assert!((on - 2.0).abs() < 0.001, "{on}");
+        // Off the deck's end, the ground under it is the floor in reach.
+        let off = super::carried_soles(
+            &world,
+            Some((2.0, glam::Vec2::new(19.0, 0.0))),
+            glam::Vec3::new(21.0, 2.0, 0.0),
+            60,
+            6.0,
+        );
+        assert!(off.abs() < 0.001, "{off}");
+    }
+
+    #[test]
+    fn a_carried_flyer_stays_at_its_reported_height() {
+        let world = ramp(0.0);
+        let soles = glam::Vec3::Y * 9.0;
+        let first = super::carried_soles(&world, None, soles, 60, 6.0);
+        assert!((first - 9.0).abs() < 0.001);
+        let on = glam::Vec3::new(1.0, 9.0, 0.0);
+        let next = super::carried_soles(&world, Some((first, glam::Vec2::ZERO)), on, 60, 6.0);
+        assert!((next - 9.0).abs() < 0.001);
     }
 
     #[test]

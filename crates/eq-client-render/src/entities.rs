@@ -58,8 +58,11 @@ const HURRIED: std::time::Duration = std::time::Duration::from_millis(40);
 #[derive(Component)]
 pub(super) struct RemoteEntity {
     pub(super) id: u16,
-    /// The server report this entity moves on from, and when it was first seen.
-    report: Option<(eq_client_core::WorldPosition, [f32; 3], std::time::Instant)>,
+    /// When the server report this entity moves on from came, once placed.
+    seen: Option<std::time::Instant>,
+    /// Where its soles were drawn the frame before, since that report: their
+    /// height, and their spot across the ground.
+    soles: Option<(f32, Vec2)>,
     /// How far under the reported position a drawn model's soles hang, in
     /// world units; None for a marker, which stays where the server says.
     feet: Option<f32>,
@@ -232,7 +235,8 @@ fn draw(
         .spawn((
             RemoteEntity {
                 id,
-                report: None,
+                seen: None,
+                soles: None,
                 feet: None,
             },
             Name::new(spawn.name.clone()),
@@ -259,7 +263,8 @@ fn draw(
         commands.entity(entity).insert((
             RemoteEntity {
                 id,
-                report: None,
+                seen: None,
+                soles: None,
                 feet: Some(feet),
             },
             Transform::from_translation(position)
@@ -324,30 +329,27 @@ pub(super) fn interpolate(
     let weight = 1.0 - (-time.delta_secs().min(0.1) / 0.1).exp();
     let now = std::time::Instant::now();
     for (mut entity, mut transform) in &mut entities {
-        let Some(spawn) = state.world().spawn(entity.id).map(|spawn| &spawn.state) else {
+        let Some(spawn) = state.world().spawn(entity.id) else {
             continue;
         };
-        // A spawn moves on from its latest report at its reported velocity.
-        let first = entity.report.is_none();
-        let (since, fresh) = match entity.report {
-            Some((position, velocity, seen))
-                if position == spawn.position
-                    && velocity.map(f32::to_bits) == spawn.velocity.map(f32::to_bits) =>
-            {
-                (seen, false)
-            }
-            _ => {
-                entity.report = Some((spawn.position, spawn.velocity, now));
-                (now, !first)
-            }
-        };
-        let position = eq_client_core::entities::extrapolate(spawn, now.duration_since(since));
-        let mut target = Vec3::from_array(render_position(position));
-        // A drawn model stands on the floor under it, whichever rule put its z.
+        // A spawn moves on from its latest report at its reported velocity,
+        // from when the report came, however late it is drawn.
+        let first = entity.seen.is_none();
+        let fresh = entity.seen != Some(spawn.reported);
+        if fresh {
+            entity.seen = Some(spawn.reported);
+            entity.soles = None;
+        }
+        let mut target = Vec3::from_array(render_position(spawn.carried(now)));
+        let spawn = &spawn.state;
+        // A drawn model stands on the floor under it, whichever rule put its
+        // z, and keeps to the floor as it is carried on.
         if let (Some(feet), Some(world)) = (entity.feet, world) {
             let soles = target - Vec3::Y * feet;
-            target.y +=
-                eq_client_core::grounded_soles(world, soles, spawn.race, spawn.size) - soles.y;
+            let height =
+                eq_client_core::carried_soles(world, entity.soles, soles, spawn.race, spawn.size);
+            entity.soles = Some((height, Vec2::new(soles.x, soles.z)));
+            target.y += height - soles.y;
         }
         if first {
             report_drawn(entity.id, spawn);
@@ -421,5 +423,71 @@ mod tests {
         app.update();
         // So the loading screen lifts as soon as the zone has laid out.
         assert!(app.world().resource::<NearbyEntities>().settled());
+    }
+
+    #[test]
+    fn a_spawn_drawn_late_is_carried_and_its_corpse_lies_still() {
+        use eq_client_core::{Death, WorldEvent, WorldPosition};
+        use std::time::{Duration, Instant};
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let mut walker = testing::pet(5, 0);
+        walker.pet_owner = None;
+        testing::spawns(&mut online, vec![walker]);
+        let reported = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        testing::news_at(
+            &mut online,
+            [WorldEvent::Position {
+                spawn_id: 5,
+                position: WorldPosition::default(),
+                velocity: [4.0, 0.0, 0.0],
+            }],
+            reported,
+        );
+        let mut app = App::new();
+        app.insert_resource(online)
+            .init_resource::<Time>()
+            .add_systems(Update, interpolate);
+        let drawn = |app: &mut App| {
+            let entity = app
+                .world_mut()
+                .spawn((
+                    RemoteEntity {
+                        id: 5,
+                        seen: None,
+                        soles: None,
+                        feet: None,
+                    },
+                    Transform::default(),
+                ))
+                .id();
+            app.update();
+            let at = app.world().get::<Transform>(entity).unwrap().translation;
+            (entity, eq_client_core::world_position(at.to_array(), 0.0))
+        };
+        // Drawn two seconds after its report, it is drawn two seconds along,
+        // not back where the report put it.
+        let (walking, at) = drawn(&mut app);
+        assert!(at.x > 7.9 && at.x < 8.5, "{at:?}");
+        app.world_mut().despawn(walking);
+        // It dies; the corpse is drawn anew where the walker had got to,
+        // and lies there.
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Death(Death {
+                spawn_id: 5,
+                killer_id: 7,
+                corpse_id: 5,
+                bind_zone_id: 0,
+                corpse_name: None,
+            })],
+        );
+        let (corpse, fell) = drawn(&mut app);
+        assert!(fell.x > 7.9 && fell.x < 8.5, "{fell:?}");
+        std::thread::sleep(Duration::from_millis(50));
+        app.update();
+        let lies = app.world().get::<Transform>(corpse).unwrap().translation;
+        let lies = eq_client_core::world_position(lies.to_array(), 0.0);
+        assert!((lies.x - fell.x).abs() < 1e-4, "{fell:?} then {lies:?}");
     }
 }
