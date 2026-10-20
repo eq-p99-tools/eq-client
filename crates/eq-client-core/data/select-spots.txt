@@ -203,7 +203,7 @@ taki            -71.98   -474.57     20.00    448.0      25.0   10.0  unreviewed
 takj           -116.42    150.33     28.00     64.0      25.0   10.0  unreviewed
 templeveeshan    -98.20   -764.37    159.94    352.0      25.0   10.0  unreviewed
 thedeep         216.17    753.50    -72.00    416.0      25.0   10.0  unreviewed
-thurgadina     -223.04     13.55     35.00    480.0      25.0   10.0  reviewed
+thurgadina     -440.00      0.00      2.75      0.0      25.0   10.0  unreviewed  # picked by hand on the street
 thurgadinb      616.38     39.62    -18.00    416.0      25.0   10.0  unreviewed
 timorous      -1296.40  -1311.98   -618.59    480.0      25.0   10.0  unreviewed
 tipt            420.23     28.23    178.00    320.0      25.0   10.0  unreviewed
