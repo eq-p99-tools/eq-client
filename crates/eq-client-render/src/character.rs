@@ -300,7 +300,7 @@ pub(super) fn spawn_on_layers(
     let asset = prepared.asset.clone();
     let (_, top) = asset.span().unwrap_or_default();
     // The soles hang by the lowest point the model reaches standing, as it
-    // is drawn, not by its base pose's.
+    // is drawn, not by its base pose's (inferred, item 6.277).
     let lift = -feet_offset - prepared.soles;
     // Until gear says otherwise, only the base body and bare head show.
     let shown: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
