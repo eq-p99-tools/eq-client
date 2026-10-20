@@ -615,6 +615,21 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
             "Stamina report"
         ),
         WorldEvent::NothingToEat { food, water } => debug!(?food, ?water, "Nothing to eat"),
+        // A zone header, at entry or sent again: its sky, read just before,
+        // and its clip, with the far clip the world now draws to.
+        WorldEvent::ZoneDescription(description) => {
+            let sky = world.sky();
+            debug!(
+                sky = sky.map(|sky| sky.sky),
+                fog_color = ?sky.map(|sky| sky.fog[0].color),
+                fog_near = sky.map(|sky| sky.fog[0].near),
+                fog_far = sky.map(|sky| sky.fog[0].far),
+                min_clip = description.min_clip,
+                max_clip = description.max_clip,
+                far_clip = world.far_clip(),
+                "Zone header decoded"
+            );
+        }
         WorldEvent::Inventory(eq_client_core::inventory::InventoryUpdate::Deduct {
             slot,
             quantity,

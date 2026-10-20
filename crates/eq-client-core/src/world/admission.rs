@@ -8,6 +8,7 @@ use super::{
 use crate::{
     CampStatus, Capability, CharacterChoice, PlayerState, WorldPosition, ZoneOffer, ZoneRejection,
     servers::{ServerChoice, ServerRefusal},
+    zones::ZoneDescription,
 };
 use std::time::Instant;
 
@@ -60,6 +61,15 @@ impl ClientWorld {
             characters: characters.to_vec(),
         });
         changes.characters = true;
+    }
+
+    /// A zone header, at entry or sent again mid-zone, sets the far clip to
+    /// its maximum clip when it gives one.
+    pub(super) fn described(&mut self, description: &ZoneDescription) {
+        let clip = description.max_clip;
+        if clip.is_finite() && clip > 0.0 {
+            self.far_clip = Some(clip);
+        }
     }
 
     /// A new admission replaces the old one and its zone.

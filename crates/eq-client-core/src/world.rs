@@ -406,6 +406,7 @@ impl ClientWorld {
             // The time of day, and how the zone's sky looks.
             WorldEvent::TimeOfDay(time) => self.time = Some((*time, now)),
             WorldEvent::Sky(sky) => self.zone.sky = Some(*sky),
+            WorldEvent::ZoneDescription(description) => self.described(description),
             WorldEvent::ServerSelection {
                 selection_id,
                 servers,
@@ -473,7 +474,8 @@ impl ClientWorld {
             // No front end creates characters yet; when one does, the news
             // lands here. Nothing here shows the world's rules, the
             // expansions it allows, its chat server, a zone it says is down,
-            // the zone's weather or the rest of its header yet either, nor
+            // the zone's weather or its header beyond the sky and the clip
+            // yet either, nor
             // stops the player while stunned, charmed, held by the server or
             // berserk, spins them, or shows their hiding's end. The target
             // the server sets and whom it targets, a quest's reward and ding
@@ -502,7 +504,6 @@ impl ClientWorld {
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::Weather(_)
-            | WorldEvent::ZoneDescription(_)
             | WorldEvent::Stun(_)
             | WorldEvent::Charm(_)
             | WorldEvent::Controlled(_)
