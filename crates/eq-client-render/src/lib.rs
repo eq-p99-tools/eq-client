@@ -639,7 +639,7 @@ fn schedule(app: &mut App) {
                 hud::key_help,
                 target::key_help,
                 hud::hotbar::item_artwork,
-                hud::hotbar::presentation,
+                (hud::hotbar::presentation, hud::hotbar::fit_words).chain(),
                 spellbook::scribe_presentation,
                 buffs::update,
                 (buffs::hover, buffs::skinned_details, buffs::short_window),

@@ -124,6 +124,31 @@ impl Bindings {
 pub(crate) struct Slot(pub usize);
 #[derive(Component)]
 pub(crate) struct Caption(pub usize);
+/// A slot's words, centred in its button, for what it holds with no
+/// picture: Sit, Stand, Melee Attack, Camp, the group's kinds and the
+/// abilities.
+#[derive(Component)]
+pub(crate) struct Words(pub usize);
+/// The size a slot's words are drawn at now, and whether that size fits
+/// yet ([`fit_words`]); the words stay hidden until it does.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Fit {
+    size: Size,
+    settled: bool,
+}
+
+impl Default for Fit {
+    fn default() -> Self {
+        Self {
+            size: WORDS_LARGEST,
+            settled: false,
+        }
+    }
+}
+
+/// The size a slot's words start from, before [`fit_words`] steps them down
+/// to fit the button.
+const WORDS_LARGEST: Size = Size::Heading;
 #[derive(Component)]
 pub(crate) struct Hint;
 
@@ -162,7 +187,8 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
 }
 
 /// What a slot's button shows of what it holds: the spell's icon, the
-/// item's picture and a caption, in the client's own window and in the
+/// item's picture and a caption in the corner, or the words of a kind with
+/// no picture centred in the button, in the client's own window and in the
 /// skin's Hot Button window alike.
 pub(crate) fn contents(button: &mut ChildSpawnerCommands, index: usize) {
     button.spawn(crate::spell_icons::artwork(
@@ -181,6 +207,28 @@ pub(crate) fn contents(button: &mut ChildSpawnerCommands, index: usize) {
         },
         bevy::ui::FocusPolicy::Pass,
     ));
+    button
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: px(0),
+                width: percent(100),
+                height: percent(100),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            bevy::ui::FocusPolicy::Pass,
+        ))
+        .with_child((
+            Words(index),
+            Fit::default(),
+            Visibility::Hidden,
+            theme::text("", WORDS_LARGEST, theme::INK),
+            TextLayout::new(Justify::Center, LineBreak::WordBoundary),
+            bevy::ui::FocusPolicy::Pass,
+        ));
 }
 
 /// The first of the ten slots whose action the keys freshly pressed.
@@ -257,6 +305,19 @@ type SlotButtons<'w, 's> = Query<
     ),
 >;
 
+/// The hotbar's texts: a slot's corner caption or centred words, and the
+/// window's detail line.
+type Labels<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Text,
+        Option<&'static Caption>,
+        Option<&'static Words>,
+        Option<&'static Hint>,
+    ),
+>;
+
 /// Presents current bindings, spell identity and cooldowns independently of keyboard focus.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn presentation(
@@ -268,7 +329,7 @@ pub(crate) fn presentation(
     ),
     (names, map): (Res<crate::spellbook::SpellNames>, Res<crate::keys::KeyMap>),
     mut slots: SlotButtons,
-    mut labels: Query<(&mut Text, Option<&Caption>, Option<&Hint>)>,
+    mut labels: Labels,
 ) {
     let now = std::time::Instant::now();
     let inventory = online.world().inventory();
@@ -313,9 +374,17 @@ pub(crate) fn presentation(
             color.0 = theme::readiness(*interaction != Interaction::None, empty, waiting);
         }
     }
-    for (mut text, caption, hint) in &mut labels {
-        if let Some(caption) = caption {
-            text.0 = caption_text(bindings.0[caption.0], online.world());
+    for (mut text, caption, words, hint) in &mut labels {
+        // Written only when they change, so `fit_words` sees a change.
+        let wanted = match (caption, words) {
+            (Some(caption), _) => Some(faces(bindings.0[caption.0], online.world()).0),
+            (_, Some(words)) => Some(faces(bindings.0[words.0], online.world()).1),
+            _ => None,
+        };
+        if let Some(wanted) = wanted
+            && text.0 != wanted
+        {
+            text.0 = wanted;
         }
         if hint.is_some() {
             text.0 = hovered_detail(
@@ -326,6 +395,79 @@ pub(crate) fn presentation(
                 now,
             );
         }
+    }
+}
+
+/// Where a slot's button puts its words: in the corner, over a gem's spell
+/// icon or an item's picture, or as the small mark of an empty slot or gem;
+/// or centred in the button for a kind with no picture. Centred and sized
+/// to fit, as Adam chose (10-20); what the official client draws on such a
+/// hotbutton is not checked.
+fn faces(action: Option<Action>, world: &ClientWorld) -> (String, String) {
+    let words = caption_text(action, world);
+    match action {
+        Some(Action::Gem(_) | Action::Item { .. }) | None => (words, String::new()),
+        Some(
+            Action::Sit
+            | Action::Stand
+            | Action::Ability(_)
+            | Action::Attack
+            | Action::Camp
+            | Action::Invite
+            | Action::Follow
+            | Action::Disband,
+        ) => (String::new(), words),
+    }
+}
+
+/// A slot's centred words, with the size they are drawn at, what Bevy
+/// measured of them, and the node they are centred in.
+type SlotWords<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Ref<'static, Text>,
+        &'static mut Fit,
+        &'static mut TextFont,
+        &'static mut Visibility,
+        &'static bevy::text::TextLayoutInfo,
+        &'static ChildOf,
+    ),
+    With<Words>,
+>;
+
+/// Draws each slot's words as large as fits its button, measured while
+/// hidden and shown once at their final size: from [`WORDS_LARGEST`] down the
+/// type scale, a step a frame while Bevy's measured text is wider or taller
+/// than the button, and hidden again from the largest when the words change.
+/// A button not laid out yet (a hidden window) waits until it is.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn fit_words(mut words: SlotWords, areas: Query<&ComputedNode>) {
+    for (text, mut fit, mut font, mut visibility, measured, parent) in &mut words {
+        if text.is_changed() {
+            fit.set_if_neq(Fit::default());
+        } else if !fit.settled {
+            let Ok(area) = areas.get(parent.parent()) else {
+                continue;
+            };
+            let room = area.size * area.inverse_scale_factor();
+            if room.x <= 0.0 || room.y <= 0.0 {
+                continue;
+            }
+            let over = measured.size.x > room.x + 0.5 || measured.size.y > room.y + 0.5;
+            match fit.size.smaller() {
+                Some(smaller) if over => fit.size = smaller,
+                _ => fit.settled = true,
+            }
+        }
+        if font.font_size != theme::font(fit.size).font_size {
+            *font = theme::font(fit.size);
+        }
+        visibility.set_if_neq(if fit.settled {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
 }
 
@@ -566,6 +708,138 @@ mod tests {
                 "{action:?}"
             );
         }
+    }
+
+    /// The viewer's app with a player in the world whose first gem holds a
+    /// spell, the default hotbar, and the slots' words presented and fitted.
+    fn words_app() -> App {
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        crate::online::testing::spell(
+            &mut online,
+            eq_client_core::SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 73,
+                mode: 1,
+            },
+        );
+        app.init_resource::<Bindings>()
+            .init_resource::<crate::options::OptionsState>()
+            .init_resource::<crate::spellbook::SpellNames>()
+            .insert_resource(online)
+            .add_systems(Update, (presentation, fit_words).chain());
+        app
+    }
+
+    fn text(app: &App, entity: Entity) -> &str {
+        &app.world().get::<Text>(entity).unwrap().0
+    }
+
+    #[test]
+    fn a_kind_without_a_picture_shows_its_words_centred_and_a_picture_its_corner_tag() {
+        let mut app = words_app();
+        app.world_mut().resource_mut::<Bindings>().0[3] = None;
+        let spawn = |app: &mut App, slot| {
+            let corner = app.world_mut().spawn((Caption(slot), Text::default())).id();
+            let words = app.world_mut().spawn((Words(slot), Text::default())).id();
+            (corner, words)
+        };
+        let gem = spawn(&mut app, 0);
+        let sit = spawn(&mut app, 8);
+        let empty = spawn(&mut app, 3);
+        let spellless = spawn(&mut app, 1);
+        app.update();
+        // A gem's spell icon keeps its corner tag; Sit's words are centred;
+        // an empty slot or gem keeps its small mark in the corner.
+        assert_eq!((text(&app, gem.0), text(&app, gem.1)), ("G1", ""));
+        assert_eq!((text(&app, sit.0), text(&app, sit.1)), ("", "Sit"));
+        assert_eq!((text(&app, empty.0), text(&app, empty.1)), ("-", ""));
+        assert_eq!(
+            (text(&app, spellless.0), text(&app, spellless.1)),
+            ("-", "")
+        );
+    }
+
+    #[test]
+    fn words_are_measured_hidden_and_shown_once_at_the_largest_size_that_fits() {
+        let mut app = words_app();
+        // A button 40 logical pixels square, at a scale factor of 2.
+        let button = app
+            .world_mut()
+            .spawn(ComputedNode {
+                size: Vec2::new(80.0, 80.0),
+                inverse_scale_factor: 0.5,
+                ..default()
+            })
+            .id();
+        let words = app
+            .world_mut()
+            .spawn((
+                Words(8),
+                Fit::default(),
+                Visibility::Hidden,
+                Text::default(),
+                TextFont::default(),
+                bevy::text::TextLayoutInfo::default(),
+                ChildOf(button),
+            ))
+            .id();
+        let measure = |app: &mut App, width: f32, height: f32| {
+            app.world_mut()
+                .get_mut::<bevy::text::TextLayoutInfo>(words)
+                .unwrap()
+                .size = Vec2::new(width, height);
+        };
+        let shown = |app: &App| {
+            let fit = *app.world().get::<Fit>(words).unwrap();
+            let font = app.world().get::<TextFont>(words).unwrap().font_size;
+            assert_eq!(font, theme::font(fit.size).font_size);
+            (
+                fit.size,
+                *app.world().get::<Visibility>(words).unwrap() == Visibility::Inherited,
+            )
+        };
+        measure(&mut app, 60.0, 15.0);
+        app.update();
+        assert_eq!(text(&app, words), "Sit");
+        assert_eq!(shown(&app), (Size::Heading, false));
+        // Too wide: a size smaller, still hidden.
+        app.update();
+        assert_eq!(shown(&app), (Size::Label, false));
+        // It fits: shown at that size, and kept there while the words stay.
+        measure(&mut app, 30.0, 14.0);
+        app.update();
+        assert_eq!(shown(&app), (Size::Label, true));
+        app.update();
+        assert_eq!(shown(&app), (Size::Label, true));
+        // New words start hidden from the largest again.
+        app.world_mut().resource_mut::<Bindings>().0[8] = Some(Action::Stand);
+        app.update();
+        assert_eq!(
+            (text(&app, words), shown(&app)),
+            ("Stand", (Size::Heading, false))
+        );
+        app.update();
+        assert_eq!(shown(&app), (Size::Heading, true));
+        // Words that never fit show at the smallest size.
+        app.world_mut().resource_mut::<Bindings>().0[8] = Some(Action::Disband);
+        measure(&mut app, 100.0, 15.0);
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(shown(&app), (Size::Caption, true));
+        // A button not laid out yet keeps them hidden.
+        app.world_mut()
+            .get_mut::<ComputedNode>(button)
+            .unwrap()
+            .size = Vec2::ZERO;
+        app.world_mut().resource_mut::<Bindings>().0[8] = Some(Action::Camp);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(shown(&app), (Size::Heading, false));
     }
 
     #[test]

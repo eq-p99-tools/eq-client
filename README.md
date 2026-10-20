@@ -423,7 +423,11 @@ swap, the drop where a hold is let go, the click that throws a hotkey away, what
 the cursor shows and which items can go on the bar (those with a click effect)
 are inferred, not yet checked against the official client. Hover any of those
 controls and press Ctrl+number to bind what a hold would pick up from it to that
-slot; Ctrl+Shift+number empties a slot.
+slot; Ctrl+Shift+number empties a slot. A hotbutton holding a kind with no
+picture (Sit, Stand, Melee Attack, Camp, the group's kinds or an ability) shows
+its name centred, as large as fits the button; a gem's spell and an item keep
+their picture with a small tag in the corner. That look is Adam's choice; the
+official client's is not yet checked.
 Item shortcuts show installed item artwork and use the same activation checks as
 Alt+right-click in inventory, including cursor, casting, charges and pending-request
 guards. They use the selected target, or self when no target is selected. Worker
