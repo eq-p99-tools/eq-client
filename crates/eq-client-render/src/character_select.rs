@@ -42,6 +42,18 @@ impl Selection {
         self.entries.iter().find(|entry| entry.slot == slot)
     }
 
+    /// The long name of the zone the highlighted character is in; None when
+    /// the server's list carries no zone for it (eq-network keeps a list's
+    /// zones only where the server type's list is checked to carry them) or
+    /// our zone table has no long name for its number. The number is taken
+    /// to its low 16 bits first, and the short name is never shown, as the
+    /// official client names a zone (from the program, 0x5fa1c0).
+    pub(crate) fn chosen_zone(&self) -> Option<&'static str> {
+        let zone = self.entry(self.selected?)?.zone_id? & 0xffff;
+        eq_client_core::zones::long_name(eq_client_core::zones::short_name(zone)?)
+            .filter(|long| !long.is_empty())
+    }
+
     /// Whether Enter World has been asked for with this list.
     pub(crate) const fn entering(&self) -> bool {
         self.submitted
@@ -136,7 +148,10 @@ pub(super) fn update(
         Res<crate::login::FrontEnd>,
         Res<crate::loading::Screen>,
     ),
-    preview: Res<crate::select_preview::Preview>,
+    (preview, messages): (
+        Res<crate::select_preview::Preview>,
+        Res<crate::hud::messages::Messages>,
+    ),
 ) {
     let focused = keys.focused();
     let keys = navigation.sample(&keys.input);
@@ -222,10 +237,11 @@ pub(super) fn update(
     if online.selection.as_ref().is_some_and(Selection::entering) {
         crate::loading::cover(&mut commands, &screen, Root, Display::Flex);
     } else {
+        let line = character_line(online.selection.as_ref(), &messages);
         spawn(
             &mut commands,
             online.selection.as_ref(),
-            status,
+            (status, line.as_deref()),
             (skinned, showing),
         );
     }
@@ -291,6 +307,54 @@ fn guidance<'a>(selection: Option<&'a Selection>, status: &'a str) -> &'a str {
     }
 }
 
+/// The official client's string for a character's line in explore mode:
+/// its name, level, class and zone (from the program, 0x5000ba).
+const CHARACTER_LINE: u32 = 6681;
+
+/// The highlighted character's line under the list. The installed client's
+/// words for it in explore mode, which the official client shows only there
+/// (from the program; under the list is this client's place for it, 6.109),
+/// with the name, the level, the class's name and the zone's long name in
+/// that order, when all four are known; the zone's long name alone when the
+/// level or the class is unknown or the installation lacks the string; and
+/// nothing when the zone is unknown.
+fn character_line(
+    selection: Option<&Selection>,
+    messages: &crate::hud::messages::Messages,
+) -> Option<String> {
+    let selection = selection?;
+    let entry = selection.entry(selection.chosen()?)?;
+    let zone = selection.chosen_zone()?;
+    let class = entry.look.and_then(|look| {
+        let id = eq_client_core::classes::select_name_string(look.class);
+        let name = messages.argument_free(id);
+        if name.is_none() {
+            debug!(
+                "The installed string table lacks string {id} for class {}",
+                look.class
+            );
+        }
+        name
+    });
+    let (Some(level), Some(class)) = (entry.level, class) else {
+        return Some(zone.to_owned());
+    };
+    let arguments = [
+        entry.name.clone(),
+        level.to_string(),
+        class.to_owned(),
+        zone.to_owned(),
+    ];
+    Some(
+        messages
+            .formatted(CHARACTER_LINE, &arguments)
+            .unwrap_or_else(|| {
+                debug!("The installed string table lacks string {CHARACTER_LINE}");
+                zone.to_owned()
+            }),
+    )
+}
+
 /// Covers the scene behind the screen until a character has completed zone
 /// admission: under the skin's list, with the list's guidance at its foot,
 /// or with the client's own panel on it. While the highlighted character
@@ -299,7 +363,7 @@ fn guidance<'a>(selection: Option<&'a Selection>, status: &'a str) -> &'a str {
 fn spawn(
     commands: &mut Commands,
     selection: Option<&Selection>,
-    status: &str,
+    (status, line): (&str, Option<&str>),
     (skinned, showing): (bool, bool),
 ) {
     let backdrop = BackgroundColor(if showing { Color::NONE } else { theme::COVER });
@@ -312,8 +376,10 @@ fn spawn(
                 position_type: PositionType::Absolute,
                 width: percent(100),
                 height: percent(100),
-                align_items: AlignItems::FlexEnd,
-                justify_content: JustifyContent::Center,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::FlexEnd,
+                row_gap: px(6),
                 padding: UiRect::bottom(px(40)),
                 ..default()
             },
@@ -323,6 +389,9 @@ fn spawn(
             root.insert(Button);
         }
         root.with_children(|root| {
+            if let Some(line) = line {
+                theme::label(root, line, Size::Label);
+            }
             theme::label(root, guidance(selection, status), Size::Label);
         });
         return;
@@ -382,6 +451,9 @@ fn spawn(
             if selection.selected.is_some() && !selection.submitted {
                 button(panel, Action::Enter, "Enter World", true);
             }
+            if let Some(line) = line {
+                theme::label(panel, line, Size::Label);
+            }
             theme::label(panel, guidance(Some(selection), status), Size::Label);
         });
     });
@@ -401,6 +473,94 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selecte
 mod tests {
     use super::*;
     use bevy::window::PrimaryWindow;
+
+    fn listed(slot: u8, name: &str, zone_id: Option<u32>) -> CharacterChoice {
+        CharacterChoice {
+            slot,
+            name: name.into(),
+            level: Some(12),
+            zone_id,
+            look: Some(eq_client_core::CharacterLook {
+                class: 1,
+                ..default()
+            }),
+        }
+    }
+
+    #[test]
+    fn the_highlighted_characters_zone_is_its_long_name_and_follows_the_highlight() {
+        let mut selection = Selection::new(
+            7,
+            vec![
+                listed(0, "Exampleone", Some(4)),
+                listed(2, "Exampletwo", Some(9)),
+                listed(5, "Examplethree", None),
+                listed(6, "Examplefour", Some(65_000)),
+                // The zone's number in the low 16 bits, as the program reads it.
+                listed(7, "Examplefive", Some((5 << 16) | 4)),
+            ],
+        );
+        assert_eq!(selection.chosen_zone(), Some("The Qeynos Hills"));
+        assert!(selection.choose_named("exampletwo"));
+        assert_eq!(selection.chosen_zone(), Some("West Freeport"));
+        // A list without the zone, and a number the table doesn't know, name
+        // none rather than one made up.
+        assert!(selection.choose_named("Examplethree"));
+        assert_eq!(selection.chosen_zone(), None);
+        assert!(selection.choose_named("Examplefour"));
+        assert_eq!(selection.chosen_zone(), None);
+        assert!(selection.choose_named("Examplefive"));
+        assert_eq!(selection.chosen_zone(), Some("The Qeynos Hills"));
+        assert_eq!(Selection::new(7, vec![]).chosen_zone(), None);
+    }
+
+    #[test]
+    fn the_character_line_is_the_installed_string_with_all_four_parts_or_the_zone_alone() {
+        // A test table: the line's string takes its four arguments in order.
+        let messages = crate::hud::messages::Messages::parse(
+            "EQST0002\n0\n6681 <%1|%2|%3|%4>\n1502 Classone\n",
+        );
+        let line = |entry: CharacterChoice, messages: &crate::hud::messages::Messages| {
+            character_line(Some(&Selection::new(7, vec![entry])), messages)
+        };
+        assert_eq!(
+            line(listed(0, "Exampleone", Some(4)), &messages).as_deref(),
+            Some("<Exampleone|12|Classone|The Qeynos Hills>")
+        );
+        // Without the level, the class, or the class's string: the zone alone.
+        let mut unlevelled = listed(0, "Exampleone", Some(4));
+        unlevelled.level = None;
+        assert_eq!(
+            line(unlevelled, &messages).as_deref(),
+            Some("The Qeynos Hills")
+        );
+        let mut unlooked = listed(0, "Exampleone", Some(4));
+        unlooked.look = None;
+        assert_eq!(
+            line(unlooked, &messages).as_deref(),
+            Some("The Qeynos Hills")
+        );
+        let mut unnamed = listed(0, "Exampleone", Some(4));
+        unnamed.look = Some(eq_client_core::CharacterLook {
+            class: 2,
+            ..default()
+        });
+        assert_eq!(
+            line(unnamed, &messages).as_deref(),
+            Some("The Qeynos Hills")
+        );
+        // Without the line's string: the zone alone.
+        let lacking = crate::hud::messages::Messages::parse("EQST0002\n0\n1502 Classone\n");
+        assert_eq!(
+            line(listed(0, "Exampleone", Some(4)), &lacking).as_deref(),
+            Some("The Qeynos Hills")
+        );
+        // Without the zone: nothing, whatever else is known.
+        assert_eq!(line(listed(0, "Exampleone", None), &messages), None);
+        assert_eq!(line(listed(0, "Exampleone", Some(65_000)), &messages), None);
+        assert_eq!(character_line(None, &messages), None);
+    }
+
     #[test]
     fn keyboard_selection_queues_the_server_slot_and_disappears_after_admission() {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
@@ -427,6 +587,7 @@ mod tests {
             .init_resource::<crate::login::FrontEnd>()
             .init_resource::<crate::loading::Screen>()
             .init_resource::<crate::select_preview::Preview>()
+            .init_resource::<crate::hud::messages::Messages>()
             .add_message::<AppExit>()
             .add_systems(Update, update);
         app.world_mut().spawn((
@@ -630,6 +791,7 @@ mod tests {
             .init_resource::<crate::login::FrontEnd>()
             .init_resource::<crate::loading::Screen>()
             .init_resource::<crate::select_preview::Preview>()
+            .init_resource::<crate::hud::messages::Messages>()
             .add_message::<AppExit>()
             .add_systems(Update, update);
         app.world_mut().spawn((

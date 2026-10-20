@@ -39,6 +39,12 @@ impl Messages {
         )
     }
 
+    /// A string with these arguments in it, in the installed client's words;
+    /// None where the installation lacks it.
+    pub(crate) fn formatted(&self, id: u32, arguments: &[String]) -> Option<String> {
+        self.0.format(id, arguments)
+    }
+
     /// A string with the server's arguments in it. Missing strings stay
     /// identifiable instead of being silently dropped.
     pub(crate) fn format(&self, id: u32, arguments: &[String]) -> String {

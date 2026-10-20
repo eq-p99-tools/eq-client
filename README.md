@@ -186,7 +186,11 @@ stands in each zone comes from this client's spots file
 (`crates/eq-client-core/data/select-spots.txt`); a zone without a line there
 shows the character at the middle of the zone. The character shows where the
 server type's list is checked to carry its look (EQEmu and TAKP); elsewhere
-the list stays on its dark cover. Spots for the file are proposed from each
+the list stays on its dark cover. Under the list, a line names the chosen
+character with its level, class and zone, in the installed client's words
+for it (the official client shows that line only in its explore mode); where
+the server's list lacks the level or the class it names the zone alone, and
+where it lacks the zone it shows nothing. Spots for the file are proposed from each
 installed zone's shape by
 `cargo run --release -p eq-client-render --example propose_select_spots -- <EverQuest folder> [zone ...]`,
 which reads the installation only and prints unreviewed lines to look over.
