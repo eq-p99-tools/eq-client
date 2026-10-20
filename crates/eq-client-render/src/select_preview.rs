@@ -4,12 +4,13 @@
 //! list's look by the same code that dresses everyone in the game, and the
 //! camera orbits it. It shows only where the server type's list carries the
 //! look; elsewhere the screen keeps its cover.
-use super::{OrbitCamera, Player, ViewerSettings, background::Background, online::OnlineState};
+use super::{OrbitCamera, ViewerSettings, background::Background, online::OnlineState};
 use bevy::prelude::*;
 use eq_client_core::{outfit::Appearance, select_spots::Spots};
 
-/// How fast a character shown at select turns by itself, in radians a
-/// second: one turn in about 20 s. Adam's choice (10-19 20:17Z): it turns
+/// How fast the camera circles a character shown at select by itself, in
+/// radians a second: one turn in about 20 s. Adam's choice (10-19 20:17Z,
+/// and 23:47Z: the camera orbits, the character stands still): it circles
 /// slowly until the player moves the camera, by right-drag or zoom, and
 /// starts again when another character is highlighted.
 const TURN: f32 = std::f32::consts::TAU / 20.0;
@@ -155,13 +156,13 @@ fn wanted(
     ))
 }
 
-/// Frames the camera on a character as it comes to stand, then turns the
-/// character until the player turns or zooms the camera.
+/// Frames the camera on a character as it comes to stand, then circles the
+/// camera around it, the character keeping its facing, until the player
+/// turns or zooms the camera.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn turn(
     time: Res<Time>,
     mut preview: ResMut<Preview>,
-    mut players: Query<&mut Transform, (With<Player>, With<Look>)>,
     mut cameras: Query<&mut OrbitCamera>,
 ) {
     let Ok(mut camera) = cameras.single_mut() else {
@@ -179,16 +180,16 @@ pub(super) fn turn(
     if !preview.showing() {
         return;
     }
-    let now = (camera.yaw, camera.pitch, camera.radius);
-    if preview.seen.is_some_and(|seen| seen != now) {
+    if preview
+        .seen
+        .is_some_and(|seen| seen != (camera.yaw, camera.pitch, camera.radius))
+    {
         preview.turning = false;
     }
-    preview.seen = Some(now);
-    if preview.turning
-        && let Ok(mut transform) = players.single_mut()
-    {
-        transform.rotate_y(TURN * time.delta_secs());
+    if preview.turning {
+        camera.yaw += TURN * time.delta_secs();
     }
+    preview.seen = Some((camera.yaw, camera.pitch, camera.radius));
 }
 
 /// A UI root: its visibility, its layer and whether the preview hid it.
@@ -236,6 +237,7 @@ pub(super) fn veil(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Player;
     use eq_client_core::{CharacterChoice, CharacterLook};
 
     fn listed(look: Option<CharacterLook>) -> OnlineState {
@@ -328,34 +330,36 @@ mod tests {
         app.update();
     }
 
-    fn yaw(app: &App, player: Entity) -> f32 {
-        app.world()
-            .get::<Transform>(player)
-            .unwrap()
-            .rotation
-            .to_euler(EulerRot::YXZ)
-            .0
+    fn camera_yaw(app: &App, camera: Entity) -> f32 {
+        app.world().get::<OrbitCamera>(camera).unwrap().yaw
     }
 
     #[test]
-    fn the_character_turns_until_the_player_moves_the_camera() {
+    fn the_camera_circles_the_standing_character_until_the_player_moves_it() {
         let (mut app, camera, player) = turning_app();
         app.update();
         let framed = app.world().get::<OrbitCamera>(camera).unwrap();
         assert_eq!((framed.yaw, framed.pitch, framed.radius), (1.0, -0.2, 25.0));
         advance(&mut app);
-        // A quarter turn in five seconds.
-        assert!((yaw(&app, player) - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
-        // A zoom of the player's stops it where it stands.
+        // A quarter turn in five seconds, around a character that keeps its
+        // facing.
+        assert!((camera_yaw(&app, camera) - (1.0 + std::f32::consts::FRAC_PI_2)).abs() < 1e-4);
+        assert_eq!(
+            app.world().get::<Transform>(player).unwrap().rotation,
+            Quat::IDENTITY
+        );
+        // A zoom of the player's stops it where it is.
         app.world_mut()
             .get_mut::<OrbitCamera>(camera)
             .unwrap()
             .radius = 40.0;
         advance(&mut app);
-        let stopped = yaw(&app, player);
+        let stopped = camera_yaw(&app, camera);
         advance(&mut app);
-        assert!((yaw(&app, player) - stopped).abs() < f32::EPSILON);
-        assert!((stopped - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+        assert!((camera_yaw(&app, camera) - stopped).abs() < f32::EPSILON);
+        assert!((stopped - (1.0 + std::f32::consts::FRAC_PI_2)).abs() < 1e-4);
+        let view = app.world().get::<OrbitCamera>(camera).unwrap();
+        assert!((view.radius - 40.0).abs() < f32::EPSILON);
     }
 
     #[test]

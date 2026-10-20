@@ -179,8 +179,9 @@ them yet. The window opens where the skin puts it and can be dragged, but its
 place is not kept between runs: no character is chosen yet whose files could
 hold it.
 The list opens with its first character chosen, and the chosen character
-stands in its own zone behind the list, dressed in its gear, turning slowly
-until you move the camera: right-drag orbits it and the wheel zooms. Where it
+stands in its own zone behind the list, dressed in its gear, while the
+camera circles it slowly until you move the camera yourself: right-drag
+orbits it and the wheel zooms. Where it
 stands in each zone comes from this client's spots file
 (`crates/eq-client-core/data/select-spots.txt`); a zone without a line there
 shows the character at the middle of the zone. The character shows where the
