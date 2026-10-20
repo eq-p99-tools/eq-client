@@ -181,6 +181,11 @@ struct Arguments {
     #[arg(long, requires = "script")]
     script_follow: bool,
 
+    /// Leave the script pointer undrawn: the arrow that shows, while a
+    /// script runs, where its clicks and hovers point.
+    #[arg(long, requires = "script")]
+    hide_script_pointer: bool,
+
     /// UI skin under the installation's `uifiles` whose window layouts to use,
     /// instead of the one the character last chose in the official client.
     #[arg(long)]
@@ -665,6 +670,7 @@ fn viewer_config(
         },
         script,
         script_follow,
+        hide_script_pointer: arguments.hide_script_pointer,
         local_session: local,
         ui_skin: arguments.ui_skin,
         settings_directory,
