@@ -156,6 +156,9 @@ pub struct ViewerConfig {
     pub script: Option<Vec<script::Step>>,
     /// Script file and byte offset to keep reading appended steps from.
     pub script_follow: Option<(PathBuf, usize)>,
+    /// Leave the script pointer's arrow undrawn while a script runs; it is
+    /// drawn by default, so a recording shows where each click lands.
+    pub hide_script_pointer: bool,
     /// The network session refuses servers outside this machine's network (a local
     /// `EQEmu` test server), so scripts may send `gm` steps and run unwatched.
     pub local_session: bool,
@@ -250,6 +253,7 @@ pub fn run(
 ) -> i32 {
     let screenshot = config.screenshot.clone();
     let steps = config.script.clone();
+    let arrow = !config.hide_script_pointer;
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
     let installed_client = config.installed_client;
@@ -341,7 +345,7 @@ pub fn run(
     device_pixels::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
-        install_script(&mut app, steps, follow, (local_session, online));
+        install_script(&mut app, (steps, follow), (local_session, online), arrow);
     }
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
@@ -469,18 +473,23 @@ fn exit_status(exit: &AppExit) -> i32 {
 
 /// Drives a script after UI focus, optionally following its file; it is
 /// attended unless the session is local-only or the preview is offline.
+/// The script pointer's arrow is drawn while it runs, unless `arrow` is false.
 fn install_script(
     app: &mut App,
-    steps: Vec<script::Step>,
-    follow: Option<(PathBuf, usize)>,
+    (steps, follow): (Vec<script::Step>, Option<(PathBuf, usize)>),
     (local_session, online): (bool, bool),
+    arrow: bool,
 ) {
     let script = match follow {
         Some((path, offset)) => script::Script::following(steps, path, offset),
         None => script::Script::new(steps),
     };
     app.insert_resource(script.local_session(local_session).offline_preview(!online));
-    app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
+    app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus))
+        .add_systems(Update, script::pointer::draw);
+    if arrow {
+        app.add_systems(Startup, script::pointer::spawn);
+    }
 }
 
 /// Puts every frame's work in its stage, and orders within a stage the few

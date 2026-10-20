@@ -50,14 +50,25 @@ type Drawn = (
     Option<Face>,
 );
 
-/// Follows the pointer using confirmed/predicted inventory state, never a selected slot.
+/// A running script, and where its pointer is.
+type Scripted<'w> = (
+    Option<Res<'w, crate::script::Script>>,
+    Option<Res<'w, crate::script::ScriptPointer>>,
+);
+
+/// Follows the pointer using confirmed/predicted inventory state, never a
+/// selected slot; while a script runs, it follows the script pointer.
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub(crate) fn update(
     mut commands: Commands,
     state: Res<InventoryState>,
     online: Res<crate::online::OnlineState>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    (scale, look): (Option<Res<UiScale>>, Res<crate::skinned::CursorLook>),
+    (scale, look, scripted): (
+        Option<Res<UiScale>>,
+        Res<crate::skinned::CursorLook>,
+        Scripted,
+    ),
     (hand, names, carry): (
         Res<crate::spellbook::BookHand>,
         Res<crate::spellbook::SpellNames>,
@@ -93,10 +104,16 @@ pub(crate) fn update(
             .find(|(interaction, ..)| **interaction != Interaction::None)
             .map(|(_, computed, at)| at.translation * computed.inverse_scale_factor())
     };
+    // While a script runs, what rides the cursor rides the script pointer.
+    let script_pointer = scripted
+        .1
+        .filter(|_| scripted.0.is_some())
+        .map(|pointer| pointer.0 / factor);
     let pointer = windows.single().ok().and_then(|window| {
-        let pointer = match window.cursor_position() {
-            Some(pointer) => window.focused.then_some(pointer / factor),
-            None => hovered(),
+        let pointer = match (script_pointer, window.cursor_position()) {
+            (Some(pointer), _) => Some(pointer),
+            (None, Some(pointer)) => window.focused.then_some(pointer / factor),
+            (None, None) => hovered(),
         }?;
         Some((pointer, window.size() / factor))
     });

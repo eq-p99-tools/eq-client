@@ -3,17 +3,21 @@
 //! A script never runs unattended: it pauses until the client window is focused,
 //! stops if focus is lost while a key is held, and ends after a bounded time.
 //! Scripted clicks are only injected while the real pointer is outside the window,
-//! so they cannot also press whatever the pointer happens to be over. A followed
+//! so they cannot also press whatever the pointer happens to be over; each click
+//! and hover first glides the script's own pointer to its control (see
+//! [`pointer`]), and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
 //! `gm` steps send `#` commands only to a local `EQEmu` server, and `chat`
 //! steps speak only there.
 mod parse;
+pub(crate) mod pointer;
 mod report;
 
 pub use parse::{
     AbilityPage, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step, TradeClick,
     TrainingClick, parse,
 };
+pub(crate) use pointer::ScriptPointer;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -83,6 +87,11 @@ pub struct Script {
     /// The control a `hover` step rests the pointer on, until the next click
     /// or hover.
     hovering: Option<Entity>,
+    /// The script pointer's glide to the control a click or hover names.
+    glide: Option<pointer::Glide>,
+    /// The control the script pointer last hovered on its way, whose hover
+    /// it clears as it leaves.
+    pointed: Option<Entity>,
     /// The spawn a `wait_dead` or `chase` step waits on: the target as it
     /// started.
     awaited: Option<u16>,
@@ -139,6 +148,8 @@ impl Script {
             search_frames: None,
             last_frame: None,
             hovering: None,
+            glide: None,
+            pointed: None,
             awaited: None,
             approached: None,
             chase_seen: None,
@@ -237,6 +248,7 @@ impl Script {
         self.current = None;
         self.follow = None;
         self.route = None;
+        self.glide = None;
         self.awaited = None;
         self.approached = None;
         info!("Script stopped: {reason}");
@@ -399,11 +411,12 @@ pub(super) fn drive(
     bodies: Query<&super::PlayerBody, With<super::Player>>,
     collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
-    (mut buttons, layout, mut pointers, needs): (
+    (mut buttons, layout, mut pointers, needs, mut aim): (
         Buttons,
         Layout,
         Pointers,
         Query<&crate::outbox::Needs>,
+        pointer::Aim,
     ),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut focus: MessageReader<bevy::window::WindowFocused>,
@@ -874,8 +887,15 @@ pub(super) fn drive(
                 if window.is_some_and(|window| window.cursor_position().is_some()) {
                     return;
                 }
-                let entity = match reach(*target, &buttons, &layout, &needs, online.world()) {
-                    Ok(entity) => entity,
+                let entity = match aim_click(
+                    script,
+                    (*target, now),
+                    (&mut aim, &mut commands),
+                    (&mut buttons, &layout, &needs),
+                    online.world(),
+                ) {
+                    Ok(Some(entity)) => entity,
+                    Ok(None) => return,
                     Err(reason) => {
                         script.stop(&mut keys, &mut mouse, &reason);
                         return;
@@ -903,8 +923,15 @@ pub(super) fn drive(
                     if window.is_some_and(|window| window.cursor_position().is_some()) {
                         return;
                     }
-                    let entity = match reach(*target, &buttons, &layout, &needs, online.world()) {
-                        Ok(entity) => entity,
+                    let entity = match aim_click(
+                        script,
+                        (*target, now),
+                        (&mut aim, &mut commands),
+                        (&mut buttons, &layout, &needs),
+                        online.world(),
+                    ) {
+                        Ok(Some(entity)) => entity,
+                        Ok(None) => return,
                         Err(reason) => {
                             script.stop(&mut keys, &mut mouse, &reason);
                             return;
@@ -928,6 +955,41 @@ pub(super) fn drive(
                 }
                 true
             }
+            Step::Hover(target) => {
+                // The real pointer coming back over the window ends the glide
+                // where it is, and the hover rests on the control as it would
+                // without one; a glide that ends over another control stops
+                // the script, as a click's does.
+                let target_entity = script
+                    .glide
+                    .map(|glide| glide.target)
+                    .or_else(|| find(*target, &buttons, &layout));
+                let inside = window.is_some_and(|window| window.cursor_position().is_some());
+                let ended_over = match target_entity {
+                    Some(entity) if !inside => match glide(
+                        script,
+                        (entity, now),
+                        (&mut aim, &mut commands),
+                        &mut buttons,
+                    ) {
+                        Glided::Moving => return,
+                        Glided::Over(over) => Some(over),
+                    },
+                    _ => None,
+                };
+                script.glide = None;
+                let Some(entity) = find(*target, &buttons, &layout) else {
+                    script.stop(&mut keys, &mut mouse, "hover target is not visible");
+                    return;
+                };
+                if ended_over.is_some_and(|over| over != Some(entity)) {
+                    script.stop(&mut keys, &mut mouse, "the hover target is covered");
+                    return;
+                }
+                point(script, Some(entity), &mut commands, &mut buttons);
+                script.hovering = Some(entity);
+                true
+            }
             _ => true,
         };
         if !done {
@@ -936,6 +998,7 @@ pub(super) fn drive(
         script.release(&mut keys, &mut mouse);
         script.current = None;
         script.route = None;
+        script.glide = None;
         script.following = None;
         script.quiet = None;
         script.awaited = None;
@@ -1090,23 +1153,30 @@ pub(super) fn drive(
             return;
         }
         Step::Click(_) | Step::RightClick(_) | Step::HoldClick(..) => {
-            script.hovering = None;
+            // The script pointer leaves the control a hover rested on.
+            script.pointed = script.hovering.take().or(script.pointed);
             if window.is_some_and(|window| window.cursor_position().is_some()) {
                 info!("Scripted click waits until the pointer leaves the client window");
             }
         }
         Step::Hover(target) => {
-            match find(*target, &buttons, &layout) {
-                Some(entity) => {
-                    // A hover rests on the control, even one just clicked.
-                    commands
-                        .entity(entity)
-                        .remove::<super::tooltip::ScriptPressed>();
-                    script.hovering = Some(entity);
-                }
-                None => script.stop(&mut keys, &mut mouse, "hover target is not visible"),
+            let Some(entity) = find(*target, &buttons, &layout) else {
+                script.stop(&mut keys, &mut mouse, "hover target is not visible");
+                return;
+            };
+            if window.is_some_and(|window| window.cursor_position().is_some()) {
+                // With the real pointer over the window there is no script
+                // pointer to glide: the hover rests on the control at once,
+                // even one just clicked.
+                commands
+                    .entity(entity)
+                    .remove::<super::tooltip::ScriptPressed>();
+                script.hovering = Some(entity);
+                return;
             }
-            return;
+            // The script pointer glides there first, leaving the control
+            // the last hover rested on.
+            script.pointed = script.hovering.take().or(script.pointed);
         }
         Step::Report(label) => {
             report::state(label, &online, &observed, players.single().ok());
@@ -1527,6 +1597,99 @@ const fn picks(button: PickButton) -> Option<super::inventory::SplitAction> {
         PickButton::Cancel => SplitAction::Cancel,
         PickButton::Amount => return None,
     })
+}
+
+/// Where a glide of the script pointer stands after a frame.
+enum Glided {
+    /// It is still on its way.
+    Moving,
+    /// It is over, with the control the pointer ended over, if any.
+    Over(Option<Entity>),
+}
+
+/// One frame of the script pointer's glide to the middle of `target`, begun
+/// on the first from where the pointer rests: it moves the pointer and
+/// gives the control under it the hover a `hover` step gives.
+fn glide(
+    script: &mut Script,
+    (target, now): (Entity, Duration),
+    (aim, commands): (&mut pointer::Aim, &mut Commands),
+    buttons: &mut Buttons,
+) -> Glided {
+    let glide = *script.glide.get_or_insert_with(|| pointer::Glide {
+        from: aim.at(),
+        began: now,
+        target,
+    });
+    let elapsed = now.saturating_sub(glide.began);
+    // A control that moves as the pointer heads for it is followed.
+    let to = aim.middle(glide.target).unwrap_or(glide.from);
+    let at = pointer::glide_at(glide.from, to, elapsed);
+    aim.place(commands, at);
+    let over = aim.under(at);
+    point(script, over, commands, buttons);
+    if elapsed < pointer::GLIDE {
+        return Glided::Moving;
+    }
+    script.glide = None;
+    Glided::Over(over)
+}
+
+/// Rests the script pointer's hover on `over`, as a `hover` step rests it,
+/// and clears the hover of the control it leaves.
+fn point(
+    script: &mut Script,
+    over: Option<Entity>,
+    commands: &mut Commands,
+    buttons: &mut Buttons,
+) {
+    if script.pointed != over {
+        if let Some(left) = script.pointed
+            && let Ok((_, mut interaction, ..)) = buttons.get_mut(left)
+            && *interaction == Interaction::Hovered
+        {
+            *interaction = Interaction::None;
+        }
+        if let Some(entered) = over {
+            commands
+                .entity(entered)
+                .remove::<super::tooltip::ScriptPressed>();
+        }
+        script.pointed = over;
+    }
+    if let Some(over) = over
+        && let Ok((_, mut interaction, ..)) = buttons.get_mut(over)
+    {
+        interaction.set_if_neq(Interaction::Hovered);
+    }
+}
+
+/// A click's aim this frame: none while the script pointer glides to the
+/// control the click names, then that control, once the pointer has ended
+/// over it; or why the script stops: the control is out of reach as
+/// [`reach`] says, or another control covers it where the pointer ends.
+fn aim_click(
+    script: &mut Script,
+    (target, now): (ClickTarget, Duration),
+    aim: (&mut pointer::Aim, &mut Commands),
+    (buttons, layout, needs): (&mut Buttons, &Layout, &Query<&crate::outbox::Needs>),
+    world: &eq_client_core::world::ClientWorld,
+) -> Result<Option<Entity>, String> {
+    let heading = match script.glide {
+        Some(glide) => glide.target,
+        None => reach(target, buttons, layout, needs, world)?,
+    };
+    let Glided::Over(over) = glide(script, (heading, now), aim, buttons) else {
+        return Ok(None);
+    };
+    // The click lands as it did without a pointer to glide, on the control
+    // found as it lands, only if the pointer is over it.
+    let entity = reach(target, buttons, layout, needs, world)?;
+    if over == Some(entity) {
+        Ok(Some(entity))
+    } else {
+        Err("the click target is covered".to_owned())
+    }
 }
 
 /// Marks a found control pressed, a slider where the setting is to go; the
@@ -2711,6 +2874,220 @@ mod tests {
                 .is_some()
         );
         assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
+    }
+
+    /// An offline app driving `steps`, with the real pointer outside its
+    /// window and the script pointer's arrow, on a clock the test sets.
+    fn pointing(steps: Vec<Step>) -> App {
+        let mut app = crate::testing::app();
+        app.insert_resource(Time::<Real>::new(std::time::Instant::now()))
+            .init_resource::<crate::windows::Moves>()
+            .add_message::<bevy::input::keyboard::KeyboardInput>()
+            .add_message::<bevy::window::WindowFocused>()
+            .add_message::<AppExit>()
+            .insert_resource(Script::new(steps).offline_preview(true))
+            .add_systems(Startup, pointer::spawn)
+            .add_systems(Update, (drive, pointer::draw).chain());
+        app
+    }
+
+    /// Runs a frame `ms` into the run.
+    fn frame_at(app: &mut App, ms: u64) {
+        let mut time = app.world_mut().resource_mut::<Time<Real>>();
+        let startup = time.startup();
+        time.update_with_instant(startup + Duration::from_millis(ms));
+        app.update();
+    }
+
+    /// A node laid out square around `middle`, `side` across and `stack`
+    /// high in the stack.
+    fn laid_out(middle: Vec2, side: f32, stack: u32) -> impl Bundle {
+        (
+            InheritedVisibility::VISIBLE,
+            ComputedNode {
+                size: Vec2::splat(side),
+                ..default()
+            },
+            UiGlobalTransform::from_xy(middle.x, middle.y),
+            bevy::ui::ComputedStackIndex(stack),
+        )
+    }
+
+    /// The give button, at the window's left, and the attack button, between
+    /// it and the window's middle, where the script pointer starts.
+    fn give_and_attack(app: &mut App) -> (Entity, Entity) {
+        let give = app
+            .world_mut()
+            .spawn((
+                Button,
+                super::super::give::GiveButton,
+                laid_out(Vec2::new(240.0, 360.0), 40.0, 1),
+            ))
+            .id();
+        let attack = app
+            .world_mut()
+            .spawn((
+                Button,
+                super::super::skinned::AttackButton,
+                laid_out(Vec2::new(440.0, 360.0), 60.0, 2),
+            ))
+            .id();
+        (give, attack)
+    }
+
+    fn interaction(app: &App, entity: Entity) -> Interaction {
+        *app.world().get::<Interaction>(entity).unwrap()
+    }
+
+    fn script_pointer(app: &App) -> Option<Vec2> {
+        app.world().get_resource::<ScriptPointer>().map(|at| at.0)
+    }
+
+    #[test]
+    fn a_click_glides_the_pointer_hovering_what_it_crosses_then_presses_its_control() {
+        let mut app = pointing(vec![Step::Click(ClickTarget::Give)]);
+        let (give, attack) = give_and_attack(&mut app);
+        let arrow = |app: &mut App| {
+            let world = app.world_mut();
+            let mut arrows = world.query_filtered::<&Node, With<pointer::PointerArt>>();
+            let node = arrows.single(world).unwrap();
+            (node.display, node.left, node.top)
+        };
+        // The step starts; the glide begins on the next frame, from the
+        // window's middle.
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 0);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 360.0)));
+        // Halfway through its time the pointer is halfway there, over the
+        // attack button, which it hovers; nothing is pressed yet.
+        frame_at(&mut app, 125);
+        let halfway = script_pointer(&app).unwrap();
+        assert!(
+            halfway.distance(Vec2::new(440.0, 360.0)) < 0.01,
+            "{halfway}"
+        );
+        assert_eq!(interaction(&app, attack), Interaction::Hovered);
+        assert_eq!(interaction(&app, give), Interaction::None);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        assert_eq!(arrow(&mut app).0, Display::Flex);
+        // Once it has left the attack button, that button's hover clears.
+        frame_at(&mut app, 200);
+        assert!(script_pointer(&app).unwrap().x < 410.0);
+        assert_eq!(interaction(&app, attack), Interaction::None);
+        // At the end of the glide the pointer rests on the give button's
+        // middle and the click presses it.
+        frame_at(&mut app, 250);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(240.0, 360.0)));
+        assert_eq!(interaction(&app, give), Interaction::Pressed);
+        assert_eq!(interaction(&app, attack), Interaction::None);
+        assert!(
+            app.world()
+                .get::<super::super::tooltip::ScriptPressed>(give)
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        assert_eq!(arrow(&mut app), (Display::Flex, px(240), px(360)));
+        // The click is let go, the script ends, and the arrow is hidden and
+        // the script pointer forgotten.
+        frame_at(&mut app, 266);
+        frame_at(&mut app, 282);
+        frame_at(&mut app, 298);
+        assert!(app.world().get_resource::<Script>().is_none());
+        assert_eq!(script_pointer(&app), None);
+        assert_eq!(arrow(&mut app).0, Display::None);
+    }
+
+    #[test]
+    fn a_hover_glides_there_hovering_what_it_crosses_and_rests_on_its_control() {
+        let mut app = pointing(vec![
+            Step::Hover(ClickTarget::Give),
+            Step::Wait(Duration::from_secs(1)),
+        ]);
+        let (give, attack) = give_and_attack(&mut app);
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 125);
+        assert_eq!(interaction(&app, attack), Interaction::Hovered);
+        assert_eq!(interaction(&app, give), Interaction::None);
+        frame_at(&mut app, 250);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(240.0, 360.0)));
+        assert_eq!(interaction(&app, attack), Interaction::None);
+        assert_eq!(interaction(&app, give), Interaction::Hovered);
+        // The hover stays on it as a hover step's does.
+        frame_at(&mut app, 400);
+        assert_eq!(app.world().resource::<Script>().hovering, Some(give));
+        assert_eq!(interaction(&app, give), Interaction::Hovered);
+    }
+
+    #[test]
+    fn a_click_stops_on_a_covered_target_but_not_under_its_own_tooltip() {
+        // The tooltip its glide raises lies over the control and is ignored,
+        // even were it to block the pointer.
+        let mut app = pointing(vec![Step::Click(ClickTarget::Give)]);
+        let (give, _) = give_and_attack(&mut app);
+        app.world_mut().spawn((
+            Node::default(),
+            super::super::tooltip::TooltipBox,
+            bevy::ui::FocusPolicy::Block,
+            laid_out(Vec2::new(240.0, 360.0), 200.0, 9),
+        ));
+        for ms in [0, 0, 125, 250] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, give), Interaction::Pressed);
+        // A window over the control takes the pointer: the script stops
+        // rather than press what it cannot reach.
+        let mut app = pointing(vec![
+            Step::Click(ClickTarget::Give),
+            Step::Wait(Duration::from_secs(1)),
+        ]);
+        let (give, _) = give_and_attack(&mut app);
+        app.world_mut().spawn((
+            Node::default(),
+            bevy::ui::FocusPolicy::Block,
+            laid_out(Vec2::new(250.0, 360.0), 40.0, 5),
+        ));
+        for ms in [0, 0, 125, 250] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, give), Interaction::None);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        let script = app.world().resource::<Script>();
+        assert!(script.current.is_none() && script.steps.is_empty());
+    }
+
+    #[test]
+    fn a_hover_stops_on_a_covered_target_rather_than_rest_where_it_does_not_point() {
+        let mut app = pointing(vec![
+            Step::Hover(ClickTarget::Give),
+            Step::Wait(Duration::from_secs(1)),
+        ]);
+        let (give, _) = give_and_attack(&mut app);
+        // A window over the control takes the pointer as the glide ends.
+        app.world_mut().spawn((
+            Node::default(),
+            bevy::ui::FocusPolicy::Block,
+            laid_out(Vec2::new(250.0, 360.0), 40.0, 5),
+        ));
+        for ms in [0, 0, 125, 250] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, give), Interaction::None);
+        let script = app.world().resource::<Script>();
+        assert_eq!(script.hovering, None);
+        assert!(script.current.is_none() && script.steps.is_empty());
     }
 
     #[test]
