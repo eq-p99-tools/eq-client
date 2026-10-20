@@ -44,6 +44,9 @@ pub(super) struct AnimatedCharacter {
     /// character newly drawn at its place is not taken for moving there.
     previous_position: Option<Vec3>,
     clip: (&'static str, bool),
+    /// While it stands up from sitting: the time in the sitting clip it is
+    /// drawn at, running back towards the clip's start. See [`rising`].
+    rise: Option<f32>,
     /// The swings the server sent for the spawn drawn.
     swings: Swings,
     /// How far the model hangs above its root: what lifts a pose's top to
@@ -379,6 +382,7 @@ pub(super) fn spawn_on_layers(
             moving_for: 0.0,
             previous_position: None,
             clip: (STANDING_CLIP, false),
+            rise: None,
             swings: Swings::default(),
             lift,
             soles: prepared.soles,
@@ -458,14 +462,12 @@ pub(super) fn animate(
         if character.since_pose < 1.0 / 30.0 {
             continue;
         }
+        let step = character.since_pose;
         character.since_pose = 0.0;
-        let gesture = character
-            .swings
-            .gesture(|clip| character.asset.clip_seconds(clip));
         // A corpse seen dying falls from its death; one that arrived dead
         // lies in the death clip's last frame.
         let lying = corpse.map(|corpse| corpse.lying(now));
-        let (selected, pinned) = chosen_clip(lying, posture, character.moving_for > 0.0, gesture);
+        let (selected, pinned) = character.next_clip(lying, posture, step);
         let selected = paced(
             selected,
             character.clip,
@@ -528,6 +530,26 @@ pub(super) fn animate(
 }
 
 impl AnimatedCharacter {
+    /// The clip it shows next and the time in it when that is pinned, as
+    /// [`chosen_clip`] picks it, carrying a rise from sitting on by the
+    /// `step` seconds since its last pose.
+    fn next_clip(
+        &mut self,
+        lying: Option<f32>,
+        posture: Option<eq_client_core::PostureState>,
+        step: f32,
+    ) -> ((&'static str, bool), Option<f32>) {
+        let gesture = self.swings.gesture(|clip| self.asset.clip_seconds(clip));
+        let moving = self.moving_for > 0.0;
+        self.rise = rising(
+            self.rise,
+            (self.clip, self.elapsed, step),
+            self.asset.clip_seconds(SITTING_CLIP.0),
+            lying.is_some() || moving || gesture.is_some() || posed(posture),
+        );
+        chosen_clip(lying, posture, moving, gesture, self.rise)
+    }
+
     /// The casting gesture it is playing, if any: the seconds since it began
     /// and the seconds left of its clip.
     pub(super) fn casting_gesture(&self) -> Option<(f32, f32)> {
@@ -704,6 +726,54 @@ impl Swings {
     }
 }
 
+/// The sitting clip: sitting down, held on its last frame once seated.
+const SITTING_CLIP: (&str, bool) = ("P02", true);
+
+/// Whether the posture is one a character holds a clip for, which a
+/// gesture does not play over.
+fn posed(posture: Option<eq_client_core::PostureState>) -> bool {
+    use eq_client_core::PostureState;
+    matches!(
+        posture,
+        Some(
+            PostureState::Sitting
+                | PostureState::Lying
+                | PostureState::Looting
+                | PostureState::Ducking
+        )
+    )
+}
+
+/// Where a character standing up from sitting is drawn in the sitting
+/// clip, if it is: the sitting clip played backwards at its own frame
+/// timing, once, from the frame the sit left it on, so it rises rather than
+/// popping to its stance. `previous` is the rise so far; `shown` the clip
+/// last drawn, the time in it and the seconds since that pose; `length` the
+/// sitting clip's, if the model has one. `held` is a posture, a gesture,
+/// movement or death taking over, which ends the rise at once; sitting again
+/// mid-rise resumes the sit from where the rise left it, since the clip
+/// drawn is the same and runs on from there.
+///
+/// Adam's choice (10-20): the official client's stand is inferred to be its
+/// sit reversed, at the sit's speed (recording checklist 6.281).
+fn rising(
+    previous: Option<f32>,
+    (shown, elapsed, step): ((&'static str, bool), f32, f32),
+    length: Option<f32>,
+    held: bool,
+) -> Option<f32> {
+    if held {
+        return None;
+    }
+    match previous {
+        Some(at) => Some(at - step).filter(|at| *at > 0.0),
+        None if shown == SITTING_CLIP => length
+            .map(|length| elapsed.min(length))
+            .filter(|at| *at > 0.0),
+        None => None,
+    }
+}
+
 /// The clip a character shows, and the time in it when that is pinned
 /// rather than run on from when the clip was chosen. A corpse plays the
 /// death clip from `corpse` seconds since it fell, staying on its last
@@ -712,28 +782,21 @@ impl Swings {
 /// each time it is drawn (the fall is inferred). Sitting, lying, looting and
 /// ducking show their posture; otherwise a swing or a completed cast's
 /// gesture plays once over the stance and the walk alike, its clips being
-/// the whole body's (inferred).
+/// the whole body's (inferred). Standing up from sitting comes after the
+/// gesture: the sitting clip at the time [`rising`] gives.
 fn chosen_clip(
     corpse: Option<f32>,
     posture: Option<eq_client_core::PostureState>,
     moving: bool,
     gesture: Option<Gesture>,
+    rise: Option<f32>,
 ) -> ((&'static str, bool), Option<f32>) {
-    use eq_client_core::PostureState;
     if let Some(since) = corpse {
         return (DEATH, Some(since));
     }
-    let posed = matches!(
-        posture,
-        Some(
-            PostureState::Sitting
-                | PostureState::Lying
-                | PostureState::Looting
-                | PostureState::Ducking
-        )
-    );
-    match gesture {
-        Some(Gesture { clip, since }) if !posed => ((clip, true), Some(since)),
+    match (gesture, rise) {
+        (Some(Gesture { clip, since }), _) if !posed(posture) => ((clip, true), Some(since)),
+        (_, Some(at)) if !posed(posture) && !moving => (SITTING_CLIP, Some(at)),
         _ => (posture_clip(posture, moving), None),
     }
 }
@@ -906,7 +969,7 @@ fn posture_clip(
 ) -> (&'static str, bool) {
     use eq_client_core::PostureState;
     match posture {
-        Some(PostureState::Sitting) => ("P02", true),
+        Some(PostureState::Sitting) => SITTING_CLIP,
         Some(PostureState::Ducking) if moving => ("L06", false),
         Some(PostureState::Ducking) => ("L08", true),
         Some(PostureState::Looting) => ("P05", true),
@@ -1090,6 +1153,7 @@ mod tests {
             Some(PostureState::Standing),
             true,
             Some(swing),
+            None,
         );
         assert_eq!(clip, ("D05", true));
         assert!(pinned.is_some_and(|seconds| seconds > 1000.0));
@@ -1097,11 +1161,11 @@ mod tests {
             fell: now.checked_sub(std::time::Duration::from_millis(400)),
         };
         assert_eq!(
-            chosen_clip(Some(seen.lying(now)), None, false, None),
+            chosen_clip(Some(seen.lying(now)), None, false, None, None),
             (("D05", true), Some(0.4))
         );
         assert_eq!(
-            chosen_clip(None, Some(PostureState::Sitting), false, None),
+            chosen_clip(None, Some(PostureState::Sitting), false, None, None),
             (("P02", true), None)
         );
     }
@@ -1191,12 +1255,12 @@ mod tests {
         });
         for moving in [false, true] {
             assert_eq!(
-                chosen_clip(None, Some(PostureState::Standing), moving, swing),
+                chosen_clip(None, Some(PostureState::Standing), moving, swing, None),
                 (("C05", true), Some(0.25))
             );
         }
         assert_eq!(
-            chosen_clip(None, None, true, swing),
+            chosen_clip(None, None, true, swing, None),
             (("C05", true), Some(0.25))
         );
         for (posture, shown) in [
@@ -1206,14 +1270,74 @@ mod tests {
             (PostureState::Ducking, ("L08", true)),
         ] {
             assert_eq!(
-                chosen_clip(None, Some(posture), false, swing),
+                chosen_clip(None, Some(posture), false, swing, None),
                 (shown, None)
             );
         }
         // With nothing to play the stance or walk shows.
         assert_eq!(
-            chosen_clip(None, Some(PostureState::Standing), true, None),
+            chosen_clip(None, Some(PostureState::Standing), true, None, None),
             (("L01", false), None)
+        );
+    }
+
+    #[test]
+    fn standing_up_plays_the_sit_backwards_once_from_where_the_sit_left_it() {
+        use eq_client_core::PostureState;
+        let sitting = SITTING_CLIP;
+        let length = Some(1.0);
+        // Seated (the hold long past the clip's end), it rises from the
+        // clip's last frame, and runs back by each pose's step.
+        let rise = rising(None, (sitting, 30.0, 0.03), length, false);
+        assert_eq!(rise, Some(1.0));
+        let rise = rising(rise, (sitting, 1.0, 0.25), length, false);
+        assert_eq!(rise, Some(0.75));
+        // Half sat, it rises from where the sit had reached.
+        assert_eq!(rising(None, (sitting, 0.4, 0.03), length, false), Some(0.4));
+        // It ends at the clip's start, and a standing character does not rise.
+        assert_eq!(rising(Some(0.1), (sitting, 0.1, 0.25), length, false), None);
+        assert_eq!(
+            rising(None, ((STANDING_CLIP, false), 2.0, 0.03), length, false),
+            None
+        );
+        // A model without the clip pops to its stance as before.
+        assert_eq!(rising(None, (sitting, 30.0, 0.03), None, false), None);
+        // Moving, a gesture, a posture or death ends it at once.
+        assert_eq!(rising(Some(0.5), (sitting, 0.5, 0.03), length, true), None);
+        // While rising the sitting clip shows at the rise's time; moving
+        // cuts it to the walk.
+        let standing = Some(PostureState::Standing);
+        assert_eq!(
+            chosen_clip(None, standing, false, None, Some(0.75)),
+            (sitting, Some(0.75))
+        );
+        assert_eq!(
+            chosen_clip(None, standing, true, None, Some(0.75)),
+            (("L01", false), None)
+        );
+        // Sitting again mid-rise shows the sit unpinned, so it runs on from
+        // the frame the rise left rather than restarting.
+        assert_eq!(
+            chosen_clip(None, Some(PostureState::Sitting), false, None, Some(0.75)),
+            (sitting, None)
+        );
+    }
+
+    #[test]
+    fn a_gesture_plays_before_a_rise() {
+        use eq_client_core::PostureState;
+        let swing = Some(Gesture {
+            clip: "C05",
+            since: 0.25,
+        });
+        assert_eq!(
+            chosen_clip(None, Some(PostureState::Standing), false, swing, Some(0.5)),
+            (("C05", true), Some(0.25))
+        );
+        // And a gesture's start ends the rise, so the stance follows it.
+        assert_eq!(
+            rising(Some(0.5), (SITTING_CLIP, 0.5, 0.03), Some(1.0), true),
+            None
         );
     }
 
