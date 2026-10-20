@@ -11,7 +11,7 @@ use bevy::{
     },
     prelude::*,
 };
-use eq_client_assets::characters::CharacterAsset;
+use eq_client_assets::characters::{CharacterAsset, STANDING_CLIP};
 use std::sync::Arc;
 
 use super::{create_render_primitives, create_texture_images};
@@ -49,6 +49,9 @@ pub(super) struct AnimatedCharacter {
     /// How far the model hangs above its root: what lifts a pose's top to
     /// the root's [`super::names::Overhead`].
     lift: f32,
+    /// Where its soles are in the model's own frame: the lowest point it
+    /// reaches standing.
+    pub(super) soles: f32,
 }
 
 /// A corpse: drawn with its race's model, falling from when it died if the
@@ -146,6 +149,9 @@ pub(super) struct PreparedCharacter {
     /// The model's inverse bind poses: identities, as its vertices are
     /// already bone-local.
     bindposes: Handle<SkinnedMeshInverseBindposes>,
+    /// The lowest point its base pieces reach standing, which its soles
+    /// hang by.
+    soles: f32,
 }
 
 /// The stores a model's textures, meshes, materials and bind poses go in.
@@ -219,7 +225,9 @@ pub(super) fn prepare(
             return None;
         }
     }
+    let soles = asset.standing_bottom().unwrap_or_default();
     Some(PreparedCharacter {
+        soles,
         asset: Arc::new(asset),
         primitives: drawn
             .into_iter()
@@ -290,8 +298,10 @@ pub(super) fn spawn_on_layers(
     layers: &bevy::camera::visibility::RenderLayers,
 ) {
     let asset = prepared.asset.clone();
-    let (bottom, top) = asset.span().unwrap_or_default();
-    let lift = -feet_offset - bottom;
+    let (_, top) = asset.span().unwrap_or_default();
+    // The soles hang by the lowest point the model reaches standing, as it
+    // is drawn, not by its base pose's (inferred, item 6.277).
+    let lift = -feet_offset - prepared.soles;
     // Until gear says otherwise, only the base body and bare head show.
     let shown: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
     let mut parts = Vec::with_capacity(prepared.primitives.len());
@@ -359,9 +369,10 @@ pub(super) fn spawn_on_layers(
             since_pose: 0.0,
             moving_for: 0.0,
             previous_position: None,
-            clip: ("P01", false),
+            clip: (STANDING_CLIP, false),
             swings: Swings::default(),
             lift,
+            soles: prepared.soles,
         });
 }
 
@@ -771,7 +782,7 @@ fn posture_clip(
         Some(PostureState::Looting) => ("P05", true),
         Some(PostureState::Lying) => ("D05", true),
         _ if moving => ("L01", false),
-        _ => ("P01", false),
+        _ => (STANDING_CLIP, false),
     }
 }
 
@@ -1149,5 +1160,67 @@ mod tests {
             posture_clip(Some(PostureState::Unknown(999)), false),
             ("P01", false)
         );
+    }
+
+    #[test]
+    fn the_joints_place_a_scaled_hung_model_where_its_pose_puts_it() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins(bevy::transform::TransformPlugin);
+        testing::stores(app.world_mut());
+        let prepared = testing::prepared(app.world_mut());
+        let feet = 1.3;
+        let root = app
+            .world_mut()
+            .spawn(
+                Transform::from_xyz(4.0, -2.0, 7.0)
+                    .with_rotation(Quat::from_rotation_y(0.9))
+                    .with_scale(Vec3::splat(0.7)),
+            )
+            .id();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                spawn_prepared(&mut commands, root, &prepared, feet);
+            })
+            .unwrap();
+        app.update();
+        let world = app.world();
+        let character = world.get::<AnimatedCharacter>(root).unwrap();
+        let part = character.parts[0].entity;
+        let skin = world.get::<SkinnedMesh>(part).unwrap();
+        let mesh = world
+            .resource::<Assets<Mesh>>()
+            .get(&world.get::<Mesh3d>(part).unwrap().0)
+            .unwrap();
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(VertexAttributeValues::as_float3)
+            .unwrap();
+        let Some(VertexAttributeValues::Uint16x4(bones)) =
+            mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)
+        else {
+            panic!("no joint indices");
+        };
+        // Where the GPU puts each vertex: its joint's world transform.
+        let placed: Vec<Vec3> = positions
+            .iter()
+            .zip(bones)
+            .map(|(position, bone)| {
+                world
+                    .get::<GlobalTransform>(skin.joints[usize::from(bone[0])])
+                    .unwrap()
+                    .transform_point(Vec3::from_array(*position))
+            })
+            .collect();
+        // Where the pose puts it, hung under the root as a mesh would be.
+        let model = world.get::<GlobalTransform>(character.model).unwrap();
+        let posed = &character.asset.pose("", 0.0)[0].positions;
+        for (placed, posed) in placed.iter().zip(posed) {
+            let expected = model.transform_point(Vec3::from_array(*posed));
+            assert!((*placed - expected).length() < 1e-4, "{placed} {expected}");
+        }
+        // The soles sit the feet offset, scaled, under the root.
+        let soles = placed.iter().map(|point| point.y).reduce(f32::min).unwrap();
+        assert!((soles - (-2.0 - feet * 0.7)).abs() < 1e-4, "{soles}");
     }
 }
