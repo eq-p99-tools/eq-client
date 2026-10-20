@@ -151,8 +151,8 @@ potorment       270.67   -158.67   -512.00      0.0      25.0   10.0  unreviewed
 qcat            453.79     37.74    -28.00     64.0      25.0   10.0  unreviewed
 qey2hh1       -1486.48  -8601.11    660.09     96.0      25.0   10.0  unreviewed
 qeynos          -86.24    410.87     79.97    224.0      25.0   10.0  unreviewed
-qeynos2        1081.84     41.08      0.00    192.0      25.0   10.0  unreviewed
-qeytoqrg       1671.17   -247.02    111.89    288.0      25.0   10.0  unreviewed
+qeynos2        1081.84     41.08      0.00    192.0      25.0   10.0  reviewed
+qeytoqrg       1671.17   -247.02    111.89    288.0      25.0   10.0  reviewed
 qinimi          -11.21   -581.03    100.75     96.0      25.0   10.0  unreviewed
 qrg            -461.44   -313.00    419.84    448.0      25.0   10.0  unreviewed
 qvic             75.22  -2189.28   -468.00    448.0      25.0   10.0  unreviewed
@@ -203,7 +203,7 @@ taki            -71.98   -474.57     20.00    448.0      25.0   10.0  unreviewed
 takj           -116.42    150.33     28.00     64.0      25.0   10.0  unreviewed
 templeveeshan    -98.20   -764.37    159.94    352.0      25.0   10.0  unreviewed
 thedeep         216.17    753.50    -72.00    416.0      25.0   10.0  unreviewed
-thurgadina     -223.04     13.55     35.00    480.0      25.0   10.0  unreviewed
+thurgadina     -223.04     13.55     35.00    480.0      25.0   10.0  reviewed
 thurgadinb      616.38     39.62    -18.00    416.0      25.0   10.0  unreviewed
 timorous      -1296.40  -1311.98   -618.59    480.0      25.0   10.0  unreviewed
 tipt            420.23     28.23    178.00    320.0      25.0   10.0  unreviewed
