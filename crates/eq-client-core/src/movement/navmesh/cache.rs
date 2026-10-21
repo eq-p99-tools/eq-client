@@ -2,13 +2,15 @@
 //! entered again reads its mesh instead of building it.
 //!
 //! A file is `navmesh/<zone>-<key>.bin` under the settings directory. The
-//! key is a hash over the input triangles, the build settings, the rerecast
-//! version and this format's version, so a changed install or setting gives
-//! a new key. The header repeats the key, the settings and the triangle
+//! key is a hash over the input triangles, the build settings, the limits
+//! the ledges' drops are found with, the rerecast version and this format's
+//! version, so a changed install or setting gives a new key. The header repeats the key, the settings and the triangle
 //! count, and a read checks them, so a hash collision or a damaged file is
 //! rebuilt rather than trusted.
 
-use super::{BuildReport, Link, NavMesh, Polygon, Settings};
+use super::drops::{DROP_SPACING, THINNING};
+use super::{BuildReport, DropLink, Link, NavMesh, Polygon, Settings};
+use crate::movement::path::{CELL, MAX_DROP};
 use glam::Vec3;
 use std::fs;
 use std::io;
@@ -18,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The rerecast version the mesh is built with, as pinned in Cargo.toml.
 const RERECAST: &str = "0.4.0";
 /// This format's version; raised whenever the bytes or the build change.
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 const MAGIC: &[u8; 4] = b"EQNM";
 
 /// Where a mesh came from.
@@ -98,7 +100,7 @@ pub fn key(triangles: &[[[f32; 3]; 3]], settings: &Settings) -> u64 {
     let mut hash = Fnv::default();
     hash.write(RERECAST.as_bytes());
     hash.write(&FORMAT.to_le_bytes());
-    for value in settings_values(settings) {
+    for value in settings_values(settings).into_iter().chain(drop_values()) {
         hash.write(&value.to_le_bytes());
     }
     for value in triangles.iter().flatten().flatten() {
@@ -198,6 +200,11 @@ fn settings_values(settings: &Settings) -> [f32; 7] {
     ]
 }
 
+/// The limits the drops are found with.
+const fn drop_values() -> [f32; 4] {
+    [MAX_DROP, DROP_SPACING, THINNING, CELL]
+}
+
 fn header(key: u64, triangles: usize, settings: &Settings) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
     out.extend_from_slice(&FORMAT.to_le_bytes());
@@ -232,6 +239,13 @@ fn encode(mesh: &NavMesh, out: &mut Vec<u8>) {
             point(out, link.b);
         }
     }
+    count(out, mesh.drops.len());
+    for link in &mesh.drops {
+        out.extend_from_slice(&link.from.to_le_bytes());
+        out.extend_from_slice(&link.to.to_le_bytes());
+        point(out, link.top);
+        point(out, link.landing);
+    }
 }
 
 /// The mesh in `bytes` after `header`; None for a different header, a short
@@ -257,10 +271,22 @@ fn decode(bytes: &[u8], header: &[u8]) -> Option<NavMesh> {
             .collect::<Option<_>>()?;
         polygons.push(Polygon { vertices, links });
     }
+    let drops = (0..reader.u32()?)
+        .map(|_| {
+            let (from, to) = (reader.u32()?, reader.u32()?);
+            (from < count && to < count).then_some(())?;
+            Some(DropLink {
+                from,
+                to,
+                top: reader.point()?,
+                landing: reader.point()?,
+            })
+        })
+        .collect::<Option<_>>()?;
     reader
         .0
         .is_empty()
-        .then(|| NavMesh::from_polygons(polygons))
+        .then(|| NavMesh::from_parts(polygons, drops))
 }
 
 struct Reader<'a>(&'a [u8]);

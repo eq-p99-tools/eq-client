@@ -726,6 +726,7 @@ pub(super) fn drive(
                         planner = planned.planner,
                         legs = planned.legs,
                         clear = planned.clear,
+                        drops = planned.drops,
                         repaired = planned.repaired,
                         fallback = planned.fallback,
                         "Script route ready"
@@ -2190,6 +2191,7 @@ struct Planned {
     planner: &'static str,
     legs: usize,
     clear: usize,
+    drops: usize,
     repaired: usize,
     fallback: &'static str,
 }
@@ -2201,12 +2203,14 @@ impl Planned {
             Some(By::Mesh {
                 legs,
                 clear,
+                drops,
                 repaired,
                 fallback,
             }) => Self {
                 planner: "mesh",
                 legs: *legs,
                 clear: *clear,
+                drops: *drops,
                 repaired: repaired.len(),
                 fallback: match fallback {
                     None => "none",
@@ -2220,6 +2224,7 @@ impl Planned {
                 planner: "grid",
                 legs: 0,
                 clear: 0,
+                drops: 0,
                 repaired: 0,
                 fallback: "none",
             },

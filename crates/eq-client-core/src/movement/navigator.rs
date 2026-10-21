@@ -81,6 +81,8 @@ pub enum Planned {
         legs: usize,
         /// Legs that also kept the clearance from walls to either side.
         clear: usize,
+        /// Drops off ledges the walker's own drop made.
+        drops: usize,
         /// The legs a short grid search replaced, each as where it began
         /// and where the mesh had it end.
         repaired: Vec<(Vec3, Vec3)>,

@@ -107,9 +107,14 @@ fn poll(mut navmesh: ResMut<ZoneNavMesh>) {
 }
 
 fn report(making: &Making, loaded: &cache::Loaded) {
-    let (source, tiles, refused) = match &loaded.source {
-        cache::Source::Cache => ("cache", None, &[][..]),
-        cache::Source::Built(report) => ("built", Some(report.tiles), &report.refused[..]),
+    let (source, tiles, refused, drop_seconds) = match &loaded.source {
+        cache::Source::Cache => ("cache", None, &[][..], None),
+        cache::Source::Built(report) => (
+            "built",
+            Some(report.tiles),
+            &report.refused[..],
+            Some(format!("{:.2}", report.drop_elapsed.as_secs_f32())),
+        ),
     };
     let bytes = loaded.cached.as_ref().ok().copied();
     info!(
@@ -121,6 +126,8 @@ fn report(making: &Making, loaded: &cache::Loaded) {
         polygons = loaded.mesh.polygon_count(),
         islands = loaded.mesh.island_count(),
         failed_tiles = refused.len(),
+        drop_links = loaded.mesh.drop_links().count(),
+        drop_seconds,
         bytes,
         "Navmesh ready"
     );
@@ -128,6 +135,13 @@ fn report(making: &Making, loaded: &cache::Loaded) {
         warn!(zone = making.zone.as_str(), %error, "Navmesh not kept");
     }
     if let cache::Source::Built(report) = &loaded.source {
+        if report.refused_stretches > 0 {
+            warn!(
+                zone = making.zone.as_str(),
+                stretches = report.refused_stretches,
+                "Navmesh ledge drops refused"
+            );
+        }
         if refused.len() > LISTED_REFUSALS {
             for (reason, count) in report.refusals_by_reason() {
                 warn!(

@@ -21,6 +21,12 @@ pub struct BuildReport {
     pub refused: Vec<RefusedTile>,
     /// Each build thread's tiles and the time it spent building them.
     pub threads: Vec<(usize, Duration)>,
+    /// Ways off ledges found.
+    pub drop_links: usize,
+    /// Stretches of outline whose drops were refused for a panic.
+    pub refused_stretches: usize,
+    /// The search for ways off ledges.
+    pub drop_elapsed: Duration,
     /// The whole build.
     pub elapsed: Duration,
 }

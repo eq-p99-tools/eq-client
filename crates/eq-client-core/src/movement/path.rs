@@ -38,7 +38,7 @@ const NEAR: f32 = CELL * std::f32::consts::SQRT_2
     };
 /// Deepest ledge a path drops off, in world units: no deeper than a fall
 /// that does no damage.
-const MAX_DROP: f32 = super::HARMLESS_DROP;
+pub(super) const MAX_DROP: f32 = super::HARMLESS_DROP;
 /// Room a straightened leg keeps from walls on either side, so a route runs
 /// down the middle of a room rather than along its walls: the cell's length,
 /// the room the search's wall toll keeps.
@@ -493,7 +493,7 @@ pub(super) fn within_reach(feet: Vec3, goal: Vec3, reach: f32) -> bool {
 
 /// Steps off a ledge toward a horizontal position and falls to the floor below;
 /// None when a wall blocks the way or the drop exceeds [`MAX_DROP`].
-fn drop(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) -> Option<Vec3> {
+pub(super) fn drop(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) -> Option<Vec3> {
     let mut airborne = AirborneController::default();
     let step = |airborne: &mut AirborneController, feet, horizontal| {
         airborne.step(

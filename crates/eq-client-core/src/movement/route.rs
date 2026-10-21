@@ -955,20 +955,23 @@ mod tests {
     fn a_walker_falling_off_a_ledge_heads_on_instead_of_turning_back_under_it() {
         // At a run's sample, and at the 0.5 of a 16 ms frame.
         for planner in 0..2 {
+            let mut turned_back = 0;
             for stride in [3.1, 3.26, 0.5] {
                 for start in [Vec3::new(0.0, 0.0, -12.0), Vec3::new(0.81, 0.0, -11.19)] {
                     let (end, reversals) = follow_falling(planner, start, stride, true);
                     assert!((end.y + 5.0).abs() < 0.01, "stride {stride}: {end:?}");
                     assert_eq!(reversals, 0, "turned back while falling, stride {stride}");
                 }
-                // Untold, the same walk turns back over the landing waypoint.
+                // Untold, the same walk turns back over the landing waypoint,
+                // at strides that depend on where the planner puts it.
                 let (_, untold) =
                     follow_falling(planner, Vec3::new(0.81, 0.0, -11.19), stride, false);
-                assert!(
-                    untold > 0,
-                    "the walk this test guards against, stride {stride}"
-                );
+                turned_back += untold;
             }
+            assert!(
+                turned_back > 0,
+                "the walk this test guards against, planner {planner}"
+            );
         }
     }
 

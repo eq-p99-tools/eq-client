@@ -4,10 +4,10 @@
 //! the whole way handed to the grid.
 
 use super::NavMesh;
-use super::route::{Areas, Corridor, PolygonSearch, entry, funnel};
+use super::route::{Areas, Corridor, Crossing, PolygonSearch, entry, funnel};
 use crate::movement::BODY_REACH;
 use crate::movement::navigator::LOCAL_EXPANSIONS;
-use crate::movement::path::{CELL, CLEARANCE, DOOR_REACH, DOOR_TOLL, clear_leg, walk};
+use crate::movement::path::{CELL, CLEARANCE, DOOR_REACH, DOOR_TOLL, clear_leg, drop, walk};
 use crate::movement::{
     CollisionWorld, Fallback, GridNavigator, MAX_GROUNDED_STEP, Navigator, PathProgress,
     PathSearch, Planned, RouteSearch, Scope, SearchRequest,
@@ -40,6 +40,11 @@ impl MeshNavigator {
     pub const fn new(mesh: Arc<NavMesh>) -> Self {
         Self { mesh }
     }
+
+    #[cfg(test)]
+    pub(super) fn mesh(&self) -> &NavMesh {
+        &self.mesh
+    }
 }
 
 impl Navigator for MeshNavigator {
@@ -53,6 +58,7 @@ impl Navigator for MeshNavigator {
                 walked: Walked::default(),
                 legs: 0,
                 clear: 0,
+                drops: 0,
                 repaired: Vec::new(),
                 fallback: None,
                 expanded: 0,
@@ -70,6 +76,8 @@ struct MeshSearch {
     walked: Walked,
     legs: usize,
     clear: usize,
+    /// Drops off ledges taken.
+    drops: usize,
     /// Each repaired leg's ends, as the mesh gave them.
     repaired: Vec<(Vec3, Vec3)>,
     fallback: Option<Fallback>,
@@ -81,12 +89,50 @@ enum Stage {
     Start,
     Polygons(PolygonSearch),
     Legs {
-        legs: Vec<Vec3>,
+        legs: Vec<Leg>,
         next: usize,
         repair: Option<Box<PathSearch>>,
     },
     Grid(Box<dyn RouteSearch>),
     Done(bool),
+}
+
+/// A leg the mesh gives: a straight walk to `to`, or with `drop`, a step off
+/// a ledge that lands at `to`.
+#[derive(Clone, Copy, Debug)]
+struct Leg {
+    to: Vec3,
+    drop: bool,
+}
+
+/// The legs through `corridor` from `start` to `goal`: each stretch between
+/// drops funnelled on its own, its last leg ending at the drop's top, then
+/// the drop.
+fn legs(start: Vec3, goal: Vec3, corridor: &[Crossing]) -> Vec<Leg> {
+    let stretch = |from: Vec3, to: Vec3, portals: &[_]| {
+        funnel(from, to, portals, CLEARANCE)
+            .into_iter()
+            .map(|to| Leg { to, drop: false })
+    };
+    let mut legs = Vec::new();
+    let mut from = start;
+    let mut portals = Vec::new();
+    for crossing in corridor {
+        match *crossing {
+            Crossing::Edge(portal) => portals.push(portal),
+            Crossing::Drop { top, landing } => {
+                legs.extend(stretch(from, top, &portals));
+                legs.push(Leg {
+                    to: landing,
+                    drop: true,
+                });
+                portals.clear();
+                from = landing;
+            }
+        }
+    }
+    legs.extend(stretch(from, goal, &portals));
+    legs
 }
 
 /// The positions walked so far, each with the closed door the step to it
@@ -140,7 +186,7 @@ impl MeshSearch {
         else {
             return self.fall_back(Fallback::OffMesh);
         };
-        if !self.mesh.connected(from, to) {
+        if !self.mesh.reaches(from, to, self.request.drops) {
             return self.fall_back(Fallback::OtherIsland);
         }
         Stage::Polygons(PolygonSearch::new(
@@ -148,17 +194,31 @@ impl MeshSearch {
             (goal, to),
             MESH_WEIGHT,
             self.areas(world),
+            self.request.drops,
         ))
     }
 
     /// Checks the next leg, from where the last one ended; a leg the edge
     /// tests refuse starts a repair.
-    fn check(&mut self, world: &CollisionWorld, to: Vec3) -> Result<(), Box<PathSearch>> {
-        let height = self.request.height;
+    fn check(&mut self, world: &CollisionWorld, leg: Leg) -> Result<(), Box<PathSearch>> {
+        let (height, to) = (self.request.height, leg.to);
         let from = self.walked.feet(self.request.start);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A leg's length.
         let cost = (flat(to - from) / CELL).ceil() as usize + 1;
         self.expanded += cost;
+        if leg.drop {
+            // The walker's own drop from where it stands, landing where the
+            // mesh's drop did.
+            if let Some(landing) = drop(world, from, Vec2::new(to.x, to.z), height)
+                && flat(landing - to) <= REPAIR_REACH
+                && (landing.y - to.y).abs() <= MAX_GROUNDED_STEP
+            {
+                self.drops += 1;
+                self.walked.push(landing, None);
+                return Ok(());
+            }
+            return Err(self.repair(from, to));
+        }
         let reach = |world: &CollisionWorld| {
             walk(world, from, Vec2::new(to.x, to.z), height)
                 .filter(|end| (end.y - to.y).abs() <= MAX_GROUNDED_STEP)
@@ -177,6 +237,12 @@ impl MeshSearch {
         {
             return Ok(());
         }
+        Err(self.repair(from, to))
+    }
+
+    /// A short grid search from `from` to `to`, with the route's doors and
+    /// drops, to stand for a leg the edge tests refused.
+    fn repair(&self, from: Vec3, to: Vec3) -> Box<PathSearch> {
         // The last leg ends anywhere within the route's reach, as the grid's
         // search does.
         let last = to == self.request.goal;
@@ -185,12 +251,12 @@ impl MeshSearch {
         } else {
             REPAIR_REACH
         };
-        Err(Box::new(
-            PathSearch::new(from, to, reach, height)
+        Box::new(
+            PathSearch::new(from, to, reach, self.request.height)
                 .with_drops(self.request.drops)
                 .with_doors(self.request.doors.clone())
                 .with_max_expansions(LOCAL_EXPANSIONS),
-        ))
+        )
     }
 
     /// Walks the leg to `to` through `door`, as the grid keeps a door's step:
@@ -254,7 +320,7 @@ impl MeshSearch {
         &mut self,
         world: &CollisionWorld,
         budget: usize,
-        (legs, mut next, mut repair): (Vec<Vec3>, usize, Option<Box<PathSearch>>),
+        (legs, mut next, mut repair): (Vec<Leg>, usize, Option<Box<PathSearch>>),
     ) -> Stage {
         let spent = self.expanded + budget;
         while self.expanded < spent {
@@ -269,22 +335,22 @@ impl MeshSearch {
                         for (feet, door) in path.into_iter().zip(search.doors_along()) {
                             self.walked.push(feet, door);
                         }
-                        self.repaired.push((from, legs[next]));
+                        self.repaired.push((from, legs[next].to));
                         next += 1;
                     }
                     PathProgress::Failed => {
                         return self.fall_back(Fallback::Leg {
                             from,
-                            to: legs[next],
+                            to: legs[next].to,
                         });
                     }
                 }
                 continue;
             }
-            let Some(&to) = legs.get(next) else {
+            let Some(&leg) = legs.get(next) else {
                 return Stage::Done(true);
             };
-            match self.check(world, to) {
+            match self.check(world, leg) {
                 Ok(()) => next += 1,
                 Err(search) => repair = Some(search),
             }
@@ -299,12 +365,22 @@ fn flat(v: Vec3) -> f32 {
 
 impl RouteSearch for MeshSearch {
     fn advance(&mut self, world: &CollisionWorld, budget: usize) -> PathProgress {
+        // A stage that ends inside the call hands on what is left of it.
+        let (began, budget) = (self.expanded, budget.max(1));
         loop {
+            let left = budget.saturating_sub(self.expanded - began);
+            let working = matches!(
+                self.stage,
+                Stage::Polygons(_) | Stage::Legs { .. } | Stage::Grid(_)
+            );
+            if working && left == 0 {
+                return PathProgress::Searching;
+            }
             self.stage = match std::mem::replace(&mut self.stage, Stage::Done(false)) {
                 Stage::Start => self.start(world),
                 Stage::Polygons(mut search) => {
                     let before = search.expanded();
-                    let progress = search.advance(&self.mesh, budget);
+                    let progress = search.advance(&self.mesh, left);
                     self.expanded += search.expanded() - before;
                     match progress {
                         Corridor::Searching => {
@@ -312,9 +388,8 @@ impl RouteSearch for MeshSearch {
                             return PathProgress::Searching;
                         }
                         Corridor::Failed => self.fall_back(Fallback::NoCorridor),
-                        Corridor::Found(edges) => {
-                            let legs =
-                                funnel(self.request.start, self.request.goal, &edges, CLEARANCE);
+                        Corridor::Found(corridor) => {
+                            let legs = legs(self.request.start, self.request.goal, &corridor);
                             self.legs = legs.len();
                             Stage::Legs {
                                 legs,
@@ -325,7 +400,7 @@ impl RouteSearch for MeshSearch {
                     }
                 }
                 Stage::Legs { legs, next, repair } => {
-                    match self.legs(world, budget, (legs, next, repair)) {
+                    match self.legs(world, left, (legs, next, repair)) {
                         stage @ Stage::Legs { .. } => {
                             self.stage = stage;
                             return PathProgress::Searching;
@@ -334,7 +409,7 @@ impl RouteSearch for MeshSearch {
                     }
                 }
                 Stage::Grid(mut search) => {
-                    let progress = search.advance(world, budget);
+                    let progress = search.advance(world, left);
                     self.stage = Stage::Grid(search);
                     return progress;
                 }
@@ -378,6 +453,7 @@ impl RouteSearch for MeshSearch {
         Planned::Mesh {
             legs: self.legs,
             clear: self.clear,
+            drops: self.drops,
             repaired: self.repaired.clone(),
             fallback: self.fallback.clone(),
         }

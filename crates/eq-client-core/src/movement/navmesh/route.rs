@@ -1,5 +1,6 @@
-//! Planning over the mesh: an A* over the polygons, run a budget at a time,
-//! then the funnel through the edges they share.
+//! Planning over the mesh: an A* over the polygons and the drops off their
+//! ledges, run a budget at a time, then the funnel through the edges they
+//! share.
 
 use super::NavMesh;
 use glam::{Vec2, Vec3};
@@ -15,9 +16,27 @@ pub(super) struct Portal {
     pub left_wall: bool,
     pub right_wall: bool,
 }
-/// A polygon's best cost, where it was entered, and the polygon and link it
+/// A polygon's best cost, where it was entered, and the polygon and way it
 /// was entered by.
-type Reached = (f32, Vec3, Option<(u32, usize)>);
+type Reached = (f32, Vec3, Option<(u32, Via)>);
+
+/// How a polygon was entered from the one before.
+#[derive(Clone, Copy, Debug)]
+enum Via {
+    /// Across the shared edge of that polygon's link.
+    Link(usize),
+    /// Off a ledge by the mesh's drop.
+    Drop(u32),
+}
+
+/// A step along a corridor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Crossing {
+    /// Across an edge two polygons share.
+    Edge(Portal),
+    /// Off a ledge: walk to `top`, then step off and land at `landing`.
+    Drop { top: Vec3, landing: Vec3 },
+}
 
 /// Boxes a request treats apart from the rest: doors. A move across the
 /// floor that passes through one costs a toll, or can't be made. Only the
@@ -90,6 +109,8 @@ pub(super) struct PolygonSearch {
     to: u32,
     weight: f32,
     areas: Areas,
+    /// Whether the search takes the mesh's drops.
+    drops: bool,
     best: HashMap<u32, Reached>,
     done: HashSet<u32>,
     open: BinaryHeap<Open>,
@@ -126,26 +147,29 @@ impl Ord for Open {
 pub(super) enum Corridor {
     /// More slices needed.
     Searching,
-    /// The edges crossed, in order, from the start polygon to the goal's.
-    Found(Vec<Portal>),
+    /// The steps taken, in order, from the start polygon to the goal's.
+    Found(Vec<Crossing>),
     /// No polygon path joins them.
     Failed,
 }
 
 impl PolygonSearch {
     /// A search from `start` on polygon `from` to `goal` on polygon `to`,
-    /// with the distance still to go weighed `weight` times.
+    /// with the distance still to go weighed `weight` times; with `drops`,
+    /// it may step off ledges.
     pub fn new(
         (start, from): (Vec3, u32),
         (goal, to): (Vec3, u32),
         weight: f32,
         areas: Areas,
+        drops: bool,
     ) -> Self {
         Self {
             goal,
             to,
             weight,
             areas,
+            drops,
             best: HashMap::from([(from, (0.0, start, None))]),
             done: HashSet::new(),
             open: BinaryHeap::from([Open(weight * start.distance(goal), from)]),
@@ -172,45 +196,78 @@ impl PolygonSearch {
             }
             self.expanded += 1;
             let (cost, point, _) = self.best[&at];
-            for (k, link) in mesh.polygons[at as usize].links.iter().enumerate() {
-                if self.done.contains(&link.to) {
+            // Entered at a shared edge's middle, at no extra cost.
+            let links = mesh.polygons[at as usize]
+                .links
+                .iter()
+                .enumerate()
+                .map(|(k, link)| (link.to, (link.a + link.b) / 2.0, 0.0, Via::Link(k)));
+            // Or off a ledge: walked to its top, then the drop's own way to
+            // its landing, as the grid charges a drop step.
+            let drops = self
+                .drops
+                .then(|| mesh.drops_from.get(&at))
+                .flatten()
+                .into_iter()
+                .flatten()
+                .map(|&d| {
+                    let link = &mesh.drops[d as usize];
+                    (
+                        link.to,
+                        link.landing,
+                        link.top.distance(link.landing),
+                        Via::Drop(d),
+                    )
+                });
+            for (to, entry, extra, via) in links.chain(drops) {
+                if self.done.contains(&to) {
                     continue;
                 }
-                // Entered at the shared edge's middle; the last polygon adds
-                // the way on to the goal.
-                let entry = (link.a + link.b) / 2.0;
-                let onward = if link.to == self.to {
+                let walked_to = match via {
+                    Via::Link(_) => entry,
+                    Via::Drop(d) => mesh.drops[d as usize].top,
+                };
+                // The last polygon adds the way on to the goal.
+                let onward = if to == self.to {
                     entry.distance(self.goal)
                 } else {
                     0.0
                 };
-                let Some(toll) = self.areas.cost(point, entry) else {
+                let Some(toll) = self.areas.cost(point, walked_to) else {
                     continue;
                 };
-                let next = cost + point.distance(entry) + onward + toll;
-                if self
-                    .best
-                    .get(&link.to)
-                    .is_none_or(|(old, _, _)| next < *old)
-                {
-                    self.best.insert(link.to, (next, entry, Some((at, k))));
+                let next = cost + point.distance(walked_to) + extra + onward + toll;
+                if self.best.get(&to).is_none_or(|(old, _, _)| next < *old) {
+                    self.best.insert(to, (next, entry, Some((at, via))));
                     let estimate = next + self.weight * entry.distance(self.goal);
-                    self.open.push(Open(estimate, link.to));
+                    self.open.push(Open(estimate, to));
                 }
             }
         }
         Corridor::Searching
     }
 
-    /// The edges crossed, each set left then right by the polygon it
-    /// leaves: its centre lies behind the edge, so the sides never depend on
-    /// how the corridor bent before it.
-    fn edges(&self, mesh: &NavMesh) -> Vec<Portal> {
+    /// The steps taken: the edges crossed, each set left then right by the
+    /// polygon it leaves (its centre lies behind the edge, so the sides never
+    /// depend on how the corridor bent before it), and the drops.
+    fn edges(&self, mesh: &NavMesh) -> Vec<Crossing> {
         let mut edges = Vec::new();
         let mut at = self.to;
-        while let Some((_, _, Some((parent, k)))) = self.best.get(&at) {
-            let polygon = &mesh.polygons[*parent as usize];
-            let link = &polygon.links[*k];
+        while let Some(&(_, _, Some((parent, via)))) = self.best.get(&at) {
+            at = parent;
+            let k = match via {
+                Via::Link(k) => k,
+                Via::Drop(d) => {
+                    let link = &mesh.drops[d as usize];
+                    edges.push(Crossing::Drop {
+                        top: link.top,
+                        landing: link.landing,
+                    });
+                    continue;
+                }
+            };
+            let polygon = &mesh.polygons[parent as usize];
+            let link = &polygon.links[k];
             #[allow(clippy::cast_precision_loss)] // A polygon has a few corners.
             let centre = polygon.vertices.iter().sum::<Vec3>() / polygon.vertices.len() as f32;
             let (left, right) = if left_of(centre, (link.a + link.b) / 2.0, link.a) {
@@ -218,13 +275,12 @@ impl PolygonSearch {
             } else {
                 (link.b, link.a)
             };
-            edges.push(Portal {
+            edges.push(Crossing::Edge(Portal {
                 left,
                 right,
                 left_wall: mesh.on_outline(left),
                 right_wall: mesh.on_outline(right),
-            });
-            at = *parent;
+            }));
         }
         edges.reverse();
         edges
