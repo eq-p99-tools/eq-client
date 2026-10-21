@@ -259,6 +259,8 @@ fn a_file_with_another_header_or_cut_short_is_rebuilt() {
             cache::load_or_build(Some(&folder), "zone", &triangles, &settings(), 2, &cancel)
                 .unwrap();
         assert!(matches!(again.source, Source::Built(_)));
+        // The rebuilt mesh is stored over the rejected file.
+        assert_eq!(again.cached.unwrap(), good.len());
         assert_eq!(std::fs::read(&path).unwrap(), good);
     }
     let _ = std::fs::remove_dir_all(&folder);
@@ -270,6 +272,13 @@ fn a_new_key_removes_the_zone_s_stale_file() {
     let cancel = AtomicBool::new(false);
     let old = floor(0.0, -20.0, 20.0);
     let new = floor(1.0, -20.0, 20.0);
+    // A temp file a crash left under an old key.
+    std::fs::create_dir_all(folder.join("navmesh")).unwrap();
+    std::fs::write(
+        folder.join("navmesh").join("zone-0000000000000001.tmp"),
+        b"half",
+    )
+    .unwrap();
     for (zone, triangles) in [("zone", &old), ("zone2", &old), ("zone", &new)] {
         let built =
             cache::load_or_build(Some(&folder), zone, triangles, &settings(), 2, &cancel).unwrap();
@@ -306,6 +315,36 @@ fn a_build_cancelled_part_way_keeps_no_mesh_and_no_file() {
     // Cancelled before the first tile.
     assert!(NavMesh::build(&triangles, &settings(), 4, &AtomicBool::new(true)).is_none());
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[test]
+fn a_tile_that_panics_is_refused_and_the_rest_are_built() {
+    let triangles = floor(0.0, -32.0, 32.0);
+    // The first tile built panics; one thread, so that is tile (0, 0).
+    let panicked = AtomicBool::new(false);
+    let panicking = |triangles: &[[[f32; 3]; 3]],
+                     indices: &[u32],
+                     min: Vec3,
+                     max: Vec3,
+                     border: u16,
+                     settings: &Settings| {
+        assert!(panicked.swap(true, Ordering::Relaxed), "a tile that panics");
+        build::build_tile(triangles, indices, min, max, border, settings)
+    };
+    let (polygons, report) =
+        build::polygons_with(&triangles, &settings(), 1, &|| false, &panicking).unwrap();
+    assert_eq!(
+        report.refused,
+        [RefusedTile {
+            tile: (0, 0),
+            step: "panic",
+            reason: "a tile that panics".to_owned(),
+        }]
+    );
+    assert_eq!(report.tiles_with_polygons, report.tiles - 1);
+    let mesh = NavMesh::from_polygons(polygons);
+    assert!(mesh.locate(Vec3::new(-28.0, 0.0, -28.0)).is_none());
+    assert!(mesh.locate(Vec3::new(28.0, 0.0, 28.0)).is_some());
 }
 
 #[test]

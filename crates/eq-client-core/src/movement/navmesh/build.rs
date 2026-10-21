@@ -6,6 +6,7 @@ use super::{Link, Polygon, Settings};
 use glam::{UVec3, Vec2, Vec3, Vec3A};
 use rerecast::{AreaType, HeightfieldBuilder, PolygonNavmesh, RegionId, TriMesh};
 use std::collections::BTreeMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -65,7 +66,7 @@ struct Tiled {
 }
 
 /// A tile's polygons, or the step that refused it and why.
-type TileResult = Result<PolygonNavmesh, (&'static str, String)>;
+pub(super) type TileResult = Result<PolygonNavmesh, (&'static str, String)>;
 /// An edge's two ends.
 type Edge = (Vec3, Vec3);
 /// A tile and one of its four sides.
@@ -79,6 +80,22 @@ pub(super) fn polygons(
     settings: &Settings,
     threads: usize,
     cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<(Vec<Polygon>, BuildReport)> {
+    polygons_with(triangles, settings, threads, cancelled, &build_tile)
+}
+
+/// Builds one tile: the triangles at `indices`, in the box from `min` to
+/// `max` with a `border` of voxels.
+pub(super) type TileBuilder<'a> =
+    dyn Fn(&[[[f32; 3]; 3]], &[u32], Vec3, Vec3, u16, &Settings) -> TileResult + Sync + 'a;
+
+/// [`polygons`], with each tile built by `tile_builder`.
+pub(super) fn polygons_with(
+    triangles: &[[[f32; 3]; 3]],
+    settings: &Settings,
+    threads: usize,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    tile_builder: &TileBuilder<'_>,
 ) -> Option<(Vec<Polygon>, BuildReport)> {
     let started = Instant::now();
     let (low, high) = triangles.iter().flatten().fold(
@@ -134,10 +151,13 @@ pub(super) fn polygons(
                             high.y + settings.height + 1.0,
                             min.z + tile + 2.0 * pad,
                         );
-                        done.push((
-                            i,
-                            build_tile(triangles, indices, min, max, border, settings),
-                        ));
+                        // A tile rerecast panics on is refused like one it
+                        // reports an error for, and the build goes on.
+                        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                            tile_builder(triangles, indices, min, max, border, settings)
+                        }))
+                        .unwrap_or_else(|panic| Err(("panic", panic_message(&*panic))));
+                        done.push((i, result));
                         busy += began.elapsed();
                     }
                     (done, busy)
@@ -145,7 +165,8 @@ pub(super) fn polygons(
             })
             .collect();
         for handle in handles {
-            // A tile build that panicked is a bug in rerecast; pass it on.
+            // Tile panics are caught above, so a thread panics only on a
+            // bug here; pass it on.
             let (done, busy) = handle
                 .join()
                 .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
@@ -209,6 +230,15 @@ fn bucket(
     buckets.into_iter().collect()
 }
 
+/// A panic's message, as `panic!` gives it.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a panic with no message".to_owned())
+}
+
 /// The walker's radius in voxels.
 fn walkable_radius(settings: &Settings) -> u16 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -216,7 +246,7 @@ fn walkable_radius(settings: &Settings) -> u16 {
     radius
 }
 
-fn build_tile(
+pub(super) fn build_tile(
     triangles: &[[[f32; 3]; 3]],
     indices: &[u32],
     min: Vec3,

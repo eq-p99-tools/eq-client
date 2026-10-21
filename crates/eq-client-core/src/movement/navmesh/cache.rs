@@ -158,6 +158,12 @@ pub fn store(
     // leaves half a file under the key.
     let temporary = path.with_extension("tmp");
     fs::write(&temporary, &bytes)?;
+    // A file under the key is one a read just rejected; Windows renames
+    // onto no existing file, so it goes first.
+    match fs::remove_file(&path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        _ => (),
+    }
     fs::rename(&temporary, &path)?;
     let name = path.file_name().and_then(|name| name.to_str());
     for entry in fs::read_dir(folder)?.flatten() {
@@ -165,9 +171,11 @@ pub fn store(
         let Some(other) = other.to_str() else {
             continue;
         };
+        // The zone's files under other keys, and any temp file a crash left.
         let stale = Some(other) != name
             && other
                 .strip_suffix(".bin")
+                .or_else(|| other.strip_suffix(".tmp"))
                 .and_then(|stem| stem.rsplit_once('-'))
                 .is_some_and(|(owner, _)| owner == zone);
         if stale {
