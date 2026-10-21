@@ -2,6 +2,9 @@
 //! a recording of a script shows where each one lands. A step that clicks or
 //! hovers a control glides the script pointer there first, hovering what it
 //! crosses, and the click goes to the control under it as the glide ends.
+//! A control a list the wheel scrolls has scrolled out of view is first
+//! scrolled into it: the pointer glides to the list and turns the wheel a
+//! notch a frame, as a player scrolls the list before clicking the row.
 //! The real pointer is never moved: the script pointer is set only while the
 //! real one is outside the window, and is drawn as an arrow of its own: the
 //! skin's `arrow.cur`, or this client's own arrow when the skin has none.
@@ -13,6 +16,8 @@ use bevy::{
     ui::{ComputedStackIndex, FocusPolicy},
     window::PrimaryWindow,
 };
+
+use crate::windows::pointer::{LINE_PIXELS, TakesWheel, Wheel};
 
 /// How long the script pointer takes to glide to a control.
 pub(super) const GLIDE: Duration = Duration::from_millis(250);
@@ -31,6 +36,21 @@ pub(super) struct Glide {
     pub(super) from: Vec2,
     pub(super) began: Duration,
     pub(super) target: Entity,
+    /// Where it ends in place of the control's middle: just inside the edge
+    /// of a list the wheel is to scroll.
+    pub(super) at: Option<Vec2>,
+}
+
+/// How far inside a list's edge the script pointer rests to turn the wheel.
+pub(super) const EDGE: f32 = 4.0;
+
+/// The wheel turning over a list until the control a step names shows whole
+/// in it: the list, and how far it was scrolled before the last notch, so a
+/// notch that moves it no further is noticed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Scrolling {
+    pub(super) list: Entity,
+    pub(super) before: Option<f32>,
 }
 
 /// Where a glide from `from` to `to` has reached `elapsed` into it: slow to
@@ -81,6 +101,8 @@ pub(crate) struct Aim<'w, 's> {
         ),
     >,
     parents: Query<'w, 's, &'static ChildOf, Without<bevy::ui::OverrideClip>>,
+    ancestors: Query<'w, 's, &'static ChildOf>,
+    lists: Query<'w, 's, Option<&'static ScrollPosition>, With<TakesWheel>>,
 }
 
 impl Aim<'_, '_> {
@@ -117,6 +139,32 @@ impl Aim<'_, '_> {
         Some(transform.translation / self.scale())
     }
 
+    /// Where a laid-out node is drawn, in the window's logical pixels.
+    pub(super) fn rect(&self, entity: Entity) -> Option<Rect> {
+        let (_, transform, node, ..) = self.nodes.get(entity).ok()?;
+        let scale = self.scale();
+        Some(Rect::from_center_size(
+            transform.translation / scale,
+            node.size() / scale,
+        ))
+    }
+
+    /// The nearest node above `entity` that the wheel scrolls.
+    pub(super) fn wheel_list(&self, entity: Entity) -> Option<Entity> {
+        self.ancestors
+            .iter_ancestors(entity)
+            .find(|ancestor| self.lists.contains(*ancestor))
+    }
+
+    /// How far down a list the wheel scrolls is scrolled.
+    pub(super) fn scrolled(&self, list: Entity) -> f32 {
+        self.lists
+            .get(list)
+            .ok()
+            .flatten()
+            .map_or(0.0, |position| position.y)
+    }
+
     /// The topmost control under `at`, in the window's logical pixels, that
     /// takes the pointer as Bevy's UI focus gives it: a node that blocks the
     /// pointer and takes no input itself, as a window's frame, hides what is
@@ -143,6 +191,23 @@ impl Aim<'_, '_> {
             .max_by_key(|(_, _, _, stack, ..)| stack.map_or(0, |stack| stack.0))
             .filter(|(.., interactive)| *interactive)
             .map(|(entity, ..)| entity)
+    }
+}
+
+/// Turns the wheel the notch a script's step asks for this frame over the
+/// list it scrolls. It runs after the real wheel is read and before the
+/// lists take the turn, so the list scrolls as a real wheel scrolls it.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn turn(script: Option<ResMut<super::Script>>, mut wheel: ResMut<Wheel>) {
+    let Some(mut script) = script.filter(|script| script.notch.is_some()) else {
+        return;
+    };
+    if let Some((list, pixels)) = script.notch.take() {
+        *wheel = Wheel {
+            pixels,
+            lines: pixels / LINE_PIXELS,
+            surface: Some(list),
+        };
     }
 }
 
