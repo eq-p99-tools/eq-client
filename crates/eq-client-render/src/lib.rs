@@ -234,6 +234,16 @@ struct PlayerBody {
     size: f32,
 }
 
+impl PlayerBody {
+    /// The walker size the player plans on the navigation mesh by: its
+    /// drawn size, but never shorter than its collision height, so the mesh
+    /// offers no way its body's own checks would refuse. Its size alone
+    /// once collision follows the size.
+    fn mesh_size(&self) -> f32 {
+        self.size.max(self.height)
+    }
+}
+
 #[derive(Component)]
 struct SceneEntity;
 
@@ -1801,6 +1811,19 @@ fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_player_plans_on_a_mesh_no_shorter_than_its_collision() {
+        let body = |height, size| super::PlayerBody {
+            feet_offset: 0.0,
+            height,
+            size,
+        };
+        // A gnome drawn 3 tall with a 6.8 collision plans as 6.8.
+        assert!((body(6.8, 3.0).mesh_size() - 6.8).abs() < 1e-6);
+        // An ogre drawn 9 tall plans as 9.
+        assert!((body(6.4, 9.0).mesh_size() - 9.0).abs() < 1e-6);
+    }
+
     #[test]
     fn a_screenshot_waits_for_the_loading_screen_to_lift() {
         use super::*;
