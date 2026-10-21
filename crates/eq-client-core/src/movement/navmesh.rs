@@ -407,23 +407,37 @@ impl NavMesh {
     /// probes, where no route is given.
     #[must_use]
     pub fn far_pair(&self) -> Option<(Vec3, Vec3)> {
-        let mut sizes = vec![0_usize; self.islands];
-        for &island in &self.island {
-            sizes[island as usize] += 1;
-        }
-        let largest = (0..self.islands).max_by_key(|&i| (sizes[i], std::cmp::Reverse(i)))?;
+        self.far_pair_where(|_| true)
+    }
+
+    /// [`far_pair`](Self::far_pair) over only the polygons whose floor
+    /// centre `keep` takes, on the island most of them lie on.
+    #[must_use]
+    pub fn far_pair_where(&self, keep: impl Fn(Vec3) -> bool) -> Option<(Vec3, Vec3)> {
         let centre = |polygon: &Polygon| {
             #[allow(clippy::cast_precision_loss)] // A polygon has a few corners.
             let middle = polygon.vertices.iter().sum::<Vec3>() / polygon.vertices.len() as f32;
             height_in(&polygon.vertices, middle)
                 .map_or(middle, |y| Vec3::new(middle.x, y, middle.z))
         };
-        let on_island: Vec<Vec3> = self
+        let kept: Vec<(Vec3, u32)> = self
             .polygons
             .iter()
             .zip(&self.island)
-            .filter(|&(_, &island)| island as usize == largest)
-            .map(|(polygon, _)| centre(polygon))
+            .map(|(polygon, &island)| (centre(polygon), island))
+            .filter(|&(at, _)| keep(at))
+            .collect();
+        let mut sizes = vec![0_usize; self.islands];
+        for &(_, island) in &kept {
+            sizes[island as usize] += 1;
+        }
+        let largest = (0..self.islands)
+            .filter(|&i| sizes[i] > 0)
+            .max_by_key(|&i| (sizes[i], std::cmp::Reverse(i)))?;
+        let on_island: Vec<Vec3> = kept
+            .into_iter()
+            .filter(|&(_, island)| island as usize == largest)
+            .map(|(at, _)| at)
             .collect();
         let farthest = |from: Vec3| {
             on_island

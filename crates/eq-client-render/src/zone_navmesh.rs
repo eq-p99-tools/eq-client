@@ -157,6 +157,13 @@ fn report(making: &Making, loaded: &cache::Loaded, sizes: [f32; 3]) {
                 "Navmesh ledge drops refused"
             );
         }
+        if report.deep_triangles > 0 {
+            warn!(
+                zone = making.zone.as_str(),
+                triangles = report.deep_triangles,
+                "Navmesh triangles left out below the span limit"
+            );
+        }
         if refused.len() > LISTED_REFUSALS {
             for (reason, count) in report.refusals_by_reason() {
                 warn!(

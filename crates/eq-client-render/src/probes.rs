@@ -1570,7 +1570,9 @@ fn inspect_model_heights() {
 /// of `EQ_PROBE_MODEL` (default 6). Each route in `EQ_PROBE_ROUTES`
 /// (`name=x,y,z>x,y,z` renderer points a little above their floor, separated
 /// by `;`), or without it the two far ends of the mesh's largest island as
-/// the route `far`, is searched by both planners, 5,000 units of work a call, and
+/// the route `far` (and with `EQ_PROBE_COVERED` set to a roof height, the
+/// far pair under a roof that low as the route `covered`), is searched by
+/// both planners, 5,000 units of work a call, and
 /// prints the planner, its legs, how many kept the clearance or passed only
 /// the plain walk, each repaired leg's ends, any fallback, the seconds the
 /// whole search took with its leg checks, the path's length, and how many of
@@ -1625,14 +1627,15 @@ fn inspect_mesh_routes() {
     .unwrap();
     println!(
         "zone={zone_name} triangles={} height={height} release={} build_seconds={:.2} polygons={} \
-         islands={} refused_tiles={} drop_links={} drop_seconds={:.2} refused_stretches={} drops={drops} \
-         drop_world={}",
+         islands={} refused_tiles={} deep_triangles={} drop_links={} drop_seconds={:.2} refused_stretches={} \
+         drops={drops} drop_world={}",
         triangles.len(),
         !cfg!(debug_assertions),
         building.elapsed().as_secs_f32(),
         mesh.polygon_count(),
         mesh.island_count(),
         report.refused.len(),
+        report.deep_triangles,
         report.drop_links,
         report.drop_elapsed.as_secs_f32(),
         report.refused_stretches,
@@ -1682,11 +1685,38 @@ fn inspect_mesh_routes() {
     let routes: Vec<(String, Vec3, Vec3)> = std::env::var("EQ_PROBE_ROUTES").map_or_else(
         |_| {
             let (a, b) = mesh.far_pair().expect("a mesh with polygons");
-            vec![(
+            let mut routes = vec![(
                 "far".to_owned(),
                 floor(a + Vec3::Y * 2.0),
                 floor(b + Vec3::Y * 2.0),
-            )]
+            )];
+            // The far pair under a roof: floor with a ceiling no more than
+            // `EQ_PROBE_COVERED` units over it, as in a tunnel.
+            if let Some(roof) = std::env::var("EQ_PROBE_COVERED")
+                .ok()
+                .and_then(|roof| roof.parse::<f32>().ok())
+            {
+                let covered = |at: Vec3| {
+                    world
+                        .ray_distance(at + Vec3::Y * 2.0, Vec3::Y, roof)
+                        .is_some()
+                };
+                if let Some((a, b)) = mesh.far_pair_where(covered) {
+                    println!(
+                        "covered_pair a_eq={} b_eq={} route=covered={}>{}",
+                        eq_point(a),
+                        eq_point(b),
+                        raised(a),
+                        raised(b),
+                    );
+                    routes.push((
+                        "covered".to_owned(),
+                        floor(a + Vec3::Y * 2.0),
+                        floor(b + Vec3::Y * 2.0),
+                    ));
+                }
+            }
+            routes
         },
         |routes| {
             routes
@@ -1868,12 +1898,13 @@ fn inspect_mesh_sizes() {
         let seconds = building.elapsed().as_secs_f32();
         println!(
             "build={label} seconds={seconds:.2} drop_seconds={:.2} polygons={} islands={} \
-             drop_links={} refused_tiles={} refused_stretches={} cache_bytes={}",
+             drop_links={} refused_tiles={} deep_triangles={} refused_stretches={} cache_bytes={}",
             report.drop_elapsed.as_secs_f32(),
             mesh.polygon_count(),
             mesh.island_count(),
             report.drop_links,
             report.refused.len(),
+            report.deep_triangles,
             report.refused_stretches,
             cache_bytes(&mesh, settings),
         );
