@@ -13,6 +13,7 @@
 //! and the status lines are this client's, in its own words.
 use super::{Availability, Field, FrontEnd, Screen as Showing, form, worlds};
 use crate::{
+    navmesh_prebuild::{self, NavmeshPrebuild},
     online::OnlineState,
     skinned::{self, at},
     theme,
@@ -64,6 +65,19 @@ const LOGIN_STATUS: Area = Area {
     width: 250.0,
     height: 36.0,
 };
+
+/// Where the navmesh batch's button sits on the login screen in a window
+/// too short to hold it under the screen ([`prebuild_place`]): in the
+/// screen's bottom left corner, its line under it. Ours.
+const PREBUILD: Area = Area {
+    x: 20.0,
+    y: 434.0,
+    width: 160.0,
+    height: 24.0,
+};
+
+/// The room the navmesh batch's line takes under its button. Ours.
+const PREBUILD_LINE: f32 = 18.0;
 
 /// Where the list of worlds says what is happening, along the screen's
 /// foot. Ours.
@@ -187,7 +201,7 @@ pub(crate) fn login_screen(
         Option<Res<UiScale>>,
     ),
     mut art: crate::sheets::Art,
-    roots: Query<Entity, With<LoginRoot>>,
+    (roots, prebuild): (Query<Entity, With<LoginRoot>>, Option<Res<NavmeshPrebuild>>),
     mut previous: Local<Option<String>>,
 ) {
     let screens = look
@@ -198,12 +212,16 @@ pub(crate) fn login_screen(
     let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
     let height = windows.single().ok().map(|window| window.height() / factor);
     let shown = screens.map(|screens| (screens, picker_place(height, size(&screens.login).1)));
+    let prebuild = prebuild.as_deref();
     let signature = shown.map(|(screens, place)| {
         format!(
-            "{:p}:{}:{}",
+            "{:p}:{}:{}:{}",
             Arc::as_ptr(screens),
             form::appearance(&front),
-            place.y
+            place.y,
+            prebuild
+                .map(NavmeshPrebuild::appearance)
+                .unwrap_or_default()
         )
     });
     if *previous == signature {
@@ -224,9 +242,92 @@ pub(crate) fn login_screen(
         pieces(stage, &mut art, &screens.login.pieces, &inside, context);
         status(stage, LOGIN_STATUS, form::guidance(&front), Justify::Center);
     });
+    let screen_height = size(&screens.login).1;
     commands.entity(frame).with_children(|frame| {
         picker(frame, &mut art, (&screens.login, place), &front);
+        if let Some(prebuild) = prebuild {
+            let place = prebuild_place(height, screen_height);
+            prebuild_control(frame, &mut art, (&screens.login, place), prebuild);
+        }
     });
+}
+
+/// Where the navmesh batch's button sits, from the screen's top left: on
+/// the black under the screen, at the screen's left edge, where the window,
+/// as the UI lays out, has the room there for it, its line and a gap; else
+/// inside, in the screen's bottom left corner ([`PREBUILD`]). Ours.
+fn prebuild_place(window_height: Option<f32>, screen_height: f32) -> Area {
+    let room = window_height.map_or(0.0, |height| (height - screen_height) / 2.0);
+    if room >= PICKER_GAP + PREBUILD.height + PREBUILD_LINE {
+        Area {
+            x: 0.0,
+            y: screen_height + PICKER_GAP,
+            ..PREBUILD
+        }
+    } else {
+        PREBUILD
+    }
+}
+
+/// The navmesh batch's button, styled as the screen's Connect button, and
+/// its line under it.
+fn prebuild_control(
+    parent: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    (screen, area): (&Screen, Area),
+    prebuild: &NavmeshPrebuild,
+) {
+    let connect = screen.pieces.iter().find_map(|(_, element)| match element {
+        Element::Button(button) if button.id.as_deref() == Some("ConnectButton") => Some(button),
+        _ => None,
+    });
+    let usable = prebuild.usable();
+    let mut drawn = parent.spawn((
+        Button,
+        navmesh_prebuild::Toggle,
+        at(area.x, area.y, area.width, area.height),
+        crate::tooltip::Tooltip(
+            "Builds the navigation meshes of the installed zones not built yet, one at a time. \
+             Connecting to a world stops it; the next press carries on."
+                .to_owned(),
+        ),
+    ));
+    if let Some(look) = connect.map(|button| &button.look) {
+        drawn.insert(skinned::SkinButton(look.clone()));
+        let piece = if usable {
+            look.normal.as_ref()
+        } else {
+            look.disabled.as_ref().or(look.normal.as_ref())
+        };
+        if let Some(image) = piece.and_then(|piece| art.cut(piece)) {
+            drawn.insert(image);
+        }
+    }
+    if !usable {
+        drawn.insert(skinned::Greyed);
+    }
+    let ink = if usable {
+        connect
+            .and_then(|button| button.text_color)
+            .map_or(theme::INK_BRIGHT, skinned::rgb)
+    } else {
+        theme::INK_DIM
+    };
+    let typeface = connect.and_then(|button| button.font);
+    drawn.with_children(|inner| {
+        centred(inner, area, (prebuild.label().to_owned(), typeface, ink));
+    });
+    words_at(
+        parent,
+        Area {
+            y: area.y + area.height + 2.0,
+            width: 320.0,
+            height: 16.0,
+            ..area
+        },
+        (prebuild.line(), Some(2), theme::INK_BRIGHT),
+        (Justify::Left, false),
+    );
 }
 
 /// Where the login server picker sits, from the screen's top left: on the
