@@ -84,6 +84,9 @@ pub enum Planned {
         pieces: usize,
         /// Legs cut into pieces before their checks.
         cut: usize,
+        /// Pieces partway along a leg that stood only on the floor the walk
+        /// reached, more than a step off their reference height.
+        loose: usize,
         /// Pieces that also kept the clearance from walls to either side.
         clear: usize,
         /// Drops off ledges the walker's own drop made.

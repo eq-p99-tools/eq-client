@@ -7,7 +7,9 @@ use super::NavMesh;
 use super::route::{Areas, Corridor, Crossing, PolygonSearch, entry, funnel};
 use crate::movement::BODY_REACH;
 use crate::movement::navigator::LOCAL_EXPANSIONS;
-use crate::movement::path::{CELL, CLEARANCE, DOOR_REACH, DOOR_TOLL, clear_leg, drop, walk};
+use crate::movement::path::{
+    CELL, CLEARANCE, DOOR_REACH, DOOR_TOLL, HEIGHT_REACH, clear_leg, drop, walk,
+};
 use crate::movement::{
     CollisionWorld, Fallback, GridNavigator, MAX_GROUNDED_STEP, Navigator, PathProgress,
     PathSearch, Planned, Refusals, RouteSearch, Scope, SearchRequest,
@@ -72,6 +74,7 @@ impl Navigator for MeshNavigator {
                 legs: 0,
                 pieces: 0,
                 cut: 0,
+                loose: 0,
                 clear: 0,
                 drops: 0,
                 repaired: Vec::new(),
@@ -96,6 +99,7 @@ struct MeshSearch {
     legs: usize,
     pieces: usize,
     cut: usize,
+    loose: usize,
     clear: usize,
     /// Drops off ledges taken.
     drops: usize,
@@ -122,12 +126,13 @@ enum Stage {
 
 /// A leg the mesh gives: a straight walk to `to`, or with `drop`, a step off
 /// a ledge that lands at `to`. A `piece` is part of a cut leg, never cut
-/// again.
+/// again; a `mid` piece is one that ends partway along its leg.
 #[derive(Clone, Copy, Debug)]
 struct Leg {
     to: Vec3,
     drop: bool,
     piece: bool,
+    mid: bool,
 }
 
 /// How a leg's check ended.
@@ -150,6 +155,7 @@ fn legs(start: Vec3, goal: Vec3, corridor: &[Crossing]) -> Vec<Leg> {
                 to,
                 drop: false,
                 piece: false,
+                mid: false,
             })
     };
     let mut legs = Vec::new();
@@ -164,6 +170,7 @@ fn legs(start: Vec3, goal: Vec3, corridor: &[Crossing]) -> Vec<Leg> {
                     to: landing,
                     drop: true,
                     piece: false,
+                    mid: false,
                 });
                 portals.clear();
                 from = landing;
@@ -272,14 +279,37 @@ impl MeshSearch {
             return Checked::Repair(self.repair(from, to));
         }
         let walked = walk(world, from, Vec2::new(to.x, to.z), height);
-        if let Some(end) = walked.filter(|end| (end.y - to.y).abs() <= MAX_GROUNDED_STEP) {
-            // The plain walk is the bar, as for the grid's own hops; legs
-            // that also keep the clearance are counted, for the looks.
-            if clear_leg(world, from, to, height) {
-                self.clear += 1;
+        // A piece ending partway along its leg ends on the floor the walk
+        // reached there, so long as that floor and a corridor polygon over it
+        // both lie within the reach a search's own end has: its reference
+        // height comes from a polygon's corners, which on curved ground can
+        // sit several units off the floor. A leg's own end, a drop and the
+        // goal stay strict.
+        let loose = |end: &Vec3| {
+            leg.mid
+                && (end.y - to.y).abs() <= HEIGHT_REACH
+                && self
+                    .mesh
+                    .floor_among(*end, |polygon| self.corridor.contains(&polygon))
+                    .is_some_and(|floor| (floor - end.y).abs() <= HEIGHT_REACH)
+        };
+        if let Some(end) = walked {
+            let strict = (end.y - to.y).abs() <= MAX_GROUNDED_STEP;
+            if strict || loose(&end) {
+                self.loose += usize::from(!strict);
+                let to = if strict {
+                    to
+                } else {
+                    Vec3::new(to.x, end.y, to.z)
+                };
+                // The plain walk is the bar, as for the grid's own hops; legs
+                // that also keep the clearance are counted, for the looks.
+                if clear_leg(world, from, to, height) {
+                    self.clear += 1;
+                }
+                self.walked.push(end, None);
+                return Checked::Stood;
             }
-            self.walked.push(end, None);
-            return Checked::Stood;
         }
         if let Some(door) = world.door_between(&self.request.doors, from, to, DOOR_REACH) {
             if self.through_door(world, door, to) {
@@ -317,6 +347,7 @@ impl MeshSearch {
                     },
                     drop: false,
                     piece: true,
+                    mid: k != count,
                 }
             })
             .collect()
@@ -551,6 +582,7 @@ impl RouteSearch for MeshSearch {
             legs: self.legs,
             pieces: self.pieces,
             cut: self.cut,
+            loose: self.loose,
             clear: self.clear,
             drops: self.drops,
             repaired: self.repaired.clone(),
