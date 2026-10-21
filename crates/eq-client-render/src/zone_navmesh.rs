@@ -116,11 +116,23 @@ fn poll(mut navmesh: ResMut<ZoneNavMesh>) {
     let Some((loaded, sizes)) = loaded else {
         return;
     };
-    report(&making, &loaded, sizes);
+    report(
+        &making.zone,
+        (making.started, making.threads),
+        &loaded,
+        sizes,
+    );
     navmesh.mesh = Some(loaded.mesh.split(sizes));
 }
 
-fn report(making: &Making, loaded: &cache::Loaded, sizes: [f32; 3]) {
+/// Logs a mesh ready for `zone`, read or built since `started` on
+/// `threads` threads, with what its build refused.
+pub(super) fn report(
+    zone: &str,
+    (started, threads): (Instant, usize),
+    loaded: &cache::Loaded,
+    sizes: [f32; 3],
+) {
     let (source, tiles, refused, drop_seconds) = match &loaded.source {
         cache::Source::Cache => ("cache", None, &[][..], None),
         cache::Source::Built(report) => (
@@ -132,10 +144,10 @@ fn report(making: &Making, loaded: &cache::Loaded, sizes: [f32; 3]) {
     };
     let bytes = loaded.cached.as_ref().ok().copied();
     info!(
-        zone = making.zone.as_str(),
+        zone = zone,
         source,
-        seconds = %format!("{:.2}", making.started.elapsed().as_secs_f32()),
-        threads = making.threads,
+        seconds = %format!("{:.2}", started.elapsed().as_secs_f32()),
+        threads,
         tiles,
         polygons = loaded.mesh.polygon_count(),
         islands = loaded.mesh.island_count(),
@@ -147,34 +159,31 @@ fn report(making: &Making, loaded: &cache::Loaded, sizes: [f32; 3]) {
         "Navmesh ready"
     );
     if let Err(error) = &loaded.cached {
-        warn!(zone = making.zone.as_str(), %error, "Navmesh not kept");
+        warn!(zone = zone, %error, "Navmesh not kept");
     }
     if let cache::Source::Built(report) = &loaded.source {
         if report.refused_stretches > 0 {
             warn!(
-                zone = making.zone.as_str(),
+                zone = zone,
                 stretches = report.refused_stretches,
                 "Navmesh ledge drops refused"
             );
         }
         if report.deep_triangles > 0 {
             warn!(
-                zone = making.zone.as_str(),
+                zone = zone,
                 triangles = report.deep_triangles,
                 "Navmesh triangles left out below the span limit"
             );
         }
         if refused.len() > LISTED_REFUSALS {
             for (reason, count) in report.refusals_by_reason() {
-                warn!(
-                    zone = making.zone.as_str(),
-                    count, reason, "Navmesh tiles refused"
-                );
+                warn!(zone = zone, count, reason, "Navmesh tiles refused");
             }
         } else {
             for tile in refused {
                 warn!(
-                    zone = making.zone.as_str(),
+                    zone = zone,
                     tile = ?tile.tile,
                     step = tile.step,
                     reason = tile.reason.as_str(),

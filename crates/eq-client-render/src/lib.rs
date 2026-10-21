@@ -37,6 +37,7 @@ mod map;
 mod motion;
 mod names;
 mod navigation;
+mod navmesh_prebuild;
 mod notices;
 mod online;
 mod options;
@@ -349,7 +350,7 @@ pub fn run(
             }),
     );
     theme::install_font(&mut app, installed_client);
-    app.add_systems(Startup, setup_scene)
+    app.add_systems(Startup, (setup_scene, navmesh_prebuild::offer))
         .add_systems(Update, exit_log::close_requests);
     schedule(&mut app);
     navigation::install(&mut app);
@@ -629,7 +630,12 @@ fn schedule(app: &mut App) {
                 .chain(),
             (
                 // Which login screens show decides which take the presses.
-                (login::read_look, (login::form, login::worlds, login::light)).chain(),
+                (
+                    login::read_look,
+                    (login::form, login::worlds, login::light),
+                    navmesh_prebuild::run_batch(),
+                )
+                    .chain(),
                 (
                     character_select::update,
                     character_select::names,

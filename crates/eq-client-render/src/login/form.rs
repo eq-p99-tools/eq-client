@@ -5,6 +5,7 @@
 //! installation has its own login screen, that shows instead
 //! ([`super::official`]), and its controls do what this window's do.
 use super::{Availability, Connected, Field, FrontEnd, Link, Lit, Request, Screen};
+use crate::navmesh_prebuild::{self, NavmeshPrebuild};
 use crate::{online::OnlineState, theme, theme::Size};
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -62,6 +63,7 @@ pub(crate) fn form(
         Query<Entity, With<Root>>,
         Option<Res<super::official::LoginLook>>,
     ),
+    prebuild: Option<Res<NavmeshPrebuild>>,
     mut previous: Local<String>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -96,7 +98,14 @@ pub(crate) fn form(
             }
         }
     }
-    let signature = format!("{visible}:{official}:{}", appearance(&front));
+    let prebuild = prebuild.as_deref();
+    let signature = format!(
+        "{visible}:{official}:{}:{}",
+        appearance(&front),
+        prebuild
+            .map(NavmeshPrebuild::appearance)
+            .unwrap_or_default()
+    );
     if *previous == signature {
         return;
     }
@@ -105,7 +114,7 @@ pub(crate) fn form(
         commands.entity(root).despawn();
     }
     if visible && !official {
-        spawn(&mut commands, &front);
+        spawn(&mut commands, &front, prebuild);
     }
 }
 
@@ -206,8 +215,9 @@ fn take(
 }
 
 /// Draws the window: the login servers, the boxes, the buttons and the
-/// line under them.
-fn spawn(commands: &mut Commands, front: &FrontEnd) {
+/// line under them, with the navmesh batch's button and line where it is
+/// offered.
+fn spawn(commands: &mut Commands, front: &FrontEnd, prebuild: Option<&NavmeshPrebuild>) {
     let logging_in = front.running();
     super::cover(commands, Root).with_children(|root| {
         root.spawn(super::panel()).with_children(|panel| {
@@ -278,8 +288,22 @@ fn spawn(commands: &mut Commands, front: &FrontEnd) {
                             on: false,
                         },
                     );
+                    if let Some(prebuild) = prebuild {
+                        super::lit_button(
+                            buttons,
+                            navmesh_prebuild::Toggle,
+                            prebuild.label(),
+                            Lit {
+                                usable: prebuild.usable(),
+                                on: false,
+                            },
+                        );
+                    }
                 });
             panel.spawn(theme::text(guidance(front), Size::Label, theme::INK));
+            if let Some(prebuild) = prebuild {
+                panel.spawn(theme::text(prebuild.line(), Size::Label, theme::INK));
+            }
         });
     });
 }
@@ -446,6 +470,30 @@ mod tests {
         type_text(&mut app, "more");
         assert_eq!(heard.lock().unwrap().connects.len(), 1);
         assert_eq!(app.world().resource::<FrontEnd>().password.as_str(), "");
+    }
+
+    #[test]
+    fn the_navmesh_button_and_line_show_only_while_the_batch_is_offered() {
+        let (mut app, _) = app(vec![server("Example", "remembered")]);
+        app.update();
+        let shown = |app: &mut App| {
+            let buttons = app
+                .world_mut()
+                .query_filtered::<(), With<navmesh_prebuild::Toggle>>()
+                .iter(app.world())
+                .count();
+            let line = app
+                .world_mut()
+                .query::<&Text>()
+                .iter(app.world())
+                .any(|text| text.0.starts_with("Navmeshes:"));
+            (buttons, line)
+        };
+        assert_eq!(shown(&mut app), (0, false));
+        let folder = std::env::temp_dir().join("eq-prebuild-form");
+        app.insert_resource(NavmeshPrebuild::installed(folder.clone(), folder));
+        app.update();
+        assert_eq!(shown(&mut app), (1, true));
     }
 
     #[test]
