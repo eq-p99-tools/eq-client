@@ -342,7 +342,7 @@ fn a_tile_that_panics_is_refused_and_the_rest_are_built() {
         }]
     );
     assert_eq!(report.tiles_with_polygons, report.tiles - 1);
-    let mesh = NavMesh::from_polygons(polygons);
+    let mesh = NavMesh::from_parts(polygons, Vec::new());
     assert!(mesh.locate(Vec3::new(-28.0, 0.0, -28.0)).is_none());
     assert!(mesh.locate(Vec3::new(28.0, 0.0, 28.0)).is_some());
 }
@@ -684,6 +684,11 @@ mod routes {
         assert!(feet.distance(goal) < 1.5, "{feet}");
     }
 
+    /// The most a leg's check costs in the wall's zones: its length in grid
+    /// cells, plus one, for legs under 28 long from the start round the
+    /// wall's end.
+    const ONE_LEG: usize = 15;
+
     #[test]
     fn a_repair_and_its_fallback_keep_to_each_call_s_budget() {
         let (world, mesh) = post_beside_the_way();
@@ -693,7 +698,7 @@ mod routes {
         found(progress);
         assert_eq!(mesh_planned(&*search).1, 1);
         // A call's work is its budget, and at most one leg's check beyond.
-        assert!(most <= 16 + 40, "{most}");
+        assert!(most <= 16 + ONE_LEG, "{most}");
     }
 
     #[test]
@@ -712,7 +717,7 @@ mod routes {
             mesh_planned(&*search).2,
             Some(Fallback::Leg { .. })
         ));
-        assert!(most <= 64 + 40, "{most}");
+        assert!(most <= 64 + ONE_LEG, "{most}");
         // The grid's nearest reach stands, for a route that ends as close as it can.
         assert!(
             search
@@ -745,5 +750,242 @@ mod routes {
         let mut search = mesh.search(local);
         found(run(&mut *search, &world, 256).0);
         assert_eq!(search.planned(), Planned::Grid);
+    }
+    mod drops {
+        //! Ways off ledges, found at the build and taken by searches with
+        //! drops on.
+
+        use super::super::super::drops::{THINNING, links_with};
+        use super::super::super::{DropLink, NavMesh};
+        use super::{block, floor, found, length, request, run, settings, zone};
+        use crate::movement::path::{drop, walk};
+        use crate::movement::{
+            CollisionMesh, CollisionWorld, Fallback, MAX_GROUNDED_STEP, Navigator, PathProgress,
+            Planned, RouteSearch, SearchRequest,
+        };
+        use glam::{Vec2, Vec3};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        /// A floor at y = 0 and a platform `high` tall over z < -5, with a
+        /// ramp up to it at its far end when `ramp` is set.
+        fn platform(high: f32, ramp: bool) -> Vec<[[f32; 3]; 3]> {
+            let mut triangles = floor(0.0, -40.0, 40.0);
+            triangles.extend(block([-30.0, 0.0, -30.0], [20.0, high, -5.0]));
+            if ramp {
+                // Half as steep as long: well inside the walker's slope limit.
+                let run = 2.0 * high;
+                triangles.push([
+                    [20.0, high, -30.0],
+                    [20.0, high, -5.0],
+                    [20.0 + run, 0.0, -5.0],
+                ]);
+                triangles.push([
+                    [20.0, high, -30.0],
+                    [20.0 + run, 0.0, -5.0],
+                    [20.0 + run, 0.0, -30.0],
+                ]);
+            }
+            triangles
+        }
+
+        fn falling(start: Vec3, goal: Vec3) -> SearchRequest {
+            SearchRequest {
+                drops: true,
+                ..request(start, goal, Vec::new())
+            }
+        }
+
+        fn planned(search: &dyn RouteSearch) -> (usize, usize, usize, Option<Fallback>) {
+            match search.planned() {
+                Planned::Mesh {
+                    legs,
+                    drops,
+                    repaired,
+                    fallback,
+                    ..
+                } => (legs, drops, repaired.len(), fallback),
+                Planned::Grid => panic!("the grid planned"),
+            }
+        }
+
+        /// Follows `path` from `start` as the walker would: a walk to each
+        /// waypoint, or where a walk can't reach it, a drop; where it ends.
+        fn follow(world: &CollisionWorld, start: Vec3, path: &[Vec3]) -> Vec3 {
+            let mut feet = start;
+            for &next in path {
+                let to = Vec2::new(next.x, next.z);
+                feet = walk(world, feet, to, 6.0)
+                    .filter(|end| (end.y - next.y).abs() <= MAX_GROUNDED_STEP)
+                    .or_else(|| drop(world, feet, to, 6.0))
+                    .unwrap_or_else(|| panic!("{feet} to {next} in {path:?}"));
+            }
+            feet
+        }
+
+        fn links(mesh: &NavMesh) -> &[DropLink] {
+            &mesh.drops
+        }
+
+        fn mesh_of(navigator: &crate::movement::navmesh::MeshNavigator) -> &NavMesh {
+            navigator.mesh()
+        }
+
+        #[test]
+        fn a_route_with_drops_steps_off_the_ledge_and_one_without_takes_the_ramp() {
+            let (world, mesh) = zone(&platform(8.0, true));
+            let (start, goal) = (Vec3::new(0.0, 8.0, -15.0), Vec3::new(0.0, 0.0, 10.0));
+            let mut search = mesh.search(falling(start, goal));
+            let path = found(run(&mut *search, &world, 256).0);
+            let (_, drops, repaired, fallback) = planned(&*search);
+            assert_eq!((drops, repaired, fallback), (1, 0, None), "{path:?}");
+            assert!(length(start, &path) < 40.0, "{path:?}");
+            assert!(
+                follow(&world, start, &path).distance(goal) < 1.5,
+                "{path:?}"
+            );
+            // Without drops, down the ramp.
+            let mut search = mesh.search(request(start, goal, Vec::new()));
+            let path = found(run(&mut *search, &world, 256).0);
+            let (_, drops, _, fallback) = planned(&*search);
+            assert_eq!((drops, fallback), (0, None), "{path:?}");
+            assert!(path.iter().any(|p| p.x > 20.0), "{path:?}");
+            assert!(
+                follow(&world, start, &path).distance(goal) < 1.5,
+                "{path:?}"
+            );
+        }
+
+        #[test]
+        fn a_ledge_deeper_than_the_drop_limit_gives_no_way_down() {
+            let (world, mesh) = zone(&platform(30.0, false));
+            assert_eq!(links(mesh_of(&mesh)).len(), 0);
+            let (start, goal) = (Vec3::new(0.0, 30.0, -15.0), Vec3::new(0.0, 0.0, 10.0));
+            let mut search = mesh.search(falling(start, goal));
+            assert_eq!(run(&mut *search, &world, 256).0, PathProgress::Failed);
+            assert_eq!(planned(&*search).3, Some(Fallback::OtherIsland));
+        }
+
+        #[test]
+        fn a_drop_goes_one_way_only() {
+            let (world, mesh) = zone(&platform(8.0, true));
+            let (start, goal) = (Vec3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 8.0, -15.0));
+            let mut search = mesh.search(falling(start, goal));
+            let path = found(run(&mut *search, &world, 256).0);
+            let (_, drops, _, fallback) = planned(&*search);
+            assert_eq!((drops, fallback), (0, None), "{path:?}");
+            assert!(path.iter().any(|p| p.x > 20.0), "up the ramp: {path:?}");
+        }
+
+        #[test]
+        fn a_step_down_is_a_walk_not_a_drop() {
+            let mut triangles = floor(0.0, -20.0, 20.0);
+            triangles.extend(block([-20.0, 0.0, -20.0], [20.0, 1.5, 0.0]));
+            let (_, mesh) = zone(&triangles);
+            assert_eq!(links(mesh_of(&mesh)).len(), 0);
+        }
+
+        #[test]
+        fn drops_along_one_ledge_onto_one_floor_are_kept_apart() {
+            let (_, mesh) = zone(&platform(8.0, false));
+            let links = links(mesh_of(&mesh));
+            assert_ne!(links.len(), 0);
+            for (i, a) in links.iter().enumerate() {
+                assert!(a.top.y - a.landing.y > MAX_GROUNDED_STEP, "{a:?}");
+                for b in &links[i + 1..] {
+                    if (a.from, a.to) == (b.from, b.to) {
+                        assert!(a.top.distance(b.top) >= THINNING, "{a:?} {b:?}");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn islands_a_drop_leads_down_to_are_reached_only_with_drops() {
+            let (world, mesh) = zone(&platform(8.0, false));
+            let (top, below) = (Vec3::new(0.0, 8.0, -15.0), Vec3::new(0.0, 0.0, 10.0));
+            let mut search = mesh.search(falling(top, below));
+            let path = found(run(&mut *search, &world, 256).0);
+            assert_eq!(planned(&*search).1, 1, "{path:?}");
+            for (request, why) in [
+                (request(top, below, Vec::new()), Fallback::OtherIsland),
+                (falling(below, top), Fallback::OtherIsland),
+            ] {
+                let mut search = mesh.search(request);
+                assert_eq!(run(&mut *search, &world, 256).0, PathProgress::Failed);
+                assert_eq!(planned(&*search).3, Some(why));
+            }
+        }
+
+        #[test]
+        fn a_drop_the_world_refuses_is_repaired_with_drops() {
+            // A railing at the ledge's edge, in the world but not in the mesh.
+            let (mut world, mesh) = zone(&platform(8.0, false));
+            let railing = CollisionMesh::new(block([-4.0, 8.0, -5.4], [4.0, 11.0, -5.0])).unwrap();
+            world.set_obstacles(vec![Arc::new(railing)]);
+            let (start, goal) = (Vec3::new(0.0, 8.0, -15.0), Vec3::new(0.0, 0.0, 10.0));
+            let mut search = mesh.search(falling(start, goal));
+            let path = found(run(&mut *search, &world, 256).0);
+            let (_, _, repaired, fallback) = planned(&*search);
+            assert!(
+                repaired >= 1 && fallback.is_none(),
+                "{repaired} {fallback:?} {path:?}"
+            );
+            assert!(
+                follow(&world, start, &path).distance(goal) < 1.5,
+                "{path:?}"
+            );
+        }
+
+        #[test]
+        fn a_build_cancelled_in_its_drops_keeps_nothing() {
+            let triangles = platform(8.0, false);
+            // One thread asks once a tile and once past the last: so many
+            // asks, and the drops' first few, before it is cancelled.
+            let (_, report) = super::super::build(&triangles);
+            let asked = AtomicUsize::new(0);
+            let limit = report.tiles + 3;
+            let cancelled = || asked.fetch_add(1, Ordering::Relaxed) >= limit;
+            assert!(NavMesh::build_until(&triangles, &settings(), 1, &cancelled).is_none());
+            assert!(asked.load(Ordering::Relaxed) > limit);
+        }
+
+        #[test]
+        fn a_stretch_whose_drops_panic_is_refused_and_the_rest_are_found() {
+            let triangles = platform(8.0, false);
+            let (_, navigator) = zone(&triangles);
+            let mesh = mesh_of(&navigator);
+            let world = CollisionWorld::new(triangles.iter().copied()).unwrap();
+            let first = AtomicBool::new(true);
+            let panicking = |mesh: &NavMesh, world: &CollisionWorld, stretch: &_, height: f32| {
+                assert!(!first.swap(false, Ordering::Relaxed), "the first stretch");
+                super::super::super::drops::stretch_links(mesh, world, stretch, height)
+            };
+            let (found, refused) = links_with(mesh, &world, 6.0, 1, &|| false, &panicking).unwrap();
+            assert_eq!(refused, 1);
+            assert_ne!(found.len(), 0);
+        }
+
+        #[test]
+        fn drops_are_kept_in_the_cache() {
+            let triangles = platform(8.0, false);
+            let folder = super::super::folder("drops");
+            let cancel = AtomicBool::new(false);
+            let built = crate::movement::navmesh::cache::load_or_build(
+                Some(&folder),
+                "zone",
+                &triangles,
+                &settings(),
+                2,
+                &cancel,
+            )
+            .unwrap();
+            let read =
+                crate::movement::navmesh::cache::load(&folder, "zone", &triangles, &settings())
+                    .unwrap();
+            assert_ne!(built.mesh.drops.len(), 0);
+            assert_eq!(read.drops, built.mesh.drops);
+            let _ = std::fs::remove_dir_all(&folder);
+        }
     }
 }

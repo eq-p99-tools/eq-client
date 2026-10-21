@@ -10,6 +10,7 @@
 
 mod build;
 pub mod cache;
+mod drops;
 mod navigator;
 mod route;
 
@@ -94,10 +95,37 @@ pub struct NavMesh {
     islands: usize,
     /// Polygons by the index cells their bounds cover.
     index: HashMap<(i32, i32), Vec<u32>>,
-    /// The mesh's outline, the stretches of polygon edges no link shares, by
-    /// the index cells their bounds cover.
-    walls: HashMap<(i32, i32), Vec<(Vec3, Vec3)>>,
+    /// The mesh's outline: the stretches of polygon edges no link shares.
+    outline: Vec<Outline>,
+    /// The outline's stretches by the index cells their bounds cover.
+    walls: HashMap<(i32, i32), Vec<u32>>,
+    /// Ways off a ledge onto a lower polygon, by the polygon they leave.
+    drops: Vec<DropLink>,
+    drops_from: HashMap<u32, Vec<u32>>,
+    /// The islands each island reaches by its drops, directly.
+    drops_to: Vec<Vec<u32>>,
 }
+
+/// A stretch of the mesh's outline, and the polygon whose edge it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Outline {
+    a: Vec3,
+    b: Vec3,
+    polygon: u32,
+}
+
+/// A way off a ledge: walking from `top` on polygon `from` over its edge
+/// lands the walker at `landing` on polygon `to`, lower down. One way only.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DropLink {
+    from: u32,
+    to: u32,
+    top: Vec3,
+    landing: Vec3,
+}
+
+/// Items by the index cells their bounds cover.
+type Index = HashMap<(i32, i32), Vec<u32>>;
 
 /// The side of an index cell, in world units.
 const INDEX_CELL: f32 = 8.0;
@@ -123,21 +151,55 @@ impl NavMesh {
         threads: usize,
         cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<(Self, BuildReport)> {
-        let (polygons, report) = build::polygons(triangles, settings, threads, cancelled)?;
-        Some((Self::from_polygons(polygons), report))
+        let (polygons, mut report) = build::polygons(triangles, settings, threads, cancelled)?;
+        let mesh = Self::from_parts(polygons, Vec::new());
+        let started = std::time::Instant::now();
+        let (links, refused) = drops::links(&mesh, triangles, settings.height, threads, cancelled)?;
+        report.drop_links = links.len();
+        report.refused_stretches = refused;
+        report.drop_elapsed = started.elapsed();
+        report.elapsed += report.drop_elapsed;
+        Some((mesh.with_drops(links), report))
     }
 
-    fn from_polygons(polygons: Vec<Polygon>) -> Self {
+    fn from_parts(polygons: Vec<Polygon>, drops: Vec<DropLink>) -> Self {
         let (island, islands) = islands(&polygons);
         let index = index(&polygons);
-        let walls = walls(&polygons);
+        let (outline, walls) = walls(&polygons);
         Self {
             polygons,
             island,
             islands,
             index,
+            outline,
             walls,
+            drops: Vec::new(),
+            drops_from: HashMap::new(),
+            drops_to: Vec::new(),
         }
+        .with_drops(drops)
+    }
+
+    /// The mesh with `drops` as its ways off ledges.
+    fn with_drops(mut self, drops: Vec<DropLink>) -> Self {
+        let mut drops_from: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut drops_to = vec![Vec::new(); self.islands];
+        for (i, link) in drops.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)] // Links are counted in u32.
+            drops_from.entry(link.from).or_default().push(i as u32);
+            let (from, to) = (
+                self.island[link.from as usize],
+                self.island[link.to as usize],
+            );
+            let reached: &mut Vec<u32> = &mut drops_to[from as usize];
+            if from != to && !reached.contains(&to) {
+                reached.push(to);
+            }
+        }
+        self.drops = drops;
+        self.drops_from = drops_from;
+        self.drops_to = drops_to;
+        self
     }
 
     /// Polygons in the mesh.
@@ -177,7 +239,8 @@ impl NavMesh {
             .get(&cell_of(point))
             .into_iter()
             .flatten()
-            .any(|&(a, b)| {
+            .any(|&i| {
+                let Outline { a, b, .. } = self.outline[i as usize];
                 let (a2, b2) = (Vec2::new(a.x, a.z), Vec2::new(b.x, b.z));
                 let along = b2 - a2;
                 let t = ((point - a2).dot(along) / along.length_squared()).clamp(0.0, 1.0);
@@ -189,6 +252,35 @@ impl NavMesh {
     #[must_use]
     pub fn connected(&self, a: u32, b: u32) -> bool {
         self.island[a as usize] == self.island[b as usize]
+    }
+
+    /// Whether a walk from polygon `a` can reach polygon `b`: on one island,
+    /// or with `drops`, through islands its drops lead down to.
+    #[must_use]
+    pub fn reaches(&self, a: u32, b: u32, drops: bool) -> bool {
+        let (from, to) = (self.island[a as usize], self.island[b as usize]);
+        if from == to || !drops {
+            return from == to;
+        }
+        let mut seen = vec![false; self.islands];
+        let mut stack = vec![from];
+        seen[from as usize] = true;
+        while let Some(at) = stack.pop() {
+            for &next in &self.drops_to[at as usize] {
+                if next == to {
+                    return true;
+                }
+                if !std::mem::replace(&mut seen[next as usize], true) {
+                    stack.push(next);
+                }
+            }
+        }
+        false
+    }
+
+    /// Ways off ledges, as where each leaves its ledge and where it lands.
+    pub fn drop_links(&self) -> impl Iterator<Item = (Vec3, Vec3)> + '_ {
+        self.drops.iter().map(|link| (link.top, link.landing))
     }
 }
 
@@ -241,15 +333,17 @@ fn index(polygons: &[Polygon]) -> HashMap<(i32, i32), Vec<u32>> {
     index
 }
 
-/// The stretches of each polygon's edges that no link of its covers.
-fn walls(polygons: &[Polygon]) -> HashMap<(i32, i32), Vec<(Vec3, Vec3)>> {
+/// The stretches of each polygon's edges that no link of its covers, and
+/// them by the index cells their bounds cover.
+fn walls(polygons: &[Polygon]) -> (Vec<Outline>, Index) {
     // How near a link's end lies to an edge to count as on it, and the
     // shortest stretch kept.
     const ON: f32 = 0.02;
     const SHORTEST: f32 = 0.01;
     let flat = |v: Vec3| Vec2::new(v.x, v.z);
-    let mut walls: HashMap<(i32, i32), Vec<(Vec3, Vec3)>> = HashMap::new();
-    for polygon in polygons {
+    let mut outline = Vec::new();
+    let mut walls = Index::new();
+    for (owner, polygon) in polygons.iter().enumerate() {
         let corners = polygon.vertices.len();
         for corner in 0..corners {
             let (a, b) = (
@@ -286,15 +380,23 @@ fn walls(polygons: &[Polygon]) -> HashMap<(i32, i32), Vec<(Vec3, Vec3)>> {
             }
             for (p, q) in stretches {
                 let (low, high) = (cell_of(flat(p).min(flat(q))), cell_of(flat(p).max(flat(q))));
+                #[allow(clippy::cast_possible_truncation)] // Counted in u32.
+                let i = outline.len() as u32;
                 for x in low.0..=high.0 {
                     for z in low.1..=high.1 {
-                        walls.entry((x, z)).or_default().push((p, q));
+                        walls.entry((x, z)).or_default().push(i);
                     }
                 }
+                #[allow(clippy::cast_possible_truncation)] // Polygons are counted in u32.
+                outline.push(Outline {
+                    a: p,
+                    b: q,
+                    polygon: owner as u32,
+                });
             }
         }
     }
-    walls
+    (outline, walls)
 }
 
 /// The height of a convex polygon's surface under `at`, from the fan triangle

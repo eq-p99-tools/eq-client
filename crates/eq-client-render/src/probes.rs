@@ -1563,7 +1563,12 @@ fn inspect_model_heights() {
 /// the plain walk, each repaired leg's ends, any fallback, the seconds the
 /// whole search took with its leg checks, and the path's length.
 /// `EQ_PROBE_DOORS` (comma-separated ids) lists the doors a route may open;
-/// door colliders are not loaded.
+/// door colliders are not loaded. `EQ_PROBE_DROPS=1` lets both planners step
+/// off ledges, and the mesh's drops taken are printed too.
+///
+/// The build line gives the mesh's ways off ledges and the seconds spent
+/// finding them, then the three with the longest falls, each as EQ X,Y,Z
+/// from its top to its landing and as a route ready for `EQ_PROBE_ROUTES`.
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE and EQ_PROBE_ROUTES"]
 #[allow(clippy::too_many_lines)]
@@ -1590,6 +1595,7 @@ fn inspect_mesh_routes() {
             .map(|d| d.trim().parse().unwrap())
             .collect()
     });
+    let drops = std::env::var("EQ_PROBE_DROPS").is_ok_and(|drops| drops == "1");
     let building = Instant::now();
     let (mesh, report) = NavMesh::build(
         &triangles,
@@ -1600,14 +1606,30 @@ fn inspect_mesh_routes() {
     .unwrap();
     println!(
         "zone={zone_name} triangles={} height={height} release={} build_seconds={:.2} polygons={} \
-         islands={} refused_tiles={}",
+         islands={} refused_tiles={} drop_links={} drop_seconds={:.2} refused_stretches={} drops={drops}",
         triangles.len(),
         !cfg!(debug_assertions),
         building.elapsed().as_secs_f32(),
         mesh.polygon_count(),
         mesh.island_count(),
         report.refused.len(),
+        report.drop_links,
+        report.drop_elapsed.as_secs_f32(),
+        report.refused_stretches,
     );
+    let mut deepest: Vec<(Vec3, Vec3)> = mesh.drop_links().collect();
+    deepest.sort_by(|a, b| (b.0.y - b.1.y).total_cmp(&(a.0.y - a.1.y)));
+    let raised = |v: Vec3| format!("{:.1},{:.1},{:.1}", v.x, v.y + 2.0, v.z);
+    for (k, (top, landing)) in deepest.iter().take(3).enumerate() {
+        println!(
+            "drop_link={k} top_eq={} landing_eq={} fall={:.1} route=drop{k}={}>{}",
+            eq_point(*top),
+            eq_point(*landing),
+            top.y - landing.y,
+            raised(*top),
+            raised(*landing),
+        );
+    }
     let floor = |at: Vec3| {
         let below = world.ray_distance(at, -Vec3::Y, 50.0).unwrap();
         at - Vec3::Y * below
@@ -1636,7 +1658,7 @@ fn inspect_mesh_routes() {
                 reach: 10.0,
                 height,
                 doors: doors.clone(),
-                drops: false,
+                drops,
                 scope: Scope::Whole,
             });
             let progress = loop {
@@ -1664,6 +1686,7 @@ fn inspect_mesh_routes() {
                 Planned::Mesh {
                     legs,
                     clear,
+                    drops,
                     repaired,
                     fallback,
                 } => {
@@ -1672,9 +1695,9 @@ fn inspect_mesh_routes() {
                         .map(|(from, to)| format!("{}>{}", eq_point(*from), eq_point(*to)))
                         .collect();
                     format!(
-                        " legs={legs} clear={clear} walk_only={} repaired={} repaired_eq=[{}] \
-                         fallback={fallback:?}",
-                        legs.saturating_sub(clear + repaired.len()),
+                        " legs={legs} clear={clear} walk_only={} drops={drops} repaired={} \
+                         repaired_eq=[{}] fallback={fallback:?}",
+                        legs.saturating_sub(clear + drops + repaired.len()),
                         repaired.len(),
                         repairs.join(" "),
                     )
