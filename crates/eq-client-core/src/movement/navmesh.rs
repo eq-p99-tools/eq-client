@@ -14,6 +14,7 @@ mod drops;
 mod navigator;
 mod route;
 
+use super::CollisionWorld;
 pub use build::{BuildReport, RefusedTile};
 use glam::{Vec2, Vec3};
 pub use navigator::MeshNavigator;
@@ -140,13 +141,27 @@ impl NavMesh {
         threads: usize,
         cancel: &AtomicBool,
     ) -> Option<(Self, BuildReport)> {
-        Self::build_until(triangles, settings, threads, &|| {
+        Self::build_in(triangles, None, settings, threads, cancel)
+    }
+
+    /// [`NavMesh::build`], its ledges' drops tried in `world`, the zone's
+    /// own world over the same `triangles`, when there is one.
+    #[must_use]
+    pub fn build_in(
+        triangles: &[[[f32; 3]; 3]],
+        world: Option<&CollisionWorld>,
+        settings: &Settings,
+        threads: usize,
+        cancel: &AtomicBool,
+    ) -> Option<(Self, BuildReport)> {
+        Self::build_until(triangles, world, settings, threads, &|| {
             cancel.load(Ordering::Relaxed)
         })
     }
 
     fn build_until(
         triangles: &[[[f32; 3]; 3]],
+        world: Option<&CollisionWorld>,
         settings: &Settings,
         threads: usize,
         cancelled: &(dyn Fn() -> bool + Sync),
@@ -154,7 +169,8 @@ impl NavMesh {
         let (polygons, mut report) = build::polygons(triangles, settings, threads, cancelled)?;
         let mesh = Self::from_parts(polygons, Vec::new());
         let started = std::time::Instant::now();
-        let (links, refused) = drops::links(&mesh, triangles, settings.height, threads, cancelled)?;
+        let (links, refused) =
+            drops::links(&mesh, triangles, world, settings.height, threads, cancelled)?;
         report.drop_links = links.len();
         report.refused_stretches = refused;
         report.drop_elapsed = started.elapsed();
@@ -276,6 +292,39 @@ impl NavMesh {
             }
         }
         false
+    }
+
+    /// Two points far apart on the largest island, on its floor: from any of
+    /// its polygons the farthest one, then the farthest from that. For
+    /// probes, where no route is given.
+    #[must_use]
+    pub fn far_pair(&self) -> Option<(Vec3, Vec3)> {
+        let mut sizes = vec![0_usize; self.islands];
+        for &island in &self.island {
+            sizes[island as usize] += 1;
+        }
+        let largest = (0..self.islands).max_by_key(|&i| (sizes[i], std::cmp::Reverse(i)))?;
+        let centre = |polygon: &Polygon| {
+            #[allow(clippy::cast_precision_loss)] // A polygon has a few corners.
+            let middle = polygon.vertices.iter().sum::<Vec3>() / polygon.vertices.len() as f32;
+            height_in(&polygon.vertices, middle)
+                .map_or(middle, |y| Vec3::new(middle.x, y, middle.z))
+        };
+        let on_island: Vec<Vec3> = self
+            .polygons
+            .iter()
+            .zip(&self.island)
+            .filter(|&(_, &island)| island as usize == largest)
+            .map(|(polygon, _)| centre(polygon))
+            .collect();
+        let farthest = |from: Vec3| {
+            on_island
+                .iter()
+                .copied()
+                .max_by(|a, b| a.distance(from).total_cmp(&b.distance(from)))
+        };
+        let a = farthest(*on_island.first()?)?;
+        Some((a, farthest(a)?))
     }
 
     /// Ways off ledges, as where each leaves its ledge and where it lands.

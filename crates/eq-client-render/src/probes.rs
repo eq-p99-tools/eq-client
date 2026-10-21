@@ -1558,21 +1558,24 @@ fn inspect_model_heights() {
 /// The mesh is built as the client builds it at zone entry, for the height
 /// of `EQ_PROBE_MODEL` (default 6). Each route in `EQ_PROBE_ROUTES`
 /// (`name=x,y,z>x,y,z` renderer points a little above their floor, separated
-/// by `;`) is searched by both planners, 5,000 units of work a call, and
+/// by `;`), or without it the two far ends of the mesh's largest island as
+/// the route `far`, is searched by both planners, 5,000 units of work a call, and
 /// prints the planner, its legs, how many kept the clearance or passed only
 /// the plain walk, each repaired leg's ends, any fallback, the seconds the
-/// whole search took with its leg checks, and the path's length.
-/// `EQ_PROBE_DOORS` (comma-separated ids) lists the doors a route may open;
+/// whole search took with its leg checks, the path's length, and how many of
+/// its stretches take the walker's head under water. `EQ_PROBE_DOORS` (comma-separated ids) lists the doors a route may open;
 /// door colliders are not loaded. `EQ_PROBE_DROPS=1` lets both planners step
 /// off ledges, and the mesh's drops taken are printed too.
 ///
 /// The build line gives the mesh's ways off ledges and the seconds spent
-/// finding them, then the three with the longest falls, each as EQ X,Y,Z
+/// finding them in the zone's own world, the next line the zone's liquid
+/// regions and the cache file's bytes, then the three with the longest falls, each as EQ X,Y,Z
 /// from its top to its landing and as a route ready for `EQ_PROBE_ROUTES`.
 #[test]
-#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE and EQ_PROBE_ROUTES"]
+#[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
 #[allow(clippy::too_many_lines)]
 fn inspect_mesh_routes() {
+    use eq_client_core::movement::Liquids as _;
     use eq_client_core::movement::navmesh::{self, MeshNavigator, NavMesh, Settings};
     use eq_client_core::movement::{
         GridNavigator, Navigator, PathProgress, Planned, Scope, SearchRequest,
@@ -1597,8 +1600,9 @@ fn inspect_mesh_routes() {
     });
     let drops = std::env::var("EQ_PROBE_DROPS").is_ok_and(|drops| drops == "1");
     let building = Instant::now();
-    let (mesh, report) = NavMesh::build(
+    let (mesh, report) = NavMesh::build_in(
         &triangles,
+        Some(&world),
         &Settings::walker(height),
         navmesh::build_threads(),
         &AtomicBool::new(false),
@@ -1616,6 +1620,26 @@ fn inspect_mesh_routes() {
         report.drop_links,
         report.drop_elapsed.as_secs_f32(),
         report.refused_stretches,
+    );
+    let liquids = ZoneLiquids(zone.regions.clone());
+    // The cache file's size, written to a folder of the probe's own and
+    // removed again.
+    let folder = std::env::temp_dir().join(format!("eq-probe-navmesh-{}", std::process::id()));
+    let bytes = navmesh::cache::store(
+        &folder,
+        &zone_name,
+        &triangles,
+        &Settings::walker(height),
+        &mesh,
+    );
+    let _ = std::fs::remove_dir_all(&folder);
+    println!(
+        "liquid_regions={} cache_bytes={}",
+        zone.regions.liquid_region_count(),
+        bytes.map_or_else(
+            |error| format!("unknown ({error})"),
+            |bytes| bytes.to_string()
+        ),
     );
     let mut deepest: Vec<(Vec3, Vec3)> = mesh.drop_links().collect();
     deepest.sort_by(|a, b| (b.0.y - b.1.y).total_cmp(&(a.0.y - a.1.y)));
@@ -1638,18 +1662,32 @@ fn inspect_mesh_routes() {
         let v: Vec<f32> = s.split(',').map(|n| n.trim().parse().unwrap()).collect();
         floor(Vec3::new(v[0], v[1], v[2]))
     };
+    let routes: Vec<(String, Vec3, Vec3)> = std::env::var("EQ_PROBE_ROUTES").map_or_else(
+        |_| {
+            let (a, b) = mesh.far_pair().expect("a mesh with polygons");
+            vec![(
+                "far".to_owned(),
+                floor(a + Vec3::Y * 2.0),
+                floor(b + Vec3::Y * 2.0),
+            )]
+        },
+        |routes| {
+            routes
+                .split(';')
+                .filter(|r| !r.trim().is_empty())
+                .map(|route| {
+                    let (name, ends) = route.split_once('=').unwrap();
+                    let (a, b) = ends.split_once('>').unwrap();
+                    (name.trim().to_owned(), point(a), point(b))
+                })
+                .collect()
+        },
+    );
     let navigators: [(&str, Box<dyn Navigator>); 2] = [
         ("grid", Box::new(GridNavigator)),
         ("mesh", Box::new(MeshNavigator::new(Arc::new(mesh)))),
     ];
-    for route in std::env::var("EQ_PROBE_ROUTES")
-        .unwrap()
-        .split(';')
-        .filter(|r| !r.trim().is_empty())
-    {
-        let (name, ends) = route.split_once('=').unwrap();
-        let (a, b) = ends.split_once('>').unwrap();
-        let (start, goal) = (point(a), point(b));
+    for (name, start, goal) in routes {
         for (planner, navigator) in &navigators {
             let searching = Instant::now();
             let mut search = navigator.search(SearchRequest {
@@ -1668,6 +1706,24 @@ fn inspect_mesh_routes() {
                 }
             };
             let seconds = searching.elapsed().as_secs_f32();
+            // Stretches of the path along which the walker's head would be
+            // under water: a walk on a seabed.
+            let under_water = match &progress {
+                PathProgress::Found(path) => std::iter::once(start)
+                    .chain(path.iter().copied())
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .filter(|pair| {
+                        let head = Vec3::Y * height;
+                        liquids.passes_through(
+                            pair[0] + head,
+                            pair[1] + head,
+                            eq_client_core::movement::Liquid::Water,
+                        )
+                    })
+                    .count(),
+                _ => 0,
+            };
             let (found, length, points) = match &progress {
                 PathProgress::Found(path) => (
                     true,
@@ -1704,9 +1760,8 @@ fn inspect_mesh_routes() {
                 }
             };
             println!(
-                "route={} planner={planner} eq_start={} eq_goal={} found={found} seconds={seconds:.3} \
-                 searched={} length={length:.1} path_points={points}{detail}",
-                name.trim(),
+                "route={name} planner={planner} eq_start={} eq_goal={} found={found} seconds={seconds:.3} \
+                 searched={} length={length:.1} path_points={points} under_water={under_water}{detail}",
                 eq_point(start),
                 eq_point(goal),
                 search.searched().0,
