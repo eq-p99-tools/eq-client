@@ -1965,6 +1965,204 @@ fn inspect_mesh_sizes() {
     );
 }
 
+/// Looks at one leg the tagged mesh fell back to the grid on, against
+/// plain builds at the two shorter sizes (#268's East Commons check).
+/// Nothing opens a window.
+///
+/// `EQ_PROBE_LEG` is the leg as renderer points, `x,y,z>x,y,z`, defaulting
+/// to East Commons' fallback leg at bfa110c. For the tagged build's size 0
+/// and size 1 meshes and for plain builds at those sizes, it prints the
+/// polygon under each end (its size tag on the tagged build), whether the
+/// ends share an island, the leg routed alone, and every 2 units along the
+/// leg where no polygon lies under it, as runs of gaps. Each build's
+/// refused tiles within two tiles of the leg are printed too.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
+#[allow(clippy::too_many_lines)]
+fn inspect_mesh_leg() {
+    use eq_client_core::movement::navmesh::{self, MeshNavigator, NavMesh, Settings};
+    use eq_client_core::movement::{Navigator, PathProgress, Planned, Scope, SearchRequest};
+    use std::sync::{Arc, atomic::AtomicBool};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone_name = std::env::var("EQ_PROBE_ZONE").unwrap();
+    let leg = std::env::var("EQ_PROBE_LEG")
+        .unwrap_or_else(|_| "-441.4,-55.3,-2145.3>-1019.4,-15.2,-1521.2".to_owned());
+    let point = |text: &str| {
+        let v: Vec<f32> = text.split(',').map(|n| n.trim().parse().unwrap()).collect();
+        Vec3::new(v[0], v[1], v[2])
+    };
+    let (from, to) = leg.split_once('>').unwrap();
+    let (from, to) = (point(from), point(to));
+    let zone = eq_client_assets::load_zone_collision(&install, &zone_name).unwrap();
+    let triangles = collision_triangles(&zone);
+    let world = build_collision(&zone).unwrap();
+    let low = triangles
+        .iter()
+        .flatten()
+        .fold(Vec3::splat(f32::MAX), |low, p| {
+            low.min(Vec3::from_array(*p))
+        });
+    let sizes = super::zone_navmesh::walker_sizes();
+    println!(
+        "zone={zone_name} sizes={sizes:?} leg_eq={}>{} leg_length={:.1}",
+        eq_point(from),
+        eq_point(to),
+        from.distance(to)
+    );
+    let build = |label: &str, settings: &Settings| {
+        let (mesh, report) = NavMesh::build_in(
+            &triangles,
+            Some(&world),
+            settings,
+            navmesh::build_threads(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        #[allow(clippy::cast_possible_truncation)]
+        let tile_of = |p: Vec3| {
+            (
+                ((p.x - low.x) / settings.tile).floor() as i32,
+                ((p.z - low.z) / settings.tile).floor() as i32,
+            )
+        };
+        let (a, b) = (tile_of(from), tile_of(to));
+        let near: Vec<_> = report
+            .refused
+            .iter()
+            .filter(|tile| {
+                let (x, z) = tile.tile;
+                x >= a.0.min(b.0) - 2
+                    && x <= a.0.max(b.0) + 2
+                    && z >= a.1.min(b.1) - 2
+                    && z <= a.1.max(b.1) + 2
+            })
+            .map(|tile| format!("{:?}:{}", tile.tile, tile.step))
+            .collect();
+        println!(
+            "build={label} polygons={} islands={} refused_tiles={} leg_tiles={a:?}..{b:?} \
+             refused_near_leg={near:?}",
+            mesh.polygon_count(),
+            mesh.island_count(),
+            report.refused.len(),
+        );
+        mesh
+    };
+    let route = |mesh: &Arc<NavMesh>, height: f32| {
+        let navigator = MeshNavigator::new(Arc::clone(mesh));
+        let mut search = navigator.search(SearchRequest {
+            start: from,
+            goal: to,
+            reach: 10.0,
+            height,
+            doors: Vec::new(),
+            drops: false,
+            scope: Scope::Whole,
+        });
+        let progress = loop {
+            match search.advance(&world, 5000) {
+                PathProgress::Searching => (),
+                done => break done,
+            }
+        };
+        let detail = match search.planned() {
+            Planned::Mesh {
+                legs,
+                repaired,
+                fallback,
+                ..
+            } => format!(
+                "legs={legs} repaired={} fallback={fallback:?}",
+                repaired.len()
+            ),
+            Planned::Grid => "grid".to_owned(),
+        };
+        format!(
+            "found={} {detail}",
+            matches!(progress, PathProgress::Found(_))
+        )
+    };
+    let look = |label: &str, mesh: &Arc<NavMesh>, tagged: Option<&NavMesh>, height: f32| {
+        let end = |at: Vec3| {
+            mesh.locate(at).map_or_else(
+                || "none".to_owned(),
+                |(polygon, floor)| {
+                    let size = tagged
+                        .and_then(|whole| whole.locate(at))
+                        .map(|(i, _)| whole_size(tagged, i))
+                        .unwrap_or_default();
+                    format!("polygon={polygon} floor={floor:.2}{size}")
+                },
+            )
+        };
+        let joined = match (mesh.locate(from), mesh.locate(to)) {
+            (Some((a, _)), Some((b, _))) => mesh.connected(a, b).to_string(),
+            _ => "unknown".to_owned(),
+        };
+        // Runs of 2-unit steps along the leg with no polygon under them.
+        let steps = (from.distance(to) / 2.0).ceil().max(1.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let count = steps as usize;
+        let mut gaps = Vec::new();
+        let mut run: Option<(usize, usize)> = None;
+        for step in 0..=count {
+            #[allow(clippy::cast_precision_loss)]
+            let at = from.lerp(to, step as f32 / steps);
+            // The leg's ends are a little over the floor; look a few units
+            // either way of the straight line's height.
+            let under = [0.0, 2.0, -2.0, 4.0, -4.0]
+                .iter()
+                .any(|dy| mesh.locate(at + Vec3::Y * *dy).is_some());
+            match (under, &mut run) {
+                (false, None) => run = Some((step, step)),
+                (false, Some((_, last))) => *last = step,
+                (true, Some(_)) => gaps.push(run.take().unwrap()),
+                (true, None) => (),
+            }
+        }
+        gaps.extend(run);
+        #[allow(clippy::cast_precision_loss)]
+        let gaps: Vec<String> = gaps
+            .iter()
+            .take(12)
+            .map(|&(a, b)| {
+                format!(
+                    "{}..{} ({} steps)",
+                    eq_point(from.lerp(to, a as f32 / steps)),
+                    eq_point(from.lerp(to, b as f32 / steps)),
+                    b - a + 1
+                )
+            })
+            .collect();
+        println!(
+            "mesh={label} height={height:.1} start: {} | goal: {} | same_island={joined} | \
+             route: {} | gaps={gaps:?}",
+            end(from),
+            end(to),
+            route(mesh, height),
+        );
+    };
+    let tagged = build("tagged", &Settings::sized(sizes));
+    let meshes = tagged.split(sizes);
+    for (size, &height) in sizes.iter().enumerate().take(2) {
+        look(
+            &format!("tagged{size}"),
+            &meshes.for_height(height).unwrap(),
+            Some(&tagged),
+            height,
+        );
+        let plain = Arc::new(build(&format!("plain{size}"), &Settings::walker(height)));
+        look(&format!("plain{size}"), &plain, None, height);
+    }
+}
+
+/// ` size=` and the tag of polygon `i` on the whole tagged mesh, where
+/// there is one.
+fn whole_size(tagged: Option<&eq_client_core::movement::navmesh::NavMesh>, i: u32) -> String {
+    tagged.map_or_else(String::new, |mesh| {
+        format!(" size={}", mesh.polygon_size(i))
+    })
+}
+
 /// Where a zone's solids lie up and down, and what lies far from the rest:
 /// for a zone whose height range overflows the mesh's tiles (Dreadlands'
 /// build refused every tile). Nothing opens a window.

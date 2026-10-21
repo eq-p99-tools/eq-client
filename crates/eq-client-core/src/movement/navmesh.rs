@@ -293,6 +293,13 @@ impl NavMesh {
             })
     }
 
+    /// The size polygon `i` is tagged for: 0 for the shortest alone, up to 2
+    /// for all three.
+    #[must_use]
+    pub fn polygon_size(&self, i: u32) -> u8 {
+        self.polygons[i as usize].size
+    }
+
     /// Whether polygons `a` and `b` lie on one island, so a walk can join them.
     #[must_use]
     pub fn connected(&self, a: u32, b: u32) -> bool {
