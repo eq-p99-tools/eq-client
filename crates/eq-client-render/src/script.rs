@@ -2206,6 +2206,7 @@ impl Planned {
                 drops,
                 repaired,
                 fallback,
+                ..
             }) => Self {
                 planner: "mesh",
                 legs: *legs,

@@ -624,8 +624,8 @@ mod routes {
     use crate::movement::navmesh::{MeshNavigator, NavMesh};
     use crate::movement::path::{CLEARANCE, DOOR_TOLL};
     use crate::movement::{
-        CollisionMesh, CollisionWorld, Fallback, Navigator, PathProgress, Planned, RouteSearch,
-        Scope, SearchRequest,
+        CollisionMesh, CollisionWorld, Fallback, Navigator, PathProgress, Planned, Refusals,
+        RouteSearch, Scope, SearchRequest,
     };
     use glam::{Vec2, Vec3};
     use std::sync::Arc;
@@ -901,6 +901,106 @@ mod routes {
     /// cells, plus one, for legs under 28 long from the start round the
     /// wall's end.
     const ONE_LEG: usize = 15;
+
+    fn mesh_refused(search: &dyn RouteSearch) -> Refusals {
+        match search.planned() {
+            Planned::Mesh { refused, .. } => refused,
+            Planned::Grid => panic!("the grid planned"),
+        }
+    }
+
+    #[test]
+    fn a_leg_ends_on_the_floor_where_the_mesh_lies_under_it() {
+        // The mesh's floor 2.5 under the world's, more than a step, as the
+        // mesh's surface sinks under a sloped floor; the wall's end makes a
+        // corner the route turns at, a mesh point.
+        let mut low = floor(0.0, -40.0, 40.0);
+        low.extend(wall_to(20.0));
+        let (_, mesh) = zone(&low);
+        let mut high = floor(2.5, -40.0, 40.0);
+        high.extend(block([-40.0, 2.5, -0.5], [20.0, 12.5, 0.5]));
+        let world = CollisionWorld::new(high).unwrap();
+        let (start, goal) = (Vec3::new(0.0, 2.5, -20.0), Vec3::new(0.0, 2.5, 20.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let path = found(run(&mut *search, &world, 256).0);
+        let (_, repaired, fallback) = mesh_planned(&*search);
+        assert_eq!((repaired, fallback), (0, None), "{path:?}");
+        assert_eq!(mesh_refused(&*search), Refusals::default());
+        assert!(
+            path.iter().all(|feet| (feet.y - 2.5).abs() < 0.01),
+            "{path:?}"
+        );
+    }
+
+    #[test]
+    fn a_long_refused_leg_is_cut_and_only_its_refused_piece_repaired() {
+        // Open floor the mesh sees clear, with a post in the world alone
+        // halfway along the way.
+        let (world, mesh) = {
+            let (mut world, mesh) = zone(&floor(0.0, -150.0, 150.0));
+            let post = CollisionMesh::new(block([-0.5, 0.0, 9.5], [0.5, 10.0, 10.5])).unwrap();
+            world.set_obstacles(vec![Arc::new(post)]);
+            (world, mesh)
+        };
+        let (start, goal) = (Vec3::new(0.0, 0.0, -140.0), Vec3::new(0.0, 0.0, 140.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let path = found(run(&mut *search, &world, 256).0);
+        let Planned::Mesh {
+            legs,
+            repaired,
+            fallback,
+            refused,
+            ..
+        } = search.planned()
+        else {
+            panic!("the grid planned");
+        };
+        assert_eq!((legs, fallback), (1, None), "{path:?}");
+        // The leg and the piece by the post refused, the leg cut once.
+        assert_eq!(
+            refused,
+            Refusals {
+                walk: 2,
+                split: 1,
+                ..Refusals::default()
+            }
+        );
+        let [(from, to)] = repaired[..] else {
+            panic!("{repaired:?}");
+        };
+        assert!(Vec2::new(to.x - from.x, to.z - from.z).length() <= 64.0 + 1.0);
+        assert!(from.z < 10.0 && to.z > 10.0, "{from} {to}");
+        assert!(path.last().unwrap().distance(goal) < 1.5, "{path:?}");
+    }
+
+    #[test]
+    fn a_cut_leg_s_pieces_end_on_the_corridor_s_floor_not_its_straight_line() {
+        // A ridge 20 high across the way, the straight line between its feet
+        // far under its top, with a post in the world alone on its slope.
+        let ridge = [(-150.0, 0.0), (0.0, 20.0), (150.0, 0.0)];
+        let triangles: Vec<_> = ridge
+            .windows(2)
+            .flat_map(|pair| {
+                let ((z0, y0), (z1, y1)) = (pair[0], pair[1]);
+                super::quad(
+                    [-40.0, y0, z0],
+                    [-40.0, y1, z1],
+                    [40.0, y1, z1],
+                    [40.0, y0, z0],
+                )
+            })
+            .collect();
+        let (mut world, mesh) = zone(&triangles);
+        let post = CollisionMesh::new(block([-0.5, 0.0, 29.5], [0.5, 30.0, 30.5])).unwrap();
+        world.set_obstacles(vec![Arc::new(post)]);
+        let (start, goal) = (Vec3::new(0.0, 0.0, -140.0), Vec3::new(0.0, 0.0, 140.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let path = found(run(&mut *search, &world, 256).0);
+        let (_, repaired, fallback) = mesh_planned(&*search);
+        assert_eq!((repaired, fallback), (1, None), "{path:?}");
+        assert_eq!(mesh_refused(&*search).split, 1);
+        assert!(path.iter().any(|feet| feet.y > 15.0), "{path:?}");
+    }
 
     #[test]
     fn a_repair_and_its_fallback_keep_to_each_call_s_budget() {
