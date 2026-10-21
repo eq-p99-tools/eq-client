@@ -1508,8 +1508,10 @@ fn inspect_clip_soles() {
 /// and gender in `EQ_PROBE_RACES` (`race:gender` pairs, defaulting to the
 /// short races and the classic models the table names), the model's lowest
 /// and highest points, its height, the table's factor, and the factor its
-/// geometry predicts if the origin hangs 0.625 x size under z. Models load
-/// from the first zone in `EQ_PROBE_ZONES` whose archives hold them.
+/// geometry predicts if the origin hangs 0.625 x size under z, with the
+/// height the global archives alone give (what the navmesh's walker sizes
+/// measure) and the race's default drawn size. Models load from the first
+/// zone in `EQ_PROBE_ZONES` whose archives hold them.
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL"]
 fn inspect_model_heights() {
@@ -1543,9 +1545,18 @@ fn inspect_model_heights() {
         let height = asset.height();
         let table = eq_client_core::z_offset(race, 5.0) / (0.2 * 5.0);
         let origin_factor = 3.125 - bottom / (0.2 * height);
+        // The height the navmesh's walker sizes measure, from the global
+        // archives alone, and the size a spawn of the race is drawn at.
+        let global = eq_client_assets::characters::load_global_character(&install, code, &donors)
+            .map_or_else(
+                |_| "none".to_owned(),
+                |asset| format!("{:.3}", asset.height()),
+            );
+        let drawn_size = eq_client_core::drawn_feet_offset(race, 0.0) / 0.625;
         println!(
             "race={race} gender={gender} model={code} zone={zone} bottom={bottom:.3} \
-             top={top:.3} height={height:.3} table_factor={table:.3} \
+             top={top:.3} height={height:.3} global_height={global} \
+             default_size={drawn_size:.2} table_factor={table:.3} \
              origin_rule_factor={origin_factor:.3} soles_rule_factor=3.125"
         );
     }
