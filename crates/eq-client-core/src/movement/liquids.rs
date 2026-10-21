@@ -30,6 +30,13 @@ pub trait Liquids: Send + Sync {
     /// Whether a straight path from one point to another passes through
     /// this liquid anywhere, however thin.
     fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool;
+
+    /// The liquids within the box from `low` to `high`, answering
+    /// [`liquid_at`](Self::liquid_at) for points in it as these do, made to
+    /// answer faster many times over; None when none are in the box. The
+    /// mesh build asks it once per tile; the walker's guard always asks the
+    /// whole zone's liquids.
+    fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn Liquids>>;
 }
 
 /// What the guard sees for feet at one place, for probes and logs.
@@ -150,10 +157,17 @@ impl CollisionWorld {
     /// Whether feet here are in deep water or lava now: the head of a body
     /// this tall under water, or the soles in lava.
     pub(super) fn submerged(&self, feet: Vec3, height: f32) -> bool {
-        self.liquids.as_ref().is_some_and(|liquids| {
-            liquids.liquid_at(feet + Vec3::Y * height) == Some(Liquid::Water)
-                || liquids.liquid_at(feet + Vec3::Y * SOLES) == Some(Liquid::Lava)
-        })
+        self.liquids
+            .as_ref()
+            .is_some_and(|liquids| submerged_in(&**liquids, feet, height))
+    }
+
+    /// The zone's liquids within the box from `low` to `high`, for many
+    /// [`submerged_in`] questions about feet whose bodies stay in it; None
+    /// when there are none there. For the mesh build's tiles only: nothing
+    /// a step asks goes through it.
+    pub(super) fn liquids_within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn Liquids>> {
+        self.liquids.as_ref()?.within(low, high)
     }
 
     /// Whether feet here are in water or lava.
@@ -188,9 +202,17 @@ impl CollisionWorld {
     }
 }
 
+/// Whether feet here are in deep water or lava in `liquids`, as
+/// [`CollisionWorld::submerged`] asks it.
+pub(super) fn submerged_in(liquids: &dyn Liquids, feet: Vec3, height: f32) -> bool {
+    liquids.liquid_at(feet + Vec3::Y * height) == Some(Liquid::Water)
+        || liquids.liquid_at(feet + Vec3::Y * SOLES) == Some(Liquid::Lava)
+}
+
 /// Liquids filling boxes, each from its lower corner to its upper, for the
 /// movement tests.
 #[cfg(test)]
+#[derive(Clone)]
 pub(super) struct Boxes(pub(super) Vec<(Vec3, Vec3, Liquid)>);
 
 #[cfg(test)]
@@ -225,6 +247,16 @@ impl Liquids for Boxes {
                 }
                 enter <= leave
             })
+    }
+
+    fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn Liquids>> {
+        let boxes: Vec<_> = self
+            .0
+            .iter()
+            .filter(|(l, h, _)| l.cmple(high).all() && h.cmpge(low).all())
+            .copied()
+            .collect();
+        (!boxes.is_empty()).then(|| Box::new(Self(boxes)) as Box<dyn Liquids>)
     }
 }
 

@@ -114,6 +114,20 @@ struct Polygon {
     size: u8,
 }
 
+impl Polygon {
+    /// A point on the polygon's floor: the corners' average, or where that
+    /// lies off a polygon that bends round it, the middle of its first
+    /// corner triangle; None for a polygon with no area.
+    fn point(&self) -> Option<Vec3> {
+        let on_floor = |corners: &[Vec3]| {
+            #[allow(clippy::cast_precision_loss)] // A polygon has a few corners.
+            let middle = corners.iter().sum::<Vec3>() / corners.len() as f32;
+            height_in(&self.vertices, middle).map(|y| Vec3::new(middle.x, y, middle.z))
+        };
+        on_floor(&self.vertices).or_else(|| on_floor(self.vertices.get(..3)?))
+    }
+}
+
 /// A link [`NavMesh::link_faults`] finds wrong.
 #[derive(Clone, Debug)]
 pub struct LinkFault {
@@ -209,8 +223,10 @@ impl NavMesh {
         Self::build_in(triangles, None, settings, threads, cancel)
     }
 
-    /// [`NavMesh::build`], its ledges' drops tried in `world`, the zone's
-    /// own world over the same `triangles`, when there is one.
+    /// [`NavMesh::build`] in `world`, the zone's own world over the same
+    /// `triangles`, when there is one: its ledges' drops are tried there, and
+    /// floor where the tallest size would be under water or in lava there
+    /// is left out.
     #[must_use]
     pub fn build_in(
         triangles: &[[[f32; 3]; 3]],
@@ -231,7 +247,8 @@ impl NavMesh {
         threads: usize,
         cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<(Self, BuildReport)> {
-        let (polygons, mut report) = build::polygons(triangles, settings, threads, cancelled)?;
+        let (polygons, mut report) =
+            build::polygons(triangles, world, settings, threads, cancelled)?;
         let mesh = Self::from_parts(polygons, Vec::new());
         let started = std::time::Instant::now();
         let (links, refused) =
@@ -372,6 +389,19 @@ impl NavMesh {
         (count, faults)
     }
 
+    /// The island polygon `i` lies on. For probes.
+    #[must_use]
+    pub fn island_of(&self, i: u32) -> u32 {
+        self.island[i as usize]
+    }
+
+    /// A point on polygon `i`'s floor, as [`far_pair`](Self::far_pair)
+    /// takes it. For probes.
+    #[must_use]
+    pub fn polygon_point(&self, i: u32) -> Option<Vec3> {
+        self.polygons[i as usize].point()
+    }
+
     /// Whether polygons `a` and `b` lie on one island, so a walk can join them.
     #[must_use]
     pub fn connected(&self, a: u32, b: u32) -> bool {
@@ -414,22 +444,11 @@ impl NavMesh {
     /// centre `keep` takes, on the island most of them lie on.
     #[must_use]
     pub fn far_pair_where(&self, keep: impl Fn(Vec3) -> bool) -> Option<(Vec3, Vec3)> {
-        // A point on the polygon's floor: the corners' average, or where that
-        // lies off a polygon that bends round it, the middle of its first
-        // corner triangle; None for a polygon with no area.
-        let centre = |polygon: &Polygon| {
-            let on_floor = |corners: &[Vec3]| {
-                #[allow(clippy::cast_precision_loss)] // A polygon has a few corners.
-                let middle = corners.iter().sum::<Vec3>() / corners.len() as f32;
-                height_in(&polygon.vertices, middle).map(|y| Vec3::new(middle.x, y, middle.z))
-            };
-            on_floor(&polygon.vertices).or_else(|| on_floor(polygon.vertices.get(..3)?))
-        };
         let kept: Vec<(Vec3, u32)> = self
             .polygons
             .iter()
             .zip(&self.island)
-            .filter_map(|(polygon, &island)| Some((centre(polygon)?, island)))
+            .filter_map(|(polygon, &island)| Some((polygon.point()?, island)))
             .filter(|&(at, _)| keep(at))
             .collect();
         let mut sizes = vec![0_usize; self.islands];

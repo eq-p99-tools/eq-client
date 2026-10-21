@@ -1318,6 +1318,11 @@ impl eq_client_core::movement::Liquids for ZoneLiquids {
         self.0
             .passes_through(from.to_array(), to.to_array(), liquid)
     }
+
+    fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn eq_client_core::movement::Liquids>> {
+        let regions = self.0.within(low.to_array(), high.to_array())?;
+        Some(Box::new(Self(regions)))
+    }
 }
 
 /// A liquid the zone's regions mark, as movement knows it.

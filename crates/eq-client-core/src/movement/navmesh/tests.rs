@@ -180,6 +180,74 @@ fn a_far_pair_can_be_kept_to_the_floor_a_test_takes() {
     assert!(mesh.far_pair_where(|_| false).is_none());
 }
 
+/// `triangles`' world with these boxes of water in it.
+fn with_water(triangles: &[[[f32; 3]; 3]], water: &[(Vec3, Vec3)]) -> CollisionWorld {
+    let boxes = water
+        .iter()
+        .map(|&(low, high)| (low, high, crate::movement::Liquid::Water))
+        .collect();
+    CollisionWorld::new(triangles.iter().copied())
+        .unwrap()
+        .with_liquids(crate::movement::liquids::Boxes(boxes))
+}
+
+#[test]
+fn floor_under_water_too_deep_to_stand_in_has_no_mesh() {
+    // Water over the floor's high-x half closes over a 6-tall walker's
+    // head; a strip of water by its middle is shallower than that.
+    let triangles = floor(0.0, -32.0, 32.0);
+    let world = with_water(
+        &triangles,
+        &[
+            (Vec3::new(4.0, -1.0, -40.0), Vec3::new(40.0, 10.0, 40.0)),
+            (Vec3::new(-4.0, -1.0, -40.0), Vec3::new(4.0, 3.0, 40.0)),
+        ],
+    );
+    let (mesh, report) = NavMesh::build_in(
+        &triangles,
+        Some(&world),
+        &settings(),
+        2,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(report.refused.is_empty(), "{report:?}");
+    assert!(mesh.locate(Vec3::new(-20.0, 0.0, 0.0)).is_some());
+    assert!(
+        mesh.locate(Vec3::new(0.0, 0.0, 0.0)).is_some(),
+        "the shallows"
+    );
+    assert!(mesh.locate(Vec3::new(20.0, 0.0, 0.0)).is_none(), "the deep");
+    assert!(
+        mesh.locate(Vec3::new(30.0, 0.0, 30.0)).is_none(),
+        "the deep"
+    );
+}
+
+#[test]
+fn floor_under_water_the_tallest_size_can_wade_keeps_its_mesh() {
+    // Water 7 deep closes over the two shorter sizes' heads, not the
+    // tallest's: the floor stays, and each walker's own check decides.
+    let triangles = floor(0.0, -32.0, 32.0);
+    let world = with_water(
+        &triangles,
+        &[(Vec3::new(-40.0, -1.0, -40.0), Vec3::new(40.0, 7.0, 40.0))],
+    );
+    let sized = Settings {
+        cell_size: 0.25,
+        tile: 16.0,
+        ..Settings::sized([4.0, 6.0, 9.0])
+    };
+    let build = |world: Option<&CollisionWorld>| {
+        NavMesh::build_in(&triangles, world, &sized, 2, &AtomicBool::new(false))
+            .unwrap()
+            .0
+    };
+    let (wet, dry) = (build(Some(&world)), build(None));
+    assert_eq!(wet.polygon_count(), dry.polygon_count());
+    assert!((wet.floor_area(2) - dry.floor_area(2)).abs() < 1.0);
+}
+
 #[test]
 fn a_far_pair_end_lies_on_its_polygon_even_where_the_polygon_bends() {
     // An L whose corners' average lies outside it, in the corner it bends
@@ -474,7 +542,7 @@ fn a_tile_that_panics_is_refused_and_the_rest_are_built() {
                      border: u16,
                      settings: &Settings| {
         assert!(panicked.swap(true, Ordering::Relaxed), "a tile that panics");
-        build::build_tile(triangles, indices, min, max, border, settings)
+        build::build_tile(triangles, indices, min, max, border, settings, None)
     };
     let (polygons, report) =
         build::polygons_with(&triangles, &settings(), 1, &|| false, &panicking).unwrap();
@@ -1109,6 +1177,9 @@ mod routes {
             )
             .unwrap();
             assert_eq!(into_water(links(&mesh)), 0);
+            // The floor under the water is left out of the mesh, so no drop
+            // has a landing there.
+            assert!(mesh.locate(Vec3::new(0.0, 0.0, 20.0)).is_none());
             // The drops off its other sides, onto dry floor, stay.
             assert_ne!(report.drop_links, 0);
         }

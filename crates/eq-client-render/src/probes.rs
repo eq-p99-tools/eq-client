@@ -1294,6 +1294,17 @@ impl eq_client_core::movement::Liquids for Boxes {
                 enter <= leave
             })
     }
+
+    fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn eq_client_core::movement::Liquids>> {
+        let boxes: Vec<_> = self
+            .0
+            .iter()
+            .filter(|(l, h, _)| l.cmple(high).all() && h.cmpge(low).all())
+            .copied()
+            .collect();
+        (!boxes.is_empty())
+            .then(|| Box::new(Self(boxes)) as Box<dyn eq_client_core::movement::Liquids>)
+    }
 }
 
 /// A made-up zone with a lake, lava and a ledge over deep water, all under
@@ -1580,7 +1591,11 @@ fn inspect_model_heights() {
 /// door colliders are not loaded. A route with an end that has no floor
 /// within 50 units under it is reported and skipped. `EQ_PROBE_LOCATE`
 /// (renderer `x,y,z` points separated by `;`) prints the mesh's polygon and
-/// floor height at each, if any. `EQ_PROBE_DROPS=1` lets both planners step
+/// floor height at each, if any. After each mesh route, a line gives the
+/// islands under its ends and whether they are joined, and the same for a
+/// fallback leg's ends. Each end's floor is sought from 8 units over it.
+/// Last, a `look_under` line for each of the far pair's and the covered
+/// pair's points and each fallback leg's ends: what lies over and under it. `EQ_PROBE_DROPS=1` lets both planners step
 /// off ledges, and the mesh's drops taken are printed too.
 ///
 /// The build line gives the mesh's ways off ledges and the seconds spent
@@ -1679,9 +1694,12 @@ fn inspect_mesh_routes() {
     }
     // None where no floor lies within 50 units under the point; its route
     // is then reported and skipped.
+    // Started 8 units over the point, so floor a mesh polygon sits a little
+    // under, as it may on a steep slope, is still found.
     let floor = |at: Vec3| {
-        let below = world.ray_distance(at, -Vec3::Y, 50.0)?;
-        Some(at - Vec3::Y * below)
+        let above = at + Vec3::Y * 8.0;
+        let below = world.ray_distance(above, -Vec3::Y, 58.0)?;
+        Some(above - Vec3::Y * below)
     };
     // Whether the mesh has floor at each of `EQ_PROBE_LOCATE`'s points
     // (renderer x,y,z, separated by `;`), and at what height.
@@ -1704,10 +1722,13 @@ fn inspect_mesh_routes() {
         let v: Vec<f32> = s.split(',').map(|n| n.trim().parse().unwrap()).collect();
         floor(Vec3::new(v[0], v[1], v[2]))
     };
+    // Mesh points to look under: the far and covered pairs' own.
+    let mut checked: Vec<(String, Vec3)> = Vec::new();
     let routes: Vec<(String, Option<Vec3>, Option<Vec3>)> = std::env::var("EQ_PROBE_ROUTES")
         .map_or_else(
             |_| {
                 let (a, b) = mesh.far_pair().expect("a mesh with polygons");
+                checked.extend([("far_start".to_owned(), a), ("far_goal".to_owned(), b)]);
                 let mut routes = vec![(
                     "far".to_owned(),
                     floor(a + Vec3::Y * 2.0),
@@ -1725,6 +1746,7 @@ fn inspect_mesh_routes() {
                             .is_some()
                     };
                     if let Some((a, b)) = mesh.far_pair_where(covered) {
+                        checked.extend([("covered_a".to_owned(), a), ("covered_b".to_owned(), b)]);
                         println!(
                             "covered_pair a_eq={} b_eq={} route=covered={}>{}",
                             eq_point(a),
@@ -1753,14 +1775,16 @@ fn inspect_mesh_routes() {
                     .collect()
             },
         );
+    let mesh = Arc::new(mesh);
     let navigators: [(&str, Box<dyn Navigator>); 2] = [
         ("grid", Box::new(GridNavigator)),
-        ("mesh", Box::new(MeshNavigator::new(Arc::new(mesh)))),
+        ("mesh", Box::new(MeshNavigator::new(Arc::clone(&mesh)))),
     ];
     for (name, start, goal) in routes {
         let (Some(start), Some(goal)) = (start, goal) else {
             println!(
-                "route={name} skipped: no floor within 50 under its start={} goal={}",
+                "route={name} skipped: no floor within 50 under an end; start_has_floor={} \
+                 goal_has_floor={}",
                 start.is_some(),
                 goal.is_some()
             );
@@ -1844,8 +1868,121 @@ fn inspect_mesh_routes() {
                 eq_point(goal),
                 search.searched().0,
             );
+            if let Planned::Mesh { fallback, .. } = search.planned() {
+                println!(
+                    "route={name} islands {}{}",
+                    islands(&mesh, start, goal),
+                    match fallback {
+                        Some(eq_client_core::movement::Fallback::Leg { from, to }) => {
+                            format!(" | fallback_leg {}", islands(&mesh, from, to))
+                        }
+                        _ => String::new(),
+                    }
+                );
+                if let Some(eq_client_core::movement::Fallback::Leg { from, to }) = fallback {
+                    checked.extend([
+                        (format!("{name}_fallback_from"), from),
+                        (format!("{name}_fallback_to"), to),
+                    ]);
+                }
+            }
         }
     }
+    for (label, at) in checked {
+        println!("{}", look_under(&mesh, &world, &triangles, &label, at));
+    }
+}
+
+/// What lies over and under a mesh point: the floor height of the polygon
+/// under it, the nearest solid straight up and straight down, by distance
+/// and by which way the triangle hit faces (its normal's up part, as
+/// wound), whichever side the ray meets, and the size of the polygon's
+/// island with how many of its polygons have solid floor within 50 units
+/// under their own points, sought from 8 over.
+fn look_under(
+    mesh: &eq_client_core::movement::navmesh::NavMesh,
+    world: &eq_client_core::movement::CollisionWorld,
+    triangles: &[[[f32; 3]; 3]],
+    label: &str,
+    at: Vec3,
+) -> String {
+    // Two-sided: the nearest triangle the ray from `at` along `direction`
+    // meets, its distance and its normal's up part.
+    let nearest = |direction: Vec3| {
+        triangles
+            .iter()
+            .filter_map(|triangle| {
+                // Möller and Trumbore's test.
+                let [first, second, third] = triangle.map(Vec3::from_array);
+                let (along, across) = (second - first, third - first);
+                let cross = direction.cross(across);
+                let det = along.dot(cross);
+                if det.abs() < 1e-9 {
+                    return None;
+                }
+                let offset = at - first;
+                let u = offset.dot(cross) / det;
+                let back = offset.cross(along);
+                let v = direction.dot(back) / det;
+                let distance = across.dot(back) / det;
+                (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && distance > 1e-4)
+                    .then(|| (distance, along.cross(across).normalize_or_zero().y))
+            })
+            .min_by(|x, y| x.0.total_cmp(&y.0))
+    };
+    let shown = |hit: Option<(f32, f32)>| {
+        hit.map_or_else(
+            || "none".to_owned(),
+            |(distance, up)| format!("{distance:.2} facing_up={up:.2}"),
+        )
+    };
+    let located = mesh.locate(at);
+    let island = located.map(|(polygon, _)| {
+        let island = mesh.island_of(polygon);
+        #[allow(clippy::cast_possible_truncation)] // Polygons are counted in u32.
+        let members: Vec<u32> = (0..mesh.polygon_count() as u32)
+            .filter(|&i| mesh.island_of(i) == island)
+            .collect();
+        let floored = members
+            .iter()
+            .filter_map(|&i| mesh.polygon_point(i))
+            .filter(|p| {
+                world
+                    .ray_distance(*p + Vec3::Y * 8.0, -Vec3::Y, 58.0)
+                    .is_some()
+            })
+            .count();
+        (island, members.len(), floored)
+    });
+    format!(
+        "look_under point={label} at_eq={} polygon_floor={:?} solid_above={} solid_below={} \
+         island={:?} island_polygons={:?} island_floored={:?}",
+        eq_point(at),
+        located.map(|(_, height)| height),
+        shown(nearest(Vec3::Y)),
+        shown(nearest(-Vec3::Y)),
+        island.map(|i| i.0),
+        island.map(|i| i.1),
+        island.map(|i| i.2),
+    )
+}
+
+/// The islands of the polygons under `a` and `b`, whether they are joined,
+/// and whether a walk with drops reaches `b` from `a`.
+fn islands(mesh: &eq_client_core::movement::navmesh::NavMesh, a: Vec3, b: Vec3) -> String {
+    let (at_a, at_b) = (mesh.locate(a), mesh.locate(b));
+    let joined = at_a
+        .zip(at_b)
+        .map(|((a, _), (b, _))| (mesh.connected(a, b), mesh.reaches(a, b, true)));
+    format!(
+        "a_eq={} a_island={:?} b_eq={} b_island={:?} joined={:?} reached_with_drops={:?}",
+        eq_point(a),
+        at_a.map(|(polygon, _)| mesh.island_of(polygon)),
+        eq_point(b),
+        at_b.map(|(polygon, _)| mesh.island_of(polygon)),
+        joined.map(|(joined, _)| joined),
+        joined.map(|(_, reached)| reached),
+    )
 }
 
 /// Weighs one mesh build tagged for the three walker sizes against three

@@ -291,6 +291,79 @@ impl ZoneRegions {
     pub fn liquid_region_count(&self) -> usize {
         self.liquids.len()
     }
+
+    /// The liquids within the box from `low` to `high` in the renderer's
+    /// frame, as a tree of only the planes that cut it: each other plane
+    /// gives way to its child on the box's side. It answers
+    /// [`liquid_at`](Self::liquid_at) as the whole tree does for any point
+    /// in the box, at a fraction of the descent. None when no water or lava
+    /// is in the box, or the tree breaks before any.
+    #[must_use]
+    pub fn within(&self, low: [f32; 3], high: [f32; 3]) -> Option<Self> {
+        let (low, high) = (Vec3::from_array(low), Vec3::from_array(high));
+        if self.liquids.is_empty() || !low.is_finite() || !high.is_finite() {
+            return None;
+        }
+        let (middle, half) = ((low + high) / 2.0, (high - low).abs() / 2.0);
+        let mut pruned = Self::default();
+        self.prune(0, middle, half, 0, &mut pruned)?;
+        (!pruned.liquids.is_empty()).then_some(pruned)
+    }
+
+    /// Copies the node at `cursor` into `pruned`, as [`within`](Self::within)
+    /// keeps it, and gives its new index; None for a missing node, or one
+    /// past as many steps as the tree has nodes, a cycle.
+    fn prune(
+        &self,
+        cursor: usize,
+        middle: Vec3,
+        half: Vec3,
+        depth: usize,
+        pruned: &mut Self,
+    ) -> Option<usize> {
+        let node = self
+            .nodes
+            .get(cursor)
+            .filter(|_| depth < self.nodes.len())?;
+        if let Some(region) = node.region {
+            if let Some(&liquid) = self.liquids.get(&region) {
+                pruned.liquids.insert(region, liquid);
+            }
+            if let Some(&route) = self.routes.get(&region) {
+                pruned.routes.insert(region, route);
+            }
+            pruned.nodes.push(node.clone());
+            return Some(pruned.nodes.len() - 1);
+        }
+        let normal = Vec3::from_array(node.normal);
+        // The box's distances from the plane run this far either side of
+        // its middle's.
+        let (distance, reach) = (node.distance + normal.dot(middle), normal.abs().dot(half));
+        if !distance.is_finite() || !reach.is_finite() {
+            return None;
+        }
+        if distance - reach > 0.0 {
+            return self.prune(node.front?, middle, half, depth + 1, pruned);
+        }
+        if distance + reach < 0.0 {
+            return self.prune(node.back?, middle, half, depth + 1, pruned);
+        }
+        let index = pruned.nodes.len();
+        pruned.nodes.push(Node {
+            region: None,
+            front: None,
+            back: None,
+            ..node.clone()
+        });
+        let front = node
+            .front
+            .and_then(|next| self.prune(next, middle, half, depth + 1, pruned));
+        let back = node
+            .back
+            .and_then(|next| self.prune(next, middle, half, depth + 1, pruned));
+        (pruned.nodes[index].front, pruned.nodes[index].back) = (front, back);
+        Some(index)
+    }
 }
 
 fn invalid(message: &str) -> LoadError {
@@ -547,6 +620,83 @@ mod tests {
             assert!(!regions.passes_through([-5.0, 0.0, 0.0], [5.0, 0.0, 0.0], liquid));
             assert!(!regions.passes_through([f32::NAN, 0.0, 0.0], low, liquid));
         }
+    }
+
+    #[test]
+    fn a_box_s_own_tree_finds_the_liquids_the_whole_tree_does_inside_it() {
+        // Water at x under 10 (the tree's back side), and the layers' lava
+        // and water under y 0 behind a plane at x 20.
+        let mut regions = layers();
+        let shift = regions.nodes.len();
+        let mut nodes = vec![
+            Node {
+                normal: [1.0, 0.0, 0.0],
+                distance: -10.0,
+                region: None,
+                front: Some(2),
+                back: Some(1),
+            },
+            leaf(3),
+            Node {
+                normal: [1.0, 0.0, 0.0],
+                distance: -20.0,
+                region: None,
+                front: Some(4),
+                back: Some(3),
+            },
+            leaf(4),
+        ];
+        for node in &mut regions.nodes {
+            node.front = node.front.map(|i| i + 4);
+            node.back = node.back.map(|i| i + 4);
+        }
+        nodes.append(&mut regions.nodes);
+        assert_eq!(nodes.len(), shift + 4);
+        regions.nodes = nodes;
+        regions.liquids.insert(3, Liquid::Water);
+        // A box across the plane at x 20 keeps the layers; one between the
+        // planes holds no liquid.
+        let across = regions
+            .within([15.0, -5.0, -5.0], [25.0, 5.0, 5.0])
+            .unwrap();
+        assert!(across.nodes.len() < regions.nodes.len());
+        // Points inside and on its faces, at several heights: deep, just
+        // under the water's top, in the lava, at its top, above it.
+        for x in [15.0, 15.5, 19.5, 20.5, 24.5, 25.0] {
+            for y in [-5.0, -4.5, -0.13, -0.0625, -0.03, 0.5, 4.5, 5.0] {
+                for z in [-5.0, 1.0, 5.0] {
+                    let at = [x, y, z];
+                    assert_eq!(across.liquid_at(at), regions.liquid_at(at), "{at:?}");
+                }
+            }
+        }
+        assert!(
+            regions
+                .within([11.0, -5.0, -5.0], [19.0, 5.0, 5.0])
+                .is_none()
+        );
+        // One across x 10 finds the water there.
+        let water = regions.within([5.0, 0.0, 0.0], [15.0, 1.0, 1.0]).unwrap();
+        assert_eq!(water.liquid_at([9.0, 0.5, 0.5]), Some(Liquid::Water));
+        assert_eq!(water.liquid_at([11.0, 0.5, 0.5]), None);
+        assert!(ZoneRegions::default().within([0.0; 3], [1.0; 3]).is_none());
+    }
+
+    #[test]
+    fn a_box_s_tree_through_a_break_or_a_cycle_holds_nothing_there() {
+        let mut regions = layers();
+        regions.nodes[2].back = Some(99);
+        // The lava is still found; the broken water side is in neither.
+        let pruned = regions.within([-1.0, -5.0, -1.0], [1.0, 5.0, 1.0]).unwrap();
+        assert_eq!(pruned.liquid_at([0.0, -0.0625, 0.0]), Some(Liquid::Lava));
+        assert_eq!(pruned.liquid_at([0.0, -3.0, 0.0]), None);
+        regions.nodes[2].back = Some(0);
+        regions.nodes[2].front = Some(2);
+        assert!(
+            regions
+                .within([-1.0, -5.0, -1.0], [1.0, -1.0, 1.0])
+                .is_none()
+        );
     }
 
     #[test]
