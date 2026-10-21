@@ -414,17 +414,22 @@ impl NavMesh {
     /// centre `keep` takes, on the island most of them lie on.
     #[must_use]
     pub fn far_pair_where(&self, keep: impl Fn(Vec3) -> bool) -> Option<(Vec3, Vec3)> {
+        // A point on the polygon's floor: the corners' average, or where that
+        // lies off a polygon that bends round it, the middle of its first
+        // corner triangle; None for a polygon with no area.
         let centre = |polygon: &Polygon| {
-            #[allow(clippy::cast_precision_loss)] // A polygon has a few corners.
-            let middle = polygon.vertices.iter().sum::<Vec3>() / polygon.vertices.len() as f32;
-            height_in(&polygon.vertices, middle)
-                .map_or(middle, |y| Vec3::new(middle.x, y, middle.z))
+            let on_floor = |corners: &[Vec3]| {
+                #[allow(clippy::cast_precision_loss)] // A polygon has a few corners.
+                let middle = corners.iter().sum::<Vec3>() / corners.len() as f32;
+                height_in(&polygon.vertices, middle).map(|y| Vec3::new(middle.x, y, middle.z))
+            };
+            on_floor(&polygon.vertices).or_else(|| on_floor(polygon.vertices.get(..3)?))
         };
         let kept: Vec<(Vec3, u32)> = self
             .polygons
             .iter()
             .zip(&self.island)
-            .map(|(polygon, &island)| (centre(polygon), island))
+            .filter_map(|(polygon, &island)| Some((centre(polygon)?, island)))
             .filter(|&(at, _)| keep(at))
             .collect();
         let mut sizes = vec![0_usize; self.islands];

@@ -181,6 +181,35 @@ fn a_far_pair_can_be_kept_to_the_floor_a_test_takes() {
 }
 
 #[test]
+fn a_far_pair_end_lies_on_its_polygon_even_where_the_polygon_bends() {
+    // An L whose corners' average lies outside it, in the corner it bends
+    // round.
+    let vertices = [
+        [0.0, 0.0],
+        [10.0, 0.0],
+        [10.0, 1.0],
+        [1.0, 1.0],
+        [1.0, 10.0],
+        [0.0, 10.0],
+    ]
+    .map(|[x, z]| Vec3::new(x, 0.0, z))
+    .to_vec();
+    let mesh = NavMesh::from_parts(
+        vec![Polygon {
+            vertices,
+            links: Vec::new(),
+            size: 0,
+        }],
+        Vec::new(),
+    );
+    let (a, b) = mesh.far_pair().unwrap();
+    assert!(
+        mesh.locate(a).is_some() && mesh.locate(b).is_some(),
+        "{a} {b}"
+    );
+}
+
+#[test]
 fn stairs_join_at_the_riser_limit_and_not_past_it() {
     // Risers a little under and a little over the highest step, each flight
     // up to a landing on its own side of the floor.
