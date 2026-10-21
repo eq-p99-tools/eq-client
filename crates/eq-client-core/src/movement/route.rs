@@ -3,7 +3,10 @@
 //! The route owns the search and the waypoints still ahead; callers only report
 //! the character's feet and the goal each tick and steer toward what comes back.
 
-use super::{CollisionWorld, MAX_GROUNDED_STEP, PathProgress, PathSearch, path};
+use super::{
+    CollisionWorld, GridNavigator, MAX_GROUNDED_STEP, Navigator, PathProgress, RouteSearch, Scope,
+    SearchRequest, path,
+};
 use glam::{Vec2, Vec3};
 use std::{
     collections::VecDeque,
@@ -38,17 +41,6 @@ const DOOR_MARGIN: f32 = 2.0;
 /// A step round an opened door rejoins the route at its first waypoint at
 /// least this far from the feet, beyond the door's leaf.
 const DETOUR_REJOIN: f32 = 8.0;
-/// Expansions a step round an opened door may take: a few rooms' worth, so
-/// it stays local and never stands the walker still for long.
-const DETOUR_EXPANSIONS: usize = 3000;
-
-/// How much a search of the whole way weighs the distance still to go. On
-/// two long city routes (9,554 and 13,849 expansions unweighted) it expanded
-/// 76% and 62% fewer positions (2,321 and 5,260), for paths 2.7% and 3.5%
-/// longer; every weight from 1.25 to 2 kept both within 5%. A path is never
-/// more than this many times the cost of the shortest. A step round a door
-/// stays unweighted: it is short already.
-const SEARCH_WEIGHT: f32 = 2.0;
 /// Expansions a search off the caller's thread makes between checks that its
 /// route still wants it.
 const BACKGROUND_CHUNK: usize = 500;
@@ -119,10 +111,10 @@ impl Finished {
     /// Straightens what `search` found from `feet`; `partial` takes the nearest
     /// reached point when it found no way to the goal.
     fn new(
-        search: &PathSearch,
+        search: &dyn RouteSearch,
         progress: PathProgress,
         world: &CollisionWorld,
-        feet: Vec3,
+        (feet, height): (Vec3, f32),
         partial: bool,
     ) -> Self {
         let found = matches!(progress, PathProgress::Found(_));
@@ -133,7 +125,7 @@ impl Finished {
         };
         let legs = path.map(|path| {
             let doors = search.doors_along();
-            path::straightened(world, feet, &path, search.height())
+            path::straightened(world, feet, &path, height)
                 .into_iter()
                 .map(|index| (path[index], doors.get(index).copied().flatten()))
                 .collect()
@@ -141,7 +133,7 @@ impl Finished {
         Self {
             legs,
             found,
-            searched: (search.expanded(), search.has_open()),
+            searched: search.searched(),
             timing: None,
         }
     }
@@ -159,9 +151,9 @@ impl Running {
     /// Hands `search` and a snapshot of `world` to `background`.
     fn spawn(
         background: &dyn Background,
-        mut search: PathSearch,
+        mut search: Box<dyn RouteSearch>,
         world: &CollisionWorld,
-        feet: Vec3,
+        feet: (Vec3, f32),
         partial: bool,
     ) -> Self {
         let taken = Instant::now();
@@ -186,7 +178,7 @@ impl Running {
                     done => break done,
                 }
             };
-            let mut finished = Finished::new(&search, progress, &world, feet, partial);
+            let mut finished = Finished::new(&*search, progress, &world, feet, partial);
             finished.timing = Some(SearchTiming {
                 queued: began.duration_since(spawned),
                 ran: began.elapsed(),
@@ -234,9 +226,11 @@ impl Drop for Running {
     }
 }
 
-/// A search in progress: run a budget at a time by the caller, or handed off.
+/// A search not started yet, then in progress: run a budget at a time by the
+/// caller, or handed off.
 enum Job {
-    Inline(Box<PathSearch>),
+    Queued(SearchRequest),
+    Inline(Box<dyn RouteSearch>),
     Running(Running),
 }
 
@@ -249,44 +243,53 @@ struct Search {
 }
 
 impl Search {
-    fn new(search: PathSearch, replaces: Option<usize>) -> Self {
+    const fn new(request: SearchRequest, replaces: Option<usize>) -> Self {
         Self {
-            job: Job::Inline(Box::new(search)),
+            job: Job::Queued(request),
             replaces,
         }
     }
 
-    /// Advances the search by `budget` positions, or hands it to `background`
-    /// with a snapshot of `world` on its first call; the finished search, or
-    /// the search still under way.
+    /// Starts the search through `navigator` on its first call, then advances
+    /// it by `budget` positions, or hands it to `background` with a snapshot of
+    /// `world`; the finished search, or the search still under way.
     fn poll(
         self,
         world: &CollisionWorld,
-        feet: Vec3,
+        feet: (Vec3, f32),
         budget: usize,
-        background: Option<&dyn Background>,
+        (navigator, background): (&dyn Navigator, Option<&dyn Background>),
     ) -> Result<(Finished, Option<usize>), Self> {
         let Self { job, replaces } = self;
         let partial = replaces.is_none();
-        match (job, background) {
-            (Job::Inline(search), Some(background)) => Err(Self {
-                job: Job::Running(Running::spawn(background, *search, world, feet, partial)),
+        let mut search = match job {
+            Job::Queued(request) => navigator.search(request),
+            Job::Inline(search) => search,
+            Job::Running(running) => {
+                return match running.poll() {
+                    Some(finished) => Ok((finished, replaces)),
+                    None => Err(Self {
+                        job: Job::Running(running),
+                        replaces,
+                    }),
+                };
+            }
+        };
+        if let Some(background) = background {
+            return Err(Self {
+                job: Job::Running(Running::spawn(background, search, world, feet, partial)),
+                replaces,
+            });
+        }
+        match search.advance(world, budget) {
+            PathProgress::Searching => Err(Self {
+                job: Job::Inline(search),
                 replaces,
             }),
-            (Job::Inline(mut search), None) => match search.advance(world, budget) {
-                PathProgress::Searching => Err(Self {
-                    job: Job::Inline(search),
-                    replaces,
-                }),
-                done => Ok((Finished::new(&search, done, world, feet, partial), replaces)),
-            },
-            (Job::Running(running), _) => match running.poll() {
-                Some(finished) => Ok((finished, replaces)),
-                None => Err(Self {
-                    job: Job::Running(running),
-                    replaces,
-                }),
-            },
+            done => Ok((
+                Finished::new(&*search, done, world, feet, partial),
+                replaces,
+            )),
         }
     }
 }
@@ -294,6 +297,8 @@ impl Search {
 /// An incremental search, then the waypoints still ahead.
 pub struct Route {
     search: Option<Search>,
+    /// Where the route's searches come from.
+    navigator: Box<dyn Navigator>,
     waypoints: VecDeque<Vec3>,
     /// For each waypoint, the closed door the leg to it passes through.
     crossings: VecDeque<Option<u8>>,
@@ -320,7 +325,7 @@ pub struct Route {
     /// Whether the one fresh search a route may make has been spent, and
     /// whether a refused door came after that.
     replan: Replan,
-    /// Whether the route may step off ledges; see [`PathSearch::with_drops`].
+    /// Whether the route may step off ledges; see [`SearchRequest::drops`].
     drops: bool,
     /// The last finished search's expansions, and whether positions remained.
     searched: Option<(usize, bool)>,
@@ -339,9 +344,18 @@ impl Route {
     pub fn new(feet: Vec3, goal: Vec3, reach: f32, height: f32) -> Self {
         Self {
             search: Some(Search::new(
-                PathSearch::new(feet, goal, reach, height).with_weight(SEARCH_WEIGHT),
+                SearchRequest {
+                    start: feet,
+                    goal,
+                    reach,
+                    height,
+                    doors: Vec::new(),
+                    drops: false,
+                    scope: Scope::Whole,
+                },
                 None,
             )),
+            navigator: Box::new(GridNavigator),
             drops: false,
             waypoints: VecDeque::new(),
             crossings: VecDeque::new(),
@@ -367,7 +381,7 @@ impl Route {
     #[must_use]
     pub fn with_drops(mut self, drops: bool) -> Self {
         self.drops = drops;
-        self.restart(|search| search.with_drops(drops));
+        self.restart(|request| request.drops = drops);
         self
     }
 
@@ -375,7 +389,7 @@ impl Route {
     /// one as [`RouteStep::OpenDoor`] asks.
     #[must_use]
     pub fn with_doors(mut self, doors: Vec<u8>) -> Self {
-        self.restart(|search| search.with_doors(doors.clone()));
+        self.restart(|request| request.doors.clone_from(&doors));
         self.doors = doors;
         self
     }
@@ -390,18 +404,22 @@ impl Route {
         self
     }
 
+    /// Plans the route's searches through `navigator` instead of the grid.
+    #[must_use]
+    pub fn with_navigator(mut self, navigator: Box<dyn Navigator>) -> Self {
+        self.navigator = navigator;
+        self
+    }
+
     /// Reconfigures a search that has not started yet.
-    fn restart(&mut self, change: impl FnOnce(PathSearch) -> PathSearch) {
-        self.search = self.search.take().map(|search| match search {
-            Search {
-                job: Job::Inline(inner),
-                replaces,
-            } => Search {
-                job: Job::Inline(Box::new(change(*inner))),
-                replaces,
-            },
-            running => running,
-        });
+    fn restart(&mut self, change: impl FnOnce(&mut SearchRequest)) {
+        if let Some(Search {
+            job: Job::Queued(request),
+            ..
+        }) = &mut self.search
+        {
+            change(request);
+        }
     }
 
     /// A door the follower could not open: it is a wall from now on, and the
@@ -441,20 +459,30 @@ impl Route {
             .iter()
             .position(|waypoint| flat(*waypoint - feet) >= DETOUR_REJOIN)
             .unwrap_or(last);
-        let search = PathSearch::new(feet, self.waypoints[rejoin], FINAL_REACH, self.height)
-            .with_drops(self.drops)
-            .with_doors(self.doors.clone())
-            .with_max_expansions(DETOUR_EXPANSIONS);
-        self.search = Some(Search::new(search, Some(rejoin + 1)));
+        let request = SearchRequest {
+            start: feet,
+            goal: self.waypoints[rejoin],
+            reach: FINAL_REACH,
+            height: self.height,
+            doors: self.doors.clone(),
+            drops: self.drops,
+            scope: Scope::Local,
+        };
+        self.search = Some(Search::new(request, Some(rejoin + 1)));
         self.best = None;
     }
 
     fn replan(&mut self, feet: Vec3, goal: Vec3) {
-        let search = PathSearch::new(feet, goal, self.reach, self.height)
-            .with_weight(SEARCH_WEIGHT)
-            .with_drops(self.drops)
-            .with_doors(self.doors.clone());
-        self.search = Some(Search::new(search, None));
+        let request = SearchRequest {
+            start: feet,
+            goal,
+            reach: self.reach,
+            height: self.height,
+            doors: self.doors.clone(),
+            drops: self.drops,
+            scope: Scope::Whole,
+        };
+        self.search = Some(Search::new(request, None));
         self.waypoints.clear();
         self.crossings.clear();
         self.reached = 0;
@@ -621,14 +649,15 @@ impl Route {
             return RouteStep::Arrived;
         }
         if let Some(search) = self.search.take() {
-            let background = self.background.as_deref();
-            let (finished, replaces) = match search.poll(world, feet, budget, background) {
-                Ok(done) => done,
-                Err(search) => {
-                    self.search = Some(search);
-                    return RouteStep::Searching;
-                }
-            };
+            let planners = (&*self.navigator, self.background.as_deref());
+            let (finished, replaces) =
+                match search.poll(world, (feet, self.height), budget, planners) {
+                    Ok(done) => done,
+                    Err(search) => {
+                        self.search = Some(search);
+                        return RouteStep::Searching;
+                    }
+                };
             self.searched = Some(finished.searched);
             self.timing = finished.timing;
             match (replaces, finished.legs) {
