@@ -486,7 +486,18 @@ fn install_script(
     };
     app.insert_resource(script.local_session(local_session).offline_preview(!online));
     app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus))
-        .add_systems(Update, script::pointer::draw);
+        .add_systems(
+            Update,
+            (
+                script::pointer::draw,
+                // A scripted notch of the wheel replaces the real wheel's
+                // turn, read just before, and reaches the lists as one does.
+                script::pointer::turn
+                    .after(windows::pointer::wheel)
+                    .after(skinned::scrollbar::scroll)
+                    .in_set(Stage::Typing),
+            ),
+        );
     if arrow {
         app.init_resource::<script::pointer::SkinArrow>()
             .add_systems(Startup, script::pointer::spawn)

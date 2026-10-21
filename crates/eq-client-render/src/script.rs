@@ -5,7 +5,8 @@
 //! Scripted clicks are only injected while the real pointer is outside the window,
 //! so they cannot also press whatever the pointer happens to be over; each click
 //! and hover first glides the script's own pointer to its control (see
-//! [`pointer`]), and lands only on the control under it. A followed
+//! [`pointer`]), scrolling a list the control has scrolled out of view as
+//! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
 //! `gm` steps send `#` commands only to a local `EQEmu` server, and `chat`
 //! steps speak only there.
@@ -89,6 +90,12 @@ pub struct Script {
     hovering: Option<Entity>,
     /// The script pointer's glide to the control a click or hover names.
     glide: Option<pointer::Glide>,
+    /// The wheel turning over a list until the control a click or hover
+    /// names shows whole in it, before the glide to the control.
+    scrolling: Option<pointer::Scrolling>,
+    /// The notch the wheel turns this frame over a list, in pixels with
+    /// upward positive, which [`pointer::turn`] gives the list.
+    notch: Option<(Entity, f32)>,
     /// The control the script pointer last hovered on its way, whose hover
     /// it clears as it leaves.
     pointed: Option<Entity>,
@@ -149,6 +156,8 @@ impl Script {
             last_frame: None,
             hovering: None,
             glide: None,
+            scrolling: None,
+            notch: None,
             pointed: None,
             awaited: None,
             approached: None,
@@ -249,6 +258,8 @@ impl Script {
         self.follow = None;
         self.route = None;
         self.glide = None;
+        self.scrolling = None;
+        self.notch = None;
         self.awaited = None;
         self.approached = None;
         info!("Script stopped: {reason}");
@@ -962,9 +973,25 @@ pub(super) fn drive(
                 // the script, as a click's does.
                 let target_entity = script
                     .glide
+                    .filter(|_| script.scrolling.is_none())
                     .map(|glide| glide.target)
                     .or_else(|| find(*target, &buttons, &layout));
                 let inside = window.is_some_and(|window| window.cursor_position().is_some());
+                if let Some(entity) = target_entity.filter(|_| !inside) {
+                    match scroll_to(
+                        script,
+                        (entity, now),
+                        (&mut aim, &mut commands),
+                        &mut buttons,
+                    ) {
+                        Ok(true) => (),
+                        Ok(false) => return,
+                        Err(reason) => {
+                            script.stop(&mut keys, &mut mouse, &reason);
+                            return;
+                        }
+                    }
+                }
                 let ended_over = match target_entity {
                     Some(entity) if !inside => match glide(
                         script,
@@ -978,6 +1005,7 @@ pub(super) fn drive(
                     _ => None,
                 };
                 script.glide = None;
+                script.scrolling = None;
                 let Some(entity) = find(*target, &buttons, &layout) else {
                     script.stop(&mut keys, &mut mouse, "hover target is not visible");
                     return;
@@ -999,6 +1027,7 @@ pub(super) fn drive(
         script.current = None;
         script.route = None;
         script.glide = None;
+        script.scrolling = None;
         script.following = None;
         script.quiet = None;
         script.awaited = None;
@@ -1620,10 +1649,14 @@ fn glide(
         from: aim.at(),
         began: now,
         target,
+        at: None,
     });
     let elapsed = now.saturating_sub(glide.began);
     // A control that moves as the pointer heads for it is followed.
-    let to = aim.middle(glide.target).unwrap_or(glide.from);
+    let to = glide
+        .at
+        .or_else(|| aim.middle(glide.target))
+        .unwrap_or(glide.from);
     let at = pointer::glide_at(glide.from, to, elapsed);
     aim.place(commands, at);
     let over = aim.under(at);
@@ -1633,6 +1666,82 @@ fn glide(
     }
     script.glide = None;
     Glided::Over(over)
+}
+
+/// One frame of scrolling `target` into view in the nearest list above it
+/// that the wheel scrolls, as a player scrolls a list before clicking a row
+/// it hides: true once the control shows whole in the list, at once when it
+/// already does or lies in no such list. The script pointer first glides
+/// just inside the list's edge nearest the control, then the wheel turns a
+/// notch a frame toward it; a notch that leaves the list where it was, with
+/// the control still not whole in view, is why the script stops.
+fn scroll_to(
+    script: &mut Script,
+    (target, now): (Entity, Duration),
+    (aim, commands): (&mut pointer::Aim, &mut Commands),
+    buttons: &mut Buttons,
+) -> Result<bool, String> {
+    let Some(list) = script
+        .scrolling
+        .map(|scrolling| scrolling.list)
+        .or_else(|| aim.wheel_list(target))
+    else {
+        return Ok(true);
+    };
+    let (Some(row), Some(view)) = (aim.rect(target), aim.rect(list)) else {
+        return Ok(true);
+    };
+    // The wheel scrolls up and down, so only how high the control lies counts.
+    let shows = row.min.y >= view.min.y - 0.5 && row.max.y <= view.max.y + 0.5;
+    let up = row.min.y < view.min.y;
+    if script.scrolling.is_none() {
+        if shows {
+            return Ok(true);
+        }
+        let x = row
+            .center()
+            .x
+            .min(view.max.x - pointer::EDGE)
+            .max(view.min.x + pointer::EDGE);
+        let y = if up {
+            view.min.y + pointer::EDGE
+        } else {
+            view.max.y - pointer::EDGE
+        };
+        script.scrolling = Some(pointer::Scrolling { list, before: None });
+        script.glide = Some(pointer::Glide {
+            from: aim.at(),
+            began: now,
+            target: list,
+            at: Some(Vec2::new(x, y)),
+        });
+    }
+    if script.glide.is_some()
+        && matches!(
+            glide(script, (list, now), (aim, commands), buttons),
+            Glided::Moving
+        )
+    {
+        return Ok(false);
+    }
+    if shows {
+        script.scrolling = None;
+        return Ok(true);
+    }
+    let scrolled = aim.scrolled(list);
+    let Some(scrolling) = script.scrolling.as_mut() else {
+        return Ok(true);
+    };
+    if scrolling
+        .before
+        .is_some_and(|before| before.to_bits() == scrolled.to_bits())
+    {
+        return Err("the target can't be scrolled into view".to_owned());
+    }
+    scrolling.before = Some(scrolled);
+    let pixels = crate::windows::pointer::LINE_PIXELS;
+    script.notch = Some((list, if up { pixels } else { -pixels }));
+    Ok(false)
 }
 
 /// Rests the script pointer's hover on `over`, as a `hover` step rests it,
@@ -1664,10 +1773,11 @@ fn point(
     }
 }
 
-/// A click's aim this frame: none while the script pointer glides to the
-/// control the click names, then that control, once the pointer has ended
-/// over it; or why the script stops: the control is out of reach as
-/// [`reach`] says, or another control covers it where the pointer ends.
+/// A click's aim this frame: none while the control the click names is
+/// scrolled into view (see [`scroll_to`]) and the script pointer glides to
+/// it, then that control, once the pointer has ended over it; or why the
+/// script stops: the control is out of reach as [`reach`] says, cannot be
+/// scrolled into view, or another control covers it where the pointer ends.
 fn aim_click(
     script: &mut Script,
     (target, now): (ClickTarget, Duration),
@@ -1675,9 +1785,14 @@ fn aim_click(
     (buttons, layout, needs): (&mut Buttons, &Layout, &Query<&crate::outbox::Needs>),
     world: &eq_client_core::world::ClientWorld,
 ) -> Result<Option<Entity>, String> {
-    let heading = match script.glide {
-        Some(glide) => glide.target,
-        None => reach(target, buttons, layout, needs, world)?,
+    let heading = if let Some(glide) = script.glide.filter(|_| script.scrolling.is_none()) {
+        glide.target
+    } else {
+        let entity = reach(target, buttons, layout, needs, world)?;
+        if !scroll_to(script, (entity, now), (&mut *aim.0, &mut *aim.1), buttons)? {
+            return Ok(None);
+        }
+        entity
     };
     let Glided::Over(over) = glide(script, (heading, now), aim, buttons) else {
         return Ok(None);
@@ -3088,6 +3203,182 @@ mod tests {
         let script = app.world().resource::<Script>();
         assert_eq!(script.hovering, None);
         assert!(script.current.is_none() && script.steps.is_empty());
+    }
+
+    /// Where a row of [`merchant_list`] lies with its list unscrolled.
+    #[derive(Component)]
+    struct Unscrolled(Vec2);
+
+    /// A merchant's list of `rows` wares, 18 rows of 20 pixels showing, and
+    /// as much content to scroll as `content` rows fill, in an app driving
+    /// `steps` that scrolls it as the wheel does and lays out its rows
+    /// where its scroll puts them.
+    fn merchant_list(steps: Vec<Step>, rows: u32, content: u32) -> (App, Entity, Vec<Entity>) {
+        /// Lays the rows out where the list's scroll puts them, as the UI's
+        /// layout does after the lists have taken the wheel.
+        #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+        fn lay_out(
+            lists: Query<&ScrollPosition, With<crate::trade::MerchantRows>>,
+            mut rows: Query<(&Unscrolled, &mut UiGlobalTransform)>,
+        ) {
+            let scrolled = lists.single().map_or(0.0, |position| position.y);
+            for (unscrolled, mut transform) in &mut rows {
+                *transform = UiGlobalTransform::from_xy(unscrolled.0.x, unscrolled.0.y - scrolled);
+            }
+        }
+        let mut app = pointing(steps);
+        app.add_message::<bevy::input::mouse::MouseWheel>()
+            .add_systems(
+                Update,
+                (
+                    crate::windows::pointer::wheel,
+                    pointer::turn,
+                    super::super::skinned::scroll_lists,
+                    lay_out,
+                )
+                    .chain()
+                    .after(drive),
+            );
+        // The list spans 540 to 740 across and 120 to 480 down.
+        #[allow(clippy::cast_precision_loss, reason = "a handful of rows")]
+        let list = app
+            .world_mut()
+            .spawn((
+                crate::trade::MerchantRows::new(Vec::new()),
+                crate::windows::pointer::TakesWheel,
+                ScrollPosition::default(),
+                Node {
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                InheritedVisibility::VISIBLE,
+                ComputedNode {
+                    size: Vec2::new(200.0, 360.0),
+                    content_size: Vec2::new(200.0, 20.0 * content as f32),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(640.0, 300.0),
+                bevy::ui::ComputedStackIndex(1),
+            ))
+            .id();
+        #[allow(clippy::cast_precision_loss, reason = "a handful of rows")]
+        let rows = (0..rows)
+            .map(|slot| {
+                let middle = Vec2::new(640.0, 130.0 + 20.0 * slot as f32);
+                app.world_mut()
+                    .spawn((
+                        Button,
+                        crate::trade::Action::Choose(slot),
+                        Node::default(),
+                        Unscrolled(middle),
+                        InheritedVisibility::VISIBLE,
+                        ComputedNode {
+                            size: Vec2::new(200.0, 20.0),
+                            ..default()
+                        },
+                        UiGlobalTransform::from_xy(middle.x, middle.y),
+                        bevy::ui::ComputedStackIndex(2),
+                        ChildOf(list),
+                    ))
+                    .id()
+            })
+            .collect();
+        (app, list, rows)
+    }
+
+    fn scrolled(app: &App, list: Entity) -> f32 {
+        app.world().get::<ScrollPosition>(list).unwrap().y
+    }
+
+    fn stopped(app: &App) -> bool {
+        let script = app.world().resource::<Script>();
+        script.current.is_none() && script.steps.is_empty()
+    }
+
+    #[test]
+    fn a_click_on_a_row_scrolled_out_of_view_turns_the_wheel_until_it_shows() {
+        let (mut app, list, rows) = merchant_list(
+            vec![
+                Step::Click(ClickTarget::Trade(TradeClick::Choose(28))),
+                Step::Wait(Duration::from_secs(1)),
+            ],
+            30,
+            30,
+        );
+        // The pointer glides first to the list's bottom edge, under the row.
+        for ms in [0, 0, 125] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(scrolled(&app, list), 0.0);
+        frame_at(&mut app, 250);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 476.0)));
+        // Then the wheel turns down a notch a frame until the row shows
+        // whole, the list scrolled as far as it goes.
+        let mut seen = vec![scrolled(&app, list)];
+        let mut ms = 250;
+        while interaction(&app, rows[28]) != Interaction::Pressed && ms < 2000 {
+            ms += 16;
+            frame_at(&mut app, ms);
+            seen.push(scrolled(&app, list));
+        }
+        assert_eq!(
+            interaction(&app, rows[28]),
+            Interaction::Pressed,
+            "{seen:?}"
+        );
+        let notches: Vec<_> = seen.iter().copied().filter(|y| *y > 0.0).collect();
+        assert_eq!(notches.first(), Some(&24.0));
+        assert!(notches.windows(2).all(|pair| pair[1] - pair[0] <= 24.0));
+        assert_eq!(scrolled(&app, list), 240.0);
+        // The row is clicked where it now shows, wholly inside the list.
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 450.0)));
+        assert!(
+            app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        frame_at(&mut app, ms + 16);
+        let script = app.world().resource::<Script>();
+        assert!(matches!(script.current, Some((Step::Wait(_), _))));
+        assert!(script.scrolling.is_none());
+    }
+
+    #[test]
+    fn a_click_on_a_row_in_view_scrolls_nothing() {
+        let (mut app, list, rows) = merchant_list(
+            vec![Step::Click(ClickTarget::Trade(TradeClick::Choose(3)))],
+            30,
+            30,
+        );
+        for ms in [0, 0, 125, 250] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, rows[3]), Interaction::Pressed);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 190.0)));
+        assert_eq!(scrolled(&app, list), 0.0);
+    }
+
+    #[test]
+    fn a_row_the_list_cannot_scroll_to_stops_the_script() {
+        // The list's content ends with what shows: the wheel moves nothing.
+        let (mut app, list, rows) = merchant_list(
+            vec![
+                Step::Click(ClickTarget::Trade(TradeClick::Choose(28))),
+                Step::Wait(Duration::from_secs(1)),
+            ],
+            30,
+            18,
+        );
+        for ms in [0, 0, 125, 250, 266] {
+            frame_at(&mut app, ms);
+        }
+        assert!(stopped(&app));
+        assert_eq!(scrolled(&app, list), 0.0);
+        assert_eq!(interaction(&app, rows[28]), Interaction::None);
+        // It stopped at the list's edge, never gliding to the row.
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 476.0)));
+        assert!(app.world().resource::<Script>().scrolling.is_none());
     }
 
     #[test]
