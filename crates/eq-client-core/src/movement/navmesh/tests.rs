@@ -1152,6 +1152,33 @@ mod sizes {
             .0
     }
 
+    #[test]
+    fn a_taller_sizes_floor_stops_short_of_a_ceiling_too_low_for_it() {
+        // The floor under a beam 5 high is the short size's alone. A plain
+        // build for a taller walker erodes its floor back from the beam by
+        // the walker's radius; the tagged build's taller sizes stop there
+        // too, not at the beam's edge.
+        let triangles = lintel(5.0);
+        let reach = |mesh: &NavMesh| {
+            mesh.polygons
+                .iter()
+                .flat_map(|polygon| polygon.vertices.iter())
+                .filter(|v| v.x < -0.9 && v.z.abs() <= 3.5 && v.y < 2.0)
+                .map(|v| v.x)
+                .fold(f32::MIN, f32::max)
+        };
+        let tagged = build(&triangles, &sized()).split(SIZES);
+        for height in [SIZES[1], SIZES[2]] {
+            let plain = reach(&build(&triangles, &plain(height)));
+            let sized = reach(&tagged.for_height(height).unwrap());
+            assert!(plain < -1.2, "{height}: {plain}");
+            assert!(
+                (sized - plain).abs() <= 0.25,
+                "{height}: {sized} against {plain}"
+            );
+        }
+    }
+
     /// The route from `start` to `goal` for a walker `height` tall on
     /// `mesh`: its path, and any fallback.
     fn route(

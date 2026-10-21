@@ -302,6 +302,7 @@ pub(super) fn build_tile(
         .into_compact(walkable_height, walkable_climb)
         .map_err(refused("compact"))?;
     tag_sizes(&mut compact, settings)?;
+    keep_sizes_off_low_ceilings(&mut compact, radius);
     compact.erode_walkable_area(radius);
     compact.build_distance_field();
     compact
@@ -346,6 +347,32 @@ fn tag_sizes(
         *area = AreaType(fits.max(1));
     }
     Ok(())
+}
+
+/// Narrows each taller size's floor away from where a shorter size's alone
+/// begins by the walker's `radius`, as a plain build at that size erodes it
+/// from the low ceiling: a walker standing on a size's floor keeps its
+/// whole width out from under a ceiling too low for it. For each size, the
+/// spans of the sizes under it are treated as walls, rerecast's own erosion
+/// runs, and a span it takes falls to the size below.
+fn keep_sizes_off_low_ceilings(compact: &mut rerecast::CompactHeightfield, radius: u16) {
+    let mut tags = compact.areas.clone();
+    for size in [3_u8, 2] {
+        for (area, tag) in compact.areas.iter_mut().zip(&tags) {
+            *area = if tag.0 >= size && tag.is_walkable() {
+                *tag
+            } else {
+                AreaType::NOT_WALKABLE
+            };
+        }
+        compact.erode_walkable_area(radius);
+        for (tag, area) in tags.iter_mut().zip(&compact.areas) {
+            if tag.is_walkable() && tag.0 >= size && !area.is_walkable() {
+                *tag = AreaType(size - 1);
+            }
+        }
+    }
+    compact.areas = tags;
 }
 
 /// Adds a tile's polygons, in world units, with links inside the tile and
