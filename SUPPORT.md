@@ -49,4 +49,4 @@ For an intentional networking update:
 CI runs synthetic tests without proprietary assets or live logins. Ignored tests
 requiring an installation remain a separate, opt-in validation step. Windows CI
 checks native compilation and tests, not GPU rendering or desktop input. The
-minimum supported compiler is Rust 1.95; stable Clippy is checked separately.
+minimum supported compiler is Rust 1.99.
