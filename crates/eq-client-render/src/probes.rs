@@ -1781,7 +1781,8 @@ fn inspect_mesh_routes() {
 /// check). Nothing opens a window.
 ///
 /// It first reads the zone whole and as its solids alone, and prints both
-/// reads' seconds and their triangles' count and hash, which must match. The
+/// reads' seconds and their triangles' count and hash, which must match;
+/// `EQ_PROBE_LOAD_ONLY=1` stops there. The
 /// sizes are measured from the installation's models. Then, for the tagged
 /// build and each plain one: build seconds, polygons, islands, drop links,
 /// refused tiles and the cache file's bytes. Per size, it gives the floor's
@@ -1825,6 +1826,11 @@ fn inspect_mesh_sizes() {
         whole_triangles == triangles,
     );
     drop(whole_triangles);
+    // EQ_PROBE_LOAD_ONLY=1 stops after the two reads, for a zone whose
+    // builds would take too long to weigh.
+    if std::env::var("EQ_PROBE_LOAD_ONLY").is_ok_and(|only| only == "1") {
+        return;
+    }
     let measuring = Instant::now();
     let sizes = super::zone_navmesh::sizes(&install);
     println!(
