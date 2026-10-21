@@ -467,6 +467,11 @@ pub(super) fn straightened(
     kept
 }
 
+/// [`clear_leg`], for the navmesh probe.
+pub(super) fn clear_leg_probe(world: &CollisionWorld, from: Vec3, to: Vec3, height: f32) -> bool {
+    clear_leg(world, from, to, height)
+}
+
 /// Whether a straight walk from `from` reaches `to` on its floor, and so do the
 /// walks beside it, [`CLEARANCE`] to either side.
 fn clear_leg(world: &CollisionWorld, from: Vec3, to: Vec3, height: f32) -> bool {

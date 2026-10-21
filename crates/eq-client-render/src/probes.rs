@@ -1550,3 +1550,205 @@ fn inspect_model_heights() {
         );
     }
 }
+
+/// Builds a navigation mesh for a zone and compares its routes with the grid
+/// search's (probe-only; the navmesh plan's step 1). Nothing opens a window.
+///
+/// For each cell size in `EQ_PROBE_CELLS` (comma-separated, default
+/// `0.2,0.3,0.5`), at tiles of `EQ_PROBE_TILE` world units (default 48), on
+/// `EQ_PROBE_THREADS` threads (default all): the build's time by phase,
+/// tiles, polygons, links and islands, the mesh's memory and bytes, and the
+/// time to write and read it back as a cache would. Then for each route in
+/// `EQ_PROBE_ROUTES` (`name=x,y,z>x,y,z` renderer points a little above their
+/// floor, separated by `;`), or else the two ends of the largest island: the
+/// mesh's legs, query time, how many legs pass the clearance walk, the plain
+/// walk, or a short grid repair, the time with the checks, and the grid
+/// search's own result and time for the same ends, with and without drops.
+/// `EQ_PROBE_DOORS` (comma-separated ids) lists the doors the grid may pass.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
+fn inspect_navmesh() {
+    use eq_client_core::movement::navmesh::{NavMesh, Settings, check_legs};
+    use eq_client_core::movement::{PathProgress, PathSearch};
+    use std::time::Instant;
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone_name = std::env::var("EQ_PROBE_ZONE").unwrap();
+    let loading = Instant::now();
+    let zone = eq_client_assets::load_zone(&install, &zone_name).unwrap();
+    let triangles = collision_triangles(&zone);
+    let world = build_collision(&zone).unwrap();
+    let height = std::env::var("EQ_PROBE_MODEL").map_or(6.0, |model| {
+        eq_client_assets::characters::load_character(&install.join("global_chr.s3d"), &model)
+            .unwrap()
+            .height()
+    });
+    let list = |name: &str, default: &str| -> Vec<f32> {
+        std::env::var(name)
+            .unwrap_or_else(|_| default.into())
+            .split(',')
+            .map(|v| v.trim().parse().unwrap())
+            .collect()
+    };
+    let cells = list("EQ_PROBE_CELLS", "0.2,0.3,0.5");
+    let tile = list("EQ_PROBE_TILE", "48")[0];
+    let threads = std::env::var("EQ_PROBE_THREADS").map_or_else(
+        |_| std::thread::available_parallelism().map_or(4, std::num::NonZero::get),
+        |v| v.parse().unwrap(),
+    );
+    let doors: Vec<u8> = std::env::var("EQ_PROBE_DOORS").map_or(Vec::new(), |doors| {
+        doors
+            .split(',')
+            .map(|d| d.trim().parse().unwrap())
+            .collect()
+    });
+    let (low, high) = triangles.iter().flatten().fold(
+        (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+        |(low, high), p| {
+            (
+                low.min(Vec3::from_array(*p)),
+                high.max(Vec3::from_array(*p)),
+            )
+        },
+    );
+    println!(
+        "zone={zone_name} triangles={} bounds={low:.0}..{high:.0} height={height} threads={threads} \
+         tile={tile} load_seconds={:.2} release={}",
+        triangles.len(),
+        loading.elapsed().as_secs_f32(),
+        !cfg!(debug_assertions),
+    );
+    let floor = |at: Vec3| {
+        let below = world.ray_distance(at, -Vec3::Y, 50.0).unwrap();
+        at - Vec3::Y * below
+    };
+    let named: Vec<(String, Vec3, Vec3)> =
+        std::env::var("EQ_PROBE_ROUTES").map_or(Vec::new(), |routes| {
+            routes
+                .split(';')
+                .filter(|r| !r.trim().is_empty())
+                .map(|route| {
+                    let (name, ends) = route.split_once('=').unwrap();
+                    let (a, b) = ends.split_once('>').unwrap();
+                    let point = |s: &str| {
+                        let v: Vec<f32> = s.split(',').map(|n| n.trim().parse().unwrap()).collect();
+                        Vec3::new(v[0], v[1], v[2])
+                    };
+                    (name.trim().to_owned(), floor(point(a)), floor(point(b)))
+                })
+                .collect()
+        });
+    let eq = |at: Vec3| Vec3::new(-at.z, at.x, at.y);
+    for (round, &cell) in cells.iter().enumerate() {
+        let mesh = NavMesh::build(&triangles, Settings::walker(cell, tile, height, threads));
+        let s = &mesh.stats;
+        let bytes = mesh.to_bytes();
+        let file = std::env::temp_dir().join(format!("eq-navmesh-probe-{zone_name}-{cell}.bin"));
+        let writing = Instant::now();
+        std::fs::write(&file, &bytes).unwrap();
+        let write_seconds = writing.elapsed().as_secs_f32();
+        let reading = Instant::now();
+        let back = NavMesh::from_bytes(&std::fs::read(&file).unwrap());
+        let read_seconds = reading.elapsed().as_secs_f32();
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(back.polygon_count(), mesh.polygon_count());
+        println!(
+            "cell={cell} build_seconds={:.2} (bucket {:.2}, tiles {:.2}, join {:.2}) tiles={} with_polygons={} \
+             failed_tiles={} peak_tile_spans={} polygons={} links={} islands={} largest_island={} \
+             memory_mb={:.1} disk_mb={:.1} cache_write_seconds={write_seconds:.3} cache_read_seconds={read_seconds:.3}",
+            s.total.as_secs_f32(),
+            s.bucket.as_secs_f32(),
+            s.tiles_time.as_secs_f32(),
+            s.join.as_secs_f32(),
+            s.tiles,
+            s.tiles_with_polygons,
+            s.failed_tiles,
+            s.peak_tile_spans,
+            mesh.polygon_count(),
+            mesh.link_count(),
+            mesh.island_count(),
+            mesh.largest_island(),
+            mesh.memory_bytes() as f64 / 1e6,
+            bytes.len() as f64 / 1e6,
+        );
+        let routes = if named.is_empty() {
+            mesh.far_pair()
+                .map(|(a, b)| vec![("far_pair".to_owned(), a, b)])
+                .unwrap_or_default()
+        } else {
+            named.clone()
+        };
+        for (name, start, goal) in &routes {
+            let querying = Instant::now();
+            let located = (mesh.locate(*start), mesh.locate(*goal));
+            let legs = mesh.route(*start, *goal);
+            let query_seconds = querying.elapsed().as_secs_f32();
+            let checking = Instant::now();
+            let checks = legs
+                .as_deref()
+                .map(|legs| check_legs(&world, *start, legs, height, &doors))
+                .unwrap_or_default();
+            let check_seconds = checking.elapsed().as_secs_f32();
+            let count = |f: &dyn Fn(&eq_client_core::movement::navmesh::LegCheck) -> bool| {
+                checks.iter().filter(|c| f(c)).count()
+            };
+            let length = legs.as_ref().map(|legs| {
+                std::iter::once(*start)
+                    .chain(legs.iter().copied())
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .map(|pair| pair[0].distance(pair[1]))
+                    .sum::<f32>()
+            });
+            println!(
+                "cell={cell} route={name} eq_start={:?} eq_goal={:?} located=({},{}) legs={} length={length:?} \
+                 query_seconds={query_seconds:.4} clear={} walk_only={} unrepaired_pass={} failed={} repaired={} \
+                 check_seconds={check_seconds:.3}",
+                eq(*start),
+                eq(*goal),
+                located.0.is_some(),
+                located.1.is_some(),
+                legs.as_ref().map_or(0, Vec::len),
+                count(&|c| c.clear),
+                count(&|c| !c.clear && c.walk),
+                count(&|c| c.clear || c.walk),
+                count(&|c| !c.clear && !c.walk),
+                count(&|c| c.repaired == Some(true)),
+            );
+            for (i, (leg, check)) in legs.iter().flatten().zip(&checks).enumerate() {
+                if !check.clear && !check.walk {
+                    println!(
+                        "cell={cell} route={name} failed_leg={i} to_eq={:?} repaired={:?}",
+                        eq(*leg),
+                        check.repaired
+                    );
+                }
+            }
+            if round == 0 {
+                for drops in [false, true] {
+                    let searching = Instant::now();
+                    let mut search = PathSearch::new(*start, *goal, 10.0, height)
+                        .with_weight(2.0)
+                        .with_drops(drops)
+                        .with_doors(doors.clone());
+                    let result = loop {
+                        match search.advance(&world, 5000) {
+                            PathProgress::Searching => (),
+                            done => break done,
+                        }
+                    };
+                    println!(
+                        "grid route={name} drops={drops} found={} expanded={} seconds={:.2} path_points={}",
+                        matches!(result, PathProgress::Found(_)),
+                        search.expanded(),
+                        searching.elapsed().as_secs_f32(),
+                        match &result {
+                            PathProgress::Found(path) => path.len(),
+                            _ => 0,
+                        },
+                    );
+                }
+            }
+        }
+    }
+}

@@ -1321,7 +1321,9 @@ pub fn zone_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Coll
     build_collision(zone)
 }
 
-fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
+/// The zone's collision triangles with every placed object's, as
+/// [`build_collision`] gathers them.
+fn collision_triangles(zone: &ZoneAsset) -> Vec<[[f32; 3]; 3]> {
     let mut triangles = zone.collision.clone();
     for object in &zone.objects {
         let Some(model) = zone.models.get(object.model) else {
@@ -1332,6 +1334,11 @@ fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Collisi
             triangle.map(|p| transform.transform_point3(Vec3::from_array(p)).to_array())
         }));
     }
+    triangles
+}
+
+fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
+    let triangles = collision_triangles(zone);
     match eq_client_core::movement::CollisionWorld::new(triangles) {
         Ok(world) if zone.regions.liquid_region_count() == 0 => Some(world),
         Ok(world) => Some(world.with_liquids(ZoneLiquids(zone.regions.clone()))),

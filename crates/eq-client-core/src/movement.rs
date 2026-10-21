@@ -4,6 +4,8 @@ mod airborne;
 mod falls;
 mod liquids;
 mod navigator;
+#[doc(hidden)]
+pub mod navmesh;
 mod pace;
 mod path;
 mod route;
