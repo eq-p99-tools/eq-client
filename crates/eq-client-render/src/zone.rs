@@ -4,7 +4,8 @@
 //! door models.
 use super::{
     Collision, HudText, OrbitCamera, Player, PlayerBody, SceneEntity, SceneInfo, TerrainSurface,
-    build_collision, character, doors, hud, spawn_player_and_hud, spawn_static_zone,
+    ViewerSettings, character, collision_triangles, collision_world, doors, hud,
+    spawn_player_and_hud, spawn_static_zone, zone_navmesh::ZoneNavMesh,
 };
 use bevy::{ecs::system::SystemParam, prelude::*};
 use eq_client_assets::{ZoneAsset, characters::CharacterAsset, regions::ZoneRegions};
@@ -28,6 +29,9 @@ pub(super) struct PreparedEntry {
     entry: Entry,
     collision: Collision,
     terrain: TerrainSurface,
+    /// The triangles to build the zone's navigation mesh over, when it is
+    /// built.
+    navmesh: Option<Vec<[[f32; 3]; 3]>>,
 }
 
 impl PreparedEntry {
@@ -160,14 +164,18 @@ impl Entry {
         })
     }
 
-    /// Builds collision and terrain indices alongside archive decoding.
-    pub(super) fn prepare(self) -> PreparedEntry {
-        let collision = Collision(build_collision(&self.zone));
+    /// Builds collision and terrain indices alongside archive decoding, and
+    /// with `navmesh`, gathers the triangles the zone's mesh is built over.
+    pub(super) fn prepare(self, navmesh: bool) -> PreparedEntry {
+        let triangles = collision_triangles(&self.zone);
+        let navmesh = navmesh.then(|| triangles.clone());
+        let collision = Collision(collision_world(&self.zone, triangles));
         let terrain = TerrainSurface::from_primitives(&self.zone.primitives);
         PreparedEntry {
             entry: self,
             collision,
             terrain,
+            navmesh,
         }
     }
 }
@@ -190,6 +198,8 @@ pub(super) struct Scene<'w, 's> {
     materials: ResMut<'w, Assets<StandardMaterial>>,
     bindposes: ResMut<'w, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     nearby: Option<ResMut<'w, super::entities::NearbyEntities>>,
+    navmesh: Option<ResMut<'w, ZoneNavMesh>>,
+    settings: Option<Res<'w, ViewerSettings>>,
 }
 
 impl Scene<'_, '_> {
@@ -207,7 +217,7 @@ impl Scene<'_, '_> {
 
     /// Leaves the zone shown: its scene, the player and the HUD, and
     /// everything built from the zone's assets.
-    pub(super) fn leave(&self, commands: &mut Commands, regions: &mut ZoneRegions) {
+    pub(super) fn leave(&mut self, commands: &mut Commands, regions: &mut ZoneRegions) {
         for entity in &self.roots {
             commands.entity(entity).despawn();
         }
@@ -218,6 +228,9 @@ impl Scene<'_, '_> {
             zone_name: String::new(),
         });
         *regions = ZoneRegions::default();
+        if let Some(navmesh) = self.navmesh.as_mut() {
+            navmesh.leave();
+        }
     }
 
     /// Shows a zone with the player in it, the camera on them, and returns
@@ -233,6 +246,7 @@ impl Scene<'_, '_> {
             entry,
             collision,
             terrain,
+            navmesh,
         } = prepared;
         let Entry {
             zone,
@@ -246,6 +260,13 @@ impl Scene<'_, '_> {
             zone_name: zone.short_name.clone(),
         });
         regions.clone_from(&zone.regions);
+        if let (Some(triangles), Some(mesh)) = (navmesh, self.navmesh.as_mut()) {
+            let directory = self
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.0.settings_directory.clone());
+            mesh.start(&zone.short_name, triangles, body.height, directory);
+        }
         spawn_static_zone(
             commands,
             zone,

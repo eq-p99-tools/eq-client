@@ -73,6 +73,7 @@ mod who;
 mod window_size;
 mod windows;
 mod zone;
+mod zone_navmesh;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
@@ -180,6 +181,9 @@ pub struct ViewerConfig {
     /// name, coordinates, the movement mode with its keys, and the count of
     /// nearby entities.
     pub debug_overlay: bool,
+    /// Build each zone's navigation mesh at entry, for probes, scripts and
+    /// looks; never a player setting. Nothing plans over it yet.
+    pub navmesh: bool,
 }
 
 impl ViewerConfig {
@@ -336,6 +340,7 @@ pub fn run(
         .add_systems(Update, exit_log::close_requests);
     schedule(&mut app);
     navigation::install(&mut app);
+    zone_navmesh::install(&mut app);
     frame_limit::install(&mut app);
     attention::install(&mut app);
     if let Some(size) = window_size {
@@ -865,7 +870,7 @@ fn setup_scene(
             placed,
             body,
         }
-        .prepare(),
+        .prepare(settings.0.navmesh),
         settings.0.terrain_only,
         &mut online.regions,
     );
@@ -1322,6 +1327,12 @@ pub fn zone_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Coll
 }
 
 fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
+    collision_world(zone, collision_triangles(zone))
+}
+
+/// The zone's collision triangles with every placed object's: the solids the
+/// walker meets, doors aside.
+fn collision_triangles(zone: &ZoneAsset) -> Vec<[[f32; 3]; 3]> {
     let mut triangles = zone.collision.clone();
     for object in &zone.objects {
         let Some(model) = zone.models.get(object.model) else {
@@ -1332,6 +1343,13 @@ fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Collisi
             triangle.map(|p| transform.transform_point3(Vec3::from_array(p)).to_array())
         }));
     }
+    triangles
+}
+
+fn collision_world(
+    zone: &ZoneAsset,
+    triangles: Vec<[[f32; 3]; 3]>,
+) -> Option<eq_client_core::movement::CollisionWorld> {
     match eq_client_core::movement::CollisionWorld::new(triangles) {
         Ok(world) if zone.regions.liquid_region_count() == 0 => Some(world),
         Ok(world) => Some(world.with_liquids(ZoneLiquids(zone.regions.clone()))),
@@ -2106,7 +2124,7 @@ mod tests {
                             height: 6.0,
                         },
                     }
-                    .prepare(),
+                    .prepare(false),
                     true,
                     &mut eq_client_assets::regions::ZoneRegions::default(),
                 );

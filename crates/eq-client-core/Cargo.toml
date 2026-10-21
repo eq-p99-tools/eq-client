@@ -12,6 +12,7 @@ chrono.workspace = true
 parry3d.workspace = true
 eq-client-axes.workspace = true
 glam.workspace = true
+rerecast.workspace = true
 eq-network-game.workspace = true
 
 [lints]

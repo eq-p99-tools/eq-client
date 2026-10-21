@@ -4,6 +4,7 @@ mod airborne;
 mod falls;
 mod liquids;
 mod navigator;
+pub mod navmesh;
 mod pace;
 mod path;
 mod route;
