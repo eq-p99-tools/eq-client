@@ -10,6 +10,7 @@
 
 use super::drops::{DROP_SPACING, THINNING};
 use super::{BuildReport, DropLink, Link, NavMesh, Polygon, Settings};
+use crate::movement::CollisionWorld;
 use crate::movement::path::{CELL, MAX_DROP};
 use glam::Vec3;
 use std::fs;
@@ -44,27 +45,36 @@ pub struct Loaded {
 }
 
 /// The mesh for `zone` over `triangles`: read from the cache under
-/// `directory` when it holds one, else built on `threads` threads and kept
-/// there. None when `cancel` is set before a build finishes; a cancelled
+/// `directory` when it holds one, else built on `threads` threads, its
+/// ledges' drops tried in `world` (the zone's own, when there is one), and
+/// kept there. None when `cancel` is set before a build finishes; a cancelled
 /// build keeps nothing.
 #[must_use]
 pub fn load_or_build(
     directory: Option<&Path>,
     zone: &str,
     triangles: &[[[f32; 3]; 3]],
+    world: Option<&CollisionWorld>,
     settings: &Settings,
     threads: usize,
     cancel: &AtomicBool,
 ) -> Option<Loaded> {
-    load_or_build_until(directory, zone, triangles, settings, threads, &|| {
-        cancel.load(Ordering::Relaxed)
-    })
+    load_or_build_until(
+        directory,
+        zone,
+        triangles,
+        world,
+        settings,
+        threads,
+        &|| cancel.load(Ordering::Relaxed),
+    )
 }
 
 pub(super) fn load_or_build_until(
     directory: Option<&Path>,
     zone: &str,
     triangles: &[[[f32; 3]; 3]],
+    world: Option<&CollisionWorld>,
     settings: &Settings,
     threads: usize,
     cancelled: &(dyn Fn() -> bool + Sync),
@@ -82,7 +92,7 @@ pub(super) fn load_or_build_until(
             });
         }
     }
-    let (mesh, report) = NavMesh::build_until(triangles, settings, threads, cancelled)?;
+    let (mesh, report) = NavMesh::build_until(triangles, world, settings, threads, cancelled)?;
     let cached = directory.map_or_else(
         || Err(io::Error::other("no settings directory")),
         |directory| store(directory, zone, triangles, settings, &mesh),

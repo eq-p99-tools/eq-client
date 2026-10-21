@@ -254,6 +254,8 @@ impl Scene<'_, '_> {
             placed,
             body,
         } = entry;
+        // A clone shares the world's geometry.
+        let world = collision.0.clone();
         commands.insert_resource(collision);
         commands.insert_resource(terrain);
         commands.insert_resource(SceneInfo {
@@ -265,7 +267,7 @@ impl Scene<'_, '_> {
                 .settings
                 .as_ref()
                 .and_then(|settings| settings.0.settings_directory.clone());
-            mesh.start(&zone.short_name, triangles, body.height, directory);
+            mesh.start(&zone.short_name, triangles, world, body.height, directory);
         }
         spawn_static_zone(
             commands,

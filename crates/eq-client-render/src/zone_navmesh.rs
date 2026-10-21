@@ -3,6 +3,7 @@
 //! plans over it once it is ready.
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool, block_on, poll_once};
+use eq_client_core::movement::CollisionWorld;
 use eq_client_core::movement::navmesh::{self, NavMesh, Settings, cache};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,11 +38,13 @@ struct Making {
 
 impl ZoneNavMesh {
     /// Reads or builds `zone`'s mesh over `triangles` for a walker `height`
-    /// tall, keeping it under `settings_directory` when there is one.
+    /// tall, its drops tried in the zone's `world` when there is one, keeping
+    /// it under `settings_directory` when there is one.
     pub(super) fn start(
         &mut self,
         zone: &str,
         triangles: Vec<[[f32; 3]; 3]>,
+        world: Option<CollisionWorld>,
         height: f32,
         settings_directory: Option<PathBuf>,
     ) {
@@ -57,6 +60,7 @@ impl ZoneNavMesh {
                     settings_directory.as_deref(),
                     &zone,
                     &triangles,
+                    world.as_ref(),
                     &Settings::walker(height),
                     threads,
                     &cancel,
@@ -188,7 +192,7 @@ mod tests {
         let mut app = app();
         app.world_mut()
             .resource_mut::<ZoneNavMesh>()
-            .start("zone", floor(), 6.0, None);
+            .start("zone", floor(), None, 6.0, None);
         let started = Instant::now();
         while app
             .world()
@@ -217,7 +221,7 @@ mod tests {
     fn leaving_stops_the_build() {
         let mut app = app();
         let mut navmesh = app.world_mut().resource_mut::<ZoneNavMesh>();
-        navmesh.start("zone", floor(), 6.0, None);
+        navmesh.start("zone", floor(), None, 6.0, None);
         let cancel = Arc::clone(&navmesh.making.as_ref().unwrap().cancel);
         navmesh.leave();
         assert!(cancel.load(Ordering::Relaxed));

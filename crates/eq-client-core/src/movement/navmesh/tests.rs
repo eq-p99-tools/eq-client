@@ -210,12 +210,28 @@ fn a_mesh_reads_back_from_the_cache() {
     let folder = folder("read-back");
     let triangles = floor(0.0, -40.0, 40.0);
     let cancel = AtomicBool::new(false);
-    let built =
-        cache::load_or_build(Some(&folder), "zone", &triangles, &settings(), 2, &cancel).unwrap();
+    let built = cache::load_or_build(
+        Some(&folder),
+        "zone",
+        &triangles,
+        None,
+        &settings(),
+        2,
+        &cancel,
+    )
+    .unwrap();
     assert!(matches!(built.source, Source::Built(_)));
     let bytes = built.cached.unwrap();
-    let read =
-        cache::load_or_build(Some(&folder), "zone", &triangles, &settings(), 2, &cancel).unwrap();
+    let read = cache::load_or_build(
+        Some(&folder),
+        "zone",
+        &triangles,
+        None,
+        &settings(),
+        2,
+        &cancel,
+    )
+    .unwrap();
     assert!(matches!(read.source, Source::Cache));
     assert_eq!(read.cached.unwrap(), bytes);
     assert_eq!(read.mesh.polygons, built.mesh.polygons);
@@ -244,8 +260,16 @@ fn a_file_with_another_header_or_cut_short_is_rebuilt() {
     let folder = folder("rejected");
     let triangles = floor(0.0, -40.0, 40.0);
     let cancel = AtomicBool::new(false);
-    let built =
-        cache::load_or_build(Some(&folder), "zone", &triangles, &settings(), 2, &cancel).unwrap();
+    let built = cache::load_or_build(
+        Some(&folder),
+        "zone",
+        &triangles,
+        None,
+        &settings(),
+        2,
+        &cancel,
+    )
+    .unwrap();
     let path = cache::path(&folder, "zone", cache::key(&triangles, &settings())).unwrap();
     let good = std::fs::read(&path).unwrap();
     assert_eq!(good.len(), built.cached.unwrap());
@@ -255,9 +279,16 @@ fn a_file_with_another_header_or_cut_short_is_rebuilt() {
     for bad in [other, good[..good.len() - 3].to_vec()] {
         std::fs::write(&path, bad).unwrap();
         assert!(cache::load(&folder, "zone", &triangles, &settings()).is_none());
-        let again =
-            cache::load_or_build(Some(&folder), "zone", &triangles, &settings(), 2, &cancel)
-                .unwrap();
+        let again = cache::load_or_build(
+            Some(&folder),
+            "zone",
+            &triangles,
+            None,
+            &settings(),
+            2,
+            &cancel,
+        )
+        .unwrap();
         assert!(matches!(again.source, Source::Built(_)));
         // The rebuilt mesh is stored over the rejected file.
         assert_eq!(again.cached.unwrap(), good.len());
@@ -280,8 +311,16 @@ fn a_new_key_removes_the_zone_s_stale_file() {
     )
     .unwrap();
     for (zone, triangles) in [("zone", &old), ("zone2", &old), ("zone", &new)] {
-        let built =
-            cache::load_or_build(Some(&folder), zone, triangles, &settings(), 2, &cancel).unwrap();
+        let built = cache::load_or_build(
+            Some(&folder),
+            zone,
+            triangles,
+            None,
+            &settings(),
+            2,
+            &cancel,
+        )
+        .unwrap();
         built.cached.unwrap();
     }
     let name = |zone: &str, triangles: &[[[f32; 3]; 3]]| {
@@ -305,6 +344,7 @@ fn a_build_cancelled_part_way_keeps_no_mesh_and_no_file() {
         Some(&folder),
         "zone",
         &triangles,
+        None,
         &settings(),
         1,
         &cancelled,
@@ -938,6 +978,58 @@ mod routes {
         }
 
         #[test]
+        fn a_drop_into_deep_water_is_no_way_down_in_a_world_with_water() {
+            // Water over the floor below the ledge, deep enough to close over
+            // the walker's head: its own drop never falls into it.
+            let triangles = platform(8.0, false);
+            let (_, navigator) = zone(&triangles);
+            // The floor in front of the platform, where the water is.
+            let into_water =
+                |links: &[DropLink]| links.iter().filter(|l| l.landing.z > -5.0).count();
+            assert_ne!(into_water(links(mesh_of(&navigator))), 0);
+            let water = crate::movement::liquids::Boxes(vec![(
+                Vec3::new(-40.0, -1.0, -5.0),
+                Vec3::new(40.0, 7.0, 40.0),
+                crate::movement::Liquid::Water,
+            )]);
+            let world = CollisionWorld::new(triangles.iter().copied())
+                .unwrap()
+                .with_liquids(water);
+            let (mesh, report) = NavMesh::build_in(
+                &triangles,
+                Some(&world),
+                &settings(),
+                2,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert_eq!(into_water(links(&mesh)), 0);
+            // The drops off its other sides, onto dry floor, stay.
+            assert_ne!(report.drop_links, 0);
+        }
+
+        #[test]
+        fn drops_built_in_the_zones_world_leave_its_doors_out() {
+            let triangles = platform(8.0, false);
+            let (_, navigator) = zone(&triangles);
+            let alone = links(mesh_of(&navigator)).to_vec();
+            // A shut door along the ledge: the mesh's drops don't depend on it.
+            let mut world = CollisionWorld::new(triangles.iter().copied()).unwrap();
+            let door = CollisionMesh::new(block([-4.0, 8.0, -5.4], [4.0, 11.0, -5.0])).unwrap();
+            world.set_door_obstacles(vec![(1, Arc::new(door))]);
+            let (mesh, report) = NavMesh::build_in(
+                &triangles,
+                Some(&world),
+                &settings(),
+                2,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert_eq!(report.drop_links, alone.len());
+            assert_eq!(links(&mesh), &alone[..]);
+        }
+
+        #[test]
         fn a_build_cancelled_in_its_drops_keeps_nothing() {
             let triangles = platform(8.0, false);
             // One thread asks once a tile and once past the last: so many
@@ -946,7 +1038,7 @@ mod routes {
             let asked = AtomicUsize::new(0);
             let limit = report.tiles + 3;
             let cancelled = || asked.fetch_add(1, Ordering::Relaxed) >= limit;
-            assert!(NavMesh::build_until(&triangles, &settings(), 1, &cancelled).is_none());
+            assert!(NavMesh::build_until(&triangles, None, &settings(), 1, &cancelled).is_none());
             assert!(asked.load(Ordering::Relaxed) > limit);
         }
 
@@ -975,6 +1067,7 @@ mod routes {
                 Some(&folder),
                 "zone",
                 &triangles,
+                None,
                 &settings(),
                 2,
                 &cancel,
