@@ -301,6 +301,7 @@ pub(super) fn build_tile(
     let mut compact = heightfield
         .into_compact(walkable_height, walkable_climb)
         .map_err(refused("compact"))?;
+    tag_sizes(&mut compact, settings)?;
     compact.erode_walkable_area(radius);
     compact.build_distance_field();
     compact
@@ -308,6 +309,43 @@ pub(super) fn build_tile(
         .map_err(refused("regions"))?;
     let contours = compact.build_contours(1.3, radius * 8, rerecast::BuildContoursFlags::default());
     contours.into_polygon_mesh(6).map_err(refused("polygons"))
+}
+
+/// Tags each walkable span with the sizes its headroom fits: area 1 for the
+/// shortest alone, 2 for the two shorter, 3 for all three. Regions, and so
+/// polygons, never cross a change of tag.
+fn tag_sizes(
+    compact: &mut rerecast::CompactHeightfield,
+    settings: &Settings,
+) -> Result<(), (&'static str, String)> {
+    let ch = settings.cell_height;
+    // A span's headroom is kept in a byte of cell heights; open sky and any
+    // gap above the byte read as its top.
+    let cap = f32::from(u8::MAX) * ch;
+    if settings.sizes[2] >= cap {
+        return Err((
+            "sizes",
+            format!(
+                "the tallest size {} is over the headroom cap {cap}",
+                settings.sizes[2]
+            ),
+        ));
+    }
+    for (span, area) in compact.spans.iter().zip(compact.areas.iter_mut()) {
+        if !area.is_walkable() {
+            continue;
+        }
+        let headroom = f32::from(span.height()) * ch;
+        #[allow(clippy::cast_possible_truncation)] // At most three sizes.
+        let fits = settings
+            .sizes
+            .iter()
+            .filter(|&&size| headroom >= size)
+            .count() as u8;
+        // The build's own height filter leaves only spans the shortest fits.
+        *area = AreaType(fits.max(1));
+    }
+    Ok(())
 }
 
 /// Adds a tile's polygons, in world units, with links inside the tile and
@@ -352,7 +390,12 @@ fn append_tile(tiled: &mut Vec<Tiled>, mesh: &PolygonNavmesh, tile: (i32, i32)) 
             }
         }
         tiled.push(Tiled {
-            polygon: Polygon { vertices, links },
+            polygon: Polygon {
+                vertices,
+                links,
+                // Areas 1 to 3, as `tag_sizes` sets them.
+                size: (*mesh.areas[p]).clamp(1, 3) - 1,
+            },
             open,
             tile,
         });

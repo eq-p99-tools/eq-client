@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The rerecast version the mesh is built with, as pinned in Cargo.toml.
 const RERECAST: &str = "0.4.0";
 /// This format's version; raised whenever the bytes or the build change.
-const FORMAT: u32 = 3;
+const FORMAT: u32 = 4;
 const MAGIC: &[u8; 4] = b"EQNM";
 
 /// Where a mesh came from.
@@ -145,6 +145,44 @@ pub fn load(
     decode(&bytes, &header(key, triangles.len(), settings))
 }
 
+/// Whether a mesh for `zone` built with `settings` is kept under `directory`,
+/// judged by the header alone: its format and settings, not its key, so the
+/// count of built zones never loads a zone. A file whose triangles have since
+/// changed counts until a load rebuilds it.
+#[must_use]
+pub fn present(directory: &Path, zone: &str, settings: &Settings) -> bool {
+    // A zone that isn't a plain file name has no file.
+    if path(directory, zone, 0).is_none() {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(directory.join("navmesh")) else {
+        return false;
+    };
+    let expected = header(0, 0, settings);
+    // The key and the triangle count sit between the format and the
+    // settings.
+    let (format, settings_at) = (MAGIC.len() + 4, MAGIC.len() + 4 + 8 + 8);
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let ours = name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".bin"))
+            .and_then(|stem| stem.rsplit_once('-'))
+            .is_some_and(|(owner, _)| owner == zone);
+        ours && read_prefix(&entry.path(), expected.len()).is_some_and(|bytes| {
+            bytes[..format] == expected[..format] && bytes[settings_at..] == expected[settings_at..]
+        })
+    })
+}
+
+/// The first `length` bytes of the file at `path`, when it has that many.
+fn read_prefix(path: &Path, length: usize) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = vec![0; length];
+    fs::File::open(path).ok()?.read_exact(&mut bytes).ok()?;
+    Some(bytes)
+}
+
 /// Keeps `mesh` as the cached mesh for `zone` over `triangles`, removing the
 /// zone's files under other keys; the bytes written.
 ///
@@ -198,13 +236,16 @@ pub fn store(
 }
 
 /// The fields of `settings` that change a build.
-fn settings_values(settings: &Settings) -> [f32; 7] {
+fn settings_values(settings: &Settings) -> [f32; 10] {
     [
         settings.cell_size,
         settings.cell_height,
         settings.tile,
         settings.radius,
         settings.height,
+        settings.sizes[0],
+        settings.sizes[1],
+        settings.sizes[2],
         settings.climb,
         settings.floor_normal_y,
     ]
@@ -242,6 +283,7 @@ fn encode(mesh: &NavMesh, out: &mut Vec<u8>) {
         for &v in &polygon.vertices {
             point(out, v);
         }
+        out.extend_from_slice(&u32::from(polygon.size).to_le_bytes());
         count(out, polygon.links.len());
         for link in &polygon.links {
             out.extend_from_slice(&link.to.to_le_bytes());
@@ -268,6 +310,7 @@ fn decode(bytes: &[u8], header: &[u8]) -> Option<NavMesh> {
         let vertices = (0..reader.u32()?)
             .map(|_| reader.point())
             .collect::<Option<_>>()?;
+        let size = u8::try_from(reader.u32()?).ok().filter(|&size| size < 3)?;
         let links = (0..reader.u32()?)
             .map(|_| {
                 let to = reader.u32()?;
@@ -279,7 +322,11 @@ fn decode(bytes: &[u8], header: &[u8]) -> Option<NavMesh> {
                 })
             })
             .collect::<Option<_>>()?;
-        polygons.push(Polygon { vertices, links });
+        polygons.push(Polygon {
+            vertices,
+            links,
+            size,
+        });
     }
     let drops = (0..reader.u32()?)
         .map(|_| {

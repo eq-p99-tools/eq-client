@@ -63,6 +63,16 @@ fn folder(name: &str) -> PathBuf {
     folder
 }
 
+/// A path's length from `start` through its points.
+fn routes_length(start: Vec3, path: &[Vec3]) -> f32 {
+    std::iter::once(start)
+        .chain(path.iter().copied())
+        .collect::<Vec<_>>()
+        .windows(2)
+        .map(|pair| pair[0].distance(pair[1]))
+        .sum()
+}
+
 fn files(folder: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(folder.join("navmesh"))
         .map(|entries| {
@@ -1080,5 +1090,249 @@ mod routes {
             assert_eq!(read.drops, built.mesh.drops);
             let _ = std::fs::remove_dir_all(&folder);
         }
+    }
+}
+
+mod sizes {
+    //! One build tagged for three walker sizes, each size's mesh split out.
+
+    use super::{block, floor, folder};
+    use crate::movement::navmesh::{MeshNavigator, NavMesh, Settings, SizedMeshes, cache};
+    use crate::movement::{
+        CollisionWorld, Fallback, Navigator, PathProgress, Planned, Scope, SearchRequest,
+    };
+    use glam::Vec3;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    const SIZES: [f32; 3] = [4.0, 6.0, 9.0];
+
+    /// A box hung over the floor: its sides, its top and its underside,
+    /// which a walker meets overhead.
+    fn beam(low: [f32; 3], high: [f32; 3]) -> Vec<[[f32; 3]; 3]> {
+        let ([x0, y0, z0], [x1, _, z1]) = (low, high);
+        let mut triangles = block(low, high);
+        // Facing down.
+        triangles.push([[x0, y0, z0], [x1, y0, z0], [x1, y0, z1]]);
+        triangles.push([[x0, y0, z0], [x1, y0, z1], [x0, y0, z1]]);
+        triangles
+    }
+
+    fn sized() -> Settings {
+        Settings {
+            cell_size: 0.25,
+            tile: 16.0,
+            ..Settings::sized(SIZES)
+        }
+    }
+
+    fn plain(height: f32) -> Settings {
+        Settings {
+            cell_size: 0.25,
+            tile: 16.0,
+            ..Settings::walker(height)
+        }
+    }
+
+    /// A floor split by a wall across x = 0, with a doorway at z -3..3 under
+    /// a beam whose `underside` is that high, and an open way through at
+    /// z 12..18.
+    fn lintel(underside: f32) -> Vec<[[f32; 3]; 3]> {
+        let mut triangles = floor(0.0, -20.0, 20.0);
+        triangles.extend(block([-1.0, 0.0, -20.0], [1.0, 14.0, -3.0]));
+        triangles.extend(beam([-1.0, underside, -3.0], [1.0, 14.0, 3.0]));
+        triangles.extend(block([-1.0, 0.0, 3.0], [1.0, 14.0, 12.0]));
+        triangles.extend(block([-1.0, 0.0, 18.0], [1.0, 14.0, 20.0]));
+        triangles
+    }
+
+    fn build(triangles: &[[[f32; 3]; 3]], settings: &Settings) -> NavMesh {
+        NavMesh::build(triangles, settings, 2, &AtomicBool::new(false))
+            .unwrap()
+            .0
+    }
+
+    /// The route from `start` to `goal` for a walker `height` tall on
+    /// `mesh`: its path, and any fallback.
+    fn route(
+        mesh: &Arc<NavMesh>,
+        world: &CollisionWorld,
+        start: Vec3,
+        goal: Vec3,
+        height: f32,
+    ) -> (Option<Vec<Vec3>>, Option<Fallback>) {
+        let navigator = MeshNavigator::new(Arc::clone(mesh));
+        let mut search = navigator.search(SearchRequest {
+            start,
+            goal,
+            reach: 1.0,
+            height,
+            doors: Vec::new(),
+            drops: false,
+            scope: Scope::Whole,
+        });
+        let progress = loop {
+            match search.advance(world, 5000) {
+                PathProgress::Searching => (),
+                done => break done,
+            }
+        };
+        let fallback = match search.planned() {
+            Planned::Mesh { fallback, .. } => fallback,
+            Planned::Grid => panic!("the grid planned"),
+        };
+        match progress {
+            PathProgress::Found(path) => (Some(path), fallback),
+            _ => (None, fallback),
+        }
+    }
+
+    /// Whether the path from `start` crosses the wall at x = 0 under the
+    /// beam.
+    fn through_beam(start: Vec3, path: &[Vec3]) -> bool {
+        std::iter::once(start)
+            .chain(path.iter().copied())
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| {
+                let (a, b) = (pair[0], pair[1]);
+                (a.x < 0.0) != (b.x < 0.0) && {
+                    let z = a.z + (b.z - a.z) * (0.0 - a.x) / (b.x - a.x);
+                    z.abs() < 3.0
+                }
+            })
+    }
+
+    #[test]
+    fn a_low_beam_lets_the_short_size_through_and_sends_the_others_round() {
+        let triangles = lintel(5.0);
+        let world = CollisionWorld::new(triangles.iter().copied()).unwrap();
+        let tagged = build(&triangles, &sized());
+        // Every polygon on the floor under the beam carries the short size
+        // alone.
+        let under: Vec<u8> = tagged
+            .polygons
+            .iter()
+            .filter(|polygon| {
+                #[allow(clippy::cast_precision_loss)] // A polygon has a few corners.
+                let centre = polygon.vertices.iter().sum::<Vec3>() / polygon.vertices.len() as f32;
+                centre.x.abs() < 1.0 && centre.z.abs() < 3.0 && centre.y < 2.0
+            })
+            .map(|polygon| polygon.size)
+            .collect();
+        assert!(
+            !under.is_empty() && under.iter().all(|&size| size == 0),
+            "{under:?}"
+        );
+        let meshes = tagged.split(SIZES);
+        let (start, goal) = (Vec3::new(-10.0, 0.5, 0.0), Vec3::new(10.0, 0.5, 0.0));
+        let short = meshes.for_height(SIZES[0]).unwrap();
+        let (path, fallback) = route(&short, &world, start, goal, SIZES[0]);
+        let path = path.unwrap_or_else(|| panic!("{fallback:?}"));
+        assert!(through_beam(start, &path), "{path:?}");
+        for height in [SIZES[1], SIZES[2]] {
+            let mesh = meshes.for_height(height).unwrap();
+            let (path, fallback) = route(&mesh, &world, start, goal, height);
+            let path = path.unwrap_or_else(|| panic!("{height}: {fallback:?}"));
+            assert!(!through_beam(start, &path), "{height}: {path:?}");
+            assert!(path.iter().any(|p| p.z > 10.0), "{height}: round: {path:?}");
+        }
+    }
+
+    #[test]
+    fn with_no_way_round_the_taller_sizes_fall_back() {
+        let mut triangles = floor(0.0, -20.0, 20.0);
+        triangles.extend(block([-1.0, 0.0, -20.0], [1.0, 14.0, -3.0]));
+        triangles.extend(beam([-1.0, 5.0, -3.0], [1.0, 14.0, 3.0]));
+        triangles.extend(block([-1.0, 0.0, 3.0], [1.0, 14.0, 20.0]));
+        let world = CollisionWorld::new(triangles.iter().copied()).unwrap();
+        let meshes = build(&triangles, &sized()).split(SIZES);
+        let (start, goal) = (Vec3::new(-10.0, 0.5, 0.0), Vec3::new(10.0, 0.5, 0.0));
+        let short = meshes.for_height(SIZES[0]).unwrap();
+        assert!(route(&short, &world, start, goal, SIZES[0]).0.is_some());
+        let medium = meshes.for_height(SIZES[1]).unwrap();
+        let (path, fallback) = route(&medium, &world, start, goal, SIZES[1]);
+        assert!(path.is_none());
+        assert_eq!(fallback, Some(Fallback::OtherIsland));
+    }
+
+    #[test]
+    fn each_size_of_a_tagged_build_matches_a_plain_build_at_that_size() {
+        // Beams at each size's edges: one only the short fits, one the short
+        // and medium fit.
+        let mut triangles = floor(0.0, -40.0, 40.0);
+        triangles.extend(block([-1.0, 0.0, -40.0], [1.0, 14.0, -24.0]));
+        triangles.extend(beam([-1.0, 5.0, -24.0], [1.0, 14.0, -18.0]));
+        triangles.extend(block([-1.0, 0.0, -18.0], [1.0, 14.0, 0.0]));
+        triangles.extend(beam([-1.0, 7.5, 0.0], [1.0, 14.0, 6.0]));
+        triangles.extend(block([-1.0, 0.0, 6.0], [1.0, 14.0, 24.0]));
+        triangles.extend(block([-1.0, 0.0, 30.0], [1.0, 14.0, 40.0]));
+        let world = CollisionWorld::new(triangles.iter().copied()).unwrap();
+        let tagged = build(&triangles, &sized());
+        let meshes = tagged.split(SIZES);
+        let (start, goal) = (Vec3::new(-20.0, 0.5, -21.0), Vec3::new(20.0, 0.5, -21.0));
+        for (size, &height) in SIZES.iter().enumerate() {
+            let plain = Arc::new(build(&triangles, &plain(height)));
+            let ours = meshes.for_height(height).unwrap();
+            #[allow(clippy::cast_possible_truncation)] // Three sizes.
+            let (area, plain_area) = (tagged.floor_area(size as u8), plain.floor_area(0));
+            assert!(
+                (area - plain_area).abs() <= 0.02 * plain_area,
+                "{height}: {area} against {plain_area}"
+            );
+            let (ours, ours_fallback) = route(&ours, &world, start, goal, height);
+            let (theirs, theirs_fallback) = route(&plain, &world, start, goal, height);
+            assert_eq!(ours_fallback, theirs_fallback, "{height}");
+            let (ours, theirs) = (ours.unwrap(), theirs.unwrap());
+            let length = |path: &[Vec3]| super::routes_length(start, path);
+            assert!(
+                (length(&ours) - length(&theirs)).abs() <= 0.03 * length(&theirs),
+                "{height}: {ours:?} against {theirs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_walker_uses_the_smallest_size_that_fits_it_and_none_past_the_tallest() {
+        let meshes: SizedMeshes = build(&floor(0.0, -10.0, 10.0), &sized()).split(SIZES);
+        for (height, size) in [
+            (3.5, Some(0)),
+            (4.0, Some(0)),
+            (5.0, Some(1)),
+            (6.0, Some(1)),
+            (8.0, Some(2)),
+            (9.0, Some(2)),
+            (9.5, None),
+        ] {
+            assert_eq!(meshes.size_for(height), size, "{height}");
+        }
+        assert!(meshes.for_height(9.5).is_none());
+    }
+
+    #[test]
+    fn a_tagged_mesh_keeps_its_sizes_in_the_cache_and_is_counted_by_its_header() {
+        let triangles = lintel(5.0);
+        let folder = folder("sizes");
+        assert!(!cache::present(&folder, "zone", &sized()));
+        let built = cache::load_or_build(
+            Some(&folder),
+            "zone",
+            &triangles,
+            None,
+            &sized(),
+            2,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let read = cache::load(&folder, "zone", &triangles, &sized()).unwrap();
+        assert_eq!(read.polygons, built.mesh.polygons);
+        assert!(cache::present(&folder, "zone", &sized()));
+        assert!(!cache::present(&folder, "other", &sized()));
+        assert!(!cache::present(&folder, "zone", &plain(6.0)));
+        // A file that isn't a mesh doesn't count.
+        let name = super::files(&folder).pop().unwrap();
+        std::fs::write(folder.join("navmesh").join(&name), b"EQNM").unwrap();
+        assert!(!cache::present(&folder, "zone", &sized()));
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }

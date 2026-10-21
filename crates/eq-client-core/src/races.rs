@@ -222,6 +222,11 @@ pub const fn drawn(race: u32) -> bool {
     !matches!(race, 127 | 240)
 }
 
+/// The playable races by the walker size their models are measured into for
+/// the navigation mesh, shortest first: halfling, gnome and dwarf; human,
+/// erudite, the elves, half elf and iksar; barbarian, troll and ogre.
+pub const SIZE_GROUPS: [&[u32]; 3] = [&[8, 11, 12], &[1, 3, 4, 5, 6, 7, 128], &[2, 9, 10]];
+
 /// The model a spawn of this race and gender (0 male, 1 female, 2 neuter)
 /// draws with. A gender the race has no model for takes its neuter model,
 /// then its male one, then its female one; None for a race without a model.
