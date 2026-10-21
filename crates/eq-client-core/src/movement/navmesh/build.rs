@@ -3,6 +3,8 @@
 //! border edges meet.
 
 use super::{Link, Polygon, Settings};
+use crate::movement::liquids::submerged_in;
+use crate::movement::{CollisionWorld, Liquids};
 use glam::{UVec3, Vec2, Vec3, Vec3A};
 use rerecast::{AreaType, HeightfieldBuilder, PolygonNavmesh, RegionId, TriMesh};
 use std::borrow::Cow;
@@ -84,15 +86,26 @@ type Edge = (Vec3, Vec3);
 type TileSide = ((i32, i32), u8);
 
 /// Builds the polygons over `triangles` on `threads` threads, joined across
-/// tiles; None when `cancelled` turns true before the last tile is built.
-/// It is asked before each tile.
+/// tiles, leaving out floor where the tallest size would be under water or
+/// in lava in `world`, the zone's own world, when there is one; None when
+/// `cancelled` turns true before the last tile is built. It is asked before
+/// each tile.
 pub(super) fn polygons(
     triangles: &[[[f32; 3]; 3]],
+    world: Option<&CollisionWorld>,
     settings: &Settings,
     threads: usize,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<(Vec<Polygon>, BuildReport)> {
-    polygons_with(triangles, settings, threads, cancelled, &build_tile)
+    polygons_with(
+        triangles,
+        settings,
+        threads,
+        cancelled,
+        &|triangles, indices, min, max, border, settings| {
+            build_tile(triangles, indices, min, max, border, settings, world)
+        },
+    )
 }
 
 /// Builds one tile: the triangles at `indices`, in the box from `min` to
@@ -303,6 +316,7 @@ pub(super) fn build_tile(
     max: Vec3,
     border: u16,
     settings: &Settings,
+    world: Option<&CollisionWorld>,
 ) -> TileResult {
     fn refused<E: std::fmt::Display>(step: &'static str) -> impl Fn(E) -> (&'static str, String) {
         move |error| (step, error.to_string())
@@ -345,6 +359,13 @@ pub(super) fn build_tile(
     let mut compact = heightfield
         .into_compact(walkable_height, walkable_climb)
         .map_err(refused("compact"))?;
+    // Only the liquids in the tile, up to the tallest size's head over its
+    // highest floor, are asked about; a tile with none asks nothing.
+    if let Some(liquids) =
+        world.and_then(|world| world.liquids_within(min, max + Vec3::Y * settings.sizes[2]))
+    {
+        leave_out_drowned(&mut compact, &*liquids, settings.sizes[2]);
+    }
     tag_sizes(&mut compact, settings)?;
     keep_sizes_off_low_ceilings(&mut compact, radius);
     compact.erode_walkable_area(radius);
@@ -354,6 +375,39 @@ pub(super) fn build_tile(
         .map_err(refused("regions"))?;
     let contours = compact.build_contours(1.3, radius * 8, rerecast::BuildContoursFlags::default());
     contours.into_polygon_mesh(6).map_err(refused("polygons"))
+}
+
+/// Marks not walkable each walkable span where a walker `height` tall,
+/// standing on it at the middle of its cell, would be under water or in
+/// lava in `liquids`, the zone's world's within the tile: the walker's own guard refuses every step there, so no
+/// route can use it. Floor too deep for the tallest size is too deep for
+/// every size; shallows only a taller size can wade stay, and a shorter
+/// walker's legs through them are refused by its own check.
+fn leave_out_drowned(
+    compact: &mut rerecast::CompactHeightfield,
+    liquids: &dyn Liquids,
+    height: f32,
+) {
+    let (cs, ch, min) = (compact.cell_size, compact.cell_height, compact.aabb.min);
+    for z in 0..compact.height {
+        for x in 0..compact.width {
+            let cell = compact.cell_at(x, z);
+            let spans = cell.index() as usize..cell.index() as usize + usize::from(cell.count());
+            for i in spans {
+                if !compact.areas[i].is_walkable() {
+                    continue;
+                }
+                let feet = Vec3::new(
+                    min.x + (f32::from(x) + 0.5) * cs,
+                    min.y + f32::from(compact.spans[i].y) * ch,
+                    min.z + (f32::from(z) + 0.5) * cs,
+                );
+                if submerged_in(liquids, feet, height) {
+                    compact.areas[i] = AreaType::NOT_WALKABLE;
+                }
+            }
+        }
+    }
 }
 
 /// Tags each walkable span with the sizes its headroom fits: area 1 for the
