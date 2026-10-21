@@ -229,6 +229,19 @@ struct Player;
 struct PlayerBody {
     feet_offset: f32,
     height: f32,
+    /// The size the player is drawn at, which picks its walker size on the
+    /// navigation mesh. Its collision height is still the model's own.
+    size: f32,
+}
+
+impl PlayerBody {
+    /// The walker size the player plans on the navigation mesh by: its
+    /// drawn size, but never shorter than its collision height, so the mesh
+    /// offers no way its body's own checks would refuse. Its size alone
+    /// once collision follows the size.
+    fn mesh_size(&self) -> f32 {
+        self.size.max(self.height)
+    }
 }
 
 #[derive(Component)]
@@ -853,6 +866,7 @@ fn setup_scene(
     let body = PlayerBody {
         feet_offset: height * 0.5,
         height,
+        size: 6.0,
     };
     let player_position = Vec3::new(start_x, start_y + body.feet_offset, start_z);
     let default_radius = 120.0;
@@ -1798,6 +1812,19 @@ fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn the_player_plans_on_a_mesh_no_shorter_than_its_collision() {
+        let body = |height, size| super::PlayerBody {
+            feet_offset: 0.0,
+            height,
+            size,
+        };
+        // A gnome drawn 3 tall with a 6.8 collision plans as 6.8.
+        assert!((body(6.8, 3.0).mesh_size() - 6.8).abs() < 1e-6);
+        // An ogre drawn 9 tall plans as 9.
+        assert!((body(6.4, 9.0).mesh_size() - 9.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn a_screenshot_waits_for_the_loading_screen_to_lift() {
         use super::*;
         // A session logging in, as `--online` starts one.
@@ -2122,6 +2149,7 @@ mod tests {
                         body: PlayerBody {
                             feet_offset: 3.0,
                             height: 6.0,
+                            size: 6.0,
                         },
                     }
                     .prepare(false),
@@ -2337,6 +2365,7 @@ mod tests {
                 PlayerBody {
                     feet_offset: 0.0,
                     height: 6.0,
+                    size: 6.0,
                 },
                 Transform::from_xyz(0.0, 10.0, 0.0),
             ))

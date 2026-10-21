@@ -61,8 +61,38 @@ pub fn load_installed_character(
     donors: &DonorArchives,
 ) -> Result<CharacterAsset, LoadError> {
     let zone = crate::zone_name(zone)?;
-    let mut archives = vec![format!("{zone}_chr.s3d"), "global_chr.s3d".into()];
-    archives.extend((2..=7).map(|i| format!("global{i}_chr.s3d")));
+    let mut archives = vec![format!("{zone}_chr.s3d")];
+    archives.extend(global_archives());
+    load_from(directory, archives, model, donors)
+}
+
+/// Finds a classic model in the installation's global archives alone, as
+/// [`load_installed_character`] does past a zone's own: the model a race
+/// draws with wherever a zone doesn't replace it.
+///
+/// # Errors
+/// The last asset error when no global archive supplies a usable model.
+pub fn load_global_character(
+    directory: &Path,
+    model: &str,
+    donors: &DonorArchives,
+) -> Result<CharacterAsset, LoadError> {
+    load_from(directory, global_archives().collect(), model, donors)
+}
+
+fn global_archives() -> impl Iterator<Item = String> {
+    std::iter::once("global_chr.s3d".to_owned())
+        .chain((2..=7).map(|i| format!("global{i}_chr.s3d")))
+}
+
+/// The model from the first of `archives` under `directory` that supplies a
+/// usable one, borrowing movements from the others.
+fn load_from(
+    directory: &Path,
+    archives: Vec<String>,
+    model: &str,
+    donors: &DonorArchives,
+) -> Result<CharacterAsset, LoadError> {
     let archives: Vec<_> = archives
         .into_iter()
         .map(|archive| directory.join(archive))

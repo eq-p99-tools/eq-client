@@ -126,6 +126,7 @@ impl Entry {
             body: PlayerBody {
                 feet_offset,
                 height,
+                size: eq_client_core::size_or_default(player.race, player.size),
             },
         })
     }
@@ -160,6 +161,7 @@ impl Entry {
                 // The racial default size, as no list gives one.
                 feet_offset: eq_client_core::z_offset(race, 0.0),
                 height,
+                size: eq_client_core::size_or_default(race, 0.0),
             },
         })
     }
@@ -267,7 +269,7 @@ impl Scene<'_, '_> {
                 .settings
                 .as_ref()
                 .and_then(|settings| settings.0.settings_directory.clone());
-            mesh.start(&zone.short_name, triangles, world, body.height, directory);
+            mesh.start(&zone.short_name, triangles, world, directory);
         }
         spawn_static_zone(
             commands,

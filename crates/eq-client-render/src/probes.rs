@@ -1508,8 +1508,10 @@ fn inspect_clip_soles() {
 /// and gender in `EQ_PROBE_RACES` (`race:gender` pairs, defaulting to the
 /// short races and the classic models the table names), the model's lowest
 /// and highest points, its height, the table's factor, and the factor its
-/// geometry predicts if the origin hangs 0.625 x size under z. Models load
-/// from the first zone in `EQ_PROBE_ZONES` whose archives hold them.
+/// geometry predicts if the origin hangs 0.625 x size under z, with the
+/// height the global archives alone give and the race's default drawn size,
+/// which the navmesh's walker sizes come from. Models load from the first
+/// zone in `EQ_PROBE_ZONES` whose archives hold them.
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL"]
 fn inspect_model_heights() {
@@ -1543,9 +1545,18 @@ fn inspect_model_heights() {
         let height = asset.height();
         let table = eq_client_core::z_offset(race, 5.0) / (0.2 * 5.0);
         let origin_factor = 3.125 - bottom / (0.2 * height);
+        // The model's height from the global archives alone, and the size a
+        // spawn of the race is drawn at.
+        let global = eq_client_assets::characters::load_global_character(&install, code, &donors)
+            .map_or_else(
+                |_| "none".to_owned(),
+                |asset| format!("{:.3}", asset.height()),
+            );
+        let drawn_size = eq_client_core::size_or_default(race, 0.0);
         println!(
             "race={race} gender={gender} model={code} zone={zone} bottom={bottom:.3} \
-             top={top:.3} height={height:.3} table_factor={table:.3} \
+             top={top:.3} height={height:.3} global_height={global} \
+             default_size={drawn_size:.2} table_factor={table:.3} \
              origin_rule_factor={origin_factor:.3} soles_rule_factor=3.125"
         );
     }
@@ -1774,4 +1785,608 @@ fn inspect_mesh_routes() {
             );
         }
     }
+}
+
+/// Weighs one mesh build tagged for the three walker sizes against three
+/// plain builds, one per size, on a real zone (the prebuild plan's timing
+/// check). Nothing opens a window.
+///
+/// It first reads the zone whole and as its solids alone, and prints both
+/// reads' seconds and their triangles' count and hash, which must match;
+/// `EQ_PROBE_LOAD_ONLY=1` stops there. The
+/// sizes are the races' drawn sizes. Then, for the tagged
+/// build and each plain one: build seconds, polygons, islands, drop links,
+/// refused tiles and the cache file's bytes. Per size, it gives the floor's
+/// area on the tagged build's mesh for that size against the plain build's,
+/// and the far pair of the largest island routed on both, drops off.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
+#[allow(clippy::too_many_lines)]
+fn inspect_mesh_sizes() {
+    use eq_client_core::movement::navmesh::{self, MeshNavigator, NavMesh, Settings};
+    use eq_client_core::movement::{Navigator, PathProgress, Planned, Scope, SearchRequest};
+    use std::hash::{Hash, Hasher};
+    use std::sync::{Arc, atomic::AtomicBool};
+    use std::time::Instant;
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone_name = std::env::var("EQ_PROBE_ZONE").unwrap();
+    let hashed = |triangles: &[[[f32; 3]; 3]]| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for value in triangles.iter().flatten().flatten() {
+            value.to_bits().hash(&mut hasher);
+        }
+        hasher.finish()
+    };
+    let reading = Instant::now();
+    let whole = eq_client_assets::load_zone(&install, &zone_name).unwrap();
+    let whole_seconds = reading.elapsed().as_secs_f32();
+    let reading = Instant::now();
+    let zone = eq_client_assets::load_zone_collision(&install, &zone_name).unwrap();
+    let solids_seconds = reading.elapsed().as_secs_f32();
+    let (whole_triangles, triangles) = (collision_triangles(&whole), collision_triangles(&zone));
+    drop(whole);
+    println!(
+        "zone={zone_name} release={} load_zone_seconds={whole_seconds:.2} \
+         load_zone_collision_seconds={solids_seconds:.2} triangles={} collision_triangles={} \
+         hash={:016x} collision_hash={:016x} same={}",
+        !cfg!(debug_assertions),
+        whole_triangles.len(),
+        triangles.len(),
+        hashed(&whole_triangles),
+        hashed(&triangles),
+        whole_triangles == triangles,
+    );
+    drop(whole_triangles);
+    // EQ_PROBE_LOAD_ONLY=1 stops after the two reads, for a zone whose
+    // builds would take too long to weigh.
+    if std::env::var("EQ_PROBE_LOAD_ONLY").is_ok_and(|only| only == "1") {
+        return;
+    }
+    let sizes = super::zone_navmesh::walker_sizes();
+    println!("sizes={sizes:?}");
+    let world = build_collision(&zone).unwrap();
+    let cache_bytes = |mesh: &NavMesh, settings: &Settings| {
+        let folder =
+            std::env::temp_dir().join(format!("eq-probe-navmesh-sizes-{}", std::process::id()));
+        let bytes = navmesh::cache::store(&folder, &zone_name, &triangles, settings, mesh);
+        let _ = std::fs::remove_dir_all(&folder);
+        bytes.map_or_else(
+            |error| format!("unknown ({error})"),
+            |bytes| bytes.to_string(),
+        )
+    };
+    let build = |label: &str, settings: &Settings| {
+        let building = Instant::now();
+        let (mesh, report) = NavMesh::build_in(
+            &triangles,
+            Some(&world),
+            settings,
+            navmesh::build_threads(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let seconds = building.elapsed().as_secs_f32();
+        println!(
+            "build={label} seconds={seconds:.2} drop_seconds={:.2} polygons={} islands={} \
+             drop_links={} refused_tiles={} refused_stretches={} cache_bytes={}",
+            report.drop_elapsed.as_secs_f32(),
+            mesh.polygon_count(),
+            mesh.island_count(),
+            report.drop_links,
+            report.refused.len(),
+            report.refused_stretches,
+            cache_bytes(&mesh, settings),
+        );
+        for (reason, count) in report.refusals_by_reason() {
+            println!("build={label} refused={count} reason={reason}");
+        }
+        (mesh, seconds)
+    };
+    let (tagged, tagged_seconds) = build("tagged", &Settings::sized(sizes));
+    let meshes = tagged.split(sizes);
+    let route = |mesh: &Arc<NavMesh>, start: Vec3, goal: Vec3, height: f32| {
+        let searching = Instant::now();
+        let navigator = MeshNavigator::new(Arc::clone(mesh));
+        let mut search = navigator.search(SearchRequest {
+            start,
+            goal,
+            reach: 10.0,
+            height,
+            doors: Vec::new(),
+            drops: false,
+            scope: Scope::Whole,
+        });
+        let progress = loop {
+            match search.advance(&world, 5000) {
+                PathProgress::Searching => (),
+                done => break done,
+            }
+        };
+        let length = match &progress {
+            PathProgress::Found(path) => std::iter::once(start)
+                .chain(path.iter().copied())
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|pair| pair[0].distance(pair[1]))
+                .sum::<f32>(),
+            _ => 0.0,
+        };
+        let detail = match search.planned() {
+            Planned::Mesh {
+                legs,
+                repaired,
+                fallback,
+                ..
+            } => format!(
+                "legs={legs} repaired={} fallback={fallback:?}",
+                repaired.len()
+            ),
+            Planned::Grid => "grid".to_owned(),
+        };
+        format!(
+            "found={} seconds={:.3} length={length:.1} {detail}",
+            matches!(progress, PathProgress::Found(_)),
+            searching.elapsed().as_secs_f32()
+        )
+    };
+    let mut plain_seconds = 0.0;
+    for (size, &height) in sizes.iter().enumerate() {
+        let (plain, seconds) = build(&format!("plain{size}"), &Settings::walker(height));
+        plain_seconds += seconds;
+        let ours = meshes.for_height(height).unwrap();
+        #[allow(clippy::cast_possible_truncation)] // Three sizes.
+        let (area, plain_area) = (tagged.floor_area(size as u8), plain.floor_area(0));
+        println!(
+            "size={size} height={height:.2} tagged_polygons={} tagged_islands={} \
+             plain_polygons={} plain_islands={} tagged_area={area:.0} plain_area={plain_area:.0} \
+             area_change_percent={:+.2}",
+            ours.polygon_count(),
+            ours.island_count(),
+            plain.polygon_count(),
+            plain.island_count(),
+            100.0 * (area - plain_area) / plain_area.max(1.0),
+        );
+        let plain = Arc::new(plain);
+        if let Some((a, b)) = plain.far_pair() {
+            let (start, goal) = (a + Vec3::Y * 2.0, b + Vec3::Y * 2.0);
+            println!(
+                "size={size} route=far eq_start={} eq_goal={} tagged: {} | plain: {}",
+                eq_point(start),
+                eq_point(goal),
+                route(&ours, start, goal, height),
+                route(&plain, start, goal, height),
+            );
+        }
+    }
+    println!(
+        "tagged_seconds={tagged_seconds:.2} three_plain_seconds={plain_seconds:.2} \
+         saving_percent={:.1}",
+        100.0 * (plain_seconds - tagged_seconds) / plain_seconds.max(f32::EPSILON),
+    );
+}
+
+/// Looks at one leg the tagged mesh fell back to the grid on, against
+/// plain builds at the two shorter sizes (#268's East Commons check).
+/// Nothing opens a window.
+///
+/// `EQ_PROBE_LEG` is the leg as renderer points, `x,y,z>x,y,z`, defaulting
+/// to East Commons' fallback leg at bfa110c. For the tagged build's size 0
+/// and size 1 meshes and for plain builds at those sizes, it prints the
+/// polygon under each end (its size tag on the tagged build), whether the
+/// ends share an island, the leg routed alone, and every 2 units along the
+/// leg where no polygon lies under it, as runs of gaps. Each build's
+/// refused tiles within two tiles of the leg are printed too.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
+#[allow(clippy::too_many_lines)]
+fn inspect_mesh_leg() {
+    use eq_client_core::movement::navmesh::{self, MeshNavigator, NavMesh, Settings};
+    use eq_client_core::movement::{Navigator, PathProgress, Planned, Scope, SearchRequest};
+    use std::sync::{Arc, atomic::AtomicBool};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone_name = std::env::var("EQ_PROBE_ZONE").unwrap();
+    let leg = std::env::var("EQ_PROBE_LEG")
+        .unwrap_or_else(|_| "-441.4,-55.3,-2145.3>-1019.4,-15.2,-1521.2".to_owned());
+    let point = |text: &str| {
+        let v: Vec<f32> = text.split(',').map(|n| n.trim().parse().unwrap()).collect();
+        Vec3::new(v[0], v[1], v[2])
+    };
+    let (from, to) = leg.split_once('>').unwrap();
+    let (from, to) = (point(from), point(to));
+    let zone = eq_client_assets::load_zone_collision(&install, &zone_name).unwrap();
+    let triangles = collision_triangles(&zone);
+    let world = build_collision(&zone).unwrap();
+    let low = triangles
+        .iter()
+        .flatten()
+        .fold(Vec3::splat(f32::MAX), |low, p| {
+            low.min(Vec3::from_array(*p))
+        });
+    let sizes = super::zone_navmesh::walker_sizes();
+    println!(
+        "zone={zone_name} sizes={sizes:?} leg_eq={}>{} leg_length={:.1}",
+        eq_point(from),
+        eq_point(to),
+        from.distance(to)
+    );
+    let build = |label: &str, settings: &Settings| {
+        let (mesh, report) = NavMesh::build_in(
+            &triangles,
+            Some(&world),
+            settings,
+            navmesh::build_threads(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        #[allow(clippy::cast_possible_truncation)]
+        let tile_of = |p: Vec3| {
+            (
+                ((p.x - low.x) / settings.tile).floor() as i32,
+                ((p.z - low.z) / settings.tile).floor() as i32,
+            )
+        };
+        let (a, b) = (tile_of(from), tile_of(to));
+        let near: Vec<_> = report
+            .refused
+            .iter()
+            .filter(|tile| {
+                let (x, z) = tile.tile;
+                x >= a.0.min(b.0) - 2
+                    && x <= a.0.max(b.0) + 2
+                    && z >= a.1.min(b.1) - 2
+                    && z <= a.1.max(b.1) + 2
+            })
+            .map(|tile| format!("{:?}:{}", tile.tile, tile.step))
+            .collect();
+        println!(
+            "build={label} polygons={} islands={} refused_tiles={} leg_tiles={a:?}..{b:?} \
+             refused_near_leg={near:?}",
+            mesh.polygon_count(),
+            mesh.island_count(),
+            report.refused.len(),
+        );
+        mesh
+    };
+    let route = |mesh: &Arc<NavMesh>, height: f32| {
+        let navigator = MeshNavigator::new(Arc::clone(mesh));
+        let mut search = navigator.search(SearchRequest {
+            start: from,
+            goal: to,
+            reach: 10.0,
+            height,
+            doors: Vec::new(),
+            drops: false,
+            scope: Scope::Whole,
+        });
+        let progress = loop {
+            match search.advance(&world, 5000) {
+                PathProgress::Searching => (),
+                done => break done,
+            }
+        };
+        let detail = match search.planned() {
+            Planned::Mesh {
+                legs,
+                repaired,
+                fallback,
+                ..
+            } => format!(
+                "legs={legs} repaired={} fallback={fallback:?}",
+                repaired.len()
+            ),
+            Planned::Grid => "grid".to_owned(),
+        };
+        format!(
+            "found={} {detail}",
+            matches!(progress, PathProgress::Found(_))
+        )
+    };
+    let look = |label: &str, mesh: &Arc<NavMesh>, tagged: Option<&NavMesh>, height: f32| {
+        let end = |at: Vec3| {
+            mesh.locate(at).map_or_else(
+                || "none".to_owned(),
+                |(polygon, floor)| {
+                    let size = tagged
+                        .and_then(|whole| whole.locate(at))
+                        .map(|(i, _)| whole_size(tagged, i))
+                        .unwrap_or_default();
+                    format!("polygon={polygon} floor={floor:.2}{size}")
+                },
+            )
+        };
+        let joined = match (mesh.locate(from), mesh.locate(to)) {
+            (Some((a, _)), Some((b, _))) => mesh.connected(a, b).to_string(),
+            _ => "unknown".to_owned(),
+        };
+        // Runs of 2-unit steps along the leg with no polygon under them.
+        let steps = (from.distance(to) / 2.0).ceil().max(1.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let count = steps as usize;
+        let mut gaps = Vec::new();
+        let mut run: Option<(usize, usize)> = None;
+        for step in 0..=count {
+            #[allow(clippy::cast_precision_loss)]
+            let at = from.lerp(to, step as f32 / steps);
+            // The leg's ends are a little over the floor; look a few units
+            // either way of the straight line's height.
+            let under = [0.0, 2.0, -2.0, 4.0, -4.0]
+                .iter()
+                .any(|dy| mesh.locate(at + Vec3::Y * *dy).is_some());
+            match (under, &mut run) {
+                (false, None) => run = Some((step, step)),
+                (false, Some((_, last))) => *last = step,
+                (true, Some(_)) => gaps.push(run.take().unwrap()),
+                (true, None) => (),
+            }
+        }
+        gaps.extend(run);
+        #[allow(clippy::cast_precision_loss)]
+        let gaps: Vec<String> = gaps
+            .iter()
+            .take(12)
+            .map(|&(a, b)| {
+                format!(
+                    "{}..{} ({} steps)",
+                    eq_point(from.lerp(to, a as f32 / steps)),
+                    eq_point(from.lerp(to, b as f32 / steps)),
+                    b - a + 1
+                )
+            })
+            .collect();
+        println!(
+            "mesh={label} height={height:.1} start: {} | goal: {} | same_island={joined} | \
+             route: {} | gaps={gaps:?}",
+            end(from),
+            end(to),
+            route(mesh, height),
+        );
+    };
+    let tagged = build("tagged", &Settings::sized(sizes));
+    let meshes = tagged.split(sizes);
+    for (size, &height) in sizes.iter().enumerate().take(2) {
+        look(
+            &format!("tagged{size}"),
+            &meshes.for_height(height).unwrap(),
+            Some(&tagged),
+            height,
+        );
+        let plain = Arc::new(build(&format!("plain{size}"), &Settings::walker(height)));
+        look(&format!("plain{size}"), &plain, None, height);
+    }
+}
+
+/// Checks every link of a zone's tagged build and of a plain build at the
+/// short size: whether each portal lies on an edge of the polygon it leads
+/// to, within 1.5 cells across and the tiles' joining tolerance up or down,
+/// and whether that polygon links back (#268's seam check). Nothing opens a
+/// window.
+///
+/// It prints each build's link count and its faults, split into links
+/// across a change of size and links within one, with the first ten of
+/// each as EQ points. Then, along `EQ_PROBE_LEG` (renderer points
+/// `x,y,z>x,y,z`, defaulting to East Commons' fallback leg at bfa110c),
+/// every 2 units, it finds the zone's floor nearest the straight line's
+/// height within 40 units and says how many steps have a floor there and a
+/// polygon on it, on each build.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
+#[allow(clippy::too_many_lines)]
+fn inspect_mesh_links() {
+    use eq_client_core::movement::navmesh::{self, NavMesh, Settings};
+    use std::sync::atomic::AtomicBool;
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone_name = std::env::var("EQ_PROBE_ZONE").unwrap();
+    let leg = std::env::var("EQ_PROBE_LEG")
+        .unwrap_or_else(|_| "-441.4,-55.3,-2145.3>-1019.4,-15.2,-1521.2".to_owned());
+    let point = |text: &str| {
+        let v: Vec<f32> = text.split(',').map(|n| n.trim().parse().unwrap()).collect();
+        Vec3::new(v[0], v[1], v[2])
+    };
+    let (from, to) = leg.split_once('>').unwrap();
+    let (from, to) = (point(from), point(to));
+    let zone = eq_client_assets::load_zone_collision(&install, &zone_name).unwrap();
+    let triangles = collision_triangles(&zone);
+    let world = build_collision(&zone).unwrap();
+    let sizes = super::zone_navmesh::walker_sizes();
+    for (label, settings) in [
+        ("tagged", Settings::sized(sizes)),
+        ("plain0", Settings::walker(sizes[0])),
+    ] {
+        let (mesh, report) = NavMesh::build_in(
+            &triangles,
+            Some(&world),
+            &settings,
+            navmesh::build_threads(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let (across, up) = (
+            settings.cell_size * 1.5,
+            settings.cell_height * 4.0 + settings.climb,
+        );
+        let (links, faults) = mesh.link_faults(across, up);
+        let (seam, same): (Vec<_>, Vec<_>) = faults
+            .iter()
+            .partition(|fault| fault.sizes.0 != fault.sizes.1);
+        let one_way = faults.iter().filter(|fault| fault.one_way).count();
+        println!(
+            "zone={zone_name} build={label} polygons={} refused_tiles={} links={links} \
+             across_limit={across:.2} up_limit={up:.2} faults={} seam_faults={} \
+             same_size_faults={} one_way={one_way}",
+            mesh.polygon_count(),
+            report.refused.len(),
+            faults.len(),
+            seam.len(),
+            same.len(),
+        );
+        for (kind, list) in [("seam", &seam), ("same", &same)] {
+            for fault in list.iter().take(10) {
+                println!(
+                    "build={label} fault={kind} sizes={:?} eq_a={} eq_b={} across={:.2} up={:.2} \
+                     one_way={}",
+                    fault.sizes,
+                    eq_point(fault.a),
+                    eq_point(fault.b),
+                    fault.across,
+                    fault.up,
+                    fault.one_way
+                );
+            }
+        }
+        // The leg's steps against the zone's own floor under them.
+        let steps = (from.distance(to) / 2.0).ceil().max(1.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let count = steps as usize;
+        let (mut floored, mut meshed, mut first_bare) = (0, 0, None);
+        for step in 0..=count {
+            #[allow(clippy::cast_precision_loss)]
+            let at = from.lerp(to, step as f32 / steps);
+            let Some(floor) = world.nearest_ground(at, 40.0, 40.0) else {
+                continue;
+            };
+            floored += 1;
+            let on = Vec3::new(at.x, floor, at.z);
+            if mesh.locate(on).is_some() {
+                meshed += 1;
+            } else if first_bare.is_none() {
+                first_bare = Some(eq_point(on));
+            }
+        }
+        println!(
+            "build={label} leg_eq={}>{} steps={} with_floor={floored} with_polygon_on_floor={meshed} \
+             first_floor_without_polygon={}",
+            eq_point(from),
+            eq_point(to),
+            count + 1,
+            first_bare.unwrap_or_else(|| "none".to_owned())
+        );
+    }
+}
+
+/// ` size=` and the tag of polygon `i` on the whole tagged mesh, where
+/// there is one.
+fn whole_size(tagged: Option<&eq_client_core::movement::navmesh::NavMesh>, i: u32) -> String {
+    tagged.map_or_else(String::new, |mesh| {
+        format!(" size={}", mesh.polygon_size(i))
+    })
+}
+
+/// Where a zone's solids lie up and down, and what lies far from the rest:
+/// for a zone whose height range overflows the mesh's tiles (Dreadlands'
+/// build refused every tile). Nothing opens a window.
+///
+/// It prints the bounds of the zone's own collision and of its placed
+/// objects', the triangles by 1,000-unit band of height, and every placed
+/// object or terrain triangle with a corner more than `EQ_PROBE_FAR`
+/// (default 5,000) units below or above the terrain's middle band, each
+/// object by its model, placement and scale, at most 40 lines.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
+#[allow(clippy::too_many_lines)]
+fn inspect_zone_heights() {
+    use std::collections::BTreeMap;
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone_name = std::env::var("EQ_PROBE_ZONE").unwrap();
+    let far: f32 = std::env::var("EQ_PROBE_FAR").map_or(5000.0, |far| far.parse().unwrap());
+    let zone = eq_client_assets::load_zone_collision(&install, &zone_name).unwrap();
+    let bounds = |triangles: &mut dyn Iterator<Item = [f32; 3]>| {
+        triangles.fold(None, |bounds: Option<(Vec3, Vec3)>, p| {
+            let p = Vec3::from_array(p);
+            Some(bounds.map_or((p, p), |(low, high)| (low.min(p), high.max(p))))
+        })
+    };
+    let terrain = bounds(&mut zone.collision.iter().flatten().copied());
+    let placed: Vec<(usize, Vec<[[f32; 3]; 3]>)> = zone
+        .objects
+        .iter()
+        .enumerate()
+        .map(|(i, object)| {
+            let transform = object_transform(object).to_matrix();
+            let model = &zone.models[object.model];
+            (
+                i,
+                model
+                    .collision
+                    .iter()
+                    .map(|t| t.map(|p| transform.transform_point3(Vec3::from_array(p)).to_array()))
+                    .collect(),
+            )
+        })
+        .collect();
+    let objects = bounds(&mut placed.iter().flat_map(|(_, t)| t.iter().flatten().copied()));
+    let eq = |bounds: Option<(Vec3, Vec3)>| {
+        bounds.map_or_else(
+            || "none".to_owned(),
+            |(low, high)| format!("{}..{}", eq_point(low), eq_point(high)),
+        )
+    };
+    println!(
+        "zone={zone_name} terrain_triangles={} terrain_eq={} objects={} object_triangles={} \
+         objects_eq={}",
+        zone.collision.len(),
+        eq(terrain),
+        zone.objects.len(),
+        placed.iter().map(|(_, t)| t.len()).sum::<usize>(),
+        eq(objects),
+    );
+    let mut bands: BTreeMap<i32, (usize, usize)> = BTreeMap::new();
+    #[allow(clippy::cast_possible_truncation)] // Zone heights.
+    let band = |t: &[[f32; 3]; 3]| (t.iter().map(|p| p[1]).sum::<f32>() / 3000.0).floor() as i32;
+    for t in &zone.collision {
+        bands.entry(band(t)).or_default().0 += 1;
+    }
+    for t in placed.iter().flat_map(|(_, t)| t) {
+        bands.entry(band(t)).or_default().1 += 1;
+    }
+    for (band, (terrain, objects)) in &bands {
+        println!(
+            "band_eq_z={}..{} terrain={terrain} objects={objects}",
+            band * 1000,
+            (band + 1) * 1000
+        );
+    }
+    // The middle of the band holding the most terrain.
+    let middle = bands
+        .iter()
+        .max_by_key(|(_, (terrain, _))| *terrain)
+        .map_or(0.0, |(band, _)| {
+            #[allow(clippy::cast_precision_loss)] // A band number.
+            let middle = (*band as f32 + 0.5) * 1000.0;
+            middle
+        });
+    let is_far = |t: &[[f32; 3]; 3]| t.iter().any(|p| (p[1] - middle).abs() > far);
+    let mut lines = 0;
+    for t in zone.collision.iter().filter(|t| is_far(t)) {
+        if lines < 20 {
+            println!(
+                "far_terrain_triangle={} {} {}",
+                eq_point(Vec3::from_array(t[0])),
+                eq_point(Vec3::from_array(t[1])),
+                eq_point(Vec3::from_array(t[2])),
+            );
+        }
+        lines += 1;
+    }
+    println!("far_terrain_triangles={lines}");
+    let mut listed = 0;
+    for (i, triangles) in &placed {
+        let count = triangles.iter().filter(|t| is_far(t)).count();
+        if count == 0 {
+            continue;
+        }
+        let object = &zone.objects[*i];
+        if listed < 20 {
+            println!(
+                "far_object={i} model={} at_eq={} scale={:?} far_triangles={count} of {} \
+                 bounds_eq={}",
+                zone.models[object.model].name,
+                eq_point(Vec3::from_array(object.translation)),
+                object.scale,
+                triangles.len(),
+                eq(bounds(&mut triangles.iter().flatten().copied())),
+            );
+        }
+        listed += 1;
+    }
+    println!("far_objects={listed}");
 }

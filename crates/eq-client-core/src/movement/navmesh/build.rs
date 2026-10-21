@@ -301,6 +301,8 @@ pub(super) fn build_tile(
     let mut compact = heightfield
         .into_compact(walkable_height, walkable_climb)
         .map_err(refused("compact"))?;
+    tag_sizes(&mut compact, settings)?;
+    keep_sizes_off_low_ceilings(&mut compact, radius);
     compact.erode_walkable_area(radius);
     compact.build_distance_field();
     compact
@@ -308,6 +310,69 @@ pub(super) fn build_tile(
         .map_err(refused("regions"))?;
     let contours = compact.build_contours(1.3, radius * 8, rerecast::BuildContoursFlags::default());
     contours.into_polygon_mesh(6).map_err(refused("polygons"))
+}
+
+/// Tags each walkable span with the sizes its headroom fits: area 1 for the
+/// shortest alone, 2 for the two shorter, 3 for all three. Regions, and so
+/// polygons, never cross a change of tag.
+fn tag_sizes(
+    compact: &mut rerecast::CompactHeightfield,
+    settings: &Settings,
+) -> Result<(), (&'static str, String)> {
+    let ch = settings.cell_height;
+    // A span's headroom is kept in a byte of cell heights; open sky and any
+    // gap above the byte read as its top.
+    let cap = f32::from(u8::MAX) * ch;
+    if settings.sizes[2] >= cap {
+        return Err((
+            "sizes",
+            format!(
+                "the tallest size {} is over the headroom cap {cap}",
+                settings.sizes[2]
+            ),
+        ));
+    }
+    for (span, area) in compact.spans.iter().zip(compact.areas.iter_mut()) {
+        if !area.is_walkable() {
+            continue;
+        }
+        let headroom = f32::from(span.height()) * ch;
+        #[allow(clippy::cast_possible_truncation)] // At most three sizes.
+        let fits = settings
+            .sizes
+            .iter()
+            .filter(|&&size| headroom >= size)
+            .count() as u8;
+        // The build's own height filter leaves only spans the shortest fits.
+        *area = AreaType(fits.max(1));
+    }
+    Ok(())
+}
+
+/// Narrows each taller size's floor away from where a shorter size's alone
+/// begins by the walker's `radius`, as a plain build at that size erodes it
+/// from the low ceiling: a walker standing on a size's floor keeps its
+/// whole width out from under a ceiling too low for it. For each size, the
+/// spans of the sizes under it are treated as walls, rerecast's own erosion
+/// runs, and a span it takes falls to the size below.
+fn keep_sizes_off_low_ceilings(compact: &mut rerecast::CompactHeightfield, radius: u16) {
+    let mut tags = compact.areas.clone();
+    for size in [3_u8, 2] {
+        for (area, tag) in compact.areas.iter_mut().zip(&tags) {
+            *area = if tag.0 >= size && tag.is_walkable() {
+                *tag
+            } else {
+                AreaType::NOT_WALKABLE
+            };
+        }
+        compact.erode_walkable_area(radius);
+        for (tag, area) in tags.iter_mut().zip(&compact.areas) {
+            if tag.is_walkable() && tag.0 >= size && !area.is_walkable() {
+                *tag = AreaType(size - 1);
+            }
+        }
+    }
+    compact.areas = tags;
 }
 
 /// Adds a tile's polygons, in world units, with links inside the tile and
@@ -352,7 +417,12 @@ fn append_tile(tiled: &mut Vec<Tiled>, mesh: &PolygonNavmesh, tile: (i32, i32)) 
             }
         }
         tiled.push(Tiled {
-            polygon: Polygon { vertices, links },
+            polygon: Polygon {
+                vertices,
+                links,
+                // Areas 1 to 3, as `tag_sizes` sets them.
+                size: (*mesh.areas[p]).clamp(1, 3) - 1,
+            },
             open,
             tile,
         });

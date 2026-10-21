@@ -215,7 +215,31 @@ pub(crate) fn zone_name(short_name: &str) -> Result<&str, LoadError> {
 /// unreadable, or an archive, world, or texture cannot be decoded.
 pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
     let short_name = zone_name(short_name)?;
-    guarded(short_name, || read_zone(eq_directory, short_name))
+    guarded(short_name, || {
+        read_zone(eq_directory, short_name, Textures::Realize)
+    })
+}
+
+/// Loads a zone's solids alone: its collision, its regions and its placed
+/// objects with their models' collision, the same as [`load_zone`] gives
+/// them, but with no drawn geometry and no texture decoded. For building the
+/// navigation mesh, where the textures would be most of the time.
+///
+/// # Errors
+///
+/// As [`load_zone`], but for textures, which aren't read.
+pub fn load_zone_collision(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
+    let short_name = zone_name(short_name)?;
+    guarded(short_name, || {
+        read_zone(eq_directory, short_name, Textures::Skip)
+    })
+}
+
+/// Whether a zone's read decodes its drawn geometry and textures.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Textures {
+    Realize,
+    Skip,
 }
 
 /// Runs a zone's read through libeq, whose parser and model view panic on
@@ -240,7 +264,11 @@ fn guarded<T>(
     })
 }
 
-fn read_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
+fn read_zone(
+    eq_directory: &Path,
+    short_name: &str,
+    textures_read: Textures,
+) -> Result<ZoneAsset, LoadError> {
     let archive_path = eq_directory.join(format!("{short_name}.s3d"));
     let file = File::open(&archive_path).map_err(|source| LoadError::OpenArchive {
         path: archive_path,
@@ -258,9 +286,15 @@ fn read_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadErr
     let mut texture_indices = HashMap::<String, usize>::new();
     let mut primitives = Vec::new();
 
-    for mesh in world.meshes() {
-        for staged in stage_mesh(&mesh) {
-            primitives.push(staged.realize(&mut archive, &mut textures, &mut texture_indices)?);
+    if textures_read == Textures::Realize {
+        for mesh in world.meshes() {
+            for staged in stage_mesh(&mesh) {
+                primitives.push(staged.realize(
+                    &mut archive,
+                    &mut textures,
+                    &mut texture_indices,
+                )?);
+            }
         }
     }
 
@@ -273,8 +307,8 @@ fn read_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadErr
         eq_directory,
         short_name,
         placements,
-        &mut textures,
-        &mut texture_indices,
+        textures_read,
+        (&mut textures, &mut texture_indices),
     )?;
 
     Ok(ZoneAsset {
@@ -382,8 +416,8 @@ fn load_object_models(
     eq_directory: &Path,
     short_name: &str,
     placements: Vec<ObjectPlacement>,
-    textures: &mut Vec<ZoneTexture>,
-    texture_indices: &mut HashMap<String, usize>,
+    textures_read: Textures,
+    (textures, texture_indices): (&mut Vec<ZoneTexture>, &mut HashMap<String, usize>),
 ) -> Result<(Vec<ZoneModel>, Vec<ZoneObject>), LoadError> {
     let archive_path = eq_directory.join(format!("{short_name}_obj.s3d"));
     let file = match File::open(&archive_path) {
@@ -411,10 +445,20 @@ fn load_object_models(
         let (Some(name), Some(mesh)) = (model.name(), model.mesh()) else {
             continue;
         };
-        let primitives = load_mesh_primitives(&mesh, &mut archive, textures, texture_indices)?;
-        if primitives.is_empty() {
-            continue;
-        }
+        // A model with nothing drawn is left out either way, so both reads
+        // place the same objects.
+        let primitives = match textures_read {
+            Textures::Realize => {
+                let primitives =
+                    load_mesh_primitives(&mesh, &mut archive, textures, texture_indices)?;
+                if primitives.is_empty() {
+                    continue;
+                }
+                primitives
+            }
+            Textures::Skip if stage_mesh(&mesh).is_empty() => continue,
+            Textures::Skip => Vec::new(),
+        };
         model_indices.insert(name.to_owned(), models.len());
         models.push(ZoneModel {
             name: name.to_owned(),
@@ -654,7 +698,10 @@ mod tests {
         DrawStyle, Lighting, MaterialType, RenderMethod, Shading, TextureStyle,
     };
 
-    use super::{LoadError, MaterialMode, bmp_color_key, load_zone, material_mode};
+    use super::{
+        LoadError, MaterialMode, ZoneAsset, bmp_color_key, load_zone, load_zone_collision,
+        material_mode,
+    };
 
     #[test]
     fn unparseable_world_files_are_errors_not_crashes() {
@@ -815,6 +862,53 @@ mod tests {
         );
         assert_eq!(zone.objects.len(), 1);
         assert_eq!(zone.objects[0].model, 0);
+    }
+
+    #[test]
+    fn a_zones_solids_alone_are_the_same_as_in_the_whole_zone() {
+        let install =
+            std::env::temp_dir().join(format!("eq-zone-collision-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        write_new_format_zone(&install);
+        let (whole, solids) = (
+            load_zone(&install, "newzone"),
+            load_zone_collision(&install, "newzone"),
+        );
+        std::fs::remove_dir_all(&install).unwrap();
+        let (whole, solids) = (whole.unwrap(), solids.unwrap());
+        assert!(solids.primitives.is_empty() && solids.textures.is_empty());
+        assert_eq!(solids.collision, whole.collision);
+        assert_eq!(
+            solids.regions.liquid_region_count(),
+            whole.regions.liquid_region_count()
+        );
+        let models = |zone: &ZoneAsset| -> Vec<(String, Vec<[[f32; 3]; 3]>)> {
+            zone.models
+                .iter()
+                .map(|model| (model.name.clone(), model.collision.clone()))
+                .collect()
+        };
+        assert_eq!(models(&solids), models(&whole));
+        assert!(
+            solids
+                .models
+                .iter()
+                .all(|model| model.primitives.is_empty())
+        );
+        // Each placement's model, translation, rotation and scale.
+        let placed = |zone: &ZoneAsset| -> Vec<String> {
+            zone.objects
+                .iter()
+                .map(|object| {
+                    format!(
+                        "{} {:?} {:?} {:?}",
+                        object.model, object.translation, object.rotation, object.scale
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(placed(&solids), placed(&whole));
+        assert_eq!(solids.objects.len(), 1);
     }
 
     #[test]

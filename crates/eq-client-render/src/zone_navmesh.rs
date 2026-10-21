@@ -4,7 +4,7 @@
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool, block_on, poll_once};
 use eq_client_core::movement::CollisionWorld;
-use eq_client_core::movement::navmesh::{self, NavMesh, Settings, cache};
+use eq_client_core::movement::navmesh::{self, Settings, SizedMeshes, cache};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,31 +21,30 @@ pub(super) fn install(app: &mut App) {
 /// The shown zone's mesh once it is ready, and the build or read making it.
 #[derive(Resource, Default)]
 pub(super) struct ZoneNavMesh {
-    /// The mesh, and the walker height it was built for.
-    mesh: Option<(Arc<NavMesh>, f32)>,
+    /// The mesh, split for its walker sizes.
+    mesh: Option<SizedMeshes>,
     making: Option<Making>,
 }
 
 struct Making {
     zone: String,
-    height: f32,
     threads: usize,
     started: Instant,
     /// Set on leaving the zone; the build's threads stop at their next tile.
     cancel: Arc<AtomicBool>,
-    task: Task<Option<cache::Loaded>>,
+    task: Task<Option<(cache::Loaded, [f32; 3])>>,
 }
 
 impl ZoneNavMesh {
-    /// Reads or builds `zone`'s mesh over `triangles` for a walker `height`
-    /// tall, its drops tried in the zone's `world` when there is one, keeping
-    /// it under `settings_directory` when there is one.
+    /// Reads or builds `zone`'s mesh over `triangles`, its drops tried in
+    /// the zone's `world` when there is one, keeping it under
+    /// `settings_directory` when there is one. It is tagged for the three
+    /// walker sizes.
     pub(super) fn start(
         &mut self,
         zone: &str,
         triangles: Vec<[[f32; 3]; 3]>,
         world: Option<CollisionWorld>,
-        height: f32,
         settings_directory: Option<PathBuf>,
     ) {
         self.leave();
@@ -56,20 +55,21 @@ impl ZoneNavMesh {
             // One task that runs its own threads, so the tiles don't crowd
             // out the pool's other work.
             AsyncComputeTaskPool::get_or_init(TaskPool::new).spawn(async move {
+                let sizes = walker_sizes();
                 cache::load_or_build(
                     settings_directory.as_deref(),
                     &zone,
                     &triangles,
                     world.as_ref(),
-                    &Settings::walker(height),
+                    &Settings::sized(sizes),
                     threads,
                     &cancel,
                 )
+                .map(|loaded| (loaded, sizes))
             })
         };
         self.making = Some(Making {
             zone: zone.to_owned(),
-            height,
             threads,
             started: Instant::now(),
             cancel,
@@ -85,12 +85,22 @@ impl ZoneNavMesh {
         self.mesh = None;
     }
 
-    /// The shown zone's mesh, once it is ready, when it was built for a
-    /// walker `height` tall.
-    pub(super) fn mesh_for(&self, height: f32) -> Option<Arc<NavMesh>> {
-        let (mesh, built) = self.mesh.as_ref()?;
-        ((built - height).abs() < 1e-3).then(|| Arc::clone(mesh))
+    /// The shown zone's mesh for a walker drawn `size` tall, once it is
+    /// ready: the smallest of its sizes that fits the walker. None for a
+    /// walker taller than its tallest size, which stays on the grid.
+    pub(super) fn mesh_for(&self, size: f32) -> Option<Arc<navmesh::NavMesh>> {
+        self.mesh.as_ref()?.for_height(size)
     }
+}
+
+/// The heights of the three walker sizes: in each of
+/// [`races::SIZE_GROUPS`], the tallest size its races are drawn at, by
+/// `EQEmu`'s default sizes (dwarf 4, human 6, ogre 9). A walker's own drawn
+/// size picks its mesh.
+///
+/// [`races::SIZE_GROUPS`]: eq_client_core::races::SIZE_GROUPS
+pub(super) fn walker_sizes() -> [f32; 3] {
+    eq_client_core::races::walker_sizes(|race| eq_client_core::size_or_default(race, 0.0))
 }
 
 /// Takes the mesh once it is ready, and says so in the log.
@@ -103,14 +113,14 @@ fn poll(mut navmesh: ResMut<ZoneNavMesh>) {
     };
     let making = navmesh.making.take().expect("polled above");
     // None only for a cancelled build, whose zone is gone.
-    let Some(loaded) = loaded else {
+    let Some((loaded, sizes)) = loaded else {
         return;
     };
-    report(&making, &loaded);
-    navmesh.mesh = Some((Arc::new(loaded.mesh), making.height));
+    report(&making, &loaded, sizes);
+    navmesh.mesh = Some(loaded.mesh.split(sizes));
 }
 
-fn report(making: &Making, loaded: &cache::Loaded) {
+fn report(making: &Making, loaded: &cache::Loaded, sizes: [f32; 3]) {
     let (source, tiles, refused, drop_seconds) = match &loaded.source {
         cache::Source::Cache => ("cache", None, &[][..], None),
         cache::Source::Built(report) => (
@@ -133,6 +143,7 @@ fn report(making: &Making, loaded: &cache::Loaded) {
         drop_links = loaded.mesh.drop_links().count(),
         drop_seconds,
         bytes,
+        sizes = ?sizes,
         "Navmesh ready"
     );
     if let Err(error) = &loaded.cached {
@@ -192,7 +203,7 @@ mod tests {
         let mut app = app();
         app.world_mut()
             .resource_mut::<ZoneNavMesh>()
-            .start("zone", floor(), None, 6.0, None);
+            .start("zone", floor(), None, None);
         let started = Instant::now();
         while app
             .world()
@@ -206,8 +217,10 @@ mod tests {
         let navmesh = app.world().resource::<ZoneNavMesh>();
         assert!(navmesh.making.is_none());
         assert_eq!(navmesh.mesh_for(6.0).unwrap().island_count(), 1);
-        // Built for one height, it plans for no other.
-        assert!(navmesh.mesh_for(7.0).is_none());
+        // It plans for walkers up to the tallest size, an ogre's 9, and no
+        // taller.
+        assert!(navmesh.mesh_for(3.0).is_some() && navmesh.mesh_for(9.0).is_some());
+        assert!(navmesh.mesh_for(9.5).is_none());
         app.world_mut().resource_mut::<ZoneNavMesh>().leave();
         assert!(
             app.world()
@@ -221,7 +234,7 @@ mod tests {
     fn leaving_stops_the_build() {
         let mut app = app();
         let mut navmesh = app.world_mut().resource_mut::<ZoneNavMesh>();
-        navmesh.start("zone", floor(), None, 6.0, None);
+        navmesh.start("zone", floor(), None, None);
         let cancel = Arc::clone(&navmesh.making.as_ref().unwrap().cancel);
         navmesh.leave();
         assert!(cancel.load(Ordering::Relaxed));

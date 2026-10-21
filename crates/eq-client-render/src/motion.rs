@@ -1181,6 +1181,7 @@ mod tests {
             PlayerBody {
                 feet_offset: 3.0,
                 height: 6.0,
+                size: 6.0,
             },
         ));
         app.world_mut().spawn(OrbitCamera {

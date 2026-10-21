@@ -19,6 +19,7 @@ pub use build::{BuildReport, RefusedTile};
 use glam::{Vec2, Vec3};
 pub use navigator::MeshNavigator;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// How a mesh is built.
@@ -32,8 +33,12 @@ pub struct Settings {
     pub tile: f32,
     /// The walker's radius.
     pub radius: f32,
-    /// The walker's height.
+    /// The shortest walker's height: the floor it fits under is kept.
     pub height: f32,
+    /// The heights of the walker sizes the floor is tagged for, shortest
+    /// first: each polygon admits the sizes its headroom fits. The first is
+    /// `height`.
+    pub sizes: [f32; 3],
     /// The highest step the walker climbs.
     pub climb: f32,
     /// The lowest floor normal's up component the walker stands on.
@@ -65,9 +70,28 @@ impl Settings {
             tile: TILE,
             radius: super::BODY_REACH,
             height,
+            sizes: [height; 3],
             climb: super::MAX_GROUNDED_STEP,
             // The collision's own floor limit.
             floor_normal_y: 0.7,
+        }
+    }
+
+    /// The walker's own limits, with the floor tagged for walkers of the
+    /// three `sizes` (heights, shortest first): one build serves them all.
+    ///
+    /// # Panics
+    ///
+    /// When the sizes aren't shortest first.
+    #[must_use]
+    pub fn sized(sizes: [f32; 3]) -> Self {
+        assert!(
+            sizes[0] <= sizes[1] && sizes[1] <= sizes[2],
+            "sizes shortest first: {sizes:?}"
+        );
+        Self {
+            sizes,
+            ..Self::walker(sizes[0])
         }
     }
 }
@@ -85,6 +109,47 @@ struct Polygon {
     /// Corners, counter-clockwise seen from above.
     vertices: Vec<Vec3>,
     links: Vec<Link>,
+    /// The tallest of the build's sizes, 0 to 2, that fits under the lowest
+    /// headroom over the polygon's floor; every shorter size fits too.
+    size: u8,
+}
+
+/// A link [`NavMesh::link_faults`] finds wrong.
+#[derive(Clone, Debug)]
+pub struct LinkFault {
+    /// The sizes of the polygon it leaves and the one it leads to.
+    pub sizes: (u8, u8),
+    /// The portal's one end.
+    pub a: Vec3,
+    /// Its other end.
+    pub b: Vec3,
+    /// How far the portal lies off the far polygon's edges, seen from
+    /// above, at worst.
+    pub across: f32,
+    /// How far it lies above or below them there, at worst.
+    pub up: f32,
+    /// Whether the far polygon has no link back.
+    pub one_way: bool,
+}
+
+/// How far `p` lies from the nearest edge of the polygon with these
+/// corners: across, seen from above, and up or down from that edge there.
+fn off_boundary(vertices: &[Vec3], p: Vec3) -> (f32, f32) {
+    let flat = Vec2::new(p.x, p.z);
+    (0..vertices.len())
+        .map(|i| {
+            let (a, b) = (vertices[i], vertices[(i + 1) % vertices.len()]);
+            let (a2, b2) = (Vec2::new(a.x, a.z), Vec2::new(b.x, b.z));
+            let along = b2 - a2;
+            let t = if along.length_squared() > 0.0 {
+                ((flat - a2).dot(along) / along.length_squared()).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (flat.distance(a2 + along * t), (a.lerp(b, t).y - p.y).abs())
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+        .unwrap_or((f32::INFINITY, f32::INFINITY))
 }
 
 /// A built mesh.
@@ -170,7 +235,9 @@ impl NavMesh {
         let mesh = Self::from_parts(polygons, Vec::new());
         let started = std::time::Instant::now();
         let (links, refused) =
-            drops::links(&mesh, triangles, world, settings.height, threads, cancelled)?;
+            // Found for the tallest size: what it can drop off, every size
+            // can, and each drop is run again from the real feet.
+            drops::links(&mesh, triangles, world, settings.sizes[2], threads, cancelled)?;
         report.drop_links = links.len();
         report.refused_stretches = refused;
         report.drop_elapsed = started.elapsed();
@@ -264,6 +331,47 @@ impl NavMesh {
             })
     }
 
+    /// The size polygon `i` is tagged for: 0 for the shortest alone, up to 2
+    /// for all three.
+    #[must_use]
+    pub fn polygon_size(&self, i: u32) -> u8 {
+        self.polygons[i as usize].size
+    }
+
+    /// Every link whose portal doesn't lie on an edge of the polygon it
+    /// leads to, within `horizontal` across and `vertical` up or down, or
+    /// that the polygon it leads to has no link back for: a check of the
+    /// build's links, for probes.
+    #[must_use]
+    pub fn link_faults(&self, horizontal: f32, vertical: f32) -> (usize, Vec<LinkFault>) {
+        let mut count = 0;
+        let mut faults = Vec::new();
+        for (from, polygon) in self.polygons.iter().enumerate() {
+            for link in &polygon.links {
+                count += 1;
+                let to = &self.polygons[link.to as usize];
+                let off = |p: Vec3| off_boundary(&to.vertices, p);
+                let (across, up) = [link.a, link.b, (link.a + link.b) / 2.0]
+                    .into_iter()
+                    .map(off)
+                    .fold((0.0_f32, 0.0_f32), |(x, y), (a, b)| (x.max(a), y.max(b)));
+                #[allow(clippy::cast_possible_truncation)] // Polygons are counted in u32.
+                let one_way = !to.links.iter().any(|back| back.to == from as u32);
+                if across > horizontal || up > vertical || one_way {
+                    faults.push(LinkFault {
+                        sizes: (polygon.size, to.size),
+                        a: link.a,
+                        b: link.b,
+                        across,
+                        up,
+                        one_way,
+                    });
+                }
+            }
+        }
+        (count, faults)
+    }
+
     /// Whether polygons `a` and `b` lie on one island, so a walk can join them.
     #[must_use]
     pub fn connected(&self, a: u32, b: u32) -> bool {
@@ -330,6 +438,120 @@ impl NavMesh {
     /// Ways off ledges, as where each leaves its ledge and where it lands.
     pub fn drop_links(&self) -> impl Iterator<Item = (Vec3, Vec3)> + '_ {
         self.drops.iter().map(|link| (link.top, link.landing))
+    }
+
+    /// The floor's area across, summed over the polygons a walker of `size`
+    /// (0 to 2) may use. For probes comparing builds.
+    #[must_use]
+    pub fn floor_area(&self, size: u8) -> f32 {
+        self.polygons
+            .iter()
+            .filter(|polygon| polygon.size >= size)
+            .map(|polygon| {
+                let flat = |v: Vec3| Vec2::new(v.x, v.z);
+                let first = flat(polygon.vertices[0]);
+                polygon
+                    .vertices
+                    .windows(2)
+                    .skip(1)
+                    .map(|pair| {
+                        (flat(pair[0]) - first)
+                            .perp_dot(flat(pair[1]) - first)
+                            .abs()
+                            / 2.0
+                    })
+                    .sum::<f32>()
+            })
+            .sum()
+    }
+
+    /// The mesh a walker of `size` (0 to 2) uses: only the polygons whose
+    /// headroom fits it, so an edge to one too low for it is outline, and
+    /// only the drops between them.
+    #[must_use]
+    pub fn for_size(&self, size: u8) -> Self {
+        const GONE: u32 = u32::MAX;
+        let mut kept = vec![GONE; self.polygons.len()];
+        let mut polygons = Vec::new();
+        for (i, polygon) in self.polygons.iter().enumerate() {
+            if polygon.size >= size {
+                #[allow(clippy::cast_possible_truncation)] // Polygons are counted in u32.
+                let at = polygons.len() as u32;
+                kept[i] = at;
+                polygons.push(polygon.clone());
+            }
+        }
+        for polygon in &mut polygons {
+            polygon.links.retain_mut(|link| {
+                link.to = kept[link.to as usize];
+                link.to != GONE
+            });
+        }
+        let drops = self
+            .drops
+            .iter()
+            .filter_map(|link| {
+                let (from, to) = (kept[link.from as usize], kept[link.to as usize]);
+                (from != GONE && to != GONE).then_some(DropLink { from, to, ..*link })
+            })
+            .collect();
+        Self::from_parts(polygons, drops)
+    }
+
+    /// The mesh split for the build's three walker `sizes` (heights, shortest
+    /// first, as in [`Settings::sizes`]).
+    #[must_use]
+    pub fn split(&self, sizes: [f32; 3]) -> SizedMeshes {
+        let short = Arc::new(self.for_size(0));
+        // Sizes of one height share a mesh: a plain build tags every
+        // polygon for all three.
+        let medium = if sizes[1] > sizes[0] {
+            Arc::new(self.for_size(1))
+        } else {
+            Arc::clone(&short)
+        };
+        let tall = if sizes[2] > sizes[1] {
+            Arc::new(self.for_size(2))
+        } else {
+            Arc::clone(&medium)
+        };
+        SizedMeshes {
+            sizes,
+            meshes: [short, medium, tall],
+        }
+    }
+}
+
+/// One build's meshes for its three walker sizes.
+#[derive(Debug, Clone)]
+pub struct SizedMeshes {
+    sizes: [f32; 3],
+    meshes: [Arc<NavMesh>; 3],
+}
+
+impl SizedMeshes {
+    /// The size, 0 to 2, a walker `height` tall uses: the smallest at least
+    /// its height. None for a walker taller than the tallest size, which
+    /// stays on the grid rather than take a mesh for a shorter body.
+    #[must_use]
+    pub fn size_for(&self, height: f32) -> Option<u8> {
+        // A hair of slack for heights measured from the same model twice.
+        const SLACK: f32 = 1e-3;
+        (0..3_u8).find(|&size| height <= self.sizes[size as usize] + SLACK)
+    }
+
+    /// The mesh a walker `height` tall uses, as [`SizedMeshes::size_for`]
+    /// picks it.
+    #[must_use]
+    pub fn for_height(&self, height: f32) -> Option<Arc<NavMesh>> {
+        self.size_for(height)
+            .map(|size| Arc::clone(&self.meshes[size as usize]))
+    }
+
+    /// The three sizes' heights, shortest first.
+    #[must_use]
+    pub const fn sizes(&self) -> [f32; 3] {
+        self.sizes
     }
 }
 
