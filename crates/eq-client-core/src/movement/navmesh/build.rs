@@ -262,9 +262,13 @@ pub(super) fn build_tile(
     for &i in indices {
         #[allow(clippy::cast_possible_truncation)] // Three per triangle, counted in u32.
         let base = trimesh.vertices.len() as u32;
+        let [a, b, c] = triangles[i as usize].map(Vec3A::from_array);
+        // The walker stands on a triangle whichever way it was wound, so
+        // each is turned to face up before rerecast judges its slope.
+        let up = (b - a).cross(c - a).y >= 0.0;
         trimesh
             .vertices
-            .extend(triangles[i as usize].iter().map(|p| Vec3A::from_array(*p)));
+            .extend(if up { [a, b, c] } else { [a, c, b] });
         trimesh.indices.push(UVec3::new(base, base + 1, base + 2));
         trimesh.area_types.push(AreaType::NOT_WALKABLE);
     }

@@ -1550,3 +1550,144 @@ fn inspect_model_heights() {
         );
     }
 }
+
+/// Routes a zone's ways over its navigation mesh and over the grid, as a
+/// script's walk plans them with the navmesh switch on and off (the navmesh
+/// plan's step 4 look). Nothing opens a window.
+///
+/// The mesh is built as the client builds it at zone entry, for the height
+/// of `EQ_PROBE_MODEL` (default 6). Each route in `EQ_PROBE_ROUTES`
+/// (`name=x,y,z>x,y,z` renderer points a little above their floor, separated
+/// by `;`) is searched by both planners, 5,000 units of work a call, and
+/// prints the planner, its legs, how many kept the clearance or passed only
+/// the plain walk, each repaired leg's ends, any fallback, the seconds the
+/// whole search took with its leg checks, and the path's length.
+/// `EQ_PROBE_DOORS` (comma-separated ids) lists the doors a route may open;
+/// door colliders are not loaded.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE and EQ_PROBE_ROUTES"]
+#[allow(clippy::too_many_lines)]
+fn inspect_mesh_routes() {
+    use eq_client_core::movement::navmesh::{self, MeshNavigator, NavMesh, Settings};
+    use eq_client_core::movement::{
+        GridNavigator, Navigator, PathProgress, Planned, Scope, SearchRequest,
+    };
+    use std::sync::{Arc, atomic::AtomicBool};
+    use std::time::Instant;
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone_name = std::env::var("EQ_PROBE_ZONE").unwrap();
+    let zone = eq_client_assets::load_zone(&install, &zone_name).unwrap();
+    let triangles = collision_triangles(&zone);
+    let world = build_collision(&zone).unwrap();
+    let height = std::env::var("EQ_PROBE_MODEL").map_or(6.0, |model| {
+        eq_client_assets::characters::load_character(&install.join("global_chr.s3d"), &model)
+            .unwrap()
+            .height()
+    });
+    let doors: Vec<u8> = std::env::var("EQ_PROBE_DOORS").map_or(Vec::new(), |doors| {
+        doors
+            .split(',')
+            .map(|d| d.trim().parse().unwrap())
+            .collect()
+    });
+    let building = Instant::now();
+    let (mesh, report) = NavMesh::build(
+        &triangles,
+        &Settings::walker(height),
+        navmesh::build_threads(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    println!(
+        "zone={zone_name} triangles={} height={height} release={} build_seconds={:.2} polygons={} \
+         islands={} refused_tiles={}",
+        triangles.len(),
+        !cfg!(debug_assertions),
+        building.elapsed().as_secs_f32(),
+        mesh.polygon_count(),
+        mesh.island_count(),
+        report.refused.len(),
+    );
+    let floor = |at: Vec3| {
+        let below = world.ray_distance(at, -Vec3::Y, 50.0).unwrap();
+        at - Vec3::Y * below
+    };
+    let point = |s: &str| {
+        let v: Vec<f32> = s.split(',').map(|n| n.trim().parse().unwrap()).collect();
+        floor(Vec3::new(v[0], v[1], v[2]))
+    };
+    let navigators: [(&str, Box<dyn Navigator>); 2] = [
+        ("grid", Box::new(GridNavigator)),
+        ("mesh", Box::new(MeshNavigator::new(Arc::new(mesh)))),
+    ];
+    for route in std::env::var("EQ_PROBE_ROUTES")
+        .unwrap()
+        .split(';')
+        .filter(|r| !r.trim().is_empty())
+    {
+        let (name, ends) = route.split_once('=').unwrap();
+        let (a, b) = ends.split_once('>').unwrap();
+        let (start, goal) = (point(a), point(b));
+        for (planner, navigator) in &navigators {
+            let searching = Instant::now();
+            let mut search = navigator.search(SearchRequest {
+                start,
+                goal,
+                reach: 10.0,
+                height,
+                doors: doors.clone(),
+                drops: false,
+                scope: Scope::Whole,
+            });
+            let progress = loop {
+                match search.advance(&world, 5000) {
+                    PathProgress::Searching => (),
+                    done => break done,
+                }
+            };
+            let seconds = searching.elapsed().as_secs_f32();
+            let (found, length, points) = match &progress {
+                PathProgress::Found(path) => (
+                    true,
+                    std::iter::once(start)
+                        .chain(path.iter().copied())
+                        .collect::<Vec<_>>()
+                        .windows(2)
+                        .map(|pair| pair[0].distance(pair[1]))
+                        .sum::<f32>(),
+                    path.len(),
+                ),
+                _ => (false, 0.0, 0),
+            };
+            let detail = match search.planned() {
+                Planned::Grid => String::new(),
+                Planned::Mesh {
+                    legs,
+                    clear,
+                    repaired,
+                    fallback,
+                } => {
+                    let repairs: Vec<String> = repaired
+                        .iter()
+                        .map(|(from, to)| format!("{}>{}", eq_point(*from), eq_point(*to)))
+                        .collect();
+                    format!(
+                        " legs={legs} clear={clear} walk_only={} repaired={} repaired_eq=[{}] \
+                         fallback={fallback:?}",
+                        legs.saturating_sub(clear + repaired.len()),
+                        repaired.len(),
+                        repairs.join(" "),
+                    )
+                }
+            };
+            println!(
+                "route={} planner={planner} eq_start={} eq_goal={} found={found} seconds={seconds:.3} \
+                 searched={} length={length:.1} path_points={points}{detail}",
+                name.trim(),
+                eq_point(start),
+                eq_point(goal),
+                search.searched().0,
+            );
+        }
+    }
+}

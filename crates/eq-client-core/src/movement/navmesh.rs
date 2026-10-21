@@ -3,15 +3,19 @@
 //!
 //! rerecast builds the polygons a square tile at a time ([`build`]); the
 //! tiles are joined where their border edges meet. A built mesh is cached by
-//! its input ([`cache`]). Routes plan over it in a later change; until then
-//! the grid search plans every route, and whatever plans over the mesh, the
-//! walker's own edge tests stay the judge of what is walkable.
+//! its input ([`cache`]). [`MeshNavigator`] plans routes over it: an A* over
+//! the polygons, the funnel through their shared edges, then every leg
+//! checked by the walker's own edge tests, which stay the judge of what is
+//! walkable.
 
 mod build;
 pub mod cache;
+mod navigator;
+mod route;
 
 pub use build::{BuildReport, RefusedTile};
 use glam::{Vec2, Vec3};
+pub use navigator::MeshNavigator;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -90,6 +94,9 @@ pub struct NavMesh {
     islands: usize,
     /// Polygons by the index cells their bounds cover.
     index: HashMap<(i32, i32), Vec<u32>>,
+    /// The mesh's outline, the stretches of polygon edges no link shares, by
+    /// the index cells their bounds cover.
+    walls: HashMap<(i32, i32), Vec<(Vec3, Vec3)>>,
 }
 
 /// The side of an index cell, in world units.
@@ -123,11 +130,13 @@ impl NavMesh {
     fn from_polygons(polygons: Vec<Polygon>) -> Self {
         let (island, islands) = islands(&polygons);
         let index = index(&polygons);
+        let walls = walls(&polygons);
         Self {
             polygons,
             island,
             islands,
             index,
+            walls,
         }
     }
 
@@ -155,6 +164,25 @@ impl NavMesh {
                 ((height - at.y).abs() <= 3.0).then_some((i, height))
             })
             .min_by(|a, b| (a.1 - at.y).abs().total_cmp(&(b.1 - at.y).abs()))
+    }
+
+    /// Whether `at` lies on the mesh's outline, where the walkable floor
+    /// ends, rather than only where polygons meet.
+    fn on_outline(&self, at: Vec3) -> bool {
+        // Within a hair across, and a step up or down.
+        const NEAR: f32 = 0.05;
+        const HEIGHT: f32 = 1.0;
+        let point = Vec2::new(at.x, at.z);
+        self.walls
+            .get(&cell_of(point))
+            .into_iter()
+            .flatten()
+            .any(|&(a, b)| {
+                let (a2, b2) = (Vec2::new(a.x, a.z), Vec2::new(b.x, b.z));
+                let along = b2 - a2;
+                let t = ((point - a2).dot(along) / along.length_squared()).clamp(0.0, 1.0);
+                point.distance(a2 + along * t) <= NEAR && (a.lerp(b, t).y - at.y).abs() <= HEIGHT
+            })
     }
 
     /// Whether polygons `a` and `b` lie on one island, so a walk can join them.
@@ -211,6 +239,62 @@ fn index(polygons: &[Polygon]) -> HashMap<(i32, i32), Vec<u32>> {
         }
     }
     index
+}
+
+/// The stretches of each polygon's edges that no link of its covers.
+fn walls(polygons: &[Polygon]) -> HashMap<(i32, i32), Vec<(Vec3, Vec3)>> {
+    // How near a link's end lies to an edge to count as on it, and the
+    // shortest stretch kept.
+    const ON: f32 = 0.02;
+    const SHORTEST: f32 = 0.01;
+    let flat = |v: Vec3| Vec2::new(v.x, v.z);
+    let mut walls: HashMap<(i32, i32), Vec<(Vec3, Vec3)>> = HashMap::new();
+    for polygon in polygons {
+        let corners = polygon.vertices.len();
+        for corner in 0..corners {
+            let (a, b) = (
+                polygon.vertices[corner],
+                polygon.vertices[(corner + 1) % corners],
+            );
+            let along = flat(b) - flat(a);
+            let span = along.length();
+            if span < SHORTEST {
+                continue;
+            }
+            // Where along the edge, 0 to 1, a point lies, when it's on it.
+            let on = |v: Vec3| {
+                let share = (flat(v) - flat(a)).dot(along) / (span * span);
+                let off = (flat(v) - flat(a)).perp_dot(along).abs() / span;
+                (off <= ON && (-0.01..=1.01).contains(&share)).then_some(share.clamp(0.0, 1.0))
+            };
+            let mut covered: Vec<(f32, f32)> = polygon
+                .links
+                .iter()
+                .filter_map(|link| {
+                    let (first, second) = (on(link.a)?, on(link.b)?);
+                    Some((first.min(second), first.max(second)))
+                })
+                .collect();
+            covered.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let mut from = 0.0_f32;
+            let mut stretches = Vec::new();
+            for (start, end) in covered.into_iter().chain([(1.0, 1.0)]) {
+                if (start - from) * span >= SHORTEST {
+                    stretches.push((a.lerp(b, from), a.lerp(b, start)));
+                }
+                from = from.max(end);
+            }
+            for (p, q) in stretches {
+                let (low, high) = (cell_of(flat(p).min(flat(q))), cell_of(flat(p).max(flat(q))));
+                for x in low.0..=high.0 {
+                    for z in low.1..=high.1 {
+                        walls.entry((x, z)).or_default().push((p, q));
+                    }
+                }
+            }
+        }
+    }
+    walls
 }
 
 /// The height of a convex polygon's surface under `at`, from the fan triangle

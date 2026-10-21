@@ -4,8 +4,8 @@
 //! the character's feet and the goal each tick and steer toward what comes back.
 
 use super::{
-    CollisionWorld, GridNavigator, MAX_GROUNDED_STEP, Navigator, PathProgress, RouteSearch, Scope,
-    SearchRequest, path,
+    CollisionWorld, GridNavigator, MAX_GROUNDED_STEP, Navigator, PathProgress, Planned,
+    RouteSearch, Scope, SearchRequest, path,
 };
 use glam::{Vec2, Vec3};
 use std::{
@@ -103,6 +103,8 @@ struct Finished {
     found: bool,
     /// Expansions, and whether positions remained.
     searched: (usize, bool),
+    /// What planned it.
+    planned: Planned,
     /// For a search handed off, where its time went.
     timing: Option<SearchTiming>,
 }
@@ -134,6 +136,7 @@ impl Finished {
             legs,
             found,
             searched: search.searched(),
+            planned: search.planned(),
             timing: None,
         }
     }
@@ -213,6 +216,7 @@ impl Running {
                 legs: None,
                 found: false,
                 searched: (0, false),
+                planned: Planned::Grid,
                 timing: None,
             })
         })
@@ -329,6 +333,8 @@ pub struct Route {
     drops: bool,
     /// The last finished search's expansions, and whether positions remained.
     searched: Option<(usize, bool)>,
+    /// What planned the last finished search.
+    planned: Option<Planned>,
     /// How long the last finished search handed off waited to start, and ran.
     timing: Option<SearchTiming>,
     /// Where the walker stood before it last moved, and where it stands now
@@ -371,6 +377,7 @@ impl Route {
             best: None,
             replan: Replan::Ready,
             searched: None,
+            planned: None,
             timing: None,
             reached: 0,
             path: None,
@@ -508,6 +515,13 @@ impl Route {
     #[must_use]
     pub const fn searched(&self) -> Option<(usize, bool)> {
         self.searched
+    }
+
+    /// What planned the last finished search, for diagnostics; None until a
+    /// search finishes.
+    #[must_use]
+    pub const fn planned(&self) -> Option<&Planned> {
+        self.planned.as_ref()
     }
 
     /// Where the last finished search handed off spent its time; None for a
@@ -659,6 +673,7 @@ impl Route {
                     }
                 };
             self.searched = Some(finished.searched);
+            self.planned = Some(finished.planned);
             self.timing = finished.timing;
             match (replaces, finished.legs) {
                 (None, None) => {
@@ -801,6 +816,51 @@ mod tests {
         [[a, b, c], [a, c, d]]
     }
 
+    /// What plans a test's routes: every route test runs once with each of
+    /// [`planners`], so later tests inherit both.
+    #[derive(Clone)]
+    enum Planner {
+        Grid,
+        Mesh(Arc<crate::movement::navmesh::NavMesh>),
+    }
+
+    impl std::fmt::Debug for Planner {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(match self {
+                Self::Grid => "grid",
+                Self::Mesh(_) => "mesh",
+            })
+        }
+    }
+
+    impl Planner {
+        /// A route as [`Route::new`] makes it, planned by this.
+        fn route(&self, feet: Vec3, goal: Vec3, reach: f32, height: f32) -> Route {
+            let route = Route::new(feet, goal, reach, height);
+            match self {
+                Self::Grid => route,
+                Self::Mesh(mesh) => route.with_navigator(Box::new(
+                    crate::movement::navmesh::MeshNavigator::new(Arc::clone(mesh)),
+                )),
+            }
+        }
+    }
+
+    /// The grid, then a mesh over `world`'s own triangles, its doors left
+    /// out as a zone's mesh leaves them, for a walker 6 tall.
+    fn planners(world: &CollisionWorld) -> [Planner; 2] {
+        use crate::movement::navmesh::{NavMesh, Settings};
+        let settings = Settings {
+            cell_size: 0.25,
+            tile: 16.0,
+            ..Settings::walker(6.0)
+        };
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let (mesh, _) = NavMesh::build(&world.terrain_triangles(), &settings, 2, &cancel)
+            .expect("not cancelled");
+        [Planner::Grid, Planner::Mesh(Arc::new(mesh))]
+    }
+
     /// Walks straight to each waypoint the route names, as a follower would.
     fn follow(route: &mut Route, world: &CollisionWorld, mut feet: Vec3, goal: Vec3) -> Vec3 {
         for tick in 0..500_u64 {
@@ -827,7 +887,7 @@ mod tests {
     /// airborne controller in five 50 ms slices, telling the route whether
     /// it falls when `told`. Returns the feet at the end and how many samples
     /// between leaving the edge and landing turned back on the one before.
-    fn follow_falling(start: Vec3, stride: f32, told: bool) -> (Vec3, usize) {
+    fn follow_falling(planner: usize, start: Vec3, stride: f32, told: bool) -> (Vec3, usize) {
         use crate::movement::{AirborneController, MotionStep, PROVISIONAL_PHYSICS};
         // An upper floor at y = 0 for z < 0, a lower one at y = -5 beyond it,
         // and the ledge's face between them.
@@ -853,7 +913,9 @@ mod tests {
         let world = CollisionWorld::new(triangles).unwrap();
         let goal = Vec3::new(0.0, -5.0, 20.0);
         let mut feet = start;
-        let mut route = Route::new(feet, goal, 1.5, 6.0).with_drops(true);
+        let mut route = planners(&world)[planner]
+            .route(feet, goal, 1.5, 6.0)
+            .with_drops(true);
         let mut controller = AirborneController::default();
         let (mut reversals, mut last) = (0, None::<Vec3>);
         for tick in 0..500_u64 {
@@ -892,18 +954,21 @@ mod tests {
     #[test]
     fn a_walker_falling_off_a_ledge_heads_on_instead_of_turning_back_under_it() {
         // At a run's sample, and at the 0.5 of a 16 ms frame.
-        for stride in [3.1, 3.26, 0.5] {
-            for start in [Vec3::new(0.0, 0.0, -12.0), Vec3::new(0.81, 0.0, -11.19)] {
-                let (end, reversals) = follow_falling(start, stride, true);
-                assert!((end.y + 5.0).abs() < 0.01, "stride {stride}: {end:?}");
-                assert_eq!(reversals, 0, "turned back while falling, stride {stride}");
+        for planner in 0..2 {
+            for stride in [3.1, 3.26, 0.5] {
+                for start in [Vec3::new(0.0, 0.0, -12.0), Vec3::new(0.81, 0.0, -11.19)] {
+                    let (end, reversals) = follow_falling(planner, start, stride, true);
+                    assert!((end.y + 5.0).abs() < 0.01, "stride {stride}: {end:?}");
+                    assert_eq!(reversals, 0, "turned back while falling, stride {stride}");
+                }
+                // Untold, the same walk turns back over the landing waypoint.
+                let (_, untold) =
+                    follow_falling(planner, Vec3::new(0.81, 0.0, -11.19), stride, false);
+                assert!(
+                    untold > 0,
+                    "the walk this test guards against, stride {stride}"
+                );
             }
-            // Untold, the same walk turns back over the landing waypoint.
-            let (_, untold) = follow_falling(Vec3::new(0.81, 0.0, -11.19), stride, false);
-            assert!(
-                untold > 0,
-                "the walk this test guards against, stride {stride}"
-            );
         }
     }
 
@@ -1002,68 +1067,77 @@ mod tests {
     #[test]
     fn a_route_searched_off_the_caller_follows_the_same_waypoints_and_doors() {
         let (world, _) = doorway(true);
-        let (start, goal) = (Vec3::new(-20.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
-        // However busy the machine, a thread of its own finishes this search.
-        let first_step = |route: &mut Route| {
-            let deadline = Instant::now() + Duration::from_secs(60);
-            for tick in 0_u64.. {
-                let now = Duration::from_millis(tick);
-                match route.next(&world, start, goal, 256, now) {
-                    RouteStep::Searching if Instant::now() < deadline => {
-                        std::thread::sleep(Duration::from_millis(1));
+        for planner in planners(&world) {
+            let (start, goal) = (Vec3::new(-20.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+            // However busy the machine, a thread of its own finishes this search.
+            let first_step = |route: &mut Route| {
+                let deadline = Instant::now() + Duration::from_secs(60);
+                for tick in 0_u64.. {
+                    let now = Duration::from_millis(tick);
+                    match route.next(&world, start, goal, 256, now) {
+                        RouteStep::Searching if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        RouteStep::Searching => panic!("the search never finished"),
+                        step => return step,
                     }
-                    RouteStep::Searching => panic!("the search never finished"),
-                    step => return step,
                 }
-            }
-            unreachable!("the clock ran out first");
-        };
-        let mut inline = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
-        let mut handed = Route::new(start, goal, 1.0, 6.0)
-            .with_doors(vec![7])
-            .with_background(Arc::new(Threads));
-        assert_eq!(first_step(&mut handed), first_step(&mut inline));
-        assert_eq!(handed.waypoints, inline.waypoints);
-        assert_eq!(handed.crossings, inline.crossings);
-        assert_eq!(handed.searched(), inline.searched());
-        // Only the handed-off search reports where its time went.
-        assert_eq!(inline.search_timing(), None);
-        assert_eq!(
-            handed.search_timing().map(|timing| timing.obstacles),
-            Some(1)
-        );
-        assert!(inline.waypoints.len() > 1, "{:?}", inline.waypoints);
+                unreachable!("the clock ran out first");
+            };
+            let mut inline = planner.route(start, goal, 1.0, 6.0).with_doors(vec![7]);
+            let mut handed = planner
+                .route(start, goal, 1.0, 6.0)
+                .with_doors(vec![7])
+                .with_background(Arc::new(Threads));
+            assert_eq!(first_step(&mut handed), first_step(&mut inline));
+            assert_eq!(handed.waypoints, inline.waypoints);
+            assert_eq!(handed.crossings, inline.crossings);
+            assert_eq!(handed.searched(), inline.searched());
+            // Only the handed-off search reports where its time went.
+            assert_eq!(inline.search_timing(), None);
+            assert_eq!(
+                handed.search_timing().map(|timing| timing.obstacles),
+                Some(1)
+            );
+            assert!(inline.waypoints.len() > 1, "{:?}", inline.waypoints);
+        }
     }
 
     #[test]
     fn a_handed_off_search_holds_the_route_at_searching_until_its_result_arrives() {
         let world = open_field();
-        let (start, goal) = (Vec3::ZERO, Vec3::new(20.0, 0.0, 0.0));
-        let held = Arc::new(Held::default());
-        let mut route = Route::new(start, goal, 2.0, 6.0).with_background(held.clone());
-        // Every call while the search is away returns at once, whatever the budget.
-        for tick in 0..20 {
-            let now = Duration::from_millis(tick * 16);
+        for planner in planners(&world) {
+            let (start, goal) = (Vec3::ZERO, Vec3::new(20.0, 0.0, 0.0));
+            let held = Arc::new(Held::default());
+            let mut route = planner
+                .route(start, goal, 2.0, 6.0)
+                .with_background(held.clone());
+            // Every call while the search is away returns at once, whatever the budget.
+            for tick in 0..20 {
+                let now = Duration::from_millis(tick * 16);
+                assert_eq!(
+                    route.next(&world, start, goal, 0, now),
+                    RouteStep::Searching
+                );
+            }
+            assert_eq!(held.run(), 1);
+            assert!(matches!(
+                route.next(&world, start, goal, 0, Duration::from_secs(1)),
+                RouteStep::Toward(_)
+            ));
+            assert!(!route.is_searching());
+
+            // A search whose route is gone is told to stop, and runs safely without it.
+            let mut route = planner
+                .route(start, goal, 2.0, 6.0)
+                .with_background(held.clone());
             assert_eq!(
-                route.next(&world, start, goal, 0, now),
+                route.next(&world, start, goal, 0, Duration::ZERO),
                 RouteStep::Searching
             );
+            drop(route);
+            assert_eq!(held.run(), 1);
         }
-        assert_eq!(held.run(), 1);
-        assert!(matches!(
-            route.next(&world, start, goal, 0, Duration::from_secs(1)),
-            RouteStep::Toward(_)
-        ));
-        assert!(!route.is_searching());
-
-        // A search whose route is gone is told to stop, and runs safely without it.
-        let mut route = Route::new(start, goal, 2.0, 6.0).with_background(held.clone());
-        assert_eq!(
-            route.next(&world, start, goal, 0, Duration::ZERO),
-            RouteStep::Searching
-        );
-        drop(route);
-        assert_eq!(held.run(), 1);
     }
 
     /// Follows with whole samples of `stride` toward each waypoint, never
@@ -1106,98 +1180,108 @@ mod tests {
         // the walk stalled; 3.32 is the stride the live stall measured, and
         // 0.5 that of a 16 ms frame.
         let (world, _) = doorway(false);
-        let goal = Vec3::new(12.0, 0.0, 10.0);
-        for (stride, start) in [
-            (3.32, Vec3::new(-20.0, 0.0, -20.0)),
-            (3.32, Vec3::new(-10.0, 0.0, -22.0)),
-            (3.32, Vec3::new(-10.0, 0.0, -10.0)),
-            (0.5, Vec3::new(-20.0, 0.0, -20.0)),
-            (0.5, Vec3::new(-10.0, 0.0, -10.0)),
-            (0.5, Vec3::new(20.0, 0.0, -8.0)),
-            (4.5, Vec3::new(-15.0, 0.0, -8.0)),
-            (4.5, Vec3::new(0.0, 0.0, -8.0)),
-            (4.5, Vec3::new(28.0, 0.0, -15.0)),
-            (6.0, Vec3::new(-25.0, 0.0, -15.0)),
-            (6.0, Vec3::new(20.0, 0.0, -8.0)),
-            (7.6, Vec3::new(-15.0, 0.0, -8.0)),
-            (7.6, Vec3::new(0.0, 0.0, -8.0)),
-        ] {
-            let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
-            let (step, feet, reversals) = follow_strides(&mut route, &world, start, goal, stride);
-            assert_eq!(
-                (step, reversals),
-                (RouteStep::OpenDoor(7), 0),
-                "stride {stride} from {start:?}, at {feet:?}"
-            );
+        for planner in planners(&world) {
+            let goal = Vec3::new(12.0, 0.0, 10.0);
+            for (stride, start) in [
+                (3.32, Vec3::new(-20.0, 0.0, -20.0)),
+                (3.32, Vec3::new(-10.0, 0.0, -22.0)),
+                (3.32, Vec3::new(-10.0, 0.0, -10.0)),
+                (0.5, Vec3::new(-20.0, 0.0, -20.0)),
+                (0.5, Vec3::new(-10.0, 0.0, -10.0)),
+                (0.5, Vec3::new(20.0, 0.0, -8.0)),
+                (4.5, Vec3::new(-15.0, 0.0, -8.0)),
+                (4.5, Vec3::new(0.0, 0.0, -8.0)),
+                (4.5, Vec3::new(28.0, 0.0, -15.0)),
+                (6.0, Vec3::new(-25.0, 0.0, -15.0)),
+                (6.0, Vec3::new(20.0, 0.0, -8.0)),
+                (7.6, Vec3::new(-15.0, 0.0, -8.0)),
+                (7.6, Vec3::new(0.0, 0.0, -8.0)),
+            ] {
+                let mut route = planner.route(start, goal, 1.0, 6.0).with_doors(vec![7]);
+                let (step, feet, reversals) =
+                    follow_strides(&mut route, &world, start, goal, stride);
+                assert_eq!(
+                    (step, reversals),
+                    (RouteStep::OpenDoor(7), 0),
+                    "stride {stride} from {start:?}, at {feet:?}"
+                );
+            }
         }
     }
 
     #[test]
     fn a_route_opens_a_closed_door_from_beside_it_and_walks_through_once_it_is_open() {
-        let (mut world, _) = doorway(false);
-        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
-        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
-        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
-        assert_eq!(step, RouteStep::OpenDoor(7));
-        // Asked from beside the door, not from across the room.
-        assert!(feet.z > -3.0 && feet.z < 0.0, "{feet:?}");
-        // Waiting at the door is not a stall, however long the door takes.
-        for tick in 0..100 {
-            let now = Duration::from_millis(100_000 + tick * 150);
-            assert_eq!(
-                route.next(&world, feet, goal, 256, now),
-                RouteStep::OpenDoor(7)
-            );
+        let (world0, _) = doorway(false);
+        for planner in planners(&world0) {
+            let mut world = world0.clone();
+            let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+            let mut route = planner.route(start, goal, 1.0, 6.0).with_doors(vec![7]);
+            let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+            assert_eq!(step, RouteStep::OpenDoor(7));
+            // Asked from beside the door, not from across the room.
+            assert!(feet.z > -3.0 && feet.z < 0.0, "{feet:?}");
+            // Waiting at the door is not a stall, however long the door takes.
+            for tick in 0..100 {
+                let now = Duration::from_millis(100_000 + tick * 150);
+                assert_eq!(
+                    route.next(&world, feet, goal, 256, now),
+                    RouteStep::OpenDoor(7)
+                );
+            }
+            // The door swings open: its collider leaves the doorway.
+            world.set_door_obstacles(Vec::new());
+            let (step, feet) = follow_to_door(&mut route, &world, feet, goal, 1000);
+            assert_eq!(step, RouteStep::Arrived);
+            assert!(feet.z > 8.0, "{feet:?}");
         }
-        // The door swings open: its collider leaves the doorway.
-        world.set_door_obstacles(Vec::new());
-        let (step, feet) = follow_to_door(&mut route, &world, feet, goal, 1000);
-        assert_eq!(step, RouteStep::Arrived);
-        assert!(feet.z > 8.0, "{feet:?}");
     }
 
     #[test]
     fn a_far_door_unseen_when_planned_and_shut_on_arrival_is_opened_without_a_stall() {
-        let (mut world, door) = doorway(false);
-        world.set_door_obstacles(Vec::new());
-        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
-        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
-        let mut feet = start;
-        // Without a collider when planned: open, or too far away to be loaded.
-        let mut shut = None;
-        let mut asked = None;
-        for tick in 0..500_u64 {
-            // Shut as the walker nears the doorway.
-            if shut.is_none() && feet.z > -6.0 {
-                world.set_door_obstacles(vec![(7, Arc::clone(&door))]);
-                shut = Some(tick);
-            }
-            match route.next(&world, feet, goal, 256, Duration::from_millis(tick * 150)) {
-                RouteStep::Searching => (),
-                RouteStep::Toward(next) => {
-                    let to = Vec3::new(next.x - feet.x, 0.0, next.z - feet.z).clamp_length_max(3.0);
-                    for _ in 0..3 {
-                        feet = world.step(feet, to / 3.0, 6.0);
+        let (world0, door) = doorway(false);
+        for planner in planners(&world0) {
+            let mut world = world0.clone();
+            world.set_door_obstacles(Vec::new());
+            let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+            let mut route = planner.route(start, goal, 1.0, 6.0).with_doors(vec![7]);
+            let mut feet = start;
+            // Without a collider when planned: open, or too far away to be loaded.
+            let mut shut = None;
+            let mut asked = None;
+            for tick in 0..500_u64 {
+                // Shut as the walker nears the doorway.
+                if shut.is_none() && feet.z > -6.0 {
+                    world.set_door_obstacles(vec![(7, Arc::clone(&door))]);
+                    shut = Some(tick);
+                }
+                match route.next(&world, feet, goal, 256, Duration::from_millis(tick * 150)) {
+                    RouteStep::Searching => (),
+                    RouteStep::Toward(next) => {
+                        let to =
+                            Vec3::new(next.x - feet.x, 0.0, next.z - feet.z).clamp_length_max(3.0);
+                        for _ in 0..3 {
+                            feet = world.step(feet, to / 3.0, 6.0);
+                        }
                     }
+                    RouteStep::OpenDoor(id) => {
+                        asked = Some((id, tick));
+                        break;
+                    }
+                    end => panic!("{end:?} at {feet:?}"),
                 }
-                RouteStep::OpenDoor(id) => {
-                    asked = Some((id, tick));
-                    break;
-                }
-                end => panic!("{end:?} at {feet:?}"),
             }
+            let (id, tick) = asked.expect("the shut door is asked for");
+            assert_eq!(id, 7);
+            assert!(feet.z < 0.0, "{feet:?}");
+            // Asked for as the walker meets it, well before the 3 s stall (20 ticks).
+            let shut = shut.unwrap();
+            assert!(tick - shut < 8, "asked {} ticks after it shut", tick - shut);
+            // The walker opens it and goes on through.
+            world.set_door_obstacles(Vec::new());
+            let (step, feet) = follow_to_door(&mut route, &world, feet, goal, tick + 1);
+            assert_eq!(step, RouteStep::Arrived);
+            assert!(feet.z > 8.0, "{feet:?}");
         }
-        let (id, tick) = asked.expect("the shut door is asked for");
-        assert_eq!(id, 7);
-        assert!(feet.z < 0.0, "{feet:?}");
-        // Asked for as the walker meets it, well before the 3 s stall (20 ticks).
-        let shut = shut.unwrap();
-        assert!(tick - shut < 8, "asked {} ticks after it shut", tick - shut);
-        // The walker opens it and goes on through.
-        world.set_door_obstacles(Vec::new());
-        let (step, feet) = follow_to_door(&mut route, &world, feet, goal, tick + 1);
-        assert_eq!(step, RouteStep::Arrived);
-        assert!(feet.z > 8.0, "{feet:?}");
     }
 
     /// A floor split by a wall across z = 0 with a wide doorway, 6 < x < 14,
@@ -1240,25 +1324,28 @@ mod tests {
 
     #[test]
     fn a_door_that_swings_toward_the_walker_is_passed_around_its_open_leaf() {
-        let (mut world, leaf) = wide_doorway((10.0, 14.0));
-        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
-        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
-        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
-        assert_eq!(step, RouteStep::OpenDoor(7));
-        // Open: the doorway is clear but the leaf now stands in the straight way.
-        let leaf = crate::movement::CollisionMesh::new(leaf).unwrap();
-        world.set_door_obstacles(vec![(7, Arc::new(leaf))]);
-        assert_eq!(
-            route.next(&world, feet, goal, 256, Duration::from_secs(100)),
-            RouteStep::OpenDoor(7)
-        );
-        route.reroute(feet, goal);
-        let (step, feet) = follow_to_door(&mut route, &world, feet, goal, 1000);
-        assert_eq!(step, RouteStep::Arrived);
-        assert!(feet.z > 8.0, "{feet:?}");
-        // Only a short way round was searched, not the whole route again.
-        let (expanded, _) = route.searched().unwrap();
-        assert!(expanded < 500, "{expanded}");
+        let (world0, leaf) = wide_doorway((10.0, 14.0));
+        for planner in planners(&world0) {
+            let mut world = world0.clone();
+            let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+            let mut route = planner.route(start, goal, 1.0, 6.0).with_doors(vec![7]);
+            let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+            assert_eq!(step, RouteStep::OpenDoor(7));
+            // Open: the doorway is clear but the leaf now stands in the straight way.
+            let leaf = crate::movement::CollisionMesh::new(leaf.clone()).unwrap();
+            world.set_door_obstacles(vec![(7, Arc::new(leaf))]);
+            assert_eq!(
+                route.next(&world, feet, goal, 256, Duration::from_secs(100)),
+                RouteStep::OpenDoor(7)
+            );
+            route.reroute(feet, goal);
+            let (step, feet) = follow_to_door(&mut route, &world, feet, goal, 1000);
+            assert_eq!(step, RouteStep::Arrived);
+            assert!(feet.z > 8.0, "{feet:?}");
+            // Only a short way round was searched, not the whole route again.
+            let (expanded, _) = route.searched().unwrap();
+            assert!(expanded < 500, "{expanded}");
+        }
     }
 
     #[test]
@@ -1297,108 +1384,120 @@ mod tests {
                 [from, 10.0, 10.0],
             ));
         }
-        let mut world = CollisionWorld::new(triangles).unwrap();
-        let shut = crate::movement::CollisionMesh::new(quad(
-            [6.0, 0.0, 0.0],
-            [14.0, 0.0, 0.0],
-            [14.0, 10.0, 0.0],
-            [6.0, 10.0, 0.0],
-        ))
-        .unwrap();
-        let door8 = Arc::new(second(10.0));
-        world.set_door_obstacles(vec![(7, Arc::new(shut)), (8, Arc::clone(&door8))]);
-        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 20.0));
-        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7, 8]);
-        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
-        assert_eq!(step, RouteStep::OpenDoor(7));
-        let leaf = Arc::new(crate::movement::CollisionMesh::new(leaf).unwrap());
-        world.set_door_obstacles(vec![(7, leaf), (8, door8)]);
-        route.reroute(feet, goal);
-        for tick in 0..50 {
-            if route.next(
-                &world,
-                feet,
-                goal,
-                256,
-                Duration::from_millis(200_000 + tick),
-            ) != RouteStep::Searching
-            {
-                break;
-            }
-        }
-        assert_eq!(route.detoured(), Some(true));
-        // Door 8's crossing is still on the waypoint just past its wall.
-        let crossing = route
-            .crossings
-            .iter()
-            .position(|door| *door == Some(8))
+        let world0 = CollisionWorld::new(triangles).unwrap();
+        for planner in planners(&world0) {
+            let mut world = world0.clone();
+            let shut = crate::movement::CollisionMesh::new(quad(
+                [6.0, 0.0, 0.0],
+                [14.0, 0.0, 0.0],
+                [14.0, 10.0, 0.0],
+                [6.0, 10.0, 0.0],
+            ))
             .unwrap();
-        assert!(route.waypoints[crossing].z >= 10.0, "{:?}", route.waypoints);
-        assert!(
-            route.waypoints[crossing - 1].z < 10.0,
-            "{:?}",
-            route.waypoints
-        );
-        let (step, _) = follow_to_door(&mut route, &world, feet, goal, 1000);
-        assert_eq!(step, RouteStep::OpenDoor(8));
+            let door8 = Arc::new(second(10.0));
+            world.set_door_obstacles(vec![(7, Arc::new(shut)), (8, Arc::clone(&door8))]);
+            let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 20.0));
+            let mut route = planner.route(start, goal, 1.0, 6.0).with_doors(vec![7, 8]);
+            let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+            assert_eq!(step, RouteStep::OpenDoor(7));
+            let leaf = Arc::new(crate::movement::CollisionMesh::new(leaf.clone()).unwrap());
+            world.set_door_obstacles(vec![(7, leaf), (8, door8)]);
+            route.reroute(feet, goal);
+            for tick in 0..50 {
+                if route.next(
+                    &world,
+                    feet,
+                    goal,
+                    256,
+                    Duration::from_millis(200_000 + tick),
+                ) != RouteStep::Searching
+                {
+                    break;
+                }
+            }
+            assert_eq!(route.detoured(), Some(true));
+            // Door 8's crossing is still on the waypoint just past its wall.
+            let crossing = route
+                .crossings
+                .iter()
+                .position(|door| *door == Some(8))
+                .unwrap();
+            assert!(route.waypoints[crossing].z >= 10.0, "{:?}", route.waypoints);
+            assert!(
+                route.waypoints[crossing - 1].z < 10.0,
+                "{:?}",
+                route.waypoints
+            );
+            let (step, _) = follow_to_door(&mut route, &world, feet, goal, 1000);
+            assert_eq!(step, RouteStep::OpenDoor(8));
+        }
     }
 
     #[test]
     fn a_door_whose_open_leaf_still_blocks_the_doorway_is_asked_for_again() {
-        let (mut world, leaf) = wide_doorway((5.0, 15.0));
-        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
-        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
-        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
-        assert_eq!(step, RouteStep::OpenDoor(7));
-        let leaf = crate::movement::CollisionMesh::new(leaf).unwrap();
-        world.set_door_obstacles(vec![(7, Arc::new(leaf))]);
-        route.reroute(feet, goal);
-        // The search around it still has to pass the same door, so the walk
-        // refuses it ("it opened but still blocks the way").
-        let (step, _) = follow_to_door(&mut route, &world, feet, goal, 1000);
-        assert_eq!(step, RouteStep::OpenDoor(7));
+        let (world0, leaf) = wide_doorway((5.0, 15.0));
+        for planner in planners(&world0) {
+            let mut world = world0.clone();
+            let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+            let mut route = planner.route(start, goal, 1.0, 6.0).with_doors(vec![7]);
+            let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+            assert_eq!(step, RouteStep::OpenDoor(7));
+            let leaf = crate::movement::CollisionMesh::new(leaf.clone()).unwrap();
+            world.set_door_obstacles(vec![(7, Arc::new(leaf))]);
+            route.reroute(feet, goal);
+            // The search around it still has to pass the same door, so the walk
+            // refuses it ("it opened but still blocks the way").
+            let (step, _) = follow_to_door(&mut route, &world, feet, goal, 1000);
+            assert_eq!(step, RouteStep::OpenDoor(7));
+        }
     }
 
     #[test]
     fn a_door_the_route_may_not_open_is_a_wall() {
         let (world, _) = doorway(false);
-        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
-        let mut route = Route::new(start, goal, 1.0, 6.0);
-        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
-        assert_eq!(step, RouteStep::Arrived);
-        assert!(route.partial());
-        assert!(feet.z < 0.0, "{feet:?}");
+        for planner in planners(&world) {
+            let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+            let mut route = planner.route(start, goal, 1.0, 6.0);
+            let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+            assert_eq!(step, RouteStep::Arrived);
+            assert!(route.partial());
+            assert!(feet.z < 0.0, "{feet:?}");
+        }
     }
 
     #[test]
     fn a_door_that_does_not_open_turns_the_route_back_once() {
         let (world, _) = doorway(false);
-        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
-        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
-        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
-        assert_eq!(step, RouteStep::OpenDoor(7));
-        route.refused(7, feet, goal);
-        // Searched again without the door: only a partial route is left.
-        let (step, _) = follow_to_door(&mut route, &world, feet, goal, 1000);
-        assert_eq!(step, RouteStep::Arrived);
-        assert!(route.partial());
-        // A second refusal has no replan left.
-        route.refused(7, feet, goal);
-        assert_eq!(
-            route.next(&world, feet, goal, 256, Duration::from_mins(15)),
-            RouteStep::Stalled
-        );
+        for planner in planners(&world) {
+            let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+            let mut route = planner.route(start, goal, 1.0, 6.0).with_doors(vec![7]);
+            let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+            assert_eq!(step, RouteStep::OpenDoor(7));
+            route.refused(7, feet, goal);
+            // Searched again without the door: only a partial route is left.
+            let (step, _) = follow_to_door(&mut route, &world, feet, goal, 1000);
+            assert_eq!(step, RouteStep::Arrived);
+            assert!(route.partial());
+            // A second refusal has no replan left.
+            route.refused(7, feet, goal);
+            assert_eq!(
+                route.next(&world, feet, goal, 256, Duration::from_mins(15)),
+                RouteStep::Stalled
+            );
+        }
     }
 
     #[test]
     fn a_short_way_round_beats_opening_a_door() {
         let (world, _) = doorway(true);
-        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
-        let mut route = Route::new(start, goal, 1.0, 6.0).with_doors(vec![7]);
-        let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
-        assert_eq!(step, RouteStep::Arrived);
-        assert!(!route.partial());
-        assert!(feet.z > 8.0, "{feet:?}");
+        for planner in planners(&world) {
+            let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+            let mut route = planner.route(start, goal, 1.0, 6.0).with_doors(vec![7]);
+            let (step, feet) = follow_to_door(&mut route, &world, start, goal, 0);
+            assert_eq!(step, RouteStep::Arrived);
+            assert!(!route.partial());
+            assert!(feet.z > 8.0, "{feet:?}");
+        }
     }
 
     #[test]
@@ -1419,13 +1518,15 @@ mod tests {
         ));
         let world = CollisionWorld::new(triangles.clone()).unwrap();
         let (start, goal) = (Vec3::new(0.0, 0.0, -10.0), Vec3::new(0.0, 0.0, 10.0));
-        let mut route = Route::new(start, goal, 3.0, 6.0);
-        let end = follow(&mut route, &world, start, goal);
-        assert!(
-            Vec2::new(end.x - goal.x, end.z - goal.z).length() <= 3.0,
-            "{end:?}"
-        );
-        assert!(!route.partial());
+        for planner in planners(&world) {
+            let mut route = planner.route(start, goal, 3.0, 6.0);
+            let end = follow(&mut route, &world, start, goal);
+            assert!(
+                Vec2::new(end.x - goal.x, end.z - goal.z).length() <= 3.0,
+                "{planner:?}: {end:?}"
+            );
+            assert!(!route.partial());
+        }
 
         // Closing the gap leaves only the nearest point on this side of the wall.
         triangles.extend(quad(
@@ -1435,11 +1536,16 @@ mod tests {
             [10.0, 10.0, 0.0],
         ));
         let world = CollisionWorld::new(triangles).unwrap();
-        let mut route = Route::new(start, goal, 3.0, 6.0);
-        let end = follow(&mut route, &world, start, goal);
-        assert!(route.partial());
-        // At the nearest point on the start's side of the wall.
-        assert!(end.z < 0.0 && end.z > -2.0 - FINAL_REACH - 0.1, "{end:?}");
+        for planner in planners(&world) {
+            let mut route = planner.route(start, goal, 3.0, 6.0);
+            let end = follow(&mut route, &world, start, goal);
+            assert!(route.partial());
+            // At the nearest point on the start's side of the wall.
+            assert!(
+                end.z < 0.0 && end.z > -2.0 - FINAL_REACH - 0.1,
+                "{planner:?}: {end:?}"
+            );
+        }
     }
 
     /// A lower floor at y = 0 for z < 0 and a raised floor at y = 4 for z > 0,
@@ -1502,24 +1608,28 @@ mod tests {
     fn a_follower_climbs_to_a_raised_floor_by_its_ramp_or_stops_at_the_ledge() {
         let (start, goal) = (Vec3::new(0.0, 0.0, -20.0), Vec3::new(0.0, 4.0, 15.0));
         let world = ledge(true);
-        let mut route = Route::new(start, goal, 3.0, 6.0);
-        let end = follow(&mut route, &world, start, goal);
-        assert!(!route.partial());
-        assert!(
-            Vec2::new(end.x - goal.x, end.z - goal.z).length() <= 3.0 && end.y > 3.9,
-            "{end:?}"
-        );
+        for planner in planners(&world) {
+            let mut route = planner.route(start, goal, 3.0, 6.0);
+            let end = follow(&mut route, &world, start, goal);
+            assert!(!route.partial());
+            assert!(
+                Vec2::new(end.x - goal.x, end.z - goal.z).length() <= 3.0 && end.y > 3.9,
+                "{planner:?}: {end:?}"
+            );
+        }
 
         // Without the ramp the ledge is too tall to step up, so the route ends
         // as close as it can get on the lower floor.
         let world = ledge(false);
-        let mut route = Route::new(start, goal, 3.0, 6.0);
-        let end = follow(&mut route, &world, start, goal);
-        assert!(route.partial());
-        assert!(
-            end.y.abs() < 0.01 && end.z < 0.0 && end.z > -2.0 - FINAL_REACH - 0.1,
-            "{end:?}"
-        );
+        for planner in planners(&world) {
+            let mut route = planner.route(start, goal, 3.0, 6.0);
+            let end = follow(&mut route, &world, start, goal);
+            assert!(route.partial());
+            assert!(
+                end.y.abs() < 0.01 && end.z < 0.0 && end.z > -2.0 - FINAL_REACH - 0.1,
+                "{planner:?}: {end:?}"
+            );
+        }
     }
 
     #[test]
@@ -1532,20 +1642,22 @@ mod tests {
             [-1.0, 0.0, 1.0],
         ))
         .unwrap();
-        let mut route = Route::new(Vec3::ZERO, Vec3::new(20.0, 0.0, 0.0), 2.0, 6.0);
-        let step = loop {
-            match route.next(
-                &world,
-                Vec3::ZERO,
-                Vec3::new(20.0, 0.0, 0.0),
-                64,
-                Duration::ZERO,
-            ) {
-                RouteStep::Searching => (),
-                done => break done,
-            }
-        };
-        assert_eq!(step, RouteStep::Unreachable);
+        for planner in planners(&world) {
+            let mut route = planner.route(Vec3::ZERO, Vec3::new(20.0, 0.0, 0.0), 2.0, 6.0);
+            let step = loop {
+                match route.next(
+                    &world,
+                    Vec3::ZERO,
+                    Vec3::new(20.0, 0.0, 0.0),
+                    64,
+                    Duration::ZERO,
+                ) {
+                    RouteStep::Searching => (),
+                    done => break done,
+                }
+            };
+            assert_eq!(step, RouteStep::Unreachable);
+        }
     }
 
     fn open_field() -> CollisionWorld {
@@ -1577,86 +1689,96 @@ mod tests {
     #[test]
     fn a_goal_on_another_floor_is_not_reached_from_below_it() {
         let world = open_field();
-        let goal = Vec3::Y * 20.0;
-        let mut route = Route::new(Vec3::X, goal, 2.0, 6.0);
-        let step = route.next(&world, Vec3::X, goal, 4096, Duration::ZERO);
-        assert_ne!(step, RouteStep::Arrived);
+        for planner in planners(&world) {
+            let goal = Vec3::Y * 20.0;
+            let mut route = planner.route(Vec3::X, goal, 2.0, 6.0);
+            let step = route.next(&world, Vec3::X, goal, 4096, Duration::ZERO);
+            assert_ne!(step, RouteStep::Arrived);
+        }
     }
 
     #[test]
     fn a_follower_that_stops_moving_searches_again_once_then_stalls() {
         let world = open_field();
-        let goal = Vec3::new(20.0, 0.0, 0.0);
-        let mut route = Route::new(Vec3::ZERO, goal, 2.0, 6.0);
-        // Something keeps the feet where they are while the route says to go.
-        let steps = ticks(&mut route, &world, goal, 100, |_| Vec3::ZERO);
-        let stalled = steps.iter().position(|step| *step == RouteStep::Stalled);
-        // Three seconds, a fresh search, three more seconds.
-        assert!(
-            stalled.is_some_and(|tick| (60..=64).contains(&tick)),
-            "{stalled:?}"
-        );
-        let searches = steps[1..stalled.unwrap()]
-            .iter()
-            .filter(|step| **step == RouteStep::Searching)
-            .count();
-        assert_eq!(searches, 1);
+        for planner in planners(&world) {
+            let goal = Vec3::new(20.0, 0.0, 0.0);
+            let mut route = planner.route(Vec3::ZERO, goal, 2.0, 6.0);
+            // Something keeps the feet where they are while the route says to go.
+            let steps = ticks(&mut route, &world, goal, 100, |_| Vec3::ZERO);
+            let stalled = steps.iter().position(|step| *step == RouteStep::Stalled);
+            // Three seconds, a fresh search, three more seconds.
+            assert!(
+                stalled.is_some_and(|tick| (60..=64).contains(&tick)),
+                "{stalled:?}"
+            );
+            let searches = steps[1..stalled.unwrap()]
+                .iter()
+                .filter(|step| **step == RouteStep::Searching)
+                .count();
+            assert_eq!(searches, 1);
+        }
     }
 
     #[test]
     fn a_follower_reports_where_it_heads_and_how_far_is_left() {
         let world = open_field();
-        let goal = Vec3::new(20.0, 0.0, 0.0);
-        let mut route = Route::new(Vec3::ZERO, goal, 2.0, 6.0);
-        let steps = ticks(&mut route, &world, goal, 2, |_| Vec3::ZERO);
-        assert!(
-            matches!(steps.last(), Some(RouteStep::Toward(_))),
-            "{steps:?}"
-        );
-        assert_eq!(route.waypoints_reached(), 0);
-        assert!((route.distance_left(Vec3::ZERO, goal) - 20.0).abs() < 0.01);
-        let halfway = Vec3::new(10.0, 0.0, 0.0);
-        assert!((route.distance_left(halfway, goal) - 10.0).abs() < 0.01);
+        for planner in planners(&world) {
+            let goal = Vec3::new(20.0, 0.0, 0.0);
+            let mut route = planner.route(Vec3::ZERO, goal, 2.0, 6.0);
+            let steps = ticks(&mut route, &world, goal, 2, |_| Vec3::ZERO);
+            assert!(
+                matches!(steps.last(), Some(RouteStep::Toward(_))),
+                "{steps:?}"
+            );
+            assert_eq!(route.waypoints_reached(), 0);
+            assert!((route.distance_left(Vec3::ZERO, goal) - 20.0).abs() < 0.01);
+            let halfway = Vec3::new(10.0, 0.0, 0.0);
+            assert!((route.distance_left(halfway, goal) - 10.0).abs() < 0.01);
+        }
     }
 
     #[test]
     fn sliding_back_and_forth_is_not_progress_but_slow_steady_walking_is() {
         let world = open_field();
-        let goal = Vec3::new(25.0, 0.0, 0.0);
-        // Across the route and back, without getting any closer.
-        let mut route = Route::new(Vec3::ZERO, goal, 2.0, 6.0);
-        let sliding = ticks(&mut route, &world, goal, 100, |tick| {
-            Vec3::new(0.0, 0.0, if tick % 20 < 10 { 1.5 } else { -1.5 })
-        });
-        assert!(sliding.contains(&RouteStep::Stalled));
-        // Half a unit per second: a whole unit every two seconds.
-        let mut route = Route::new(Vec3::ZERO, goal, 2.0, 6.0);
-        let walking = ticks(&mut route, &world, goal, 150, |tick| {
-            Vec3::new(f32::from(tick) * 0.05, 0.0, 0.0)
-        });
-        assert!(
-            walking[1..]
-                .iter()
-                .all(|step| matches!(step, RouteStep::Toward(_))),
-            "{walking:?}"
-        );
+        for planner in planners(&world) {
+            let goal = Vec3::new(25.0, 0.0, 0.0);
+            // Across the route and back, without getting any closer.
+            let mut route = planner.route(Vec3::ZERO, goal, 2.0, 6.0);
+            let sliding = ticks(&mut route, &world, goal, 100, |tick| {
+                Vec3::new(0.0, 0.0, if tick % 20 < 10 { 1.5 } else { -1.5 })
+            });
+            assert!(sliding.contains(&RouteStep::Stalled));
+            // Half a unit per second: a whole unit every two seconds.
+            let mut route = planner.route(Vec3::ZERO, goal, 2.0, 6.0);
+            let walking = ticks(&mut route, &world, goal, 150, |tick| {
+                Vec3::new(f32::from(tick) * 0.05, 0.0, 0.0)
+            });
+            assert!(
+                walking[1..]
+                    .iter()
+                    .all(|step| matches!(step, RouteStep::Toward(_))),
+                "{walking:?}"
+            );
+        }
     }
 
     #[test]
     fn time_between_calls_is_not_steering_time() {
         let world = open_field();
-        let goal = Vec3::new(20.0, 0.0, 0.0);
-        let mut route = Route::new(Vec3::ZERO, goal, 2.0, 6.0);
-        // Paused for a minute between calls, as when the window loses focus.
-        for minute in 0..5_u64 {
-            let step = loop {
-                let now = Duration::from_secs(minute * 60);
-                match route.next(&world, Vec3::ZERO, goal, 4096, now) {
-                    RouteStep::Searching => (),
-                    step => break step,
-                }
-            };
-            assert!(matches!(step, RouteStep::Toward(_)), "{step:?}");
+        for planner in planners(&world) {
+            let goal = Vec3::new(20.0, 0.0, 0.0);
+            let mut route = planner.route(Vec3::ZERO, goal, 2.0, 6.0);
+            // Paused for a minute between calls, as when the window loses focus.
+            for minute in 0..5_u64 {
+                let step = loop {
+                    let now = Duration::from_secs(minute * 60);
+                    match route.next(&world, Vec3::ZERO, goal, 4096, now) {
+                        RouteStep::Searching => (),
+                        step => break step,
+                    }
+                };
+                assert!(matches!(step, RouteStep::Toward(_)), "{step:?}");
+            }
         }
     }
 
@@ -1694,15 +1816,17 @@ mod tests {
         // A side wall: the stairs can only be climbed from their foot.
         triangles.extend(solid([0.0, 0.0, -0.2], [14.0, 8.0, 0.0]));
         let world = CollisionWorld::new(triangles).unwrap();
-        // Approaching from beside the stairs, where the first step's waypoint is
-        // within flat reach long before the feet are on it.
-        let (start, goal) = (Vec3::new(-1.0, 0.0, -12.0), Vec3::new(12.0, 6.0, 1.5));
-        let mut route = Route::new(start, goal, 2.0, 6.0);
-        let end = follow(&mut route, &world, start, goal);
-        assert!((end.y - 6.0).abs() < 0.01, "{end:?}");
-        assert!(
-            Vec2::new(end.x - goal.x, end.z - goal.z).length() <= 2.0,
-            "{end:?}"
-        );
+        for planner in planners(&world) {
+            // Approaching from beside the stairs, where the first step's waypoint is
+            // within flat reach long before the feet are on it.
+            let (start, goal) = (Vec3::new(-1.0, 0.0, -12.0), Vec3::new(12.0, 6.0, 1.5));
+            let mut route = planner.route(start, goal, 2.0, 6.0);
+            let end = follow(&mut route, &world, start, goal);
+            assert!((end.y - 6.0).abs() < 0.01, "{end:?}");
+            assert!(
+                Vec2::new(end.x - goal.x, end.z - goal.z).length() <= 2.0,
+                "{end:?}"
+            );
+        }
     }
 }

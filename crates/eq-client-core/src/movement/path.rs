@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
 /// Horizontal spacing between searched positions.
-const CELL: f32 = 2.0;
+pub(super) const CELL: f32 = 2.0;
 /// Longest single collision step, keeping slopes within the grounded step limit.
 const SUBSTEP: f32 = 1.0;
 /// Floors closer together than this share a grid level.
@@ -23,7 +23,7 @@ const MAX_EXPANSIONS: usize = 60_000;
 /// How near its target a walk must end to count as reaching it.
 const LANDING: f32 = 0.25;
 /// How near a blocked step a door must come to be the one in its way.
-const DOOR_REACH: f32 = CELL;
+pub(super) const DOOR_REACH: f32 = CELL;
 /// How far across the ground every probe of one expansion reaches from its
 /// feet, which lie within `LANDING` of their cell's centre: a diagonal step
 /// to a neighbour's centre, then the body's own reach, or a door's when a
@@ -42,14 +42,14 @@ const MAX_DROP: f32 = super::HARMLESS_DROP;
 /// Room a straightened leg keeps from walls on either side, so a route runs
 /// down the middle of a room rather than along its walls: the cell's length,
 /// the room the search's wall toll keeps.
-const CLEARANCE: f32 = CELL;
+pub(super) const CLEARANCE: f32 = CELL;
 /// Extra cost of leaving a position beside a wall or ledge: two cells' length,
 /// so a route along a wall prefers a parallel line a cell away, and one through
 /// a doorway its middle rather than a jamb.
 const WALL_TOLL: f32 = 2.0 * CELL;
 /// Extra cost of a step through a closed door the player can open: four
 /// cells' length, so a short way round beats stopping to open a door.
-const DOOR_TOLL: f32 = 4.0 * CELL;
+pub(super) const DOOR_TOLL: f32 = 4.0 * CELL;
 /// Waypoints a straightened leg may skip at most, bounding its cost. The
 /// longest leg, every skipped hop a diagonal, must stay within the 255
 /// substeps [`walk`] counts in a `u8`.
@@ -469,7 +469,7 @@ pub(super) fn straightened(
 
 /// Whether a straight walk from `from` reaches `to` on its floor, and so do the
 /// walks beside it, [`CLEARANCE`] to either side.
-fn clear_leg(world: &CollisionWorld, from: Vec3, to: Vec3, height: f32) -> bool {
+pub(super) fn clear_leg(world: &CollisionWorld, from: Vec3, to: Vec3, height: f32) -> bool {
     let reach = |from: Vec3, to: Vec3| {
         walk(world, from, Vec2::new(to.x, to.z), height)
             .filter(|end| (end.y - to.y).abs() <= MAX_GROUNDED_STEP)

@@ -15,10 +15,10 @@ use glam::Vec3;
 /// longer; every weight from 1.25 to 2 kept both within 5%. A path is never
 /// more than this many times the cost of the shortest. A local search stays
 /// unweighted: it is short already.
-const SEARCH_WEIGHT: f32 = 2.0;
+pub(super) const SEARCH_WEIGHT: f32 = 2.0;
 /// Expansions a local search may take: a few rooms' worth, so it stays local
 /// and never stands the walker still for long.
-const LOCAL_EXPANSIONS: usize = 3000;
+pub(super) const LOCAL_EXPANSIONS: usize = 3000;
 
 /// How far a search looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +63,49 @@ pub trait RouteSearch: Send + Sync {
     /// Work done so far, and whether any remained when it ended, for
     /// diagnostics.
     fn searched(&self) -> (usize, bool);
+    /// What planned the search, for diagnostics.
+    fn planned(&self) -> Planned {
+        Planned::Grid
+    }
+}
+
+/// What planned a search.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Planned {
+    /// The grid search, throughout.
+    #[default]
+    Grid,
+    /// The navigation mesh, its legs checked by the walker's edge tests.
+    Mesh {
+        /// Legs the mesh gave.
+        legs: usize,
+        /// Legs that also kept the clearance from walls to either side.
+        clear: usize,
+        /// The legs a short grid search replaced, each as where it began
+        /// and where the mesh had it end.
+        repaired: Vec<(Vec3, Vec3)>,
+        /// Why the grid took over the whole search, if it did.
+        fallback: Option<Fallback>,
+    },
+}
+
+/// Why a mesh search handed the whole way to the grid.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fallback {
+    /// The start or the goal is off the mesh.
+    OffMesh,
+    /// The start and the goal lie on islands the mesh doesn't join.
+    OtherIsland,
+    /// No polygon path joins them past the doors that can't be opened.
+    NoCorridor,
+    /// A leg failed the walker's edge tests and a short grid search found no
+    /// way between its ends.
+    Leg {
+        /// Where the leg began.
+        from: Vec3,
+        /// Where it ended.
+        to: Vec3,
+    },
 }
 
 /// Plans a route's searches.
