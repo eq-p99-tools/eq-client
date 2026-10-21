@@ -978,25 +978,34 @@ mod routes {
         }
 
         #[test]
-        fn skipping_drops_thinning_would_leave_out_keeps_the_same_links() {
-            // Ledges over one floor, with and without a ramp, and a terrace
-            // of two ledges over two floors.
-            let mut terrace = floor(0.0, -40.0, 40.0);
-            terrace.extend(block([-30.0, 0.0, -30.0], [20.0, 5.0, -5.0]));
-            terrace.extend(block([-30.0, 5.0, -30.0], [20.0, 12.0, -18.0]));
-            for triangles in [platform(8.0, false), platform(8.0, true), terrace] {
-                let (_, navigator) = zone(&triangles);
-                let mesh = mesh_of(&navigator);
-                let world = CollisionWorld::new(triangles.iter().copied()).unwrap();
-                let pass = |stretch_links: &super::super::super::drops::StretchLinks<'_>| {
-                    links_with(mesh, &world, 6.0, 2, &|| false, stretch_links)
-                        .unwrap()
-                        .0
-                };
-                let every = pass(&super::super::super::drops::every_stretch_link);
-                assert_ne!(every.len(), 0);
-                assert_eq!(pass(&super::super::super::drops::stretch_links), every);
-            }
+        fn a_drop_into_deep_water_is_no_way_down_in_a_world_with_water() {
+            // Water over the floor below the ledge, deep enough to close over
+            // the walker's head: its own drop never falls into it.
+            let triangles = platform(8.0, false);
+            let (_, navigator) = zone(&triangles);
+            // The floor in front of the platform, where the water is.
+            let into_water =
+                |links: &[DropLink]| links.iter().filter(|l| l.landing.z > -5.0).count();
+            assert_ne!(into_water(links(mesh_of(&navigator))), 0);
+            let water = crate::movement::liquids::Boxes(vec![(
+                Vec3::new(-40.0, -1.0, -5.0),
+                Vec3::new(40.0, 7.0, 40.0),
+                crate::movement::Liquid::Water,
+            )]);
+            let world = CollisionWorld::new(triangles.iter().copied())
+                .unwrap()
+                .with_liquids(water);
+            let (mesh, report) = NavMesh::build_in(
+                &triangles,
+                Some(&world),
+                &settings(),
+                2,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert_eq!(into_water(links(&mesh)), 0);
+            // The drops off its other sides, onto dry floor, stay.
+            assert_ne!(report.drop_links, 0);
         }
 
         #[test]

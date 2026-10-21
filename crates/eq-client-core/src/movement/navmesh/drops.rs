@@ -109,28 +109,6 @@ pub(super) fn stretch_links(
     stretch: &Outline,
     height: f32,
 ) -> Vec<DropLink> {
-    stretch_links_skipping(mesh, world, stretch, height, true)
-}
-
-/// [`stretch_links`] running the walker's drop at every sample, even where
-/// thinning would leave its link out.
-#[cfg(test)]
-pub(super) fn every_stretch_link(
-    mesh: &NavMesh,
-    world: &CollisionWorld,
-    stretch: &Outline,
-    height: f32,
-) -> Vec<DropLink> {
-    stretch_links_skipping(mesh, world, stretch, height, false)
-}
-
-fn stretch_links_skipping(
-    mesh: &NavMesh,
-    world: &CollisionWorld,
-    stretch: &Outline,
-    height: f32,
-    skip: bool,
-) -> Vec<DropLink> {
     let flat = |v: Vec3| Vec2::new(v.x, v.z);
     let polygon = &mesh.polygons[stretch.polygon as usize];
     #[allow(clippy::cast_precision_loss)] // A polygon has a few corners.
@@ -147,35 +125,20 @@ fn stretch_links_skipping(
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A stretch's samples.
     let samples = (span / DROP_SPACING).floor().max(1.0) as usize;
-    let mut found: Vec<DropLink> = Vec::new();
-    for k in 0..samples {
-        #[allow(clippy::cast_precision_loss)] // A stretch's samples.
-        let at = stretch.a.lerp(stretch.b, (k as f32 + 0.5) / samples as f32);
-        let Some(ledge) = ledge_at(world, at - Vec3::new(out.x, 0.0, out.y) * INSIDE, out) else {
-            continue;
-        };
-        // A drop onto the polygon straight below that a drop found along
-        // this stretch already reaches from near here would be thinned out,
-        // so the walker's drop isn't run for it.
-        let below = mesh.locate(ledge.below).map(|(to, _)| to);
-        let near =
-            |link: &DropLink| Some(link.to) == below && link.top.distance(ledge.top) < THINNING;
-        if skip && found.iter().any(near) {
-            continue;
-        }
-        if let Some(link) = drop_from(mesh, world, stretch.polygon, &ledge, height) {
-            found.push(link);
-        }
-    }
-    found
+    (0..samples)
+        .filter_map(|k| {
+            #[allow(clippy::cast_precision_loss)] // A stretch's samples.
+            let at = stretch.a.lerp(stretch.b, (k as f32 + 0.5) / samples as f32);
+            let ledge = ledge_at(world, at - Vec3::new(out.x, 0.0, out.y) * INSIDE, out)?;
+            drop_from(mesh, world, stretch.polygon, &ledge, height)
+        })
+        .collect()
 }
 
-/// A point at a ledge: its floor, where a grid cell out from it lies, and
-/// the floor straight below that.
+/// A point at a ledge: its floor, and where a grid cell out from it lies.
 struct Ledge {
     top: Vec3,
     target: Vec2,
-    below: Vec3,
 }
 
 /// The ledge at the mesh's point `at`, a grid cell out along `out`; None
@@ -189,11 +152,7 @@ fn ledge_at(world: &CollisionWorld, at: Vec3, out: Vec2) -> Option<Ledge> {
     let target = Vec2::new(top.x, top.z) + out * CELL;
     let probe = Vec3::new(target.x, top.y + MAX_GROUNDED_STEP, target.y);
     let below = world.ray_distance(probe, -Vec3::Y, 2.0 * MAX_GROUNDED_STEP + MAX_DROP)?;
-    (below > 2.0 * MAX_GROUNDED_STEP).then(|| Ledge {
-        top,
-        target,
-        below: probe - Vec3::Y * below,
-    })
+    (below > 2.0 * MAX_GROUNDED_STEP).then_some(Ledge { top, target })
 }
 
 /// The walker's own drop off `ledge` from polygon `from`, where it lands

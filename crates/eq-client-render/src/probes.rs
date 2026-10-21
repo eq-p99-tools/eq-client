@@ -1600,9 +1600,13 @@ fn inspect_mesh_routes() {
     });
     let drops = std::env::var("EQ_PROBE_DROPS").is_ok_and(|drops| drops == "1");
     let building = Instant::now();
+    // EQ_PROBE_DROP_WORLD=triangles finds the drops in a world built from
+    // the triangles alone, with no water, as before the zone's own world
+    // was handed in.
+    let triangles_world = std::env::var("EQ_PROBE_DROP_WORLD").is_ok_and(|w| w == "triangles");
     let (mesh, report) = NavMesh::build_in(
         &triangles,
-        Some(&world),
+        (!triangles_world).then_some(&world),
         &Settings::walker(height),
         navmesh::build_threads(),
         &AtomicBool::new(false),
@@ -1610,7 +1614,8 @@ fn inspect_mesh_routes() {
     .unwrap();
     println!(
         "zone={zone_name} triangles={} height={height} release={} build_seconds={:.2} polygons={} \
-         islands={} refused_tiles={} drop_links={} drop_seconds={:.2} refused_stretches={} drops={drops}",
+         islands={} refused_tiles={} drop_links={} drop_seconds={:.2} refused_stretches={} drops={drops} \
+         drop_world={}",
         triangles.len(),
         !cfg!(debug_assertions),
         building.elapsed().as_secs_f32(),
@@ -1620,6 +1625,7 @@ fn inspect_mesh_routes() {
         report.drop_links,
         report.drop_elapsed.as_secs_f32(),
         report.refused_stretches,
+        if triangles_world { "triangles" } else { "zone" },
     );
     let liquids = ZoneLiquids(zone.regions.clone());
     // The cache file's size, written to a folder of the probe's own and
