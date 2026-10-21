@@ -1509,8 +1509,8 @@ fn inspect_clip_soles() {
 /// short races and the classic models the table names), the model's lowest
 /// and highest points, its height, the table's factor, and the factor its
 /// geometry predicts if the origin hangs 0.625 x size under z, with the
-/// height the global archives alone give (what the navmesh's walker sizes
-/// measure) and the race's default drawn size. Models load from the first
+/// height the global archives alone give and the race's default drawn size,
+/// which the navmesh's walker sizes come from. Models load from the first
 /// zone in `EQ_PROBE_ZONES` whose archives hold them.
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL"]
@@ -1545,14 +1545,14 @@ fn inspect_model_heights() {
         let height = asset.height();
         let table = eq_client_core::z_offset(race, 5.0) / (0.2 * 5.0);
         let origin_factor = 3.125 - bottom / (0.2 * height);
-        // The height the navmesh's walker sizes measure, from the global
-        // archives alone, and the size a spawn of the race is drawn at.
+        // The model's height from the global archives alone, and the size a
+        // spawn of the race is drawn at.
         let global = eq_client_assets::characters::load_global_character(&install, code, &donors)
             .map_or_else(
                 |_| "none".to_owned(),
                 |asset| format!("{:.3}", asset.height()),
             );
-        let drawn_size = eq_client_core::drawn_feet_offset(race, 0.0) / 0.625;
+        let drawn_size = eq_client_core::size_or_default(race, 0.0);
         println!(
             "race={race} gender={gender} model={code} zone={zone} bottom={bottom:.3} \
              top={top:.3} height={height:.3} global_height={global} \
@@ -1794,7 +1794,7 @@ fn inspect_mesh_routes() {
 /// It first reads the zone whole and as its solids alone, and prints both
 /// reads' seconds and their triangles' count and hash, which must match;
 /// `EQ_PROBE_LOAD_ONLY=1` stops there. The
-/// sizes are measured from the installation's models. Then, for the tagged
+/// sizes are the races' drawn sizes. Then, for the tagged
 /// build and each plain one: build seconds, polygons, islands, drop links,
 /// refused tiles and the cache file's bytes. Per size, it gives the floor's
 /// area on the tagged build's mesh for that size against the plain build's,
@@ -1842,12 +1842,8 @@ fn inspect_mesh_sizes() {
     if std::env::var("EQ_PROBE_LOAD_ONLY").is_ok_and(|only| only == "1") {
         return;
     }
-    let measuring = Instant::now();
-    let sizes = super::zone_navmesh::sizes(&install);
-    println!(
-        "sizes={sizes:?} measure_seconds={:.2}",
-        measuring.elapsed().as_secs_f32()
-    );
+    let sizes = super::zone_navmesh::walker_sizes();
+    println!("sizes={sizes:?}");
     let world = build_collision(&zone).unwrap();
     let cache_bytes = |mesh: &NavMesh, settings: &Settings| {
         let folder =

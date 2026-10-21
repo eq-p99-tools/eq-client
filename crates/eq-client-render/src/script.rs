@@ -1300,11 +1300,12 @@ pub(super) fn drive(
                     .with_doors(openable_doors(&online))
                     .with_background(std::sync::Arc::new(super::background::ComputePool));
                 // With the navmesh switch on and the zone's mesh ready for
-                // this body, the mesh plans; else the grid, as before.
+                // this body's drawn size, the mesh plans; else the grid, as
+                // before.
                 let mesh = observed
                     .7
                     .as_ref()
-                    .and_then(|meshes| meshes.mesh_for(body.height));
+                    .and_then(|meshes| meshes.mesh_for(body.size));
                 Some(match mesh {
                     Some(mesh) => route.with_navigator(Box::new(
                         eq_client_core::movement::navmesh::MeshNavigator::new(mesh),

@@ -5,10 +5,9 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool, block_on, poll_once};
 use eq_client_core::movement::CollisionWorld;
 use eq_client_core::movement::navmesh::{self, Settings, SizedMeshes, cache};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
 /// More refused tiles than this are summed up by reason, not listed.
@@ -40,14 +39,12 @@ impl ZoneNavMesh {
     /// Reads or builds `zone`'s mesh over `triangles`, its drops tried in
     /// the zone's `world` when there is one, keeping it under
     /// `settings_directory` when there is one. It is tagged for the three
-    /// walker sizes measured from the models in `installation`, or without
-    /// one built for a walker `height` tall alone.
+    /// walker sizes.
     pub(super) fn start(
         &mut self,
         zone: &str,
         triangles: Vec<[[f32; 3]; 3]>,
         world: Option<CollisionWorld>,
-        (height, installation): (f32, Option<PathBuf>),
         settings_directory: Option<PathBuf>,
     ) {
         self.leave();
@@ -58,7 +55,7 @@ impl ZoneNavMesh {
             // One task that runs its own threads, so the tiles don't crowd
             // out the pool's other work.
             AsyncComputeTaskPool::get_or_init(TaskPool::new).spawn(async move {
-                let sizes = installation.as_deref().map_or([height; 3], sizes);
+                let sizes = walker_sizes();
                 cache::load_or_build(
                     settings_directory.as_deref(),
                     &zone,
@@ -88,66 +85,22 @@ impl ZoneNavMesh {
         self.mesh = None;
     }
 
-    /// The shown zone's mesh for a walker `height` tall, once it is ready:
-    /// the smallest of its sizes that fits the walker. None for a walker
-    /// taller than its tallest size, which stays on the grid.
-    pub(super) fn mesh_for(&self, height: f32) -> Option<Arc<navmesh::NavMesh>> {
-        self.mesh.as_ref()?.for_height(height)
+    /// The shown zone's mesh for a walker drawn `size` tall, once it is
+    /// ready: the smallest of its sizes that fits the walker. None for a
+    /// walker taller than its tallest size, which stays on the grid.
+    pub(super) fn mesh_for(&self, size: f32) -> Option<Arc<navmesh::NavMesh>> {
+        self.mesh.as_ref()?.for_height(size)
     }
 }
 
-/// The heights of the three walker sizes in `installation`: in each of
-/// [`races::SIZE_GROUPS`], the tallest model its global archives draw the
-/// group's races with. A group with no model there takes the next shorter
-/// group's height, or 6. Measured once per installation.
+/// The heights of the three walker sizes: in each of
+/// [`races::SIZE_GROUPS`], the tallest size its races are drawn at, by
+/// `EQEmu`'s default sizes (dwarf 4, human 6, ogre 9). A walker's own drawn
+/// size picks its mesh.
 ///
 /// [`races::SIZE_GROUPS`]: eq_client_core::races::SIZE_GROUPS
-pub(super) fn sizes(installation: &Path) -> [f32; 3] {
-    static MEASURED: OnceLock<Mutex<HashMap<PathBuf, [f32; 3]>>> = OnceLock::new();
-    let measured = MEASURED.get_or_init(Mutex::default);
-    if let Some(sizes) = measured
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(installation)
-    {
-        return *sizes;
-    }
-    let donors = eq_client_assets::characters::DonorArchives::default();
-    let tallest = |races: &[u32]| {
-        races
-            .iter()
-            .flat_map(|&race| [0, 1].map(|gender| eq_client_core::races::model(race, gender)))
-            .flatten()
-            .filter_map(|model| {
-                eq_client_assets::characters::load_global_character(installation, model, &donors)
-                    .ok()
-            })
-            .map(|character| character.height())
-            .reduce(f32::max)
-    };
-    let sizes = sizes_from(eq_client_core::races::SIZE_GROUPS.map(tallest));
-    measured
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(installation.to_owned(), sizes);
-    sizes
-}
-
-/// The three sizes from each group's tallest model, where it has one: a
-/// group with none takes the size below it, or 6, and no size is shorter
-/// than the one below it.
-fn sizes_from(tallest: [Option<f32>; 3]) -> [f32; 3] {
-    let mut sizes = [6.0_f32; 3];
-    let mut shorter = None;
-    for (size, tallest) in tallest.into_iter().enumerate() {
-        let height = tallest
-            .or(shorter)
-            .unwrap_or(6.0)
-            .max(shorter.unwrap_or(0.0));
-        sizes[size] = height;
-        shorter = Some(height);
-    }
-    sizes
+pub(super) fn walker_sizes() -> [f32; 3] {
+    eq_client_core::races::walker_sizes(|race| eq_client_core::size_or_default(race, 0.0))
 }
 
 /// Takes the mesh once it is ready, and says so in the log.
@@ -248,13 +201,9 @@ mod tests {
     #[test]
     fn the_mesh_is_taken_once_ready_and_dropped_on_leaving() {
         let mut app = app();
-        app.world_mut().resource_mut::<ZoneNavMesh>().start(
-            "zone",
-            floor(),
-            None,
-            (6.0, None),
-            None,
-        );
+        app.world_mut()
+            .resource_mut::<ZoneNavMesh>()
+            .start("zone", floor(), None, None);
         let started = Instant::now();
         while app
             .world()
@@ -268,9 +217,10 @@ mod tests {
         let navmesh = app.world().resource::<ZoneNavMesh>();
         assert!(navmesh.making.is_none());
         assert_eq!(navmesh.mesh_for(6.0).unwrap().island_count(), 1);
-        // Built for one height, it plans for no taller walker.
-        assert!(navmesh.mesh_for(5.0).is_some());
-        assert!(navmesh.mesh_for(7.0).is_none());
+        // It plans for walkers up to the tallest size, an ogre's 9, and no
+        // taller.
+        assert!(navmesh.mesh_for(3.0).is_some() && navmesh.mesh_for(9.0).is_some());
+        assert!(navmesh.mesh_for(9.5).is_none());
         app.world_mut().resource_mut::<ZoneNavMesh>().leave();
         assert!(
             app.world()
@@ -281,26 +231,10 @@ mod tests {
     }
 
     #[test]
-    fn sizes_come_from_each_groups_tallest_model_and_never_shrink() {
-        assert_eq!(
-            sizes_from([Some(3.5), Some(5.8), Some(8.9)]),
-            [3.5, 5.8, 8.9]
-        );
-        // A group with no model takes the size below it, or 6.
-        assert_eq!(sizes_from([None, Some(5.8), None]), [6.0, 6.0, 6.0]);
-        assert_eq!(sizes_from([Some(3.5), None, Some(8.9)]), [3.5, 3.5, 8.9]);
-        // No size is shorter than the one below it.
-        assert_eq!(
-            sizes_from([Some(4.0), Some(3.0), Some(9.0)]),
-            [4.0, 4.0, 9.0]
-        );
-    }
-
-    #[test]
     fn leaving_stops_the_build() {
         let mut app = app();
         let mut navmesh = app.world_mut().resource_mut::<ZoneNavMesh>();
-        navmesh.start("zone", floor(), None, (6.0, None), None);
+        navmesh.start("zone", floor(), None, None);
         let cancel = Arc::clone(&navmesh.making.as_ref().unwrap().cancel);
         navmesh.leave();
         assert!(cancel.load(Ordering::Relaxed));

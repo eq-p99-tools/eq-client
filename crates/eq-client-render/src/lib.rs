@@ -229,6 +229,9 @@ struct Player;
 struct PlayerBody {
     feet_offset: f32,
     height: f32,
+    /// The size the player is drawn at, which picks its walker size on the
+    /// navigation mesh. Its collision height is still the model's own.
+    size: f32,
 }
 
 #[derive(Component)]
@@ -853,6 +856,7 @@ fn setup_scene(
     let body = PlayerBody {
         feet_offset: height * 0.5,
         height,
+        size: 6.0,
     };
     let player_position = Vec3::new(start_x, start_y + body.feet_offset, start_z);
     let default_radius = 120.0;
@@ -2122,6 +2126,7 @@ mod tests {
                         body: PlayerBody {
                             feet_offset: 3.0,
                             height: 6.0,
+                            size: 6.0,
                         },
                     }
                     .prepare(false),
@@ -2337,6 +2342,7 @@ mod tests {
                 PlayerBody {
                     feet_offset: 0.0,
                     height: 6.0,
+                    size: 6.0,
                 },
                 Transform::from_xyz(0.0, 10.0, 0.0),
             ))

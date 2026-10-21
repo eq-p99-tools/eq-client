@@ -227,6 +227,23 @@ pub const fn drawn(race: u32) -> bool {
 /// erudite, the elves, half elf and iksar; barbarian, troll and ogre.
 pub const SIZE_GROUPS: [&[u32]; 3] = [&[8, 11, 12], &[1, 3, 4, 5, 6, 7, 128], &[2, 9, 10]];
 
+/// The heights of the three walker sizes, from each group of
+/// [`SIZE_GROUPS`]: the tallest drawn size `size_of` gives its races, and no
+/// size shorter than the one below it. A server's own size rule passes its
+/// sizes in.
+#[must_use]
+pub fn walker_sizes(size_of: impl Fn(u32) -> f32) -> [f32; 3] {
+    let mut shorter = 0.0_f32;
+    SIZE_GROUPS.map(|races| {
+        let tallest = races
+            .iter()
+            .map(|&race| size_of(race))
+            .fold(shorter, f32::max);
+        shorter = tallest;
+        tallest
+    })
+}
+
 /// The model a spawn of this race and gender (0 male, 1 female, 2 neuter)
 /// draws with. A gender the race has no model for takes its neuter model,
 /// then its male one, then its female one; None for a race without a model.
@@ -264,6 +281,20 @@ mod tests {
         assert_eq!(race_name(6), Some("Dark Elf"));
         assert_eq!(race_name(130), Some("Vah Shir"));
         assert_eq!(race_name(71), None);
+    }
+
+    #[test]
+    fn the_walker_sizes_are_each_groups_tallest_drawn_size() {
+        // EQEmu's default sizes: dwarf 4, human 6, ogre 9.
+        assert_eq!(
+            walker_sizes(|race| crate::size_or_default(race, 0.0)),
+            [4.0, 6.0, 9.0]
+        );
+        // No size is shorter than the one below it.
+        assert_eq!(
+            walker_sizes(|race| if race == 8 { 7.0 } else { 5.0 }),
+            [7.0, 7.0, 7.0]
+        );
     }
 
     #[test]

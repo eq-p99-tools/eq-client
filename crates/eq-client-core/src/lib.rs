@@ -371,8 +371,10 @@ pub fn corpse_tilt(
     Tilt { pitch, roll }
 }
 
-/// The size sent, or the race's default when it is missing or not positive.
-fn size_or_default(race: u32, size: f32) -> f32 {
+/// The size sent, or the race's default when it is missing or not positive:
+/// the height a spawn of the race is drawn at, as `EQEmu` sizes players.
+#[must_use]
+pub fn size_or_default(race: u32, size: f32) -> f32 {
     if size.is_finite() && size > 0.0 {
         size
     } else {
