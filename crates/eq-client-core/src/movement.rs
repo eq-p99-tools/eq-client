@@ -12,7 +12,7 @@ pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS,
 pub use falls::{HARMLESS_DROP, fall_damage};
 pub use liquids::{GuardView, Liquid, Liquids};
 pub use navigator::{
-    Fallback, GridNavigator, Navigator, Planned, RouteSearch, Scope, SearchRequest,
+    Fallback, GridNavigator, Navigator, Planned, Refusals, RouteSearch, Scope, SearchRequest,
 };
 pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};

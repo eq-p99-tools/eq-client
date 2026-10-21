@@ -328,6 +328,17 @@ impl NavMesh {
             .min_by(|a, b| (a.1 - at.y).abs().total_cmp(&(b.1 - at.y).abs()))
     }
 
+    /// The floor nearest `at`'s height among the polygons under it that
+    /// `keep` takes, however far from that height.
+    pub(super) fn floor_among(&self, at: Vec3, keep: impl Fn(u32) -> bool) -> Option<f32> {
+        self.index
+            .get(&cell_of(Vec2::new(at.x, at.z)))?
+            .iter()
+            .filter(|&&i| keep(i))
+            .filter_map(|&i| height_in(&self.polygons[i as usize].vertices, at))
+            .min_by(|a, b| (a - at.y).abs().total_cmp(&(b - at.y).abs()))
+    }
+
     /// Whether `at` lies on the mesh's outline, where the walkable floor
     /// ends, rather than only where polygons meet.
     fn on_outline(&self, at: Vec3) -> bool {

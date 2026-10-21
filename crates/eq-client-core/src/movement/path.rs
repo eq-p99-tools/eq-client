@@ -50,15 +50,8 @@ const WALL_TOLL: f32 = 2.0 * CELL;
 /// Extra cost of a step through a closed door the player can open: four
 /// cells' length, so a short way round beats stopping to open a door.
 pub(super) const DOOR_TOLL: f32 = 4.0 * CELL;
-/// Waypoints a straightened leg may skip at most, bounding its cost. The
-/// longest leg, every skipped hop a diagonal, must stay within the 255
-/// substeps [`walk`] counts in a `u8`.
+/// Waypoints a straightened leg may skip at most, bounding its cost.
 const LOOKAHEAD: usize = 32;
-#[allow(clippy::cast_precision_loss)] // A small count.
-const _: () = assert!(
-    (LOOKAHEAD + 1) as f32 * CELL * std::f32::consts::SQRT_2 / SUBSTEP <= 255.0,
-    "a straightened leg would overflow walk's substep count"
-);
 /// Airborne slice length, matching the controller's integration limit.
 const SLICE: f32 = 0.05;
 const NEIGHBORS: [(i16, i16); 8] = [
@@ -412,9 +405,12 @@ fn level(y: f32) -> i16 {
 /// ledge or steep slope stops the character short of it.
 pub(super) fn walk(world: &CollisionWorld, from: Vec3, to: Vec2, height: f32) -> Option<Vec3> {
     let delta = Vec3::new(to.x - from.x, 0.0, to.y - from.z);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A few grid steps.
-    let steps = (delta.length() / SUBSTEP).ceil().max(1.0) as u8;
-    let part = delta / f32::from(steps);
+    // Counted wide enough for a mesh leg across a zone, so no step is ever
+    // longer than SUBSTEP.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A zone's width.
+    let steps = (delta.length() / SUBSTEP).ceil().max(1.0) as u32;
+    #[allow(clippy::cast_precision_loss)] // Far inside f32's whole numbers.
+    let part = delta / steps as f32;
     let mut feet = from;
     for _ in 0..steps {
         feet = world.step(feet, part, height);
@@ -581,6 +577,38 @@ mod tests {
             [-30.0, 0.0, 30.0],
         )
         .to_vec()
+    }
+
+    /// Ground along x from 0 to 1,000, with a hill at x = 500: up 6 over 10,
+    /// then down 6 over 10, about 31 degrees, within the slope limit.
+    fn hill() -> CollisionWorld {
+        let ground = [
+            (0.0, 0.0),
+            (500.0, 0.0),
+            (510.0, 6.0),
+            (520.0, 0.0),
+            (1000.0, 0.0),
+        ];
+        let triangles: Vec<_> = ground
+            .windows(2)
+            .flat_map(|pair| {
+                let ((x0, y0), (x1, y1)) = (pair[0], pair[1]);
+                quad([x0, y0, -5.0], [x1, y1, -5.0], [x1, y1, 5.0], [x0, y0, 5.0])
+            })
+            .collect();
+        CollisionWorld::new(triangles).unwrap()
+    }
+
+    #[test]
+    fn a_walk_of_any_length_follows_the_ground_a_unit_at_a_time() {
+        let world = hill();
+        for (from, to) in [(480.0, 540.0), (100.0, 900.0), (0.5, 999.5)] {
+            let end = walk(&world, Vec3::new(from, 0.0, 0.0), Vec2::new(to, 0.0), 6.0);
+            assert!(
+                end.is_some_and(|end| (end.x - to).abs() < LANDING && end.y.abs() < 0.01),
+                "{from} to {to}: {end:?}"
+            );
+        }
     }
 
     #[test]

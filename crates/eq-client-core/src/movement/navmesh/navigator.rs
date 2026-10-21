@@ -10,10 +10,12 @@ use crate::movement::navigator::LOCAL_EXPANSIONS;
 use crate::movement::path::{CELL, CLEARANCE, DOOR_REACH, DOOR_TOLL, clear_leg, drop, walk};
 use crate::movement::{
     CollisionWorld, Fallback, GridNavigator, MAX_GROUNDED_STEP, Navigator, PathProgress,
-    PathSearch, Planned, RouteSearch, Scope, SearchRequest,
+    PathSearch, Planned, Refusals, RouteSearch, Scope, SearchRequest,
 };
 use glam::{Vec2, Vec3};
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// How the polygon search weighs the distance still to go: not at all beyond
 /// it, so the search finds the cheapest corridor. The grid weighs it twice
@@ -26,6 +28,16 @@ const MESH_WEIGHT: f32 = 1.0;
 /// How near a repaired leg's end its grid search must come: within a grid
 /// cell's half-diagonal, so it ends on the cell nearest the leg's end.
 const REPAIR_REACH: f32 = CELL * std::f32::consts::FRAC_1_SQRT_2 + 0.1;
+
+/// How far above or below a mesh point a leg's end looks for the floor the
+/// walker stands on: a step, and the most the mesh's surface sinks under a
+/// sloped floor (about 2.5 in the stress zones), with room to spare.
+const LIFT: f32 = MAX_GROUNDED_STEP + 3.0;
+
+/// The longest piece a leg is cut into before its check: one whose check
+/// stays short wherever the search runs, and that a short grid search can
+/// stand for within its expansions.
+const PIECE: f32 = 64.0;
 
 /// Plans searches of the whole way over a zone's mesh; a short way round
 /// stays with the grid, whose expansion cap keeps it short.
@@ -56,11 +68,16 @@ impl Navigator for MeshNavigator {
                 request,
                 stage: Stage::Start,
                 walked: Walked::default(),
+                corridor: HashSet::new(),
                 legs: 0,
+                pieces: 0,
+                cut: 0,
                 clear: 0,
                 drops: 0,
                 repaired: Vec::new(),
                 fallback: None,
+                refused: Refusals::default(),
+                longest_check: Duration::ZERO,
                 expanded: 0,
             }),
         }
@@ -74,13 +91,19 @@ struct MeshSearch {
     stage: Stage,
     /// The legs that stood so far.
     walked: Walked,
+    /// The polygons the corridor passes through.
+    corridor: HashSet<u32>,
     legs: usize,
+    pieces: usize,
+    cut: usize,
     clear: usize,
     /// Drops off ledges taken.
     drops: usize,
     /// Each repaired leg's ends, as the mesh gave them.
     repaired: Vec<(Vec3, Vec3)>,
     fallback: Option<Fallback>,
+    refused: Refusals,
+    longest_check: Duration,
     /// Polygons, leg checks and repairs, in grid expansions' worth.
     expanded: usize,
 }
@@ -98,11 +121,22 @@ enum Stage {
 }
 
 /// A leg the mesh gives: a straight walk to `to`, or with `drop`, a step off
-/// a ledge that lands at `to`.
+/// a ledge that lands at `to`. A `piece` is part of a cut leg, never cut
+/// again.
 #[derive(Clone, Copy, Debug)]
 struct Leg {
     to: Vec3,
     drop: bool,
+    piece: bool,
+}
+
+/// How a leg's check ended.
+enum Checked {
+    Stood,
+    /// Cut into these pieces, to check in its place.
+    Cut(Vec<Leg>),
+    /// Refused, and this search stands for it.
+    Repair(Box<PathSearch>),
 }
 
 /// The legs through `corridor` from `start` to `goal`: each stretch between
@@ -112,7 +146,11 @@ fn legs(start: Vec3, goal: Vec3, corridor: &[Crossing]) -> Vec<Leg> {
     let stretch = |from: Vec3, to: Vec3, portals: &[_]| {
         funnel(from, to, portals, CLEARANCE)
             .into_iter()
-            .map(|to| Leg { to, drop: false })
+            .map(|to| Leg {
+                to,
+                drop: false,
+                piece: false,
+            })
     };
     let mut legs = Vec::new();
     let mut from = start;
@@ -125,6 +163,7 @@ fn legs(start: Vec3, goal: Vec3, corridor: &[Crossing]) -> Vec<Leg> {
                 legs.push(Leg {
                     to: landing,
                     drop: true,
+                    piece: false,
                 });
                 portals.clear();
                 from = landing;
@@ -198,11 +237,24 @@ impl MeshSearch {
         ))
     }
 
-    /// Checks the next leg, from where the last one ended; a leg the edge
-    /// tests refuse starts a repair.
-    fn check(&mut self, world: &CollisionWorld, leg: Leg) -> Result<(), Box<PathSearch>> {
-        let (height, to) = (self.request.height, leg.to);
+    /// Checks the next leg, from where the last one ended: a long leg is
+    /// first cut into pieces, and a leg or piece the edge tests refuse
+    /// starts a repair.
+    fn check(&mut self, world: &CollisionWorld, leg: Leg) -> Checked {
+        let height = self.request.height;
         let from = self.walked.feet(self.request.start);
+        if !leg.drop && !leg.piece && flat(leg.to - from) > PIECE {
+            self.cut += 1;
+            return Checked::Cut(self.pieces(from, leg.to));
+        }
+        self.pieces += 1;
+        // The route's own goal is where the walker was sent; a mesh point is
+        // where the mesh's surface lies, which can sit under the floor.
+        let to = if leg.drop || leg.to == self.request.goal {
+            leg.to
+        } else {
+            on_floor(world, leg.to)
+        };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A leg's length.
         let cost = (flat(to - from) / CELL).ceil() as usize + 1;
         self.expanded += cost;
@@ -215,29 +267,59 @@ impl MeshSearch {
             {
                 self.drops += 1;
                 self.walked.push(landing, None);
-                return Ok(());
+                return Checked::Stood;
             }
-            return Err(self.repair(from, to));
+            return Checked::Repair(self.repair(from, to));
         }
-        let reach = |world: &CollisionWorld| {
-            walk(world, from, Vec2::new(to.x, to.z), height)
-                .filter(|end| (end.y - to.y).abs() <= MAX_GROUNDED_STEP)
-        };
-        if let Some(end) = reach(world) {
+        let walked = walk(world, from, Vec2::new(to.x, to.z), height);
+        if let Some(end) = walked.filter(|end| (end.y - to.y).abs() <= MAX_GROUNDED_STEP) {
             // The plain walk is the bar, as for the grid's own hops; legs
             // that also keep the clearance are counted, for the looks.
             if clear_leg(world, from, to, height) {
                 self.clear += 1;
             }
             self.walked.push(end, None);
-            return Ok(());
+            return Checked::Stood;
         }
-        if let Some(door) = world.door_between(&self.request.doors, from, to, DOOR_REACH)
-            && self.through_door(world, door, to)
-        {
-            return Ok(());
+        if let Some(door) = world.door_between(&self.request.doors, from, to, DOOR_REACH) {
+            if self.through_door(world, door, to) {
+                return Checked::Stood;
+            }
+            self.refused.door += 1;
+        } else if walked.is_none() {
+            self.refused.walk += 1;
+        } else {
+            self.refused.height += 1;
         }
-        Err(self.repair(from, to))
+        Checked::Repair(self.repair(from, to))
+    }
+
+    /// The leg from `from` to `to` cut into pieces of at most [`PIECE`]
+    /// across, each ending on the corridor's floor at its place, the last
+    /// at `to`.
+    fn pieces(&self, from: Vec3, to: Vec3) -> Vec<Leg> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A leg's length.
+        let count = (flat(to - from) / PIECE).ceil() as u32;
+        (1..=count)
+            .map(|k| {
+                #[allow(clippy::cast_precision_loss)] // A few hundred pieces at most.
+                let along = from.lerp(to, k as f32 / count as f32);
+                // The straight line's height drifts far from a hilly floor;
+                // the corridor's own floor at that place is the reference.
+                let floor = self
+                    .mesh
+                    .floor_among(along, |polygon| self.corridor.contains(&polygon));
+                Leg {
+                    to: if k == count {
+                        to
+                    } else {
+                        Vec3::new(along.x, floor.unwrap_or(along.y), along.z)
+                    },
+                    drop: false,
+                    piece: true,
+                }
+            })
+            .collect()
     }
 
     /// A short grid search from `from` to `to`, with the route's doors and
@@ -320,7 +402,7 @@ impl MeshSearch {
         &mut self,
         world: &CollisionWorld,
         budget: usize,
-        (legs, mut next, mut repair): (Vec<Leg>, usize, Option<Box<PathSearch>>),
+        (mut legs, mut next, mut repair): (Vec<Leg>, usize, Option<Box<PathSearch>>),
     ) -> Stage {
         let spent = self.expanded + budget;
         while self.expanded < spent {
@@ -350,13 +432,27 @@ impl MeshSearch {
             let Some(&leg) = legs.get(next) else {
                 return Stage::Done(true);
             };
-            match self.check(world, leg) {
-                Ok(()) => next += 1,
-                Err(search) => repair = Some(search),
+            let began = Instant::now();
+            let checked = self.check(world, leg);
+            self.longest_check = self.longest_check.max(began.elapsed());
+            match checked {
+                Checked::Stood => next += 1,
+                Checked::Cut(pieces) => {
+                    legs.splice(next..=next, pieces);
+                }
+                Checked::Repair(search) => repair = Some(search),
             }
         }
         Stage::Legs { legs, next, repair }
     }
+}
+
+/// `at` moved onto the collision floor nearest it within [`LIFT`], where the
+/// walker stands; as it is where there's none.
+fn on_floor(world: &CollisionWorld, at: Vec3) -> Vec3 {
+    world
+        .nearest_ground(at, LIFT, LIFT)
+        .map_or(at, |y| Vec3::new(at.x, y, at.z))
 }
 
 fn flat(v: Vec3) -> f32 {
@@ -389,6 +485,7 @@ impl RouteSearch for MeshSearch {
                         }
                         Corridor::Failed => self.fall_back(Fallback::NoCorridor),
                         Corridor::Found(corridor) => {
+                            self.corridor = search.polygons().into_iter().collect();
                             let legs = legs(self.request.start, self.request.goal, &corridor);
                             self.legs = legs.len();
                             Stage::Legs {
@@ -452,10 +549,14 @@ impl RouteSearch for MeshSearch {
     fn planned(&self) -> Planned {
         Planned::Mesh {
             legs: self.legs,
+            pieces: self.pieces,
+            cut: self.cut,
             clear: self.clear,
             drops: self.drops,
             repaired: self.repaired.clone(),
             fallback: self.fallback.clone(),
+            refused: self.refused,
+            longest_check: self.longest_check,
         }
     }
 }

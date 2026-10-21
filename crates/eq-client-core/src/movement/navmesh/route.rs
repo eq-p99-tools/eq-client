@@ -247,6 +247,17 @@ impl PolygonSearch {
         Corridor::Searching
     }
 
+    /// The polygons of the corridor found, the goal's among them.
+    pub fn polygons(&self) -> Vec<u32> {
+        let mut polygons = vec![self.to];
+        let mut at = self.to;
+        while let Some(&(_, _, Some((parent, _)))) = self.best.get(&at) {
+            polygons.push(parent);
+            at = parent;
+        }
+        polygons
+    }
+
     /// The steps taken: the edges crossed, each set left then right by the
     /// polygon it leaves (its centre lies behind the edge, so the sides never
     /// depend on how the corridor bent before it), and the drops.

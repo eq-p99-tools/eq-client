@@ -8,6 +8,7 @@
 
 use super::{CollisionWorld, PathProgress, PathSearch};
 use glam::Vec3;
+use std::time::Duration;
 
 /// How much a search of the whole way weighs the distance still to go. On
 /// two long city routes (9,554 and 13,849 expansions unweighted) it expanded
@@ -79,7 +80,11 @@ pub enum Planned {
     Mesh {
         /// Legs the mesh gave.
         legs: usize,
-        /// Legs that also kept the clearance from walls to either side.
+        /// The checks made: each leg, or each piece of a cut leg.
+        pieces: usize,
+        /// Legs cut into pieces before their checks.
+        cut: usize,
+        /// Pieces that also kept the clearance from walls to either side.
         clear: usize,
         /// Drops off ledges the walker's own drop made.
         drops: usize,
@@ -88,7 +93,22 @@ pub enum Planned {
         repaired: Vec<(Vec3, Vec3)>,
         /// Why the grid took over the whole search, if it did.
         fallback: Option<Fallback>,
+        /// The pieces the edge tests refused, by why.
+        refused: Refusals,
+        /// The longest any one leg's check took.
+        longest_check: Duration,
     },
+}
+
+/// Pieces of a mesh route the walker's edge tests refused, by why.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Refusals {
+    /// The walk stopped short of the leg's end: a wall, a ledge or a slope.
+    pub walk: usize,
+    /// The walk got there, on a floor more than a step from the leg's end.
+    pub height: usize,
+    /// A closed door stood across it, and the walk failed with it open too.
+    pub door: usize,
 }
 
 /// Why a mesh search handed the whole way to the grid.
