@@ -1582,7 +1582,7 @@ fn inspect_model_heights() {
 /// (`name=x,y,z>x,y,z` renderer points a little above their floor, separated
 /// by `;`), or without it the two far ends of the mesh's largest island as
 /// the route `far` (and with `EQ_PROBE_COVERED` set to a roof height, the
-/// far pair under a down-facing roof that low as the route `covered`, or a
+/// far pair with a down-facing roof within that height as the route `covered`, or a
 /// line saying there is none), is searched by
 /// both planners, 5,000 units of work a call, and
 /// prints the planner, its legs, how many kept the clearance or passed only
@@ -1742,12 +1742,13 @@ fn inspect_mesh_routes() {
                     .ok()
                     .and_then(|roof| roof.parse::<f32>().ok())
                 {
-                    // The nearest triangle over it faces down, as a roof does,
-                    // not the slope its polygon sags under.
+                    // A triangle over it faces down within the roof's height, as
+                    // a roof does; the slope its polygon sags under faces up
+                    // and is passed over.
                     let covered = |at: Vec3| {
                         upright
-                            .nearest(at + Vec3::Y * 2.0, true)
-                            .is_some_and(|(distance, up)| distance <= roof && up < 0.0)
+                            .hits(at + Vec3::Y * 2.0, true)
+                            .any(|(distance, up)| distance <= roof && up < 0.0)
                     };
                     if let Some((a, b)) = mesh.far_pair_where(covered) {
                         checked.extend([("covered_a".to_owned(), a), ("covered_b".to_owned(), b)]);
@@ -1849,6 +1850,8 @@ fn inspect_mesh_routes() {
                 Planned::Grid => String::new(),
                 Planned::Mesh {
                     legs,
+                    pieces,
+                    cut,
                     clear,
                     drops,
                     repaired,
@@ -1861,16 +1864,15 @@ fn inspect_mesh_routes() {
                         .map(|(from, to)| format!("{}>{}", eq_point(*from), eq_point(*to)))
                         .collect();
                     format!(
-                        " legs={legs} clear={clear} walk_only={} drops={drops} repaired={} \
-                         repaired_eq=[{}] fallback={fallback:?} refused_walk={} \
-                         refused_height={} refused_door={} split={} longest_check_ms={:.2}",
-                        legs.saturating_sub(clear + drops + repaired.len()),
+                        " legs={legs} cut={cut} pieces={pieces} clear={clear} walk_only={} \
+                         drops={drops} repaired={} repaired_eq=[{}] fallback={fallback:?} \
+                         refused_walk={} refused_height={} refused_door={} longest_check_ms={:.2}",
+                        pieces.saturating_sub(clear + drops + repaired.len()),
                         repaired.len(),
                         repairs.join(" "),
                         refused.walk,
                         refused.height,
                         refused.door,
-                        refused.split,
                         longest_check.as_secs_f64() * 1000.0,
                     )
                 }
@@ -1948,11 +1950,18 @@ impl<'a> Upright<'a> {
     /// Two-sided: the nearest triangle straight up from `at`, or down, its
     /// distance and its normal's up part, as wound.
     fn nearest(&self, at: Vec3, up: bool) -> Option<(f32, f32)> {
+        self.hits(at, up).min_by(|x, y| x.0.total_cmp(&y.0))
+    }
+
+    /// Every triangle straight up from `at`, or down, as [`Self::nearest`]
+    /// gives it.
+    fn hits(&self, at: Vec3, up: bool) -> impl Iterator<Item = (f32, f32)> + '_ {
         let direction = if up { Vec3::Y } else { -Vec3::Y };
         self.squares
-            .get(&Self::square(at.x, at.z))?
-            .iter()
-            .filter_map(|&i| {
+            .get(&Self::square(at.x, at.z))
+            .into_iter()
+            .flatten()
+            .filter_map(move |&i| {
                 // Möller and Trumbore's test.
                 let [first, second, third] = self.triangles[i].map(Vec3::from_array);
                 let (along, across) = (second - first, third - first);
@@ -1969,7 +1978,6 @@ impl<'a> Upright<'a> {
                 (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && distance > 1e-4)
                     .then(|| (distance, along.cross(across).normalize_or_zero().y))
             })
-            .min_by(|x, y| x.0.total_cmp(&y.0))
     }
 }
 

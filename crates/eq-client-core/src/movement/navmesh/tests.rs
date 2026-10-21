@@ -947,6 +947,10 @@ mod routes {
         let path = found(run(&mut *search, &world, 256).0);
         let Planned::Mesh {
             legs,
+            pieces,
+            cut,
+            clear,
+            drops,
             repaired,
             fallback,
             refused,
@@ -956,14 +960,19 @@ mod routes {
             panic!("the grid planned");
         };
         assert_eq!((legs, fallback), (1, None), "{path:?}");
-        // The leg and the piece by the post refused, the leg cut once.
+        // The leg, 280 across, cut once into five pieces; only the piece by
+        // the post refused, and the counts by outcome add up to the pieces.
+        assert_eq!((cut, pieces), (1, 5));
         assert_eq!(
             refused,
             Refusals {
-                walk: 2,
-                split: 1,
+                walk: 1,
                 ..Refusals::default()
             }
+        );
+        assert!(
+            clear + drops + repaired.len() <= pieces,
+            "{clear} {drops} {repaired:?}"
         );
         let [(from, to)] = repaired[..] else {
             panic!("{repaired:?}");
@@ -998,8 +1007,22 @@ mod routes {
         let path = found(run(&mut *search, &world, 256).0);
         let (_, repaired, fallback) = mesh_planned(&*search);
         assert_eq!((repaired, fallback), (1, None), "{path:?}");
-        assert_eq!(mesh_refused(&*search).split, 1);
+        assert!(matches!(search.planned(), Planned::Mesh { cut: 1, .. }));
         assert!(path.iter().any(|feet| feet.y > 15.0), "{path:?}");
+    }
+
+    /// The most a piece's check costs: a piece's length in grid cells, plus
+    /// one, from feet that ended within a hair of the last piece's end.
+    const ONE_PIECE: usize = 34;
+
+    #[test]
+    fn a_long_leg_s_check_keeps_to_each_call_s_budget_a_piece_at_a_time() {
+        let (world, mesh) = zone(&floor(0.0, -150.0, 150.0));
+        let (start, goal) = (Vec3::new(0.0, 0.0, -140.0), Vec3::new(0.0, 0.0, 140.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let (progress, most) = run(&mut *search, &world, 16);
+        found(progress);
+        assert!(most <= 16 + ONE_PIECE, "{most}");
     }
 
     #[test]

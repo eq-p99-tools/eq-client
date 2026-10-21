@@ -34,7 +34,8 @@ const REPAIR_REACH: f32 = CELL * std::f32::consts::FRAC_1_SQRT_2 + 0.1;
 /// sloped floor (about 2.5 in the stress zones), with room to spare.
 const LIFT: f32 = MAX_GROUNDED_STEP + 3.0;
 
-/// The longest piece a refused leg is cut into: one a short grid search can
+/// The longest piece a leg is cut into before its check: one whose check
+/// stays short wherever the search runs, and that a short grid search can
 /// stand for within its expansions.
 const PIECE: f32 = 64.0;
 
@@ -69,6 +70,8 @@ impl Navigator for MeshNavigator {
                 walked: Walked::default(),
                 corridor: HashSet::new(),
                 legs: 0,
+                pieces: 0,
+                cut: 0,
                 clear: 0,
                 drops: 0,
                 repaired: Vec::new(),
@@ -91,6 +94,8 @@ struct MeshSearch {
     /// The polygons the corridor passes through.
     corridor: HashSet<u32>,
     legs: usize,
+    pieces: usize,
+    cut: usize,
     clear: usize,
     /// Drops off ledges taken.
     drops: usize,
@@ -116,7 +121,7 @@ enum Stage {
 }
 
 /// A leg the mesh gives: a straight walk to `to`, or with `drop`, a step off
-/// a ledge that lands at `to`. A `piece` is part of a refused leg, never cut
+/// a ledge that lands at `to`. A `piece` is part of a cut leg, never cut
 /// again.
 #[derive(Clone, Copy, Debug)]
 struct Leg {
@@ -128,8 +133,8 @@ struct Leg {
 /// How a leg's check ended.
 enum Checked {
     Stood,
-    /// Refused, and cut into these pieces to check in its place.
-    Split(Vec<Leg>),
+    /// Cut into these pieces, to check in its place.
+    Cut(Vec<Leg>),
     /// Refused, and this search stands for it.
     Repair(Box<PathSearch>),
 }
@@ -232,12 +237,17 @@ impl MeshSearch {
         ))
     }
 
-    /// Checks the next leg, from where the last one ended. A leg the edge
-    /// tests refuse is cut into pieces when it is long, or else starts a
-    /// repair.
+    /// Checks the next leg, from where the last one ended: a long leg is
+    /// first cut into pieces, and a leg or piece the edge tests refuse
+    /// starts a repair.
     fn check(&mut self, world: &CollisionWorld, leg: Leg) -> Checked {
         let height = self.request.height;
         let from = self.walked.feet(self.request.start);
+        if !leg.drop && !leg.piece && flat(leg.to - from) > PIECE {
+            self.cut += 1;
+            return Checked::Cut(self.pieces(from, leg.to));
+        }
+        self.pieces += 1;
         // The route's own goal is where the walker was sent; a mesh point is
         // where the mesh's surface lies, which can sit under the floor.
         let to = if leg.drop || leg.to == self.request.goal {
@@ -280,10 +290,6 @@ impl MeshSearch {
             self.refused.walk += 1;
         } else {
             self.refused.height += 1;
-        }
-        if !leg.piece && flat(to - from) > PIECE {
-            self.refused.split += 1;
-            return Checked::Split(self.pieces(from, leg.to));
         }
         Checked::Repair(self.repair(from, to))
     }
@@ -431,7 +437,7 @@ impl MeshSearch {
             self.longest_check = self.longest_check.max(began.elapsed());
             match checked {
                 Checked::Stood => next += 1,
-                Checked::Split(pieces) => {
+                Checked::Cut(pieces) => {
                     legs.splice(next..=next, pieces);
                 }
                 Checked::Repair(search) => repair = Some(search),
@@ -543,6 +549,8 @@ impl RouteSearch for MeshSearch {
     fn planned(&self) -> Planned {
         Planned::Mesh {
             legs: self.legs,
+            pieces: self.pieces,
+            cut: self.cut,
             clear: self.clear,
             drops: self.drops,
             repaired: self.repaired.clone(),
