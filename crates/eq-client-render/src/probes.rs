@@ -1570,12 +1570,17 @@ fn inspect_model_heights() {
 /// of `EQ_PROBE_MODEL` (default 6). Each route in `EQ_PROBE_ROUTES`
 /// (`name=x,y,z>x,y,z` renderer points a little above their floor, separated
 /// by `;`), or without it the two far ends of the mesh's largest island as
-/// the route `far`, is searched by both planners, 5,000 units of work a call, and
+/// the route `far` (and with `EQ_PROBE_COVERED` set to a roof height, the
+/// far pair under a roof that low as the route `covered`), is searched by
+/// both planners, 5,000 units of work a call, and
 /// prints the planner, its legs, how many kept the clearance or passed only
 /// the plain walk, each repaired leg's ends, any fallback, the seconds the
 /// whole search took with its leg checks, the path's length, and how many of
 /// its stretches take the walker's head under water. `EQ_PROBE_DOORS` (comma-separated ids) lists the doors a route may open;
-/// door colliders are not loaded. `EQ_PROBE_DROPS=1` lets both planners step
+/// door colliders are not loaded. A route with an end that has no floor
+/// within 50 units under it is reported and skipped. `EQ_PROBE_LOCATE`
+/// (renderer `x,y,z` points separated by `;`) prints the mesh's polygon and
+/// floor height at each, if any. `EQ_PROBE_DROPS=1` lets both planners step
 /// off ledges, and the mesh's drops taken are printed too.
 ///
 /// The build line gives the mesh's ways off ledges and the seconds spent
@@ -1625,14 +1630,15 @@ fn inspect_mesh_routes() {
     .unwrap();
     println!(
         "zone={zone_name} triangles={} height={height} release={} build_seconds={:.2} polygons={} \
-         islands={} refused_tiles={} drop_links={} drop_seconds={:.2} refused_stretches={} drops={drops} \
-         drop_world={}",
+         islands={} refused_tiles={} deep_triangles={} drop_links={} drop_seconds={:.2} refused_stretches={} \
+         drops={drops} drop_world={}",
         triangles.len(),
         !cfg!(debug_assertions),
         building.elapsed().as_secs_f32(),
         mesh.polygon_count(),
         mesh.island_count(),
         report.refused.len(),
+        report.deep_triangles,
         report.drop_links,
         report.drop_elapsed.as_secs_f32(),
         report.refused_stretches,
@@ -1671,40 +1677,95 @@ fn inspect_mesh_routes() {
             raised(*landing),
         );
     }
+    // None where no floor lies within 50 units under the point; its route
+    // is then reported and skipped.
     let floor = |at: Vec3| {
-        let below = world.ray_distance(at, -Vec3::Y, 50.0).unwrap();
-        at - Vec3::Y * below
+        let below = world.ray_distance(at, -Vec3::Y, 50.0)?;
+        Some(at - Vec3::Y * below)
     };
+    // Whether the mesh has floor at each of `EQ_PROBE_LOCATE`'s points
+    // (renderer x,y,z, separated by `;`), and at what height.
+    for at in std::env::var("EQ_PROBE_LOCATE")
+        .iter()
+        .flat_map(|points| points.split(';'))
+        .filter(|p| !p.trim().is_empty())
+    {
+        let v: Vec<f32> = at.split(',').map(|n| n.trim().parse().unwrap()).collect();
+        let at = Vec3::new(v[0], v[1], v[2]);
+        let located = mesh.locate(at);
+        println!(
+            "locate at_eq={} polygon={:?} floor_height={:?}",
+            eq_point(at),
+            located.map(|(polygon, _)| polygon),
+            located.map(|(_, height)| height),
+        );
+    }
     let point = |s: &str| {
         let v: Vec<f32> = s.split(',').map(|n| n.trim().parse().unwrap()).collect();
         floor(Vec3::new(v[0], v[1], v[2]))
     };
-    let routes: Vec<(String, Vec3, Vec3)> = std::env::var("EQ_PROBE_ROUTES").map_or_else(
-        |_| {
-            let (a, b) = mesh.far_pair().expect("a mesh with polygons");
-            vec![(
-                "far".to_owned(),
-                floor(a + Vec3::Y * 2.0),
-                floor(b + Vec3::Y * 2.0),
-            )]
-        },
-        |routes| {
-            routes
-                .split(';')
-                .filter(|r| !r.trim().is_empty())
-                .map(|route| {
-                    let (name, ends) = route.split_once('=').unwrap();
-                    let (a, b) = ends.split_once('>').unwrap();
-                    (name.trim().to_owned(), point(a), point(b))
-                })
-                .collect()
-        },
-    );
+    let routes: Vec<(String, Option<Vec3>, Option<Vec3>)> = std::env::var("EQ_PROBE_ROUTES")
+        .map_or_else(
+            |_| {
+                let (a, b) = mesh.far_pair().expect("a mesh with polygons");
+                let mut routes = vec![(
+                    "far".to_owned(),
+                    floor(a + Vec3::Y * 2.0),
+                    floor(b + Vec3::Y * 2.0),
+                )];
+                // The far pair under a roof: floor with a ceiling no more than
+                // `EQ_PROBE_COVERED` units over it, as in a tunnel.
+                if let Some(roof) = std::env::var("EQ_PROBE_COVERED")
+                    .ok()
+                    .and_then(|roof| roof.parse::<f32>().ok())
+                {
+                    let covered = |at: Vec3| {
+                        world
+                            .ray_distance(at + Vec3::Y * 2.0, Vec3::Y, roof)
+                            .is_some()
+                    };
+                    if let Some((a, b)) = mesh.far_pair_where(covered) {
+                        println!(
+                            "covered_pair a_eq={} b_eq={} route=covered={}>{}",
+                            eq_point(a),
+                            eq_point(b),
+                            raised(a),
+                            raised(b),
+                        );
+                        routes.push((
+                            "covered".to_owned(),
+                            floor(a + Vec3::Y * 2.0),
+                            floor(b + Vec3::Y * 2.0),
+                        ));
+                    }
+                }
+                routes
+            },
+            |routes| {
+                routes
+                    .split(';')
+                    .filter(|r| !r.trim().is_empty())
+                    .map(|route| {
+                        let (name, ends) = route.split_once('=').unwrap();
+                        let (a, b) = ends.split_once('>').unwrap();
+                        (name.trim().to_owned(), point(a), point(b))
+                    })
+                    .collect()
+            },
+        );
     let navigators: [(&str, Box<dyn Navigator>); 2] = [
         ("grid", Box::new(GridNavigator)),
         ("mesh", Box::new(MeshNavigator::new(Arc::new(mesh)))),
     ];
     for (name, start, goal) in routes {
+        let (Some(start), Some(goal)) = (start, goal) else {
+            println!(
+                "route={name} skipped: no floor within 50 under its start={} goal={}",
+                start.is_some(),
+                goal.is_some()
+            );
+            continue;
+        };
         for (planner, navigator) in &navigators {
             let searching = Instant::now();
             let mut search = navigator.search(SearchRequest {
@@ -1868,12 +1929,13 @@ fn inspect_mesh_sizes() {
         let seconds = building.elapsed().as_secs_f32();
         println!(
             "build={label} seconds={seconds:.2} drop_seconds={:.2} polygons={} islands={} \
-             drop_links={} refused_tiles={} refused_stretches={} cache_bytes={}",
+             drop_links={} refused_tiles={} deep_triangles={} refused_stretches={} cache_bytes={}",
             report.drop_elapsed.as_secs_f32(),
             mesh.polygon_count(),
             mesh.island_count(),
             report.drop_links,
             report.refused.len(),
+            report.deep_triangles,
             report.refused_stretches,
             cache_bytes(&mesh, settings),
         );
@@ -2279,7 +2341,9 @@ fn whole_size(tagged: Option<&eq_client_core::movement::navmesh::NavMesh>, i: u3
 /// objects', the triangles by 1,000-unit band of height, and every placed
 /// object or terrain triangle with a corner more than `EQ_PROBE_FAR`
 /// (default 5,000) units below or above the terrain's middle band, each
-/// object by its model, placement and scale, at most 40 lines.
+/// object by its model, placement and scale and the count of the zone's
+/// other solids, not far, within 60 units of it across the floor, at most
+/// 40 lines.
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
 #[allow(clippy::too_many_lines)]
@@ -2376,14 +2440,37 @@ fn inspect_zone_heights() {
         }
         let object = &zone.objects[*i];
         if listed < 20 {
+            // The zone's other solids, not far, across the floor within 60
+            // units of the object's own: a mesh tile holding the object
+            // holds these too.
+            let (low, high) = bounds(&mut triangles.iter().flatten().copied()).expect("triangles");
+            let near = |t: &[[f32; 3]; 3]| {
+                t.iter().any(|p| {
+                    p[0] >= low.x - 60.0
+                        && p[0] <= high.x + 60.0
+                        && p[2] >= low.z - 60.0
+                        && p[2] <= high.z + 60.0
+                })
+            };
+            let others = zone
+                .collision
+                .iter()
+                .chain(
+                    placed
+                        .iter()
+                        .filter(|(j, _)| j != i)
+                        .flat_map(|(_, t)| t.iter()),
+                )
+                .filter(|t| !is_far(t) && near(t))
+                .count();
             println!(
                 "far_object={i} model={} at_eq={} scale={:?} far_triangles={count} of {} \
-                 bounds_eq={}",
+                 bounds_eq={} other_solids_within_60={others}",
                 zone.models[object.model].name,
                 eq_point(Vec3::from_array(object.translation)),
                 object.scale,
                 triangles.len(),
-                eq(bounds(&mut triangles.iter().flatten().copied())),
+                eq(Some((low, high))),
             );
         }
         listed += 1;

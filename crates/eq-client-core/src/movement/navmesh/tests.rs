@@ -115,6 +115,101 @@ fn stacked_floors_are_told_apart() {
 }
 
 #[test]
+fn tiles_far_apart_in_height_build_each_over_its_own_heights() {
+    // Two floors 10,000 apart, a tile and more apart: the zone is taller
+    // than a heightfield can hold, each tile isn't.
+    let mut triangles = quad(
+        [-32.0, 0.0, -8.0],
+        [-32.0, 0.0, 8.0],
+        [-8.0, 0.0, 8.0],
+        [-8.0, 0.0, -8.0],
+    )
+    .to_vec();
+    triangles.extend(quad(
+        [8.0, 10_000.0, -8.0],
+        [8.0, 10_000.0, 8.0],
+        [32.0, 10_000.0, 8.0],
+        [32.0, 10_000.0, -8.0],
+    ));
+    let (mesh, report) = build(&triangles);
+    assert!(report.refused.is_empty(), "{report:?}");
+    assert_eq!(report.deep_triangles, 0);
+    assert!(mesh.locate(Vec3::new(-20.0, 0.0, 0.0)).is_some());
+    assert!(mesh.locate(Vec3::new(20.0, 10_000.0, 0.0)).is_some());
+}
+
+#[test]
+fn a_tile_taller_than_a_heightfield_leaves_out_what_lies_far_under_it() {
+    // A floor, and a block 40,000 under it in one tile: the floor builds
+    // in every tile, and the block's triangles are counted, not meshed.
+    let mut triangles = floor(0.0, -32.0, 32.0);
+    let deep = block([-28.0, -40_001.0, -28.0], [-26.0, -40_000.0, -26.0]);
+    let deep_count = deep.len();
+    triangles.extend(deep);
+    let (mesh, report) = build(&triangles);
+    assert!(report.refused.is_empty(), "{report:?}");
+    assert_eq!(report.tiles_with_polygons, report.tiles);
+    assert_eq!(report.deep_triangles, deep_count);
+    assert_eq!(mesh.island_count(), 1);
+    assert!(mesh.locate(Vec3::new(-27.0, 0.0, -27.0)).is_some());
+    assert!(mesh.locate(Vec3::new(-27.0, -40_000.0, -27.0)).is_none());
+}
+
+#[test]
+fn a_tile_s_own_heights_keep_the_mesh_a_zone_wide_heightfield_gives() {
+    // A tile's bottom stays on the zone's cell grid, so a floor high over
+    // the zone's lowest point builds where it did: one tile's floor at 0
+    // and another's at 37.03, off the cell grid.
+    let mut triangles = floor(0.0, -32.0, -16.0);
+    triangles.extend(floor(37.03, 16.0, 32.0));
+    let (mesh, report) = build(&triangles);
+    let (_, high) = mesh.locate(Vec3::new(24.0, 37.03, 24.0)).unwrap();
+    let alone = build(&floor(37.03, 16.0, 32.0)).0;
+    let (_, high_alone) = alone.locate(Vec3::new(24.0, 37.03, 24.0)).unwrap();
+    assert!(report.refused.is_empty(), "{report:?}");
+    assert!((high - 37.03).abs() < 0.3, "{high}");
+    assert!((high - high_alone).abs() < 0.3, "{high} {high_alone}");
+}
+
+#[test]
+fn a_far_pair_can_be_kept_to_the_floor_a_test_takes() {
+    let (mesh, _) = build(&floor(0.0, -32.0, 32.0));
+    let (a, b) = mesh.far_pair_where(|at| at.x < 0.0 && at.z < 0.0).unwrap();
+    assert!(a.x < 0.0 && a.z < 0.0 && b.x < 0.0 && b.z < 0.0, "{a} {b}");
+    assert!(a.distance(b) > 30.0, "{a} {b}");
+    assert!(mesh.far_pair_where(|_| false).is_none());
+}
+
+#[test]
+fn a_far_pair_end_lies_on_its_polygon_even_where_the_polygon_bends() {
+    // An L whose corners' average lies outside it, in the corner it bends
+    // round.
+    let vertices = [
+        [0.0, 0.0],
+        [10.0, 0.0],
+        [10.0, 1.0],
+        [1.0, 1.0],
+        [1.0, 10.0],
+        [0.0, 10.0],
+    ]
+    .map(|[x, z]| Vec3::new(x, 0.0, z))
+    .to_vec();
+    let mesh = NavMesh::from_parts(
+        vec![Polygon {
+            vertices,
+            links: Vec::new(),
+            size: 0,
+        }],
+        Vec::new(),
+    );
+    let (a, b) = mesh.far_pair().unwrap();
+    assert!(
+        mesh.locate(a).is_some() && mesh.locate(b).is_some(),
+        "{a} {b}"
+    );
+}
+
+#[test]
 fn stairs_join_at_the_riser_limit_and_not_past_it() {
     // Risers a little under and a little over the highest step, each flight
     // up to a landing on its own side of the floor.

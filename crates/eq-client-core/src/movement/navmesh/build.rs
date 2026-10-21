@@ -5,7 +5,8 @@
 use super::{Link, Polygon, Settings};
 use glam::{UVec3, Vec2, Vec3, Vec3A};
 use rerecast::{AreaType, HeightfieldBuilder, PolygonNavmesh, RegionId, TriMesh};
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -19,6 +20,10 @@ pub struct BuildReport {
     pub tiles_with_polygons: usize,
     /// Tiles rerecast refused; each leaves a hole in the mesh.
     pub refused: Vec<RefusedTile>,
+    /// Triangles left out of at least one tile for lying wholly under the
+    /// tallest heightfield rerecast can hold below the rest of the tile.
+    /// The walker still collides with them; only the mesh leaves them out.
+    pub deep_triangles: usize,
     /// Each build thread's tiles and the time it spent building them.
     pub threads: Vec<(usize, Duration)>,
     /// Ways off ledges found.
@@ -134,6 +139,7 @@ pub(super) fn polygons_with(
         tiles: jobs.len(),
         ..BuildReport::default()
     };
+    let mut deep_triangles = BTreeSet::new();
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..threads)
             .map(|_| {
@@ -146,24 +152,23 @@ pub(super) fn polygons_with(
                             break;
                         };
                         let began = Instant::now();
+                        let (bottom, top, kept, deep) =
+                            tile_heights(triangles, indices, low.y - 1.0, settings);
                         #[allow(clippy::cast_precision_loss)] // Tile counts are small.
                         let min = Vec3::new(
                             low.x + *tx as f32 * tile - pad,
-                            low.y - 1.0,
+                            bottom,
                             low.z + *tz as f32 * tile - pad,
                         );
-                        let max = Vec3::new(
-                            min.x + tile + 2.0 * pad,
-                            high.y + settings.height + 1.0,
-                            min.z + tile + 2.0 * pad,
-                        );
+                        let max =
+                            Vec3::new(min.x + tile + 2.0 * pad, top, min.z + tile + 2.0 * pad);
                         // A tile rerecast panics on is refused like one it
                         // reports an error for, and the build goes on.
                         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                            tile_builder(triangles, indices, min, max, border, settings)
+                            tile_builder(triangles, &kept, min, max, border, settings)
                         }))
                         .unwrap_or_else(|panic| Err(("panic", panic_message(&*panic))));
-                        done.push((i, result));
+                        done.push((i, result, deep));
                         busy += began.elapsed();
                     }
                     (done, busy)
@@ -177,8 +182,9 @@ pub(super) fn polygons_with(
                 .join()
                 .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
             report.threads.push((done.len(), busy));
-            for (i, result) in done {
+            for (i, result, deep) in done {
                 built[i] = Some(result);
+                deep_triangles.extend(deep);
             }
         }
     });
@@ -199,6 +205,7 @@ pub(super) fn polygons_with(
             }),
         }
     }
+    report.deep_triangles = deep_triangles.len();
     let polygons = join_tiles(tiled, settings.cell_height * 4.0 + settings.climb);
     report.elapsed = started.elapsed();
     Some((polygons, report))
@@ -234,6 +241,43 @@ fn bucket(
         }
     }
     buckets.into_iter().collect()
+}
+
+/// A tile's heightfield bottom and top, the triangles it is built over and
+/// those it leaves out. It spans its own triangles' heights, from a cell
+/// under the lowest to the walker's height and a unit over the highest, so
+/// a zone's height adds nothing to a tile's. Its bottom stays on the cell
+/// grid that starts at `base`, so a tile's cells lie where a heightfield
+/// spanning the whole zone puts them. A tile taller than rerecast's tallest
+/// span is built over its top that tall, and leaves out the triangles
+/// wholly under it.
+fn tile_heights<'a>(
+    triangles: &[[[f32; 3]; 3]],
+    indices: &'a [u32],
+    base: f32,
+    settings: &Settings,
+) -> (f32, f32, Cow<'a, [u32]>, Vec<u32>) {
+    let ch = settings.cell_height;
+    let (lowest, highest) = indices
+        .iter()
+        .flat_map(|&i| triangles[i as usize])
+        .fold((f32::MAX, f32::MIN), |(low, high), p| {
+            (low.min(p[1]), high.max(p[1]))
+        });
+    let top = highest + settings.height + 1.0;
+    // Spans count cells in 16 bits; two short of the most keeps a span
+    // started at the top inside them after rounding.
+    let tallest = f32::from(u16::MAX - 2) * ch;
+    let on_grid = |y: f32| base + ((y - base) / ch).floor() * ch;
+    let bottom = on_grid(lowest - 1.0);
+    if top - bottom <= tallest {
+        return (bottom, top, Cow::Borrowed(indices), Vec::new());
+    }
+    let bottom = on_grid(top - tallest) + ch;
+    let (kept, deep): (Vec<u32>, Vec<u32>) = indices
+        .iter()
+        .partition(|&&i| triangles[i as usize].iter().any(|p| p[1] >= bottom));
+    (bottom, top, Cow::Owned(kept), deep)
 }
 
 /// A panic's message, as `panic!` gives it.
