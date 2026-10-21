@@ -1,6 +1,6 @@
 //! The shown zone's navigation mesh, read from the cache or built off the
-//! frame at zone entry while the `navmesh` switch is on. Nothing plans over
-//! it yet: the grid search plans every route.
+//! frame at zone entry while the `navmesh` switch is on. A scripted walk
+//! plans over it once it is ready.
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool, block_on, poll_once};
 use eq_client_core::movement::navmesh::{self, NavMesh, Settings, cache};
@@ -20,12 +20,14 @@ pub(super) fn install(app: &mut App) {
 /// The shown zone's mesh once it is ready, and the build or read making it.
 #[derive(Resource, Default)]
 pub(super) struct ZoneNavMesh {
-    mesh: Option<Arc<NavMesh>>,
+    /// The mesh, and the walker height it was built for.
+    mesh: Option<(Arc<NavMesh>, f32)>,
     making: Option<Making>,
 }
 
 struct Making {
     zone: String,
+    height: f32,
     threads: usize,
     started: Instant,
     /// Set on leaving the zone; the build's threads stop at their next tile.
@@ -63,6 +65,7 @@ impl ZoneNavMesh {
         };
         self.making = Some(Making {
             zone: zone.to_owned(),
+            height,
             threads,
             started: Instant::now(),
             cancel,
@@ -78,10 +81,11 @@ impl ZoneNavMesh {
         self.mesh = None;
     }
 
-    /// The shown zone's mesh, once it is ready.
-    #[allow(dead_code, reason = "routes plan over it from the next change")]
-    pub(super) fn mesh(&self) -> Option<&Arc<NavMesh>> {
-        self.mesh.as_ref()
+    /// The shown zone's mesh, once it is ready, when it was built for a
+    /// walker `height` tall.
+    pub(super) fn mesh_for(&self, height: f32) -> Option<Arc<NavMesh>> {
+        let (mesh, built) = self.mesh.as_ref()?;
+        ((built - height).abs() < 1e-3).then(|| Arc::clone(mesh))
     }
 }
 
@@ -99,7 +103,7 @@ fn poll(mut navmesh: ResMut<ZoneNavMesh>) {
         return;
     };
     report(&making, &loaded);
-    navmesh.mesh = Some(Arc::new(loaded.mesh));
+    navmesh.mesh = Some((Arc::new(loaded.mesh), making.height));
 }
 
 fn report(making: &Making, loaded: &cache::Loaded) {
@@ -172,15 +176,27 @@ mod tests {
             .resource_mut::<ZoneNavMesh>()
             .start("zone", floor(), 6.0, None);
         let started = Instant::now();
-        while app.world().resource::<ZoneNavMesh>().mesh().is_none() {
+        while app
+            .world()
+            .resource::<ZoneNavMesh>()
+            .mesh_for(6.0)
+            .is_none()
+        {
             assert!(started.elapsed().as_secs() < 60, "never ready");
             app.update();
         }
         let navmesh = app.world().resource::<ZoneNavMesh>();
         assert!(navmesh.making.is_none());
-        assert_eq!(navmesh.mesh().unwrap().island_count(), 1);
+        assert_eq!(navmesh.mesh_for(6.0).unwrap().island_count(), 1);
+        // Built for one height, it plans for no other.
+        assert!(navmesh.mesh_for(7.0).is_none());
         app.world_mut().resource_mut::<ZoneNavMesh>().leave();
-        assert!(app.world().resource::<ZoneNavMesh>().mesh().is_none());
+        assert!(
+            app.world()
+                .resource::<ZoneNavMesh>()
+                .mesh_for(6.0)
+                .is_none()
+        );
     }
 
     #[test]
@@ -191,8 +207,13 @@ mod tests {
         let cancel = Arc::clone(&navmesh.making.as_ref().unwrap().cancel);
         navmesh.leave();
         assert!(cancel.load(Ordering::Relaxed));
-        assert!(navmesh.making.is_none() && navmesh.mesh().is_none());
+        assert!(navmesh.making.is_none() && navmesh.mesh_for(6.0).is_none());
         app.update();
-        assert!(app.world().resource::<ZoneNavMesh>().mesh().is_none());
+        assert!(
+            app.world()
+                .resource::<ZoneNavMesh>()
+                .mesh_for(6.0)
+                .is_none()
+        );
     }
 }

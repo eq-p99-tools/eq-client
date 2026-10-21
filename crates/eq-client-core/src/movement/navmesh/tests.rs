@@ -403,3 +403,347 @@ fn inspect_synthetic_build_balance() {
         }
     }
 }
+
+mod routes {
+    //! Routes over the mesh, each leg judged by the walker's edge tests.
+
+    use super::{block, floor, settings};
+    use crate::movement::navmesh::{MeshNavigator, NavMesh};
+    use crate::movement::path::{CLEARANCE, DOOR_TOLL};
+    use crate::movement::{
+        CollisionMesh, CollisionWorld, Fallback, Navigator, PathProgress, Planned, RouteSearch,
+        Scope, SearchRequest,
+    };
+    use glam::{Vec2, Vec3};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    /// The world over `triangles`, and the mesh over the same triangles.
+    fn zone(triangles: &[[[f32; 3]; 3]]) -> (CollisionWorld, MeshNavigator) {
+        let (mesh, _) = NavMesh::build(triangles, &settings(), 2, &AtomicBool::new(false)).unwrap();
+        (
+            CollisionWorld::new(triangles.to_vec()).unwrap(),
+            MeshNavigator::new(Arc::new(mesh)),
+        )
+    }
+
+    fn request(start: Vec3, goal: Vec3, doors: Vec<u8>) -> SearchRequest {
+        SearchRequest {
+            start,
+            goal,
+            reach: 1.0,
+            height: 6.0,
+            doors,
+            drops: false,
+            scope: Scope::Whole,
+        }
+    }
+
+    /// Runs `search` to its end, `budget` at a time; what it found, and the
+    /// most work any one call did.
+    fn run(
+        search: &mut dyn RouteSearch,
+        world: &CollisionWorld,
+        budget: usize,
+    ) -> (PathProgress, usize) {
+        let mut most = 0;
+        for _ in 0..100_000 {
+            let before = search.searched().0;
+            let progress = search.advance(world, budget);
+            most = most.max(search.searched().0 - before);
+            if progress != PathProgress::Searching {
+                return (progress, most);
+            }
+        }
+        panic!("the search never ended");
+    }
+
+    fn found(progress: PathProgress) -> Vec<Vec3> {
+        match progress {
+            PathProgress::Found(path) => path,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn length(start: Vec3, path: &[Vec3]) -> f32 {
+        std::iter::once(start)
+            .chain(path.iter().copied())
+            .collect::<Vec<_>>()
+            .windows(2)
+            .map(|pair| pair[0].distance(pair[1]))
+            .sum()
+    }
+
+    fn mesh_planned(search: &dyn RouteSearch) -> (usize, usize, Option<Fallback>) {
+        match search.planned() {
+            Planned::Mesh {
+                legs,
+                repaired,
+                fallback,
+                ..
+            } => (legs, repaired.len(), fallback),
+            Planned::Grid => panic!("the grid planned"),
+        }
+    }
+
+    /// A wall across z = 0, ten high and a unit thick, from x = -40 to x = 20.
+    fn wall_to(end: f32) -> Vec<[[f32; 3]; 3]> {
+        block([-40.0, 0.0, -0.5], [end, 10.0, 0.5])
+    }
+
+    #[test]
+    fn a_route_goes_straight_over_open_floor() {
+        let (world, mesh) = zone(&floor(0.0, -40.0, 40.0));
+        let (start, goal) = (Vec3::new(-30.0, 0.0, -30.0), Vec3::new(30.0, 0.0, 30.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let path = found(run(&mut *search, &world, 256).0);
+        assert!(
+            length(start, &path) <= start.distance(goal) * 1.01,
+            "{path:?}"
+        );
+        assert!(path.last().unwrap().distance(goal) < 0.3, "{path:?}");
+        assert_eq!(mesh_planned(&*search), (1, 0, None));
+    }
+
+    #[test]
+    fn a_route_turns_at_a_wall_s_end_with_room_to_spare() {
+        let mut triangles = floor(0.0, -40.0, 40.0);
+        triangles.extend(wall_to(20.0));
+        let (world, mesh) = zone(&triangles);
+        let (start, goal) = (Vec3::new(0.0, 0.0, -20.0), Vec3::new(0.0, 0.0, 20.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let path = found(run(&mut *search, &world, 256).0);
+        // Round the wall's end, every leg a clearance clear of its corners
+        // (a little less where the funnel cuts between two insets).
+        assert!(path.iter().any(|p| p.x > 20.0), "round the end: {path:?}");
+        let flat = |v: Vec3| Vec2::new(v.x, v.z);
+        let legs: Vec<Vec3> = std::iter::once(start).chain(path.iter().copied()).collect();
+        for corner in [Vec2::new(20.0, -0.5), Vec2::new(20.0, 0.5)] {
+            let nearest = legs
+                .windows(2)
+                .map(|pair| {
+                    let (a, b) = (flat(pair[0]), flat(pair[1]));
+                    let t = ((corner - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
+                    corner.distance(a.lerp(b, t))
+                })
+                .fold(f32::MAX, f32::min);
+            assert!(
+                nearest >= CLEARANCE - 0.25,
+                "{nearest} from {corner}: {path:?}"
+            );
+        }
+        let (legs, repaired, fallback) = mesh_planned(&*search);
+        assert!(
+            legs >= 2 && repaired == 0 && fallback.is_none(),
+            "{legs} {repaired} {fallback:?}"
+        );
+    }
+
+    #[test]
+    fn a_doorway_is_crossed_through_its_middle_however_wide() {
+        // Doorways of 8 and of 3 at x = 0 in a wall across z = 0; 3 is
+        // narrower than twice the clearance.
+        for gap in [8.0_f32, 3.0] {
+            let mut triangles = floor(0.0, -30.0, 30.0);
+            triangles.extend(block([-30.0, 0.0, -0.5], [-gap / 2.0, 10.0, 0.5]));
+            triangles.extend(block([gap / 2.0, 0.0, -0.5], [30.0, 10.0, 0.5]));
+            let (world, mesh) = zone(&triangles);
+            let (start, goal) = (Vec3::new(-10.0, 0.0, -15.0), Vec3::new(10.0, 0.0, 15.0));
+            let mut search = mesh.search(request(start, goal, Vec::new()));
+            let path = found(run(&mut *search, &world, 256).0);
+            // Where the path crosses the wall's line.
+            let mut previous = start;
+            let crossed = path
+                .iter()
+                .find_map(|&p| {
+                    let at = (previous.z < 0.0 && p.z >= 0.0)
+                        .then(|| previous.lerp(p, -previous.z / (p.z - previous.z)).x);
+                    previous = p;
+                    at
+                })
+                .expect("through the doorway");
+            let room = (gap / 2.0 - CLEARANCE).max(0.0) + 0.5;
+            assert!(
+                crossed.abs() <= room,
+                "gap {gap}: crossed at x = {crossed}, {path:?}"
+            );
+            assert_eq!(mesh_planned(&*search).2, None, "gap {gap}");
+        }
+    }
+
+    /// A room 60 across with a wall across z = 0 and a doorway at
+    /// 10 < x < 14 shut by door 7, the doorway the one way through.
+    fn walled_room() -> (CollisionWorld, MeshNavigator) {
+        let mut triangles = floor(0.0, -30.0, 30.0);
+        triangles.extend(block([-30.0, 0.0, -0.5], [10.0, 10.0, 0.5]));
+        triangles.extend(block([14.0, 0.0, -0.5], [30.0, 10.0, 0.5]));
+        let (mut world, mesh) = zone(&triangles);
+        let door = CollisionMesh::new(block([10.0, 0.0, -0.25], [14.0, 10.0, 0.25])).unwrap();
+        world.set_door_obstacles(vec![(7, Arc::new(door))]);
+        (world, mesh)
+    }
+
+    #[test]
+    fn a_door_that_can_t_be_opened_closes_only_its_doorway() {
+        let (world, mesh) = walled_room();
+        // Across the room beside the door: routed on the mesh, past the door.
+        let (start, goal) = (Vec3::new(-20.0, 0.0, -5.0), Vec3::new(25.0, 0.0, -3.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let path = found(run(&mut *search, &world, 256).0);
+        assert!(
+            length(start, &path) < start.distance(goal) * 1.05,
+            "{path:?}"
+        );
+        assert_eq!(mesh_planned(&*search).2, None);
+        // Through the door: no corridor past it, so the grid finds no way.
+        let through = request(
+            Vec3::new(12.0, 0.0, -10.0),
+            Vec3::new(12.0, 0.0, 10.0),
+            Vec::new(),
+        );
+        let mut search = mesh.search(through);
+        assert_eq!(run(&mut *search, &world, 256).0, PathProgress::Failed);
+        assert_eq!(mesh_planned(&*search).2, Some(Fallback::NoCorridor));
+    }
+
+    #[test]
+    fn a_door_that_can_be_opened_costs_its_toll_only_through_its_doorway() {
+        let (world, mesh) = walled_room();
+        // Beside the door, the toll changes nothing.
+        let (start, goal) = (Vec3::new(-20.0, 0.0, -5.0), Vec3::new(25.0, 0.0, -3.0));
+        let mut search = mesh.search(request(start, goal, vec![7]));
+        let path = found(run(&mut *search, &world, 256).0);
+        assert!(
+            length(start, &path) < start.distance(goal) * 1.05,
+            "{path:?}"
+        );
+        assert!(search.doors_along().iter().all(Option::is_none));
+        // Through it: one step crosses the door, from a cell short of it.
+        let (start, goal) = (Vec3::new(12.0, 0.0, -10.0), Vec3::new(12.0, 0.0, 10.0));
+        let mut search = mesh.search(request(start, goal, vec![7]));
+        let path = found(run(&mut *search, &world, 256).0);
+        let doors = search.doors_along();
+        let crossing = doors
+            .iter()
+            .position(|door| *door == Some(7))
+            .expect("door 7");
+        assert_eq!(doors.iter().flatten().count(), 1, "{doors:?}");
+        let before = if crossing == 0 {
+            start
+        } else {
+            path[crossing - 1]
+        };
+        assert!(before.z <= -1.5, "{path:?}");
+        assert!(path[crossing].z > 0.0, "{path:?}");
+        // A way round as long as the toll loses to the door.
+        let mut triangles = floor(0.0, -30.0, 30.0);
+        triangles.extend(block([-30.0, 0.0, -0.5], [10.0, 10.0, 0.5]));
+        triangles.extend(block([14.0, 0.0, -0.5], [16.0, 10.0, 0.5]));
+        triangles.extend(block([22.0, 0.0, -0.5], [30.0, 10.0, 0.5]));
+        let (mut world, mesh) = zone(&triangles);
+        let door = CollisionMesh::new(block([10.0, 0.0, -0.25], [14.0, 10.0, 0.25])).unwrap();
+        world.set_door_obstacles(vec![(7, Arc::new(door))]);
+        let mut search = mesh.search(request(start, goal, vec![7]));
+        let path = found(run(&mut *search, &world, 256).0);
+        let round = length(start, &path);
+        // Through the gap at 16 < x < 22 is longer by less than the toll.
+        assert!(round - start.distance(goal) < DOOR_TOLL, "{round}");
+        assert!(search.doors_along().iter().all(Option::is_none), "{path:?}");
+    }
+
+    /// The stand-in for the probe's Thurgadin stretch (EQ x -21..-44 at
+    /// y -377): a corner the mesh doesn't know is there, beside a leg it
+    /// gives. In the zone the cause was the mesh's voxel-rounded walls; here
+    /// it is a post standing in the world but left out of the mesh. Either
+    /// way the leg fails the walker's edge tests, and a short grid search
+    /// replaces that leg only.
+    fn post_beside_the_way() -> (CollisionWorld, MeshNavigator) {
+        let mut triangles = floor(0.0, -40.0, 40.0);
+        triangles.extend(wall_to(20.0));
+        let (mut world, mesh) = zone(&triangles);
+        let post = CollisionMesh::new(block([16.5, 0.0, -7.0], [17.5, 10.0, -6.0])).unwrap();
+        world.set_obstacles(vec![Arc::new(post)]);
+        (world, mesh)
+    }
+
+    #[test]
+    fn a_leg_the_mesh_gets_wrong_is_repaired_by_a_short_grid_search() {
+        let (world, mesh) = post_beside_the_way();
+        let (start, goal) = (Vec3::new(0.0, 0.0, -20.0), Vec3::new(0.0, 0.0, 20.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let path = found(run(&mut *search, &world, 256).0);
+        let (legs, repaired, fallback) = mesh_planned(&*search);
+        assert_eq!((repaired, fallback), (1, None), "{legs} legs: {path:?}");
+        // The repaired route is walkable from end to end.
+        let mut feet = start;
+        for &next in &path {
+            let to = Vec2::new(next.x, next.z);
+            feet = crate::movement::path::walk(&world, feet, to, 6.0)
+                .unwrap_or_else(|| panic!("{feet} to {next} in {path:?}"));
+        }
+        assert!(feet.distance(goal) < 1.5, "{feet}");
+    }
+
+    #[test]
+    fn a_repair_and_its_fallback_keep_to_each_call_s_budget() {
+        let (world, mesh) = post_beside_the_way();
+        let (start, goal) = (Vec3::new(0.0, 0.0, -20.0), Vec3::new(0.0, 0.0, 20.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let (progress, most) = run(&mut *search, &world, 16);
+        found(progress);
+        assert_eq!(mesh_planned(&*search).1, 1);
+        // A call's work is its budget, and at most one leg's check beyond.
+        assert!(most <= 16 + 40, "{most}");
+    }
+
+    #[test]
+    fn a_leg_no_repair_can_mend_hands_the_whole_way_to_the_grid() {
+        // The wall's gap filled in the world but open in the mesh.
+        let mut triangles = floor(0.0, -40.0, 40.0);
+        triangles.extend(wall_to(20.0));
+        let (mut world, mesh) = zone(&triangles);
+        let plug = CollisionMesh::new(block([20.0, 0.0, -0.5], [40.0, 10.0, 0.5])).unwrap();
+        world.set_obstacles(vec![Arc::new(plug)]);
+        let (start, goal) = (Vec3::new(0.0, 0.0, -20.0), Vec3::new(0.0, 0.0, 20.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let (progress, most) = run(&mut *search, &world, 64);
+        assert_eq!(progress, PathProgress::Failed);
+        assert!(matches!(
+            mesh_planned(&*search).2,
+            Some(Fallback::Leg { .. })
+        ));
+        assert!(most <= 64 + 40, "{most}");
+        // The grid's nearest reach stands, for a route that ends as close as it can.
+        assert!(
+            search
+                .closest()
+                .is_some_and(|path| path.last().unwrap().z < 0.0)
+        );
+    }
+
+    #[test]
+    fn ends_off_the_mesh_or_on_another_island_go_to_the_grid() {
+        let mut triangles = floor(0.0, -20.0, 20.0);
+        triangles.extend(floor(12.0, -10.0, 10.0));
+        let (world, mesh) = zone(&triangles);
+        let start = Vec3::new(-15.0, 0.0, -15.0);
+        for (goal, why) in [
+            (Vec3::new(0.0, 12.0, 0.0), Fallback::OtherIsland),
+            (Vec3::new(0.0, 40.0, 0.0), Fallback::OffMesh),
+        ] {
+            let mut search = mesh.search(request(start, goal, Vec::new()));
+            assert_eq!(run(&mut *search, &world, 256).0, PathProgress::Failed);
+            assert_eq!(mesh_planned(&*search), (0, 0, Some(why)));
+        }
+    }
+
+    #[test]
+    fn a_short_way_round_stays_with_the_grid() {
+        let (world, mesh) = zone(&floor(0.0, -20.0, 20.0));
+        let mut local = request(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0), Vec::new());
+        local.scope = Scope::Local;
+        let mut search = mesh.search(local);
+        found(run(&mut *search, &world, 256).0);
+        assert_eq!(search.planned(), Planned::Grid);
+    }
+}

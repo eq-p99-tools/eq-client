@@ -11,7 +11,9 @@ mod route;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use falls::{HARMLESS_DROP, fall_damage};
 pub use liquids::{GuardView, Liquid, Liquids};
-pub use navigator::{GridNavigator, Navigator, RouteSearch, Scope, SearchRequest};
+pub use navigator::{
+    Fallback, GridNavigator, Navigator, Planned, RouteSearch, Scope, SearchRequest,
+};
 pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};
 pub use route::{Background, Route, RouteStep, SearchTiming};
@@ -167,6 +169,34 @@ impl CollisionWorld {
                 .collect(),
             liquids: self.liquids.clone(),
         }
+    }
+
+    /// The zone's own triangles, without the obstacles, as a zone's mesh is
+    /// built from them.
+    #[cfg(test)]
+    pub(crate) fn terrain_triangles(&self) -> Vec<[[f32; 3]; 3]> {
+        let mesh = &self.terrain.mesh;
+        let vertices = mesh.vertices();
+        mesh.indices()
+            .iter()
+            .map(|triangle| triangle.map(|i| vertices[i as usize].into()))
+            .collect()
+    }
+
+    /// Each door collider's id and bounds, low corner then high.
+    #[must_use]
+    pub fn door_bounds(&self) -> Vec<(u8, Vec3, Vec3)> {
+        self.obstacles
+            .iter()
+            .filter_map(|(door, mesh)| {
+                let bounds = mesh.mesh.local_aabb();
+                Some((
+                    (*door)?,
+                    Vec3::from_array(bounds.mins.into()),
+                    Vec3::from_array(bounds.maxs.into()),
+                ))
+            })
+            .collect()
     }
 
     /// How many obstacles stand in the world, for diagnostics.

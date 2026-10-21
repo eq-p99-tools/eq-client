@@ -346,6 +346,7 @@ type Observed<'w> = (
     Res<'w, super::motion::Controls>,
     Option<Res<'w, crate::loading::Loading>>,
     Option<Res<'w, super::doors::Hinges>>,
+    Option<Res<'w, super::zone_navmesh::ZoneNavMesh>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
@@ -704,6 +705,7 @@ pub(super) fn drive(
                     let (height, drops) = (route.height(), observed.4.airborne.is_some());
                     let reach = route.reach();
                     let timing = route.search_timing().unwrap_or_default();
+                    let planned = Planned::of(route.planned());
                     info!(
                         waypoints,
                         waited,
@@ -721,8 +723,20 @@ pub(super) fn drive(
                         ?goal,
                         height,
                         drops,
+                        planner = planned.planner,
+                        legs = planned.legs,
+                        clear = planned.clear,
+                        repaired = planned.repaired,
+                        fallback = planned.fallback,
                         "Script route ready"
                     );
+                    if let Some(eq_client_core::movement::Planned::Mesh {
+                        fallback: Some(why),
+                        ..
+                    }) = route.planned()
+                    {
+                        info!(?why, ?feet, ?goal, "Script route fell back to the grid");
+                    }
                     if partial && let Some(end) = route.end() {
                         log_partial_route(&online, end);
                     }
@@ -1280,12 +1294,22 @@ pub(super) fn drive(
             let route = bodies.single().ok().and_then(|body| {
                 let (feet, goal) = walk_ends(&online, *body, script.approached)?;
                 // Ledges are routes only where the session simulates falls.
-                Some(
-                    eq_client_core::movement::Route::new(feet, goal, *range, body.height)
-                        .with_drops(observed.4.airborne.is_some())
-                        .with_doors(openable_doors(&online))
-                        .with_background(std::sync::Arc::new(super::background::ComputePool)),
-                )
+                let route = eq_client_core::movement::Route::new(feet, goal, *range, body.height)
+                    .with_drops(observed.4.airborne.is_some())
+                    .with_doors(openable_doors(&online))
+                    .with_background(std::sync::Arc::new(super::background::ComputePool));
+                // With the navmesh switch on and the zone's mesh ready for
+                // this body, the mesh plans; else the grid, as before.
+                let mesh = observed
+                    .7
+                    .as_ref()
+                    .and_then(|meshes| meshes.mesh_for(body.height));
+                Some(match mesh {
+                    Some(mesh) => route.with_navigator(Box::new(
+                        eq_client_core::movement::navmesh::MeshNavigator::new(mesh),
+                    )),
+                    None => route,
+                })
             });
             let creating = creating.elapsed();
             if creating >= SLOW_ROUTE_CALL {
@@ -2156,6 +2180,48 @@ impl DoorWait {
                     self.rerouted = false;
                     DoorAction::Click
                 }
+            },
+        }
+    }
+}
+
+/// What planned a route, as the route trace line names it.
+struct Planned {
+    planner: &'static str,
+    legs: usize,
+    clear: usize,
+    repaired: usize,
+    fallback: &'static str,
+}
+
+impl Planned {
+    fn of(planned: Option<&eq_client_core::movement::Planned>) -> Self {
+        use eq_client_core::movement::{Fallback, Planned as By};
+        match planned {
+            Some(By::Mesh {
+                legs,
+                clear,
+                repaired,
+                fallback,
+            }) => Self {
+                planner: "mesh",
+                legs: *legs,
+                clear: *clear,
+                repaired: repaired.len(),
+                fallback: match fallback {
+                    None => "none",
+                    Some(Fallback::OffMesh) => "off_mesh",
+                    Some(Fallback::OtherIsland) => "other_island",
+                    Some(Fallback::NoCorridor) => "no_corridor",
+                    Some(Fallback::Leg { .. }) => "leg",
+                },
+            },
+            Some(By::Grid) | None => Self {
+                planner: "grid",
+                legs: 0,
+                clear: 0,
+                repaired: 0,
+                fallback: "none",
             },
         }
     }
