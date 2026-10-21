@@ -1011,6 +1011,98 @@ mod routes {
         assert!(path.iter().any(|feet| feet.y > 15.0), "{path:?}");
     }
 
+    /// A mesh built over a rise `high` in the middle of the way, its ramps
+    /// 30 long, and a world whose floor is flat under it: the mesh off the
+    /// floor there by more than its lift reaches, as a polygon's corners can
+    /// lie off curved ground.
+    fn rise_in_the_mesh_alone(high: f32) -> (CollisionWorld, MeshNavigator) {
+        let ground = [
+            (-150.0, 0.0),
+            (-70.0, 0.0),
+            (-40.0, high),
+            (40.0, high),
+            (70.0, 0.0),
+            (150.0, 0.0),
+        ];
+        let triangles: Vec<_> = ground
+            .windows(2)
+            .flat_map(|pair| {
+                let ((z0, y0), (z1, y1)) = (pair[0], pair[1]);
+                super::quad(
+                    [-40.0, y0, z0],
+                    [-40.0, y1, z1],
+                    [40.0, y1, z1],
+                    [40.0, y0, z0],
+                )
+            })
+            .collect();
+        let (_, mesh) = zone(&triangles);
+        (
+            CollisionWorld::new(floor(0.0, -150.0, 150.0)).unwrap(),
+            mesh,
+        )
+    }
+
+    #[test]
+    fn a_piece_partway_along_ends_on_the_floor_its_walk_reached_under_the_corridor() {
+        let (world, mesh) = rise_in_the_mesh_alone(7.0);
+        let (start, goal) = (Vec3::new(0.0, 0.0, -140.0), Vec3::new(0.0, 0.0, 140.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        let path = found(run(&mut *search, &world, 256).0);
+        let Planned::Mesh {
+            pieces,
+            loose,
+            repaired,
+            fallback,
+            refused,
+            ..
+        } = search.planned()
+        else {
+            panic!("the grid planned");
+        };
+        assert_eq!((repaired.len(), fallback), (0, None), "{repaired:?}");
+        assert_eq!(refused, Refusals::default());
+        // The pieces ending on the rise stood on the walked floor.
+        assert!(loose >= 1 && loose < pieces, "{loose} of {pieces}");
+        assert!(path.iter().all(|feet| feet.y.abs() < 0.01), "{path:?}");
+    }
+
+    #[test]
+    fn a_piece_s_walk_with_no_corridor_within_reach_over_it_is_still_refused() {
+        // The rise 14 high: the walked floor lies farther under the corridor
+        // than a search's own end may stand off.
+        let (world, mesh) = rise_in_the_mesh_alone(14.0);
+        let (start, goal) = (Vec3::new(0.0, 0.0, -140.0), Vec3::new(0.0, 0.0, 140.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        run(&mut *search, &world, 256);
+        let Planned::Mesh { loose, refused, .. } = search.planned() else {
+            panic!("the grid planned");
+        };
+        assert_eq!(loose, 0);
+        assert!(refused.height >= 1, "{refused:?}");
+    }
+
+    #[test]
+    fn a_leg_s_own_end_off_the_floor_is_still_refused() {
+        let (world, mesh) = rise_in_the_mesh_alone(7.0);
+        // The goal 5 over the floor, on the rise's ramp in the mesh: the last
+        // piece's end, which stays strict.
+        let (start, goal) = (Vec3::new(0.0, 0.0, -140.0), Vec3::new(0.0, 5.0, -45.0));
+        let mut search = mesh.search(request(start, goal, Vec::new()));
+        found(run(&mut *search, &world, 256).0);
+        let Planned::Mesh {
+            repaired, refused, ..
+        } = search.planned()
+        else {
+            panic!("the grid planned");
+        };
+        assert_eq!(refused.height, 1, "{refused:?}");
+        assert!(
+            matches!(repaired[..], [(_, to)] if to == goal),
+            "{repaired:?}"
+        );
+    }
+
     /// The most a piece's check costs: a piece's length in grid cells, plus
     /// one, from feet that ended within a hair of the last piece's end.
     const ONE_PIECE: usize = 34;

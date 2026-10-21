@@ -1852,6 +1852,7 @@ fn inspect_mesh_routes() {
                     legs,
                     pieces,
                     cut,
+                    loose,
                     clear,
                     drops,
                     repaired,
@@ -1864,7 +1865,7 @@ fn inspect_mesh_routes() {
                         .map(|(from, to)| format!("{}>{}", eq_point(*from), eq_point(*to)))
                         .collect();
                     format!(
-                        " legs={legs} cut={cut} pieces={pieces} clear={clear} walk_only={} \
+                        " legs={legs} cut={cut} pieces={pieces} loose_pieces={loose} clear={clear} walk_only={} \
                          drops={drops} repaired={} repaired_eq=[{}] fallback={fallback:?} \
                          refused_walk={} refused_height={} refused_door={} longest_check_ms={:.2}",
                         pieces.saturating_sub(clear + drops + repaired.len()),

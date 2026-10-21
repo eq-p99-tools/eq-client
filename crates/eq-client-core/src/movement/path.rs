@@ -22,6 +22,10 @@ const LEVEL: f32 = 4.0;
 const MAX_EXPANSIONS: usize = 60_000;
 /// How near its target a walk must end to count as reaching it.
 const LANDING: f32 = 0.25;
+/// How far above or below a goal's height feet still reach it: the most a
+/// search's end, or a walk to a mesh piece's end, may stand off the height
+/// it was given.
+pub(super) const HEIGHT_REACH: f32 = 10.0;
 /// How near a blocked step a door must come to be the one in its way.
 pub(super) const DOOR_REACH: f32 = CELL;
 /// How far across the ground every probe of one expansion reaches from its
@@ -484,7 +488,7 @@ pub(super) fn clear_leg(world: &CollisionWorld, from: Vec3, to: Vec3, height: f3
 /// floor rather than one far above or below.
 pub(super) fn within_reach(feet: Vec3, goal: Vec3, reach: f32) -> bool {
     Vec2::new(feet.x - goal.x, feet.z - goal.z).length() <= reach
-        && (feet.y - goal.y).abs() <= reach.max(10.0)
+        && (feet.y - goal.y).abs() <= reach.max(HEIGHT_REACH)
 }
 
 /// Steps off a ledge toward a horizontal position and falls to the floor below;
