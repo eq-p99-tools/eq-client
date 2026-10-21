@@ -114,6 +114,44 @@ struct Polygon {
     size: u8,
 }
 
+/// A link [`NavMesh::link_faults`] finds wrong.
+#[derive(Clone, Debug)]
+pub struct LinkFault {
+    /// The sizes of the polygon it leaves and the one it leads to.
+    pub sizes: (u8, u8),
+    /// The portal's one end.
+    pub a: Vec3,
+    /// Its other end.
+    pub b: Vec3,
+    /// How far the portal lies off the far polygon's edges, seen from
+    /// above, at worst.
+    pub across: f32,
+    /// How far it lies above or below them there, at worst.
+    pub up: f32,
+    /// Whether the far polygon has no link back.
+    pub one_way: bool,
+}
+
+/// How far `p` lies from the nearest edge of the polygon with these
+/// corners: across, seen from above, and up or down from that edge there.
+fn off_boundary(vertices: &[Vec3], p: Vec3) -> (f32, f32) {
+    let flat = Vec2::new(p.x, p.z);
+    (0..vertices.len())
+        .map(|i| {
+            let (a, b) = (vertices[i], vertices[(i + 1) % vertices.len()]);
+            let (a2, b2) = (Vec2::new(a.x, a.z), Vec2::new(b.x, b.z));
+            let along = b2 - a2;
+            let t = if along.length_squared() > 0.0 {
+                ((flat - a2).dot(along) / along.length_squared()).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (flat.distance(a2 + along * t), (a.lerp(b, t).y - p.y).abs())
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+        .unwrap_or((f32::INFINITY, f32::INFINITY))
+}
+
 /// A built mesh.
 #[derive(Debug)]
 pub struct NavMesh {
@@ -298,6 +336,40 @@ impl NavMesh {
     #[must_use]
     pub fn polygon_size(&self, i: u32) -> u8 {
         self.polygons[i as usize].size
+    }
+
+    /// Every link whose portal doesn't lie on an edge of the polygon it
+    /// leads to, within `horizontal` across and `vertical` up or down, or
+    /// that the polygon it leads to has no link back for: a check of the
+    /// build's links, for probes.
+    #[must_use]
+    pub fn link_faults(&self, horizontal: f32, vertical: f32) -> (usize, Vec<LinkFault>) {
+        let mut count = 0;
+        let mut faults = Vec::new();
+        for (from, polygon) in self.polygons.iter().enumerate() {
+            for link in &polygon.links {
+                count += 1;
+                let to = &self.polygons[link.to as usize];
+                let off = |p: Vec3| off_boundary(&to.vertices, p);
+                let (across, up) = [link.a, link.b, (link.a + link.b) / 2.0]
+                    .into_iter()
+                    .map(off)
+                    .fold((0.0_f32, 0.0_f32), |(x, y), (a, b)| (x.max(a), y.max(b)));
+                #[allow(clippy::cast_possible_truncation)] // Polygons are counted in u32.
+                let one_way = !to.links.iter().any(|back| back.to == from as u32);
+                if across > horizontal || up > vertical || one_way {
+                    faults.push(LinkFault {
+                        sizes: (polygon.size, to.size),
+                        a: link.a,
+                        b: link.b,
+                        across,
+                        up,
+                        one_way,
+                    });
+                }
+            }
+        }
+        (count, faults)
     }
 
     /// Whether polygons `a` and `b` lie on one island, so a walk can join them.

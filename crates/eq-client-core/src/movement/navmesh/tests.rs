@@ -1153,6 +1153,17 @@ mod sizes {
     }
 
     #[test]
+    fn every_link_of_a_tagged_build_meets_the_polygon_it_leads_to() {
+        let triangles = lintel(5.0);
+        for settings in [sized(), plain(SIZES[0])] {
+            let mesh = build(&triangles, &settings);
+            let (links, faults) = mesh.link_faults(settings.cell_size * 1.5, 0.5);
+            assert!(links > 0);
+            assert!(faults.is_empty(), "{faults:?}");
+        }
+    }
+
+    #[test]
     fn a_taller_sizes_floor_stops_short_of_a_ceiling_too_low_for_it() {
         // The floor under a beam 5 high is the short size's alone. A plain
         // build for a taller walker erodes its floor back from the beam by

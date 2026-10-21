@@ -2155,6 +2155,114 @@ fn inspect_mesh_leg() {
     }
 }
 
+/// Checks every link of a zone's tagged build and of a plain build at the
+/// short size: whether each portal lies on an edge of the polygon it leads
+/// to, within 1.5 cells across and the tiles' joining tolerance up or down,
+/// and whether that polygon links back (#268's seam check). Nothing opens a
+/// window.
+///
+/// It prints each build's link count and its faults, split into links
+/// across a change of size and links within one, with the first ten of
+/// each as EQ points. Then, along `EQ_PROBE_LEG` (renderer points
+/// `x,y,z>x,y,z`, defaulting to East Commons' fallback leg at bfa110c),
+/// every 2 units, it finds the zone's floor nearest the straight line's
+/// height within 40 units and says how many steps have a floor there and a
+/// polygon on it, on each build.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL and EQ_PROBE_ZONE"]
+#[allow(clippy::too_many_lines)]
+fn inspect_mesh_links() {
+    use eq_client_core::movement::navmesh::{self, NavMesh, Settings};
+    use std::sync::atomic::AtomicBool;
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone_name = std::env::var("EQ_PROBE_ZONE").unwrap();
+    let leg = std::env::var("EQ_PROBE_LEG")
+        .unwrap_or_else(|_| "-441.4,-55.3,-2145.3>-1019.4,-15.2,-1521.2".to_owned());
+    let point = |text: &str| {
+        let v: Vec<f32> = text.split(',').map(|n| n.trim().parse().unwrap()).collect();
+        Vec3::new(v[0], v[1], v[2])
+    };
+    let (from, to) = leg.split_once('>').unwrap();
+    let (from, to) = (point(from), point(to));
+    let zone = eq_client_assets::load_zone_collision(&install, &zone_name).unwrap();
+    let triangles = collision_triangles(&zone);
+    let world = build_collision(&zone).unwrap();
+    let sizes = super::zone_navmesh::walker_sizes();
+    for (label, settings) in [
+        ("tagged", Settings::sized(sizes)),
+        ("plain0", Settings::walker(sizes[0])),
+    ] {
+        let (mesh, report) = NavMesh::build_in(
+            &triangles,
+            Some(&world),
+            &settings,
+            navmesh::build_threads(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let (across, up) = (
+            settings.cell_size * 1.5,
+            settings.cell_height * 4.0 + settings.climb,
+        );
+        let (links, faults) = mesh.link_faults(across, up);
+        let (seam, same): (Vec<_>, Vec<_>) = faults
+            .iter()
+            .partition(|fault| fault.sizes.0 != fault.sizes.1);
+        let one_way = faults.iter().filter(|fault| fault.one_way).count();
+        println!(
+            "zone={zone_name} build={label} polygons={} refused_tiles={} links={links} \
+             across_limit={across:.2} up_limit={up:.2} faults={} seam_faults={} \
+             same_size_faults={} one_way={one_way}",
+            mesh.polygon_count(),
+            report.refused.len(),
+            faults.len(),
+            seam.len(),
+            same.len(),
+        );
+        for (kind, list) in [("seam", &seam), ("same", &same)] {
+            for fault in list.iter().take(10) {
+                println!(
+                    "build={label} fault={kind} sizes={:?} eq_a={} eq_b={} across={:.2} up={:.2} \
+                     one_way={}",
+                    fault.sizes,
+                    eq_point(fault.a),
+                    eq_point(fault.b),
+                    fault.across,
+                    fault.up,
+                    fault.one_way
+                );
+            }
+        }
+        // The leg's steps against the zone's own floor under them.
+        let steps = (from.distance(to) / 2.0).ceil().max(1.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let count = steps as usize;
+        let (mut floored, mut meshed, mut first_bare) = (0, 0, None);
+        for step in 0..=count {
+            #[allow(clippy::cast_precision_loss)]
+            let at = from.lerp(to, step as f32 / steps);
+            let Some(floor) = world.nearest_ground(at, 40.0, 40.0) else {
+                continue;
+            };
+            floored += 1;
+            let on = Vec3::new(at.x, floor, at.z);
+            if mesh.locate(on).is_some() {
+                meshed += 1;
+            } else if first_bare.is_none() {
+                first_bare = Some(eq_point(on));
+            }
+        }
+        println!(
+            "build={label} leg_eq={}>{} steps={} with_floor={floored} with_polygon_on_floor={meshed} \
+             first_floor_without_polygon={}",
+            eq_point(from),
+            eq_point(to),
+            count + 1,
+            first_bare.unwrap_or_else(|| "none".to_owned())
+        );
+    }
+}
+
 /// ` size=` and the tag of polygon `i` on the whole tagged mesh, where
 /// there is one.
 fn whole_size(tagged: Option<&eq_client_core::movement::navmesh::NavMesh>, i: u32) -> String {
