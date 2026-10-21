@@ -471,11 +471,11 @@ pub(super) fn receive(
                 (state.world.session_id(), state.world.player().cloned())
             {
                 let zone = state.world.zone().to_owned();
-                let directory = directory.clone();
+                let (directory, navmesh) = (directory.clone(), settings.0.navmesh);
                 state.loading.start(id, move || {
                     let loading = std::time::Instant::now();
                     let entry = super::zone::Entry::admission(&zone, &player, &directory)
-                        .map(super::zone::Entry::prepare);
+                        .map(|entry| entry.prepare(navmesh));
                     if entry.is_ok() {
                         // Read and prepared off the frame thread, behind the
                         // loading screen.

@@ -88,6 +88,12 @@ struct Arguments {
     #[arg(long)]
     debug_overlay: bool,
 
+    /// Build each zone's navigation mesh at entry, off the frame, and keep it
+    /// under the settings directory; for probes, scripts and looks. Nothing
+    /// plans routes over it yet.
+    #[arg(long, env = "EQ_CLIENT_NAVMESH")]
+    navmesh: bool,
+
     /// Show synthetic moving entities offline, without connecting to a server.
     #[arg(long, conflicts_with = "online")]
     demo_entities: bool,
@@ -677,6 +683,7 @@ fn viewer_config(
         window_position: arguments.window_position,
         window_size: arguments.window_size,
         debug_overlay: arguments.debug_overlay,
+        navmesh: arguments.navmesh,
     }
 }
 

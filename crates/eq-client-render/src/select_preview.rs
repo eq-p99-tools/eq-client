@@ -81,7 +81,7 @@ pub(super) fn show(
                             race: look.race,
                             appearance: look.appearance,
                         };
-                        (entry.prepare(), appearance, zone)
+                        (entry.prepare(false), appearance, zone)
                     },
                 )
             });
