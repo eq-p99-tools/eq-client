@@ -97,6 +97,9 @@ pub enum UiLayoutError {
     /// The set of interface files has no file of that name.
     #[error("the skin's set of interface files has no {0}")]
     MissingFile(String),
+    /// The file is not a cursor: an icon, or no Windows icon file at all.
+    #[error("{0} is not a cursor")]
+    NotCursor(PathBuf),
     /// A texture sheet is not the size its cells assume.
     #[error("{path} is {width}x{height}, not {SHEET_SIZE}x{SHEET_SIZE}")]
     SheetSize {
@@ -148,6 +151,66 @@ pub fn texture(
     Ok(image::open(&path)
         .map_err(|source| UiLayoutError::Image { path, source })?
         .into_rgba8())
+}
+
+/// A skin's mouse cursor, such as `arrow.cur`: its picture and the pixel in
+/// it that points.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkinCursor {
+    /// The picture, as RGBA pixels.
+    pub pixels: image::RgbaImage,
+    /// The pixel that points, across and down from the picture's top left.
+    pub hotspot: (u16, u16),
+}
+
+/// Reads one of a skin's cursors, such as `arrow.cur`, from the picture the
+/// image crate picks among the sizes the file holds, with that picture's
+/// hotspot.
+///
+/// # Errors
+/// Rejects unsafe names, unreadable files, files that are not cursors, icons
+/// among them, and pictures that cannot be decoded.
+pub fn cursor(eq_directory: &Path, skin: &str, file: &str) -> Result<SkinCursor, UiLayoutError> {
+    let path = skin_file(eq_directory, skin, file)?;
+    let bytes = std::fs::read(&path).map_err(|source| UiLayoutError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    let hotspot = cursor_hotspot(&bytes).ok_or_else(|| UiLayoutError::NotCursor(path.clone()))?;
+    let pixels = image::load_from_memory_with_format(&bytes, image::ImageFormat::Ico)
+        .map_err(|source| UiLayoutError::Image { path, source })?
+        .into_rgba8();
+    Ok(SkinCursor { pixels, hotspot })
+}
+
+/// The hotspot of the picture the image crate decodes from a cursor file,
+/// which it does not report: a cursor's header names it in each picture's
+/// directory entry. The image crate reads a cursor as an icon and decodes the
+/// entry it scores highest by the field an icon keeps its bits per pixel in,
+/// then by its area, where a side of 0 is 256; the last entry is taken first
+/// and an earlier one only when it scores strictly higher. In a cursor that
+/// field is the hotspot's y, so the same rule finds the same entry here.
+/// None when the file is no cursor or its directory is cut short.
+fn cursor_hotspot(bytes: &[u8]) -> Option<(u16, u16)> {
+    let word = |at: usize| Some(u16::from_le_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]));
+    // The reserved word, then the type: 1 for an icon, 2 for a cursor.
+    if word(0)? != 0 || word(2)? != 2 {
+        return None;
+    }
+    let entries = (0..usize::from(word(4)?))
+        .map(|index| bytes.get(6 + 16 * index..22 + 16 * index))
+        .collect::<Option<Vec<_>>>()?;
+    let field = |entry: &[u8], at: usize| u16::from_le_bytes([entry[at], entry[at + 1]]);
+    let side = |length: u8| if length == 0 { 256 } else { u32::from(length) };
+    let score = |entry: &[u8]| (field(entry, 6), side(entry[0]) * side(entry[1]));
+    let (last, earlier) = entries.split_last()?;
+    let mut best = *last;
+    for entry in earlier {
+        if score(entry) > score(best) {
+            best = entry;
+        }
+    }
+    Some((field(best, 4), field(best, 6)))
 }
 
 /// Reads one of a skin's icon sheets, such as `dragitem1.tga`, as RGBA pixels.
@@ -1347,6 +1410,174 @@ MouseSensitivity=4
         std::fs::remove_dir_all(&install).unwrap();
         assert_eq!(chosen.as_deref(), Some("velious"));
         assert_eq!((unsafe_skin, missing, escaping), (None, None, None));
+    }
+
+    /// A picture in a Windows icon file: its side, the two words of its
+    /// directory entry that a cursor keeps its hotspot in and an icon its
+    /// planes and bits per pixel, and its colour by position.
+    struct Picture {
+        side: u8,
+        words: (u16, u16),
+        colour: fn(u32, u32) -> [u8; 4],
+    }
+
+    /// A Windows icon file of `kind`, 1 for an icon and 2 for a cursor, with
+    /// each picture a bitmap: a header of twice its height, its 32-bit BGRA
+    /// rows and its 1-bit transparency mask, each from the bottom up.
+    fn icon_file(kind: u16, pictures: &[Picture]) -> Vec<u8> {
+        let count = u16::try_from(pictures.len()).unwrap();
+        let mut file = [0, kind, count]
+            .iter()
+            .flat_map(|word: &u16| word.to_le_bytes())
+            .collect::<Vec<_>>();
+        let mut offset = 6 + 16 * u32::from(count);
+        let mut bitmaps = Vec::new();
+        for picture in pictures {
+            let side = u32::from(picture.side);
+            let mask_row = (side.div_ceil(8)).div_ceil(4) * 4;
+            let mut bitmap = Vec::new();
+            for word in [40, side, 2 * side] {
+                bitmap.extend(word.to_le_bytes());
+            }
+            bitmap.extend(1_u16.to_le_bytes());
+            bitmap.extend(32_u16.to_le_bytes());
+            bitmap.extend([0; 24]);
+            for y in (0..side).rev() {
+                for x in 0..side {
+                    let [r, g, b, a] = (picture.colour)(x, y);
+                    bitmap.extend([b, g, r, a]);
+                }
+            }
+            for y in (0..side).rev() {
+                let mut row = vec![0_u8; usize::try_from(mask_row).unwrap()];
+                for x in 0..side {
+                    if (picture.colour)(x, y)[3] == 0 {
+                        row[usize::try_from(x / 8).unwrap()] |= 0x80 >> (x % 8);
+                    }
+                }
+                bitmap.extend(row);
+            }
+            let length = u32::try_from(bitmap.len()).unwrap();
+            file.extend([picture.side, picture.side, 0, 0]);
+            file.extend(picture.words.0.to_le_bytes());
+            file.extend(picture.words.1.to_le_bytes());
+            file.extend(length.to_le_bytes());
+            file.extend(offset.to_le_bytes());
+            offset += length;
+            bitmaps.extend(bitmap);
+        }
+        file.extend(bitmaps);
+        file
+    }
+
+    /// A cursor's large picture: shaded, and clear below its diagonal.
+    fn large(x: u32, y: u32) -> [u8; 4] {
+        if x + y > 40 {
+            [0, 0, 0, 0]
+        } else {
+            [
+                u8::try_from(x * 8).unwrap(),
+                u8::try_from(y * 8).unwrap(),
+                100,
+                255,
+            ]
+        }
+    }
+
+    /// A cursor's small picture, all white.
+    fn small(_: u32, _: u32) -> [u8; 4] {
+        [255, 255, 255, 255]
+    }
+
+    /// Writes `bytes` as `file` of `skin` in a new installation.
+    fn install_file(install: &Path, skin: &str, file: &str, bytes: &[u8]) {
+        std::fs::create_dir_all(install.join("uifiles").join(skin)).unwrap();
+        std::fs::write(install.join("uifiles").join(skin).join(file), bytes).unwrap();
+    }
+
+    #[test]
+    fn a_cursor_gives_the_picture_the_image_crate_picks_and_its_hotspot() {
+        let install = std::env::temp_dir().join(format!("eq-ui-cursor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        let two = |small_hotspot| {
+            icon_file(
+                2,
+                &[
+                    Picture {
+                        side: 16,
+                        words: small_hotspot,
+                        colour: small,
+                    },
+                    Picture {
+                        side: 32,
+                        words: (3, 5),
+                        colour: large,
+                    },
+                ],
+            )
+        };
+        install_file(&install, DEFAULT_SKIN, "arrow.cur", &two((1, 2)));
+        // The image crate scores a cursor's hotspot y as an icon's bits per
+        // pixel, so a small picture with a lower hotspot wins the pick.
+        install_file(&install, DEFAULT_SKIN, "low.cur", &two((1, 9)));
+        let read = cursor(&install, DEFAULT_SKIN, "arrow.cur");
+        let low = cursor(&install, DEFAULT_SKIN, "low.cur");
+        std::fs::remove_dir_all(&install).unwrap();
+        let read = read.unwrap();
+        assert_eq!(read.pixels.dimensions(), (32, 32));
+        assert_eq!(read.hotspot, (3, 5));
+        assert_eq!(read.pixels.get_pixel(0, 0).0, [0, 0, 100, 255]);
+        assert_eq!(read.pixels.get_pixel(2, 30).0, [16, 240, 100, 255]);
+        assert_eq!(read.pixels.get_pixel(31, 0).0, [248, 0, 100, 255]);
+        assert_eq!(read.pixels.get_pixel(31, 31).0[3], 0);
+        let low = low.unwrap();
+        assert_eq!((low.pixels.dimensions(), low.hotspot), ((16, 16), (1, 9)));
+        assert_eq!(low.pixels.get_pixel(8, 8).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn a_skin_without_its_own_cursor_uses_the_default_ones() {
+        let install =
+            std::env::temp_dir().join(format!("eq-ui-cursor-skin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        let one = |hotspot| {
+            icon_file(
+                2,
+                &[Picture {
+                    side: 16,
+                    words: hotspot,
+                    colour: small,
+                }],
+            )
+        };
+        install_file(&install, DEFAULT_SKIN, "arrow.cur", &one((1, 1)));
+        std::fs::create_dir_all(install.join("uifiles/plain")).unwrap();
+        let fallback = cursor(&install, "plain", "arrow.cur").map(|cursor| cursor.hotspot);
+        install_file(&install, "plain", "arrow.cur", &one((7, 4)));
+        let own = cursor(&install, "plain", "arrow.cur").map(|cursor| cursor.hotspot);
+        let missing = cursor(&install, "plain", "hand.cur");
+        std::fs::remove_dir_all(&install).unwrap();
+        assert_eq!((fallback.unwrap(), own.unwrap()), ((1, 1), (7, 4)));
+        assert!(matches!(missing, Err(UiLayoutError::Read { .. })));
+    }
+
+    #[test]
+    fn an_icon_is_not_read_as_a_cursor() {
+        let install =
+            std::env::temp_dir().join(format!("eq-ui-cursor-icon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        let icon = icon_file(
+            1,
+            &[Picture {
+                side: 16,
+                words: (1, 32),
+                colour: small,
+            }],
+        );
+        install_file(&install, DEFAULT_SKIN, "arrow.cur", &icon);
+        let read = cursor(&install, DEFAULT_SKIN, "arrow.cur");
+        std::fs::remove_dir_all(&install).unwrap();
+        assert!(matches!(read, Err(UiLayoutError::NotCursor(_))));
     }
 
     #[test]

@@ -46,7 +46,7 @@ eq-network = { git = "https://github.com/eq-p99-tools/eq-network", branch = "mai
 eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", branch = "main" }
 glam = "0.32.1"
 parry3d = "0.30.2"
-image = { version = "0.25", default-features = false, features = ["bmp", "dds", "jpeg", "png", "tga"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "dds", "ico", "jpeg", "png", "tga"] }
 libeq = { git = "https://github.com/eq-p99-tools/libeq", rev = "e0e5a4e65c170272035a8beb65bda048f7a60a01" }
 roxmltree = "0.21.1"
 rodio = { version = "0.22", default-features = false, features = ["hound"] }

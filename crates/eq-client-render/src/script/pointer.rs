@@ -3,7 +3,8 @@
 //! hovers a control glides the script pointer there first, hovering what it
 //! crosses, and the click goes to the control under it as the glide ends.
 //! The real pointer is never moved: the script pointer is set only while the
-//! real one is outside the window, and is drawn as an arrow of its own.
+//! real one is outside the window, and is drawn as an arrow of its own: the
+//! skin's `arrow.cur`, or this client's own arrow when the skin has none.
 use std::time::Duration;
 
 use bevy::{
@@ -145,9 +146,12 @@ impl Aim<'_, '_> {
     }
 }
 
-/// The arrow drawn at the script pointer while a script runs.
+/// The arrow drawn at the script pointer while a script runs, with this
+/// client's own arrow for when the skin has no cursor.
 #[derive(Component)]
-pub(crate) struct PointerArt;
+pub(crate) struct PointerArt {
+    own: Handle<Image>,
+}
 
 /// The arrow's size in logical pixels; its tip, the point it points with,
 /// is its top left corner.
@@ -157,14 +161,70 @@ const ARROW: Vec2 = Vec2::new(12.0, 19.0);
 /// sharp on a high-density display.
 const ARROW_DENSITY: u8 = 2;
 
+/// The skin's arrow cursor, `arrow.cur`, read again when the skin changes;
+/// None when the skin and the default skin have none that decodes.
+#[derive(Resource, Default)]
+pub(crate) struct SkinArrow(Option<SkinCursor>);
+
+/// A cursor's picture, its size in its own pixels and the pixel in it that
+/// points.
+pub(crate) struct SkinCursor {
+    image: Handle<Image>,
+    size: Vec2,
+    hotspot: Vec2,
+}
+
+/// Reads the skin's `arrow.cur` again when the skin changes.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn read_arrow(
+    skin: Res<crate::skin::UiSkin>,
+    settings: Res<crate::ViewerSettings>,
+    mut images: ResMut<Assets<Image>>,
+    mut arrow: ResMut<SkinArrow>,
+) {
+    if !skin.is_changed() {
+        return;
+    }
+    let read = settings
+        .0
+        .eq_directory
+        .as_deref()
+        .map(|directory| eq_client_assets::ui::cursor(directory, &skin.0, "arrow.cur"));
+    arrow.0 = match read {
+        Some(Ok(cursor)) => {
+            let (width, height) = cursor.pixels.dimensions();
+            Some(SkinCursor {
+                image: images.add(crate::sheets::image(cursor.pixels)),
+                #[allow(clippy::cast_precision_loss, reason = "a cursor is small")]
+                size: Vec2::new(width as f32, height as f32),
+                hotspot: Vec2::new(f32::from(cursor.hotspot.0), f32::from(cursor.hotspot.1)),
+            })
+        }
+        Some(Err(eq_client_assets::ui::UiLayoutError::Read { .. })) | None => {
+            info!(
+                "UI skin {} has no arrow.cur; the script pointer is this client's own arrow",
+                skin.0
+            );
+            None
+        }
+        Some(Err(_)) => {
+            info!(
+                "UI skin {}'s arrow.cur does not decode; the script pointer is this client's own arrow",
+                skin.0
+            );
+            None
+        }
+    };
+}
+
 /// Spawns the hidden arrow above every window and the tooltip. It takes no
 /// input: it has no `Interaction`, is no pointer surface and lets the
 /// pointer pass.
 pub(crate) fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let image = images.add(crate::sheets::image(arrow()));
+    let own = images.add(crate::sheets::image(arrow()));
     commands.spawn((
-        PointerArt,
-        ImageNode::new(image),
+        PointerArt { own: own.clone() },
+        ImageNode::new(own),
         FocusPolicy::Pass,
         GlobalZIndex(2000),
         Node {
@@ -179,14 +239,18 @@ pub(crate) fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
 /// Draws the arrow at the script pointer while a script runs and hides it
 /// otherwise, and forgets the script pointer once the script ends, so the
-/// next starts at the window's middle.
+/// next starts at the window's middle. The skin's cursor is drawn at its own
+/// pixels' size, as the system draws a pointer, with its hotspot on the
+/// script pointer; this client's own arrow is drawn in its stead when the
+/// skin has none.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn draw(
     mut commands: Commands,
     script: Option<Res<super::Script>>,
     pointer: Option<Res<ScriptPointer>>,
-    scale: Option<Res<UiScale>>,
-    mut arrows: Query<&mut Node, With<PointerArt>>,
+    (scale, windows): (Option<Res<UiScale>>, Query<&Window, With<PrimaryWindow>>),
+    skin: Option<Res<SkinArrow>>,
+    mut arrows: Query<(&mut Node, &mut ImageNode, &PointerArt)>,
 ) {
     if script.is_none() && pointer.is_some() {
         commands.remove_resource::<ScriptPointer>();
@@ -195,7 +259,21 @@ pub(crate) fn draw(
     let at = pointer
         .filter(|_| script.is_some())
         .map(|pointer| pointer.0 / factor);
-    for mut node in &mut arrows {
+    // The skin's cursor in the UI's pixels: its own pixels are the
+    // display's, not the window's logical ones.
+    let pixel = 1.0 / (windows.single().map_or(1.0, Window::scale_factor) * factor);
+    let cursor = skin.as_ref().and_then(|skin| skin.0.as_ref());
+    for (mut node, mut picture, art) in &mut arrows {
+        let (image, size, hotspot) = cursor.map_or((&art.own, ARROW, Vec2::ZERO), |cursor| {
+            (&cursor.image, cursor.size * pixel, cursor.hotspot * pixel)
+        });
+        if picture.image != *image {
+            picture.image = image.clone();
+        }
+        if node.width != px(size.x) || node.height != px(size.y) {
+            node.width = px(size.x);
+            node.height = px(size.y);
+        }
         let display = if at.is_some() {
             Display::Flex
         } else {
@@ -204,7 +282,7 @@ pub(crate) fn draw(
         if node.display != display {
             node.display = display;
         }
-        if let Some(at) = at
+        if let Some(at) = at.map(|at| at - hotspot)
             && (node.left != px(at.x) || node.top != px(at.y))
         {
             node.left = px(at.x);
@@ -213,9 +291,9 @@ pub(crate) fn draw(
     }
 }
 
-/// This client's own arrow, drawn in code rather than read from any skin:
-/// the installed skin's files name no picture of the pointer that the skin
-/// loader reads. It is white with a black edge, its tip at the top left.
+/// This client's own arrow, drawn in code rather than read from any skin,
+/// for a skin that has no `arrow.cur` or one that does not decode. It is
+/// white with a black edge, its tip at the top left.
 fn arrow() -> image::RgbaImage {
     // The outline in logical pixels, from the tip round the left edge, the
     // tail and back up the right edge.
@@ -304,6 +382,49 @@ mod tests {
         }
         assert_eq!(at(250), to);
         assert_eq!(at(400), to);
+    }
+
+    #[test]
+    fn the_skins_cursor_points_with_its_hotspot_else_the_own_arrow_with_its_tip() {
+        let mut app = crate::testing::app();
+        app.init_resource::<SkinArrow>()
+            .insert_resource(super::super::Script::new(Vec::new()))
+            .insert_resource(ScriptPointer(Vec2::new(100.0, 50.0)))
+            .add_systems(Startup, spawn)
+            .add_systems(Update, draw);
+        let skin = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(crate::sheets::image(image::RgbaImage::new(32, 32)));
+        app.world_mut().resource_mut::<SkinArrow>().0 = Some(SkinCursor {
+            image: skin.clone(),
+            size: Vec2::splat(32.0),
+            hotspot: Vec2::new(3.0, 5.0),
+        });
+        let arrow = |app: &mut App| {
+            let world = app.world_mut();
+            let mut arrows = world.query::<(&Node, &ImageNode, &PointerArt)>();
+            let (node, picture, art) = arrows.single(world).unwrap();
+            (
+                (node.display, node.left, node.top, node.width, node.height),
+                picture.image.clone(),
+                art.own.clone(),
+            )
+        };
+        app.update();
+        let (placed, image, _) = arrow(&mut app);
+        assert_eq!(placed, (Display::Flex, px(97), px(45), px(32), px(32)));
+        assert_eq!(image, skin);
+        // Without the skin's cursor, this client's own arrow points with its
+        // tip at the top left.
+        app.world_mut().resource_mut::<SkinArrow>().0 = None;
+        app.update();
+        let (placed, image, own) = arrow(&mut app);
+        assert_eq!(
+            placed,
+            (Display::Flex, px(100), px(50), px(ARROW.x), px(ARROW.y))
+        );
+        assert_eq!(image, own);
     }
 
     #[test]
