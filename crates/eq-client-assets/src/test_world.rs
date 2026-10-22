@@ -112,13 +112,26 @@ pub(crate) fn triangle(
     coordinates: &Coordinates,
     grouped_faces: u16,
 ) -> Vec<u8> {
+    skinned_triangle(name, palette, coordinates, grouped_faces, &[])
+}
+
+/// A triangle as [`triangle`] makes it, whose vertices belong to bones in
+/// `skin` runs of (vertex count, bone).
+pub(crate) fn skinned_triangle(
+    name: i32,
+    palette: i32,
+    coordinates: &Coordinates,
+    grouped_faces: u16,
+    skin: &[(u16, u16)],
+) -> Vec<u8> {
     let mut body = words(&[name.cast_unsigned(), 0x0001_8003, palette.cast_unsigned()]);
     // Animation, two unknown references, center, three unknowns, radius,
     // minimum and maximum.
     body.extend([0_u8; 12 + 12 + 12 + 4 + 24]);
     // Positions, coordinates, normals, colors, faces, skin groups, face
     // groups, vertex groups, mesh operations and scale.
-    for count in [3_u16, 3, 3, 0, 1, 0, 1, 1, 0, 0] {
+    let skin_count = u16::try_from(skin.len()).unwrap();
+    for count in [3_u16, 3, 3, 0, 1, skin_count, 1, 1, 0, 0] {
         body.extend(count.to_le_bytes());
     }
     for axis in [0_i16, 0, 0, 1, 0, 0, 0, 1, 0] {
@@ -139,10 +152,82 @@ pub(crate) fn triangle(
         }
     }
     body.extend([0_u8, 0, 127].repeat(3));
-    // The face (flags, then its vertices), its face group and vertex group.
-    for word in [0_u16, 0, 1, 2, grouped_faces, 0, 3, 0] {
+    // The face (flags, then its vertices), the skin runs, its face group
+    // and vertex group.
+    for word in [0_u16, 0, 1, 2] {
         body.extend(word.to_le_bytes());
     }
+    for (count, bone) in skin {
+        body.extend(count.to_le_bytes());
+        body.extend(bone.to_le_bytes());
+    }
+    for word in [grouped_faces, 0, 3, 0] {
+        body.extend(word.to_le_bytes());
+    }
+    body
+}
+
+/// A 0x31 palette of these materials, in order.
+pub(crate) fn palette_of(name: i32, materials: &[i32]) -> Vec<u8> {
+    let mut body = words(&[
+        name.cast_unsigned(),
+        0,
+        u32::try_from(materials.len()).unwrap(),
+    ]);
+    for material in materials {
+        body.extend(material.cast_unsigned().to_le_bytes());
+    }
+    body
+}
+
+/// A 0x36 mesh of these vertices and faces, its faces grouped by material
+/// in `groups` runs of (face count, material index), its vertices on bones
+/// in `skin` runs of (vertex count, bone); texture coordinates zero.
+pub(crate) fn mesh(
+    name: i32,
+    palette: i32,
+    positions: &[[i16; 3]],
+    faces: &[[u16; 3]],
+    groups: &[(u16, u16)],
+    skin: &[(u16, u16)],
+) -> Vec<u8> {
+    let count = |n: usize| u16::try_from(n).unwrap();
+    let mut body = words(&[name.cast_unsigned(), 0x0001_8003, palette.cast_unsigned()]);
+    body.extend([0_u8; 12 + 12 + 12 + 4 + 24]);
+    let vertices = count(positions.len());
+    for n in [
+        vertices,
+        vertices,
+        vertices,
+        0,
+        count(faces.len()),
+        count(skin.len()),
+        count(groups.len()),
+        1,
+        0,
+        0,
+    ] {
+        body.extend(n.to_le_bytes());
+    }
+    for position in positions {
+        for axis in position {
+            body.extend(axis.to_le_bytes());
+        }
+    }
+    body.extend([0_u8; 4].repeat(positions.len()));
+    body.extend([0_u8, 0, 127].repeat(positions.len()));
+    for face in faces {
+        body.extend(0_u16.to_le_bytes());
+        for vertex in face {
+            body.extend(vertex.to_le_bytes());
+        }
+    }
+    for (first, second) in skin.iter().chain(groups) {
+        body.extend(first.to_le_bytes());
+        body.extend(second.to_le_bytes());
+    }
+    body.extend(vertices.to_le_bytes());
+    body.extend(0_u16.to_le_bytes());
     body
 }
 

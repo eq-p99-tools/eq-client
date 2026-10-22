@@ -11,6 +11,7 @@
 mod build;
 pub mod cache;
 mod drops;
+mod holes;
 mod navigator;
 mod route;
 

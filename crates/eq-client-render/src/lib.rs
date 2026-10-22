@@ -2149,6 +2149,8 @@ mod tests {
                     textures: Vec::new(),
                     models: Vec::new(),
                     objects: Vec::new(),
+                    objects_unplaced: 0,
+                    object_skins_skipped: 0,
                     collision: Vec::new(),
                 };
                 scene.enter(
