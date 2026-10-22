@@ -560,6 +560,174 @@ fn a_tile_that_panics_is_refused_and_the_rest_are_built() {
     assert!(mesh.locate(Vec3::new(28.0, 0.0, 28.0)).is_some());
 }
 
+/// A floor from 0 to 48 with upright trunks on it, each `(x, z, radius,
+/// sides, turn)`: a prism 10 tall whose first corner is `turn` of a side
+/// round from the x axis.
+fn trunks_on_floor(trunks: &[(f32, f32, f32, usize, f32)]) -> Vec<[[f32; 3]; 3]> {
+    let mut triangles = floor(0.0, 0.0, 48.0);
+    for &(x, z, radius, sides, turn) in trunks {
+        #[allow(clippy::cast_precision_loss)] // A handful of sides.
+        let corner = |k: usize| {
+            let angle = (k as f32 + turn) / sides as f32 * std::f32::consts::TAU;
+            (x + radius * angle.cos(), z + radius * angle.sin())
+        };
+        for k in 0..sides {
+            let ((x0, z0), (x1, z1)) = (corner(k), corner(k + 1));
+            triangles.push([[x0, 0.0, z0], [x1, 0.0, z1], [x1, 10.0, z1]]);
+            triangles.push([[x0, 0.0, z0], [x1, 10.0, z1], [x0, 10.0, z0]]);
+        }
+    }
+    triangles
+}
+
+/// The thin trunk near the floor's edge whose hole rerecast refused its
+/// tile for, before holes were merged.
+const TRUNK_IN_A_REGION: (f32, f32, f32, usize, f32) = (43.648, 40.16, 0.4986, 8, 0.634);
+
+#[test]
+fn a_trunk_s_hole_is_merged_into_its_region_and_the_tile_kept() {
+    let trunk = TRUNK_IN_A_REGION;
+    let triangles = trunks_on_floor(&[trunk]);
+    let (mesh, report) = NavMesh::build(
+        &triangles,
+        &Settings::walker(6.0),
+        1,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(report.refused.is_empty(), "{report:?}");
+    assert_eq!((report.merged_holes, report.failed_hole_merges), (1, 0));
+    // The floor is kept beside the trunk, and the trunk is still a hole.
+    assert!(mesh.locate(Vec3::new(24.0, 0.0, 24.0)).is_some());
+    assert!(mesh.locate(Vec3::new(40.0, 0.0, 40.16)).is_some());
+    assert!(mesh.locate(Vec3::new(trunk.0, 0.0, trunk.1)).is_none());
+    let across: String = (-12_i8..=12)
+        .map(|step| {
+            let x = trunk.0 + f32::from(step) * 0.25;
+            if mesh.locate(Vec3::new(x, 0.0, trunk.1)).is_some() {
+                '#'
+            } else {
+                '.'
+            }
+        })
+        .collect();
+    assert!(
+        across.starts_with("####") && across.contains("....."),
+        "{across}"
+    );
+}
+
+#[test]
+fn a_trunk_s_hole_is_wound_against_its_region_s_outline_and_joined_to_it() {
+    let triangles = trunks_on_floor(&[TRUNK_IN_A_REGION]);
+    let checked = AtomicBool::new(false);
+    let checking = |triangles: &[[[f32; 3]; 3]],
+                    indices: &[u32],
+                    min: Vec3,
+                    max: Vec3,
+                    border: u16,
+                    settings: &Settings| {
+        let mut contours =
+            build::tile_contours(triangles, indices, min, max, border, settings, None)?;
+        // The trunk's region: the outline round the floor's edge, and the
+        // trunk's hole wound the other way.
+        let region = |contours: &rerecast::ContourSet| {
+            let mut by_region = std::collections::BTreeMap::<u16, Vec<_>>::new();
+            for contour in &contours.contours {
+                by_region
+                    .entry(contour.region.bits())
+                    .or_default()
+                    .push(contour.clone());
+            }
+            by_region.into_values().find(|contours| contours.len() > 1)
+        };
+        let before = region(&contours).expect("a region with a hole");
+        let areas: Vec<i64> = before
+            .iter()
+            .map(|contour| holes::twice_area(&contour.vertices))
+            .collect();
+        assert_eq!(areas.len(), 2, "{areas:?}");
+        let (outline, hole) = if areas[0].abs() > areas[1].abs() {
+            (0, 1)
+        } else {
+            (1, 0)
+        };
+        assert!(areas[outline] > 0 && areas[hole] < 0, "{areas:?}");
+        let merged = holes::merge_holes(&mut contours);
+        assert_eq!(
+            merged,
+            holes::Merged {
+                holes: 1,
+                failed: 0
+            }
+        );
+        assert!(region(&contours).is_none(), "the hole is still apart");
+        // One contour through the bridge both ways: the outline's corners and
+        // the hole's, with the bridge's two ends again.
+        let joined = contours
+            .contours
+            .iter()
+            .find(|contour| contour.region == before[outline].region)
+            .unwrap();
+        assert_eq!(
+            joined.vertices.len(),
+            before[outline].vertices.len() + before[hole].vertices.len() + 2
+        );
+        assert_eq!(
+            holes::twice_area(&joined.vertices),
+            areas[outline] + areas[hole]
+        );
+        checked.store(true, Ordering::Relaxed);
+        build::build_tile(triangles, indices, min, max, border, settings, None)
+    };
+    build::polygons_with(&triangles, &Settings::walker(6.0), 1, &|| false, &checking).unwrap();
+    assert!(checked.load(Ordering::Relaxed));
+}
+
+/// Measured with holes merged: of 1,000 fields of twelve random trunks,
+/// none had a tile refused, and 10 holes were merged; before holes were
+/// merged, those 10 fields each had a tile refused. Run with `--ignored
+/// --nocapture` to measure again.
+#[test]
+#[ignore = "a measurement, not a check"]
+fn random_trunk_fields_with_a_tile_refused() {
+    let field = |seed: u32| {
+        let mut state = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            f32::from(u16::try_from(state % 10_000).unwrap()) / 10_000.0
+        };
+        (0..12)
+            .map(|_| {
+                let (x, z, radius) = (4.0 + next() * 40.0, 4.0 + next() * 40.0, 0.3 + next() * 1.5);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let sides = 5 + (next() * 6.0) as usize;
+                (x, z, radius, sides, next())
+            })
+            .collect::<Vec<_>>()
+    };
+    let (mut refused, mut merged, mut failed) = (0, 0, 0);
+    for seed in 0..1_000 {
+        let triangles = trunks_on_floor(&field(seed));
+        let (_, report) = NavMesh::build(
+            &triangles,
+            &Settings::walker(6.0),
+            1,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        refused += usize::from(!report.refused.is_empty());
+        merged += report.merged_holes;
+        failed += report.failed_hole_merges;
+        for (reason, count) in report.refusals_by_reason() {
+            println!("seed={seed} refused={count} reason={reason}");
+        }
+    }
+    println!("fields=1000 refused={refused} merged_holes={merged} failed_hole_merges={failed}");
+}
+
 #[test]
 fn a_tile_lies_where_it_is_whatever_else_the_zone_holds() {
     // Each tile's box, by the corner the build hands its tile builder.

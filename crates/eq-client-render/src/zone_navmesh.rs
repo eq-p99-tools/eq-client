@@ -169,6 +169,14 @@ pub(super) fn report(
                 "Navmesh ledge drops refused"
             );
         }
+        if report.failed_hole_merges > 0 {
+            warn!(
+                zone = zone,
+                holes = report.failed_hole_merges,
+                merged = report.merged_holes,
+                "Navmesh holes that couldn't be joined to their outlines"
+            );
+        }
         if report.deep_triangles > 0 {
             warn!(
                 zone = zone,

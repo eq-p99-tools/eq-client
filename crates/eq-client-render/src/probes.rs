@@ -1646,14 +1646,16 @@ fn inspect_mesh_routes() {
     .unwrap();
     println!(
         "zone={zone_name} triangles={} height={height} release={} build_seconds={:.2} polygons={} \
-         islands={} refused_tiles={} deep_triangles={} drop_links={} drop_seconds={:.2} refused_stretches={} \
-         drops={drops} drop_world={}",
+         islands={} refused_tiles={} merged_holes={} failed_hole_merges={} \
+         deep_triangles={} drop_links={} drop_seconds={:.2} refused_stretches={} drops={drops} drop_world={}",
         triangles.len(),
         !cfg!(debug_assertions),
         building.elapsed().as_secs_f32(),
         mesh.polygon_count(),
         mesh.island_count(),
         report.refused.len(),
+        report.merged_holes,
+        report.failed_hole_merges,
         report.deep_triangles,
         report.drop_links,
         report.drop_elapsed.as_secs_f32(),
@@ -2143,12 +2145,15 @@ fn inspect_mesh_sizes() {
         let seconds = building.elapsed().as_secs_f32();
         println!(
             "build={label} seconds={seconds:.2} drop_seconds={:.2} polygons={} islands={} \
-             drop_links={} refused_tiles={} deep_triangles={} refused_stretches={} cache_bytes={}",
+             drop_links={} refused_tiles={} merged_holes={} failed_hole_merges={} \
+             deep_triangles={} refused_stretches={} cache_bytes={}",
             report.drop_elapsed.as_secs_f32(),
             mesh.polygon_count(),
             mesh.island_count(),
             report.drop_links,
             report.refused.len(),
+            report.merged_holes,
+            report.failed_hole_merges,
             report.deep_triangles,
             report.refused_stretches,
             cache_bytes(&mesh, settings),
