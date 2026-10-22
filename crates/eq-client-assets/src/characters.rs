@@ -14,7 +14,7 @@ use std::{
 
 use libeq::{
     pfs::PfsReader,
-    wld::parser::{DmSprite, FragmentRef, FragmentType, HierarchicalSpriteDef, Track, WldDoc},
+    wld::parser::{DmSprite, FragmentRef, FragmentType, HierarchicalSpriteDef, WldDoc},
 };
 
 use crate::LoadError;
@@ -157,25 +157,17 @@ pub fn inspect_archive(path: &Path) -> Result<Vec<CharacterDefinition>, LoadErro
             .get_string(skeleton.name_reference)
             .ok_or_else(|| invalid("skeleton name"))?
             .to_owned();
-        let mut parents = vec![None; skeleton.dags.len()];
-        for (index, bone) in skeleton.dags.iter().enumerate() {
-            let track: &Track = resolve(&doc, bone.track_reference)?;
-            let definition = doc
-                .get(&track.reference)
-                .ok_or_else(|| invalid("base track"))?;
-            if definition.frame_count == 0 {
-                return Err(invalid("empty base track"));
-            }
-            for &child in &bone.sub_dags {
-                let parent = parents
-                    .get_mut(child as usize)
-                    .ok_or_else(|| invalid("child bone"))?;
-                if parent.replace(index).is_some() || child as usize == index {
-                    return Err(invalid("bone parent"));
+        let bones = crate::skeleton::Skeleton::read(&doc, skeleton)?;
+        for rest in &bones.rest {
+            match rest {
+                crate::skeleton::Rest::Untracked => return Err(invalid("fragment type")),
+                crate::skeleton::Rest::NoDefinition => return Err(invalid("base track")),
+                crate::skeleton::Rest::NoFrames { count: 0 } => {
+                    return Err(invalid("empty base track"));
                 }
+                _ => {}
             }
         }
-        validate_parents(&parents)?;
         let mut meshes = Vec::new();
         for &reference in skeleton.dm_sprites.as_deref().unwrap_or_default() {
             let sprite: &DmSprite = resolve(&doc, reference)?;
@@ -204,23 +196,6 @@ pub fn inspect_archive(path: &Path) -> Result<Vec<CharacterDefinition>, LoadErro
         });
     }
     Ok(characters)
-}
-
-/// Rejects cycles before future pose evaluation can walk the hierarchy.
-fn validate_parents(parents: &[Option<usize>]) -> Result<(), LoadError> {
-    for start in 0..parents.len() {
-        let mut cursor = Some(start);
-        for _ in 0..parents.len() {
-            cursor = match cursor {
-                Some(index) => *parents.get(index).ok_or_else(|| invalid("parent bone"))?,
-                None => break,
-            };
-        }
-        if cursor.is_some() {
-            return Err(invalid("cyclic skeleton"));
-        }
-    }
-    Ok(())
 }
 
 fn resolve<T: libeq::wld::parser::Fragment + 'static>(
@@ -254,7 +229,7 @@ mod tests {
         ));
     }
 
-    use super::validate_parents;
+    use crate::skeleton::validate_parents;
 
     #[test]
     fn hierarchy_accepts_parent_after_child_and_multiple_roots() {

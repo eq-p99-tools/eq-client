@@ -264,6 +264,12 @@ impl Scene<'_, '_> {
             zone_name: zone.short_name.clone(),
         });
         regions.clone_from(&zone.regions);
+        if zone.objects_unplaced > 0 || zone.object_skins_skipped > 0 {
+            info!(
+                "Zone {}: {} object placements name no model its object archive draws; {} object skins left out",
+                zone.short_name, zone.objects_unplaced, zone.object_skins_skipped
+            );
+        }
         if let (Some(triangles), Some(mesh)) = (navmesh, self.navmesh.as_mut()) {
             let directory = self
                 .settings

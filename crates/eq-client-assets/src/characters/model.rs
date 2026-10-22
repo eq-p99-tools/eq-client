@@ -6,13 +6,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Vec3};
 use libeq::{
     pfs::PfsReader,
-    wld::parser::{DmSprite, DmSpriteDef2, FrameTransform, HierarchicalSpriteDef, Track, WldDoc},
+    wld::parser::{DmSprite, DmSpriteDef2, HierarchicalSpriteDef, Track, WldDoc},
 };
 
-use super::{invalid, resolve, validate_parents};
+use super::{invalid, resolve};
+use crate::skeleton::{LocalTransform, Rest, Skeleton, Skin, compose_hierarchy};
 use crate::{LoadError, MaterialMode, ZonePrimitive, ZoneTexture, load_texture, stage_mesh};
 
 /// The clip a model plays standing still.
@@ -151,86 +152,10 @@ pub struct SkinBind<'a> {
     pub bones: &'a [usize],
 }
 
-/// A primitive's bone-local vertices in the renderer's frame, so that a
-/// joint from [`CharacterAsset::joints`] places them as they are.
-#[derive(Clone, Debug)]
-struct Skin {
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    bones: Vec<usize>,
-}
-
-impl Skin {
-    /// Poses this primitive with these joints.
-    fn pose(&self, joints: &[Mat4]) -> CharacterPose {
-        let mut positions = Vec::with_capacity(self.positions.len());
-        let mut normals = Vec::with_capacity(self.normals.len());
-        for ((position, normal), bone) in self.positions.iter().zip(&self.normals).zip(&self.bones)
-        {
-            let joint = joints[*bone];
-            positions.push(
-                joint
-                    .transform_point3(Vec3::from_array(*position))
-                    .to_array(),
-            );
-            normals.push(
-                joint
-                    .transform_vector3(Vec3::from_array(*normal))
-                    .normalize_or_zero()
-                    .to_array(),
-            );
-        }
-        CharacterPose { positions, normals }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct AnimationTrack {
     frames: Vec<LocalTransform>,
     interval: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct LocalTransform {
-    translation: Vec3,
-    rotation: Quat,
-    scale: f32,
-}
-
-impl LocalTransform {
-    fn decode(frame: &FrameTransform) -> Self {
-        let rotation = Quat::from_xyzw(
-            f32::from(frame.rotate_x_numerator),
-            f32::from(frame.rotate_y_numerator),
-            f32::from(frame.rotate_z_numerator),
-            f32::from(frame.rotate_denominator),
-        );
-        Self {
-            translation: Vec3::new(
-                f32::from(frame.shift_x_numerator),
-                f32::from(frame.shift_y_numerator),
-                f32::from(frame.shift_z_numerator),
-            ) / 256.0,
-            rotation: if rotation.length_squared() > f32::EPSILON {
-                rotation.normalize()
-            } else {
-                Quat::IDENTITY
-            },
-            scale: if frame.shift_denominator == 0 {
-                1.0
-            } else {
-                f32::from(frame.shift_denominator) / 256.0
-            },
-        }
-    }
-
-    fn matrix(self) -> Mat4 {
-        Mat4::from_scale_rotation_translation(
-            Vec3::splat(self.scale),
-            self.rotation,
-            self.translation,
-        )
-    }
 }
 
 impl CharacterAsset {
@@ -559,6 +484,9 @@ impl CharacterAsset {
 }
 
 #[cfg(feature = "testing")]
+use glam::Quat;
+
+#[cfg(feature = "testing")]
 impl CharacterAsset {
     /// A one-triangle model for tests: a root bone and a child bone the
     /// triangle hangs from, one unit up, whose `P01` turns it a quarter turn
@@ -641,23 +569,6 @@ impl CharacterAsset {
     }
 }
 
-/// Composes a validated hierarchy without assuming parents precede children.
-fn compose_hierarchy(local: &[Mat4], parents: &[Option<usize>]) -> Vec<Mat4> {
-    local
-        .iter()
-        .enumerate()
-        .map(|(index, transform)| {
-            let mut result = *transform;
-            let mut parent = parents[index];
-            while let Some(index) = parent {
-                result = local[index] * result;
-                parent = parents[index];
-            }
-            result
-        })
-        .collect()
-}
-
 /// Loads one classic model from an explicitly selected local character archive.
 ///
 /// # Errors
@@ -690,34 +601,23 @@ pub(super) fn load_with_donors(
         .fragment_iter::<HierarchicalSpriteDef>()
         .find(|s| doc.get_string(s.name_reference) == Some(identifier.as_str()))
         .ok_or_else(|| invalid(&format!("unknown model {name}")))?;
-    let mut parents = vec![None; skeleton.dags.len()];
-    let mut base_pose = Vec::new();
-    let mut bone_names = Vec::new();
-    for (index, bone) in skeleton.dags.iter().enumerate() {
-        let track: &Track = resolve(&doc, bone.track_reference)?;
-        let definition = doc
-            .get(&track.reference)
-            .ok_or_else(|| invalid("base track"))?;
-        let frame = definition
-            .frame_transforms
-            .as_ref()
-            .and_then(|frames| frames.first())
-            .ok_or_else(|| invalid("unsupported base transform"))?;
-        base_pose.push(LocalTransform::decode(frame));
-        bone_names.push(
-            doc.get_string(track.name_reference)
-                .ok_or_else(|| invalid("track name"))?,
-        );
-        for child in &bone.sub_dags {
-            let parent = parents
-                .get_mut(*child as usize)
-                .ok_or_else(|| invalid("child bone"))?;
-            if parent.replace(index).is_some() {
-                return Err(invalid("duplicate bone parent"));
-            }
-        }
-    }
-    validate_parents(&parents)?;
+    let bones = Skeleton::read(&doc, skeleton)?;
+    let base_pose = bones
+        .rest
+        .iter()
+        .map(|rest| match rest {
+            Rest::Frame(frame) => Ok(*frame),
+            Rest::Untracked => Err(invalid("fragment type")),
+            Rest::NoDefinition => Err(invalid("base track")),
+            Rest::NoFrames { .. } => Err(invalid("unsupported base transform")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let bone_names = bones
+        .names
+        .iter()
+        .map(|name| name.ok_or_else(|| invalid("track name")))
+        .collect::<Result<Vec<_>, _>>()?;
+    let parents = bones.parents;
     let mut clips = HashMap::new();
     let source = animation_source(&name);
     let borrowed = gather_clips(&doc, &name, &bone_names, source, true, &mut clips);
@@ -1009,6 +909,9 @@ fn animation_source(model: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "testing"))]
+    use glam::Quat;
+    use libeq::wld::parser::FrameTransform;
 
     #[test]
     fn models_without_movements_borrow_from_the_listed_model() {
