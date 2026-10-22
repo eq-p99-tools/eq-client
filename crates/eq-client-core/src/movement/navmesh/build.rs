@@ -135,6 +135,13 @@ pub(super) fn polygons_with(
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let tile_cells = (settings.tile / cs).round().max(8.0) as u16;
     let tile = f32::from(tile_cells) * cs;
+    // The tiles lie on a grid fixed in the world, so a tile's box depends on
+    // where it is, not on how far the zone's solids reach.
+    let low = Vec3::new(
+        (low.x / tile).floor() * tile,
+        low.y,
+        (low.z / tile).floor() * tile,
+    );
     let border = walkable_radius(settings) + 3;
     let pad = f32::from(border) * cs;
     #[allow(clippy::cast_possible_truncation)]
