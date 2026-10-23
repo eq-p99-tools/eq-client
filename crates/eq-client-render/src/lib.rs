@@ -1309,6 +1309,10 @@ fn object_transform(object: &eq_client_assets::ZoneObject) -> Transform {
 struct ZoneLiquids(eq_client_assets::regions::ZoneRegions);
 
 impl eq_client_core::movement::Liquids for ZoneLiquids {
+    fn cache_fingerprint(&self) -> Option<u64> {
+        Some(self.0.liquid_fingerprint())
+    }
+
     fn liquid_at(&self, point: Vec3) -> Option<eq_client_core::movement::Liquid> {
         self.0.liquid_at(point.to_array()).map(movement_liquid)
     }

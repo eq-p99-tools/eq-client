@@ -2,7 +2,7 @@
 //! entered again reads its mesh instead of building it.
 //!
 //! A file is `navmesh/<zone>-<key>.bin` under the settings directory. The
-//! key is a hash over the input triangles, the build settings, the limits
+//! key hashes the input triangles, static collision and liquid data, build settings, the limits
 //! the ledges' drops are found with, the rerecast version and this format's
 //! version, so a changed install or setting gives a new key. The header repeats the key, the settings and the triangle
 //! count, and a read checks them, so a hash collision or a damaged file is
@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The rerecast version the mesh is built with, as pinned in Cargo.toml.
 const RERECAST: &str = "0.4.0";
 /// This format's version; raised whenever the bytes or the build change.
-const FORMAT: u32 = 6;
+const FORMAT: u32 = 7;
 const MAGIC: &[u8; 4] = b"EQNM";
 
 /// Where a mesh came from.
@@ -79,8 +79,7 @@ pub(super) fn load_or_build_until(
     threads: usize,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<Loaded> {
-    if let Some(directory) = directory {
-        let key = key(triangles, settings);
+    if let (Some(directory), Some(key)) = (directory, key(triangles, world, settings)) {
         if let Some(path) = path(directory, zone, key)
             && let Ok(bytes) = fs::read(path)
             && let Some(mesh) = decode(&bytes, &header(key, triangles.len(), settings))
@@ -95,7 +94,7 @@ pub(super) fn load_or_build_until(
     let (mesh, report) = NavMesh::build_until(triangles, world, settings, threads, cancelled)?;
     let cached = directory.map_or_else(
         || Err(io::Error::other("no settings directory")),
-        |directory| store(directory, zone, triangles, settings, &mesh),
+        |directory| store(directory, zone, triangles, world, settings, &mesh),
     );
     Some(Loaded {
         mesh,
@@ -104,19 +103,46 @@ pub(super) fn load_or_build_until(
     })
 }
 
-/// The key for a mesh built over `triangles` with `settings`: 64-bit FNV-1a.
+/// Complete build identity: geometry, static collision, liquids and settings.
+/// Dynamic obstacles are excluded, as drop construction removes them. Returns
+/// None when a liquid provider cannot fingerprint its data; such builds are
+/// usable in memory but must not read or write the persistent cache.
 #[must_use]
-pub fn key(triangles: &[[[f32; 3]; 3]], settings: &Settings) -> u64 {
+pub fn key(
+    triangles: &[[[f32; 3]; 3]],
+    world: Option<&CollisionWorld>,
+    settings: &Settings,
+) -> Option<u64> {
     let mut hash = Fnv::default();
     hash.write(RERECAST.as_bytes());
     hash.write(&FORMAT.to_le_bytes());
     for value in settings_values(settings).into_iter().chain(drop_values()) {
         hash.write(&value.to_le_bytes());
     }
+    hash.write(&(triangles.len() as u64).to_le_bytes());
     for value in triangles.iter().flatten().flatten() {
         hash.write(&value.to_le_bytes());
     }
-    hash.0
+    hash.write(&[u8::from(world.is_some())]);
+    if let Some(world) = world {
+        // Drops use this geometry, which need not equal the rasterized triangles.
+        let mesh = &world.terrain.mesh;
+        hash.write(&(mesh.vertices().len() as u64).to_le_bytes());
+        for point in mesh.vertices() {
+            for value in [point.x, point.y, point.z] {
+                hash.write(&value.to_le_bytes());
+            }
+        }
+        hash.write(&(mesh.indices().len() as u64).to_le_bytes());
+        for index in mesh.indices().iter().flatten() {
+            hash.write(&index.to_le_bytes());
+        }
+        hash.write(&[u8::from(world.liquids.is_some())]);
+        if let Some(liquids) = &world.liquids {
+            hash.write(&liquids.cache_fingerprint()?.to_le_bytes());
+        }
+    }
+    Some(hash.0)
 }
 
 /// Where the mesh for `zone` with `key` is kept under `directory`; None for
@@ -138,9 +164,10 @@ pub fn load(
     directory: &Path,
     zone: &str,
     triangles: &[[[f32; 3]; 3]],
+    world: Option<&CollisionWorld>,
     settings: &Settings,
 ) -> Option<NavMesh> {
-    let key = key(triangles, settings);
+    let key = key(triangles, world, settings)?;
     let bytes = fs::read(path(directory, zone, key)?).ok()?;
     decode(&bytes, &header(key, triangles.len(), settings))
 }
@@ -194,10 +221,16 @@ pub fn store(
     directory: &Path,
     zone: &str,
     triangles: &[[[f32; 3]; 3]],
+    world: Option<&CollisionWorld>,
     settings: &Settings,
     mesh: &NavMesh,
 ) -> io::Result<usize> {
-    let key = key(triangles, settings);
+    let key = key(triangles, world, settings).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "liquid provider has no cache fingerprint",
+        )
+    })?;
     let path = path(directory, zone, key)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "zone name"))?;
     let folder = path.parent().unwrap_or(directory);
