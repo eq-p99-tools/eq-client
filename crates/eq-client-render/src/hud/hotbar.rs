@@ -1,9 +1,10 @@
 //! The hotbar's bindings, kept per character; activating a binding uses the
 //! normal command validators.
+use crate::profile_files::CharacterProfile;
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{hotbar::Hotbar, qol::Fix, world::ClientWorld};
-use std::path::PathBuf;
+use std::time::Instant;
 pub(crate) mod carry;
 mod item_art;
 #[cfg(test)]
@@ -21,17 +22,7 @@ impl Default for Bindings {
     }
 }
 
-/// What the hotbar's saving knows between frames.
-#[derive(Default)]
-pub(crate) struct Store {
-    /// Whether the settings directory was taken yet.
-    loaded: bool,
-    directory: Option<PathBuf>,
-    /// The world and character whose hotbar is in use; None before one enters.
-    profile: Option<(String, String)>,
-    /// The text last read or written for this profile, to skip unchanged writes.
-    written: String,
-}
+pub(crate) use crate::profile_files::Store;
 
 /// Loads the hotbar of whoever is playing, and saves a change to their own
 /// file. A character with no file of their own starts from the official
@@ -44,6 +35,7 @@ pub(crate) fn persist(
     mut bindings: ResMut<Bindings>,
     mut store: Local<Store>,
 ) {
+    store.retry(Instant::now());
     if store.loaded && !profile.is_changed() {
         if bindings.is_changed() {
             save(&mut store, &bindings);
@@ -57,14 +49,12 @@ pub(crate) fn persist(
         store.loaded = true;
     }
     store.profile = profile.key();
-    let Some((world, character)) = store.profile.clone() else {
+    let Some(CharacterProfile { world, character }) = store.profile.clone() else {
         bindings.0 = Hotbar::default().0;
-        store.written.clear();
+        store.loaded_text(String::new());
         return;
     };
-    let saved = store.directory.as_ref().and_then(|directory| {
-        std::fs::read_to_string(directory.join(file_name(&world, &character))).ok()
-    });
+    let saved = store.read(&file_name(&world, &character));
     let hotbar = saved.map_or_else(
         || {
             settings
@@ -76,29 +66,24 @@ pub(crate) fn persist(
         |text| Hotbar::read(&text, Hotbar::default()),
     );
     bindings.0 = hotbar.0;
-    store.written = hotbar.text();
+    store.loaded_text(hotbar.text());
 }
 
 /// Writes the hotbar to the profile's file when it changed since last time.
 fn save(store: &mut Store, bindings: &Bindings) {
-    let (Some(directory), Some((world, character))) = (&store.directory, &store.profile) else {
+    let Some(profile) = &store.profile else {
         return;
     };
-    let text = Hotbar(bindings.0).text();
-    if text == store.written {
-        return;
-    }
-    let path = directory.join(file_name(world, character));
-    if let Err(error) = crate::profile_files::write(directory, &path, &text) {
-        warn!("Could not save the hotbar to {}: {error}", path.display());
-    }
-    // A failed write waits for the next change rather than retrying each frame.
-    store.written = text;
+    let name = file_name(&profile.world, &profile.character);
+    store.save(name, Hotbar(bindings.0).text(), Instant::now());
 }
 
 /// The character's own hotbar file.
 fn file_name(world: &str, character: &str) -> String {
-    let profile = (world.to_owned(), character.to_owned());
+    let profile = CharacterProfile {
+        world: world.to_owned(),
+        character: character.to_owned(),
+    };
     crate::profile_files::name("hotbar", "hotbar.txt", Some(&profile))
 }
 

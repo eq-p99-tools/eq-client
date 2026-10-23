@@ -1,9 +1,10 @@
 //! The player's options: loaded for whoever is playing, saved as they
 //! change, and told to the session where it acts on them.
+use crate::profile_files::{CharacterProfile, Store};
 use bevy::prelude::*;
 use eq_client_core::food::AutoEat;
 use eq_client_core::options::{Options, Toggle};
-use std::path::PathBuf;
+use std::time::Instant;
 
 /// The file a character with none of their own starts from.
 const SHARED: &str = "options.txt";
@@ -16,19 +17,7 @@ pub(crate) struct OptionsState {
     /// What a character with no options of their own starts with.
     defaults: Options,
     store: Store,
-}
-
-/// What the persisting systems know between frames.
-#[derive(Default)]
-struct Store {
-    /// Whether the directory is known and a profile's options were loaded.
-    loaded: bool,
-    directory: Option<PathBuf>,
-    /// The world and character whose options are in use; None before one enters.
-    profile: Option<(String, String)>,
-    /// The text last read or written for this profile, to skip unchanged writes.
-    written: String,
-    /// The admission last told what the session may eat, and what it was told.
+    /// The admission and auto-eat options last accepted by the command queue.
     told: Option<(u64, AutoEat)>,
 }
 
@@ -45,6 +34,7 @@ impl OptionsState {
             options: defaults,
             defaults,
             store: Store::default(),
+            told: None,
         }
     }
 
@@ -84,9 +74,11 @@ pub(crate) fn persist(
     profile: Res<crate::profile_files::Profile>,
     mut state: ResMut<OptionsState>,
 ) {
+    let changed = state.is_changed();
+    state.bypass_change_detection().store.retry(Instant::now());
     if state.store.loaded && !profile.is_changed() {
-        if state.is_changed() {
-            save(&mut state);
+        if changed {
+            save(state.bypass_change_detection());
         }
         return;
     }
@@ -101,40 +93,24 @@ pub(crate) fn persist(
     }
     let state = &mut *state;
     state.store.profile = profile.key();
-    let read = |name: &str| {
-        state
-            .store
-            .directory
-            .as_ref()
-            .and_then(|directory| std::fs::read_to_string(directory.join(name)).ok())
-    };
     // A character with no options of their own starts from the shared file.
-    let text = read(&file_name(state.store.profile.as_ref()))
-        .or_else(|| read(SHARED))
+    let text = state
+        .store
+        .read(&file_name(state.store.profile.as_ref()))
+        .or_else(|| state.store.read(SHARED))
         .unwrap_or_default();
     state.options = Options::read(&text, state.defaults);
-    state.store.written = state.options.text();
+    state.store.loaded_text(state.options.text());
 }
 
 /// Writes the options to the profile's file when they changed since last time.
 fn save(state: &mut OptionsState) {
-    let Some(directory) = &state.store.directory else {
-        return;
-    };
-    let text = state.options.text();
-    if text == state.store.written {
-        return;
-    }
-    let path = directory.join(file_name(state.store.profile.as_ref()));
-    if let Err(error) = crate::profile_files::write(directory, &path, &text) {
-        warn!("Could not save options to {}: {error}", path.display());
-    }
-    // A failed write waits for the next change rather than retrying each frame.
-    state.store.written = text;
+    let name = file_name(state.store.profile.as_ref());
+    state.store.save(name, state.options.text(), Instant::now());
 }
 
 /// The shared file, or the profile's own.
-fn file_name(profile: Option<&(String, String)>) -> String {
+fn file_name(profile: Option<&CharacterProfile>) -> String {
     crate::profile_files::name("options", SHARED, profile)
 }
 
@@ -159,7 +135,7 @@ pub(crate) fn tell_session(
         return;
     };
     let auto_eat = state.options.auto_eat();
-    if state.store.told == Some((session_id, auto_eat)) {
+    if state.told == Some((session_id, auto_eat)) {
         return;
     }
     let command = eq_client_core::ClientCommand::AutoEat {
@@ -167,7 +143,7 @@ pub(crate) fn tell_session(
         auto_eat,
     };
     if outbox.tell(online.world(), command) {
-        state.store.told = Some((session_id, auto_eat));
+        state.told = Some((session_id, auto_eat));
     }
 }
 
