@@ -166,7 +166,7 @@ pub(crate) fn write(directory: &Path, path: &Path, text: &str) -> std::io::Resul
             .open(&partial)
         {
             Ok(file) => break (partial, file),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
             Err(error) => return Err(error),
         }
     };
