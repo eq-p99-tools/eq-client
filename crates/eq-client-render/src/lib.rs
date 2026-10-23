@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use theme::Size;
 
 mod abilities;
+mod asset_loads;
 mod attention;
 mod background;
 mod book_delete;
@@ -564,6 +565,8 @@ fn schedule(app: &mut App) {
                 .chain()
                 .in_set(Stage::Receive),
             (
+                item_models::poll,
+                outfit::poll_materials,
                 entities::reconcile,
                 entities::interpolate,
                 character::lie,

@@ -2,6 +2,7 @@
 //! Which object a click or key press means is decided in
 //! `eq_client_core::ground`; whether a pickup may be sent, in the network session.
 use super::item_models::{ItemLibrary, bounds};
+use crate::asset_loads::Asset;
 use bevy::prelude::*;
 use eq_client_core::ground::{GroundObject, ObjectKind};
 use std::collections::BTreeMap;
@@ -39,7 +40,6 @@ pub(super) fn reconcile(
     state: Res<super::online::OnlineState>,
     zone_models: Option<Res<super::doors::Models>>,
     mut library: ResMut<ItemLibrary>,
-    (mut images, mut meshes, mut materials): super::item_models::GpuAssets,
     rendered: Query<(Entity, &GroundEntity)>,
 ) {
     let mut wanted = BTreeMap::new();
@@ -68,19 +68,21 @@ pub(super) fn reconcile(
         let key = eq_client_assets::model_key(&object.model);
         let item = object.kind() == ObjectKind::Item;
         let zone = zone_models.as_ref().and_then(|models| models.0.get(&key));
-        let mut shape =
-            |key: &str| library.shape(key, directory, (&mut images, &mut meshes, &mut materials));
         let (primitives, bounds) = if let Some(model) = zone {
             let points = model.collision.iter().flatten();
             (model.primitives.clone(), bounds(points))
-        } else if let Some(shape) =
-            shape(&key).or_else(|| item.then(|| shape(DEFAULT_ITEM_MODEL))?)
-        {
-            (shape.primitives.clone(), shape.bounds)
         } else {
-            continue;
+            let shape = match library.shape(&key, directory) {
+                Asset::Ready(shape) => shape,
+                Asset::Pending => continue,
+                Asset::Missing if item => match library.shape(DEFAULT_ITEM_MODEL, directory) {
+                    Asset::Ready(shape) => shape,
+                    Asset::Pending | Asset::Missing => continue,
+                },
+                Asset::Missing => continue,
+            };
+            (shape.primitives.clone(), shape.bounds)
         };
-        // Items and world containers such as forges take clicks.
         let pick = if item || object.is_tradeskill_container() {
             let (min, max) = bounds.unwrap_or((Vec3::ZERO, Vec3::ZERO));
             let (min, max) = eq_client_core::ground::pick_box(min, max);
