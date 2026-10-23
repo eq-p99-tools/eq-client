@@ -416,16 +416,82 @@ fn a_mesh_reads_back_from_the_cache() {
 #[test]
 fn a_changed_setting_or_triangle_changes_the_key() {
     let triangles = floor(0.0, -40.0, 40.0);
-    let key = cache::key(&triangles, &settings());
-    assert_eq!(cache::key(&triangles, &settings()), key);
+    let key = cache::key(&triangles, None, &settings()).unwrap();
+    assert_eq!(cache::key(&triangles, None, &settings()).unwrap(), key);
     let taller = Settings {
         height: 6.5,
         ..settings()
     };
-    assert_ne!(cache::key(&triangles, &taller), key);
+    assert_ne!(cache::key(&triangles, None, &taller).unwrap(), key);
     let mut moved = triangles.clone();
     moved[1][2][1] = 0.01;
-    assert_ne!(cache::key(&moved, &settings()), key);
+    assert_ne!(cache::key(&moved, None, &settings()).unwrap(), key);
+}
+
+#[test]
+fn changed_liquids_rebuild_a_cached_mesh_and_unknown_providers_are_not_cached() {
+    use crate::movement::{Liquid, Liquids};
+    struct Flood(Option<u64>);
+    impl Liquids for Flood {
+        fn cache_fingerprint(&self) -> Option<u64> {
+            self.0
+        }
+        fn liquid_at(&self, _: Vec3) -> Option<Liquid> {
+            Some(Liquid::Water)
+        }
+        fn passes_through(&self, _: Vec3, _: Vec3, liquid: Liquid) -> bool {
+            liquid == Liquid::Water
+        }
+        fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
+            Some(Box::new(Self(self.0)))
+        }
+    }
+    let folder = folder("liquid-identity");
+    let triangles = floor(0.0, -40.0, 40.0);
+    let dry = CollisionWorld::new(triangles.iter().copied()).unwrap();
+    let wet = dry.clone().with_liquids(Flood(Some(1)));
+    let unknown = dry.clone().with_liquids(Flood(None));
+    let cancel = AtomicBool::new(false);
+    let build = |directory: Option<&std::path::Path>, world: &CollisionWorld| {
+        cache::load_or_build(
+            directory,
+            "zone",
+            &triangles,
+            Some(world),
+            &settings(),
+            1,
+            &cancel,
+        )
+        .unwrap()
+    };
+    let first = build(Some(&folder), &dry);
+    assert!(first.mesh.polygon_count() > 0);
+    let flooded = build(Some(&folder), &wet);
+    assert!(matches!(flooded.source, Source::Built(_)));
+    assert_eq!(flooded.mesh.polygon_count(), 0);
+    let fresh = build(None, &wet);
+    assert_eq!(flooded.mesh.polygons, fresh.mesh.polygons);
+    assert!(matches!(build(Some(&folder), &wet).source, Source::Cache));
+    assert!(cache::load(&folder, "zone", &triangles, Some(&dry), &settings()).is_none());
+    for _ in 0..2 {
+        let uncached = build(Some(&folder), &unknown);
+        assert!(matches!(uncached.source, Source::Built(_)));
+        assert!(uncached.cached.is_err());
+        assert_eq!(uncached.mesh.polygons, fresh.mesh.polygons);
+    }
+    let _ = std::fs::remove_dir_all(folder);
+}
+
+#[test]
+fn cache_identity_includes_drop_terrain_but_not_dynamic_obstacles() {
+    let triangles = floor(0.0, -40.0, 40.0);
+    let mut world = CollisionWorld::new(triangles.iter().copied()).unwrap();
+    let original = cache::key(&triangles, Some(&world), &settings());
+    let other = CollisionWorld::new(floor(-3.0, -40.0, 40.0)).unwrap();
+    assert_ne!(cache::key(&triangles, Some(&other), &settings()), original);
+    let door = crate::movement::CollisionMesh::new(floor(2.0, -2.0, 2.0)).unwrap();
+    world.set_obstacles(vec![std::sync::Arc::new(door)]);
+    assert_eq!(cache::key(&triangles, Some(&world), &settings()), original);
 }
 
 #[test]
@@ -443,7 +509,12 @@ fn a_file_with_another_header_or_cut_short_is_rebuilt() {
         &cancel,
     )
     .unwrap();
-    let path = cache::path(&folder, "zone", cache::key(&triangles, &settings())).unwrap();
+    let path = cache::path(
+        &folder,
+        "zone",
+        cache::key(&triangles, None, &settings()).unwrap(),
+    )
+    .unwrap();
     let good = std::fs::read(&path).unwrap();
     assert_eq!(good.len(), built.cached.unwrap());
     // Another format version in the header, then the body cut short.
@@ -451,7 +522,7 @@ fn a_file_with_another_header_or_cut_short_is_rebuilt() {
     other[4] ^= 1;
     for bad in [other, good[..good.len() - 3].to_vec()] {
         std::fs::write(&path, bad).unwrap();
-        assert!(cache::load(&folder, "zone", &triangles, &settings()).is_none());
+        assert!(cache::load(&folder, "zone", &triangles, None, &settings()).is_none());
         let again = cache::load_or_build(
             Some(&folder),
             "zone",
@@ -497,7 +568,10 @@ fn a_new_key_removes_the_zone_s_stale_file() {
         built.cached.unwrap();
     }
     let name = |zone: &str, triangles: &[[[f32; 3]; 3]]| {
-        format!("{zone}-{:016x}.bin", cache::key(triangles, &settings()))
+        format!(
+            "{zone}-{:016x}.bin",
+            cache::key(triangles, None, &settings()).unwrap()
+        )
     };
     // The other zone's file stays; nothing half-written is left beside them.
     let mut expected = vec![name("zone", &new), name("zone2", &old)];
@@ -1464,9 +1538,14 @@ mod routes {
                 &cancel,
             )
             .unwrap();
-            let read =
-                crate::movement::navmesh::cache::load(&folder, "zone", &triangles, &settings())
-                    .unwrap();
+            let read = crate::movement::navmesh::cache::load(
+                &folder,
+                "zone",
+                &triangles,
+                None,
+                &settings(),
+            )
+            .unwrap();
             assert_ne!(built.mesh.drops.len(), 0);
             assert_eq!(read.drops, built.mesh.drops);
             let _ = std::fs::remove_dir_all(&folder);
@@ -1743,7 +1822,7 @@ mod sizes {
             &AtomicBool::new(false),
         )
         .unwrap();
-        let read = cache::load(&folder, "zone", &triangles, &sized()).unwrap();
+        let read = cache::load(&folder, "zone", &triangles, None, &sized()).unwrap();
         assert_eq!(read.polygons, built.mesh.polygons);
         assert!(cache::present(&folder, "zone", &sized()));
         assert!(!cache::present(&folder, "other", &sized()));

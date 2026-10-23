@@ -64,6 +64,38 @@ pub struct ZoneRegions {
 }
 
 impl ZoneRegions {
+    /// Stable identity of the spatial tree and liquid assignments for navigation
+    /// caches. Zone destinations are excluded because they do not affect liquids.
+    /// Change the policy tag when the interpretation of these inputs changes.
+    #[must_use]
+    pub fn liquid_fingerprint(&self) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let mut write = |bytes: &[u8]| {
+            for byte in bytes {
+                hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3);
+            }
+        };
+        write(b"zone-liquids-v1");
+        write(&(self.nodes.len() as u64).to_le_bytes());
+        for node in &self.nodes {
+            for value in node.normal.into_iter().chain([node.distance]) {
+                write(&value.to_le_bytes());
+            }
+            for index in [node.region, node.front, node.back] {
+                write(&index.map_or(u64::MAX, |i| i as u64).to_le_bytes());
+            }
+        }
+        write(&(self.liquids.len() as u64).to_le_bytes());
+        for (region, liquid) in &self.liquids {
+            write(&(*region as u64).to_le_bytes());
+            write(&[match liquid {
+                Liquid::Water => 0,
+                Liquid::Lava => 1,
+            }]);
+        }
+        hash
+    }
+
     /// Loads the spatial tree and zone-line tags from an already parsed world.
     ///
     /// # Errors
@@ -442,6 +474,31 @@ fn zone_line_tag(tag: &str) -> Option<ZoneLine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_identity_tracks_planes_and_liquid_assignments() {
+        let mut regions = ZoneRegions {
+            nodes: vec![Node {
+                normal: [0.0, 1.0, 0.0],
+                distance: 0.0,
+                region: Some(0),
+                front: None,
+                back: None,
+            }],
+            liquids: BTreeMap::from([(0, Liquid::Water)]),
+            ..Default::default()
+        };
+        let first = regions.liquid_fingerprint();
+        assert_eq!(regions.clone().liquid_fingerprint(), first);
+        regions.nodes[0].distance = 1.0;
+        assert_ne!(regions.liquid_fingerprint(), first);
+        regions.nodes[0].distance = 0.0;
+        regions.liquids.insert(0, Liquid::Lava);
+        assert_ne!(regions.liquid_fingerprint(), first);
+        regions.liquids.insert(0, Liquid::Water);
+        regions.routes.insert(0, ZoneLine::Reference(42));
+        assert_eq!(regions.liquid_fingerprint(), first);
+    }
 
     #[test]
     fn reference_tags_do_not_guess_absolute_or_malformed_destinations() {
