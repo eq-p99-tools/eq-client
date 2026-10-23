@@ -321,6 +321,7 @@ impl Drop for SessionWorker {
 /// ends the session. Joining the worker must never depend on that drain.
 fn end_updates(sender: mpsc::SyncSender<WorldUpdate>) {
     let _ = sender.try_send(WorldUpdate::Connection(Link::Ended));
+    drop(sender);
 }
 
 #[cfg(test)]
