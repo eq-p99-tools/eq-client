@@ -79,17 +79,16 @@ pub(super) fn load_or_build_until(
     threads: usize,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<Loaded> {
-    if let (Some(directory), Some(key)) = (directory, key(triangles, world, settings)) {
-        if let Some(path) = path(directory, zone, key)
-            && let Ok(bytes) = fs::read(path)
-            && let Some(mesh) = decode(&bytes, &header(key, triangles.len(), settings))
-        {
-            return Some(Loaded {
-                mesh,
-                source: Source::Cache,
-                cached: Ok(bytes.len()),
-            });
-        }
+    if let (Some(directory), Some(key)) = (directory, key(triangles, world, settings))
+        && let Some(path) = path(directory, zone, key)
+        && let Ok(bytes) = fs::read(path)
+        && let Some(mesh) = decode(&bytes, &header(key, triangles.len(), settings))
+    {
+        return Some(Loaded {
+            mesh,
+            source: Source::Cache,
+            cached: Ok(bytes.len()),
+        });
     }
     let (mesh, report) = NavMesh::build_until(triangles, world, settings, threads, cancelled)?;
     let cached = directory.map_or_else(
