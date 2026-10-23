@@ -204,8 +204,7 @@ impl SessionWorker {
                 {
                     *reason = Some(player_words(&error));
                 }
-                // Waits for room if the queue is full; fails only once the viewer is gone.
-                let _ = sender.send(WorldUpdate::Connection(Link::Ended));
+                end_updates(sender);
             }
         });
         Ok(eq_client_render::Session {
@@ -317,9 +316,71 @@ impl Drop for SessionWorker {
     }
 }
 
+/// Sends the terminal status when there is room, then closes the event stream.
+/// A full queue drains in order before the receiver observes disconnection and
+/// ends the session. Joining the worker must never depend on that drain.
+fn end_updates(sender: mpsc::SyncSender<WorldUpdate>) {
+    let _ = sender.try_send(WorldUpdate::Connection(Link::Ended));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_event_queue_does_not_block_worker_shutdown() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .send(WorldUpdate::Connection(Link::LoggingIn))
+            .unwrap();
+        let (finished, completion) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            end_updates(sender);
+            finished.send(()).unwrap();
+        });
+        // The receiver stays alive and full while the actual terminal path runs.
+        let ended = completion.recv_timeout(Duration::from_secs(2));
+        if ended.is_err() {
+            drop(receiver);
+            worker.join().unwrap();
+            panic!("terminal notification blocked on an undrained event queue");
+        }
+        let owner = SessionWorker {
+            cancel: CancellationToken::default(),
+            worker: Some(worker),
+            reason: Arc::new(Mutex::new(None)),
+        };
+        drop(owner);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(WorldUpdate::Connection(Link::LoggingIn))
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn terminal_status_is_delivered_when_the_queue_has_room() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        end_updates(sender);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(WorldUpdate::Connection(Link::Ended))
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn terminal_status_does_not_require_a_receiver() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        end_updates(sender);
+    }
 
     #[test]
     fn an_npcs_special_message_reads_as_its_kind_of_npc_line() {
