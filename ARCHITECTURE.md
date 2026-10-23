@@ -25,7 +25,8 @@ eqstr id, with this client's own words only as the fallback.
 The renderer keeps its resource registration and frame graph in `systems`,
 camera input and occlusion in `camera`, GPU conversion in `gpu_assets`, and
 zone geometry/region adapters in `scene_collision`. Skin action bindings live
-in `skinned::bindings`; world-to-label and gauge updates live in
+in `skinned::bindings`, recursive container construction in `skinned::tree`,
+and world-to-label and gauge updates in
 `skinned::presentation`. The crate root composes startup and the shared scene.
 These modules keep their helpers internal rather than expanding the public API.
 
