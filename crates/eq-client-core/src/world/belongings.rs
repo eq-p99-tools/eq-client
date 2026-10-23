@@ -59,6 +59,15 @@ impl ClientWorld {
     /// News of the merchant's stock and the player's trades with them.
     pub(super) fn merchant_news(&mut self, update: &MerchantUpdate, changes: &mut Changes) {
         if self.zone.trade.merchant(update) {
+            match update {
+                MerchantUpdate::Opened { .. }
+                | MerchantUpdate::Item(_)
+                | MerchantUpdate::Removed { .. }
+                | MerchantUpdate::Closed => {
+                    self.merchant_revision = self.merchant_revision.wrapping_add(1);
+                }
+                MerchantUpdate::Bought { .. } | MerchantUpdate::Sold { .. } => (),
+            }
             changes.trade = true;
             changes.notices.extend(trade::merchant_notice(update));
         } else {

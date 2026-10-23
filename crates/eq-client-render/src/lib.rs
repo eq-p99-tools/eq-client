@@ -54,6 +54,7 @@ mod inventory;
 mod item_models;
 mod items;
 mod keys;
+mod list_cells;
 mod loading;
 mod login;
 mod logs;
