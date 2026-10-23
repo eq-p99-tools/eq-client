@@ -129,6 +129,10 @@ pub struct Casting {
     pub cast: Option<(u16, Instant, Duration)>,
     /// A cast request the session has not had answered yet.
     pub pending: Option<u32>,
+    /// The spell of the request the server last answered, which the cast it
+    /// begins can name differently: TAKP begins a Luclin port as spell 2935
+    /// and ends it naming the port.
+    requested: Option<u32>,
     /// The last interruption: when, and the server's message for it.
     pub interrupted: Option<(Instant, u32)>,
     /// When each memorized spell can be cast again.
@@ -136,8 +140,20 @@ pub struct Casting {
 }
 
 impl Casting {
+    /// The session's word on the request in flight: the spell asked for, or
+    /// none once the server has answered it. The session says so before the
+    /// cast's beginning arrives, so the answered spell is kept for it.
+    pub(super) fn pend(&mut self, spell_id: Option<u32>) {
+        self.requested = match spell_id {
+            Some(_) => None,
+            None => self.pending.or(self.requested),
+        };
+        self.pending = spell_id;
+    }
+
     /// Follows the player's own casts. Resource updates alone never claim
-    /// that a cast succeeded.
+    /// that a cast succeeded. A cast ends on a result for its spell or for
+    /// the spell asked for.
     pub(super) fn observe(
         &mut self,
         own_id: u16,
@@ -146,8 +162,9 @@ impl Casting {
         now: Instant,
     ) -> Option<CastNews> {
         let casting = |spell_id: u32| {
-            self.cast
-                .is_some_and(|(active, _, _)| u32::from(active) == spell_id)
+            self.cast.is_some_and(|(active, _, _)| {
+                u32::from(active) == spell_id || self.requested == Some(spell_id)
+            })
         };
         match *update {
             SpellUpdate::BarRefresh {
@@ -160,6 +177,7 @@ impl Casting {
                 self.cooldowns.refresh(spell_id, reduction_ms, now);
                 if casting(spell_id) {
                     self.cast = None;
+                    self.requested = None;
                 }
                 Some(CastNews::Refreshed)
             }
@@ -178,6 +196,7 @@ impl Casting {
                 ..
             } if caster_id == u32::from(own_id) => {
                 self.cast = None;
+                self.requested = None;
                 self.interrupted = Some((now, message_id));
                 Some(CastNews::Interrupted)
             }
@@ -186,7 +205,16 @@ impl Casting {
                 keep_casting: false,
             } if casting(spell_id) => {
                 self.cast = None;
+                self.requested = None;
                 Some(CastNews::Ended)
+            }
+            // A request that ended before any cast began, as a fizzle does.
+            SpellUpdate::Mana {
+                spell_id,
+                keep_casting: false,
+            } if self.cast.is_none() && self.requested == Some(spell_id) => {
+                self.requested = None;
+                None
             }
             _ => None,
         }
@@ -196,12 +224,14 @@ impl Casting {
     pub(super) fn drop_actions(&mut self) {
         self.cast = None;
         self.pending = None;
+        self.requested = None;
         self.interrupted = None;
     }
 
     /// Forgets the request in flight and every timer.
     pub(super) fn reset_cooldowns(&mut self) {
         self.pending = None;
+        self.requested = None;
         self.cooldowns = Cooldowns::default();
     }
 }
@@ -304,5 +334,55 @@ mod tests {
             Some(CastNews::Interrupted)
         );
         assert_eq!(casting.interrupted, Some((now, 199)));
+    }
+
+    #[test]
+    fn a_cast_begun_under_another_spell_ends_with_the_requested_ones_result() {
+        let now = Instant::now();
+        let gems = [Some(42), None, None, None, None, None, None, None];
+        // TAKP begins a Luclin port as spell 2935 and ends it naming the
+        // port; the session answers the request before the beginning arrives.
+        let began = SpellUpdate::Began {
+            caster_id: 7,
+            spell_id: 2935,
+            duration_ms: 10_000,
+        };
+        let ended = |spell_id| SpellUpdate::Mana {
+            spell_id,
+            keep_casting: false,
+        };
+        let refreshed = SpellUpdate::BarRefresh {
+            slot: 0,
+            spell_id: 42,
+            reduction_ms: 0,
+        };
+        for end in [ended(42), refreshed] {
+            let mut casting = Casting::default();
+            casting.pend(Some(42));
+            casting.pend(None);
+            assert_eq!(casting.pending, None);
+            casting.observe(7, &gems, &began, now);
+            assert_eq!(casting.observe(7, &gems, &ended(43), now), None);
+            assert!(casting.cast.is_some());
+            assert!(casting.observe(7, &gems, &end, now).is_some());
+            assert!(casting.cast.is_none());
+        }
+        // A request that ends before anything began is forgotten.
+        let mut casting = Casting::default();
+        casting.pend(Some(42));
+        casting.pend(None);
+        assert_eq!(casting.observe(7, &gems, &ended(42), now), None);
+        casting.observe(7, &gems, &began, now);
+        assert_eq!(casting.observe(7, &gems, &ended(42), now), None);
+        assert!(casting.cast.is_some());
+        // A new request forgets the last one's spell.
+        let mut casting = Casting::default();
+        casting.pend(Some(42));
+        casting.pend(None);
+        casting.pend(Some(43));
+        casting.pend(None);
+        casting.observe(7, &gems, &began, now);
+        assert_eq!(casting.observe(7, &gems, &ended(42), now), None);
+        assert!(casting.cast.is_some());
     }
 }

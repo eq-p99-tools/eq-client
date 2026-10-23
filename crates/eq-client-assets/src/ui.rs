@@ -94,6 +94,12 @@ pub enum UiLayoutError {
     /// The window file defines no window of that name.
     #[error("the skin defines no window {0}")]
     MissingWindow(String),
+    /// The set of interface files has no file of that name.
+    #[error("the skin's set of interface files has no {0}")]
+    MissingFile(String),
+    /// The file is not a cursor: an icon, or no Windows icon file at all.
+    #[error("{0} is not a cursor")]
+    NotCursor(PathBuf),
     /// A texture sheet is not the size its cells assume.
     #[error("{path} is {width}x{height}, not {SHEET_SIZE}x{SHEET_SIZE}")]
     SheetSize {
@@ -145,6 +151,66 @@ pub fn texture(
     Ok(image::open(&path)
         .map_err(|source| UiLayoutError::Image { path, source })?
         .into_rgba8())
+}
+
+/// A skin's mouse cursor, such as `arrow.cur`: its picture and the pixel in
+/// it that points.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkinCursor {
+    /// The picture, as RGBA pixels.
+    pub pixels: image::RgbaImage,
+    /// The pixel that points, across and down from the picture's top left.
+    pub hotspot: (u16, u16),
+}
+
+/// Reads one of a skin's cursors, such as `arrow.cur`, from the picture the
+/// image crate picks among the sizes the file holds, with that picture's
+/// hotspot.
+///
+/// # Errors
+/// Rejects unsafe names, unreadable files, files that are not cursors, icons
+/// among them, and pictures that cannot be decoded.
+pub fn cursor(eq_directory: &Path, skin: &str, file: &str) -> Result<SkinCursor, UiLayoutError> {
+    let path = skin_file(eq_directory, skin, file)?;
+    let bytes = std::fs::read(&path).map_err(|source| UiLayoutError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    let hotspot = cursor_hotspot(&bytes).ok_or_else(|| UiLayoutError::NotCursor(path.clone()))?;
+    let pixels = image::load_from_memory_with_format(&bytes, image::ImageFormat::Ico)
+        .map_err(|source| UiLayoutError::Image { path, source })?
+        .into_rgba8();
+    Ok(SkinCursor { pixels, hotspot })
+}
+
+/// The hotspot of the picture the image crate decodes from a cursor file,
+/// which it does not report: a cursor's header names it in each picture's
+/// directory entry. The image crate reads a cursor as an icon and decodes the
+/// entry it scores highest by the field an icon keeps its bits per pixel in,
+/// then by its area, where a side of 0 is 256; the last entry is taken first
+/// and an earlier one only when it scores strictly higher. In a cursor that
+/// field is the hotspot's y, so the same rule finds the same entry here.
+/// None when the file is no cursor or its directory is cut short.
+fn cursor_hotspot(bytes: &[u8]) -> Option<(u16, u16)> {
+    let word = |at: usize| Some(u16::from_le_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]));
+    // The reserved word, then the type: 1 for an icon, 2 for a cursor.
+    if word(0)? != 0 || word(2)? != 2 {
+        return None;
+    }
+    let entries = (0..usize::from(word(4)?))
+        .map(|index| bytes.get(6 + 16 * index..22 + 16 * index))
+        .collect::<Option<Vec<_>>>()?;
+    let field = |entry: &[u8], at: usize| u16::from_le_bytes([entry[at], entry[at + 1]]);
+    let side = |length: u8| if length == 0 { 256 } else { u32::from(length) };
+    let score = |entry: &[u8]| (field(entry, 6), side(entry[0]) * side(entry[1]));
+    let (last, earlier) = entries.split_last()?;
+    let mut best = *last;
+    for entry in earlier {
+        if score(entry) > score(best) {
+            best = entry;
+        }
+    }
+    Some((field(best, 4), field(best, 6)))
 }
 
 /// Reads one of a skin's icon sheets, such as `dragitem1.tga`, as RGBA pixels.
@@ -202,11 +268,57 @@ impl InstalledClient {
     }
 
     /// The face this client writes its windows in, by its file among
-    /// Windows' fonts; None until it is checked for this client.
+    /// Windows' fonts; None until it is checked for this client. The
+    /// Mac-era client's face is unchecked, and its installation carries no
+    /// font files, so it writes in the Titanium client's face rather than
+    /// a monospace placeholder: inferred, recording checklist item 6.152.
     #[must_use]
     pub const fn font_file(self) -> Option<&'static str> {
         match self {
-            Self::Titanium => Some("arial.ttf"),
+            Self::Titanium | Self::EqMac => Some("arial.ttf"),
+        }
+    }
+
+    /// What this client shows while it loads a zone, from its own files;
+    /// None until that is checked for this client. The Mac-era client has no
+    /// such picture among its files.
+    #[must_use]
+    pub const fn loading_screen(self) -> Option<LoadingScreen> {
+        match self {
+            Self::Titanium => Some(LoadingScreen {
+                picture: &["Resources", "loadscreen.jpg"],
+                status: 12387,
+            }),
+            Self::EqMac => None,
+        }
+    }
+
+    /// The spell particle effects this client draws, from its files in
+    /// `eq_directory`; None until they are checked for this client.
+    #[must_use]
+    pub fn spell_effects(
+        self,
+        eq_directory: &Path,
+    ) -> Option<Result<crate::spells::effects::SpellEffects, crate::spells::effects::EffectsError>>
+    {
+        match self {
+            Self::Titanium => Some(crate::spells::effects::SpellEffects::read_titanium(
+                eq_directory,
+            )),
+            Self::EqMac => None,
+        }
+    }
+
+    /// Where this client keeps its sound files; None until that is checked
+    /// for this client.
+    #[must_use]
+    pub const fn sound_files(self) -> Option<crate::sounds::SoundFiles> {
+        match self {
+            Self::Titanium => Some(crate::sounds::SoundFiles {
+                archive_stem: "snd",
+                folders: &["sounds"],
+                numbers: "SoundAssets.txt",
+            }),
             Self::EqMac => None,
         }
     }
@@ -217,6 +329,32 @@ impl InstalledClient {
             Self::Titanium => Box::new(Titanium(eq_directory)),
             Self::EqMac => Box::new(Unchecked),
         }
+    }
+}
+
+/// The picture an installed client covers the screen with while it loads a
+/// zone, and the line it writes over it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoadingScreen {
+    /// The picture's file, folder by folder under the installation.
+    pub picture: &'static [&'static str],
+    /// The line, by its id in the client's string table.
+    pub status: u32,
+}
+
+impl LoadingScreen {
+    /// Reads the picture from the installation as RGBA pixels.
+    ///
+    /// # Errors
+    /// Fails if the file cannot be read or decoded.
+    pub fn read_picture(&self, eq_directory: &Path) -> Result<image::RgbaImage, UiLayoutError> {
+        let path = self
+            .picture
+            .iter()
+            .fold(eq_directory.to_path_buf(), |path, part| path.join(part));
+        Ok(image::open(&path)
+            .map_err(|source| UiLayoutError::Image { path, source })?
+            .into_rgba8())
     }
 }
 
@@ -266,6 +404,24 @@ pub trait OfficialSettings {
     fn chat_font(&self, _character: &str, _world: &str) -> Option<u8> {
         None
     }
+
+    /// The account and world the official login screen last used.
+    fn login(&self) -> LoginMemory {
+        LoginMemory::default()
+    }
+}
+
+/// What the official login screen remembers between runs; each None when
+/// the file or setting is missing or empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoginMemory {
+    /// The login server the official client logs in at, as `host:port` or
+    /// a bare host: the one the account and world belong to.
+    pub server: Option<String>,
+    /// The account name last logged in with.
+    pub account: Option<String>,
+    /// The name of the world last played on.
+    pub world: Option<String>,
 }
 
 /// An installed Titanium client's settings files, in its installation.
@@ -351,6 +507,22 @@ impl OfficialSettings for Titanium<'_> {
         .parse()
         .ok()
     }
+
+    /// `Username` in `[PLAYER]` and `LastServerName` in `[MISC]` of
+    /// `eqlsPlayerData.ini`, which the official login screen keeps, and the
+    /// login server in `eqhost.txt`, which those belong to.
+    fn login(&self) -> LoginMemory {
+        let value = |file: &str, section, key| {
+            let bytes = std::fs::read(self.0.join(file)).ok()?;
+            ini_value(&String::from_utf8_lossy(&bytes), section, key)
+                .filter(|value| !value.is_empty())
+        };
+        LoginMemory {
+            server: value("eqhost.txt", "LoginServer", "Host"),
+            account: value("eqlsPlayerData.ini", "PLAYER", "Username"),
+            world: value("eqlsPlayerData.ini", "MISC", "LastServerName"),
+        }
+    }
 }
 
 /// A client whose settings files no reader has been checked against yet.
@@ -366,6 +538,8 @@ pub struct OfficialOptions {
     /// Whether the chat is logged from login: `Log` in `[Defaults]`, which
     /// the official `/log` saves.
     pub log: Option<bool>,
+    /// Whether sounds play: `Sound` in `[Defaults]`.
+    pub sound: Option<bool>,
     /// The Display page's Show PC Names: `PCNames` in `[Options]`.
     pub pc_names: Option<bool>,
     /// The Display page's Show NPC Names: `NPCNames` in `[Options]`.
@@ -392,6 +566,7 @@ fn options_from_ini(text: &str) -> OfficialOptions {
     };
     OfficialOptions {
         log: flag("Defaults", "Log"),
+        sound: flag("Defaults", "Sound"),
         pc_names: flag("Options", "PCNames"),
         npc_names: flag("Options", "NPCNames"),
         show_names_level: ini_value(text, "Defaults", "ShowNamesLevel")
@@ -780,7 +955,7 @@ fn valid_skin(skin: &str) -> bool {
 }
 
 /// A character or world name that keeps a file name inside the installation.
-fn plain_name(name: &str) -> bool {
+pub(crate) fn plain_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()
@@ -879,6 +1054,14 @@ Log=maybe
     }
 
     #[test]
+    fn eqclient_ini_says_whether_sounds_play() {
+        let sound = |text| options_from_ini(text).sound;
+        assert_eq!(sound("[Defaults]\nSound=TRUE\nSoundVolume=0\n"), Some(true));
+        assert_eq!(sound("[Defaults]\nSound=FALSE\n"), Some(false));
+        assert_eq!(sound("[Options]\nSound=TRUE\n"), None);
+    }
+
+    #[test]
     fn eqclient_ini_says_whose_names_show_and_how_far_and_fast_the_view_goes() {
         assert_eq!(
             options_from_ini(
@@ -894,6 +1077,7 @@ MouseSensitivity=4
             ),
             OfficialOptions {
                 log: None,
+                sound: None,
                 pc_names: Some(true),
                 npc_names: Some(false),
                 show_names_level: Some(4),
@@ -937,6 +1121,16 @@ MouseSensitivity=4
             "[HotButtons]\nPage1Button1=H0\n",
         )
         .unwrap();
+        std::fs::write(
+            install.join("eqlsPlayerData.ini"),
+            "[MISC]\nLastServerID=1\nLastServerName=ExampleWorld\n[PLAYER]\nUsername=example\n",
+        )
+        .unwrap();
+        std::fs::write(
+            install.join("eqhost.txt"),
+            "[LoginServer]\nHost=localhost:5998\n",
+        )
+        .unwrap();
         let read = |client: InstalledClient| {
             let settings = client.settings(&install);
             (
@@ -944,6 +1138,7 @@ MouseSensitivity=4
                 settings.chosen_skin("Example", "ExampleWorld"),
                 settings.hotbuttons("Example", "ExampleWorld").len(),
                 settings.window_positions("Example", "ExampleWorld").len(),
+                settings.login(),
             )
         };
         let titanium = read(InstalledClient::Titanium);
@@ -954,8 +1149,25 @@ MouseSensitivity=4
             (titanium.1.as_deref(), titanium.2, titanium.3),
             (Some("velious"), 1, 1)
         );
+        assert_eq!(
+            titanium.4,
+            LoginMemory {
+                server: Some("localhost:5998".into()),
+                account: Some("example".into()),
+                world: Some("ExampleWorld".into()),
+            }
+        );
         // The same files in an EQMac installation are left unread.
-        assert_eq!(eqmac, (OfficialOptions::default(), None, 0, 0));
+        assert_eq!(
+            eqmac,
+            (
+                OfficialOptions::default(),
+                None,
+                0,
+                0,
+                LoginMemory::default()
+            )
+        );
     }
 
     #[test]
@@ -1122,6 +1334,28 @@ MouseSensitivity=4
     }
 
     #[test]
+    fn the_loading_screen_is_titaniums_picture_and_line_and_none_on_the_mac_client() {
+        assert_eq!(InstalledClient::EqMac.loading_screen(), None);
+        let screen = InstalledClient::Titanium.loading_screen().unwrap();
+        assert_eq!(screen.status, 12387);
+        let install = std::env::temp_dir().join(format!("eq-ui-loading-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        assert!(matches!(
+            screen.read_picture(&install),
+            Err(UiLayoutError::Image { .. })
+        ));
+        std::fs::create_dir_all(install.join("Resources")).unwrap();
+        image::RgbImage::new(64, 48)
+            .save(install.join("Resources/loadscreen.jpg"))
+            .unwrap();
+        let picture = screen
+            .read_picture(&install)
+            .map(|pixels| pixels.dimensions());
+        std::fs::remove_dir_all(&install).unwrap();
+        assert_eq!(picture.unwrap(), (64, 48));
+    }
+
+    #[test]
     fn icon_sheets_come_from_the_skin_then_the_default_one() {
         let install = std::env::temp_dir().join(format!("eq-ui-sheets-{}", std::process::id()));
         std::fs::create_dir_all(install.join("uifiles/default")).unwrap();
@@ -1176,6 +1410,174 @@ MouseSensitivity=4
         std::fs::remove_dir_all(&install).unwrap();
         assert_eq!(chosen.as_deref(), Some("velious"));
         assert_eq!((unsafe_skin, missing, escaping), (None, None, None));
+    }
+
+    /// A picture in a Windows icon file: its side, the two words of its
+    /// directory entry that a cursor keeps its hotspot in and an icon its
+    /// planes and bits per pixel, and its colour by position.
+    struct Picture {
+        side: u8,
+        words: (u16, u16),
+        colour: fn(u32, u32) -> [u8; 4],
+    }
+
+    /// A Windows icon file of `kind`, 1 for an icon and 2 for a cursor, with
+    /// each picture a bitmap: a header of twice its height, its 32-bit BGRA
+    /// rows and its 1-bit transparency mask, each from the bottom up.
+    fn icon_file(kind: u16, pictures: &[Picture]) -> Vec<u8> {
+        let count = u16::try_from(pictures.len()).unwrap();
+        let mut file = [0, kind, count]
+            .iter()
+            .flat_map(|word: &u16| word.to_le_bytes())
+            .collect::<Vec<_>>();
+        let mut offset = 6 + 16 * u32::from(count);
+        let mut bitmaps = Vec::new();
+        for picture in pictures {
+            let side = u32::from(picture.side);
+            let mask_row = (side.div_ceil(8)).div_ceil(4) * 4;
+            let mut bitmap = Vec::new();
+            for word in [40, side, 2 * side] {
+                bitmap.extend(word.to_le_bytes());
+            }
+            bitmap.extend(1_u16.to_le_bytes());
+            bitmap.extend(32_u16.to_le_bytes());
+            bitmap.extend([0; 24]);
+            for y in (0..side).rev() {
+                for x in 0..side {
+                    let [r, g, b, a] = (picture.colour)(x, y);
+                    bitmap.extend([b, g, r, a]);
+                }
+            }
+            for y in (0..side).rev() {
+                let mut row = vec![0_u8; usize::try_from(mask_row).unwrap()];
+                for x in 0..side {
+                    if (picture.colour)(x, y)[3] == 0 {
+                        row[usize::try_from(x / 8).unwrap()] |= 0x80 >> (x % 8);
+                    }
+                }
+                bitmap.extend(row);
+            }
+            let length = u32::try_from(bitmap.len()).unwrap();
+            file.extend([picture.side, picture.side, 0, 0]);
+            file.extend(picture.words.0.to_le_bytes());
+            file.extend(picture.words.1.to_le_bytes());
+            file.extend(length.to_le_bytes());
+            file.extend(offset.to_le_bytes());
+            offset += length;
+            bitmaps.extend(bitmap);
+        }
+        file.extend(bitmaps);
+        file
+    }
+
+    /// A cursor's large picture: shaded, and clear below its diagonal.
+    fn large(x: u32, y: u32) -> [u8; 4] {
+        if x + y > 40 {
+            [0, 0, 0, 0]
+        } else {
+            [
+                u8::try_from(x * 8).unwrap(),
+                u8::try_from(y * 8).unwrap(),
+                100,
+                255,
+            ]
+        }
+    }
+
+    /// A cursor's small picture, all white.
+    fn small(_: u32, _: u32) -> [u8; 4] {
+        [255, 255, 255, 255]
+    }
+
+    /// Writes `bytes` as `file` of `skin` in a new installation.
+    fn install_file(install: &Path, skin: &str, file: &str, bytes: &[u8]) {
+        std::fs::create_dir_all(install.join("uifiles").join(skin)).unwrap();
+        std::fs::write(install.join("uifiles").join(skin).join(file), bytes).unwrap();
+    }
+
+    #[test]
+    fn a_cursor_gives_the_picture_the_image_crate_picks_and_its_hotspot() {
+        let install = std::env::temp_dir().join(format!("eq-ui-cursor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        let two = |small_hotspot| {
+            icon_file(
+                2,
+                &[
+                    Picture {
+                        side: 16,
+                        words: small_hotspot,
+                        colour: small,
+                    },
+                    Picture {
+                        side: 32,
+                        words: (3, 5),
+                        colour: large,
+                    },
+                ],
+            )
+        };
+        install_file(&install, DEFAULT_SKIN, "arrow.cur", &two((1, 2)));
+        // The image crate scores a cursor's hotspot y as an icon's bits per
+        // pixel, so a small picture with a lower hotspot wins the pick.
+        install_file(&install, DEFAULT_SKIN, "low.cur", &two((1, 9)));
+        let read = cursor(&install, DEFAULT_SKIN, "arrow.cur");
+        let low = cursor(&install, DEFAULT_SKIN, "low.cur");
+        std::fs::remove_dir_all(&install).unwrap();
+        let read = read.unwrap();
+        assert_eq!(read.pixels.dimensions(), (32, 32));
+        assert_eq!(read.hotspot, (3, 5));
+        assert_eq!(read.pixels.get_pixel(0, 0).0, [0, 0, 100, 255]);
+        assert_eq!(read.pixels.get_pixel(2, 30).0, [16, 240, 100, 255]);
+        assert_eq!(read.pixels.get_pixel(31, 0).0, [248, 0, 100, 255]);
+        assert_eq!(read.pixels.get_pixel(31, 31).0[3], 0);
+        let low = low.unwrap();
+        assert_eq!((low.pixels.dimensions(), low.hotspot), ((16, 16), (1, 9)));
+        assert_eq!(low.pixels.get_pixel(8, 8).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn a_skin_without_its_own_cursor_uses_the_default_ones() {
+        let install =
+            std::env::temp_dir().join(format!("eq-ui-cursor-skin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        let one = |hotspot| {
+            icon_file(
+                2,
+                &[Picture {
+                    side: 16,
+                    words: hotspot,
+                    colour: small,
+                }],
+            )
+        };
+        install_file(&install, DEFAULT_SKIN, "arrow.cur", &one((1, 1)));
+        std::fs::create_dir_all(install.join("uifiles/plain")).unwrap();
+        let fallback = cursor(&install, "plain", "arrow.cur").map(|cursor| cursor.hotspot);
+        install_file(&install, "plain", "arrow.cur", &one((7, 4)));
+        let own = cursor(&install, "plain", "arrow.cur").map(|cursor| cursor.hotspot);
+        let missing = cursor(&install, "plain", "hand.cur");
+        std::fs::remove_dir_all(&install).unwrap();
+        assert_eq!((fallback.unwrap(), own.unwrap()), ((1, 1), (7, 4)));
+        assert!(matches!(missing, Err(UiLayoutError::Read { .. })));
+    }
+
+    #[test]
+    fn an_icon_is_not_read_as_a_cursor() {
+        let install =
+            std::env::temp_dir().join(format!("eq-ui-cursor-icon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        let icon = icon_file(
+            1,
+            &[Picture {
+                side: 16,
+                words: (1, 32),
+                colour: small,
+            }],
+        );
+        install_file(&install, DEFAULT_SKIN, "arrow.cur", &icon);
+        let read = cursor(&install, DEFAULT_SKIN, "arrow.cur");
+        std::fs::remove_dir_all(&install).unwrap();
+        assert!(matches!(read, Err(UiLayoutError::NotCursor(_))));
     }
 
     #[test]

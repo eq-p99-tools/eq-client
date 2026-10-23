@@ -44,6 +44,9 @@ pub enum Toggle {
     /// Logs the chat, as the official client's `/log` does; it keeps the
     /// choice in `eqclient.ini`, this client per character.
     Log,
+    /// Plays sounds; the official client keeps the choice as `Sound` in
+    /// `eqclient.ini`, this client per character.
+    Sound,
     /// A quality-of-life setting, on the Options window's quality-of-life
     /// page, which only this client has.
     Qol(Fix),
@@ -51,7 +54,7 @@ pub enum Toggle {
 
 impl Toggle {
     /// The official client's own toggles, in the order a file lists them.
-    pub const OFFICIAL: [Self; 8] = [
+    pub const OFFICIAL: [Self; 9] = [
         Self::PetWindowPopup,
         Self::TargetRing,
         Self::ShowHelm,
@@ -60,6 +63,7 @@ impl Toggle {
         Self::InvertY,
         Self::WheelZoom,
         Self::Log,
+        Self::Sound,
     ];
 
     /// Every toggle, in the order a file lists them: the official client's,
@@ -82,6 +86,7 @@ impl Toggle {
             Self::InvertY => "invert_y",
             Self::WheelZoom => "wheel_zoom",
             Self::Log => "log",
+            Self::Sound => "sound",
             Self::Qol(fix) => fix.key(),
         }
     }
@@ -98,7 +103,8 @@ impl Toggle {
             | Self::NpcNames
             | Self::InvertY
             | Self::WheelZoom
-            | Self::Log => None,
+            | Self::Log
+            | Self::Sound => None,
             Self::Qol(fix) => fix.needs(),
         }
     }
@@ -117,6 +123,15 @@ pub enum Level {
     /// where 50 is the client's own speed (the Mouse page's Mouselook
     /// Sensitivity).
     MouseSensitivity,
+    /// How large this client's windows are drawn, as a percentage of the
+    /// desktop's scaling (the Interface scale on the quality-of-life page); the installation's
+    /// own full-window screens keep the official client's size.
+    UiScale,
+    /// How loud sounds play, as a percentage of their files' own loudness.
+    /// The official client keeps a `SoundVolume` in `eqclient.ini` on a
+    /// scale not yet known, so this client's own starts at 100 (inferred, item
+    /// 6.259).
+    SoundVolume,
 }
 
 /// The fewest frames a second the Max FPS slider offers.
@@ -126,10 +141,21 @@ const MIN_FPS: u16 = 10;
 const MAX_FPS: u16 = 200;
 /// The steps between the Max FPS slider's rates.
 const FPS_STEP: usize = 5;
+/// The smallest and largest interface scales, in percent, and the steps
+/// between them.
+const MIN_UI_SCALE: u16 = 50;
+const MAX_UI_SCALE: u16 = 200;
+const UI_SCALE_STEP: usize = 5;
 
 impl Level {
     /// Every level, in the order a file lists them.
-    pub const ALL: [Self; 3] = [Self::ClipPlane, Self::MaxFps, Self::MouseSensitivity];
+    pub const ALL: [Self; 5] = [
+        Self::ClipPlane,
+        Self::MaxFps,
+        Self::MouseSensitivity,
+        Self::UiScale,
+        Self::SoundVolume,
+    ];
 
     /// The name a file keeps it under.
     #[must_use]
@@ -138,16 +164,21 @@ impl Level {
             Self::ClipPlane => "clip_plane",
             Self::MaxFps => "max_fps",
             Self::MouseSensitivity => "mouse_sensitivity",
+            Self::UiScale => "ui_scale",
+            Self::SoundVolume => "sound_volume",
         }
     }
 
     /// The values its slider stops at, from its left.
     fn stops(self) -> Vec<u16> {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity => (0..=100).collect(),
+            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume => (0..=100).collect(),
             Self::MaxFps => (MIN_FPS..=MAX_FPS)
                 .step_by(FPS_STEP)
                 .chain(std::iter::once(0))
+                .collect(),
+            Self::UiScale => (MIN_UI_SCALE..=MAX_UI_SCALE)
+                .step_by(UI_SCALE_STEP)
                 .collect(),
         }
     }
@@ -157,13 +188,19 @@ impl Level {
     #[must_use]
     pub fn fraction(self, value: u16) -> f32 {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity => f32::from(value.min(100)) / 100.0,
+            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume => {
+                f32::from(value.min(100)) / 100.0
+            }
             Self::MaxFps if value == 0 => 1.0,
             Self::MaxFps => {
                 let span = f32::from(MAX_FPS - MIN_FPS);
                 // The far right is the display's rate, so a rate the slider
                 // does not offer stops just short of it.
                 (f32::from(value.clamp(MIN_FPS, MAX_FPS) - MIN_FPS) / span) * 0.975
+            }
+            Self::UiScale => {
+                let span = f32::from(MAX_UI_SCALE - MIN_UI_SCALE);
+                f32::from(value.clamp(MIN_UI_SCALE, MAX_UI_SCALE) - MIN_UI_SCALE) / span
             }
         }
     }
@@ -191,7 +228,9 @@ impl Level {
     #[must_use]
     pub fn words(self, value: u16) -> String {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity => format!("{value} %"),
+            Self::ClipPlane | Self::MouseSensitivity | Self::UiScale | Self::SoundVolume => {
+                format!("{value} %")
+            }
             Self::MaxFps if value == 0 => "Display".to_owned(),
             Self::MaxFps => value.to_string(),
         }
@@ -200,8 +239,9 @@ impl Level {
     /// Whether a file's value is one the option takes.
     fn takes(self, value: u16) -> bool {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity => value <= 100,
+            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume => value <= 100,
             Self::MaxFps => value == 0 || (1..=1000).contains(&value),
+            Self::UiScale => (MIN_UI_SCALE..=MAX_UI_SCALE).contains(&value),
         }
     }
 }
@@ -229,6 +269,8 @@ pub struct Options {
     pub wheel_zoom: bool,
     /// See [`Toggle::Log`].
     pub log: bool,
+    /// See [`Toggle::Sound`].
+    pub sound: bool,
     /// Which quality-of-life fixes are on ([`Toggle::Qol`]).
     pub qol: qol::Settings,
     /// How much of a player's name shows over their head, as `/shownames`
@@ -241,15 +283,21 @@ pub struct Options {
     pub max_fps: u16,
     /// See [`Level::MouseSensitivity`].
     pub mouse_sensitivity: u16,
+    /// See [`Level::UiScale`].
+    pub ui_scale: u16,
+    /// See [`Level::SoundVolume`].
+    pub sound_volume: u16,
 }
 
 impl Default for Options {
     /// The client's defaults: the pet's window pops up, the target ring, the
     /// player's helm and everyone's names show, the mouse is not inverted and its wheel
-    /// zooms, the chat is logged, each quality-of-life fix starts as it is
+    /// zooms, the chat is logged, sounds play at full volume, each
+    /// quality-of-life fix starts as it is
     /// defined, players' names show in full, spawns draw as far as the zone
-    /// allows, at most 60 frames a second ([`Fix::FrameCap`]), and the
-    /// camera turns at the client's own speed.
+    /// allows, at most 60 frames a second ([`Fix::FrameCap`]), the camera
+    /// turns at the client's own speed, and windows are drawn at the
+    /// desktop's scaling.
     fn default() -> Self {
         let qol = qol::Settings::default();
         Self {
@@ -261,11 +309,14 @@ impl Default for Options {
             invert_y: false,
             wheel_zoom: true,
             log: true,
+            sound: true,
             qol,
             show_names: ShowNames::Everything,
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
             mouse_sensitivity: 50,
+            ui_scale: 100,
+            sound_volume: 100,
         }
     }
 }
@@ -283,6 +334,7 @@ impl Options {
             Toggle::InvertY => self.invert_y,
             Toggle::WheelZoom => self.wheel_zoom,
             Toggle::Log => self.log,
+            Toggle::Sound => self.sound,
             Toggle::Qol(fix) => self.qol.on(fix),
         }
     }
@@ -298,6 +350,7 @@ impl Options {
             Toggle::InvertY => &mut self.invert_y,
             Toggle::WheelZoom => &mut self.wheel_zoom,
             Toggle::Log => &mut self.log,
+            Toggle::Sound => &mut self.sound,
             Toggle::Qol(fix) => {
                 self.qol.set(fix, on);
                 return;
@@ -313,6 +366,8 @@ impl Options {
             Level::ClipPlane => self.clip_plane,
             Level::MaxFps => self.max_fps,
             Level::MouseSensitivity => self.mouse_sensitivity,
+            Level::UiScale => self.ui_scale,
+            Level::SoundVolume => self.sound_volume,
         }
     }
 
@@ -322,6 +377,8 @@ impl Options {
             Level::ClipPlane => &mut self.clip_plane,
             Level::MaxFps => &mut self.max_fps,
             Level::MouseSensitivity => &mut self.mouse_sensitivity,
+            Level::UiScale => &mut self.ui_scale,
+            Level::SoundVolume => &mut self.sound_volume,
         };
         *option = value;
     }
@@ -341,6 +398,17 @@ impl Options {
     pub fn clip_distance(&self, far_clip: Option<f32>) -> Option<f32> {
         let far_clip = far_clip.filter(|far| far.is_finite() && *far > 0.0)?;
         Some((far_clip * self.clip_share()).max(far_clip.min(100.0)))
+    }
+
+    /// How loud sounds play, from 0 for silent to 1 for their files' own
+    /// loudness: nothing when sounds are off.
+    #[must_use]
+    pub fn sound_volume(&self) -> f32 {
+        if self.sound {
+            f32::from(self.sound_volume.min(100)) / 100.0
+        } else {
+            0.0
+        }
     }
 
     /// The most frames a second, if the client holds the rate down at all.
@@ -504,6 +572,26 @@ mod tests {
         options.set_level(Level::ClipPlane, 50);
         assert_eq!(options.clip_distance(Some(2400.0)), Some(1200.0));
         assert_eq!(options.clip_distance(None), None);
+    }
+
+    #[test]
+    fn the_interface_scale_runs_from_half_to_double_in_fives_and_starts_at_the_desktops() {
+        assert_eq!(Options::default().ui_scale, 100);
+        assert_eq!(Level::UiScale.at(0.0), 50);
+        assert_eq!(Level::UiScale.at(1.0), 200);
+        assert_eq!(Level::UiScale.at(Level::UiScale.fraction(150)), 150);
+        // Between stops, the nearest.
+        assert_eq!(Level::UiScale.at(Level::UiScale.fraction(100) + 0.01), 100);
+        assert_eq!(Level::UiScale.words(125), "125 %");
+        let mut options = Options::default();
+        options.set_level(Level::UiScale, 175);
+        let text = options.text();
+        assert!(text.contains("ui_scale = 175\n"));
+        assert_eq!(Options::read(&text, Options::default()), options);
+        // A scale the slider cannot hold keeps the default.
+        for bad in ["ui_scale = 20\n", "ui_scale = 500\n", "ui_scale = big\n"] {
+            assert_eq!(Options::read(bad, Options::default()).ui_scale, 100);
+        }
     }
 
     #[test]

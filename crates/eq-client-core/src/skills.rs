@@ -7,6 +7,9 @@
 /// its new value.
 pub const BETTER_AT: u32 = 12091;
 
+/// Safe Fall's number: the skill that lessens a fall's damage.
+pub const SAFE_FALL: u32 = 39;
+
 /// Each skill's string and name, by number.
 const SKILLS: [(Option<u32>, &str); 78] = [
     (Some(13855), "1H Blunt"),
@@ -116,6 +119,7 @@ mod tests {
         assert_eq!((name(30), name_string(30)), (Some("Kick"), Some(13893)));
         assert_eq!((name(74), name_string(74)), (Some("Frenzy"), Some(5837)));
         assert_eq!((name(77), name_string(77)), (Some("2H Piercing"), None));
+        assert_eq!(name(SAFE_FALL), Some("Safe Fall"));
         assert_eq!((name(78), name_string(78)), (None, None));
         // The abilities the session knows have the same names here.
         for ability in crate::abilities::Ability::ALL {

@@ -31,6 +31,23 @@ pub(crate) fn spawn(mut commands: Commands) {
     ));
 }
 
+/// A control a script clicked, which the pointer never rests on: it shows no
+/// tooltip while Bevy lets go of the press, until it is idle again.
+#[derive(Component)]
+pub(crate) struct ScriptPressed;
+
+/// Lets a scripted press go once its control is idle.
+pub(crate) fn end_scripted_presses(
+    mut commands: Commands,
+    pressed: Query<(Entity, &Interaction), With<ScriptPressed>>,
+) {
+    for (entity, interaction) in &pressed {
+        if *interaction == Interaction::None {
+            commands.entity(entity).remove::<ScriptPressed>();
+        }
+    }
+}
+
 /// Each control the pointer may rest on: whether it does, what it says,
 /// what it needs and where it is.
 type Controls<'w, 's> = Query<
@@ -41,6 +58,7 @@ type Controls<'w, 's> = Query<
         Option<&'static Tooltip>,
         Option<&'static super::outbox::Needs>,
         Option<(&'static ComputedNode, &'static UiGlobalTransform)>,
+        Has<ScriptPressed>,
     ),
 >;
 
@@ -65,8 +83,8 @@ pub(crate) fn show(
     let greys = super::outbox::greys(&options);
     let hovered = controls
         .iter()
-        .filter(|(interaction, ..)| **interaction != Interaction::None)
-        .find_map(|(_, tooltip, needs, placed)| {
+        .filter(|(interaction, .., scripted)| **interaction != Interaction::None && !scripted)
+        .find_map(|(_, tooltip, needs, placed, _)| {
             let line = match needs {
                 Some(needs) if greys && !needs.offered(online.world()) => {
                     Some(needs.reason(online.world()))
@@ -142,5 +160,58 @@ mod tests {
         assert_eq!(text.0, crate::outbox::MISSING);
         assert_eq!(node.display, Display::Flex);
         assert_eq!((node.left, node.top), (px(114), px(68)));
+    }
+
+    /// Whether the tooltip box shows.
+    fn showing(app: &mut App) -> bool {
+        let mut boxes = app.world_mut().query_filtered::<&Node, With<TooltipBox>>();
+        boxes.single(app.world()).unwrap().display != Display::None
+    }
+
+    #[test]
+    fn a_scripted_click_shows_no_tooltip_as_bevy_lets_it_go() {
+        let mut app = crate::testing::app();
+        app.add_systems(Startup, spawn)
+            .add_systems(Update, (end_scripted_presses, show).chain());
+        let button = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                Interaction::Pressed,
+                Tooltip("Gate".into()),
+                ScriptPressed,
+                UiGlobalTransform::from_xy(100.0, 50.0),
+            ))
+            .id();
+        app.update();
+        assert!(!showing(&mut app));
+        *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Hovered;
+        app.update();
+        assert!(!showing(&mut app));
+        *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::None;
+        app.update();
+        assert!(app.world().get::<ScriptPressed>(button).is_none());
+        assert!(!showing(&mut app));
+    }
+
+    #[test]
+    fn a_control_hovered_after_a_scripted_click_shows_its_tooltip_again() {
+        let mut app = crate::testing::app();
+        app.add_systems(Startup, spawn)
+            .add_systems(Update, (end_scripted_presses, show).chain());
+        let button = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                Interaction::None,
+                Tooltip("Gate".into()),
+                ScriptPressed,
+                UiGlobalTransform::from_xy(100.0, 50.0),
+            ))
+            .id();
+        app.update();
+        *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Hovered;
+        app.update();
+        assert!(showing(&mut app));
     }
 }

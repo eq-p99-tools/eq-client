@@ -1,21 +1,61 @@
-//! News about the session's course: the characters on offer, admissions,
-//! the motion the session allows, transfers between zones, and camping.
+//! News about the session's course: the worlds and characters on offer,
+//! admissions, the motion the session allows, transfers between zones, and
+//! camping.
 use super::{
-    Camp, Changes, CharacterList, ClientWorld, MotionGrant, Moved, Notice, Reply, Reset, Vitals,
+    Camp, Changes, CharacterList, ClientWorld, MotionGrant, Moved, Notice, Reply, Reset,
+    ServerList, Vitals,
 };
 use crate::{
     CampStatus, Capability, CharacterChoice, PlayerState, WorldPosition, ZoneOffer, ZoneRejection,
+    servers::{ServerChoice, ServerRefusal},
+    zones::ZoneDescription,
 };
 use std::time::Instant;
 
 impl ClientWorld {
-    /// The world server offered these characters to play.
+    /// The login server listed these worlds for the player to choose from.
+    pub(super) fn servers_offered(
+        &mut self,
+        selection_id: u64,
+        servers: &[ServerChoice],
+        changes: &mut Changes,
+    ) {
+        self.servers = Some(ServerList {
+            selection_id,
+            servers: servers.to_vec(),
+            asked: None,
+            refused: None,
+        });
+        changes.servers = true;
+    }
+
+    /// The login server refused the world chosen from its list, which stays
+    /// up for another choice. A refusal for an older list changes nothing.
+    pub(super) fn server_refused(
+        &mut self,
+        selection_id: u64,
+        refusal: &ServerRefusal,
+        changes: &mut Changes,
+    ) {
+        match self.servers.as_mut() {
+            Some(list) if list.selection_id == selection_id => {
+                list.asked = None;
+                list.refused = Some(refusal.clone());
+                changes.servers = true;
+            }
+            _ => changes.ignored = true,
+        }
+    }
+
+    /// The world server offered these characters to play: the login
+    /// server's list is done with.
     pub(super) fn offered(
         &mut self,
         selection_id: u64,
         characters: &[CharacterChoice],
         changes: &mut Changes,
     ) {
+        self.servers = None;
         self.characters = Some(CharacterList {
             selection_id,
             characters: characters.to_vec(),
@@ -23,11 +63,42 @@ impl ClientWorld {
         changes.characters = true;
     }
 
+    /// The world answered a character the player asked for: a refusal is
+    /// news for the player, and a creation comes with the new list.
+    pub(super) fn created(
+        &mut self,
+        name: &str,
+        outcome: crate::creation::CreationOutcome,
+        changes: &mut Changes,
+    ) {
+        let count = self.creation.as_ref().map_or(0, |last| last.count) + 1;
+        self.creation = Some(super::Creation {
+            count,
+            name: name.to_owned(),
+            outcome,
+        });
+        if outcome != crate::creation::CreationOutcome::Created {
+            changes.notices.push(Notice::CreationRefused {
+                name: name.to_owned(),
+                outcome,
+            });
+        }
+    }
+
+    /// A zone header, at entry or sent again mid-zone, sets the far clip to
+    /// its maximum clip when it gives one.
+    pub(super) fn described(&mut self, description: &ZoneDescription) {
+        let clip = description.max_clip;
+        if clip.is_finite() && clip > 0.0 {
+            self.far_clip = Some(clip);
+        }
+    }
+
     /// A new admission replaces the old one and its zone.
     pub(super) fn entered(
         &mut self,
         (capabilities, choices, session_id): (&[Capability], &[Capability], u64),
-        (zone, far_clip): (&str, Option<f32>),
+        (zone, far_clip, spell_landing_flag): (&str, Option<f32>, Option<u8>),
         player: &PlayerState,
         now: Instant,
     ) -> Changes {
@@ -37,7 +108,11 @@ impl ClientWorld {
         self.choices = choices.to_vec();
         self.session_id = Some(session_id);
         zone.clone_into(&mut self.zone_name);
+        changes
+            .notices
+            .push(Notice::Arrived(self.zone_long_name().to_owned()));
         self.far_clip = far_clip;
+        self.spell_landing_flag = spell_landing_flag;
         self.vitals = Vitals {
             mana: Some(player.mana),
             endurance: player.endurance,

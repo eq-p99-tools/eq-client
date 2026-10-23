@@ -15,7 +15,9 @@ mod changes;
 mod character;
 mod group;
 mod items;
+mod landings;
 mod link;
+mod motions;
 mod notice;
 mod raid;
 mod read;
@@ -30,7 +32,9 @@ pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTim
 pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
 pub use items::ItemCache;
+pub use landings::Landing;
 pub use link::Link;
+pub use motions::{CastDone, Motion};
 pub use notice::{ListingNotice, Notice, Party};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
@@ -53,6 +57,32 @@ pub struct CharacterList {
     pub characters: Vec<CharacterChoice>,
 }
 
+/// The world's last answer to a character the player asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Creation {
+    /// Counts the answers, so that two alike still differ.
+    pub count: u64,
+    /// The name asked for.
+    pub name: String,
+    /// How the world took it.
+    pub outcome: crate::creation::CreationOutcome,
+}
+
+/// The worlds the login server listed for the player to choose from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerList {
+    /// Names this list, which a choice must repeat.
+    pub selection_id: u64,
+    /// The worlds, in the login server's order.
+    pub servers: Vec<crate::servers::ServerChoice>,
+    /// The world the player asked to play on, by its place in the list,
+    /// until the login server answers.
+    pub asked: Option<usize>,
+    /// Why the login server refused the world last asked for; the player
+    /// may choose again.
+    pub refused: Option<crate::servers::ServerRefusal>,
+}
+
 /// One spawn in the zone and what is known about it.
 #[derive(Clone, Debug)]
 pub struct Spawn {
@@ -65,6 +95,19 @@ pub struct Spawn {
     /// Changes whenever the spawn must be drawn again: it appeared, was
     /// replaced or became a corpse.
     pub revision: u64,
+    /// When the server last said where the spawn is, from which the client
+    /// carries it on.
+    pub reported: Instant,
+}
+
+impl Spawn {
+    /// Where the client has the spawn at `now`: carried on from its latest
+    /// report at its reported velocity ([`crate::entities::extrapolate`]),
+    /// from when that report came, however late the spawn is drawn.
+    #[must_use]
+    pub fn carried(&self, now: Instant) -> crate::WorldPosition {
+        crate::entities::extrapolate(&self.state, now.saturating_duration_since(self.reported))
+    }
 }
 
 /// Camping under way.
@@ -108,9 +151,16 @@ pub struct ClientWorld {
     time: Option<(crate::clock::GameTime, Instant)>,
     /// Guild names by number, from the world's guild list.
     guild_names: BTreeMap<u32, String>,
+    /// The login server's worlds, until the chosen world lists characters.
+    servers: Option<ServerList>,
     characters: Option<CharacterList>,
+    /// The world's answers to the player's character creations, counted, and
+    /// the last of them.
+    creation: Option<Creation>,
     /// The last revision given to a spawn, which never repeats.
     revision: u64,
+    /// The last count given to a spawn's motion, which never repeats.
+    motion_count: u64,
     /// Counts the session's spellbook replies, so that two alike still differ.
     book_action_revision: u64,
 
@@ -123,7 +173,17 @@ pub struct ClientWorld {
     choices: Vec<crate::Capability>,
     zone_name: String,
     far_clip: Option<f32>,
+    /// The spell action flag that says a spell landed on its target, as the
+    /// admission says for its server type; None records no landings.
+    spell_landing_flag: Option<u8>,
     death: Option<Death>,
+    /// The HP at or below which the server takes the player as dead, where
+    /// it leaves that death to the client's own report; the session names
+    /// it only where it can count what the player's items add.
+    death_threshold: Option<i32>,
+    /// The player's HP, with what their items add, when the server's last
+    /// report said they bled out, until a front end reports it.
+    bled_out: Option<i64>,
     pending_transfer: Option<ZoneOffer>,
     /// The resurrection offered and not yet answered.
     resurrection: Option<crate::resurrection::ResurrectionOffer>,
@@ -216,19 +276,43 @@ impl ClientWorld {
         }
     }
 
-    /// Runs the world's clocks: doors the server leaves open swing shut, and
-    /// refreshed gems start their timers once the spells' timing is known.
+    /// Runs the world's clocks: doors the server leaves open swing shut,
+    /// refreshed gems start their timers once the spells' timing is known,
+    /// and casts that nothing ended run out.
     pub fn tick(&mut self, now: Instant, spells: &dyn SpellCatalog) {
         if self.zone.doors.closes_due(now) {
             self.zone.doors.close_due(now);
         }
         self.casting.cooldowns.resolve(spells, now);
+        self.expire_casts(now);
     }
 
     /// The player's choice, from their options, of what a session may leave
     /// to them to turn on.
     pub fn choose(&mut self, chosen: Vec<crate::Capability>) {
         self.chosen = chosen;
+    }
+
+    /// The player asked to play on a world of the login server's list, by
+    /// its place; the list waits for the login server's answer.
+    pub fn ask_server(&mut self, index: usize) {
+        if let Some(list) = self.servers.as_mut() {
+            list.asked = Some(index);
+            list.refused = None;
+        }
+    }
+
+    /// Forgets everything the servers said, for a new session: only the
+    /// player's own choices stay, and the revisions go on from where they
+    /// were, so nothing drawn for the old session matches the new one's.
+    pub fn restart(&mut self) {
+        *self = Self {
+            chosen: std::mem::take(&mut self.chosen),
+            revision: self.revision,
+            motion_count: self.motion_count,
+            book_action_revision: self.book_action_revision,
+            ..Self::default()
+        };
     }
 
     /// The player's own choice of target, which the client tells the session
@@ -263,6 +347,13 @@ impl ClientWorld {
         self.assisted.take()
     }
 
+    /// The player's HP, with what their items add, when the server's last
+    /// report said they bled out, taken once: a front end reports it to the
+    /// session (`ClientCommand::BledOut`).
+    pub fn take_bled_out(&mut self) -> Option<i64> {
+        self.bled_out.take()
+    }
+
     /// The player answered the resurrection offered; whatever comes of it
     /// arrives as news.
     pub fn answer_resurrection(&mut self) {
@@ -285,16 +376,6 @@ impl ClientWorld {
     pub fn close_container(&mut self) {
         self.zone.asked_container = None;
         self.zone.container = None;
-    }
-
-    /// The player asked a merchant to trade; the server's word on it arrives
-    /// as news.
-    pub fn open_shop(&mut self, merchant_id: u16) {
-        self.zone.trade.merchant = Some(Merchant {
-            merchant_id,
-            stock: BTreeMap::new(),
-            rate: None,
-        });
     }
 
     /// The player is done trading.
@@ -352,6 +433,15 @@ impl ClientWorld {
             // The time of day, and how the zone's sky looks.
             WorldEvent::TimeOfDay(time) => self.time = Some((*time, now)),
             WorldEvent::Sky(sky) => self.zone.sky = Some(*sky),
+            WorldEvent::ZoneDescription(description) => self.described(description),
+            WorldEvent::ServerSelection {
+                selection_id,
+                servers,
+            } => self.servers_offered(*selection_id, servers, news),
+            WorldEvent::ServerRefused {
+                selection_id,
+                refusal,
+            } => self.server_refused(*selection_id, refusal, news),
             WorldEvent::CharacterSelection {
                 selection_id,
                 characters,
@@ -363,10 +453,11 @@ impl ClientWorld {
                 zone,
                 player,
                 far_clip,
+                spell_landing_flag,
             } => {
                 return self.entered(
                     (capabilities, choices, *session_id),
-                    (zone, *far_clip),
+                    (zone, *far_clip, *spell_landing_flag),
                     player,
                     now,
                 );
@@ -394,7 +485,8 @@ impl ClientWorld {
                 position,
                 refused,
             } => self.motion_sent(*session_id, *position, refused.as_ref(), news),
-            WorldEvent::Death(death) => return self.died(death),
+            WorldEvent::Death(death) => return self.died(death, now),
+            WorldEvent::DeathThreshold(threshold) => self.death_threshold = Some(*threshold),
             WorldEvent::ZoneTransfer(offer) => return self.transfer(offer),
             WorldEvent::ZoneTransferRejected { session_id, reason } => {
                 self.transfer_refused(*session_id, *reason, news);
@@ -403,17 +495,83 @@ impl ClientWorld {
                 self.zone_line_refused(*session_id, reason, news);
             }
             WorldEvent::Camp(status) => return self.camp_news(status, now),
-            // No front end creates characters yet; when one does, the news
-            // lands here.
-            WorldEvent::CharacterCreation { .. } => (),
+            // A sound the server names, for the front end to play.
+            WorldEvent::Effect(crate::effects::Effect::Sound(cue)) => news.sounds.push(cue.clone()),
+
+            // The world's answer to a character the player asked for.
+            WorldEvent::CharacterCreation { name, outcome } => {
+                self.created(name, *outcome, news);
+            }
+
+            // Nothing here shows the world's rules, the expansions it allows,
+            // its chat server, a zone it says is down, the zone's weather or
+            // its header beyond the sky and the clip yet, nor stops the
+            // player while stunned, charmed, held by the server or berserk,
+            // spins them, or shows their hiding's end. The target
+            // the server sets and whom it targets, a quest's reward and ding
+            // (the session puts a reward's coins in the purse), a sacrifice
+            // or translocate offer and a player becoming a corpse wait for
+            // their front ends too; until one answers, an offer goes
+            // unanswered, as it did unread. A quest's change to the stats, a
+            // skill's button ready again, the reuse timers of disciplines and
+            // of spells that share one, and the discipline begun or ended
+            // are not shown yet either, nor the effects the server plays
+            // besides a sound: a spell's nimbus, particles, a camera shake and
+            // a projectile. The official client's sound for a quest's ding is
+            // not known, so it stays silent (inferred, item 6.273). A popup or
+            // marquee, a yell for help, a voice macro, a request to inspect the
+            // player and a duel wait for their front ends too; until one
+            // answers, a popup, an inspection and a challenge go unanswered, as
+            // they did unread. The guild's members and their changes, and an
+            // invitation to join or rise in it, wait for a guild window; until
+            // one answers, an invitation goes unanswered. Newly earned titles
+            // wait for a window to choose one from, and what a game master did
+            // to a player, or the petitions in the queue, for a front end that
+            // shows them.
+            WorldEvent::Rules(_)
+            | WorldEvent::Expansions(_)
+            | WorldEvent::ChatServer(_)
+            | WorldEvent::ZoneUnavailable { .. }
+            | WorldEvent::Weather(_)
+            | WorldEvent::Stun(_)
+            | WorldEvent::Charm(_)
+            | WorldEvent::Controlled(_)
+            | WorldEvent::Berserk(_)
+            | WorldEvent::Spun
+            | WorldEvent::HideAndSneakEnded
+            | WorldEvent::Target(_)
+            | WorldEvent::TargetOfTarget(_)
+            | WorldEvent::Reward(_)
+            | WorldEvent::Ding
+            | WorldEvent::SacrificeOffer(_)
+            | WorldEvent::SacrificeRefused { .. }
+            | WorldEvent::TranslocateOffer(_)
+            | WorldEvent::TranslocateRefused { .. }
+            | WorldEvent::BecameCorpse { .. }
+            | WorldEvent::StatsChanged(_)
+            | WorldEvent::SkillReady(_)
+            | WorldEvent::DisciplineReuse(_)
+            | WorldEvent::LinkedReuse(_)
+            | WorldEvent::Discipline(_)
+            | WorldEvent::Effect(_)
+            | WorldEvent::Popup(_)
+            | WorldEvent::Marquee(_)
+            | WorldEvent::YellForHelp { .. }
+            | WorldEvent::VoiceMacro(_)
+            | WorldEvent::InspectRequest { .. }
+            | WorldEvent::Duel(_)
+            | WorldEvent::Guild(_)
+            | WorldEvent::NewTitles
+            | WorldEvent::Gm(_) => (),
 
             // The zone and what is in it.
-            WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision),
+            WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision, now),
             WorldEvent::Despawn(id) => self.zone.vanish(*id),
             WorldEvent::Consideration(consideration) => {
                 news.notices.push(self.zone.consider(consideration));
             }
             WorldEvent::Damage(damage) => self.damage(damage, news),
+            WorldEvent::Animation(animation) => self.motion_news(*animation, news),
             WorldEvent::TargetSent(id) => self.target_sent(*id, news),
             WorldEvent::TargetRejected {
                 session_id,
@@ -424,6 +582,30 @@ impl ClientWorld {
                 spawn_id,
                 invisible,
             } => self.zone.visibility(*spawn_id, *invisible),
+            // How a spawn shows, its name and where a corpse lies are kept
+            // in the zone's table, as the session keeps them; a spawn already
+            // drawn shows an illusion or a new size when it is drawn anew. A
+            // face change that names no one changes no one.
+            WorldEvent::Appearance { spawn_id, change } => {
+                if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
+                    spawn.state.apply_appearance(change);
+                }
+                if self.is_player(*spawn_id)
+                    && let Some(player) = self.player.as_mut()
+                {
+                    player.appearance.apply_update(change);
+                }
+            }
+            WorldEvent::FaceChanged {
+                spawn_id, features, ..
+            } => self.zone.features(*spawn_id, *features),
+            WorldEvent::Renamed {
+                spawn_id, new_name, ..
+            } => self.zone.rename(*spawn_id, new_name),
+            WorldEvent::CorpseMoved { spawn_id, position } => {
+                self.zone.corpse_moved(*spawn_id, *position);
+            }
+            WorldEvent::TitleChanged { spawn_id, change } => self.retitle(*spawn_id, change),
             // How /who lists a player, and the guilds it names.
             WorldEvent::Listing { spawn_id, change } => {
                 if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
@@ -466,7 +648,7 @@ impl ClientWorld {
                 spawn_id,
                 position,
                 velocity,
-            } => self.position(*spawn_id, (*position, *velocity), news),
+            } => self.position(*spawn_id, (*position, *velocity), now, news),
             WorldEvent::WearChange(change) => self.wear(change),
             WorldEvent::Doors(update) => self.zone.doors.apply(update, now),
             WorldEvent::DoorAction {
@@ -486,6 +668,7 @@ impl ClientWorld {
                 ..
             } => self.level_news(*current, *experience, news),
             WorldEvent::Skill { skill_id, value } => self.skill_news(*skill_id, *value, news),
+            WorldEvent::Disciplines(list) => self.disciplines_news(list, news),
             WorldEvent::Mana(mana) => self.vitals.mana = Some(*mana),
             WorldEvent::Resources { mana, endurance } => {
                 self.vitals.mana = Some(*mana);
@@ -496,13 +679,13 @@ impl ClientWorld {
                 spawn_id,
                 current,
                 maximum,
-                without_items,
+                items,
             } => self.hp_news(
                 *spawn_id,
                 ReportedHp {
                     current: *current,
                     maximum: *maximum,
-                    without_items: *without_items,
+                    items: *items,
                 },
                 news,
             ),
@@ -776,7 +959,7 @@ impl ClientWorld {
 
     /// A death: a spawn becomes a corpse, and the player's own death holds
     /// them until the server offers to return them home.
-    fn died(&mut self, death: &Death) -> Changes {
+    fn died(&mut self, death: &Death, now: Instant) -> Changes {
         // Who died and who killed them, named before the corpse takes its
         // name; a death of no one the player knows says nothing.
         let slain = match self.party(death.spawn_id) {
@@ -788,7 +971,8 @@ impl ClientWorld {
         };
         if let Ok(id) = u16::try_from(death.spawn_id) {
             self.zone
-                .corpse(id, death.corpse_name.as_deref(), &mut self.revision);
+                .corpse(id, death.corpse_name.as_deref(), now, &mut self.revision);
+            self.zone.casts.remove(&id);
         }
         let mut changes = if self
             .player
@@ -799,6 +983,7 @@ impl ClientWorld {
         } else {
             self.own_health(0);
             self.death = Some(death.clone());
+            self.bled_out = None;
             // The server closes a window the player dies with.
             self.zone.trade.exchange = None;
             self.reset(Reset::Died)
@@ -875,6 +1060,7 @@ impl ClientWorld {
                     self.buffs.clear();
                 }
                 if ended {
+                    self.servers = None;
                     self.characters = None;
                     self.pending_transfer = None;
                     self.inventory = Inventory::default();
@@ -918,6 +1104,8 @@ impl ClientWorld {
         self.raid_invitation = None;
         self.raid_flow = raid::RaidFlow::default();
         self.death = None;
+        self.death_threshold = None;
+        self.bled_out = None;
         self.forget_zone();
     }
 

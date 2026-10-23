@@ -1,13 +1,14 @@
-//! Feature-specific skin identifiers mapped to typed actions.
-//! No entity construction, GPU assets, input polling or wire sending belongs here.
-use crate::windows::WindowId;
+//! Installed skin identifiers mapped to typed game actions.
+//! Entity construction and input handling belong to the skin presentation layer.
+use crate::{hud::hotbar, windows::WindowId};
 use eq_client_core::{
     buffs::EffectWindow,
+    hotbar::Binding,
     inventory::InventorySlot,
     money::{Coin, CoinPlace},
 };
 
-/// A group button, in the group window or on the Actions window's Main page.
+/// A button of the group window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GroupButton {
     Invite,
@@ -17,15 +18,21 @@ pub(super) enum GroupButton {
 }
 
 impl GroupButton {
-    /// The slash command it runs: Invite invites the target, and Decline
-    /// disbands, which with an invitation waiting declines it, as the
-    /// installed string for an invitation says.
-    pub(super) const fn command(self) -> &'static str {
+    /// What it does, as the Actions window's group buttons do: Invite
+    /// invites the target, and Decline disbands, which with an invitation
+    /// waiting declines it, as the installed string for an invitation says.
+    pub(super) const fn binding(self) -> Binding {
         match self {
-            Self::Invite => "/invite",
-            Self::Follow => "/follow",
-            Self::Disband | Self::Decline => "/disband",
+            Self::Invite => Binding::Invite,
+            Self::Follow => Binding::Follow,
+            Self::Disband | Self::Decline => Binding::Disband,
         }
+    }
+
+    /// The slash command it runs, from the one table its Actions window
+    /// button and a hotbutton read.
+    pub(super) fn command(self) -> &'static str {
+        hotbar::command(self.binding()).unwrap_or_default()
     }
 
     /// Whether it answers an invitation, and so shows in the group window
@@ -76,14 +83,16 @@ pub(super) enum Does {
     Offered(Coin),
     /// Shows a bag's picture.
     BagIcon,
-    /// Turns melee auto-attack on or off.
-    Attack,
+    /// Does what a hotbutton bound to it does, which a hold picks up: the
+    /// Actions window's Melee Attack, Sit, Stand, Camp, Invite, Follow and
+    /// Disband.
+    Bound(Binding),
     /// Uses the ability it holds.
     Ability(crate::abilities::AbilityButton),
-    /// Runs a game slash command, as the Actions window's sit does.
+    /// Runs a game slash command, as the pet window's buttons do.
     Slash(&'static str),
-    /// Invites, follows, disbands or declines, as the group window's and the
-    /// Actions window's group buttons do.
+    /// Invites, follows, disbands or declines, as the group window's buttons
+    /// do.
     Group(GroupButton),
     /// Invites, accepts or declines, as the Raid window's buttons do.
     Raid(RaidButton),
@@ -236,13 +245,13 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
         "IW_Skills" => Does::Toggles(WindowId::Skills),
         "GVW_Give_Button" | "TRDW_Trade_Button" => Does::Gives,
-        "ACP_MeleeAttackButton" => Does::Attack,
-        "AMP_SitButton" => Does::Slash("/sit"),
-        "AMP_StandButton" => Does::Slash("/stand"),
-        "AMP_CampButton" => Does::Slash("/camp"),
-        "AMP_InviteButton" => Does::Group(GroupButton::Invite),
-        "AMP_FollowButton" => Does::Group(GroupButton::Follow),
-        "AMP_DisbandButton" => Does::Group(GroupButton::Disband),
+        "ACP_MeleeAttackButton" => Does::Bound(Binding::Attack),
+        "AMP_SitButton" => Does::Bound(Binding::Sit),
+        "AMP_StandButton" => Does::Bound(Binding::Stand),
+        "AMP_CampButton" => Does::Bound(Binding::Camp),
+        "AMP_InviteButton" => Does::Bound(Binding::Invite),
+        "AMP_FollowButton" => Does::Bound(Binding::Follow),
+        "AMP_DisbandButton" => Does::Bound(Binding::Disband),
         "Container_Icon" if matches!(owner, WindowId::Bag(_) | WindowId::WorldContainer) => {
             Does::BagIcon
         }
@@ -332,6 +341,21 @@ pub(super) fn hot_button(id: &str) -> Option<usize> {
         .map(|number| number - 1)
 }
 
+/// The skin's Options window checkboxes for the official client's options
+/// this client keeps, by screen ID.
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 7] = {
+    use eq_client_core::options::Toggle;
+    [
+        ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
+        ("ODP_ShowTargetRingCheckbox", Toggle::TargetRing),
+        ("ODP_ShowHelmCheckbox", Toggle::ShowHelm),
+        ("ODP_PCNamesCheckbox", Toggle::PcNames),
+        ("ODP_NPCNamesCheckbox", Toggle::NpcNames),
+        ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
+        ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
+    ]
+};
+
 /// The option an Options window checkbox turns on and off: one of the
 /// official client's options this client keeps, or a quality-of-life
 /// setting.
@@ -346,6 +370,10 @@ pub(super) fn option_checkbox(id: &str) -> Option<eq_client_core::options::Toggl
         })
 }
 
+/// How the screen IDs of the quality-of-life page's checkboxes begin; each
+/// ends with its fix's file name.
+const QOL_CHECKBOX: &str = "EQC_QoL_";
+
 /// The screen ID of a quality-of-life setting's checkbox.
 pub(super) fn qol_checkbox_id(fix: eq_client_core::qol::Fix) -> String {
     format!("{QOL_CHECKBOX}{}", fix.key())
@@ -355,6 +383,19 @@ pub(super) fn qol_checkbox_id(fix: eq_client_core::qol::Fix) -> String {
 pub(super) fn qol_checkbox(id: &str) -> Option<eq_client_core::qol::Fix> {
     eq_client_core::qol::Fix::from_key(id.strip_prefix(QOL_CHECKBOX)?)
 }
+
+/// The Pet Info window's command buttons, by screen ID, with the `/pet`
+/// line each gives.
+pub(crate) const PET_COMMANDS: [(&str, &str); 8] = [
+    ("AttackButton", "/pet attack"),
+    ("FollowButton", "/pet follow"),
+    ("TauntButton", "/pet taunt"),
+    ("GuardButton", "/pet guard here"),
+    ("SitButton", "/pet sit down"),
+    ("StandButton", "/pet stand up"),
+    ("BackButton", "/pet back off"),
+    ("LostButton", "/pet get lost"),
+];
 
 /// The window an official selector button opens and closes, or hides and
 /// shows again; those for windows this client does not have do nothing.
@@ -508,35 +549,3 @@ pub(super) fn their_coin_box(id: &str) -> Option<Coin> {
     let index = id.strip_prefix("TRDW_HisMoney")?.parse::<usize>().ok()?;
     Coin::ALL.get(index).copied()
 }
-
-/// The skin's Options window checkboxes for the official client's options
-/// this client keeps, by screen ID.
-const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 7] = {
-    use eq_client_core::options::Toggle;
-    [
-        ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
-        ("ODP_ShowTargetRingCheckbox", Toggle::TargetRing),
-        ("ODP_ShowHelmCheckbox", Toggle::ShowHelm),
-        ("ODP_PCNamesCheckbox", Toggle::PcNames),
-        ("ODP_NPCNamesCheckbox", Toggle::NpcNames),
-        ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
-        ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
-    ]
-};
-
-/// How the screen IDs of the quality-of-life page's checkboxes begin; each
-/// ends with its fix's file name.
-const QOL_CHECKBOX: &str = "EQC_QoL_";
-
-/// The Pet Info window's command buttons, by screen ID, with the `/pet`
-/// line each gives.
-pub(crate) const PET_COMMANDS: [(&str, &str); 8] = [
-    ("AttackButton", "/pet attack"),
-    ("FollowButton", "/pet follow"),
-    ("TauntButton", "/pet taunt"),
-    ("GuardButton", "/pet guard here"),
-    ("SitButton", "/pet sit down"),
-    ("StandButton", "/pet stand up"),
-    ("BackButton", "/pet back off"),
-    ("LostButton", "/pet get lost"),
-];

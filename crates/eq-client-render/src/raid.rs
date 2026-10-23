@@ -146,7 +146,7 @@ fn row(raid: &Raid, member: &RaidMember, messages: &Messages) -> Row {
         eq_client_core::classes::class_name(u32::from(member.class))
             .map_or_else(|| member.class.to_string(), str::to_owned),
         String::new(),
-        rank.map(|(id, fallback)| messages.said_or(id, &[], fallback).text)
+        rank.map(|(id, fallback)| messages.said_or(id, &[], fallback).words.text)
             .unwrap_or_default(),
     ]
 }

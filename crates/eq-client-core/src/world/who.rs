@@ -5,6 +5,7 @@ use super::{Changes, ClientWorld, ListingNotice, Notice};
 use crate::{
     SpawnKind,
     listing::{Anonymity, Listing, ListingChange},
+    names::{NameParts, TitleChange},
     who::WhoFilter,
 };
 
@@ -54,11 +55,7 @@ impl ZonePlayer {
 pub(super) fn relist(change: ListingChange, level: &mut u8, listing: &mut Listing) {
     match change {
         ListingChange::Level(new) => *level = new,
-        ListingChange::Guild(guild) => listing.guild = guild,
-        ListingChange::Anonymity(anonymity) => listing.anonymity = anonymity,
-        ListingChange::GameMaster(on) => listing.game_master = on,
-        ListingChange::Away(on) => listing.away = on,
-        ListingChange::Looking(on) => listing.looking = on,
+        other => listing.apply(other),
     }
 }
 
@@ -104,6 +101,25 @@ impl ClientWorld {
         }
         if let Some(player) = self.player.as_mut().filter(|player| player.name == name) {
             last_name.clone_into(&mut player.name_parts.last_name);
+        }
+    }
+
+    /// A spawn's new title or suffix; the player's own too when the spawn
+    /// is theirs. `EQMac` says neither which changed nor to what, so its
+    /// change keeps both.
+    pub(super) fn retitle(&mut self, spawn_id: u16, change: &TitleChange) {
+        let retitle = |parts: &mut NameParts| match change {
+            TitleChange::Title(title) => title.clone_into(&mut parts.title),
+            TitleChange::Suffix(suffix) => suffix.clone_into(&mut parts.suffix),
+            TitleChange::Unspecified => (),
+        };
+        if let Some(spawn) = self.zone.spawns.get_mut(&spawn_id) {
+            retitle(&mut spawn.state.name_parts);
+        }
+        if self.is_player(spawn_id)
+            && let Some(player) = self.player.as_mut()
+        {
+            retitle(&mut player.name_parts);
         }
     }
 

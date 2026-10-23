@@ -15,11 +15,13 @@ pub(super) struct Selection {
 }
 
 impl Selection {
+    /// A list as it arrives, with its first character highlighted, so the
+    /// screen shows a character at once (inferred, 6.255).
     pub fn new(id: u64, entries: Vec<CharacterChoice>) -> Self {
         Self {
             id,
+            selected: entries.first().map(|entry| entry.slot),
             entries,
-            selected: None,
             submitted: false,
             message: String::new(),
         }
@@ -35,6 +37,28 @@ impl Selection {
         self.selected
     }
 
+    /// The listed character in a slot, if any.
+    pub(crate) fn entry(&self, slot: u8) -> Option<&CharacterChoice> {
+        self.entries.iter().find(|entry| entry.slot == slot)
+    }
+
+    /// The long name of the zone the highlighted character is in; None when
+    /// the server's list carries no zone for it (eq-network keeps a list's
+    /// zones only where the server type's list is checked to carry them) or
+    /// our zone table has no long name for its number. The number is taken
+    /// to its low 16 bits first, and the short name is never shown, as the
+    /// official client names a zone (from the program, 0x5fa1c0).
+    pub(crate) fn chosen_zone(&self) -> Option<&'static str> {
+        let zone = self.entry(self.selected?)?.zone_id? & 0xffff;
+        eq_client_core::zones::long_name(eq_client_core::zones::short_name(zone)?)
+            .filter(|long| !long.is_empty())
+    }
+
+    /// Whether Enter World has been asked for with this list.
+    pub(crate) const fn entering(&self) -> bool {
+        self.submitted
+    }
+
     /// Highlights a listed character by exact server spelling, ignoring case.
     pub(super) fn choose_named(&mut self, name: &str) -> bool {
         let slot = self
@@ -46,6 +70,16 @@ impl Selection {
             self.selected = slot;
         }
         slot.is_some()
+    }
+
+    /// Shows what the session's news says of this list on its guidance
+    /// line, where the player looks: a refused character creation, in the
+    /// status line's words, until the next key or click on the list or the
+    /// world's next answer (inferred, 6.278).
+    pub(super) fn hear(&mut self, notice: &eq_client_core::world::Notice) {
+        if let eq_client_core::world::Notice::CreationRefused { name, outcome } = notice {
+            self.message = crate::notices::creation_refusal(name, *outcome);
+        }
     }
 
     /// Asks once; a refused request leaves the choice available for another
@@ -80,7 +114,8 @@ pub(super) struct Root;
 pub(super) enum Action {
     Choose(u8),
     Enter,
-    /// Leaves the game, as the skin's Quit does.
+    /// The skin's Quit: back to the login screen, or out of the game in a
+    /// run without one (`login::quit`).
     Quit,
 }
 
@@ -107,32 +142,27 @@ pub(super) fn update(
     buttons: Query<(Ref<Interaction>, &Action)>,
     roots: Query<Entity, With<Root>>,
     mut previous: Local<String>,
-    (mut shown, skinned, mut exit): (
+    (mut shown, skinned, front, screen): (
         ResMut<super::windows::Shown>,
         Res<crate::skinned::Skinned>,
-        MessageWriter<AppExit>,
+        Res<crate::login::FrontEnd>,
+        Res<crate::loading::Screen>,
+    ),
+    (preview, messages): (
+        Res<crate::select_preview::Preview>,
+        Res<crate::hud::messages::Messages>,
     ),
 ) {
     let focused = keys.focused();
     let keys = navigation.sample(&keys.input);
-    // A session, or the preview's characters, until a character is in.
-    let visible =
-        (online.enabled || online.selection.is_some()) && online.world().session_id().is_none();
+    // The world's characters, or the preview's, until a character is in.
+    let visible = front.screen(&online) == crate::login::Screen::Characters;
     if visible != shown.is_open(WindowId::CharacterSelect) {
         if visible {
             shown.open(WindowId::CharacterSelect);
         } else {
             shown.close(WindowId::CharacterSelect);
         }
-    }
-    let pressed = |action: fn(&Action) -> bool| {
-        buttons.iter().any(|(interaction, button)| {
-            interaction.is_changed() && *interaction == Interaction::Pressed && action(button)
-        })
-    };
-    // Quit leaves the game from the list, whatever it shows.
-    if visible && focused && pressed(|action| matches!(action, Action::Quit)) {
-        exit.write(AppExit::Success);
     }
     let (choosing, world) = online.choosing();
     if visible
@@ -147,6 +177,7 @@ pub(super) fn update(
             match action {
                 // An empty slot of the skin's list chooses nothing.
                 Action::Choose(slot) => {
+                    selection.message.clear();
                     if selection.entries.iter().any(|entry| entry.slot == *slot) {
                         selection.selected = Some(*slot);
                     }
@@ -156,6 +187,7 @@ pub(super) fn update(
             }
         }
         if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::ArrowUp) {
+            selection.message.clear();
             let index = selection
                 .entries
                 .iter()
@@ -178,8 +210,9 @@ pub(super) fn update(
     }
     let status = lines.status.text();
     let skinned = skinned.has(WindowId::CharacterSelect);
+    let showing = preview.showing();
     let signature = format!(
-        "{visible}:{skinned}:{status}:{:?}",
+        "{visible}:{skinned}:{showing}:{status}:{:?}",
         online.selection.as_ref().map(|s| (
             s.id,
             s.selected,
@@ -195,8 +228,22 @@ pub(super) fn update(
     for root in &roots {
         commands.entity(root).despawn();
     }
-    if visible {
-        spawn(&mut commands, online.selection.as_ref(), status, skinned);
+    if !visible {
+        return;
+    }
+    // Once Enter World is asked for, the loading screen covers the list
+    // until the zone admits the character and the zone's own cover takes
+    // over, so the two read as one (inferred, 6.222).
+    if online.selection.as_ref().is_some_and(Selection::entering) {
+        crate::loading::cover(&mut commands, &screen, Root, Display::Flex);
+    } else {
+        let line = character_line(online.selection.as_ref(), &messages);
+        spawn(
+            &mut commands,
+            online.selection.as_ref(),
+            (status, line.as_deref()),
+            (skinned, showing),
+        );
     }
 }
 
@@ -260,85 +307,156 @@ fn guidance<'a>(selection: Option<&'a Selection>, status: &'a str) -> &'a str {
     }
 }
 
-/// Covers the zone preview until a character has completed zone admission:
-/// under the skin's list, with the list's guidance at its foot, or with the
-/// client's own panel on it.
-fn spawn(commands: &mut Commands, selection: Option<&Selection>, status: &str, skinned: bool) {
+/// The official client's string for a character's line in explore mode:
+/// its name, level, class and zone (from the program, 0x5000ba).
+const CHARACTER_LINE: u32 = 6681;
+
+/// The highlighted character's line under the list. The installed client's
+/// words for it in explore mode, which the official client shows only there
+/// (from the program; under the list is this client's place for it, 6.109),
+/// with the name, the level, the class's name and the zone's long name in
+/// that order, when all four are known; the zone's long name alone when the
+/// level or the class is unknown or the installation lacks the string; and
+/// nothing when the zone is unknown.
+fn character_line(
+    selection: Option<&Selection>,
+    messages: &crate::hud::messages::Messages,
+) -> Option<String> {
+    let selection = selection?;
+    let entry = selection.entry(selection.chosen()?)?;
+    let zone = selection.chosen_zone()?;
+    let class = entry.look.and_then(|look| {
+        let id = eq_client_core::classes::select_name_string(look.class);
+        let name = messages.argument_free(id);
+        if name.is_none() {
+            debug!(
+                "The installed string table lacks string {id} for class {}",
+                look.class
+            );
+        }
+        name
+    });
+    let (Some(level), Some(class)) = (entry.level, class) else {
+        return Some(zone.to_owned());
+    };
+    let arguments = [
+        entry.name.clone(),
+        level.to_string(),
+        class.to_owned(),
+        zone.to_owned(),
+    ];
+    Some(
+        messages
+            .formatted(CHARACTER_LINE, &arguments)
+            .unwrap_or_else(|| {
+                debug!("The installed string table lacks string {CHARACTER_LINE}");
+                zone.to_owned()
+            }),
+    )
+}
+
+/// Covers the scene behind the screen until a character has completed zone
+/// admission: under the skin's list, with the list's guidance at its foot,
+/// or with the client's own panel on it. While the highlighted character
+/// stands in the scene (`showing`), the cover is clear and lets the pointer
+/// through to the camera, and the client's own panel moves to the left.
+fn spawn(
+    commands: &mut Commands,
+    selection: Option<&Selection>,
+    (status, line): (&str, Option<&str>),
+    (skinned, showing): (bool, bool),
+) {
+    let backdrop = BackgroundColor(if showing { Color::NONE } else { theme::COVER });
     if skinned {
-        commands
-            .spawn((
-                Root,
-                Button,
-                // Under the skin's list, which is drawn at the screen's layer.
-                GlobalZIndex(super::windows::Layer::Screen.base() - 1),
-                Node {
-                    position_type: PositionType::Absolute,
-                    width: percent(100),
-                    height: percent(100),
-                    align_items: AlignItems::FlexEnd,
-                    justify_content: JustifyContent::Center,
-                    padding: UiRect::bottom(px(40)),
-                    ..default()
-                },
-                BackgroundColor(theme::COVER),
-            ))
-            .with_children(|root| {
-                theme::label(root, guidance(selection, status), Size::Label);
-            });
-        return;
-    }
-    commands
-        .spawn((
+        let mut root = commands.spawn((
             Root,
-            Button,
+            // Under the skin's list, which is drawn at the screen's layer.
             GlobalZIndex(super::windows::Layer::Screen.base() - 1),
             Node {
                 position_type: PositionType::Absolute,
                 width: percent(100),
                 height: percent(100),
+                flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
+                justify_content: JustifyContent::FlexEnd,
+                row_gap: px(6),
+                padding: UiRect::bottom(px(40)),
                 ..default()
             },
-            BackgroundColor(theme::COVER),
-        ))
-        .with_children(|root| {
-            root.spawn((
-                Node {
-                    width: px(440),
-                    max_width: percent(95),
-                    padding: UiRect::all(px(24)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(12),
-                    border_radius: BorderRadius::all(px(8)),
-                    ..default()
-                },
-                BackgroundColor(theme::TITLE_BAR),
-            ))
-            .with_children(|panel| {
-                theme::label(panel, "CHARACTER SELECT", Size::Display);
-                let Some(selection) = selection.filter(|selection| !selection.entries.is_empty())
-                else {
-                    theme::label(panel, guidance(selection, status), Size::Large);
-                    return;
-                };
-                for entry in &selection.entries {
-                    let detail = entry
-                        .level
-                        .map_or_else(String::new, |level| format!("  |  Level {level}"));
-                    button(
-                        panel,
-                        Action::Choose(entry.slot),
-                        &format!("{}{detail}", entry.name),
-                        selection.selected == Some(entry.slot),
-                    );
-                }
-                if selection.selected.is_some() && !selection.submitted {
-                    button(panel, Action::Enter, "Enter World", true);
-                }
-                theme::label(panel, guidance(Some(selection), status), Size::Label);
-            });
+            backdrop,
+        ));
+        if !showing {
+            root.insert(Button);
+        }
+        root.with_children(|root| {
+            if let Some(line) = line {
+                theme::label(root, line, Size::Label);
+            }
+            theme::label(root, guidance(selection, status), Size::Label);
         });
+        return;
+    }
+    let mut root = commands.spawn((
+        Root,
+        GlobalZIndex(super::windows::Layer::Screen.base() - 1),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            align_items: AlignItems::Center,
+            justify_content: if showing {
+                JustifyContent::FlexStart
+            } else {
+                JustifyContent::Center
+            },
+            padding: UiRect::left(px(if showing { 40 } else { 0 })),
+            ..default()
+        },
+        backdrop,
+    ));
+    if !showing {
+        root.insert(Button);
+    }
+    root.with_children(|root| {
+        root.spawn((
+            Node {
+                width: px(440),
+                max_width: percent(95),
+                padding: UiRect::all(px(24)),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(12),
+                border_radius: BorderRadius::all(px(8)),
+                ..default()
+            },
+            BackgroundColor(theme::TITLE_BAR),
+        ))
+        .with_children(|panel| {
+            theme::label(panel, "CHARACTER SELECT", Size::Display);
+            let Some(selection) = selection.filter(|selection| !selection.entries.is_empty())
+            else {
+                theme::label(panel, guidance(selection, status), Size::Large);
+                return;
+            };
+            for entry in &selection.entries {
+                let detail = entry
+                    .level
+                    .map_or_else(String::new, |level| format!("  |  Level {level}"));
+                button(
+                    panel,
+                    Action::Choose(entry.slot),
+                    &format!("{}{detail}", entry.name),
+                    selection.selected == Some(entry.slot),
+                );
+            }
+            if selection.selected.is_some() && !selection.submitted {
+                button(panel, Action::Enter, "Enter World", true);
+            }
+            if let Some(line) = line {
+                theme::label(panel, line, Size::Label);
+            }
+            theme::label(panel, guidance(Some(selection), status), Size::Label);
+        });
+    });
 }
 
 fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selected: bool) {
@@ -355,6 +473,94 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selecte
 mod tests {
     use super::*;
     use bevy::window::PrimaryWindow;
+
+    fn listed(slot: u8, name: &str, zone_id: Option<u32>) -> CharacterChoice {
+        CharacterChoice {
+            slot,
+            name: name.into(),
+            level: Some(12),
+            zone_id,
+            look: Some(eq_client_core::CharacterLook {
+                class: 1,
+                ..default()
+            }),
+        }
+    }
+
+    #[test]
+    fn the_highlighted_characters_zone_is_its_long_name_and_follows_the_highlight() {
+        let mut selection = Selection::new(
+            7,
+            vec![
+                listed(0, "Exampleone", Some(4)),
+                listed(2, "Exampletwo", Some(9)),
+                listed(5, "Examplethree", None),
+                listed(6, "Examplefour", Some(65_000)),
+                // The zone's number in the low 16 bits, as the program reads it.
+                listed(7, "Examplefive", Some((5 << 16) | 4)),
+            ],
+        );
+        assert_eq!(selection.chosen_zone(), Some("The Qeynos Hills"));
+        assert!(selection.choose_named("exampletwo"));
+        assert_eq!(selection.chosen_zone(), Some("West Freeport"));
+        // A list without the zone, and a number the table doesn't know, name
+        // none rather than one made up.
+        assert!(selection.choose_named("Examplethree"));
+        assert_eq!(selection.chosen_zone(), None);
+        assert!(selection.choose_named("Examplefour"));
+        assert_eq!(selection.chosen_zone(), None);
+        assert!(selection.choose_named("Examplefive"));
+        assert_eq!(selection.chosen_zone(), Some("The Qeynos Hills"));
+        assert_eq!(Selection::new(7, vec![]).chosen_zone(), None);
+    }
+
+    #[test]
+    fn the_character_line_is_the_installed_string_with_all_four_parts_or_the_zone_alone() {
+        // A test table: the line's string takes its four arguments in order.
+        let messages = crate::hud::messages::Messages::parse(
+            "EQST0002\n0\n6681 <%1|%2|%3|%4>\n1502 Classone\n",
+        );
+        let line = |entry: CharacterChoice, messages: &crate::hud::messages::Messages| {
+            character_line(Some(&Selection::new(7, vec![entry])), messages)
+        };
+        assert_eq!(
+            line(listed(0, "Exampleone", Some(4)), &messages).as_deref(),
+            Some("<Exampleone|12|Classone|The Qeynos Hills>")
+        );
+        // Without the level, the class, or the class's string: the zone alone.
+        let mut unlevelled = listed(0, "Exampleone", Some(4));
+        unlevelled.level = None;
+        assert_eq!(
+            line(unlevelled, &messages).as_deref(),
+            Some("The Qeynos Hills")
+        );
+        let mut unlooked = listed(0, "Exampleone", Some(4));
+        unlooked.look = None;
+        assert_eq!(
+            line(unlooked, &messages).as_deref(),
+            Some("The Qeynos Hills")
+        );
+        let mut unnamed = listed(0, "Exampleone", Some(4));
+        unnamed.look = Some(eq_client_core::CharacterLook {
+            class: 2,
+            ..default()
+        });
+        assert_eq!(
+            line(unnamed, &messages).as_deref(),
+            Some("The Qeynos Hills")
+        );
+        // Without the line's string: the zone alone.
+        let lacking = crate::hud::messages::Messages::parse("EQST0002\n0\n1502 Classone\n");
+        assert_eq!(
+            line(listed(0, "Exampleone", Some(4)), &lacking).as_deref(),
+            Some("The Qeynos Hills")
+        );
+        // Without the zone: nothing, whatever else is known.
+        assert_eq!(line(listed(0, "Exampleone", None), &messages), None);
+        assert_eq!(line(listed(0, "Exampleone", Some(65_000)), &messages), None);
+        assert_eq!(character_line(None, &messages), None);
+    }
+
     #[test]
     fn keyboard_selection_queues_the_server_slot_and_disappears_after_admission() {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
@@ -366,6 +572,7 @@ mod tests {
                 name: "Example".into(),
                 level: Some(1),
                 zone_id: None,
+                look: None,
             }],
         ));
         let mut app = App::new();
@@ -377,6 +584,10 @@ mod tests {
             .init_resource::<super::super::navigation::NavigationKeys>()
             .init_resource::<crate::windows::Shown>()
             .init_resource::<crate::skinned::Skinned>()
+            .init_resource::<crate::login::FrontEnd>()
+            .init_resource::<crate::loading::Screen>()
+            .init_resource::<crate::select_preview::Preview>()
+            .init_resource::<crate::hud::messages::Messages>()
             .add_message::<AppExit>()
             .add_systems(Update, update);
         app.world_mut().spawn((
@@ -408,6 +619,14 @@ mod tests {
         );
         app.update();
         assert!(rx.try_recv().is_err());
+        // Entering world, the loading screen covers the list.
+        let layers: Vec<i32> = app
+            .world_mut()
+            .query_filtered::<&GlobalZIndex, With<Root>>()
+            .iter(app.world())
+            .map(|layer| layer.0)
+            .collect();
+        assert_eq!(layers, [crate::loading::LAYER]);
         crate::online::testing::admit(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             8,
@@ -434,6 +653,7 @@ mod tests {
                 name: "Example".into(),
                 level: Some(5),
                 zone_id: None,
+                look: None,
             }],
         ));
         let mut app = App::new();
@@ -498,8 +718,12 @@ mod tests {
                 name: "Example".into(),
                 level: Some(1),
                 zone_id: Some(22),
+                look: None,
             }],
         );
+        // The list arrives with its first character highlighted.
+        assert_eq!(selection.chosen(), Some(3));
+        selection.selected = None;
         selection.enter(&sender, &world);
         assert!(rx.try_recv().is_err());
         selection.selected = Some(3);
@@ -523,5 +747,70 @@ mod tests {
             }
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_refused_creation_shows_on_the_list_until_the_next_key() {
+        use eq_client_core::{creation::CreationOutcome, world::Notice};
+        let mut state = OnlineState::new(true);
+        let mut selection = Selection::new(
+            7,
+            vec![CharacterChoice {
+                slot: 3,
+                name: "Example".into(),
+                level: Some(1),
+                zone_id: None,
+                look: None,
+            }],
+        );
+        let browse = "Select a character | Up/Down: browse | Enter: connect";
+        assert_eq!(guidance(Some(&selection), "Connected"), browse);
+        // Other news leaves the line alone.
+        selection.hear(&Notice::Connection {
+            link: eq_client_core::world::Link::Connected,
+            dead: false,
+        });
+        assert_eq!(guidance(Some(&selection), "Connected"), browse);
+        selection.hear(&Notice::CreationRefused {
+            name: "Newname".into(),
+            outcome: CreationOutcome::NameRefused,
+        });
+        let refused = crate::notices::creation_refusal("Newname", CreationOutcome::NameRefused);
+        assert_eq!(guidance(Some(&selection), "Connected"), refused);
+        state.selection = Some(selection);
+        let (tx, _rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.insert_resource(state)
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<super::super::navigation::NavigationKeys>()
+            .init_resource::<crate::windows::Shown>()
+            .init_resource::<crate::skinned::Skinned>()
+            .init_resource::<crate::login::FrontEnd>()
+            .init_resource::<crate::loading::Screen>()
+            .init_resource::<crate::select_preview::Preview>()
+            .init_resource::<crate::hud::messages::Messages>()
+            .add_message::<AppExit>()
+            .add_systems(Update, update);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+        let shown = |app: &App| {
+            let selection = app.world().resource::<OnlineState>().selection.as_ref();
+            guidance(selection, "Connected").to_owned()
+        };
+        assert_eq!(shown(&app), refused);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ArrowDown);
+        app.update();
+        assert_eq!(shown(&app), browse);
     }
 }

@@ -22,6 +22,8 @@ fn player(spawn_id: u16) -> PlayerState {
         endurance: Some(0),
         skills: None,
         practice_points: None,
+        languages: None,
+        disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: [None; 8],
         size: 0.0,
@@ -44,6 +46,8 @@ fn spawn(spawn_id: u16) -> SpawnState {
         gender: 0,
         position: WorldPosition::default(),
         velocity: [0.0; 3],
+        walk_speed: 0.0,
+        run_speed: 0.0,
         size: 0.0,
         invisible: false,
         appearance: Appearance::default(),
@@ -94,6 +98,7 @@ fn entered(session_id: u64) -> WorldEvent {
         zone: "qeytoqrg".into(),
         player: Box::new(player(9)),
         far_clip: None,
+        spell_landing_flag: Some(4),
     }
 }
 
@@ -118,6 +123,25 @@ fn admitted() -> ClientWorld {
         })),
     );
     world
+}
+
+#[test]
+fn a_sound_the_server_names_is_news_and_its_other_effects_are_not() {
+    use crate::effects::{Cue, Effect};
+    let mut world = admitted();
+    let file = Cue::File("quests/Plain.wav".into());
+    let sound = |cue: &Cue| WorldEvent::Effect(Effect::Sound(cue.clone()));
+    assert_eq!(game(&mut world, sound(&file)).sounds, [file]);
+    assert_eq!(
+        game(&mut world, sound(&Cue::Number(12))).sounds,
+        [Cue::Number(12)]
+    );
+    let shake = WorldEvent::Effect(Effect::CameraShake {
+        duration: std::time::Duration::from_millis(500),
+        intensity: 1.0,
+    });
+    assert_eq!(game(&mut world, shake).sounds, Vec::<Cue>::new());
+    assert_eq!(game(&mut world, WorldEvent::Ding).sounds, Vec::<Cue>::new());
 }
 
 fn zone_is_empty(world: &ClientWorld) -> bool {
@@ -151,6 +175,24 @@ fn a_zone_entry_keeps_what_arrives_with_it_before_the_connection() {
     assert!(!world.in_world());
     connection(&mut world, true, false);
     assert!(world.in_world());
+}
+
+#[test]
+fn every_admission_names_the_zone_the_player_arrived_in() {
+    let mut world = ClientWorld::default();
+    let changes = game(&mut world, entered(2));
+    assert_eq!(
+        changes.notices,
+        [Notice::Arrived("The Qeynos Hills".into())]
+    );
+    assert_eq!(world.zone_long_name(), "The Qeynos Hills");
+    // A zone the list lacks goes by its short name.
+    let mut elsewhere = entered(3);
+    if let WorldEvent::Entered { zone, .. } = &mut elsewhere {
+        *zone = "testzone".into();
+    }
+    let changes = game(&mut world, elsewhere);
+    assert_eq!(changes.notices, [Notice::Arrived("testzone".into())]);
 }
 
 #[test]
@@ -529,6 +571,7 @@ fn effect(target_id: u16, effect_flag: u8) -> crate::SpellEffect {
         spell_id: 42,
         spell_level: 1,
         effect_flag,
+        push: None,
     }
 }
 
@@ -665,6 +708,196 @@ fn a_dead_or_disconnected_player_casts_nothing() {
     assert!(world.casting().cast.is_none());
 }
 
+fn swing(spawn_id: u16, action: u16) -> WorldEvent {
+    WorldEvent::Animation(crate::combat::Animation {
+        spawn_id,
+        action,
+        speed: 1.0,
+    })
+}
+
+#[test]
+fn each_spawns_latest_swing_is_kept_with_a_count_that_never_repeats() {
+    let mut world = admitted();
+    assert!(!game(&mut world, swing(5, 5)).ignored);
+    let first = world.motion_of(5).unwrap();
+    assert_eq!((first.action, first.speed), (5, 1.0));
+    // Two alike in a row still differ, and the player's own is kept too.
+    game(&mut world, swing(5, 5));
+    let second = world.motion_of(5).unwrap();
+    assert_eq!(second.action, 5);
+    assert_ne!(second.count, first.count);
+    game(&mut world, swing(9, 8));
+    assert_eq!(world.motion_of(9).map(|motion| motion.action), Some(8));
+    // A spawn not in view is no one's.
+    assert!(game(&mut world, swing(77, 5)).ignored);
+    assert_eq!(world.motion_of(77), None);
+    // The record goes with the spawn, and the zone.
+    game(&mut world, WorldEvent::Despawn(5));
+    assert_eq!(world.motion_of(5), None);
+    game(&mut world, entered(2));
+    assert_eq!(world.motion_of(9), None);
+    // A new session's counts go on from the old one's.
+    let last = second.count.max(world.motion_count);
+    world.restart();
+    game(&mut world, entered(3));
+    game(&mut world, swing(9, 8));
+    assert!(world.motion_of(9).unwrap().count > last);
+}
+
+#[test]
+fn a_cast_completes_when_its_spell_lands_while_it_is_under_way() {
+    use std::time::Duration;
+    let mut world = admitted();
+    let start = Instant::now();
+    let at = |world: &mut ClientWorld, event, seconds: f32| {
+        world.apply(
+            &WorldUpdate::Game(event),
+            start + Duration::from_secs_f32(seconds),
+            &NoSpells,
+        )
+    };
+    let began = |caster_id, spell_id| {
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id,
+            spell_id,
+            duration_ms: 3000,
+        })
+    };
+    let landing = |caster_id| {
+        let mut landing = effect(5, 0);
+        landing.caster_id = caster_id;
+        WorldEvent::SpellEffect(landing)
+    };
+    // A landing with no cast under way completes nothing.
+    at(&mut world, landing(5), 0.0);
+    assert_eq!(world.completed_cast_of(5), None);
+    // Its landing completes it, whoever it lands on, after the caster's
+    // last motion.
+    game(&mut world, swing(5, 5));
+    at(&mut world, began(5, 42), 0.0);
+    assert_eq!(world.completed_cast_of(5), None);
+    at(&mut world, landing(5), 2.5);
+    let done = world.completed_cast_of(5).unwrap();
+    assert_eq!(done.spell_id, 42);
+    assert!(done.count > world.motion_of(5).unwrap().count);
+    // The landing that follows for the same cast completes nothing more.
+    at(&mut world, landing(5), 2.6);
+    assert_eq!(world.completed_cast_of(5), Some(done));
+    // Nor does one after the cast ran a second past its duration, nor after
+    // an interruption, a death or the caster's next beginning.
+    at(&mut world, began(5, 43), 10.0);
+    at(&mut world, landing(5), 14.0);
+    at(&mut world, began(5, 43), 20.0);
+    world.tick(start + Duration::from_secs(25), &NoSpells);
+    at(&mut world, landing(5), 22.0);
+    at(&mut world, began(5, 43), 30.0);
+    at(
+        &mut world,
+        WorldEvent::Spell(SpellUpdate::Interrupted {
+            caster_id: 5,
+            message_id: 439,
+            caster_name: None,
+        }),
+        31.0,
+    );
+    at(&mut world, landing(5), 31.5);
+    assert_eq!(world.completed_cast_of(5), Some(done));
+    at(&mut world, began(5, 43), 40.0);
+    at(&mut world, began(5, 44), 40.5);
+    at(&mut world, landing(5), 41.0);
+    assert_eq!(
+        world.completed_cast_of(5).map(|done| done.spell_id),
+        Some(44)
+    );
+    let last = world.completed_cast_of(5);
+    at(&mut world, began(5, 42), 50.0);
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 5,
+            killer_id: 9,
+            corpse_id: 5,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+    );
+    at(&mut world, landing(5), 51.0);
+    assert_eq!(world.completed_cast_of(5), last);
+    // A spawn not in view completes nothing, and one leaving forgets its
+    // own.
+    at(&mut world, began(77, 42), 60.0);
+    at(&mut world, landing(77), 61.0);
+    assert_eq!(world.completed_cast_of(77), None);
+    game(&mut world, WorldEvent::Despawn(5));
+    assert_eq!(world.completed_cast_of(5), None);
+    // The player's own goes with the zone.
+    at(&mut world, began(9, 44), 70.0);
+    at(&mut world, landing(9), 71.0);
+    assert_eq!(
+        world.completed_cast_of(9).map(|done| done.spell_id),
+        Some(44)
+    );
+    game(&mut world, entered(2));
+    assert_eq!(world.completed_cast_of(9), None);
+}
+
+#[test]
+fn the_players_own_cast_ends_where_their_cast_bar_does() {
+    let mut world = ClientWorld::default();
+    let mut caster = player(9);
+    caster.memorized_spells[0] = Some(42);
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities: Vec::new(),
+            choices: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(caster),
+            far_clip: None,
+            spell_landing_flag: None,
+        },
+    );
+    connection(&mut world, true, false);
+    let began = WorldEvent::Spell(SpellUpdate::Began {
+        caster_id: 9,
+        spell_id: 42,
+        duration_ms: 3000,
+    });
+    let landing = || {
+        let mut landing = effect(5, 0);
+        landing.caster_id = 9;
+        WorldEvent::SpellEffect(landing)
+    };
+    // A gem's refresh ends it, and so does the spell's mana, as TAKP ends
+    // every cast, landed or not, and EQEmu a fizzle; neither completes it,
+    // so a landing after them plays nothing.
+    for end in [
+        SpellUpdate::BarRefresh {
+            slot: 0,
+            spell_id: 42,
+            reduction_ms: 0,
+        },
+        SpellUpdate::Mana {
+            spell_id: 42,
+            keep_casting: false,
+        },
+    ] {
+        game(&mut world, began.clone());
+        game(&mut world, WorldEvent::Spell(end));
+        game(&mut world, landing());
+        assert_eq!(world.completed_cast_of(9), None);
+    }
+    // Its landing first completes it.
+    game(&mut world, began);
+    game(&mut world, landing());
+    assert_eq!(
+        world.completed_cast_of(9).map(|done| done.spell_id),
+        Some(42)
+    );
+}
+
 #[test]
 fn the_profile_restores_gem_timers_and_vitals_at_admission() {
     let mut world = ClientWorld::default();
@@ -681,6 +914,7 @@ fn the_profile_restores_gem_timers_and_vitals_at_admission() {
             zone: "qeytoqrg".into(),
             player: Box::new(caster),
             far_clip: None,
+            spell_landing_flag: None,
         }),
         now,
         &NoSpells,
@@ -774,7 +1008,7 @@ fn hit_points(spawn_id: u16, current: i32, maximum: i32) -> WorldEvent {
         spawn_id,
         current,
         maximum,
-        without_items: true,
+        items: crate::ItemHitPoints::LeftOut,
     }
 }
 
@@ -801,6 +1035,42 @@ fn shown_hp_adds_back_what_equipped_items_give() {
 }
 
 #[test]
+fn the_players_health_follows_their_hp_report_once_there_is_one() {
+    let mut world = admitted();
+    // Before any report, the server's percent is the player's health.
+    game(
+        &mut world,
+        WorldEvent::HealthPercent {
+            spawn_id: 9,
+            percent: 40,
+        },
+    );
+    assert_eq!(world.health(9), Some(40));
+    // EQMac's own update with a +100 HP chest: 175 of 250, sent as 75 of 250
+    // (the current without the chest), whose percent alone says 30.
+    assert!(game(&mut world, inventory(vec![chest()])).inventory);
+    game(
+        &mut world,
+        WorldEvent::HitPoints {
+            spawn_id: 9,
+            current: 75,
+            maximum: 250,
+            items: crate::ItemHitPoints::LeftOutOfCurrent,
+        },
+    );
+    assert_eq!(world.hit_points(), Some((175, 250)));
+    assert_eq!(world.health(9), Some(70));
+    game(
+        &mut world,
+        WorldEvent::HealthPercent {
+            spawn_id: 9,
+            percent: 30,
+        },
+    );
+    assert_eq!(world.health(9), Some(70));
+}
+
+#[test]
 fn the_dead_show_no_hp_and_a_new_admission_forgets_the_report() {
     let mut world = admitted();
     game(&mut world, hit_points(9, 75, 150));
@@ -819,6 +1089,108 @@ fn the_dead_show_no_hp_and_a_new_admission_forgets_the_report() {
     game(&mut world, entered(2));
     assert_eq!(world.hit_points(), None);
     assert_eq!(world.vitals().reported_hp, None);
+}
+
+/// Player 9 admitted in session 1 with these capabilities, and told the
+/// HP at which the server takes them as dead (-11).
+fn bleeding(capabilities: Vec<crate::Capability>) -> ClientWorld {
+    let mut world = ClientWorld::default();
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities,
+            choices: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(player(9)),
+            far_clip: None,
+            spell_landing_flag: None,
+        },
+    );
+    connection(&mut world, true, false);
+    game(&mut world, WorldEvent::DeathThreshold(-11));
+    world
+}
+
+/// `EQMac`'s report of the player's HP, whose current leaves out what items
+/// add.
+fn eqmac_hp(current: i32) -> WorldEvent {
+    WorldEvent::HitPoints {
+        spawn_id: 9,
+        current,
+        maximum: 150,
+        items: crate::ItemHitPoints::LeftOutOfCurrent,
+    }
+}
+
+#[test]
+fn a_report_at_the_threshold_with_the_items_added_says_the_player_bled_out() {
+    let mut world = bleeding(vec![crate::Capability::BleedingOut]);
+    // Before the inventory comes, what the items add is unknown: the
+    // server's -11 could be a player alive in HP gear.
+    game(&mut world, eqmac_hp(-11));
+    assert_eq!(world.bled_out(), None);
+    // With the +100 HP chest counted, -110 is -10, alive, and -111 is -11.
+    game(&mut world, inventory(vec![chest()]));
+    game(&mut world, eqmac_hp(-110));
+    assert_eq!(world.bled_out(), None);
+    game(&mut world, eqmac_hp(-111));
+    assert_eq!(world.bled_out(), Some(-11));
+    // A front end reports it once, and the server's next report asks again
+    // until a death is named.
+    assert_eq!(world.take_bled_out(), Some(-11));
+    assert_eq!(world.take_bled_out(), None);
+    game(&mut world, eqmac_hp(-112));
+    assert_eq!(world.bled_out(), Some(-12));
+    // A heal before anyone reported it takes it back.
+    game(&mut world, eqmac_hp(-50));
+    assert_eq!(world.bled_out(), None);
+}
+
+#[test]
+fn only_a_server_type_that_takes_the_clients_word_hears_of_a_bleed_out() {
+    let mut world = bleeding(Vec::new());
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, eqmac_hp(-20));
+    assert_eq!(world.bled_out(), None);
+}
+
+#[test]
+fn the_dead_bleed_out_no_more_and_an_admission_forgets_the_threshold() {
+    let mut world = bleeding(vec![crate::Capability::BleedingOut]);
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, eqmac_hp(-11));
+    assert_eq!(world.bled_out(), Some(-11));
+    // The player's death, the session's or the server's, ends it.
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 9,
+            killer_id: 0,
+            corpse_id: 9,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+    );
+    assert_eq!(world.bled_out(), None);
+    game(&mut world, eqmac_hp(-12));
+    assert_eq!(world.bled_out(), None);
+    // A new admission waits for the session to name the threshold again.
+    game(
+        &mut world,
+        WorldEvent::Entered {
+            capabilities: vec![crate::Capability::BleedingOut],
+            choices: Vec::new(),
+            session_id: 2,
+            zone: "qeynos".into(),
+            player: Box::new(player(9)),
+            far_clip: None,
+            spell_landing_flag: None,
+        },
+    );
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, eqmac_hp(-11));
+    assert_eq!(world.bled_out(), None);
 }
 
 #[test]
@@ -1004,7 +1376,7 @@ fn the_purse_is_what_the_session_says_whatever_loot_and_purchases_suggest() {
     let mut world = admitted();
     game(&mut world, WorldEvent::Coins(coins(1, 0, 0, 0)));
     world.open_loot(9);
-    world.open_shop(8);
+    game(&mut world, shop_opened(8));
     // The session adds loot coins and takes a price, and says so; the
     // client does no sums of its own.
     game(
@@ -1028,13 +1400,51 @@ fn the_purse_is_what_the_session_says_whatever_loot_and_purchases_suggest() {
     assert_eq!(world.coins(), Some(&coins(0, 9, 9, 5)));
 }
 
+/// The server opening this merchant's window at a neutral rate.
+fn shop_opened(merchant_id: u16) -> WorldEvent {
+    WorldEvent::Merchant(crate::merchant::MerchantUpdate::Opened {
+        merchant_id,
+        accepted: true,
+        rate: 1.0,
+    })
+}
+
+#[test]
+fn a_merchant_opens_only_on_the_servers_answer() {
+    use crate::merchant::MerchantUpdate;
+    let mut world = admitted();
+    // Asked and unanswered, as EQEmu leaves a merchant out of range, nothing
+    // is open: the stock that would follow an answer is no merchant's.
+    assert!(world.merchant().is_none());
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::Merchant(MerchantUpdate::Removed { slot: 3 })
+        )
+        .ignored
+    );
+    // The answer opens the window at the server's rate.
+    let changes = game(
+        &mut world,
+        WorldEvent::Merchant(MerchantUpdate::Opened {
+            merchant_id: 8,
+            accepted: true,
+            rate: 1.25,
+        }),
+    );
+    assert!(changes.trade && !changes.ignored);
+    let merchant = world.merchant().unwrap();
+    assert_eq!((merchant.merchant_id, merchant.rate), (8, 1.25));
+    assert!(merchant.stock.is_empty());
+}
+
 #[test]
 fn a_merchant_lists_stock_until_closed_or_refusing() {
     use crate::merchant::{MerchantItem, MerchantUpdate};
     let mut world = admitted();
     let merchant = |update| WorldEvent::Merchant(update);
     assert!(game(&mut world, merchant(MerchantUpdate::Closed)).ignored);
-    world.open_shop(8);
+    game(&mut world, shop_opened(8));
     game(
         &mut world,
         merchant(MerchantUpdate::Item(Box::new(MerchantItem {
@@ -1056,21 +1466,12 @@ fn a_merchant_lists_stock_until_closed_or_refusing() {
         }),
     );
     assert!(world.merchant().is_none());
-    world.open_shop(8);
+    game(&mut world, shop_opened(8));
     world.close_shop();
     assert!(world.merchant().is_none());
-    // A merchant that opens keeps the server's rate.
-    world.open_shop(8);
-    assert_eq!(world.merchant().unwrap().rate, None);
-    game(
-        &mut world,
-        merchant(MerchantUpdate::Opened {
-            merchant_id: 8,
-            accepted: true,
-            rate: 1.25,
-        }),
-    );
-    assert_eq!(world.merchant().unwrap().rate, Some(1.25));
+    game(&mut world, shop_opened(8));
+    assert!(game(&mut world, merchant(MerchantUpdate::Closed)).trade);
+    assert!(world.merchant().is_none());
 }
 
 #[test]
@@ -1084,9 +1485,9 @@ fn a_merchant_offers_what_eqemu_paid_for_each_sale() {
     let merchant = Merchant {
         merchant_id: 8,
         stock: std::collections::BTreeMap::new(),
-        rate: Some(rate(1.0)),
+        rate: rate(1.0),
     };
-    assert_eq!(merchant.rate, Some(1.052_631_6));
+    assert!((merchant.rate - 1.052_631_6).abs() < f32::EPSILON);
     let item = |price, stack_count| {
         let mut item = chest();
         item.details.price = Some(price);
@@ -1101,21 +1502,16 @@ fn a_merchant_offers_what_eqemu_paid_for_each_sale() {
     // Each product is cut on its own: a merchant whose modifier is 0.96
     // pays 26 for a 30c item, where one factor of 0.912 would give 27.
     let wary = Merchant {
-        rate: Some(rate(0.96)),
+        rate: rate(0.96),
         ..merchant.clone()
     };
     assert_eq!(wary.offer(&item(30, None)), Some(26));
-    // Without the item's price or the merchant's rate, there is no offer.
+    // Without the item's price or a usable rate, there is no offer.
     let mut unpriced = item(30, None);
     unpriced.details.price = None;
     assert_eq!(merchant.offer(&unpriced), None);
-    let unrated = Merchant {
-        rate: None,
-        ..merchant.clone()
-    };
-    assert_eq!(unrated.offer(&item(30, None)), None);
     let broken = Merchant {
-        rate: Some(0.0),
+        rate: 0.0,
         ..merchant
     };
     assert_eq!(broken.offer(&item(30, None)), None);
@@ -1215,6 +1611,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
             zone: "qeytoqrg".into(),
             player: Box::new(warrior),
             far_clip: None,
+            spell_landing_flag: None,
         }),
         Instant::now(),
         &NoSpells,
@@ -1548,6 +1945,7 @@ fn news_for_the_player_comes_with_notices_and_others_news_without() {
         kind: 1,
         spell_id: None,
         outcome: DamageOutcome::Miss,
+        push: None,
     };
     assert!(game(&mut world, WorldEvent::Damage(damage)).ignored);
     damage.source_id = 9;
@@ -1631,7 +2029,7 @@ fn loot_and_shop_replies_say_what_the_player_got_or_was_refused() {
         game(&mut world, opened(LootResponse::TooFar, Coins::default())).notices,
         []
     );
-    world.open_shop(8);
+    // A merchant's refusal answers the player's request, so it is said.
     assert_eq!(
         game(
             &mut world,
@@ -1734,6 +2132,7 @@ fn gems_read_the_admitted_players_memorized_spells() {
             zone: "qeytoqrg".into(),
             player: Box::new(caster),
             far_clip: None,
+            spell_landing_flag: None,
         },
     );
     assert_eq!(world.gem(2), Some(73));
@@ -1850,6 +2249,92 @@ fn the_clock_runs_on_from_the_time_the_server_gave() {
 }
 
 #[test]
+fn a_refused_character_creation_tells_the_player_and_a_created_one_does_not() {
+    use crate::creation::CreationOutcome;
+    let mut world = ClientWorld::default();
+    let answer = |world: &mut ClientWorld, outcome| {
+        game(
+            world,
+            WorldEvent::CharacterCreation {
+                name: "Testcleric".into(),
+                outcome,
+            },
+        )
+    };
+    let refused = answer(&mut world, CreationOutcome::NameRefused);
+    assert_eq!(
+        refused.notices,
+        [Notice::CreationRefused {
+            name: "Testcleric".into(),
+            outcome: CreationOutcome::NameRefused,
+        }]
+    );
+    assert_eq!(world.creation().map(|last| last.count), Some(1));
+    assert_eq!(answer(&mut world, CreationOutcome::Created).notices, []);
+    let last = world.creation().unwrap();
+    assert_eq!(
+        (last.count, last.name.as_str(), last.outcome),
+        (2, "Testcleric", CreationOutcome::Created)
+    );
+}
+
+#[test]
+fn a_zone_header_sent_again_changes_the_sky_fog_and_far_clip() {
+    use crate::clock::{Fog, ZoneSky};
+    use crate::zones::ZoneDescription;
+    let mut world = ClientWorld::default();
+    let header = |sky: u8, far: f32, max_clip: f32| {
+        let sky = ZoneSky {
+            sky,
+            time_type: 0,
+            fog: [Fog {
+                color: [200, 200, 220],
+                near: 10.0,
+                far,
+            }; 4],
+        };
+        let description = ZoneDescription {
+            long_name: "Example".into(),
+            zone_type: 0,
+            gravity: 0.4,
+            safe_point: [0.0; 3],
+            max_z: 0.0,
+            underworld: -1000.0,
+            min_clip: 50.0,
+            max_clip,
+            experience_multiplier: 1.0,
+            weather: Default::default(),
+            music: None,
+            sky_lock: None,
+            graveyard_minutes: None,
+        };
+        (sky, description)
+    };
+    // At entry the session gives the far clip with the admission, then the
+    // header's sky and description; the clip is there from the first frame.
+    let mut admission = entered(1);
+    if let WorldEvent::Entered { far_clip, .. } = &mut admission {
+        *far_clip = Some(1400.0);
+    }
+    game(&mut world, admission);
+    assert_eq!(world.far_clip(), Some(1400.0));
+    let (sky, description) = header(1, 800.0, 1400.0);
+    game(&mut world, WorldEvent::Sky(sky));
+    game(&mut world, WorldEvent::ZoneDescription(description));
+    assert_eq!((world.sky(), world.far_clip()), (Some(sky), Some(1400.0)));
+    // A game master's change sends the header again mid-zone: every field it
+    // carries takes effect, the clip as well as the sky and fog.
+    let (sky, description) = header(0, 500.0, 600.0);
+    game(&mut world, WorldEvent::Sky(sky));
+    game(&mut world, WorldEvent::ZoneDescription(description));
+    assert_eq!((world.sky(), world.far_clip()), (Some(sky), Some(600.0)));
+    // A header with no clip leaves the one the world has.
+    let (_, description) = header(0, 500.0, 0.0);
+    game(&mut world, WorldEvent::ZoneDescription(description));
+    assert_eq!(world.far_clip(), Some(600.0));
+}
+
+#[test]
 fn the_player_has_the_pet_they_own_and_its_buffs() {
     use crate::pets::{PetBuff, PetBuffs};
     let mut world = admitted();
@@ -1951,6 +2436,7 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
             zone: "qeynos".into(),
             player: Box::new(trainee),
             far_clip: None,
+            spell_landing_flag: None,
         },
     );
     connection(&mut world, true, false);
@@ -1980,6 +2466,11 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
     assert_eq!(
         world.player().and_then(|player| player.practice_points),
         Some(4)
+    );
+    game(&mut world, WorldEvent::Disciplines(vec![4585, 0]));
+    assert_eq!(
+        world.player().and_then(|player| player.disciplines.clone()),
+        Some(vec![4585, 0])
     );
     // A value that does not rise says nothing.
     let changes = game(
@@ -2235,6 +2726,42 @@ fn a_group_follows_the_servers_word_and_says_what_happened() {
         said(GroupNotice::Left(Party::Player))
     );
     assert!(world.group().is_none());
+}
+
+#[test]
+fn only_a_change_of_leader_says_so() {
+    use crate::group::GroupUpdate;
+    let mut world = admitted();
+    let news = |world: &mut ClientWorld, update| game(world, WorldEvent::Group(update)).notices;
+    let leader = |name: &str| GroupUpdate::Leader { name: name.into() };
+    // Outside a group, a leader is nothing to the player.
+    assert_eq!(news(&mut world, leader("Leader")), []);
+    assert!(world.group().is_none());
+    // A list naming no leader, as TAKP's profile gives after a zone
+    // change: the leader named next is learned quietly.
+    assert_eq!(
+        news(
+            &mut world,
+            GroupUpdate::Members {
+                leader: String::new(),
+                members: vec!["Leader".into(), "Friend".into()],
+            }
+        ),
+        []
+    );
+    assert_eq!(news(&mut world, leader("Leader")), []);
+    assert_eq!(
+        world.group().and_then(|group| group.leader.as_deref()),
+        Some("Leader")
+    );
+    // The same leader again says nothing; a new one says so.
+    assert_eq!(news(&mut world, leader("leader")), []);
+    assert_eq!(
+        news(&mut world, leader("Friend")),
+        [Notice::Group(GroupNotice::Leader(Party::Named(
+            "Friend".into()
+        )))]
+    );
 }
 
 #[test]
@@ -2695,4 +3222,478 @@ fn a_raid_listed_after_its_leader_says_nothing_and_a_later_member_joins() {
             "Late".into()
         )))]
     );
+}
+
+fn worlds(selection_id: u64) -> WorldEvent {
+    use crate::servers::{ServerChoice, ServerStatus};
+    WorldEvent::ServerSelection {
+        selection_id,
+        servers: vec![ServerChoice {
+            name: "Example".into(),
+            status: ServerStatus::Up,
+            players: Some(7),
+            preferred: false,
+        }],
+    }
+}
+
+#[test]
+fn the_login_servers_list_lasts_until_the_chosen_world_lists_characters() {
+    use crate::servers::ServerRefusal;
+    let mut world = ClientWorld::default();
+    assert!(game(&mut world, worlds(4)).servers);
+    let list = world.servers().unwrap();
+    assert_eq!((list.selection_id, list.servers.len()), (4, 1));
+    // A refusal for another list changes nothing; one for this list stays
+    // with it while the player chooses again.
+    let refused = |selection_id| WorldEvent::ServerRefused {
+        selection_id,
+        refusal: ServerRefusal::Message(326),
+    };
+    world.ask_server(0);
+    assert!(game(&mut world, refused(3)).ignored);
+    assert_eq!(world.servers().unwrap().asked, Some(0));
+    assert!(game(&mut world, refused(4)).servers);
+    let list = world.servers().unwrap();
+    assert_eq!(
+        (list.asked, &list.refused),
+        (None, &Some(ServerRefusal::Message(326)))
+    );
+    // Asking again clears the old refusal while the login server answers.
+    world.ask_server(0);
+    assert_eq!(world.servers().unwrap().refused, None);
+    let changes = game(
+        &mut world,
+        WorldEvent::CharacterSelection {
+            selection_id: 9,
+            characters: Vec::new(),
+        },
+    );
+    assert!(changes.characters);
+    assert!(world.servers().is_none());
+}
+
+#[test]
+fn a_session_that_ends_forgets_the_list_and_a_new_one_keeps_only_the_players_choices() {
+    use crate::Capability;
+    let mut world = ClientWorld::default();
+    world.choose(vec![Capability::Falling]);
+    game(&mut world, worlds(1));
+    connection(&mut world, false, true);
+    assert!(world.ended());
+    assert!(world.servers().is_none());
+    game(&mut world, worlds(2));
+    world.restart();
+    assert!(!world.ended() && world.servers().is_none());
+    // What the player turned on still counts once an admission leaves it to
+    // them.
+    let mut entry = entered(1);
+    if let WorldEvent::Entered { choices, .. } = &mut entry {
+        *choices = vec![Capability::Falling];
+    }
+    game(&mut world, entry);
+    assert!(world.can(Capability::Falling));
+}
+
+#[test]
+fn a_cast_under_way_is_read_until_it_lands() {
+    let mut world = admitted();
+    let now = Instant::now();
+    let began = WorldEvent::Spell(SpellUpdate::Began {
+        caster_id: 5,
+        spell_id: 42,
+        duration_ms: 3000,
+    });
+    world.apply(&WorldUpdate::Game(began), now, &NoSpells);
+    assert_eq!(world.casting_of(5), Some(42));
+    assert_eq!(world.casting_of(9), None);
+    let mut landing = effect(9, 0);
+    landing.caster_id = 5;
+    world.apply(
+        &WorldUpdate::Game(WorldEvent::SpellEffect(landing)),
+        now,
+        &NoSpells,
+    );
+    assert_eq!(world.casting_of(5), None);
+}
+
+#[test]
+fn a_landing_is_the_action_with_the_servers_landing_flag() {
+    let mut world = admitted();
+    let land = |world: &mut ClientWorld, target_id, spell_id, flag| {
+        let mut landing = effect(target_id, flag);
+        landing.spell_id = spell_id;
+        landing.caster_level = 24;
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::SpellEffect(landing)),
+            Instant::now(),
+            &NoSpells,
+        )
+    };
+    // The cast's own completion action is no landing; the flagged one is,
+    // on the player and on a spawn in view, with the caster's level.
+    land(&mut world, 9, 42, 0);
+    assert_eq!(world.landing_on(9), None);
+    land(&mut world, 9, 42, 4);
+    let first = world.landing_on(9).unwrap();
+    assert_eq!(
+        (first.spell_id, first.caster_id, first.caster_level),
+        (42, 9, 24)
+    );
+    game(&mut world, swing(5, 5));
+    land(&mut world, 5, 42, 4);
+    assert_eq!(
+        world.landing_on(5).map(|landing| landing.spell_id),
+        Some(42)
+    );
+    // Each landing is a new one.
+    land(&mut world, 9, 42, 4);
+    assert_ne!(world.landing_on(9).unwrap().count, first.count);
+    // Not on a spawn out of view, and gone with the spawn and the zone.
+    land(&mut world, 77, 42, 4);
+    assert_eq!(world.landing_on(77), None);
+    game(&mut world, WorldEvent::Despawn(5));
+    assert_eq!(world.landing_on(5), None);
+    game(&mut world, entered(2));
+    assert_eq!(world.landing_on(9), None);
+    // A server type with no landing flag named records none.
+    let mut unchecked = entered(3);
+    if let WorldEvent::Entered {
+        spell_landing_flag, ..
+    } = &mut unchecked
+    {
+        *spell_landing_flag = None;
+    }
+    game(&mut world, unchecked);
+    land(&mut world, 9, 42, 4);
+    assert_eq!(world.landing_on(9), None);
+}
+
+#[test]
+fn a_spawn_seen_dying_keeps_when_it_fell_and_one_arriving_dead_has_none() {
+    use std::time::Duration;
+    let mut world = admitted();
+    let start = Instant::now();
+    let death = |spawn_id| {
+        WorldUpdate::Game(WorldEvent::Death(Death {
+            spawn_id,
+            killer_id: 9,
+            corpse_id: spawn_id,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }))
+    };
+    assert_eq!(world.died_at(5), None);
+    world.apply(&death(5), start, &NoSpells);
+    assert_eq!(world.died_at(5), Some(start));
+    // A repeated death leaves when it fell alone.
+    world.apply(&death(5), start + Duration::from_secs(2), &NoSpells);
+    assert_eq!(world.died_at(5), Some(start));
+    // A corpse arriving in its place, or one arriving anywhere, was not
+    // seen dying.
+    let mut corpse = spawn(5);
+    corpse.kind = SpawnKind::NpcCorpse;
+    let mut other = spawn(6);
+    other.kind = SpawnKind::PlayerCorpse;
+    game(&mut world, WorldEvent::Spawns(vec![corpse, other]));
+    assert_eq!((world.died_at(5), world.died_at(6)), (None, None));
+    // One leaving forgets it, and the zone forgets them all.
+    game(&mut world, WorldEvent::Spawns(vec![spawn(7), spawn(8)]));
+    world.apply(&death(7), start, &NoSpells);
+    world.apply(&death(8), start, &NoSpells);
+    game(&mut world, WorldEvent::Despawn(7));
+    assert_eq!((world.died_at(7), world.died_at(8)), (None, Some(start)));
+    game(&mut world, entered(2));
+    assert_eq!(world.died_at(8), None);
+}
+
+#[test]
+fn the_zone_keeps_how_spawns_show_their_names_and_where_corpses_lie() {
+    use crate::outfit::Features;
+    use eq_network_game::appearance::AppearanceChange;
+    let mut world = admitted();
+    for spawn_id in [5, 9] {
+        game(
+            &mut world,
+            WorldEvent::Appearance {
+                spawn_id,
+                change: AppearanceChange::Pvp(true),
+            },
+        );
+    }
+    game(
+        &mut world,
+        WorldEvent::Appearance {
+            spawn_id: 5,
+            change: AppearanceChange::Size(9.0),
+        },
+    );
+    let features = Features {
+        face: 3,
+        ..Features::default()
+    };
+    for spawn_id in [Some(5), None] {
+        game(
+            &mut world,
+            WorldEvent::FaceChanged {
+                spawn_id,
+                features,
+                eye_colors: None,
+            },
+        );
+    }
+    game(
+        &mut world,
+        WorldEvent::Renamed {
+            spawn_id: Some(5),
+            old_name: "Example".into(),
+            new_name: "Renamed".into(),
+        },
+    );
+    game(
+        &mut world,
+        WorldEvent::CorpseMoved {
+            spawn_id: 5,
+            position: [1.0, 2.0, 3.0],
+        },
+    );
+    let state = &world.spawn(5).unwrap().state;
+    assert!(state.appearance.pvp);
+    assert!((state.size - 9.0).abs() < f32::EPSILON);
+    assert_eq!(state.appearance.features(), features);
+    assert_eq!(state.name, "Renamed");
+    let position = state.position;
+    assert_eq!([position.x, position.y, position.z], [1.0, 2.0, 3.0]);
+    assert!(world.player().unwrap().appearance.pvp);
+}
+
+#[test]
+fn what_other_players_ask_of_the_player_changes_nothing_yet() {
+    use eq_network_game::popups::{Marquee, Popup};
+    use eq_network_game::socials::{DuelRefusal, DuelUpdate, VoiceKind, VoiceMacro};
+    use std::time::Duration;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        WorldEvent::Popup(Popup {
+            title: "Title".into(),
+            text: "Text".into(),
+            buttons: 0,
+            duration: None,
+            popup_id: 1,
+        }),
+        WorldEvent::Marquee(Marquee {
+            message_type: 15,
+            priority: 1,
+            fade_in: Duration::from_millis(100),
+            fade_out: Duration::from_millis(100),
+            duration: Duration::from_secs(3),
+            text: "Text".into(),
+        }),
+        WorldEvent::YellForHelp { spawn_id: 5 },
+        WorldEvent::VoiceMacro(VoiceMacro {
+            from: "Example".into(),
+            kind: VoiceKind::Group,
+            voice: 1,
+            number: 2,
+        }),
+        WorldEvent::InspectRequest { inspector_id: 5 },
+        WorldEvent::Duel(DuelUpdate::Challenge { from: 5 }),
+        WorldEvent::Duel(DuelUpdate::Accepted {
+            challenger: 5,
+            accepter: 9,
+        }),
+        WorldEvent::Duel(DuelUpdate::Refused {
+            from: 5,
+            reason: DuelRefusal::Declined,
+        }),
+    ];
+    for event in events {
+        assert_eq!(game(&mut world, event), Changes::default());
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
+}
+
+#[test]
+fn a_spawn_that_dies_moving_lies_where_it_was_carried_and_moves_no_more() {
+    let mut world = admitted();
+    let reported = Instant::now();
+    let at = |world: &mut ClientWorld, event, now| {
+        world.apply(&WorldUpdate::Game(event), now, &NoSpells);
+    };
+    at(
+        &mut world,
+        WorldEvent::Position {
+            spawn_id: 5,
+            position: WorldPosition::default(),
+            velocity: [4.0, 0.0, 0.0],
+        },
+        reported,
+    );
+    // Drawn late, it is carried from when its report came.
+    let carried = world
+        .spawn(5)
+        .unwrap()
+        .carried(reported + std::time::Duration::from_secs(1));
+    assert!((carried.x - 4.0).abs() < 0.001);
+    let died = reported + std::time::Duration::from_secs(2);
+    at(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 5,
+            killer_id: 9,
+            corpse_id: 5,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+        died,
+    );
+    let corpse = world.spawn(5).unwrap();
+    assert_eq!(corpse.state.kind, SpawnKind::NpcCorpse);
+    assert!((corpse.state.position.x - 8.0).abs() < 0.001);
+    assert_eq!(corpse.state.velocity, [0.0; 3]);
+    let later = corpse.carried(died + std::time::Duration::from_secs(10));
+    assert!((later.x - 8.0).abs() < 0.001);
+    // A position for the corpse places it, and still it does not move on.
+    let dragged = WorldPosition {
+        x: 20.0,
+        ..WorldPosition::default()
+    };
+    at(
+        &mut world,
+        WorldEvent::Position {
+            spawn_id: 5,
+            position: dragged,
+            velocity: [4.0, 0.0, 0.0],
+        },
+        died,
+    );
+    let corpse = world.spawn(5).unwrap();
+    assert_eq!(
+        corpse.carried(died + std::time::Duration::from_secs(3)),
+        dragged
+    );
+    // One arriving as a corpse is as still.
+    let mut arriving = spawn(6);
+    arriving.kind = SpawnKind::NpcCorpse;
+    arriving.velocity = [4.0, 0.0, 0.0];
+    game(&mut world, WorldEvent::Spawns(vec![arriving]));
+    assert_eq!(world.spawn(6).unwrap().state.velocity, [0.0; 3]);
+}
+
+#[test]
+fn guild_news_changes_nothing_yet() {
+    use eq_network_game::guild::GuildUpdate;
+    use eq_network_game::listing::GuildRank;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        GuildUpdate::Members(Vec::new()),
+        GuildUpdate::MemberLocation {
+            guild_id: 1,
+            name: "Example".into(),
+            zone_id: Some(29),
+            last_on: 0,
+        },
+        GuildUpdate::MemberAdded {
+            guild_id: 1,
+            name: "Example".into(),
+            level: 10,
+            class: 1,
+            rank: GuildRank::Member,
+            zone_id: None,
+            last_on: 0,
+        },
+        GuildUpdate::MemberLevel {
+            guild_id: 1,
+            name: "Example".into(),
+            level: 10,
+        },
+        GuildUpdate::MemberRemoved {
+            guild_id: 1,
+            name: "Example".into(),
+        },
+        GuildUpdate::MemberNote {
+            guild_id: 1,
+            name: "Example".into(),
+            note: "Note".into(),
+        },
+        GuildUpdate::MemberRank {
+            guild_id: Some(1),
+            name: "Example".into(),
+            rank: GuildRank::Officer,
+            banker: true,
+            alt: false,
+        },
+        GuildUpdate::MemberRenamed {
+            guild_id: 1,
+            old_name: "Example".into(),
+            new_name: "Renamed".into(),
+        },
+        GuildUpdate::Renamed {
+            guild_id: 1,
+            name: "Guild".into(),
+        },
+        GuildUpdate::Disbanded { guild_id: 1 },
+        GuildUpdate::Invite {
+            inviter: "Example".into(),
+            guild_id: 1,
+            rank: GuildRank::Member,
+        },
+    ];
+    for event in events {
+        assert_eq!(
+            game(&mut world, WorldEvent::Guild(event)),
+            Changes::default()
+        );
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
+}
+
+#[test]
+fn titles_and_suffixes_change_the_spawn_and_the_players_own() {
+    use eq_network_game::names::TitleChange;
+    let mut world = admitted();
+    for (spawn_id, change) in [
+        (5, TitleChange::Title("Baron".into())),
+        (5, TitleChange::Suffix("the Bold".into())),
+        (5, TitleChange::Unspecified),
+        (9, TitleChange::Title("Lady".into())),
+        (12, TitleChange::Title("Nobody".into())),
+    ] {
+        game(&mut world, WorldEvent::TitleChanged { spawn_id, change });
+    }
+    let parts = &world.spawn(5).unwrap().state.name_parts;
+    assert_eq!(
+        (parts.title.as_str(), parts.suffix.as_str()),
+        ("Baron", "the Bold")
+    );
+    assert_eq!(world.player().unwrap().name_parts.title, "Lady");
+}
+
+#[test]
+fn new_titles_and_game_masters_notices_change_nothing_yet() {
+    use eq_network_game::gm::GmNotice;
+    let mut world = admitted();
+    let spawns = world.spawns().len();
+    let events = [
+        WorldEvent::NewTitles,
+        WorldEvent::Gm(GmNotice::Kicked {
+            name: "Example".into(),
+            gm_name: Some("Guide".into()),
+        }),
+        WorldEvent::Gm(GmNotice::Killed {
+            name: "Example".into(),
+            gm_name: None,
+        }),
+        WorldEvent::Gm(GmNotice::BecameNpc { max_level: 50 }),
+        WorldEvent::Gm(GmNotice::Petition(None)),
+    ];
+    for event in events {
+        assert_eq!(game(&mut world, event), Changes::default());
+    }
+    assert_eq!(world.spawns().len(), spawns);
+    assert!(world.player().is_some());
 }

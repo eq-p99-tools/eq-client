@@ -5,6 +5,11 @@
 //! as P99/Quarm rules. Callers must supply effective, capped stats rather than
 //! unmodified profile attributes. Equipment, buffs and AA bonuses are not inferred.
 
+mod estimate;
+pub use estimate::{
+    EstimateUnavailable, EstimatedCapacities, ResourceBonuses, ResourceSpells, estimate_titanium,
+};
+
 /// Governing attribute for classes that have a mana pool.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ManaAttribute {

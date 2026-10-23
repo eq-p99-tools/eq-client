@@ -3,17 +3,22 @@
 //! A script never runs unattended: it pauses until the client window is focused,
 //! stops if focus is lost while a key is held, and ends after a bounded time.
 //! Scripted clicks are only injected while the real pointer is outside the window,
-//! so they cannot also press whatever the pointer happens to be over. A followed
+//! so they cannot also press whatever the pointer happens to be over; each click
+//! and hover first glides the script's own pointer to its control (see
+//! [`pointer`]), scrolling a list the control has scrolled out of view as
+//! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
 //! `gm` steps send `#` commands only to a local `EQEmu` server, and `chat`
 //! steps speak only there.
 mod parse;
+pub(crate) mod pointer;
 mod report;
 
 pub use parse::{
     AbilityPage, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step, TradeClick,
     TrainingClick, parse,
 };
+pub(crate) use pointer::ScriptPointer;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -30,6 +35,12 @@ const MAX_RUNTIME: Duration = Duration::from_mins(15);
 const FOLLOW_POLL: Duration = Duration::from_millis(250);
 /// Path positions searched per frame, keeping each frame short.
 const SEARCH_BUDGET: usize = 1500;
+/// A frame at least this long is logged while a script runs: past it, a
+/// frame shows as a hitch.
+const SLOW_FRAME: Duration = Duration::from_millis(50);
+/// A walk's call into its route at least this long is logged, with what the
+/// route was doing.
+const SLOW_ROUTE_CALL: Duration = Duration::from_millis(5);
 
 /// Remaining steps and the one in progress.
 #[derive(Resource)]
@@ -39,6 +50,9 @@ pub struct Script {
     held: Vec<KeyCode>,
     /// The mouse button a scripted click holds down until the next frame.
     clicked: Option<MouseButton>,
+    /// The control a scripted click pressed, which the pointer is over as
+    /// the button is let go.
+    pressed: Option<Entity>,
     started: Option<Duration>,
     paused: bool,
     /// Newest chat line already included in a report.
@@ -57,9 +71,56 @@ pub struct Script {
     focus: Option<bool>,
     /// The route a `walk` step is searching for or following.
     route: Option<eq_client_core::movement::Route>,
+    /// The closed door the walk is opening, if any.
+    door_wait: Option<DoorWait>,
+    /// Where the walk last headed, for the stall line and the follower trace.
+    following: Option<Following>,
+    /// Since when a following walk has seen no movement sample sent, and
+    /// whether it has said so.
+    quiet: Option<Quiet>,
+    /// While a walk's route searches: when the search began, the last frame,
+    /// and the longest frame so far, so the log shows how long the walk
+    /// waited and whether the search held frames up.
+    search_frames: Option<SearchFrames>,
+    /// When the last frame ran, so a slow one is logged with what the script
+    /// was doing.
+    last_frame: Option<Duration>,
     /// The control a `hover` step rests the pointer on, until the next click
     /// or hover.
     hovering: Option<Entity>,
+    /// The script pointer's glide to the control a click or hover names.
+    glide: Option<pointer::Glide>,
+    /// The wheel turning over a list until the control a click or hover
+    /// names shows whole in it, before the glide to the control.
+    scrolling: Option<pointer::Scrolling>,
+    /// The notch the wheel turns this frame over a list, in pixels with
+    /// upward positive, which [`pointer::turn`] gives the list.
+    notch: Option<(Entity, f32)>,
+    /// The control the script pointer last hovered on its way, whose hover
+    /// it clears as it leaves.
+    pointed: Option<Entity>,
+    /// The spawn a `wait_dead` or `chase` step waits on: the target as it
+    /// started.
+    awaited: Option<u16>,
+    /// The world container an `approach object` or `walk object` step walks
+    /// toward, chosen as it started.
+    approached: Option<u32>,
+    /// A `chase` step's view of its target: the last report it saw and when,
+    /// so the aim carries that report forward as the target is drawn.
+    chase_seen: Option<(eq_client_core::WorldPosition, Duration)>,
+    /// The count of the world's creation answers when a `create` step sent
+    /// its request, so the step waits for the next.
+    created_before: Option<u64>,
+}
+
+/// A walk's frames while its route searches.
+#[derive(Clone, Copy)]
+struct SearchFrames {
+    began: Duration,
+    last: Duration,
+    slowest: Duration,
+    /// Frames so far, counting the one that began the search as 1.
+    count: u32,
 }
 
 struct Follow {
@@ -79,6 +140,7 @@ impl Script {
             current: None,
             held: Vec::new(),
             clicked: None,
+            pressed: None,
             started: None,
             paused: false,
             chat_seen: 0,
@@ -87,7 +149,20 @@ impl Script {
             offline: false,
             focus: None,
             route: None,
+            door_wait: None,
+            following: None,
+            quiet: None,
+            search_frames: None,
+            last_frame: None,
             hovering: None,
+            glide: None,
+            scrolling: None,
+            notch: None,
+            pointed: None,
+            awaited: None,
+            approached: None,
+            chase_seen: None,
+            created_before: None,
         }
     }
 
@@ -166,26 +241,27 @@ impl Script {
         }
     }
 
-    fn release(&mut self, keys: &mut ButtonInput<KeyCode>, mouse: &mut ButtonInput<MouseButton>) {
+    fn release(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>) {
         for key in self.held.drain(..) {
             keys.release(key);
         }
         if let Some(button) = self.clicked.take() {
             mouse.release(button);
         }
+        self.pressed = None;
     }
 
-    fn stop(
-        &mut self,
-        keys: &mut ButtonInput<KeyCode>,
-        mouse: &mut ButtonInput<MouseButton>,
-        reason: &str,
-    ) {
+    fn stop(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>, reason: &str) {
         self.release(keys, mouse);
         self.steps.clear();
         self.current = None;
         self.follow = None;
         self.route = None;
+        self.glide = None;
+        self.scrolling = None;
+        self.notch = None;
+        self.awaited = None;
+        self.approached = None;
         info!("Script stopped: {reason}");
     }
 }
@@ -205,6 +281,7 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::spellbook::BookPlace>,
             Option<&'static super::spellbook::TurnsPages>,
             Option<&'static super::hud::SpellGem>,
+            Option<&'static super::hud::hotbar::Slot>,
         ),
         Option<&'static super::spellbook::GemChoice>,
         Option<&'static super::trade::Action>,
@@ -247,6 +324,7 @@ type Buttons<'w, 's> = Query<
                     Option<&'static super::raid::RaidRow>,
                     Option<&'static super::raid::RaidAction>,
                     Option<&'static super::skinned::Shows>,
+                    Option<&'static super::skinned::SkinId>,
                 ),
             ),
         ),
@@ -266,12 +344,61 @@ type Observed<'w> = (
     Res<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,
     Res<'w, super::motion::Controls>,
+    Option<Res<'w, crate::loading::Loading>>,
+    Option<Res<'w, super::doors::Hinges>>,
+    Option<Res<'w, super::zone_navmesh::ZoneNavMesh>>,
 );
 
-type Input<'w> = (
-    ResMut<'w, ButtonInput<KeyCode>>,
-    ResMut<'w, ButtonInput<MouseButton>>,
-);
+type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
+
+/// The keyboard as a script presses it: each press and release sets the
+/// key's state and sends the typed key the window would, so what reads
+/// typed keys (the chat line, the login boxes) takes a scripted key as it
+/// takes a real one.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct Keyboard<'w, 's> {
+    state: ResMut<'w, ButtonInput<KeyCode>>,
+    typed: MessageWriter<'w, bevy::input::keyboard::KeyboardInput>,
+    window: Query<'w, 's, Entity, With<PrimaryWindow>>,
+}
+
+impl Keyboard<'_, '_> {
+    fn press(&mut self, key: KeyCode) {
+        if !self.state.pressed(key) {
+            self.send(key, bevy::input::ButtonState::Pressed);
+        }
+        self.state.press(key);
+    }
+
+    fn release(&mut self, key: KeyCode) {
+        if self.state.pressed(key) {
+            self.send(key, bevy::input::ButtonState::Released);
+        }
+        self.state.release(key);
+    }
+
+    fn send(&mut self, key_code: KeyCode, state: bevy::input::ButtonState) {
+        let shift = self
+            .state
+            .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        let chorded = self.state.any_pressed([
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::AltLeft,
+            KeyCode::AltRight,
+        ]);
+        let (logical_key, text) = parse::typed(key_code, shift, chorded);
+        self.typed.write(bevy::input::keyboard::KeyboardInput {
+            key_code,
+            logical_key,
+            state,
+            // A release types nothing.
+            text: text.filter(|_| state.is_pressed()).map(Into::into),
+            repeat: false,
+            window: self.window.single().unwrap_or(Entity::PLACEHOLDER),
+        });
+    }
+}
 
 /// Runs after Bevy's keyboard and UI focus updates so injected input is seen this frame.
 #[allow(
@@ -285,16 +412,24 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    (mut chat, mut moves): (
+    (mut chat, mut moves, mut front, mut sounds): (
         ResMut<super::chat::ChatState>,
         ResMut<super::windows::Moves>,
+        ResMut<super::login::FrontEnd>,
+        ResMut<super::sounds::Sounds>,
     ),
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
     bodies: Query<&super::PlayerBody, With<super::Player>>,
     collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
-    (mut buttons, layout, mut pointers): (Buttons, Layout, Pointers),
+    (mut buttons, layout, mut pointers, needs, mut aim): (
+        Buttons,
+        Layout,
+        Pointers,
+        Query<&crate::outbox::Needs>,
+        pointer::Aim,
+    ),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut exit: MessageWriter<AppExit>,
@@ -302,11 +437,28 @@ pub(super) fn drive(
     let Some(mut script) = script else {
         return;
     };
+    // Plain borrows of the fields, so a walk can hold its route and note
+    // where it heads at once.
+    let script = &mut *script;
     if let Some(event) = focus.read().last() {
         script.focus = Some(event.focused);
     }
     let (mut keys, mut mouse) = input;
     let now = time.elapsed();
+    if let Some(last) = script.last_frame.replace(now)
+        && now.saturating_sub(last) >= SLOW_FRAME
+    {
+        let ms = now.saturating_sub(last).as_secs_f32() * 1000.0;
+        let walking = script.route.is_some();
+        let searching = script
+            .route
+            .as_ref()
+            .is_some_and(eq_client_core::movement::Route::is_searching);
+        // The frame just ended was this one since the walk's search began;
+        // with `searching` false, it was the frame that took the result.
+        let search_frame = script.search_frames.map(|frames| frames.count);
+        info!(ms, walking, searching, ?search_frame, "Script slow frame");
+    }
     let started = *script.started.get_or_insert(now);
     if now.saturating_sub(started) > MAX_RUNTIME {
         script.stop(&mut keys, &mut mouse, "maximum runtime reached");
@@ -361,6 +513,13 @@ pub(super) fn drive(
         ))
     ) && (!script.held.is_empty() || script.clicked.is_some())
     {
+        // Bevy marks the control under the pointer hovered as the button is
+        // let go, and the hold rule clicks a control only then.
+        if let Some(entity) = script.pressed
+            && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+        {
+            interaction.set_if_neq(Interaction::Hovered);
+        }
         script.release(&mut keys, &mut mouse);
         script.current = None;
     }
@@ -368,69 +527,354 @@ pub(super) fn drive(
         let elapsed = now.saturating_sub(since);
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
+            Step::Create(character) => {
+                match answered(online.world(), script.created_before, &character.name) {
+                    Ok(done) => done,
+                    Err(reason) => {
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
+                    }
+                }
+            }
+            Step::WaitDead(limit) => {
+                match fallen(online.world(), script.awaited, elapsed, *limit) {
+                    Ok(done) => done,
+                    Err(reason) => {
+                        script.stop(&mut keys, &mut mouse, reason);
+                        return;
+                    }
+                }
+            }
             Step::Approach(range, duration) => {
                 let distance = face(&online, &players, &mut cameras);
                 distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
             }
-            Step::Walk(_, duration) => {
+            Step::Chase(range, limit) => match chase(
+                online.world(),
+                script.awaited,
+                &mut script.chase_seen,
+                elapsed,
+                *limit,
+            ) {
+                Ok(Chase::Caught) => true,
+                Ok(Chase::OutOfTime) => {
+                    info!("Script chase ended without a kill");
+                    true
+                }
+                Ok(Chase::Aim(aim)) => {
+                    let running = runs(face_toward(aim, &players, &mut cameras), *range);
+                    if running && script.held.is_empty() {
+                        keys.press(KeyCode::KeyW);
+                        script.held = vec![KeyCode::KeyW];
+                    } else if !running && !script.held.is_empty() {
+                        script.release(&mut keys, &mut mouse);
+                    }
+                    false
+                }
+                Err(reason) => {
+                    script.stop(&mut keys, &mut mouse, reason);
+                    return;
+                }
+            },
+            Step::ApproachObject {
+                range, duration, ..
+            } => {
+                let Some(distance) =
+                    face_object(script.approached, &online, &players, &mut cameras)
+                else {
+                    script.stop(&mut keys, &mut mouse, "approach object lost its object");
+                    return;
+                };
+                if distance > *range && elapsed >= *duration {
+                    // A later step such as `press f` would act on nothing.
+                    script.stop(&mut keys, &mut mouse, "approach object ran out of time");
+                    return;
+                }
+                distance <= *range
+            }
+            Step::Walk(_, duration) | Step::WalkObject { duration, .. } => {
                 use eq_client_core::movement::RouteStep;
-                let ends = bodies
-                    .single()
-                    .ok()
-                    .and_then(|body| walk_ends(&online, *body));
+                // An object walk ends only within its range; a plain walk also
+                // ends at the end of a partial route or out of time.
+                let object_range = match &step {
+                    Step::WalkObject { range, .. } => Some(*range),
+                    _ => None,
+                };
+                // Only an object walk has chosen an object.
+                let body = bodies.single().ok().copied();
+                let ends = body.and_then(|body| walk_ends(&online, body, script.approached));
                 let world = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
-                let (Some((feet, goal)), Some(world)) = (ends, world) else {
-                    script.stop(&mut keys, &mut mouse, "walk lost its target or collision");
+                let (Some((feet, goal)), Some(world), Some(body)) = (ends, world, body) else {
+                    script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
                     return;
+                };
+                let height = body.height;
+                let (waited, slowest_frame) = if script
+                    .route
+                    .as_ref()
+                    .is_some_and(eq_client_core::movement::Route::is_searching)
+                {
+                    let frames = script.search_frames.get_or_insert(SearchFrames {
+                        began: now,
+                        last: now,
+                        slowest: Duration::ZERO,
+                        count: 0,
+                    });
+                    frames.slowest = frames.slowest.max(now.saturating_sub(frames.last));
+                    frames.last = now;
+                    frames.count += 1;
+                    (
+                        now.saturating_sub(frames.began).as_secs_f32(),
+                        frames.slowest.as_secs_f32() * 1000.0,
+                    )
+                } else {
+                    script.search_frames = None;
+                    (0.0, 0.0)
                 };
                 let Some(route) = script.route.as_mut() else {
                     script.stop(&mut keys, &mut mouse, "walk lost its route");
                     return;
                 };
                 let searching = route.is_searching();
-                let step = route.next(world, feet, goal, SEARCH_BUDGET, now);
-                if searching && !route.is_searching() {
-                    let (waypoints, partial) = (route.remaining(), route.partial());
-                    info!(waypoints, partial, "Script route ready");
-                } else if !searching && route.is_searching() {
-                    let refused = observed.4.refused.as_deref();
-                    info!(?refused, "Script walk stalled; searching again from here");
+                let call = std::time::Instant::now();
+                // Off the ground, the fall brings the walker to its waypoint.
+                let falling = observed
+                    .4
+                    .airborne
+                    .as_ref()
+                    .is_some_and(|airborne| airborne.peak().is_some());
+                let step = route.next_with(world, (feet, falling), goal, SEARCH_BUDGET, now);
+                let call = call.elapsed();
+                if let RouteStep::Toward(toward) = step {
+                    let traced = script.following.and_then(|following| following.traced);
+                    let mut following = Following {
+                        toward,
+                        index: route.waypoints_reached(),
+                        ahead: route.remaining(),
+                        left: route.distance_left(feet, goal),
+                        traced,
+                    };
+                    if traced.is_none_or(|traced| now.saturating_sub(traced) >= TRACE_EVERY) {
+                        following.traced = Some(now);
+                        debug!(
+                            feet = ?eq_point(feet),
+                            toward = ?eq_point(toward),
+                            index = following.index,
+                            ahead = following.ahead,
+                            left = following.left,
+                            "Script walk following"
+                        );
+                    }
+                    script.following = Some(following);
+                    log_quiet(&mut script.quiet, &observed.4, std::time::Instant::now());
+                } else {
+                    script.quiet = None;
                 }
-                match step {
+                if call >= SLOW_ROUTE_CALL {
+                    let phase = match (searching, route.is_searching()) {
+                        (true, false) => "result",
+                        (true, true) => "searching",
+                        (false, true) => "search again",
+                        (false, false) => "following",
+                    };
+                    let ms = call.as_secs_f32() * 1000.0;
+                    info!(ms, phase, "Script route call slow");
+                }
+                if searching
+                    && !route.is_searching()
+                    && let Some(found) = route.detoured()
+                {
+                    let (expanded, _) = route.searched().unwrap_or_default();
+                    let waypoints = route.remaining();
+                    let timing = route.search_timing().unwrap_or_default();
+                    info!(
+                        queued = timing.queued.as_secs_f32(),
+                        ran = timing.ran.as_secs_f32(),
+                        found,
+                        expanded,
+                        waypoints,
+                        waited,
+                        slowest_frame,
+                        "Script walk detour ready"
+                    );
+                } else if searching && !route.is_searching() {
+                    let (waypoints, partial) = (route.remaining(), route.partial());
+                    let (expanded, open) = route.searched().unwrap_or_default();
+                    let (height, drops) = (route.height(), observed.4.airborne.is_some());
+                    let reach = route.reach();
+                    let timing = route.search_timing().unwrap_or_default();
+                    let planned = Planned::of(route.planned());
+                    info!(
+                        waypoints,
+                        waited,
+                        queued = timing.queued.as_secs_f32(),
+                        ran = timing.ran.as_secs_f32(),
+                        obstacles = timing.obstacles,
+                        snapshot_ms = timing.snapshot.as_secs_f32() * 1000.0,
+                        handoff_ms = timing.handoff.as_secs_f32() * 1000.0,
+                        slowest_frame,
+                        partial,
+                        reach,
+                        expanded,
+                        open,
+                        ?feet,
+                        ?goal,
+                        height,
+                        drops,
+                        planner = planned.planner,
+                        legs = planned.legs,
+                        clear = planned.clear,
+                        drops = planned.drops,
+                        repaired = planned.repaired,
+                        fallback = planned.fallback,
+                        "Script route ready"
+                    );
+                    if let Some(eq_client_core::movement::Planned::Mesh {
+                        fallback: Some(why),
+                        ..
+                    }) = route.planned()
+                    {
+                        info!(?why, ?feet, ?goal, "Script route fell back to the grid");
+                    }
+                    if partial && let Some(end) = route.end() {
+                        log_partial_route(&online, end);
+                    }
+                } else if !searching && route.is_searching() {
+                    log_stall(true, (feet, height), script.following, &observed.4, world);
+                }
+                let distance = Vec2::new(goal.x - feet.x, goal.z - feet.z).length();
+                // Where an object walk ends, so a partial route shows in the log.
+                let log_end = |online: &super::online::OnlineState| {
+                    if object_range.is_some()
+                        && let Some(player) = online.world().player()
+                    {
+                        let at = player.position;
+                        info!(
+                            x = at.x,
+                            y = at.y,
+                            z = at.z,
+                            distance,
+                            "Script walk object ended"
+                        );
+                    }
+                };
+                let (arrived, out_of_time) = match step {
                     RouteStep::Unreachable => {
+                        log_end(&online);
                         script.stop(&mut keys, &mut mouse, "no walkable path from here");
                         return;
                     }
                     RouteStep::Stalled => {
                         let refused = observed.4.refused.as_deref();
+                        log_stall(false, (feet, height), script.following, &observed.4, world);
                         let reason = refused.map_or_else(
                             || "walk made no progress, even after searching again".to_owned(),
                             |refused| {
                                 format!("walk made no progress; last step refused: {refused}")
                             },
                         );
+                        log_end(&online);
                         script.stop(&mut keys, &mut mouse, &reason);
                         return;
                     }
-                    RouteStep::Arrived => true,
+                    RouteStep::Arrived => (true, false),
+                    RouteStep::OpenDoor(id) => {
+                        // Stand at the door: click it as the use key would, then wait.
+                        script.release(&mut keys, &mut mouse);
+                        let door = online.world().doors().entries().get(&id);
+                        let within_use =
+                            door.zip(online.world().player())
+                                .is_some_and(|(door, player)| {
+                                    let at =
+                                        |p| Vec3::from_array(eq_client_core::render_position(p));
+                                    at(door.position).distance(at(player.position))
+                                        <= eq_client_core::doors::Doors::USE_DISTANCE
+                                });
+                        let mut wait = script
+                            .door_wait
+                            .filter(|wait| wait.id == id)
+                            .unwrap_or(DoorWait::new(id));
+                        let open = door.and_then(eq_client_core::doors::Door::active_endpoint);
+                        let hinge = observed
+                            .6
+                            .as_ref()
+                            .and_then(|hinges| hinges.0.get(&id).copied());
+                        match wait.act(open, hinge, within_use, now) {
+                            DoorAction::Click => {
+                                if let Some(door) = door {
+                                    info!(
+                                        id,
+                                        model = %door.model,
+                                        open_type = door.open_type,
+                                        x = door.position.x,
+                                        y = door.position.y,
+                                        z = door.position.z,
+                                        "Script walk opening door"
+                                    );
+                                }
+                                super::doors::open(id, &online, &observed.1);
+                                script.door_wait = Some(wait);
+                            }
+                            DoorAction::Wait => script.door_wait = Some(wait),
+                            DoorAction::Reroute => {
+                                info!(id, ?hinge, "Script walk door open; searching around it");
+                                script.door_wait = Some(wait);
+                                if let Some(route) = script.route.as_mut() {
+                                    route.reroute(feet, goal);
+                                }
+                            }
+                            DoorAction::Refuse(reason) => {
+                                info!(id, reason, "Script walk door did not open");
+                                script.door_wait = None;
+                                if let Some(route) = script.route.as_mut() {
+                                    route.refused(id, feet, goal);
+                                }
+                            }
+                        }
+                        (false, elapsed >= *duration)
+                    }
                     RouteStep::Searching => {
                         // Stand still while a stalled route searches again.
                         script.release(&mut keys, &mut mouse);
-                        elapsed >= *duration
+                        (false, elapsed >= *duration)
                     }
                     RouteStep::Toward(next) => {
+                        if let Some(DoorWait {
+                            id,
+                            asked: Some(asked),
+                            ..
+                        }) = script.door_wait.take()
+                        {
+                            let waited = now.saturating_sub(asked).as_secs_f32();
+                            info!(id, waited, "Script walk door opened");
+                        }
                         let to = next - feet;
-                        // W walks along the camera's forward direction, opposite its orbit offset.
                         for mut camera in &mut cameras {
-                            camera.yaw = to.x.atan2(to.z) + std::f32::consts::PI;
+                            camera.yaw = super::behind(to.x.atan2(to.z));
                         }
                         if script.held.is_empty() {
                             keys.press(KeyCode::KeyW);
                             script.held = vec![KeyCode::KeyW];
                         }
-                        elapsed >= *duration
+                        (false, elapsed >= *duration)
+                    }
+                };
+                match object_range
+                    .map(|range| object_walk_end(distance, range, arrived, out_of_time))
+                {
+                    None => arrived || out_of_time,
+                    Some(Ok(done)) => {
+                        if done {
+                            log_end(&online);
+                        }
+                        done
+                    }
+                    Some(Err(reason)) => {
+                        log_end(&online);
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
                     }
                 }
             }
@@ -445,19 +889,20 @@ pub(super) fn drive(
                 }
                 elapsed >= *duration
             }
-            Step::WaitSelect | Step::WaitOnline | Step::WaitZone(_) => {
+            Step::WaitServers | Step::WaitSelect | Step::WaitOnline | Step::WaitZone(_) => {
                 if elapsed > MAX_ONLINE_WAIT {
                     script.stop(&mut keys, &mut mouse, "server state did not arrive");
                     return;
                 }
-                match &step {
-                    Step::WaitSelect => online.selection.is_some(),
-                    Step::WaitZone(zone) => {
-                        online.world().connected()
-                            && online.world().player().is_some()
-                            && online.world().zone() == *zone
-                    }
-                    _ => online.world().connected() && online.world().player().is_some(),
+                if matches!(step, Step::WaitServers) {
+                    front.screen(&online) == super::login::Screen::Servers
+                        && online
+                            .world()
+                            .servers()
+                            .is_some_and(|list| list.asked.is_none())
+                } else {
+                    let covered = observed.5.as_ref().is_some_and(|loading| loading.covered());
+                    arrived(&step, &online, covered)
                 }
             }
             Step::Click(target) | Step::RightClick(target) => {
@@ -468,11 +913,21 @@ pub(super) fn drive(
                 if window.is_some_and(|window| window.cursor_position().is_some()) {
                     return;
                 }
-                let Some(entity) = find(*target, &buttons, &layout) else {
-                    script.stop(&mut keys, &mut mouse, "click target is not visible");
-                    return;
+                let entity = match aim_click(
+                    script,
+                    (*target, now),
+                    (&mut aim, &mut commands),
+                    (&mut buttons, &layout, &needs),
+                    online.world(),
+                ) {
+                    Ok(Some(entity)) => entity,
+                    Ok(None) => return,
+                    Err(reason) => {
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
+                    }
                 };
-                press(entity, *target, &mut buttons, &mut pointers);
+                press(&mut commands, entity, *target, &mut buttons, &mut pointers);
                 let button = if matches!(step, Step::RightClick(_)) {
                     MouseButton::Right
                 } else {
@@ -480,7 +935,103 @@ pub(super) fn drive(
                 };
                 mouse.press(button);
                 script.clicked = Some(button);
+                script.pressed = Some(entity);
                 return;
+            }
+            Step::HoldClick(target, duration) => {
+                if script.clicked.is_none() {
+                    // Pressed as a click presses, the hold is timed from the
+                    // press.
+                    if elapsed > MAX_WAIT {
+                        script.stop(&mut keys, &mut mouse, "the pointer stayed over the window");
+                        return;
+                    }
+                    if window.is_some_and(|window| window.cursor_position().is_some()) {
+                        return;
+                    }
+                    let entity = match aim_click(
+                        script,
+                        (*target, now),
+                        (&mut aim, &mut commands),
+                        (&mut buttons, &layout, &needs),
+                        online.world(),
+                    ) {
+                        Ok(Some(entity)) => entity,
+                        Ok(None) => return,
+                        Err(reason) => {
+                            script.stop(&mut keys, &mut mouse, &reason);
+                            return;
+                        }
+                    };
+                    press(&mut commands, entity, *target, &mut buttons, &mut pointers);
+                    mouse.press(MouseButton::Left);
+                    script.clicked = Some(MouseButton::Left);
+                    script.pressed = Some(entity);
+                    script.current = Some((step.clone(), now));
+                    return;
+                }
+                if elapsed < *duration {
+                    return;
+                }
+                // Let go over the control it pressed, as a click lets go.
+                if let Some(entity) = script.pressed
+                    && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+                {
+                    interaction.set_if_neq(Interaction::Hovered);
+                }
+                true
+            }
+            Step::Hover(target) => {
+                // The real pointer coming back over the window ends the glide
+                // where it is, and the hover rests on the control as it would
+                // without one; a glide that ends over another control stops
+                // the script, as a click's does.
+                let target_entity = script
+                    .glide
+                    .filter(|_| script.scrolling.is_none())
+                    .map(|glide| glide.target)
+                    .or_else(|| find(*target, &buttons, &layout));
+                let inside = window.is_some_and(|window| window.cursor_position().is_some());
+                if let Some(entity) = target_entity.filter(|_| !inside) {
+                    match scroll_to(
+                        script,
+                        (entity, now),
+                        (&mut aim, &mut commands),
+                        &mut buttons,
+                    ) {
+                        Ok(true) => (),
+                        Ok(false) => return,
+                        Err(reason) => {
+                            script.stop(&mut keys, &mut mouse, &reason);
+                            return;
+                        }
+                    }
+                }
+                let ended_over = match target_entity {
+                    Some(entity) if !inside => match glide(
+                        script,
+                        (entity, now),
+                        (&mut aim, &mut commands),
+                        &mut buttons,
+                    ) {
+                        Glided::Moving => return,
+                        Glided::Over(over) => Some(over),
+                    },
+                    _ => None,
+                };
+                script.glide = None;
+                script.scrolling = None;
+                let Some(entity) = find(*target, &buttons, &layout) else {
+                    script.stop(&mut keys, &mut mouse, "hover target is not visible");
+                    return;
+                };
+                if ended_over.is_some_and(|over| over != Some(entity)) {
+                    script.stop(&mut keys, &mut mouse, "the hover target is covered");
+                    return;
+                }
+                point(script, Some(entity), &mut commands, &mut buttons);
+                script.hovering = Some(entity);
+                true
             }
             _ => true,
         };
@@ -490,6 +1041,12 @@ pub(super) fn drive(
         script.release(&mut keys, &mut mouse);
         script.current = None;
         script.route = None;
+        script.glide = None;
+        script.scrolling = None;
+        script.following = None;
+        script.quiet = None;
+        script.awaited = None;
+        script.approached = None;
     }
     let Some(step) = script.steps.pop_front() else {
         return;
@@ -515,8 +1072,10 @@ pub(super) fn drive(
                     &mut mouse,
                     "character creation could not be sent",
                 );
+                return;
             }
-            return;
+            // The step waits for the world's answer to this request.
+            script.created_before = online.world().creation().map(|last| last.count);
         }
         Step::Slash(_) | Step::Gm(_) | Step::Chat(_) if !online.in_world() => {
             // The worker discards commands while zoning, dead or disconnected.
@@ -578,6 +1137,35 @@ pub(super) fn drive(
             }
             script.held.clone_from(chord);
         }
+        Step::Login => {
+            if front.screen(&online) != super::login::Screen::Login || front.running() {
+                script.stop(&mut keys, &mut mouse, "login needs the login screen");
+            } else if let Err(reason) = front.type_scripted() {
+                script.stop(&mut keys, &mut mouse, reason);
+            } else {
+                front.request = Some(super::login::Request::Connect);
+            }
+            return;
+        }
+        Step::Server(name) => {
+            let listed = online.world().servers().and_then(|list| {
+                list.servers
+                    .iter()
+                    .position(|server| server.name.eq_ignore_ascii_case(name))
+                    .map(|index| (index, list.servers[index].status.open()))
+            });
+            match listed {
+                Some((index, true)) => {
+                    front.highlighted = Some(index);
+                    front.request = Some(super::login::Request::Play);
+                }
+                Some((_, false)) => {
+                    script.stop(&mut keys, &mut mouse, "world takes no players now");
+                }
+                None => script.stop(&mut keys, &mut mouse, "world is not listed"),
+            }
+            return;
+        }
         Step::Select(name) => {
             if !online
                 .selection
@@ -603,29 +1191,46 @@ pub(super) fn drive(
                 0.0
             };
             for mut camera in &mut cameras {
-                // W walks along the camera's forward direction, opposite its orbit offset.
-                camera.yaw = eq_client_core::render_heading(base + *heading) + std::f32::consts::PI;
+                camera.yaw = super::behind(eq_client_core::render_heading(base + *heading));
                 camera.pitch = pitch.to_radians().clamp(-1.45, -0.15);
             }
             return;
         }
-        Step::Click(_) | Step::RightClick(_) => {
-            script.hovering = None;
+        Step::Click(_) | Step::RightClick(_) | Step::HoldClick(..) => {
+            // The script pointer leaves the control a hover rested on.
+            script.pointed = script.hovering.take().or(script.pointed);
             if window.is_some_and(|window| window.cursor_position().is_some()) {
                 info!("Scripted click waits until the pointer leaves the client window");
             }
         }
         Step::Hover(target) => {
-            match find(*target, &buttons, &layout) {
-                Some(entity) => script.hovering = Some(entity),
-                None => script.stop(&mut keys, &mut mouse, "hover target is not visible"),
+            let Some(entity) = find(*target, &buttons, &layout) else {
+                script.stop(&mut keys, &mut mouse, "hover target is not visible");
+                return;
+            };
+            if window.is_some_and(|window| window.cursor_position().is_some()) {
+                // With the real pointer over the window there is no script
+                // pointer to glide: the hover rests on the control at once,
+                // even one just clicked.
+                commands
+                    .entity(entity)
+                    .remove::<super::tooltip::ScriptPressed>();
+                script.hovering = Some(entity);
+                return;
             }
-            return;
+            // The script pointer glides there first, leaving the control
+            // the last hover rested on.
+            script.pointed = script.hovering.take().or(script.pointed);
         }
         Step::Report(label) => {
             report::state(label, &online, &observed, players.single().ok());
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
+            return;
+        }
+        Step::Sound(name) => {
+            info!(name, "Script plays a sound");
+            sounds.play(name, None);
             return;
         }
         Step::Screenshot(path) => {
@@ -653,28 +1258,106 @@ pub(super) fn drive(
             keys.press(KeyCode::KeyW);
             script.held = vec![KeyCode::KeyW];
         }
-        Step::Walk(range, _) => {
+        Step::Chase(..) => {
+            script.awaited = online.world().target().selected;
+            script.chase_seen = None;
+            if face(&online, &players, &mut cameras).is_none() {
+                script.stop(&mut keys, &mut mouse, "chase needs a visible target");
+                return;
+            }
+        }
+        Step::ApproachObject { kind, .. } => {
+            script.approached = nearest_station(&online, *kind);
+            if face_object(script.approached, &online, &players, &mut cameras).is_none() {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "approach object found no container of that kind",
+                );
+                return;
+            }
+            keys.press(KeyCode::KeyW);
+            script.held = vec![KeyCode::KeyW];
+        }
+        Step::Walk(range, _) | Step::WalkObject { range, .. } => {
+            if let Step::WalkObject { kind, .. } = &step {
+                script.approached = nearest_station(&online, *kind);
+                if script.approached.is_none() {
+                    script.stop(
+                        &mut keys,
+                        &mut mouse,
+                        "walk object found no container of that kind",
+                    );
+                    return;
+                }
+            }
+            let creating = std::time::Instant::now();
             let route = bodies.single().ok().and_then(|body| {
-                let (feet, goal) = walk_ends(&online, *body)?;
+                let (feet, goal) = walk_ends(&online, *body, script.approached)?;
                 // Ledges are routes only where the session simulates falls.
-                Some(
-                    eq_client_core::movement::Route::new(feet, goal, *range, body.height)
-                        .with_drops(observed.4.airborne.is_some()),
-                )
+                let route = eq_client_core::movement::Route::new(feet, goal, *range, body.height)
+                    .with_drops(observed.4.airborne.is_some())
+                    .with_doors(openable_doors(&online))
+                    .with_background(std::sync::Arc::new(super::background::ComputePool));
+                // With the navmesh switch on and the zone's mesh ready for
+                // this body's size, the mesh plans; else the grid, as before.
+                let mesh = observed
+                    .7
+                    .as_ref()
+                    .and_then(|meshes| meshes.mesh_for(body.mesh_size()));
+                Some(match mesh {
+                    Some(mesh) => route.with_navigator(Box::new(
+                        eq_client_core::movement::navmesh::MeshNavigator::new(mesh),
+                    )),
+                    None => route,
+                })
             });
+            let creating = creating.elapsed();
+            if creating >= SLOW_ROUTE_CALL {
+                info!(
+                    ms = creating.as_secs_f32() * 1000.0,
+                    "Script walk route made slowly"
+                );
+            }
             let Some(route) = route else {
                 script.stop(&mut keys, &mut mouse, "walk needs a visible target");
                 return;
             };
             script.route = Some(route);
+            script.door_wait = None;
+            script.following = None;
+            script.quiet = None;
         }
-        Step::WaitSelect
+        Step::WaitDead(_) => script.awaited = online.world().target().selected,
+        Step::WaitServers
+        | Step::WaitSelect
         | Step::WaitOnline
         | Step::WaitZone(_)
         | Step::Wait(_)
         | Step::Trace(_) => (),
     }
     script.current = Some((step, now));
+}
+
+/// Whether the world answered a `create` step's request since it was sent:
+/// done once it created the character, and the step's failure when it
+/// refused it.
+fn answered(
+    world: &eq_client_core::world::ClientWorld,
+    before: Option<u64>,
+    name: &str,
+) -> Result<bool, String> {
+    use eq_client_core::creation::CreationOutcome;
+    let Some(answer) = world
+        .creation()
+        .filter(|answer| Some(answer.count) != before && answer.name == name)
+    else {
+        return Ok(false);
+    };
+    match answer.outcome {
+        CreationOutcome::Created => Ok(true),
+        refused => Err(format!("character creation refused: {refused:?}")),
+    }
 }
 
 /// Steps run only while someone watches the window, unless the session is
@@ -747,8 +1430,8 @@ const fn raid(click: RaidClick) -> super::raid::RaidAction {
     }
 }
 
-/// Whether a control of the Training window, the confirmation dialog or a
-/// skinned window's title bar is the one a click names.
+/// Whether a control of the Training window, the confirmation dialog, a
+/// skinned window's title bar or its Done button is the one a click names.
 fn dialog_control(
     target: ClickTarget,
     (skill_row, train, closes, answer, title_box): (
@@ -758,8 +1441,10 @@ fn dialog_control(
         Option<&super::confirm::AnswerButton>,
         Option<&super::skinned::TitleBox>,
     ),
+    trade: Option<&super::trade::Action>,
 ) -> bool {
     match target {
+        ClickTarget::Done(key) => done_button(key, closes, trade, title_box),
         ClickTarget::TitleBox(key, close) => title_box
             .is_some_and(|title_box| title_box.window.key() == key && title_box.close == close),
         ClickTarget::Answer(yes) => answer.is_some_and(|answer| answer.0 == yes),
@@ -774,6 +1459,63 @@ fn dialog_control(
     }
 }
 
+/// The loot or merchant window's action a scripted click names.
+const fn trading(click: TradeClick) -> super::trade::Action {
+    use super::trade::Action;
+    match click {
+        TradeClick::Take(place) => Action::Take(place),
+        TradeClick::TakeAll => Action::TakeAll,
+        TradeClick::EndLoot => Action::EndLoot,
+        TradeClick::Buy(slot) => Action::Buy(slot),
+        TradeClick::Sell(slot) => Action::Sell(slot),
+        TradeClick::EndShop => Action::EndShop,
+        TradeClick::Choose(slot) => Action::Choose(slot),
+        TradeClick::BuyChosen => Action::BuyChosen,
+        TradeClick::SellChosen => Action::SellChosen,
+    }
+}
+
+/// Whether a control is the button in a window's own body that closes it:
+/// one that only closes the window, or the loot or merchant window's Done,
+/// which ends the loot or the shopping as it closes. The title bar's close
+/// box closes it too, but is `close_box`'s.
+fn done_button(
+    key: &str,
+    closes: Option<&super::skinned::Closes>,
+    trade: Option<&super::trade::Action>,
+    title_box: Option<&super::skinned::TitleBox>,
+) -> bool {
+    use super::trade::Action;
+    use super::windows::WindowId;
+    let window = match (closes, trade) {
+        (Some(closes), _) => closes.0,
+        (None, Some(Action::EndLoot)) => WindowId::Loot,
+        (None, Some(Action::EndShop)) => WindowId::Merchant,
+        _ => return false,
+    };
+    title_box.is_none() && window.key() == key
+}
+
+/// The control a click or a hold presses, or why the script stops: none is
+/// visible, or a skin's button named by its `ScreenID` is greyed out, as it
+/// is for a player, with the reason its hover gives.
+fn reach(
+    target: ClickTarget,
+    buttons: &Buttons,
+    layout: &Layout,
+    needs: &Query<&crate::outbox::Needs>,
+    world: &eq_client_core::world::ClientWorld,
+) -> Result<Entity, String> {
+    let entity = find(target, buttons, layout).ok_or("click target is not visible")?;
+    match (target, needs.get(entity)) {
+        (ClickTarget::Button(..), Ok(needs)) if !needs.offered(world) => Err(format!(
+            "that button is greyed out: {}",
+            needs.reason(world)
+        )),
+        _ => Ok(entity),
+    }
+}
+
 /// The first visible matching control in an open window, as a click or a
 /// hover reaches it.
 fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entity> {
@@ -784,14 +1526,19 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         slot,
         scribe,
         store,
-        (row, place, turns, spell_gem),
+        (row, place, turns, spell_gem, hot_button),
         gem,
         trade,
         tint,
         (give, character, chat_tab),
         (coins, pick, arrow, amount),
         (selector, tab, ability, attack, slash, checkbox),
-        (slider, drop_down, choice, (dialog, page, combine, map, (raid_row, raid_action, shows))),
+        (
+            slider,
+            drop_down,
+            choice,
+            (dialog, page, combine, map, (raid_row, raid_action, shows, skin_id)),
+        ),
     ) in buttons
     {
         let matches = match target {
@@ -817,9 +1564,10 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
             ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
-            ClickTarget::Answer(_) | ClickTarget::Training(_) | ClickTarget::TitleBox(..) => {
-                dialog_control(target, dialog)
-            }
+            ClickTarget::Answer(_)
+            | ClickTarget::Training(_)
+            | ClickTarget::TitleBox(..)
+            | ClickTarget::Done(_) => dialog_control(target, dialog, trade),
             ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
             ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),
             ClickTarget::Map(action) => map.is_some_and(|button| *button == action),
@@ -828,9 +1576,12 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
                 row.index == index && (row.list == super::raid::RaidList::Grouped) == grouped
             }),
             ClickTarget::Buff(long, index) => effects_button(shows, long, index),
-            ClickTarget::Scroll(key, up) => {
-                arrow.is_some_and(|arrow| arrow.window.key() == key && arrow.up == up)
+            ClickTarget::Button(key, id) => {
+                skin_id.is_some_and(|skin| skin.id == id && skin.window.key() == key)
             }
+            ClickTarget::Scroll(key, up) => arrow.is_some_and(|arrow| {
+                arrow.window.is_some_and(|window| window.key() == key) && arrow.up == up
+            }),
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
@@ -838,22 +1589,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
             ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
             ClickTarget::SpellGem(number) => spell_gem.is_some_and(|gem| gem.0 == number),
+            ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
-            ClickTarget::Trade(click) => trade.is_some_and(|action| {
-                use super::trade::Action;
-                *action
-                    == match click {
-                        TradeClick::Take(place) => Action::Take(place),
-                        TradeClick::TakeAll => Action::TakeAll,
-                        TradeClick::EndLoot => Action::EndLoot,
-                        TradeClick::Buy(slot) => Action::Buy(slot),
-                        TradeClick::Sell(slot) => Action::Sell(slot),
-                        TradeClick::EndShop => Action::EndShop,
-                        TradeClick::Choose(slot) => Action::Choose(slot),
-                        TradeClick::BuyChosen => Action::BuyChosen,
-                        TradeClick::SellChosen => Action::SellChosen,
-                    }
-            }),
+            ClickTarget::Trade(click) => trade == Some(&trading(click)),
             ClickTarget::Tint(number, color) => tint.is_some_and(|action| {
                 use super::inventory::colors::Action;
                 match (action, color) {
@@ -915,9 +1653,198 @@ const fn picks(button: PickButton) -> Option<super::inventory::SplitAction> {
     })
 }
 
+/// Where a glide of the script pointer stands after a frame.
+enum Glided {
+    /// It is still on its way.
+    Moving,
+    /// It is over, with the control the pointer ended over, if any.
+    Over(Option<Entity>),
+}
+
+/// One frame of the script pointer's glide to the middle of `target`, begun
+/// on the first from where the pointer rests: it moves the pointer and
+/// gives the control under it the hover a `hover` step gives.
+fn glide(
+    script: &mut Script,
+    (target, now): (Entity, Duration),
+    (aim, commands): (&mut pointer::Aim, &mut Commands),
+    buttons: &mut Buttons,
+) -> Glided {
+    let glide = *script.glide.get_or_insert_with(|| pointer::Glide {
+        from: aim.at(),
+        began: now,
+        target,
+        at: None,
+    });
+    let elapsed = now.saturating_sub(glide.began);
+    // A control that moves as the pointer heads for it is followed.
+    let to = glide
+        .at
+        .or_else(|| aim.middle(glide.target))
+        .unwrap_or(glide.from);
+    let at = pointer::glide_at(glide.from, to, elapsed);
+    aim.place(commands, at);
+    let over = aim.under(at);
+    point(script, over, commands, buttons);
+    if elapsed < pointer::GLIDE {
+        return Glided::Moving;
+    }
+    script.glide = None;
+    Glided::Over(over)
+}
+
+/// One frame of scrolling `target` into view in the nearest list above it
+/// that the wheel scrolls, as a player scrolls a list before clicking a row
+/// it hides: true once the control shows whole in the list, at once when it
+/// already does or lies in no such list. The script pointer first glides
+/// just inside the list's edge nearest the control, then the wheel turns a
+/// notch a frame toward it; a notch that leaves the list where it was, with
+/// the control still not whole in view, is why the script stops.
+fn scroll_to(
+    script: &mut Script,
+    (target, now): (Entity, Duration),
+    (aim, commands): (&mut pointer::Aim, &mut Commands),
+    buttons: &mut Buttons,
+) -> Result<bool, String> {
+    let Some(list) = script
+        .scrolling
+        .map(|scrolling| scrolling.list)
+        .or_else(|| aim.wheel_list(target))
+    else {
+        return Ok(true);
+    };
+    let (Some(row), Some(view)) = (aim.rect(target), aim.rect(list)) else {
+        return Ok(true);
+    };
+    // The wheel scrolls up and down, so only how high the control lies counts.
+    let shows = row.min.y >= view.min.y - 0.5 && row.max.y <= view.max.y + 0.5;
+    let up = row.min.y < view.min.y;
+    if script.scrolling.is_none() {
+        if shows {
+            return Ok(true);
+        }
+        let x = row
+            .center()
+            .x
+            .min(view.max.x - pointer::EDGE)
+            .max(view.min.x + pointer::EDGE);
+        let y = if up {
+            view.min.y + pointer::EDGE
+        } else {
+            view.max.y - pointer::EDGE
+        };
+        script.scrolling = Some(pointer::Scrolling { list, before: None });
+        script.glide = Some(pointer::Glide {
+            from: aim.at(),
+            began: now,
+            target: list,
+            at: Some(Vec2::new(x, y)),
+        });
+    }
+    if script.glide.is_some()
+        && matches!(
+            glide(script, (list, now), (aim, commands), buttons),
+            Glided::Moving
+        )
+    {
+        return Ok(false);
+    }
+    if shows {
+        script.scrolling = None;
+        return Ok(true);
+    }
+    let scrolled = aim.scrolled(list);
+    let Some(scrolling) = script.scrolling.as_mut() else {
+        return Ok(true);
+    };
+    if scrolling
+        .before
+        .is_some_and(|before| before.to_bits() == scrolled.to_bits())
+    {
+        return Err("the target can't be scrolled into view".to_owned());
+    }
+    scrolling.before = Some(scrolled);
+    let pixels = crate::windows::pointer::LINE_PIXELS;
+    script.notch = Some((list, if up { pixels } else { -pixels }));
+    Ok(false)
+}
+
+/// Rests the script pointer's hover on `over`, as a `hover` step rests it,
+/// and clears the hover of the control it leaves.
+fn point(
+    script: &mut Script,
+    over: Option<Entity>,
+    commands: &mut Commands,
+    buttons: &mut Buttons,
+) {
+    if script.pointed != over {
+        if let Some(left) = script.pointed
+            && let Ok((_, mut interaction, ..)) = buttons.get_mut(left)
+            && *interaction == Interaction::Hovered
+        {
+            *interaction = Interaction::None;
+        }
+        if let Some(entered) = over {
+            commands
+                .entity(entered)
+                .remove::<super::tooltip::ScriptPressed>();
+        }
+        script.pointed = over;
+    }
+    if let Some(over) = over
+        && let Ok((_, mut interaction, ..)) = buttons.get_mut(over)
+    {
+        interaction.set_if_neq(Interaction::Hovered);
+    }
+}
+
+/// A click's aim this frame: none while the control the click names is
+/// scrolled into view (see [`scroll_to`]) and the script pointer glides to
+/// it, then that control, once the pointer has ended over it; or why the
+/// script stops: the control is out of reach as [`reach`] says, cannot be
+/// scrolled into view, or another control covers it where the pointer ends.
+fn aim_click(
+    script: &mut Script,
+    (target, now): (ClickTarget, Duration),
+    aim: (&mut pointer::Aim, &mut Commands),
+    (buttons, layout, needs): (&mut Buttons, &Layout, &Query<&crate::outbox::Needs>),
+    world: &eq_client_core::world::ClientWorld,
+) -> Result<Option<Entity>, String> {
+    let heading = if let Some(glide) = script.glide.filter(|_| script.scrolling.is_none()) {
+        glide.target
+    } else {
+        let entity = reach(target, buttons, layout, needs, world)?;
+        if !scroll_to(script, (entity, now), (&mut *aim.0, &mut *aim.1), buttons)? {
+            return Ok(None);
+        }
+        entity
+    };
+    let Glided::Over(over) = glide(script, (heading, now), aim, buttons) else {
+        return Ok(None);
+    };
+    // The click lands as it did without a pointer to glide, on the control
+    // found as it lands, only if the pointer is over it.
+    let entity = reach(target, buttons, layout, needs, world)?;
+    if over == Some(entity) {
+        Ok(Some(entity))
+    } else {
+        Err("the click target is covered".to_owned())
+    }
+}
+
 /// Marks a found control pressed, a slider where the setting is to go; the
-/// focus system clears it next frame.
-fn press(entity: Entity, target: ClickTarget, buttons: &mut Buttons, pointers: &mut Pointers) {
+/// focus system clears it next frame. No pointer rests on it, so it shows no
+/// tooltip.
+fn press(
+    commands: &mut Commands,
+    entity: Entity,
+    target: ClickTarget,
+    buttons: &mut Buttons,
+    pointers: &mut Pointers,
+) {
+    commands
+        .entity(entity)
+        .insert(super::tooltip::ScriptPressed);
     let Ok((_, mut interaction, .., (slider, ..))) = buttons.get_mut(entity) else {
         return;
     };
@@ -942,18 +1869,437 @@ fn displayed(entity: Entity, layout: &Layout) -> bool {
     true
 }
 
-/// The player's feet at its accepted position and the target's position, in
-/// render coordinates.
-fn walk_ends(online: &super::online::OnlineState, body: super::PlayerBody) -> Option<(Vec3, Vec3)> {
-    let player = online.world().player()?;
-    let spawn = online
+/// Logs the doors nearest where a partial route ends, the likeliest reason it
+/// ends short.
+fn log_partial_route(online: &super::online::OnlineState, end: Vec3) {
+    // Renderer (EQ y, EQ z, -EQ x) back to EQ x, y, z.
+    let end = Vec3::new(-end.z, end.x, end.y);
+    let mut doors: Vec<_> = online
         .world()
-        .target()
-        .selected
-        .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state))?;
+        .doors()
+        .entries()
+        .values()
+        .map(|door| {
+            let at = Vec3::new(door.position.x, door.position.y, door.position.z);
+            (at.distance(end), door)
+        })
+        .collect();
+    doors.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (distance, door) in doors.into_iter().take(5) {
+        info!(
+            id = door.id,
+            model = %door.model,
+            open_type = door.open_type,
+            incline = door.incline,
+            action = ?door.action,
+            x = door.position.x,
+            y = door.position.y,
+            z = door.position.z,
+            distance,
+            "Script route doors"
+        );
+    }
+}
+
+/// How long a clicked door may take to start opening before the walk treats
+/// it as locked: longer than any server's answer to a click.
+const DOOR_WAIT: Duration = Duration::from_secs(3);
+/// How long an opened door may take to swing open as drawn, and may still
+/// block the way after the walk has searched around it once: the swing, a
+/// quarter turn at half a turn a second, and a second to spare.
+const DOOR_SWING: Duration = Duration::from_millis(1500);
+/// Clicks one door may take in one walk: the first, and one more if it shut
+/// again before the walker got through.
+const DOOR_CLICKS: u8 = 2;
+
+/// How often a walk's follower trace logs where it heads, at debug level.
+const TRACE_EVERY: Duration = Duration::from_secs(1);
+
+/// Where a walk last headed: the waypoint it steered toward and that
+/// waypoint's index in the last search's waypoints, how many were left, and
+/// the route distance still to cover.
+#[derive(Clone, Copy, Debug)]
+struct Following {
+    toward: Vec3,
+    index: usize,
+    ahead: usize,
+    left: f32,
+    /// When the follower trace last logged.
+    traced: Option<Duration>,
+}
+
+/// A renderer point as EQ x, y, z, as the server and the client's own
+/// reports give positions.
+fn eq_point(point: Vec3) -> [f32; 3] {
+    let at = eq_client_core::world_position(point.to_array(), 0.0);
+    [at.x, at.y, at.z]
+}
+
+/// The line a walk logs when following stops shortening its route: where it
+/// stands, where it last headed, and what the movement samples of the last
+/// second asked and moved, so one line tells a blocked walker (asked, not
+/// moved) from one going round in place (moved, not net) or one not asked to
+/// move at all.
+fn log_stall(
+    again: bool,
+    (feet, height): (Vec3, f32),
+    following: Option<Following>,
+    controls: &super::motion::Controls,
+    world: &eq_client_core::movement::CollisionWorld,
+) {
+    let refused = controls.refused.as_deref();
+    let now = std::time::Instant::now();
+    let motion = controls.recent.last_second(now);
+    let stance = Stance::at(world, controls, (feet, height), now);
+    let feet = eq_point(feet);
+    let toward = following.map(|following| eq_point(following.toward));
+    let index = following.map(|following| following.index);
+    let ahead = following.map(|following| following.ahead);
+    let left = following.map(|following| following.left);
+    let (samples, asked, moved, net) = (motion.samples, motion.asked, motion.moved, motion.net);
+    if again {
+        info!(
+            ?refused,
+            ?feet,
+            ?toward,
+            ?index,
+            ?ahead,
+            ?left,
+            samples,
+            asked,
+            moved,
+            net,
+            ?stance,
+            "Script walk stalled; searching again from here"
+        );
+    } else {
+        info!(
+            ?refused,
+            ?feet,
+            ?toward,
+            ?index,
+            ?ahead,
+            ?left,
+            samples,
+            asked,
+            moved,
+            net,
+            ?stance,
+            "Script walk stalled after searching again"
+        );
+    }
+}
+
+/// How the player stands as the movement controller sees it, for the stall
+/// lines: whether it falls and how far it has, the floor under it, the
+/// zone's liquids there, and how long since a sample went out and since the
+/// session answered one.
+#[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "the fields are read through Debug, in the stall lines"
+)]
+struct Stance {
+    /// Upward velocity while the session simulates falls; None when it
+    /// doesn't.
+    velocity: Option<f32>,
+    /// How far the feet have come down from the highest they were since
+    /// they left the ground; None while they stand on it.
+    fallen: Option<f32>,
+    /// The floor the next step stands the feet on, in EQ z; None means it
+    /// falls.
+    support: Option<f32>,
+    /// Where the feet come to rest below them, in EQ x, y, z.
+    rest: Option<[f32; 3]>,
+    /// Whether they are in deep water or lava, and whether coming to rest
+    /// stays clear of both.
+    submerged: bool,
+    dry: bool,
+    /// Whether a sample is out awaiting its answer, and why the latest
+    /// frame sent none.
+    waiting: bool,
+    held: Option<super::motion::Held>,
+    /// Seconds since the latest sample went out, since the session last
+    /// answered one, and since the last sample the controls count as
+    /// accepted (an answer, or a prediction paused).
+    since_sent: Option<f32>,
+    since_answer: Option<f32>,
+    since_accepted: f32,
+}
+
+impl Stance {
+    fn at(
+        world: &eq_client_core::movement::CollisionWorld,
+        controls: &super::motion::Controls,
+        (feet, height): (Vec3, f32),
+        now: std::time::Instant,
+    ) -> Self {
+        let since = |at: std::time::Instant| now.saturating_duration_since(at).as_secs_f32();
+        let view = world.guard_view(feet, height);
+        let airborne = controls.airborne.as_ref();
+        Self {
+            velocity: airborne.map(eq_client_core::movement::AirborneController::velocity),
+            fallen: airborne
+                .and_then(eq_client_core::movement::AirborneController::peak)
+                .map(|peak| peak - feet.y),
+            support: world
+                .support(feet)
+                .map(|floor| eq_point(Vec3::new(feet.x, floor, feet.z))[2]),
+            rest: view.rest.map(eq_point),
+            submerged: view.submerged,
+            dry: view.dry,
+            waiting: controls.waiting(),
+            held: controls.held,
+            since_sent: controls.last_sent.map(since),
+            since_answer: controls.last_answer.map(since),
+            since_accepted: since(controls.last_accepted),
+        }
+    }
+}
+
+/// How long a following walk may see no movement sample sent before it
+/// says why.
+const QUIET: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Since when a following walk has seen no sample sent, and whether it has
+/// said so for this pause.
+#[derive(Clone, Copy)]
+struct Quiet {
+    since: std::time::Instant,
+    said: bool,
+}
+
+/// Says once per pause, when a walk following its route has had no movement
+/// sample sent for over [`QUIET`], why the latest frame held one back.
+fn log_quiet(
+    quiet: &mut Option<Quiet>,
+    controls: &super::motion::Controls,
+    now: std::time::Instant,
+) {
+    let mark = quiet.get_or_insert(Quiet {
+        since: now,
+        said: false,
+    });
+    if let Some(sent) = controls.last_sent.filter(|sent| *sent > mark.since) {
+        *mark = Quiet {
+            since: sent,
+            said: false,
+        };
+    }
+    let quiet_for = now.saturating_duration_since(mark.since);
+    if !mark.said && quiet_for > QUIET {
+        mark.said = true;
+        info!(
+            reason = ?controls.held,
+            seconds = quiet_for.as_secs_f32(),
+            waiting = controls.waiting(),
+            speed = ?controls.speed,
+            "Script walk samples paused"
+        );
+    }
+}
+
+/// A walk waiting on a closed door across its next leg.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DoorWait {
+    id: u8,
+    /// When the walk first clicked it.
+    asked: Option<Duration>,
+    /// When the walk last clicked it, and when it was then seen opening.
+    clicked: Option<Duration>,
+    opened: Option<Duration>,
+    clicks: u8,
+    /// Whether the walk has searched again around the door as it stands open.
+    rerouted: bool,
+}
+
+/// What the walk does at a closed door this frame.
+#[derive(Debug, PartialEq)]
+enum DoorAction {
+    Click,
+    Wait,
+    /// The door stands open but its leaf is in the way: search again from
+    /// here, around it, as a player steps round a door that swung toward them.
+    Reroute,
+    /// The door is a wall for this route, for this reason.
+    Refuse(&'static str),
+}
+
+impl DoorWait {
+    const fn new(id: u8) -> Self {
+        Self {
+            id,
+            asked: None,
+            clicked: None,
+            opened: None,
+            clicks: 0,
+            rerouted: false,
+        }
+    }
+
+    /// `open` is the door's state as drawn (None when unknown); a click is sent
+    /// only to a door shown shut, since a click toggles it. `hinge` is how far
+    /// its leaf is drawn swung open, 0 to 1 (None when it is not drawn): the
+    /// walk searches round an open door only once the leaf it walks against
+    /// stands fully open, however slowly the frames swing it.
+    fn act(
+        &mut self,
+        open: Option<bool>,
+        hinge: Option<f32>,
+        within_use: bool,
+        now: Duration,
+    ) -> DoorAction {
+        match open {
+            None => DoorAction::Refuse("its state is unknown"),
+            Some(true) => {
+                let since = now.saturating_sub(*self.opened.get_or_insert(now));
+                let swung = hinge.is_none_or(|hinge| hinge >= 1.0);
+                if swung && !self.rerouted {
+                    self.rerouted = true;
+                    DoorAction::Reroute
+                } else if since < DOOR_SWING {
+                    DoorAction::Wait
+                } else if self.rerouted {
+                    DoorAction::Refuse("it opened but still blocks the way")
+                } else {
+                    DoorAction::Refuse("it never finished swinging")
+                }
+            }
+            Some(false) => match (self.clicked, self.opened) {
+                (Some(clicked), None) if now.saturating_sub(clicked) >= DOOR_WAIT => {
+                    DoorAction::Refuse("it did not open")
+                }
+                (Some(_), None) => DoorAction::Wait,
+                _ if self.clicks >= DOOR_CLICKS => DoorAction::Refuse("it shut again"),
+                _ if !within_use => DoorAction::Refuse("it is out of reach"),
+                _ => {
+                    self.clicks += 1;
+                    self.asked.get_or_insert(now);
+                    self.clicked = Some(now);
+                    self.opened = None;
+                    // Each opening gets its own step round the leaf.
+                    self.rerouted = false;
+                    DoorAction::Click
+                }
+            },
+        }
+    }
+}
+
+/// What planned a route, as the route trace line names it.
+struct Planned {
+    planner: &'static str,
+    legs: usize,
+    clear: usize,
+    drops: usize,
+    repaired: usize,
+    fallback: &'static str,
+}
+
+impl Planned {
+    fn of(planned: Option<&eq_client_core::movement::Planned>) -> Self {
+        use eq_client_core::movement::{Fallback, Planned as By};
+        match planned {
+            Some(By::Mesh {
+                legs,
+                clear,
+                drops,
+                repaired,
+                fallback,
+                ..
+            }) => Self {
+                planner: "mesh",
+                legs: *legs,
+                clear: *clear,
+                drops: *drops,
+                repaired: repaired.len(),
+                fallback: match fallback {
+                    None => "none",
+                    Some(Fallback::OffMesh) => "off_mesh",
+                    Some(Fallback::OtherIsland) => "other_island",
+                    Some(Fallback::NoCorridor) => "no_corridor",
+                    Some(Fallback::Leg { .. }) => "leg",
+                },
+            },
+            Some(By::Grid) | None => Self {
+                planner: "grid",
+                legs: 0,
+                clear: 0,
+                drops: 0,
+                repaired: 0,
+                fallback: "none",
+            },
+        }
+    }
+}
+
+/// The doors a walk may open on its way, open or shut now: a route consults
+/// them only where one blocks a step, and the walk clicks only a shut one.
+fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
+    online
+        .world()
+        .doors()
+        .entries()
+        .values()
+        .filter(|door| super::doors::swings(door))
+        .map(|door| door.id)
+        .collect()
+}
+
+/// The player's feet at its accepted position and the goal's position, in
+/// render coordinates: the world object `object` names, or else the target.
+fn walk_ends(
+    online: &super::online::OnlineState,
+    body: super::PlayerBody,
+    object: Option<u32>,
+) -> Option<(Vec3, Vec3)> {
+    let world = online.world();
+    let player = world.player()?;
+    let goal = match object {
+        Some(drop_id) => world.objects().entries().get(&drop_id)?.position,
+        None => {
+            world
+                .target()
+                .selected
+                .and_then(|id| world.spawn(id))?
+                .state
+                .position
+        }
+    };
     let origin = Vec3::from_array(eq_client_core::render_position(player.position));
-    let goal = Vec3::from_array(eq_client_core::render_position(spawn.position));
+    let goal = Vec3::from_array(eq_client_core::render_position(goal));
     Some((origin - Vec3::Y * body.feet_offset, goal))
+}
+
+/// The zone's nearest world container of a tradeskill kind to the player.
+fn nearest_station(online: &super::online::OnlineState, kind: u8) -> Option<u32> {
+    let world = online.world();
+    let player = world.player()?;
+    eq_client_core::ground::nearest_container(world.objects(), kind, player.position)
+        .map(|object| object.drop_id)
+}
+
+/// Whether a `walk object` step is done at a flat `distance` from its object:
+/// within `range` it is; short of it, the end of a partial route or running
+/// out of time stops the script, since a later step such as `press f` would
+/// act on nothing.
+fn object_walk_end(
+    distance: f32,
+    range: f32,
+    arrived: bool,
+    out_of_time: bool,
+) -> Result<bool, String> {
+    if distance <= range {
+        Ok(true)
+    } else if arrived {
+        Err(format!(
+            "walk object ended {distance:.1} from its object; no walkable path reaches it"
+        ))
+    } else if out_of_time {
+        Err("walk object ran out of time".to_owned())
+    } else {
+        Ok(false)
+    }
 }
 
 /// Points the camera from the player toward the target and returns the flat
@@ -968,22 +2314,688 @@ fn face(
         .target()
         .selected
         .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state))?;
+    face_toward(spawn.position, players, cameras)
+}
+
+/// [`face`] toward a world object instead of the target, or None without a
+/// player or once the object has left the zone.
+fn face_object(
+    drop_id: Option<u32>,
+    online: &super::online::OnlineState,
+    players: &Query<&Transform, With<super::Player>>,
+    cameras: &mut Query<&mut super::OrbitCamera>,
+) -> Option<f32> {
+    let object = online.world().objects().entries().get(&drop_id?)?;
+    face_toward(object.position, players, cameras)
+}
+
+/// Points the camera from the player toward a position and returns the flat
+/// distance between them, or None without a player.
+fn face_toward(
+    position: eq_client_core::WorldPosition,
+    players: &Query<&Transform, With<super::Player>>,
+    cameras: &mut Query<&mut super::OrbitCamera>,
+) -> Option<f32> {
     let transform = players.single().ok()?;
-    let to =
-        Vec3::from_array(eq_client_core::render_position(spawn.position)) - transform.translation;
+    let to = Vec3::from_array(eq_client_core::render_position(position)) - transform.translation;
     let flat = Vec2::new(to.x, to.z);
     if flat.length() > f32::EPSILON {
         for mut camera in cameras.iter_mut() {
-            // W walks along the camera's forward direction, opposite its orbit offset.
-            camera.yaw = flat.x.atan2(flat.y) + std::f32::consts::PI;
+            camera.yaw = super::behind(flat.x.atan2(flat.y));
         }
     }
     Some(flat.length())
 }
 
+/// Whether what a wait step waits for has arrived: the character list, or
+/// the player in a zone, the one named if any, with the loading screen
+/// lifted so the next step acts on the zone and not on the cover.
+fn arrived(step: &Step, online: &super::online::OnlineState, covered: bool) -> bool {
+    let world = online.world();
+    let in_zone = world.connected() && world.player().is_some() && !covered;
+    match step {
+        Step::WaitSelect => online.selection.is_some(),
+        Step::WaitZone(zone) => in_zone && world.zone() == *zone,
+        _ => in_zone,
+    }
+}
+
+/// Whether the spawn a `wait_dead` step waits on has fallen: an NPC's
+/// corpse now, which the servers leave under the dying NPC's own spawn ID,
+/// or gone from the zone. With nothing targeted as the step started, or
+/// once its time is up, the script stops for the reason given.
+fn fallen(
+    world: &eq_client_core::world::ClientWorld,
+    awaited: Option<u16>,
+    elapsed: Duration,
+    limit: Duration,
+) -> Result<bool, &'static str> {
+    let Some(awaited) = awaited else {
+        return Err("wait_dead needs a target");
+    };
+    if world
+        .spawn(awaited)
+        .is_none_or(|spawn| spawn.state.kind == eq_client_core::SpawnKind::NpcCorpse)
+    {
+        Ok(true)
+    } else if elapsed > limit {
+        Err("the target did not die in time")
+    } else {
+        Ok(false)
+    }
+}
+
+/// What a `chase` step does on one frame.
+#[derive(Debug, PartialEq)]
+enum Chase {
+    /// The target died or left the zone: the chase is over.
+    Caught,
+    /// The time ran out with the target still alive: the chase is over.
+    OutOfTime,
+    /// Keep after the target, facing where it is drawn now.
+    Aim(eq_client_core::WorldPosition),
+}
+
+/// One frame of a `chase` step. A chase ends only on the target's death,
+/// its leaving the zone, or the time limit; otherwise it aims where the
+/// target is drawn: its last report carried forward at the reported
+/// velocity from when that report was first seen.
+fn chase(
+    world: &eq_client_core::world::ClientWorld,
+    awaited: Option<u16>,
+    seen: &mut Option<(eq_client_core::WorldPosition, Duration)>,
+    elapsed: Duration,
+    limit: Duration,
+) -> Result<Chase, &'static str> {
+    let Some(id) = awaited else {
+        return Err("chase needs a target");
+    };
+    let spawn = match world.spawn(id) {
+        Some(spawn) if spawn.state.kind != eq_client_core::SpawnKind::NpcCorpse => &spawn.state,
+        _ => return Ok(Chase::Caught),
+    };
+    if elapsed >= limit {
+        return Ok(Chase::OutOfTime);
+    }
+    let since = match *seen {
+        Some((position, at)) if position == spawn.position => at,
+        _ => {
+            *seen = Some((spawn.position, elapsed));
+            elapsed
+        }
+    };
+    Ok(Chase::Aim(eq_client_core::entities::extrapolate(
+        spawn,
+        elapsed.saturating_sub(since),
+    )))
+}
+
+/// Whether a chase holds W: only while its target is beyond the distance.
+/// Within it the player stands, auto-attack doing the rest.
+fn runs(distance: Option<f32>, range: f32) -> bool {
+    distance.is_some_and(|distance| distance > range)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_create_step_waits_for_the_worlds_answer_and_fails_on_a_refusal() {
+        use eq_client_core::{
+            WorldEvent, WorldUpdate,
+            creation::CreationOutcome,
+            world::{ClientWorld, NoSpells},
+        };
+        let mut world = ClientWorld::default();
+        let answer = |world: &mut ClientWorld, name: &str, outcome| {
+            world.apply(
+                &WorldUpdate::Game(WorldEvent::CharacterCreation {
+                    name: name.into(),
+                    outcome,
+                }),
+                std::time::Instant::now(),
+                &NoSpells,
+            );
+        };
+        // No answer yet, then a refusal: the step fails, naming it.
+        assert_eq!(answered(&world, None, "Testcleric"), Ok(false));
+        answer(&mut world, "Testcleric", CreationOutcome::CreationRefused);
+        assert_eq!(
+            answered(&world, None, "Testcleric"),
+            Err("character creation refused: CreationRefused".into())
+        );
+        // A later step waits past the answer it saw sent, and past another
+        // name's, then finishes on its own character's creation.
+        let before = world.creation().map(|last| last.count);
+        assert_eq!(answered(&world, before, "Testcleric"), Ok(false));
+        answer(&mut world, "Othername", CreationOutcome::Created);
+        assert_eq!(answered(&world, before, "Testcleric"), Ok(false));
+        answer(&mut world, "Testcleric", CreationOutcome::Created);
+        assert_eq!(answered(&world, before, "Testcleric"), Ok(true));
+    }
+
+    #[test]
+    fn a_chase_aims_where_its_target_is_drawn_and_ends_only_on_death_leaving_or_time() {
+        use eq_client_core::{SpawnKind, WorldEvent, WorldPosition};
+        let at = Duration::from_millis;
+        let mut online = super::super::online::OnlineState::new(true);
+        super::super::online::testing::admit(
+            &mut online,
+            1,
+            super::super::online::testing::player(1),
+        );
+        let mut gnoll = super::super::online::testing::pet(9, 0);
+        gnoll.pet_owner = None;
+        gnoll.kind = SpawnKind::Npc;
+        gnoll.position = WorldPosition {
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+            heading: 0.0,
+        };
+        gnoll.velocity = [4.0, 0.0, 0.0];
+        super::super::online::testing::news(&mut online, [WorldEvent::Spawns(vec![gnoll.clone()])]);
+        let limit = at(90_000);
+        let mut seen = None;
+        let aim = |chase: Result<Chase, &'static str>| match chase {
+            Ok(Chase::Aim(aim)) => aim.x,
+            other => panic!("expected an aim, got {other:?}"),
+        };
+        // The aim carries the last report forward at its velocity.
+        let world = online.world();
+        assert!((aim(chase(world, Some(9), &mut seen, at(1_000), limit)) - 10.0).abs() < 1e-3);
+        assert!((aim(chase(world, Some(9), &mut seen, at(1_500), limit)) - 12.0).abs() < 1e-3);
+        // Beyond the distance the player runs; within it, it stands and the
+        // chase goes on, never ending merely on reaching the target.
+        assert!(runs(Some(12.0), 10.0));
+        assert!(!runs(Some(8.0), 10.0));
+        assert!(!runs(None, 10.0));
+        assert!(matches!(
+            chase(world, Some(9), &mut seen, at(2_000), limit),
+            Ok(Chase::Aim(_))
+        ));
+        // Out of time with the target alive ends the chase.
+        assert_eq!(
+            chase(world, Some(9), &mut seen, limit, limit),
+            Ok(Chase::OutOfTime)
+        );
+        // Its corpse, or its leaving the zone, ends it before the limit.
+        let mut corpse = gnoll.clone();
+        corpse.kind = SpawnKind::NpcCorpse;
+        super::super::online::testing::news(&mut online, [WorldEvent::Spawns(vec![corpse])]);
+        assert_eq!(
+            chase(online.world(), Some(9), &mut seen, at(3_000), limit),
+            Ok(Chase::Caught)
+        );
+        super::super::online::testing::news(&mut online, [WorldEvent::Despawn(9)]);
+        assert_eq!(
+            chase(online.world(), Some(9), &mut seen, at(3_000), limit),
+            Ok(Chase::Caught)
+        );
+        assert_eq!(
+            chase(online.world(), None, &mut seen, at(3_000), limit),
+            Err("chase needs a target")
+        );
+    }
+
+    #[test]
+    fn a_walk_clicks_a_shut_door_once_then_waits_for_it_to_swing_open() {
+        let at = Duration::from_secs;
+        let mut wait = DoorWait::new(4);
+        assert_eq!(
+            wait.act(Some(false), Some(0.0), true, at(10)),
+            DoorAction::Click
+        );
+        // No second click while the server's answer is on its way: a click toggles.
+        assert_eq!(
+            wait.act(Some(false), Some(0.0), true, at(11)),
+            DoorAction::Wait
+        );
+        // Opening: never clicked, only waited on until the swing ends.
+        assert_eq!(
+            wait.act(Some(true), Some(0.4), true, at(12)),
+            DoorAction::Wait
+        );
+        assert_eq!(wait.asked, Some(at(10)));
+    }
+
+    #[test]
+    fn a_door_that_does_not_open_or_still_blocks_is_given_up() {
+        let at = Duration::from_millis;
+        let mut locked = DoorWait::new(4);
+        assert_eq!(
+            locked.act(Some(false), Some(0.0), true, at(0)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            locked.act(Some(false), Some(0.0), true, at(2_999)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            locked.act(Some(false), Some(0.0), true, at(3_000)),
+            DoorAction::Refuse("it did not open")
+        );
+        let mut stuck = DoorWait::new(4);
+        stuck.act(Some(false), Some(0.0), true, at(0));
+        assert_eq!(
+            stuck.act(Some(true), Some(0.2), true, at(100)),
+            DoorAction::Wait
+        );
+        // Swung open but in the way: one search around it first.
+        assert_eq!(
+            stuck.act(Some(true), Some(1.0), true, at(600)),
+            DoorAction::Reroute
+        );
+        assert_eq!(
+            stuck.act(Some(true), Some(1.0), true, at(900)),
+            DoorAction::Wait
+        );
+        // Still across the way after that: the door is a wall.
+        assert_eq!(
+            stuck.act(Some(true), Some(1.0), true, at(1_600)),
+            DoorAction::Refuse("it opened but still blocks the way")
+        );
+        let mut slow = DoorWait::new(4);
+        slow.act(Some(false), Some(0.0), true, at(0));
+        slow.act(Some(true), Some(0.0), true, at(100));
+        assert_eq!(
+            slow.act(Some(true), Some(0.9), true, at(1_599)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            slow.act(Some(true), Some(0.9), true, at(1_600)),
+            DoorAction::Refuse("it never finished swinging")
+        );
+        assert_eq!(
+            DoorWait::new(4).act(Some(false), Some(0.0), false, at(0)),
+            DoorAction::Refuse("it is out of reach")
+        );
+        assert_eq!(
+            DoorWait::new(4).act(None, Some(0.0), true, at(0)),
+            DoorAction::Refuse("its state is unknown")
+        );
+    }
+
+    #[test]
+    fn a_door_that_shuts_again_is_clicked_once_more_then_given_up() {
+        let at = Duration::from_millis;
+        let mut wait = DoorWait::new(4);
+        assert_eq!(
+            wait.act(Some(false), Some(0.0), true, at(0)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(0.8), true, at(500)),
+            DoorAction::Wait
+        );
+        // Shut again before the walker got through.
+        assert_eq!(
+            wait.act(Some(false), Some(0.6), true, at(900)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(0.8), true, at(1_400)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            wait.act(Some(false), Some(0.6), true, at(1_800)),
+            DoorAction::Refuse("it shut again")
+        );
+    }
+
+    #[test]
+    fn a_door_that_shuts_again_gets_its_own_step_round_its_leaf_once_reopened() {
+        let at = Duration::from_millis;
+        let mut wait = DoorWait::new(4);
+        assert_eq!(
+            wait.act(Some(false), Some(0.0), true, at(0)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(0.8), true, at(500)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(1.0), true, at(1_100)),
+            DoorAction::Reroute
+        );
+        assert_eq!(
+            wait.act(Some(false), Some(1.0), true, at(1_300)),
+            DoorAction::Click
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(0.8), true, at(1_500)),
+            DoorAction::Wait
+        );
+        assert_eq!(
+            wait.act(Some(true), Some(1.0), true, at(2_100)),
+            DoorAction::Reroute
+        );
+    }
+
+    #[test]
+    fn a_door_drawn_open_slowly_is_searched_round_only_once_its_leaf_stands_open() {
+        // Slow frames: each draws at most a tenth of a second of swing, so a
+        // quarter turn at half a turn a second takes five of them, whatever
+        // time passes between them.
+        let frame = Duration::from_millis(250);
+        let mut wait = DoorWait::new(4);
+        assert_eq!(
+            wait.act(Some(false), Some(0.0), true, Duration::ZERO),
+            DoorAction::Click
+        );
+        let mut swing = 0.0;
+        let mut now = Duration::ZERO;
+        let mut rerouted_at = None;
+        // Within the swing's bound: past it, a leaf still across the way
+        // after the search round it makes the door a wall.
+        for _ in 0..6 {
+            now += frame;
+            swing = super::super::doors::advance_hinge(
+                swing,
+                super::super::doors::QUARTER_TURN,
+                frame.as_secs_f32(),
+            );
+            let hinge = swing / super::super::doors::QUARTER_TURN;
+            match wait.act(Some(true), Some(hinge), true, now) {
+                DoorAction::Reroute => {
+                    assert!(rerouted_at.is_none(), "one search round the leaf");
+                    assert_eq!(hinge, 1.0, "searched round a leaf still swinging");
+                    rerouted_at = Some(now);
+                }
+                DoorAction::Wait => (),
+                other => panic!("{other:?} at {now:?}"),
+            }
+        }
+        assert_eq!(rerouted_at, Some(frame * 5));
+    }
+
+    #[test]
+    fn an_object_walk_goes_on_only_within_its_range() {
+        // Within range it is done, whatever the route says.
+        assert_eq!(object_walk_end(12.0, 12.0, false, false), Ok(true));
+        assert_eq!(object_walk_end(3.0, 12.0, true, true), Ok(true));
+        // Short of it, it walks on until the route ends or time runs out,
+        // and either stops the script.
+        assert_eq!(object_walk_end(30.0, 12.0, false, false), Ok(false));
+        assert_eq!(
+            object_walk_end(18.34, 12.0, true, false),
+            Err("walk object ended 18.3 from its object; no walkable path reaches it".to_owned())
+        );
+        assert_eq!(
+            object_walk_end(30.0, 12.0, false, true),
+            Err("walk object ran out of time".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_zone_wait_ends_once_the_loading_screen_has_lifted() {
+        let mut online = crate::online::OnlineState::new(true);
+        let zone = Step::WaitZone("qeytoqrg".into());
+        assert!(!arrived(&zone, &online, false));
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        // The zone is admitted, but the cover is still up.
+        assert!(!arrived(&zone, &online, true));
+        assert!(!arrived(&Step::WaitOnline, &online, true));
+        assert!(arrived(&zone, &online, false));
+        assert!(arrived(&Step::WaitOnline, &online, false));
+        assert!(!arrived(&Step::WaitZone("qeynos2".into()), &online, false));
+    }
+
+    #[test]
+    fn done_is_a_window_body_button_that_closes_it() {
+        use super::super::skinned::{Closes, TitleBox};
+        use super::super::trade::Action;
+        use super::super::windows::WindowId;
+        let bank = Closes(WindowId::Bank);
+        let container = Closes(WindowId::WorldContainer);
+        assert!(done_button("bank", Some(&bank), None, None));
+        assert!(done_button("world-container", Some(&container), None, None));
+        // Another window's Done, or a button that does something else.
+        assert!(!done_button("bank", Some(&container), None, None));
+        assert!(!done_button("bank", None, Some(&Action::BuyChosen), None));
+        assert!(!done_button("bank", None, None, None));
+        // The loot and merchant windows' Done end the loot or the shopping.
+        assert!(done_button("loot", None, Some(&Action::EndLoot), None));
+        assert!(done_button("merchant", None, Some(&Action::EndShop), None));
+        assert!(!done_button("loot", None, Some(&Action::EndShop), None));
+        // The title bar's close box is `close_box`'s.
+        let close_box = TitleBox {
+            window: WindowId::Bank,
+            close: true,
+        };
+        assert!(!done_button("bank", Some(&bank), None, Some(&close_box)));
+        let close_box = TitleBox {
+            window: WindowId::Loot,
+            close: true,
+        };
+        assert!(!done_button(
+            "loot",
+            None,
+            Some(&Action::EndLoot),
+            Some(&close_box)
+        ));
+    }
+
+    /// Keys for [`scripted_keyboard`]'s system to press (true) or release.
+    #[derive(Resource, Default)]
+    struct Queued(Vec<(KeyCode, bool)>);
+
+    /// A chat app whose line is open, with a system pressing and releasing
+    /// the queued keys through the keyboard a script's steps press.
+    fn scripted_keyboard() -> App {
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<Queued>()
+            .init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::windows::pointer::Wheel>()
+            .add_message::<bevy::input::keyboard::KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(None))
+            .add_systems(
+                Update,
+                (
+                    |mut queued: ResMut<Queued>, mut keyboard: Keyboard| {
+                        for (key, down) in queued.0.drain(..) {
+                            if down {
+                                keyboard.press(key);
+                            } else {
+                                keyboard.release(key);
+                            }
+                        }
+                    },
+                    crate::chat::input,
+                )
+                    .chain(),
+            );
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        app
+    }
+
+    fn run_keys(app: &mut App, keys: &[(KeyCode, bool)]) {
+        app.world_mut().resource_mut::<Queued>().0 = keys.to_vec();
+        app.update();
+    }
+
+    #[test]
+    fn a_scripted_escape_closes_the_chat_line_as_a_real_one_does() {
+        let mut app = scripted_keyboard();
+        run_keys(&mut app, &[(KeyCode::Escape, true)]);
+        let typing = app.world().resource::<crate::keys::Typing>();
+        assert!(!typing.composing && typing.escape_consumed);
+    }
+
+    #[test]
+    fn scripted_keys_type_what_a_us_keyboard_types() {
+        let mut app = scripted_keyboard();
+        let draft = |app: &App| {
+            app.world()
+                .resource::<crate::chat::ChatState>()
+                .draft()
+                .to_owned()
+        };
+        // Shift makes the next letter upper case; a held key types once.
+        run_keys(
+            &mut app,
+            &[
+                (KeyCode::ShiftLeft, true),
+                (KeyCode::KeyH, true),
+                (KeyCode::KeyH, true),
+                (KeyCode::ShiftLeft, false),
+                (KeyCode::KeyH, false),
+                (KeyCode::KeyI, true),
+                (KeyCode::KeyI, false),
+                (KeyCode::Space, true),
+                (KeyCode::Digit2, true),
+                (KeyCode::Slash, true),
+            ],
+        );
+        assert_eq!(draft(&app), "Hi 2/");
+        // A Ctrl chord types nothing.
+        run_keys(
+            &mut app,
+            &[(KeyCode::ControlLeft, true), (KeyCode::KeyA, true)],
+        );
+        assert_eq!(draft(&app), "Hi 2/");
+        run_keys(
+            &mut app,
+            &[(KeyCode::ControlLeft, false), (KeyCode::KeyA, false)],
+        );
+        run_keys(&mut app, &[(KeyCode::Backspace, true)]);
+        assert_eq!(draft(&app), "Hi 2");
+    }
+
+    #[test]
+    fn a_skin_button_is_pressed_by_its_name_unless_it_is_greyed() {
+        use crate::outbox::Needs;
+        use crate::skinned::SkinId;
+        use crate::windows::WindowId;
+        #[derive(Resource, Default)]
+        struct Reached(Vec<Result<bool, String>>);
+        let mut app = App::new();
+        app.init_resource::<Reached>();
+        for (id, needs) in [("FakeDone", Needs::Nothing), ("FakeGrey", Needs::Missing)] {
+            app.world_mut().spawn((
+                Node::default(),
+                Button,
+                InheritedVisibility::VISIBLE,
+                SkinId {
+                    window: WindowId::Bank,
+                    id: id.into(),
+                },
+                needs,
+            ));
+        }
+        app.add_systems(
+            Update,
+            |buttons: Buttons,
+             layout: Layout,
+             needs: Query<&Needs>,
+             skins: Query<&SkinId>,
+             mut reached: ResMut<Reached>| {
+                let world = crate::online::OnlineState::new(true);
+                for target in [
+                    ClickTarget::Button("bank", "FakeDone"),
+                    ClickTarget::Button("bank", "FakeGrey"),
+                    ClickTarget::Button("bank", "FakeNone"),
+                    ClickTarget::Button("merchant", "FakeDone"),
+                ] {
+                    let found = reach(target, &buttons, &layout, &needs, world.world());
+                    reached.0.push(
+                        found.map(|entity| {
+                            skins.get(entity).is_ok_and(|skin| skin.id == "FakeDone")
+                        }),
+                    );
+                }
+            },
+        );
+        app.update();
+        let reached = &app.world().resource::<Reached>().0;
+        assert_eq!(reached[0], Ok(true));
+        assert_eq!(
+            reached[1],
+            Err(format!(
+                "that button is greyed out: {}",
+                crate::outbox::MISSING
+            ))
+        );
+        // No such button, or none in that window.
+        assert_eq!(reached[2], Err("click target is not visible".into()));
+        assert_eq!(reached[3], Err("click target is not visible".into()));
+    }
+
+    /// A zone with the player (7) and three gnolls (9 to 11) in it, and a
+    /// gnoll's death.
+    fn gnolls() -> (
+        crate::online::OnlineState,
+        impl Fn(u32) -> eq_client_core::WorldEvent,
+    ) {
+        use crate::online::testing;
+        let mut online = crate::online::OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        for spawn_id in 9..=11 {
+            let mut gnoll = testing::pet(spawn_id, 7);
+            gnoll.pet_owner = None;
+            testing::spawn_entry(&mut online, spawn_id, gnoll);
+        }
+        let death = |spawn_id| {
+            eq_client_core::WorldEvent::Death(eq_client_core::Death {
+                spawn_id,
+                killer_id: 7,
+                corpse_id: spawn_id,
+                bind_zone_id: 0,
+                corpse_name: None,
+            })
+        };
+        (online, death)
+    }
+
+    #[test]
+    fn a_death_wait_ends_once_its_target_is_a_corpse_or_gone() {
+        use crate::online::testing;
+        let (mut online, death) = gnolls();
+        let (soon, limit) = (Duration::from_secs(1), Duration::from_secs(90));
+        assert_eq!(fallen(online.world(), Some(9), soon, limit), Ok(false));
+        // Another spawn's death leaves it waiting.
+        testing::news(&mut online, [death(10)]);
+        assert_eq!(fallen(online.world(), Some(9), soon, limit), Ok(false));
+        // The target's own does not: its corpse keeps its spawn ID.
+        testing::news(&mut online, [death(9)]);
+        assert_eq!(fallen(online.world(), Some(9), soon, limit), Ok(true));
+        // A target that leaves the zone ends it too.
+        assert_eq!(fallen(online.world(), Some(11), soon, limit), Ok(false));
+        testing::news(&mut online, [eq_client_core::WorldEvent::Despawn(11)]);
+        assert_eq!(fallen(online.world(), Some(11), soon, limit), Ok(true));
+    }
+
+    #[test]
+    fn a_death_wait_stops_without_a_target_or_once_its_time_is_up() {
+        let (online, _) = gnolls();
+        let limit = Duration::from_secs(90);
+        // Nothing targeted as it started: it stops at once.
+        assert_eq!(
+            fallen(online.world(), None, Duration::ZERO, limit),
+            Err("wait_dead needs a target")
+        );
+        // Still fighting at the limit, it waits; past it, it stops.
+        assert_eq!(fallen(online.world(), Some(9), limit, limit), Ok(false));
+        assert_eq!(
+            fallen(
+                online.world(),
+                Some(9),
+                limit + Duration::from_millis(1),
+                limit
+            ),
+            Err("the target did not die in time")
+        );
+    }
 
     #[test]
     fn chat_steps_speak_only_on_a_local_server() {
@@ -1028,15 +3040,417 @@ mod tests {
                 .id()
         };
         let closed = button(&mut world, Display::None);
-        let mut state = SystemState::<(Buttons, Layout, Pointers)>::new(&mut world);
-        let (buttons, layout, _) = state.get_mut(&mut world).unwrap();
+        let mut state = SystemState::<(Commands, Buttons, Layout, Pointers)>::new(&mut world);
+        let (_, buttons, layout, _) = state.get_mut(&mut world).unwrap();
         assert_eq!(find(ClickTarget::Give, &buttons, &layout), None);
         let open = button(&mut world, Display::Flex);
-        let (mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
+        let (mut commands, mut buttons, layout, mut pointers) = state.get_mut(&mut world).unwrap();
         assert_eq!(find(ClickTarget::Give, &buttons, &layout), Some(open));
-        press(open, ClickTarget::Give, &mut buttons, &mut pointers);
+        press(
+            &mut commands,
+            open,
+            ClickTarget::Give,
+            &mut buttons,
+            &mut pointers,
+        );
+        state.apply(&mut world);
         assert_eq!(world.get::<Interaction>(open), Some(&Interaction::Pressed));
+        assert!(
+            world
+                .get::<super::super::tooltip::ScriptPressed>(open)
+                .is_some()
+        );
         assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
+    }
+
+    /// An offline app driving `steps`, with the real pointer outside its
+    /// window and the script pointer's arrow, on a clock the test sets.
+    fn pointing(steps: Vec<Step>) -> App {
+        let mut app = crate::testing::app();
+        app.insert_resource(Time::<Real>::new(std::time::Instant::now()))
+            .init_resource::<crate::windows::Moves>()
+            .add_message::<bevy::input::keyboard::KeyboardInput>()
+            .add_message::<bevy::window::WindowFocused>()
+            .add_message::<AppExit>()
+            .insert_resource(Script::new(steps).offline_preview(true))
+            .add_systems(Startup, pointer::spawn)
+            .add_systems(Update, (drive, pointer::draw).chain());
+        app
+    }
+
+    /// Runs a frame `ms` into the run.
+    fn frame_at(app: &mut App, ms: u64) {
+        let mut time = app.world_mut().resource_mut::<Time<Real>>();
+        let startup = time.startup();
+        time.update_with_instant(startup + Duration::from_millis(ms));
+        app.update();
+    }
+
+    /// A node laid out square around `middle`, `side` across and `stack`
+    /// high in the stack.
+    fn laid_out(middle: Vec2, side: f32, stack: u32) -> impl Bundle {
+        (
+            InheritedVisibility::VISIBLE,
+            ComputedNode {
+                size: Vec2::splat(side),
+                ..default()
+            },
+            UiGlobalTransform::from_xy(middle.x, middle.y),
+            bevy::ui::ComputedStackIndex(stack),
+        )
+    }
+
+    /// The give button, at the window's left, and the attack button, between
+    /// it and the window's middle, where the script pointer starts.
+    fn give_and_attack(app: &mut App) -> (Entity, Entity) {
+        let give = app
+            .world_mut()
+            .spawn((
+                Button,
+                super::super::give::GiveButton,
+                laid_out(Vec2::new(240.0, 360.0), 40.0, 1),
+            ))
+            .id();
+        let attack = app
+            .world_mut()
+            .spawn((
+                Button,
+                super::super::skinned::AttackButton,
+                laid_out(Vec2::new(440.0, 360.0), 60.0, 2),
+            ))
+            .id();
+        (give, attack)
+    }
+
+    fn interaction(app: &App, entity: Entity) -> Interaction {
+        *app.world().get::<Interaction>(entity).unwrap()
+    }
+
+    fn script_pointer(app: &App) -> Option<Vec2> {
+        app.world().get_resource::<ScriptPointer>().map(|at| at.0)
+    }
+
+    #[test]
+    fn a_click_glides_the_pointer_hovering_what_it_crosses_then_presses_its_control() {
+        let mut app = pointing(vec![Step::Click(ClickTarget::Give)]);
+        let (give, attack) = give_and_attack(&mut app);
+        let arrow = |app: &mut App| {
+            let world = app.world_mut();
+            let mut arrows = world.query_filtered::<&Node, With<pointer::PointerArt>>();
+            let node = arrows.single(world).unwrap();
+            (node.display, node.left, node.top)
+        };
+        // The step starts; the glide begins on the next frame, from the
+        // window's middle.
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 0);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 360.0)));
+        // Halfway through its time the pointer is halfway there, over the
+        // attack button, which it hovers; nothing is pressed yet.
+        frame_at(&mut app, 125);
+        let halfway = script_pointer(&app).unwrap();
+        assert!(
+            halfway.distance(Vec2::new(440.0, 360.0)) < 0.01,
+            "{halfway}"
+        );
+        assert_eq!(interaction(&app, attack), Interaction::Hovered);
+        assert_eq!(interaction(&app, give), Interaction::None);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        assert_eq!(arrow(&mut app).0, Display::Flex);
+        // Once it has left the attack button, that button's hover clears.
+        frame_at(&mut app, 200);
+        assert!(script_pointer(&app).unwrap().x < 410.0);
+        assert_eq!(interaction(&app, attack), Interaction::None);
+        // At the end of the glide the pointer rests on the give button's
+        // middle and the click presses it.
+        frame_at(&mut app, 250);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(240.0, 360.0)));
+        assert_eq!(interaction(&app, give), Interaction::Pressed);
+        assert_eq!(interaction(&app, attack), Interaction::None);
+        assert!(
+            app.world()
+                .get::<super::super::tooltip::ScriptPressed>(give)
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        assert_eq!(arrow(&mut app), (Display::Flex, px(240), px(360)));
+        // The click is let go, the script ends, and the arrow is hidden and
+        // the script pointer forgotten.
+        frame_at(&mut app, 266);
+        frame_at(&mut app, 282);
+        frame_at(&mut app, 298);
+        assert!(app.world().get_resource::<Script>().is_none());
+        assert_eq!(script_pointer(&app), None);
+        assert_eq!(arrow(&mut app).0, Display::None);
+    }
+
+    #[test]
+    fn a_hover_glides_there_hovering_what_it_crosses_and_rests_on_its_control() {
+        let mut app = pointing(vec![
+            Step::Hover(ClickTarget::Give),
+            Step::Wait(Duration::from_secs(1)),
+        ]);
+        let (give, attack) = give_and_attack(&mut app);
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 125);
+        assert_eq!(interaction(&app, attack), Interaction::Hovered);
+        assert_eq!(interaction(&app, give), Interaction::None);
+        frame_at(&mut app, 250);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(240.0, 360.0)));
+        assert_eq!(interaction(&app, attack), Interaction::None);
+        assert_eq!(interaction(&app, give), Interaction::Hovered);
+        // The hover stays on it as a hover step's does.
+        frame_at(&mut app, 400);
+        assert_eq!(app.world().resource::<Script>().hovering, Some(give));
+        assert_eq!(interaction(&app, give), Interaction::Hovered);
+    }
+
+    #[test]
+    fn a_click_stops_on_a_covered_target_but_not_under_its_own_tooltip() {
+        // The tooltip its glide raises lies over the control and is ignored,
+        // even were it to block the pointer.
+        let mut app = pointing(vec![Step::Click(ClickTarget::Give)]);
+        let (give, _) = give_and_attack(&mut app);
+        app.world_mut().spawn((
+            Node::default(),
+            super::super::tooltip::TooltipBox,
+            bevy::ui::FocusPolicy::Block,
+            laid_out(Vec2::new(240.0, 360.0), 200.0, 9),
+        ));
+        for ms in [0, 0, 125, 250] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, give), Interaction::Pressed);
+        // A window over the control takes the pointer: the script stops
+        // rather than press what it cannot reach.
+        let mut app = pointing(vec![
+            Step::Click(ClickTarget::Give),
+            Step::Wait(Duration::from_secs(1)),
+        ]);
+        let (give, _) = give_and_attack(&mut app);
+        app.world_mut().spawn((
+            Node::default(),
+            bevy::ui::FocusPolicy::Block,
+            laid_out(Vec2::new(250.0, 360.0), 40.0, 5),
+        ));
+        for ms in [0, 0, 125, 250] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, give), Interaction::None);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        let script = app.world().resource::<Script>();
+        assert!(script.current.is_none() && script.steps.is_empty());
+    }
+
+    #[test]
+    fn a_hover_stops_on_a_covered_target_rather_than_rest_where_it_does_not_point() {
+        let mut app = pointing(vec![
+            Step::Hover(ClickTarget::Give),
+            Step::Wait(Duration::from_secs(1)),
+        ]);
+        let (give, _) = give_and_attack(&mut app);
+        // A window over the control takes the pointer as the glide ends.
+        app.world_mut().spawn((
+            Node::default(),
+            bevy::ui::FocusPolicy::Block,
+            laid_out(Vec2::new(250.0, 360.0), 40.0, 5),
+        ));
+        for ms in [0, 0, 125, 250] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, give), Interaction::None);
+        let script = app.world().resource::<Script>();
+        assert_eq!(script.hovering, None);
+        assert!(script.current.is_none() && script.steps.is_empty());
+    }
+
+    /// Where a row of [`merchant_list`] lies with its list unscrolled.
+    #[derive(Component)]
+    struct Unscrolled(Vec2);
+
+    /// A merchant's list of `rows` wares, 18 rows of 20 pixels showing, and
+    /// as much content to scroll as `content` rows fill, in an app driving
+    /// `steps` that scrolls it as the wheel does and lays out its rows
+    /// where its scroll puts them.
+    fn merchant_list(steps: Vec<Step>, rows: u32, content: u32) -> (App, Entity, Vec<Entity>) {
+        /// Lays the rows out where the list's scroll puts them, as the UI's
+        /// layout does after the lists have taken the wheel.
+        #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+        fn lay_out(
+            lists: Query<&ScrollPosition, With<crate::trade::MerchantRows>>,
+            mut rows: Query<(&Unscrolled, &mut UiGlobalTransform)>,
+        ) {
+            let scrolled = lists.single().map_or(0.0, |position| position.y);
+            for (unscrolled, mut transform) in &mut rows {
+                *transform = UiGlobalTransform::from_xy(unscrolled.0.x, unscrolled.0.y - scrolled);
+            }
+        }
+        let mut app = pointing(steps);
+        app.add_message::<bevy::input::mouse::MouseWheel>()
+            .add_systems(
+                Update,
+                (
+                    crate::windows::pointer::wheel,
+                    pointer::turn,
+                    super::super::skinned::scroll_lists,
+                    lay_out,
+                )
+                    .chain()
+                    .after(drive),
+            );
+        // The list spans 540 to 740 across and 120 to 480 down.
+        #[allow(clippy::cast_precision_loss, reason = "a handful of rows")]
+        let list = app
+            .world_mut()
+            .spawn((
+                crate::trade::MerchantRows::new(Vec::new()),
+                crate::windows::pointer::TakesWheel,
+                ScrollPosition::default(),
+                Node {
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                InheritedVisibility::VISIBLE,
+                ComputedNode {
+                    size: Vec2::new(200.0, 360.0),
+                    content_size: Vec2::new(200.0, 20.0 * content as f32),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(640.0, 300.0),
+                bevy::ui::ComputedStackIndex(1),
+            ))
+            .id();
+        #[allow(clippy::cast_precision_loss, reason = "a handful of rows")]
+        let rows = (0..rows)
+            .map(|slot| {
+                let middle = Vec2::new(640.0, 130.0 + 20.0 * slot as f32);
+                app.world_mut()
+                    .spawn((
+                        Button,
+                        crate::trade::Action::Choose(slot),
+                        Node::default(),
+                        Unscrolled(middle),
+                        InheritedVisibility::VISIBLE,
+                        ComputedNode {
+                            size: Vec2::new(200.0, 20.0),
+                            ..default()
+                        },
+                        UiGlobalTransform::from_xy(middle.x, middle.y),
+                        bevy::ui::ComputedStackIndex(2),
+                        ChildOf(list),
+                    ))
+                    .id()
+            })
+            .collect();
+        (app, list, rows)
+    }
+
+    fn scrolled(app: &App, list: Entity) -> f32 {
+        app.world().get::<ScrollPosition>(list).unwrap().y
+    }
+
+    fn stopped(app: &App) -> bool {
+        let script = app.world().resource::<Script>();
+        script.current.is_none() && script.steps.is_empty()
+    }
+
+    #[test]
+    fn a_click_on_a_row_scrolled_out_of_view_turns_the_wheel_until_it_shows() {
+        let (mut app, list, rows) = merchant_list(
+            vec![
+                Step::Click(ClickTarget::Trade(TradeClick::Choose(28))),
+                Step::Wait(Duration::from_secs(1)),
+            ],
+            30,
+            30,
+        );
+        // The pointer glides first to the list's bottom edge, under the row.
+        for ms in [0, 0, 125] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(scrolled(&app, list), 0.0);
+        frame_at(&mut app, 250);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 476.0)));
+        // Then the wheel turns down a notch a frame until the row shows
+        // whole, the list scrolled as far as it goes.
+        let mut seen = vec![scrolled(&app, list)];
+        let mut ms = 250;
+        while interaction(&app, rows[28]) != Interaction::Pressed && ms < 2000 {
+            ms += 16;
+            frame_at(&mut app, ms);
+            seen.push(scrolled(&app, list));
+        }
+        assert_eq!(
+            interaction(&app, rows[28]),
+            Interaction::Pressed,
+            "{seen:?}"
+        );
+        let notches: Vec<_> = seen.iter().copied().filter(|y| *y > 0.0).collect();
+        assert_eq!(notches.first(), Some(&24.0));
+        assert!(notches.windows(2).all(|pair| pair[1] - pair[0] <= 24.0));
+        assert_eq!(scrolled(&app, list), 240.0);
+        // The row is clicked where it now shows, wholly inside the list.
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 450.0)));
+        assert!(
+            app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        frame_at(&mut app, ms + 16);
+        let script = app.world().resource::<Script>();
+        assert!(matches!(script.current, Some((Step::Wait(_), _))));
+        assert!(script.scrolling.is_none());
+    }
+
+    #[test]
+    fn a_click_on_a_row_in_view_scrolls_nothing() {
+        let (mut app, list, rows) = merchant_list(
+            vec![Step::Click(ClickTarget::Trade(TradeClick::Choose(3)))],
+            30,
+            30,
+        );
+        for ms in [0, 0, 125, 250] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, rows[3]), Interaction::Pressed);
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 190.0)));
+        assert_eq!(scrolled(&app, list), 0.0);
+    }
+
+    #[test]
+    fn a_row_the_list_cannot_scroll_to_stops_the_script() {
+        // The list's content ends with what shows: the wheel moves nothing.
+        let (mut app, list, rows) = merchant_list(
+            vec![
+                Step::Click(ClickTarget::Trade(TradeClick::Choose(28))),
+                Step::Wait(Duration::from_secs(1)),
+            ],
+            30,
+            18,
+        );
+        for ms in [0, 0, 125, 250, 266] {
+            frame_at(&mut app, ms);
+        }
+        assert!(stopped(&app));
+        assert_eq!(scrolled(&app, list), 0.0);
+        assert_eq!(interaction(&app, rows[28]), Interaction::None);
+        // It stopped at the list's edge, never gliding to the row.
+        assert_eq!(script_pointer(&app), Some(Vec2::new(640.0, 476.0)));
+        assert!(app.world().resource::<Script>().scrolling.is_none());
     }
 
     #[test]
@@ -1071,7 +3485,7 @@ mod tests {
     #[test]
     fn camera_heading_makes_w_walk_along_that_heading() {
         for heading in [0.0_f32, 100.0, 256.0, 400.0] {
-            let yaw = eq_client_core::render_heading(heading) + std::f32::consts::PI;
+            let yaw = super::super::behind(eq_client_core::render_heading(heading));
             let walk = super::super::camera_relative_direction(0.0, 1.0, yaw);
             let expected = eq_client_core::world_heading(walk.x.atan2(walk.z));
             let error = (expected - heading).rem_euclid(512.0);

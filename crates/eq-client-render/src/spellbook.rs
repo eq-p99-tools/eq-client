@@ -5,9 +5,11 @@ use crate::theme::{self, Size};
 use bevy::prelude::*;
 mod lines;
 mod scribe;
+mod seat;
 mod skinned;
 pub(super) use lines::say as say_book_lines;
 pub(super) use scribe::presentation as scribe_presentation;
+pub(super) use seat::seat;
 #[cfg(test)]
 pub(crate) use skinned::Entry;
 pub(crate) use skinned::{BookHand, BookPlace, ChosenMark, PLACES, TurnsPages};
@@ -150,6 +152,11 @@ impl SpellNames {
             .is_some_and(eq_client_assets::spells::Mechanics::instant)
     }
 
+    /// The particle effect the installed client draws for a spell.
+    pub(super) fn effect(&self, id: u32) -> Option<u32> {
+        self.spell(id)?.effect
+    }
+
     /// Unmodified installation mana cost.
     pub(super) fn mana(&self, id: u32) -> Option<u32> {
         self.spell(id)?.mana
@@ -157,6 +164,12 @@ impl SpellNames {
 
     pub(super) fn icon(&self, id: u32) -> Option<u32> {
         self.spell(id)?.icon
+    }
+
+    /// The motion a spell's caster plays while casting, as the servers'
+    /// animation number, from the installed spell data.
+    pub(super) fn casting_animation(&self, id: u32) -> Option<u16> {
+        self.spell(id)?.casting_animation
     }
 
     pub fn label(&self, id: u32) -> String {

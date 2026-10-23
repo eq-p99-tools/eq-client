@@ -138,6 +138,8 @@ pub(crate) fn player(
         endurance: Some(0),
         skills: None,
         practice_points: None,
+        languages: None,
+        disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: gems,
         size: 0.0,
@@ -167,15 +169,34 @@ fn admit(news: Res<News>, scene: Res<SceneInfo>, players: Query<&Transform, With
         zone: scene.zone_name.clone(),
         player: Box::new(player(origin, [None; 8])),
         far_clip: None,
+        spell_landing_flag: None,
     });
     news.tell(WorldUpdate::Connection(
         eq_client_core::world::Link::Connected,
     ));
 }
 
-/// Offers two synthetic characters to choose from.
+/// Offers two synthetic characters to choose from, each with a synthetic
+/// look, so the select screen shows them in their zones.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn characters(news: Res<News>) {
+    // Chain on the body (material 2) or plate (3), and a held model number.
+    let look = |race, gender, class, material, held| {
+        let mut materials = [material; 9];
+        materials[7] = held;
+        materials[8] = 0;
+        eq_client_core::CharacterLook {
+            race,
+            gender,
+            class,
+            appearance: eq_client_core::outfit::Appearance {
+                materials,
+                show_helm: true,
+                ..default()
+            },
+            ..default()
+        }
+    };
     news.game(WorldEvent::CharacterSelection {
         selection_id: 1,
         characters: vec![
@@ -184,12 +205,14 @@ fn characters(news: Res<News>) {
                 name: "Examplewarrior".into(),
                 level: Some(12),
                 zone_id: Some(22),
+                look: Some(look(1, 0, 1, 2, 1)),
             },
             CharacterChoice {
                 slot: 3,
                 name: "Examplecleric".into(),
                 level: Some(5),
                 zone_id: Some(9),
+                look: Some(look(8, 1, 2, 3, 0)),
             },
         ],
     });
@@ -258,7 +281,16 @@ fn trade(
     mut trade: ResMut<super::trade::TradeState>,
 ) {
     online.open_loot(1);
-    online.open_shop(2);
+    // The merchant opens as the server's answer opens it.
+    online.tell(
+        &eq_client_core::WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Opened {
+            merchant_id: 2,
+            accepted: true,
+            rate: 1.0,
+        })),
+        std::time::Instant::now(),
+        &eq_client_core::world::NoSpells,
+    );
     trade.preview("a preview rat", "Preview merchant");
     let items = items();
     news.game(WorldEvent::Coins(Coins {
@@ -270,11 +302,6 @@ fn trade(
     news.game(WorldEvent::Loot(LootUpdate::Opened {
         response: LootResponse::Normal,
         coins: Coins::default(),
-    }));
-    news.game(WorldEvent::Merchant(MerchantUpdate::Opened {
-        merchant_id: 2,
-        accepted: true,
-        rate: 1.0,
     }));
     for (item, place) in items.iter().take(3).zip(0u16..) {
         let mut item = item.clone();
@@ -413,6 +440,8 @@ fn synthetic(id: u16, race: u32, size: f32, position: WorldPosition) -> eq_clien
         gender: 0,
         position,
         velocity: [0.0; 3],
+        walk_speed: 0.0,
+        run_speed: 0.0,
         size,
         invisible: false,
         appearance: eq_client_core::outfit::Appearance::default(),

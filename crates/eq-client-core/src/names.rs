@@ -1,7 +1,7 @@
 //! Names over heads: what the tag over a character says, and how much of a
 //! player's name `/shownames` shows, in the official client's words.
 
-pub use eq_network_game::names::NameParts;
+pub use eq_network_game::names::{NameParts, TitleChange};
 
 use crate::{
     SpawnKind,

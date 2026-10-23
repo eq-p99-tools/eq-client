@@ -2,7 +2,7 @@
 
 use super::{ViewerSettings, character, online::OnlineState};
 use bevy::prelude::*;
-use eq_client_assets::characters::load_installed_character;
+use eq_client_assets::characters::{DonorArchives, load_installed_character};
 use eq_client_core::{SpawnKind, entities::nearby, races, render_position};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,7 +11,16 @@ pub(super) struct NearbyEntities {
     pub(super) rendered: BTreeMap<u16, Entity>,
     revisions: BTreeMap<u16, u64>,
     models: BTreeMap<&'static str, Option<character::PreparedCharacter>>,
+    loading: Option<(
+        &'static str,
+        super::background::Background<Option<eq_client_assets::characters::CharacterAsset>>,
+    )>,
+    /// The archives this zone's models borrow movements from, each parsed once.
+    donors: DonorArchives,
     elapsed: f32,
+    /// Whether the last pass drew every spawn it chose, so none is still to
+    /// pop in.
+    settled: bool,
 }
 
 impl NearbyEntities {
@@ -22,18 +31,50 @@ impl NearbyEntities {
             commands.entity(entity).despawn();
         }
         self.models.clear();
+        self.donors = DonorArchives::default();
+        self.loading = None;
         self.revisions.clear();
+        self.settled = false;
+    }
+
+    /// Whether every spawn near the player is drawn, as of the last pass.
+    pub(crate) const fn settled(&self) -> bool {
+        self.settled
+    }
+
+    /// Says whether the last pass drew every spawn it chose.
+    #[cfg(test)]
+    pub(crate) const fn set_settled(&mut self, settled: bool) {
+        self.settled = settled;
     }
 }
+
+/// How long a frame may spend drawing spawns while the loading screen hides
+/// them coming in. Out in the open, one is drawn every tenth of a second.
+/// Either way a model is read from disk in the background, so a frame only
+/// puts the ones already read in place.
+const HURRIED: std::time::Duration = std::time::Duration::from_millis(40);
 
 #[derive(Component)]
 pub(super) struct RemoteEntity {
     pub(super) id: u16,
-    /// The server report this entity moves on from, and when it was first seen.
-    report: Option<(eq_client_core::WorldPosition, [f32; 3], std::time::Instant)>,
+    /// When the server report this entity moves on from came, once placed.
+    seen: Option<std::time::Instant>,
+    /// Where its soles were drawn the frame before, since that report: their
+    /// height, and their spot across the ground.
+    soles: Option<(f32, Vec2)>,
+    /// How far under the reported position a drawn model's soles hang, in
+    /// world units; None for a marker, which stays where the server says.
+    feet: Option<f32>,
 }
 
-/// Maintains a bounded nearby set. At most one new model is instantiated per frame.
+/// The stores a drawn spawn's meshes and materials go in; its model's
+/// textures went in when the model was read.
+type Stores<'a> = (&'a mut Assets<Mesh>, &'a mut Assets<StandardMaterial>);
+
+/// Maintains a bounded nearby set. Out in the open, at most one new model is
+/// instantiated every tenth of a second; behind the loading screen, as many
+/// as fit in [`HURRIED`] a frame.
 #[allow(
     clippy::too_many_arguments,
     clippy::needless_pass_by_value,
@@ -42,24 +83,51 @@ pub(super) struct RemoteEntity {
 pub(super) fn reconcile(
     mut commands: Commands,
     state: Res<OnlineState>,
-    (settings, options): (Res<ViewerSettings>, Res<crate::options::OptionsState>),
+    (settings, options, loading): (
+        Res<ViewerSettings>,
+        Res<crate::options::OptionsState>,
+        Option<Res<crate::loading::Loading>>,
+    ),
     time: Res<Time>,
     mut nearby_state: ResMut<NearbyEntities>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     if !state.world().connected() {
+        nearby_state.loading = None;
+        return;
+    }
+    // The spawns come once the zone has loaded, or failed to: one whose
+    // files are missing still shows its spawns.
+    if state.scene_loading() {
         return;
     }
     let Some(player) = state.world().player() else {
         return;
     };
     let Some(directory) = &settings.0.eq_directory else {
+        // With no installation nothing is drawn, so nothing is still to come.
+        nearby_state.settled = true;
         return;
     };
+    let hurried = loading.is_some_and(|loading| loading.covered());
+    if let Some((code, job)) = &mut nearby_state.loading
+        && let Some(asset) = job.poll(state.world().session_id())
+    {
+        let code = *code;
+        let prepared = asset.and_then(|asset| {
+            character::prepare(
+                asset,
+                (&mut images, &mut meshes, &mut materials, &mut bindposes),
+            )
+        });
+        nearby_state.models.insert(code, prepared);
+        nearby_state.loading = None;
+    }
     nearby_state.elapsed += time.delta_secs();
-    if nearby_state.elapsed < 0.1 {
+    if !hurried && nearby_state.elapsed < 0.1 {
         return;
     }
     nearby_state.elapsed = 0.0;
@@ -102,33 +170,75 @@ pub(super) fn reconcile(
             commands.entity(entity).despawn();
         }
     }
-    let Some(id) = selected
+    let missing: Vec<_> = selected
         .into_iter()
-        .find(|id| !nearby_state.rendered.contains_key(id))
-    else {
-        return;
-    };
+        .filter(|id| !nearby_state.rendered.contains_key(id))
+        .collect();
+    let started = std::time::Instant::now();
+    let mut drawn = 0;
+    for &id in &missing {
+        if drawn > 0 && (!hurried || started.elapsed() >= HURRIED) {
+            break;
+        }
+        if draw(
+            &mut commands,
+            &state,
+            directory,
+            id,
+            &mut nearby_state,
+            (&mut meshes, &mut materials),
+        ) {
+            drawn += 1;
+        }
+    }
+    nearby_state.settled = drawn == missing.len();
+}
+
+/// Draws one spawn near the player: its race's model, or a marker. The
+/// first time the zone shows a race, its model is read from the
+/// installation in the background and the spawn waits for it; says whether
+/// the spawn was drawn.
+fn draw(
+    commands: &mut Commands,
+    state: &OnlineState,
+    directory: &std::path::Path,
+    id: u16,
+    nearby_state: &mut NearbyEntities,
+    (meshes, materials): Stores,
+) -> bool {
     let spawn = &state.world().spawns()[&id].state;
     let model = races::model(spawn.race, spawn.gender);
-    let asset = model.and_then(|code| {
-        nearby_state
-            .models
-            .entry(code)
-            .or_insert_with(|| {
-                // Cache failures too, avoiding repeated disk reads for unsupported models.
-                load_installed_character(directory, state.world().zone(), code)
+    if let Some(code) = model
+        && !nearby_state.models.contains_key(code)
+    {
+        if nearby_state.loading.is_none() {
+            let directory = directory.to_path_buf();
+            let zone = state.world().zone().to_owned();
+            let donors = nearby_state.donors.clone();
+            let mut job = super::background::Background::default();
+            job.start(state.world().session_id().unwrap_or_default(), move || {
+                // Read once per model and zone: a failure draws the marker
+                // for the rest of the zone, so it is said once.
+                load_installed_character(&directory, &zone, code, &donors)
+                    .inspect_err(|error| warn!("Model {code} unavailable in {zone}: {error}"))
                     .ok()
-                    .map(|asset| {
-                        character::prepare(asset, &mut images, &mut meshes, &mut materials)
-                    })
-            })
-            .clone()
-    });
+            });
+            nearby_state.loading = Some((code, job));
+        }
+        return false;
+    }
+    // Cache failures too, avoiding repeated reads for unsupported models.
+    let asset = model.and_then(|code| nearby_state.models.get(code).cloned().flatten());
     let corpse = matches!(spawn.kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse);
     let position = Vec3::from_array(render_position(spawn.position));
     let entity = commands
         .spawn((
-            RemoteEntity { id, report: None },
+            RemoteEntity {
+                id,
+                seen: None,
+                soles: None,
+                feet: None,
+            },
             Name::new(spawn.name.clone()),
             Transform::from_translation(position).with_rotation(Quat::from_rotation_y(
                 eq_client_core::render_heading(spawn.position.heading),
@@ -146,20 +256,31 @@ pub(super) fn reconcile(
             1.0
         };
         // The server reports the position EQ's size rule puts above the feet; the
-        // offset is in model units because the model is scaled below its root.
-        let feet = eq_client_core::z_offset(spawn.race, spawn.size) / scale;
-        character::spawn_prepared(&mut commands, entity, &asset, feet, &mut meshes);
-        commands.entity(entity).insert(
+        // model hangs by it in model units, as it is scaled below its root, and
+        // `interpolate` stands its root on the floor by it in world units.
+        let feet = eq_client_core::drawn_feet_offset(spawn.race, spawn.size);
+        character::spawn_prepared(commands, entity, &asset, feet / scale);
+        commands.entity(entity).insert((
+            RemoteEntity {
+                id,
+                seen: None,
+                soles: None,
+                feet: Some(feet),
+            },
             Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
                     spawn.position.heading,
                 )))
                 .with_scale(Vec3::splat(scale)),
-        );
+        ));
         if corpse {
             // Lying down, its name shows just over the body.
             commands.entity(entity).insert((
-                character::Corpse,
+                character::Corpse {
+                    fell: state.world().died_at(id),
+                    length: asset.lying().map(|length| length * scale),
+                    tilt: None,
+                },
                 super::names::Overhead(character::CORPSE_NAME_HEIGHT / scale),
             ));
         }
@@ -193,37 +314,70 @@ pub(super) fn reconcile(
     nearby_state
         .revisions
         .insert(id, state.world().spawns()[&id].revision);
+    true
 }
 
-/// Interpolates between received locations without extrapolating beyond the server.
+/// Interpolates between received locations without extrapolating beyond
+/// the server. A drawn corpse finds how it leans to lie along the floor
+/// under it as it is first drawn and when a report moves it
+/// ([`eq_client_core::corpse_tilt`]), for [`character::lie`] to lay it by.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn interpolate(
     state: Res<OnlineState>,
     time: Res<Time>,
-    mut entities: Query<(&mut RemoteEntity, &mut Transform)>,
+    collision: Option<Res<super::Collision>>,
+    mut entities: Query<(
+        &mut RemoteEntity,
+        &mut Transform,
+        Option<&mut character::Corpse>,
+    )>,
 ) {
+    let world = collision
+        .as_ref()
+        .and_then(|collision| collision.0.as_ref());
     let weight = 1.0 - (-time.delta_secs().min(0.1) / 0.1).exp();
     let now = std::time::Instant::now();
-    for (mut entity, mut transform) in &mut entities {
-        let Some(spawn) = state.world().spawn(entity.id).map(|spawn| &spawn.state) else {
+    for (mut entity, mut transform, corpse) in &mut entities {
+        let Some(spawn) = state.world().spawn(entity.id) else {
             continue;
         };
-        // A spawn moves on from its latest report at its reported velocity.
-        let since = match entity.report {
-            Some((position, velocity, seen))
-                if position == spawn.position
-                    && velocity.map(f32::to_bits) == spawn.velocity.map(f32::to_bits) =>
+        // A spawn moves on from its latest report at its reported velocity,
+        // from when the report came, however late it is drawn.
+        let first = entity.seen.is_none();
+        let fresh = entity.seen != Some(spawn.reported);
+        if fresh {
+            entity.seen = Some(spawn.reported);
+            entity.soles = None;
+        }
+        let mut target = Vec3::from_array(render_position(spawn.carried(now)));
+        let spawn = &spawn.state;
+        // A drawn model stands on the floor under it, whichever rule put its
+        // z, and keeps to the floor as it is carried on.
+        if let (Some(feet), Some(world)) = (entity.feet, world) {
+            let soles = target - Vec3::Y * feet;
+            let height =
+                eq_client_core::carried_soles(world, entity.soles, soles, spawn.race, spawn.size);
+            entity.soles = Some((height, Vec2::new(soles.x, soles.z)));
+            target.y += height - soles.y;
+            if let (true, Some(mut corpse)) = (fresh, corpse)
+                && let Some(length) = corpse.length
             {
-                seen
+                corpse.tilt = Some(eq_client_core::corpse_tilt(
+                    world,
+                    Vec3::new(soles.x, height, soles.z),
+                    eq_client_core::render_heading(spawn.position.heading),
+                    length,
+                    spawn.race,
+                    spawn.size,
+                ));
             }
-            _ => {
-                entity.report = Some((spawn.position, spawn.velocity, now));
-                now
-            }
-        };
-        let position = eq_client_core::entities::extrapolate(spawn, now.duration_since(since));
-        let target = Vec3::from_array(render_position(position));
-        if transform.translation.distance_squared(target) > 100.0 * 100.0 {
+        }
+        if first {
+            report_drawn(entity.id, spawn);
+        } else if fresh {
+            report_snap(entity.id, spawn, transform.translation, target);
+        }
+        if first || transform.translation.distance_squared(target) > 100.0 * 100.0 {
             transform.translation = target;
         } else {
             transform.translation = transform.translation.lerp(target, weight);
@@ -232,5 +386,223 @@ pub(super) fn interpolate(
             Quat::from_rotation_y(eq_client_core::render_heading(spawn.position.heading)),
             weight,
         );
+    }
+}
+
+/// A debug line for each new report of a drawn spawn: where the server put
+/// it, how it moves, and how far it was drawn from where the report puts it
+/// (the snap) as the report came. Off unless the log filter asks for this
+/// module at debug level; it changes nothing drawn.
+fn report_snap(id: u16, spawn: &eq_client_core::SpawnState, drawn: Vec3, target: Vec3) {
+    let p = spawn.position;
+    let [vx, vy, vz] = spawn.velocity;
+    debug!(
+        "spawn {id} report ({:.1}, {:.1}, {:.1}) heading {:.1} velocity ({vx:.1}, {vy:.1}, {vz:.1}) \
+         snap {:.2} (horizontal {:.2}, vertical {:+.2})",
+        p.x,
+        p.y,
+        p.z,
+        p.heading,
+        drawn.distance(target),
+        Vec2::new(target.x - drawn.x, target.z - drawn.z).length(),
+        target.y - drawn.y,
+    );
+}
+
+/// A debug line as a spawn is first drawn, a corpse after its death
+/// included: its kind, where it is reported and how it moves on from there.
+/// Off unless the log filter asks for this module at debug level.
+fn report_drawn(id: u16, spawn: &eq_client_core::SpawnState) {
+    let p = spawn.position;
+    let [vx, vy, vz] = spawn.velocity;
+    debug!(
+        "spawn {id} drawn as {:?} at report ({:.1}, {:.1}, {:.1}) velocity ({vx:.1}, {vy:.1}, {vz:.1})",
+        spawn.kind, p.x, p.y, p.z,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::online::testing;
+
+    #[test]
+    fn with_no_installation_no_spawn_is_still_to_come() {
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .init_resource::<crate::options::OptionsState>()
+            .init_resource::<Time>()
+            .init_resource::<NearbyEntities>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+            .add_systems(Update, reconcile);
+        app.update();
+        // So the loading screen lifts as soon as the zone has laid out.
+        assert!(app.world().resource::<NearbyEntities>().settled());
+    }
+
+    #[test]
+    fn a_corpse_on_a_slope_lies_along_it() {
+        use eq_client_core::WorldPosition;
+        // A floor rising 0.3 a unit toward the renderer's +X, the way
+        // heading 0 faces.
+        let grade = 0.3_f32;
+        let corner = |x: f32, z: f32| [x, grade * x, z];
+        let floor = eq_client_core::movement::CollisionWorld::new([
+            [
+                corner(-50.0, -50.0),
+                corner(50.0, -50.0),
+                corner(50.0, 50.0),
+            ],
+            [
+                corner(-50.0, -50.0),
+                corner(50.0, 50.0),
+                corner(-50.0, 50.0),
+            ],
+        ])
+        .unwrap();
+        let mut corpse = testing::pet(5, 0);
+        corpse.pet_owner = None;
+        corpse.size = 6.0;
+        let feet = eq_client_core::drawn_feet_offset(corpse.race, corpse.size);
+        corpse.position = WorldPosition {
+            z: feet,
+            ..WorldPosition::default()
+        };
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::spawns(&mut online, vec![corpse]);
+        let mut app = App::new();
+        character::testing::stores(app.world_mut());
+        app.insert_resource(online)
+            .insert_resource(super::super::Collision(Some(floor)))
+            .init_resource::<crate::options::OptionsState>()
+            .init_resource::<Time>()
+            .add_systems(Update, (interpolate, character::lie).chain());
+        let prepared = character::testing::prepared(app.world_mut());
+        let root = character::testing::drawn(app.world_mut(), &prepared);
+        app.world_mut().entity_mut(root).insert((
+            RemoteEntity {
+                id: 5,
+                seen: None,
+                soles: None,
+                feet: Some(feet),
+            },
+            character::Corpse {
+                fell: None,
+                length: prepared.lying(),
+                tilt: None,
+            },
+        ));
+        app.update();
+        // As first drawn it finds its tilt: the slope ahead, nothing across.
+        let tilt = app
+            .world()
+            .get::<character::Corpse>(root)
+            .unwrap()
+            .tilt
+            .unwrap();
+        assert!(
+            (-tilt.pitch - grade.atan()).abs() < 1.0_f32.to_radians(),
+            "{tilt:?}"
+        );
+        assert!(tilt.roll.abs() < 1e-4, "{tilt:?}");
+        // Its model's facing, turned by its heading and tilt, runs up the
+        // slope as the floor does.
+        let model = app
+            .world()
+            .get::<character::AnimatedCharacter>(root)
+            .unwrap()
+            .model;
+        let root_turn = app.world().get::<Transform>(root).unwrap().rotation;
+        let hung = app.world().get::<Transform>(model).unwrap().rotation;
+        let facing =
+            root_turn * hung * Quat::from_rotation_y(-eq_client_core::model_yaw()) * Vec3::Z;
+        let rise = facing.y.atan2(Vec2::new(facing.x, facing.z).length());
+        assert!(
+            (rise - grade.atan()).abs() < 1.0_f32.to_radians(),
+            "{facing}"
+        );
+        // Without a new report it is not found again.
+        app.world_mut()
+            .get_mut::<character::Corpse>(root)
+            .unwrap()
+            .tilt = Some(eq_client_core::Tilt::default());
+        app.update();
+        assert_eq!(
+            app.world().get::<character::Corpse>(root).unwrap().tilt,
+            Some(eq_client_core::Tilt::default())
+        );
+    }
+
+    #[test]
+    fn a_spawn_drawn_late_is_carried_and_its_corpse_lies_still() {
+        use eq_client_core::{Death, WorldEvent, WorldPosition};
+        use std::time::{Duration, Instant};
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let mut walker = testing::pet(5, 0);
+        walker.pet_owner = None;
+        testing::spawns(&mut online, vec![walker]);
+        let reported = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        testing::news_at(
+            &mut online,
+            [WorldEvent::Position {
+                spawn_id: 5,
+                position: WorldPosition::default(),
+                velocity: [4.0, 0.0, 0.0],
+            }],
+            reported,
+        );
+        let mut app = App::new();
+        app.insert_resource(online)
+            .init_resource::<Time>()
+            .add_systems(Update, interpolate);
+        let drawn = |app: &mut App| {
+            let entity = app
+                .world_mut()
+                .spawn((
+                    RemoteEntity {
+                        id: 5,
+                        seen: None,
+                        soles: None,
+                        feet: None,
+                    },
+                    Transform::default(),
+                ))
+                .id();
+            app.update();
+            let at = app.world().get::<Transform>(entity).unwrap().translation;
+            (entity, eq_client_core::world_position(at.to_array(), 0.0))
+        };
+        // Drawn two seconds after its report, it is drawn two seconds along,
+        // not back where the report put it.
+        let (walking, at) = drawn(&mut app);
+        assert!(at.x > 7.9 && at.x < 8.5, "{at:?}");
+        app.world_mut().despawn(walking);
+        // It dies; the corpse is drawn anew where the walker had got to,
+        // and lies there.
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Death(Death {
+                spawn_id: 5,
+                killer_id: 7,
+                corpse_id: 5,
+                bind_zone_id: 0,
+                corpse_name: None,
+            })],
+        );
+        let (corpse, fell) = drawn(&mut app);
+        assert!(fell.x > 7.9 && fell.x < 8.5, "{fell:?}");
+        std::thread::sleep(Duration::from_millis(50));
+        app.update();
+        let lies = app.world().get::<Transform>(corpse).unwrap().translation;
+        let lies = eq_client_core::world_position(lies.to_array(), 0.0);
+        assert!((lies.x - fell.x).abs() < 1e-4, "{fell:?} then {lies:?}");
     }
 }

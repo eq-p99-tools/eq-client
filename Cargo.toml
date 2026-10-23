@@ -13,7 +13,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/eq-p99-tools/eq-client"
-rust-version = "1.95"
+rust-version = "1.99"
 
 [workspace.dependencies]
 serde_json = "1"
@@ -21,6 +21,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 bevy = { version = "0.19.1", default-features = false, features = [
   "3d_bevy_render",
   "async_executor",
+  "bevy_audio",
   "bevy_asset",
   "bevy_log",
   "bevy_state",
@@ -32,6 +33,7 @@ bevy = { version = "0.19.1", default-features = false, features = [
   "multi_threaded",
   "reflect_auto_register",
   "std",
+  "wav",
   "x11",
 ] }
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -44,11 +46,14 @@ eq-network = { git = "https://github.com/eq-p99-tools/eq-network", branch = "mai
 eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", branch = "main" }
 glam = "0.32.1"
 parry3d = "0.30.2"
-image = { version = "0.25", default-features = false, features = ["bmp", "dds", "tga"] }
-libeq = { git = "https://github.com/cjab/libeq", rev = "e06ae17dd38b624983663505e25b99a259ea0b15" }
+rerecast = { version = "=0.4.0", default-features = false, features = ["std"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "dds", "ico", "jpeg", "png", "tga"] }
+libeq = { git = "https://github.com/eq-p99-tools/libeq", rev = "e0e5a4e65c170272035a8beb65bda048f7a60a01" }
 roxmltree = "0.21.1"
+rodio = { version = "0.22", default-features = false, features = ["hound"] }
 thiserror = "2"
 tracing = "0.1"
+zeroize = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

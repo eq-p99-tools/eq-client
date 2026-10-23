@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashSet};
 /// official client's log never takes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Said {
-    pub text: String,
+    pub words: eq_client_core::chat::RichText,
     pub source: Source,
 }
 
@@ -25,7 +25,7 @@ impl Said {
     /// The official client's words.
     pub(crate) fn official(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            words: text.into().into(),
             source: Source::Official,
         }
     }
@@ -33,7 +33,7 @@ impl Said {
     /// This client's own words.
     pub(crate) fn own(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            words: text.into().into(),
             source: Source::Client,
         }
     }
@@ -54,7 +54,7 @@ impl From<&str> for Said {
 
 /// A locally produced line in the System channel.
 pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
-    let Said { text, source } = said.into();
+    let Said { words, source } = said.into();
     ChatLine {
         channel: ChannelName::System,
         message_type: None,
@@ -63,8 +63,8 @@ pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
         message: Message {
             message: None,
             message_hex: None,
-            text,
-            item_links: Vec::new(),
+            text: words.text,
+            item_links: words.item_links,
         },
         source,
     }
@@ -127,6 +127,12 @@ struct Refusals {
 const REPEATED: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl ChatState {
+    /// The line being typed, for tests outside the chat.
+    #[cfg(test)]
+    pub(crate) fn draft(&self) -> &str {
+        &self.draft
+    }
+
     /// Says a refusal in the chat as a system line, where the official client
     /// says its refusals; the same refusal again within [`REPEATED`], as from
     /// a held key, is not said twice.
@@ -135,24 +141,34 @@ impl ChatState {
     }
 
     fn refuse_at(&mut self, said: Said, now: std::time::Instant) {
-        if said.text.is_empty() {
+        if said.words.text.is_empty() {
             return;
         }
         let refusals = &mut self.refusals;
         if !refusals.says_repeats
             && refusals.last.as_ref().is_some_and(|(text, at)| {
-                *text == said.text && now.saturating_duration_since(*at) < REPEATED
+                *text == said.words.text && now.saturating_duration_since(*at) < REPEATED
             })
         {
             return;
         }
-        refusals.last = Some((said.text.clone(), now));
+        refusals.last = Some((said.words.text.clone(), now));
         self.history.push(system_line(said));
     }
 }
 
 #[cfg(test)]
 impl ChatState {
+    /// The chat scrolled `offset` logical pixels down its lines, away from
+    /// the newest, for tests of its place.
+    pub(crate) fn scrolled_for_tests(offset: f32) -> Self {
+        let mut state = Self::default();
+        let view = state.views.entry(state.active).or_default();
+        view.follow = false;
+        view.offset = offset;
+        state
+    }
+
     /// The newest line's words, for tests of what the chat says.
     pub(crate) fn newest(&self) -> String {
         self.history
@@ -454,7 +470,7 @@ pub(super) fn input(
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut typing: ResMut<crate::keys::Typing>,
-    mut keyboard: MessageReader<KeyboardInput>,
+    (mut keyboard, mouse): (MessageReader<KeyboardInput>, Res<ButtonInput<MouseButton>>),
     windows: Query<&Window, With<PrimaryWindow>>,
     panels: Query<(Entity, &UiGlobalTransform, &ComputedNode), With<Panel>>,
     wheel: Res<super::windows::pointer::Wheel>,
@@ -471,6 +487,28 @@ pub(super) fn input(
         typing.composing = false;
         state.hovered = false;
         return;
+    }
+    state.hovered = windows
+        .single()
+        .ok()
+        .and_then(Window::physical_cursor_position)
+        .is_some_and(|cursor| {
+            panels.iter().any(|(_, transform, node)| {
+                transform.try_inverse().is_some_and(|inverse| {
+                    let local = inverse.transform_point2(cursor).abs();
+                    local.cmple(node.size() * 0.5).all()
+                })
+            })
+        });
+    // A click on the game, anywhere outside the chat window, acts as any
+    // click does and gives the keyboard back to the game; the line keeps
+    // what was typed, which Enter brings back (Titanium per Adam, 10-19;
+    // EQMac inferred, recording checklist 6.243).
+    if typing.composing
+        && !state.hovered
+        && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right])
+    {
+        typing.composing = false;
     }
     if input_box.iter().any(|value| *value == Interaction::Pressed) {
         typing.composing = true;
@@ -500,8 +538,20 @@ pub(super) fn input(
             Key::Backspace if typing.composing => {
                 state.draft.pop();
             }
-            Key::Character(value) if typing.composing && state.draft.len() < 512 => {
-                state.draft.push_str(value);
+            // A slash opens the line with only itself typed, so a command is
+            // one keystroke away, as in the official client (Titanium checked;
+            // EQMac inferred, recording checklist 6.241). A line left with
+            // Escape gives way to it, as Enter alone brings that line back.
+            Key::Character(value) if !typing.composing && value.as_str() == "/" => {
+                typing.composing = true;
+                "/".clone_into(&mut state.draft);
+            }
+            // The line types what the key types, as the window reports it:
+            // the space bar is a named key, not a character, and a Ctrl
+            // chord types only a control character, which is dropped.
+            _ if typing.composing && state.draft.len() < 512 => {
+                let text = event.text.as_deref().unwrap_or_default();
+                state.draft.extend(text.chars().filter(|c| !c.is_control()));
                 let boundary = state.draft.floor_char_boundary(512);
                 state.draft.truncate(boundary);
             }
@@ -516,18 +566,6 @@ pub(super) fn input(
             submit_draft(&mut state, &mut typing, &online, &outbox);
         }
     }
-    state.hovered = windows
-        .single()
-        .ok()
-        .and_then(Window::physical_cursor_position)
-        .is_some_and(|cursor| {
-            panels.iter().any(|(_, transform, node)| {
-                transform.try_inverse().is_some_and(|inverse| {
-                    let local = inverse.transform_point2(cursor).abs();
-                    local.cmple(node.size() * 0.5).all()
-                })
-            })
-        });
     for (interaction, TabButton(tab)) in &tabs {
         if *interaction == Interaction::Pressed {
             state.active = *tab;
@@ -921,7 +959,8 @@ fn submit_draft(
     }
 }
 
-/// Sends a game slash command for scripts; ordinary chat is never sent this way.
+/// Sends a game slash command for scripts and buttons; ordinary chat is
+/// never sent this way.
 pub(super) fn submit_game_command(
     input: &str,
     online: &super::online::OnlineState,
@@ -935,6 +974,20 @@ pub(super) fn submit_game_command(
             .map_err(|refusal| refusal.text().to_owned())?;
     }
     Ok(())
+}
+
+/// Runs a button's or a hotbutton's game slash command, as typing it would;
+/// a refusal shows in the chat once, though the outbox says it too
+/// (`outbox::show`).
+pub(super) fn run_game_command(
+    command: &str,
+    online: &super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+    chat: &mut ChatState,
+) {
+    if let Err(reason) = submit_game_command(command, online, outbox) {
+        chat.refuse(reason);
+    }
 }
 
 /// A slash command the client answers itself, noted for the system that
@@ -1573,6 +1626,8 @@ mod tests {
                 endurance: None,
                 skills: None,
                 practice_points: None,
+                languages: None,
+                disciplines: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],
                 size: 6.0,
@@ -1687,6 +1742,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(online)
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         let enter = KeyboardInput {
             key_code: KeyCode::Enter,
@@ -1732,6 +1788,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(online)
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         app.world_mut().resource_mut::<ChatState>().draft = "/tell Friend".into();
         app.world_mut()
@@ -1760,6 +1817,155 @@ mod tests {
         assert!(app.world().resource::<crate::keys::Typing>().composing);
     }
 
+    /// A chat app for the slash tests, admitted to the zone or not, with the
+    /// outbox's receiver.
+    fn slash_app(admitted: bool) -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = super::super::online::OnlineState::new(true);
+        if admitted {
+            crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        }
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ChatState>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
+            .add_message::<KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<ButtonInput<MouseButton>>()
+            .add_systems(Update, input);
+        (app, receiver)
+    }
+
+    fn press_slash(app: &mut App) {
+        press_slash_on(app, KeyCode::Slash);
+    }
+
+    fn press_slash_on(app: &mut App, key_code: KeyCode) {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key: Key::Character("/".into()),
+            state: bevy::input::ButtonState::Pressed,
+            text: Some("/".into()),
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+    }
+
+    #[test]
+    fn a_slash_opens_the_line_with_itself_typed() {
+        let (mut app, receiver) = slash_app(true);
+        // A line left with Escape gives way to the slash.
+        app.world_mut().resource_mut::<ChatState>().draft = "hello".into();
+        press_slash(&mut app);
+        assert!(app.world().resource::<crate::keys::Typing>().composing);
+        assert_eq!(app.world().resource::<ChatState>().draft, "/");
+        assert!(receiver.try_recv().is_err());
+        // In the line, a slash types as any character does.
+        press_slash(&mut app);
+        assert_eq!(app.world().resource::<ChatState>().draft, "//");
+    }
+
+    #[test]
+    fn the_keypads_slash_opens_the_line_too() {
+        let (mut app, _receiver) = slash_app(true);
+        press_slash_on(&mut app, KeyCode::NumpadDivide);
+        assert!(app.world().resource::<crate::keys::Typing>().composing);
+        assert_eq!(app.world().resource::<ChatState>().draft, "/");
+    }
+
+    #[test]
+    fn the_line_types_what_the_key_types() {
+        let (mut app, _receiver) = slash_app(true);
+        press_slash(&mut app);
+        let key = |key_code, logical_key, text: &str| KeyboardInput {
+            key_code,
+            logical_key,
+            state: bevy::input::ButtonState::Pressed,
+            text: Some(text.into()),
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        };
+        for event in [
+            // The window reports the space bar as a named key.
+            key(KeyCode::KeyT, Key::Character("t".into()), "t"),
+            key(KeyCode::Space, Key::Space, " "),
+            // Shift's letter, as the window types it.
+            key(KeyCode::KeyA, Key::Character("A".into()), "A"),
+            key(KeyCode::NumpadDivide, Key::Character("/".into()), "/"),
+            // Ctrl+A types only a control character, which is dropped.
+            key(KeyCode::KeyA, Key::Character("a".into()), "\u{1}"),
+        ] {
+            app.world_mut().write_message(event);
+        }
+        app.update();
+        assert_eq!(app.world().resource::<ChatState>().draft, "/t A/");
+    }
+
+    #[test]
+    fn a_click_on_the_game_gives_the_keyboard_back_and_keeps_the_line() {
+        let (mut app, receiver) = slash_app(true);
+        let mut window = Window {
+            focused: true,
+            resolution: bevy::window::WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::new(100.0, 100.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        // The chat window: 300 by 200 at (24, 110).
+        app.world_mut().spawn((
+            Panel,
+            ComputedNode {
+                size: Vec2::new(300.0, 200.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(
+                174.0, 210.0,
+            ))),
+        ));
+        press_slash(&mut app);
+        let click = |app: &mut App, at: (f64, f64)| {
+            app.world_mut()
+                .query::<&mut Window>()
+                .single_mut(app.world_mut())
+                .unwrap()
+                .set_physical_cursor_position(Some(bevy::math::DVec2::new(at.0, at.1)));
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.release(MouseButton::Left);
+            mouse.clear();
+            mouse.press(MouseButton::Left);
+            app.update();
+        };
+        let composing = |app: &App| app.world().resource::<crate::keys::Typing>().composing;
+        // A click in the chat window keeps the line open.
+        click(&mut app, (100.0, 200.0));
+        assert!(composing(&app));
+        // A click on the game outside it closes the line, keeping its text.
+        click(&mut app, (600.0, 500.0));
+        assert!(!composing(&app));
+        assert_eq!(app.world().resource::<ChatState>().draft, "/");
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_slash_leaves_the_quantity_windows_number_and_character_select_alone() {
+        let (mut app, _receiver) = slash_app(true);
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .counting = true;
+        press_slash(&mut app);
+        let typing = app.world().resource::<crate::keys::Typing>();
+        assert!(typing.counting && !typing.composing);
+        assert_eq!(app.world().resource::<ChatState>().draft, "");
+
+        let (mut app, _receiver) = slash_app(false);
+        press_slash(&mut app);
+        assert!(!app.world().resource::<crate::keys::Typing>().composing);
+        assert_eq!(app.world().resource::<ChatState>().draft, "");
+    }
+
     #[test]
     fn the_chat_leaves_the_keys_to_the_quantity_windows_number() {
         let mut online = super::super::online::OnlineState::new(true);
@@ -1771,6 +1977,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(online)
             .insert_resource(crate::outbox::Outbox::new(None))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
@@ -1933,6 +2140,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(true))
             .insert_resource(crate::outbox::Outbox::new(None))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         app.world_mut().write_message(KeyboardInput {
             key_code: KeyCode::Enter,
@@ -1965,6 +2173,7 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(false))
             .insert_resource(crate::outbox::Outbox::new(None))
+            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, (input, refresh).chain());
         app.world_mut().spawn(Content::default());
         let button = app

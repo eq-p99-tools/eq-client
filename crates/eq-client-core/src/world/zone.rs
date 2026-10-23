@@ -4,13 +4,13 @@
 //! in one step.
 use super::{Notice, Spawn, trade::Trade};
 use crate::{
-    PostureState, SpawnState, WorldPosition,
+    PostureState, SpawnKind, SpawnState, WorldPosition,
     combat::{ConColor, Consideration},
     doors::DoorTable,
     ground::Objects,
-    outfit::WearChange,
+    outfit::{Features, WearChange},
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 /// The zone's contents, as the server described them.
 #[derive(Default)]
@@ -35,31 +35,53 @@ pub(super) struct Zone {
     pub(super) asked_container: Option<u32>,
     /// The world container open for the player, such as a forge.
     pub(super) container: Option<crate::ground::ContainerView>,
+    /// Each spawn's latest one-shot motion, the player's own included.
+    pub(super) motions: BTreeMap<u16, super::Motion>,
+    /// The cast each spawn is under, the player's own included.
+    pub(super) casts: BTreeMap<u16, super::motions::Cast>,
+    /// The latest cast each spawn completed, the player's own included.
+    pub(super) completions: BTreeMap<u16, super::CastDone>,
+    /// The latest spell that landed on each spawn, the player included.
+    pub(super) landings: BTreeMap<u16, super::Landing>,
+    /// When each corpse in view died, for one seen dying rather than
+    /// arriving dead.
+    pub(super) deaths: BTreeMap<u16, Instant>,
 }
 
 impl Zone {
     /// Spawns appear, or replace what had their IDs; each is drawn anew.
-    pub(super) fn appear(&mut self, spawns: &[SpawnState], revision: &mut u64) {
+    pub(super) fn appear(&mut self, spawns: &[SpawnState], revision: &mut u64, now: Instant) {
         for spawn in spawns {
-            // A new spawn has not been considered, whatever had its ID.
+            // A new spawn has not been considered, whatever had its ID, and
+            // one arriving as a corpse was not seen dying.
             self.considered.remove(&spawn.spawn_id);
+            self.deaths.remove(&spawn.spawn_id);
             *revision = revision.wrapping_add(1);
             self.spawns.insert(
                 spawn.spawn_id,
                 Spawn {
-                    state: spawn.clone(),
+                    state: SpawnState {
+                        velocity: still_if_corpse(spawn.kind, spawn.velocity),
+                        ..spawn.clone()
+                    },
                     health: spawn.hp_percent,
                     posture: None,
                     revision: *revision,
+                    reported: now,
                 },
             );
         }
     }
 
-    /// A spawn leaves the zone.
+    /// A spawn leaves the zone, and its motion and casts with it.
     pub(super) fn vanish(&mut self, id: u16) {
         self.spawns.remove(&id);
         self.considered.remove(&id);
+        self.motions.remove(&id);
+        self.casts.remove(&id);
+        self.completions.remove(&id);
+        self.landings.remove(&id);
+        self.deaths.remove(&id);
     }
 
     /// The server's word on a spawn the player considered.
@@ -96,11 +118,17 @@ impl Zone {
         }
     }
 
-    /// A spawn moved.
-    pub(super) fn moved(&mut self, id: u16, position: WorldPosition, velocity: [f32; 3]) {
+    /// A spawn moved, as of `now`.
+    pub(super) fn moved(
+        &mut self,
+        id: u16,
+        (position, velocity): (WorldPosition, [f32; 3]),
+        now: Instant,
+    ) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
             spawn.state.position = position;
-            spawn.state.velocity = velocity;
+            spawn.state.velocity = still_if_corpse(spawn.state.kind, velocity);
+            spawn.reported = now;
         }
     }
 
@@ -111,21 +139,50 @@ impl Zone {
         }
     }
 
+    /// A named spawn's face or hair changed.
+    pub(super) fn features(&mut self, id: Option<u16>, features: Features) {
+        if let Some(spawn) = id.and_then(|id| self.spawns.get_mut(&id)) {
+            spawn.state.appearance.set_features(features);
+        }
+    }
+
+    /// A spawn the session named took a new name.
+    pub(super) fn rename(&mut self, id: Option<u16>, name: &str) {
+        if let Some(spawn) = id.and_then(|id| self.spawns.get_mut(&id)) {
+            name.clone_into(&mut spawn.state.name);
+        }
+    }
+
+    /// A corpse lies somewhere new, facing as it did.
+    pub(super) fn corpse_moved(&mut self, id: u16, [x, y, z]: [f32; 3]) {
+        if let Some(spawn) = self.spawns.get_mut(&id) {
+            let position = &mut spawn.state.position;
+            (position.x, position.y, position.z) = (x, y, z);
+        }
+    }
+
     /// A spawn died: it becomes a corpse, drawn anew, under the name the
     /// death gives it (the session's, by the client generation's rule) or
     /// its living name where the death gives none. Titanium corpses keep the
-    /// spawn ID.
-    pub(super) fn corpse(&mut self, id: u16, name: Option<&str>, revision: &mut u64) {
+    /// spawn ID. A living spawn's death is when it fell; a repeated death
+    /// changes nothing of that. The death says nothing of where, so the
+    /// corpse lies where the client had carried the spawn to when the death
+    /// came, and moves no more on its own. Inferred; recording item 6.275.
+    pub(super) fn corpse(&mut self, id: u16, name: Option<&str>, now: Instant, revision: &mut u64) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
             *revision = revision.wrapping_add(1);
             spawn.health = Some(0);
             let kind = spawn.state.kind.corpse();
-            if kind != spawn.state.kind
-                && let Some(name) = name
-            {
-                spawn.state.name = name.into();
+            if kind != spawn.state.kind {
+                self.deaths.insert(id, now);
+                if let Some(name) = name {
+                    spawn.state.name = name.into();
+                }
+                spawn.state.position = spawn.carried(now);
+                spawn.reported = now;
             }
             spawn.state.kind = kind;
+            spawn.state.velocity = still_if_corpse(kind, spawn.state.velocity);
             spawn.revision = *revision;
         }
     }
@@ -133,6 +190,16 @@ impl Zone {
     /// A spawn's server name, when it is known.
     pub(super) fn name(&self, id: u16) -> Option<String> {
         self.spawns.get(&id).map(|spawn| spawn.state.name.clone())
+    }
+}
+
+/// A spawn's velocity, or none for a corpse, which never moves on its own:
+/// a drag places it anew. Inferred; recording item 6.275.
+fn still_if_corpse(kind: SpawnKind, velocity: [f32; 3]) -> [f32; 3] {
+    if matches!(kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse) {
+        [0.0; 3]
+    } else {
+        velocity
     }
 }
 
@@ -182,7 +249,9 @@ impl super::ClientWorld {
 
     /// A spawn's health; the player's own too, when it is theirs.
     pub(super) fn health_percent(&mut self, spawn_id: u16, percent: u8) {
-        if self.is_player(spawn_id) {
+        // The player's health follows their HP report once there is one:
+        // `EQMac`'s percent for the player leaves out what items add.
+        if self.is_player(spawn_id) && self.vitals.reported_hp.is_none() {
             self.own_health(percent);
         }
         self.zone.health(spawn_id, percent);
@@ -193,9 +262,10 @@ impl super::ClientWorld {
         &mut self,
         spawn_id: u16,
         (position, velocity): (WorldPosition, [f32; 3]),
+        now: Instant,
         changes: &mut super::Changes,
     ) {
-        self.zone.moved(spawn_id, position, velocity);
+        self.zone.moved(spawn_id, (position, velocity), now);
         if let Some(player) = self
             .player
             .as_mut()

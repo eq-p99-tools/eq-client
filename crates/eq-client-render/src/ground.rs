@@ -198,6 +198,8 @@ mod tests {
                 deity: None,
                 skills: None,
                 practice_points: None,
+                languages: None,
+                disciplines: None,
                 gender: 0,
                 level: 1,
                 position: default(),

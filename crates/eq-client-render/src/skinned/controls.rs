@@ -1,6 +1,6 @@
 //! The skin's sliders, drop-downs and lists, drawn with its own pieces and
 //! tied to what the client keeps: the Options window's Far Clip Plane, Max
-//! FPS and Mouselook Sensitivity sliders, its key list with the filter above
+//! FPS, Mouselook Sensitivity and Sound Volume sliders, its key list with the filter above
 //! it, and the quantity window's slider and number box. A control the client
 //! keeps nothing for is drawn greyed out, as its buttons are.
 use super::{Area, WindowId, at, border, picture, to_f32};
@@ -12,9 +12,14 @@ use bevy::{prelude::*, ui::RelativeCursorPosition};
 use eq_client_assets::sidl::{Combobox, Listbox, Slider};
 use eq_client_core::options::Level;
 
+/// The quality-of-life page's interface scale slider and the label that shows its
+/// value, cut from the skin's own.
+pub(super) const UI_SCALE_SLIDER: &str = "EQC_QoL_UiScaleSlider";
+pub(super) const UI_SCALE_VALUE: &str = "EQC_QoL_UiScaleValueLabel";
+
 /// The Options window's sliders this client keeps settings for, with the
 /// labels that show their values, by screen ID.
-const LEVEL_SLIDERS: [(&str, &str, Level); 3] = [
+const LEVEL_SLIDERS: [(&str, &str, Level); 5] = [
     (
         "ODP_ClipPlaneSlider",
         "ODP_ClipPlaneValueLabel",
@@ -29,6 +34,12 @@ const LEVEL_SLIDERS: [(&str, &str, Level); 3] = [
         "OMP_MouseSensitivitySlider",
         "OMP_MouseSensitivityValueLabel",
         Level::MouseSensitivity,
+    ),
+    (UI_SCALE_SLIDER, UI_SCALE_VALUE, Level::UiScale),
+    (
+        "OGP_SoundVolumeSlider",
+        "OGP_SoundVolumeValueLabel",
+        Level::SoundVolume,
     ),
 ];
 
@@ -54,7 +65,7 @@ pub(crate) enum Sets {
 }
 
 /// What a slider sets, if the client keeps something for it.
-fn slider_sets(id: Option<&str>, owner: WindowId) -> Option<Sets> {
+pub(super) fn slider_sets(id: Option<&str>, owner: WindowId) -> Option<Sets> {
     let id = id?;
     match owner {
         WindowId::Options => LEVEL_SLIDERS
@@ -793,7 +804,7 @@ pub(super) fn listbox(
             filled_by(&mut rows, listing, columns);
         }
         if let Some(look) = bar {
-            super::scrollbar::spawn(frame, art, look, &client, (scrolled, owner));
+            super::scrollbar::spawn(frame, art, look, &client, (scrolled, Some(owner)));
         }
     });
 }
@@ -822,7 +833,7 @@ fn filled_by(rows: &mut EntityCommands, listing: Listing, columns: Vec<f32>) {
 /// Each of a list's column headings across the top of its inside, on the
 /// skin's heading frame where it has one; returns how high they are, which
 /// is the frame's height.
-fn headings(
+pub(crate) fn headings(
     frame: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
     list: &Listbox,
@@ -1018,6 +1029,15 @@ mod tests {
         assert_eq!(
             slider_sets(Some("ODP_MaxFPSSlider"), WindowId::Options),
             Some(Sets::Level(Level::MaxFps))
+        );
+        assert_eq!(
+            slider_sets(Some("OGP_SoundVolumeSlider"), WindowId::Options),
+            Some(Sets::Level(Level::SoundVolume))
+        );
+        // Music and sound realism keep nothing yet.
+        assert_eq!(
+            slider_sets(Some("OGP_MusicVolumeSlider"), WindowId::Options),
+            None
         );
         assert_eq!(
             slider_sets(Some("ODP_GammaSlider"), WindowId::Options),

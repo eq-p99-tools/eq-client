@@ -9,6 +9,7 @@ use super::{
 use eq_client_core::{
     CampStatus,
     bind_wound::{BindWoundUpdate, strings},
+    creation::CreationOutcome,
     entities::display_name,
     food::Shortage,
     loot::LootResponse,
@@ -143,6 +144,23 @@ fn connection_text(link: Link, dead: bool) -> String {
     }
 }
 
+/// What the select screen says of a character not created. The world
+/// says only which step it refused, never why, and the official client's
+/// words for each are not known, so these are this client's (inferred,
+/// item 6.278).
+pub(crate) fn creation_refusal(name: &str, outcome: CreationOutcome) -> String {
+    match outcome {
+        CreationOutcome::NameRefused => format!("The server refused the name {name}."),
+        CreationOutcome::CreationRefused => {
+            format!("The server approved the name {name} but could not create the character.")
+        }
+        CreationOutcome::NotSent => {
+            format!("{name} was not sent: this client cannot create that character on this server.")
+        }
+        CreationOutcome::Created => format!("{name} was created."),
+    }
+}
+
 /// Why a corpse could not be looted: this client's words, and the official
 /// client's string for the server's answer where it has its own: 12073
 /// for someone else looting it, 12070 for a corpse not to be looted yet,
@@ -233,10 +251,12 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
     let status = |text: String| vec![(Place::Status, Said::own(text))];
     match notice {
         Notice::Connection { link, dead } => status(connection_text(*link, *dead)),
-        Notice::ServerString { id, arguments, .. } => chat(messages.map_or_else(
-            || Said::own(format!("Server message {id}")),
-            |messages| messages.said(*id, arguments),
-        )),
+        Notice::CreationRefused { name, outcome } => status(creation_refusal(name, *outcome)),
+        Notice::ServerString { id, arguments, .. } => chat(
+            messages
+                .unwrap_or(&Messages::default())
+                .linked(*id, arguments),
+        ),
         Notice::Consideration {
             consideration,
             name,
@@ -329,6 +349,15 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         ]
         .concat(),
         Notice::ZoneLineRefused(reason) => chat(format!("Cannot cross zone line: {reason}").into()),
+        // eqstr 12357, naming the zone, where the installation has it.
+        // Inferred: that the official client says it on every arrival,
+        // Enter World included, as a system line.
+        Notice::Arrived(zone) => chat(official(
+            Some(12357),
+            std::slice::from_ref(zone),
+            &format!("Arrived in {zone}."),
+            messages,
+        )),
         Notice::TargetRefused(reason) => chat(format!("Target rejected: {reason}").into()),
         Notice::CastRefused { spell_id, reason } => {
             chat(format!("Cast rejected (spell {spell_id}): {reason}").into())
@@ -475,7 +504,7 @@ fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
 /// invitation to the player; 12283 for agreeing to join and 12289 for
 /// declining; 12266 for the one invited declining; 12003 for forming a
 /// group; 1399 and 12004 for someone else and the player joining, 12005
-/// and 12001 for leaving, and 5041 and 5040 for becoming the leader; and
+/// and 12001 for leaving, and 5041 and 5040 for a change of leader; and
 /// 12002 for the group disbanding. This client's words without the
 /// strings. That the official client says these lines at these moments is
 /// inferred from what each says, since the server sends none of them.
@@ -630,6 +659,42 @@ const fn link_text(link: Link) -> &'static str {
 mod tests {
     use super::*;
     use eq_client_core::Coins;
+
+    #[test]
+    fn a_refused_creation_says_which_step_on_the_status_line() {
+        let line = |outcome| {
+            wording(
+                &Notice::CreationRefused {
+                    name: "Testcleric".into(),
+                    outcome,
+                },
+                None,
+            )
+        };
+        assert_eq!(
+            line(CreationOutcome::NameRefused),
+            [(
+                Place::Status,
+                "The server refused the name Testcleric.".into()
+            )]
+        );
+        assert_eq!(
+            line(CreationOutcome::CreationRefused),
+            [(
+                Place::Status,
+                "The server approved the name Testcleric but could not create the character."
+                    .into()
+            )]
+        );
+        assert_eq!(
+            line(CreationOutcome::NotSent),
+            [(
+                Place::Status,
+                "Testcleric was not sent: this client cannot create that character on this server."
+                    .into()
+            )]
+        );
+    }
 
     #[test]
     fn loot_replies_say_what_the_corpse_gave_or_refused() {
@@ -1031,7 +1096,7 @@ mod tests {
                 .into_iter()
                 .map(|(place, line)| {
                     assert_eq!(place, Place::Chat);
-                    line.text
+                    line.words.text
                 })
                 .collect()
         };
@@ -1156,5 +1221,23 @@ mod tests {
             [(Place::Chat, "Server message 12293".into())]
         );
         assert_eq!(wording(&Notice::Camp(CampStatus::Camped), None), []);
+    }
+
+    #[test]
+    fn an_arrival_names_the_zone_in_the_installed_clients_words() {
+        let arrived = Notice::Arrived("The Qeynos Hills".into());
+        let messages = Messages::parse("EQST0002\n0 1\n12357 Test arrival: %1\n");
+        assert_eq!(
+            wording(&arrived, Some(&messages)),
+            [(
+                Place::Chat,
+                Said::official("Test arrival: The Qeynos Hills")
+            )]
+        );
+        // Without the installed strings, in this client's words.
+        assert_eq!(
+            wording(&arrived, None),
+            [(Place::Chat, Said::own("Arrived in The Qeynos Hills."))]
+        );
     }
 }

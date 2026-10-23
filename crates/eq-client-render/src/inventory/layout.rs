@@ -314,6 +314,7 @@ fn square(
         .spawn((
             Button,
             SlotButton(slot),
+            crate::hud::hotbar::Pickable(crate::hud::hotbar::Source::Item(slot)),
             crate::outbox::Needs::Capability(eq_client_core::Capability::Inventory),
             Node {
                 width: px(CELL),

@@ -25,9 +25,20 @@ pub(super) struct OnlineState {
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
+    loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
+    /// A new zone's admission and the news after it, held back while the
+    /// loading screen waits for the player's casting gesture over the zone
+    /// they are leaving.
+    held: Vec<WorldUpdate>,
 }
 
 impl OnlineState {
+    /// Whether the admitted zone's scene is still loading in the background.
+    /// A zone whose files fail to load is not: its spawns still show.
+    pub(crate) fn scene_loading(&self) -> bool {
+        self.loading.pending(self.world.session_id())
+    }
+
     /// What the server has told the client.
     pub(super) fn world(&self) -> &ClientWorld {
         &self.world
@@ -42,6 +53,19 @@ impl OnlineState {
         spells: &dyn SpellCatalog,
     ) -> eq_client_core::world::Changes {
         self.world.apply(update, now, spells)
+    }
+
+    /// Starts over for a new session: the world forgets what the servers
+    /// said, keeping the player's own choices, and no character choice is
+    /// in progress.
+    pub(super) fn restart(&mut self) {
+        self.world.restart();
+        self.selection = None;
+    }
+
+    /// The player asked to play on a world of the login server's list.
+    pub(super) fn ask_server(&mut self, index: usize) {
+        self.world.ask_server(index);
     }
 
     /// Runs the world's clocks.
@@ -83,11 +107,6 @@ impl OnlineState {
     /// The player closed the loot window.
     pub(super) fn close_loot(&mut self) {
         self.world.close_loot();
-    }
-
-    /// The player asked to trade with this merchant.
-    pub(super) fn open_shop(&mut self, merchant_id: u16) {
-        self.world.open_shop(merchant_id);
     }
 
     /// The player answered the resurrection offered.
@@ -141,7 +160,31 @@ impl OnlineState {
             selection: None,
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
+            loading: default(),
+            held: Vec::new(),
         }
+    }
+}
+
+impl OnlineState {
+    /// The news to apply this frame: any held back, then `batch`. The
+    /// player's casting gesture, as Gate's, plays to its end over the zone
+    /// they are leaving before the loading screen is drawn, even once the
+    /// next zone has admitted them (inferred, 6.230): while the screen is
+    /// `waiting` for it, the admission and what follows it are held back,
+    /// unapplied. Only the screen waits; the session takes the new zone as it
+    /// always does.
+    fn news(
+        &mut self,
+        batch: impl IntoIterator<Item = WorldUpdate>,
+        waiting: bool,
+    ) -> Vec<WorldUpdate> {
+        let mut news = std::mem::take(&mut self.held);
+        news.extend(batch);
+        if waiting && let Some(admission) = news.iter().position(admits) {
+            self.held = news.split_off(admission);
+        }
+        news
     }
 }
 
@@ -178,12 +221,13 @@ pub(super) struct Panels<'w> {
     items: ResMut<'w, super::items::ItemState>,
     book: Option<ResMut<'w, super::spellbook::BookSelection>>,
     book_view: Option<ResMut<'w, super::spellbook::BookView>>,
+    sounds: ResMut<'w, super::sounds::Sounds>,
 }
 
 impl Panels<'_> {
     /// Shows what the world's changes mean for the panels: the inventory, the
     /// notices, motion, the trade windows and the answers to the panels' own
-    /// requests.
+    /// requests; and plays the sounds the server names.
     fn show(
         &mut self,
         changes: &Changes,
@@ -197,14 +241,23 @@ impl Panels<'_> {
         for notice in &changes.notices {
             self.tell(notice, messages, chat);
         }
+        for cue in &changes.sounds {
+            self.sounds.play_cue(cue);
+        }
         if changes.characters {
             state.selection = state.world.characters().map(|list| {
                 super::character_select::Selection::new(list.selection_id, list.characters.clone())
             });
         }
+        if let Some(selection) = state.selection.as_mut() {
+            for notice in &changes.notices {
+                selection.hear(notice);
+            }
+        }
         if changes.motion
             && let Some(grant) = state.world.motion()
         {
+            log_grant(grant);
             self.motion.grant(grant);
         }
         if changes.trade {
@@ -261,7 +314,7 @@ impl Panels<'_> {
                     line.message_type = notice.message_type();
                     chat.history.push(line);
                 }
-                Place::Status => self.lines.status.set(said.text),
+                Place::Status => self.lines.status.set(said.words.text),
             }
         }
     }
@@ -320,6 +373,29 @@ impl Panels<'_> {
     }
 }
 
+/// Tells the session the player bled out once the world says so: the
+/// server's report, with what the player's items add, is at the threshold of
+/// a server type that leaves such a death to the client. The session checks
+/// it again; until it takes the report, the world asks again on the
+/// server's next one.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn report_bleed_out(mut state: ResMut<OnlineState>, outbox: Res<super::outbox::Outbox>) {
+    if state.world.bled_out().is_none() {
+        return;
+    }
+    let Some(stamp) = outbox.peek(&state.world) else {
+        return;
+    };
+    let command = eq_client_core::ClientCommand::BledOut {
+        session_id: stamp.session_id,
+        created: stamp.created,
+    };
+    if outbox.tell(&state.world, command) {
+        let hp = state.world.take_bled_out();
+        debug!(?hp, "Reported that the player bled out");
+    }
+}
+
 /// Applies the session's news to the world and shows what it changed. The
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
@@ -335,7 +411,7 @@ pub(super) fn receive(
     mut state: ResMut<OnlineState>,
     mut panels: Panels,
     mut chat: ResMut<super::chat::ChatState>,
-    mut scene: super::zone::Scene,
+    (mut scene, loading): (super::zone::Scene, Option<Res<super::loading::Loading>>),
 ) {
     let (settings, spell_names, messages) = definitions;
     let Ok(receiver) = updates.0.lock() else {
@@ -361,20 +437,20 @@ pub(super) fn receive(
         None => &NoSpells,
     };
     // A worker that stopped without saying so (for example after a panic) ends
-    // the session here, instead of leaving it looking connected.
-    let lost = (ended && !state.world.ended())
+    // the session here, instead of leaving it looking connected; once any
+    // held news has applied, so it is said once.
+    let lost = (ended && !state.world.ended() && state.held.is_empty())
         .then_some(WorldUpdate::Connection(eq_client_core::world::Link::Ended));
     if lost.is_some() {
         warn!("The session stopped without saying why");
     }
-    // The player entity spawned by zone entry in this batch, not yet in the world.
-    let mut entered = None;
-    for update in batch.into_iter().chain(lost) {
-        let changes = state
-            .world
-            .apply(&update, std::time::Instant::now(), spells);
+    let waiting = loading.is_some_and(|loading| loading.waiting());
+    let news = state.news(batch.into_iter().chain(lost), waiting);
+    for update in news {
+        let (changes, before) = apply(&mut state.world, &update, spells);
         trace(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
+            state.loading.clear();
             panels.forget(reason, &mut state);
             scene.forget(reason, &mut commands);
         }
@@ -391,26 +467,105 @@ pub(super) fn receive(
             // The session is this zone's even if its assets fail to load, so
             // nothing of the previous zone stays on screen either.
             scene.leave(&mut commands, &mut state.regions);
-            match super::zone::Entry::admission(&state.world, directory) {
-                Ok(entry) => {
-                    let terrain_only = settings.0.terrain_only;
-                    entered =
-                        Some(scene.enter(&mut commands, entry, terrain_only, &mut state.regions));
-                }
-                Err(text) => {
-                    error!("{text}");
-                    chat.history.push(super::chat::system_line(text));
-                }
+            if let (Some(id), Some(player)) =
+                (state.world.session_id(), state.world.player().cloned())
+            {
+                let zone = state.world.zone().to_owned();
+                let (directory, navmesh) = (directory.clone(), settings.0.navmesh);
+                state.loading.start(id, move || {
+                    let loading = std::time::Instant::now();
+                    let entry = super::zone::Entry::admission(&zone, &player, &directory)
+                        .map(|entry| entry.prepare(navmesh));
+                    if entry.is_ok() {
+                        // Read and prepared off the frame thread, behind the
+                        // loading screen.
+                        info!(
+                            zone = zone.as_str(),
+                            milliseconds = loading.elapsed().as_millis(),
+                            "Zone loaded"
+                        );
+                    }
+                    entry
+                });
+            } else {
+                // Nothing to show the zone around, said as it was before the
+                // load moved off the frame.
+                let text = "No admitted player".to_owned();
+                error!("{text}");
+                chat.history.push(super::chat::system_line(text));
             }
         }
         if let Some(position) = changes.placed {
+            let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
+            info!(from = ?before.map(at), to = ?at(position), "Server corrected the player");
             panels.motion.reset(None);
-            scene.place(&mut commands, super::zone::placement(position), entered);
+            scene.place(&mut commands, super::zone::placement(position), None);
         }
         if let WorldUpdate::Chat(line) = update {
             chat.history.push(line);
         }
     }
+    let admission = state.world.session_id();
+    if let Some(result) = state.loading.poll(admission) {
+        match result {
+            Ok(mut entry) => {
+                if let Some(player) = state.world.player() {
+                    entry.place(player.position);
+                }
+                scene.enter(
+                    &mut commands,
+                    entry,
+                    settings.0.terrain_only,
+                    &mut state.regions,
+                );
+            }
+            Err(text) => {
+                error!("{text}");
+                chat.history.push(super::chat::system_line(text));
+            }
+        }
+    }
+}
+
+/// Applies one piece of news to the world, and says where the player stood
+/// before it, so a server correction can say where it moved them from.
+fn apply(
+    world: &mut ClientWorld,
+    update: &WorldUpdate,
+    spells: &dyn SpellCatalog,
+) -> (Changes, Option<eq_client_core::WorldPosition>) {
+    let before = world.player().map(|player| player.position);
+    let changes = world.apply(update, std::time::Instant::now(), spells);
+    (changes, before)
+}
+
+/// Logs the session's word on how the player may move: a withdrawal (no
+/// speed, as after a server correction until it grants again) or a grant.
+fn log_grant(grant: eq_client_core::world::MotionGrant) {
+    let eq_client_core::world::MotionGrant {
+        units_per_second,
+        backward_units_per_second,
+        walk_units_per_second,
+        strafe_units_per_second,
+        falls,
+    } = grant;
+    if units_per_second.is_none() {
+        info!(falls, "Movement withdrawn");
+    } else {
+        info!(
+            ?units_per_second,
+            ?backward_units_per_second,
+            ?walk_units_per_second,
+            ?strafe_units_per_second,
+            falls,
+            "Movement granted"
+        );
+    }
+}
+
+/// Whether the news is a new admission, which brings its zone.
+const fn admits(update: &WorldUpdate) -> bool {
+    matches!(update, WorldUpdate::Game(WorldEvent::Entered { .. }))
 }
 
 /// Logs what diagnosing a session needs from its news.
@@ -465,6 +620,21 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
             "Stamina report"
         ),
         WorldEvent::NothingToEat { food, water } => debug!(?food, ?water, "Nothing to eat"),
+        // A zone header, at entry or sent again: its sky, read just before,
+        // and its clip, with the far clip the world now draws to.
+        WorldEvent::ZoneDescription(description) => {
+            let sky = world.sky();
+            debug!(
+                sky = sky.map(|sky| sky.sky),
+                fog_color = ?sky.map(|sky| sky.fog[0].color),
+                fog_near = sky.map(|sky| sky.fog[0].near),
+                fog_far = sky.map(|sky| sky.fog[0].far),
+                min_clip = description.min_clip,
+                max_clip = description.max_clip,
+                far_clip = world.far_clip(),
+                "Zone header decoded"
+            );
+        }
         WorldEvent::Inventory(eq_client_core::inventory::InventoryUpdate::Deduct {
             slot,
             quantity,
@@ -487,6 +657,11 @@ pub(crate) mod testing {
     /// Puts a world a test built in place of the session's.
     pub(crate) fn set_world(state: &mut OnlineState, world: eq_client_core::world::ClientWorld) {
         state.world = world;
+    }
+
+    /// Applies one update as the session's receiver hands it over.
+    pub(crate) fn apply(state: &mut OnlineState, update: &WorldUpdate) {
+        state.world.apply(update, Instant::now(), &NoSpells);
     }
 
     /// Applies session news to the world.
@@ -521,6 +696,8 @@ pub(crate) mod testing {
             endurance: Some(0),
             skills: None,
             practice_points: None,
+            languages: None,
+            disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 6.0,
@@ -545,6 +722,8 @@ pub(crate) mod testing {
             gender: 2,
             position: WorldPosition::default(),
             velocity: [0.0; 3],
+            walk_speed: 0.0,
+            run_speed: 0.0,
             size: 0.0,
             invisible: false,
             appearance: eq_client_core::outfit::Appearance::default(),
@@ -558,15 +737,40 @@ pub(crate) mod testing {
 
     /// Connects or disconnects the session without ending it.
     pub(crate) fn connect(state: &mut OnlineState, connected: bool) {
-        state.world.apply(
-            &WorldUpdate::Connection(if connected {
+        link(
+            state,
+            if connected {
                 eq_client_core::world::Link::Connected
             } else {
                 eq_client_core::world::Link::Entering
-            }),
-            Instant::now(),
-            &NoSpells,
+            },
         );
+    }
+
+    /// Puts the session's connection where this says, such as ended.
+    pub(crate) fn link(state: &mut OnlineState, link: eq_client_core::world::Link) {
+        state
+            .world
+            .apply(&WorldUpdate::Connection(link), Instant::now(), &NoSpells);
+    }
+
+    /// Starts loading the admitted zone's scene in the background, as zone
+    /// entry does; it fails once the returned sender sends or drops.
+    pub(crate) fn hold_scene(state: &mut OnlineState) -> std::sync::mpsc::Sender<()> {
+        let (release, wait) = std::sync::mpsc::channel();
+        state
+            .loading
+            .start(state.world.session_id().unwrap_or_default(), move || {
+                let _ = wait.recv();
+                Err("Synthetic scene".into())
+            });
+        release
+    }
+
+    /// Takes the background load's result if it is done, as receiving the
+    /// next batch does; says whether it was.
+    pub(crate) fn take_scene(state: &mut OnlineState) -> bool {
+        state.loading.poll(state.world.session_id()).is_some()
     }
 
     /// Admits this player in this session, connected.
@@ -590,6 +794,7 @@ pub(crate) mod testing {
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),
                 far_clip,
+                spell_landing_flag: None,
             }],
         );
         connect(state, true);
@@ -697,9 +902,120 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
     use eq_client_core::PlayerState;
 
     #[test]
+    fn the_session_hears_of_a_bleed_out_the_world_finds_once() {
+        use eq_client_core::{ClientCommand, ItemHitPoints, inventory::InventoryUpdate};
+        let (sender, queue) = std::sync::mpsc::sync_channel(4);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::news(
+            &mut online,
+            [
+                WorldEvent::DeathThreshold(-11),
+                WorldEvent::Inventory(InventoryUpdate::Snapshot(Vec::new())),
+                WorldEvent::HitPoints {
+                    spawn_id: 7,
+                    current: -11,
+                    maximum: 100,
+                    items: ItemHitPoints::LeftOutOfCurrent,
+                },
+            ],
+        );
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(super::super::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, report_bleed_out);
+        app.update();
+        app.update();
+        let sent: Vec<_> = queue.try_iter().collect();
+        assert!(
+            matches!(sent[..], [ClientCommand::BledOut { session_id: 1, .. }]),
+            "{sent:?}"
+        );
+        assert_eq!(
+            app.world().resource::<OnlineState>().world().bled_out(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_blocked_asset_load_keeps_applying_ordered_session_events() {
+        use eq_client_core::inventory::InventoryUpdate;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1024);
+        let (release, wait) = std::sync::mpsc::channel();
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        state.loading.start(1, move || {
+            wait.recv().unwrap();
+            Err("Synthetic asset read failure".into())
+        });
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig::default()))
+            .init_resource::<hud::HudState>()
+            .init_resource::<crate::motion::Controls>()
+            .init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<crate::combat::CombatState>()
+            .init_resource::<crate::trade::TradeState>()
+            .init_resource::<crate::items::ItemState>()
+            .init_resource::<crate::inventory::InventoryState>()
+            .init_resource::<crate::sounds::Sounds>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        // More than the queue's capacity over multiple frames while I/O is blocked.
+        // Alternating invalidation and snapshots makes reordering observable.
+        for batch in 0..16 {
+            for value in 0..64 {
+                let mana = batch * 64 + value;
+                for event in [
+                    WorldEvent::Inventory(InventoryUpdate::Invalidated),
+                    WorldEvent::Resources {
+                        mana,
+                        endurance: mana,
+                    },
+                    WorldEvent::Spell(eq_client_core::SpellUpdate::BookDeletion {
+                        slot: 0,
+                        success: true,
+                    }),
+                    WorldEvent::Inventory(InventoryUpdate::Snapshot(Vec::new())),
+                ] {
+                    sender.try_send(WorldUpdate::Game(event)).unwrap();
+                }
+            }
+            app.update();
+            assert!(world(&app).in_world());
+            assert!(!world(&app).inventory().stale());
+            assert_eq!(world(&app).vitals().mana, Some(batch * 64 + 63));
+        }
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app
+            .world()
+            .resource::<crate::chat::ChatState>()
+            .history
+            .lines(eq_client_core::chat::ChatTab::System)
+            .is_empty()
+        {
+            assert!(std::time::Instant::now() < deadline);
+            app.update();
+            std::thread::yield_now();
+        }
+        assert!(world(&app).in_world());
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep the ordered integration scenario and its assertions together"
+    )]
     fn a_zone_entry_batch_keeps_doors_postures_and_the_new_session() {
         use eq_client_core::doors::{Door, DoorUpdate};
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -717,8 +1033,10 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         let player = PlayerState {
@@ -735,6 +1053,8 @@ mod tests {
             endurance: Some(0),
             skills: None,
             practice_points: None,
+            languages: None,
+            disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,
@@ -754,6 +1074,8 @@ mod tests {
             gender: 0,
             position: eq_client_core::WorldPosition::default(),
             velocity: [0.0; 3],
+            walk_speed: 0.0,
+            run_speed: 0.0,
             size: 0.0,
             invisible: false,
             appearance: eq_client_core::outfit::Appearance::default(),
@@ -784,6 +1106,7 @@ mod tests {
                 zone: "example".into(),
                 player: Box::new(player),
                 far_clip: None,
+                spell_landing_flag: None,
             },
             WorldEvent::Spawns(vec![spawn]),
             WorldEvent::Posture {
@@ -826,8 +1149,10 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         // What the last zone left on screen.
@@ -844,6 +1169,7 @@ mod tests {
                 zone: "qeytoqrg".into(),
                 player: Box::new(testing::player(7)),
                 far_clip: None,
+                spell_landing_flag: None,
             }))
             .unwrap();
         app.update();
@@ -862,18 +1188,148 @@ mod tests {
             app.world().resource::<super::super::SceneInfo>().zone_name,
             ""
         );
-        let history = &app
-            .world()
-            .resource::<super::super::chat::ChatState>()
-            .history;
-        assert!(
-            history
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            app.update();
+            if app
+                .world()
+                .resource::<super::super::chat::ChatState>()
+                .history
                 .lines(eq_client_core::chat::ChatTab::System)
                 .iter()
                 .any(|(_, line)| line.message.text.contains("could not be loaded"))
-        );
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "missing load failure");
+            std::thread::yield_now();
+        }
         // The session is the new zone's all the same.
         assert_eq!(world(&app).session_id(), Some(2));
+    }
+
+    #[test]
+    fn a_new_admission_waits_while_the_players_casting_gesture_plays() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let missing = std::env::temp_dir().join("no-everquest-installed-here");
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig {
+                eq_directory: Some(missing),
+                ..default()
+            }))
+            .insert_resource(super::super::loading::Loading::waiting_for_gesture(true))
+            .init_resource::<hud::HudState>()
+            .init_resource::<super::super::motion::Controls>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<super::super::combat::CombatState>()
+            .init_resource::<super::super::trade::TradeState>()
+            .init_resource::<super::super::items::ItemState>()
+            .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        // What the zone being left shows, the player's body among it.
+        let old = app.world_mut().spawn(super::super::SceneEntity).id();
+        let resources = |mana| {
+            WorldUpdate::Game(WorldEvent::Resources {
+                mana,
+                endurance: mana,
+            })
+        };
+        sender.send(resources(5)).unwrap();
+        sender
+            .send(WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 2,
+                zone: "example".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }))
+            .unwrap();
+        sender.send(resources(6)).unwrap();
+        // The news before the admission applies; the admission and what
+        // follows it wait, and the zone being left stays drawn.
+        app.update();
+        sender.send(resources(7)).unwrap();
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(1));
+        assert_eq!(world(&app).vitals().mana, Some(5));
+        assert!(app.world().get_entity(old).is_ok());
+        // Once the gesture has played, the held news applies in its order.
+        app.insert_resource(super::super::loading::Loading::waiting_for_gesture(false));
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(2));
+        assert_eq!(world(&app).vitals().mana, Some(7));
+        assert!(app.world().get_entity(old).is_err());
+    }
+
+    #[test]
+    fn a_session_that_stops_during_a_held_admission_ends_once_after_it() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig::default()))
+            .insert_resource(super::super::loading::Loading::waiting_for_gesture(true))
+            .init_resource::<hud::HudState>()
+            .init_resource::<super::super::motion::Controls>()
+            .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<super::super::combat::CombatState>()
+            .init_resource::<super::super::trade::TradeState>()
+            .init_resource::<super::super::items::ItemState>()
+            .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        sender
+            .send(WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 2,
+                zone: "example".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }))
+            .unwrap();
+        drop(sender);
+        // The worker is gone while the admission waits: its end is said once,
+        // held behind the admission, however many frames the wait takes.
+        for _ in 0..3 {
+            app.update();
+        }
+        let state = app.world().resource::<OnlineState>();
+        assert!(matches!(
+            state.held[..],
+            [
+                WorldUpdate::Game(WorldEvent::Entered { .. }),
+                WorldUpdate::Connection(eq_client_core::world::Link::Ended)
+            ]
+        ));
+        assert!(!state.world.ended());
+        // After the wait the admission applies, and the session ends.
+        app.insert_resource(super::super::loading::Loading::waiting_for_gesture(false));
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(2));
+        assert!(world(&app).ended());
+        app.update();
+        assert!(app.world().resource::<OnlineState>().held.is_empty());
     }
 
     #[test]
@@ -893,10 +1349,12 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<super::super::spellbook::BookSelection>()
             .init_resource::<super::super::spellbook::BookView>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         let item = crate::preview::items().remove(0).details;
@@ -934,6 +1392,7 @@ mod tests {
                 zone: "qeynos2".into(),
                 player: Box::new(testing::player(7)),
                 far_clip: None,
+                spell_landing_flag: None,
             }))
             .unwrap();
         app.update();
@@ -978,6 +1437,8 @@ mod tests {
             endurance: Some(0),
             skills: Some(vec![0; 100]),
             practice_points: None,
+            languages: None,
+            disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
             size: 0.0,
@@ -997,6 +1458,7 @@ mod tests {
                 zone: "qeytoqrg".into(),
                 player: Box::new(player),
                 far_clip: None,
+                spell_landing_flag: None,
             }),
             WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {
@@ -1013,8 +1475,10 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::items::ItemState>()
             .init_resource::<super::super::inventory::InventoryState>()
+            .init_resource::<super::super::sounds::Sounds>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
         let buff = eq_client_core::Buff {
@@ -1084,6 +1548,7 @@ mod tests {
                         zone: "qeytoqrg".into(),
                         player: Box::new(timed_player),
                         far_clip: None,
+                        spell_landing_flag: None,
                     },
                     WorldEvent::SpellBook(book),
                 ],
@@ -1145,7 +1610,7 @@ mod tests {
                     spawn_id: 7,
                     current,
                     maximum,
-                    without_items: false,
+                    items: eq_client_core::ItemHitPoints::LeftOut,
                 }))
                 .unwrap();
             app.update();
@@ -1374,6 +1839,7 @@ mod tests {
                 zone: "freportw".into(),
                 player: Box::new(player),
                 far_clip: Some(450.0),
+                spell_landing_flag: None,
             }))
             .unwrap();
         app.update();

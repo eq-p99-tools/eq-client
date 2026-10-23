@@ -239,7 +239,7 @@ pub(super) fn current(
             .interrupted
             .filter(|(at, _)| recent(*at))
             .map(|(_, reason)| Shown {
-                label: messages.interruption(reason).text,
+                label: messages.interruption(reason).words.text,
                 progress: Some(0.0),
             })
     };

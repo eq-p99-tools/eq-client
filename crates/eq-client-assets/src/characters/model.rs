@@ -15,6 +15,9 @@ use libeq::{
 use super::{invalid, resolve, validate_parents};
 use crate::{LoadError, MaterialMode, ZonePrimitive, ZoneTexture, load_texture, stage_mesh};
 
+/// The clip a model plays standing still.
+pub const STANDING_CLIP: &str = "P01";
+
 /// A renderer-independent character with original bone-local mesh data.
 #[derive(Clone, Debug)]
 pub struct CharacterAsset {
@@ -135,6 +138,21 @@ pub struct CharacterPose {
     pub normals: Vec<[f32; 3]>,
 }
 
+/// A primitive's vertices as their bones hold them, for skinning wherever
+/// it is drawn: each vertex is placed by its one bone's transform from
+/// [`CharacterAsset::joints`], as [`CharacterAsset::pose`] places it.
+#[derive(Clone, Copy, Debug)]
+pub struct SkinBind<'a> {
+    /// Bone-local positions, in the renderer's frame.
+    pub positions: &'a [[f32; 3]],
+    /// Bone-local unit normals, in the renderer's frame.
+    pub normals: &'a [[f32; 3]],
+    /// Each vertex's bone, an index into the joints.
+    pub bones: &'a [usize],
+}
+
+/// A primitive's bone-local vertices in the renderer's frame, so that a
+/// joint from [`CharacterAsset::joints`] places them as they are.
 #[derive(Clone, Debug)]
 struct Skin {
     positions: Vec<[f32; 3]>,
@@ -143,19 +161,24 @@ struct Skin {
 }
 
 impl Skin {
-    /// Poses this primitive with these bone transforms.
-    fn pose(&self, world: &[Mat4]) -> CharacterPose {
+    /// Poses this primitive with these joints.
+    fn pose(&self, joints: &[Mat4]) -> CharacterPose {
         let mut positions = Vec::with_capacity(self.positions.len());
         let mut normals = Vec::with_capacity(self.normals.len());
         for ((position, normal), bone) in self.positions.iter().zip(&self.normals).zip(&self.bones)
         {
-            // Skinning occurs in native Z-up WLD coordinates.
-            let point = world[*bone].transform_point3(crate::wld(*position));
-            let normal = world[*bone]
-                .transform_vector3(crate::wld(*normal))
-                .normalize_or_zero();
-            positions.push(eq_client_axes::from_wld(point).to_array());
-            normals.push(eq_client_axes::from_wld(normal).to_array());
+            let joint = joints[*bone];
+            positions.push(
+                joint
+                    .transform_point3(Vec3::from_array(*position))
+                    .to_array(),
+            );
+            normals.push(
+                joint
+                    .transform_vector3(Vec3::from_array(*normal))
+                    .normalize_or_zero()
+                    .to_array(),
+            );
         }
         CharacterPose { positions, normals }
     }
@@ -233,6 +256,123 @@ impl CharacterAsset {
         (min <= max).then_some((min, max))
     }
 
+    /// The lowest point the base pieces reach while the model stands: the
+    /// lowest of its standing clip's (`P01`) bottoms over the clip's frames
+    /// at 30 a second, in the renderer's frame; the base pose's bottom for a
+    /// model without that clip, and None without base pieces. A standing
+    /// model is drawn in that clip, not in its base pose, so its soles are
+    /// hung by this point.
+    #[must_use]
+    pub fn standing_bottom(&self) -> Option<f32> {
+        let (bottom, _) = self.span()?;
+        let Some(length) = self.clip_seconds(STANDING_CLIP) else {
+            return Some(bottom);
+        };
+        let lowest = |seconds: f32| {
+            self.bottom(&self.joints(STANDING_CLIP, seconds, true))
+                .map(|point| point.y)
+        };
+        std::iter::successors(Some(0.0_f32), |seconds| {
+            Some(seconds + 1.0 / 30.0).filter(|next| *next < length)
+        })
+        .filter_map(lowest)
+        .reduce(f32::min)
+        .or(Some(bottom))
+    }
+
+    /// The lowest point of the base pieces placed by these joints, in the
+    /// joints' frame: the model's own for [`Self::joints`], the world's for
+    /// joints already hung where the model is drawn. None without base
+    /// pieces.
+    #[must_use]
+    pub fn bottom(&self, joints: &[Mat4]) -> Option<Vec3> {
+        self.skins
+            .iter()
+            .zip(&self.pieces)
+            .filter(|(_, piece)| piece.base())
+            .flat_map(|(skin, _)| skin.positions.iter().zip(&skin.bones))
+            .filter_map(|(position, bone)| {
+                Some(
+                    joints
+                        .get(*bone)?
+                        .transform_point3(Vec3::from_array(*position)),
+                )
+            })
+            .reduce(|lowest, point| if point.y < lowest.y { point } else { lowest })
+    }
+
+    /// How far the base pieces placed by these joints reach along `axis`, a
+    /// unit direction in the joints' frame: the least and the greatest of
+    /// their points' distances along it from the frame's origin, such as how
+    /// far behind and ahead of its soles a body lies. None without base
+    /// pieces.
+    #[must_use]
+    pub fn extent(&self, joints: &[Mat4], axis: Vec3) -> Option<(f32, f32)> {
+        self.skins
+            .iter()
+            .zip(&self.pieces)
+            .filter(|(_, piece)| piece.base())
+            .flat_map(|(skin, _)| skin.positions.iter().zip(&skin.bones))
+            .filter_map(|(position, bone)| {
+                Some(
+                    joints
+                        .get(*bone)?
+                        .transform_point3(Vec3::from_array(*position))
+                        .dot(axis),
+                )
+            })
+            .fold(None, |extent, along| match extent {
+                None => Some((along, along)),
+                Some((least, most)) => Some((f32::min(least, along), f32::max(most, along))),
+            })
+    }
+
+    /// The top of the head with these joints: the highest point of the
+    /// drawn head pieces (those `shown` marks), or of everything drawn for a
+    /// model without one, in the renderer's frame; None when nothing is
+    /// drawn. Only those pieces' positions are placed.
+    #[must_use]
+    pub fn top(&self, joints: &[Mat4], shown: &[bool]) -> Option<f32> {
+        let drawn = || {
+            self.skins
+                .iter()
+                .zip(&self.pieces)
+                .zip(shown)
+                .filter_map(|(drawn, shown)| shown.then_some(drawn))
+        };
+        let head = drawn().any(|(_, piece)| matches!(piece, Piece::Head(_)));
+        drawn()
+            .filter(|(_, piece)| !head || matches!(piece, Piece::Head(_)))
+            .flat_map(|(skin, _)| skin.positions.iter().zip(&skin.bones))
+            .filter_map(|(position, bone)| {
+                Some(
+                    joints
+                        .get(*bone)?
+                        .transform_point3(Vec3::from_array(*position))
+                        .y,
+                )
+            })
+            .reduce(f32::max)
+    }
+
+    /// How many bones the skeleton has, which is how many joints
+    /// [`Self::joints`] gives.
+    #[must_use]
+    pub fn bone_count(&self) -> usize {
+        self.parents.len()
+    }
+
+    /// A primitive's vertices as their bones hold them; None past the last
+    /// primitive.
+    #[must_use]
+    pub fn skin(&self, primitive: usize) -> Option<SkinBind<'_>> {
+        self.skins.get(primitive).map(|skin| SkinBind {
+            positions: &skin.positions,
+            normals: &skin.normals,
+            bones: &skin.bones,
+        })
+    }
+
     /// The archive the model came from.
     #[must_use]
     pub fn source(&self) -> &Path {
@@ -277,15 +417,43 @@ impl CharacterAsset {
         codes
     }
 
+    /// How long a clip takes to play once, such as `C05`: its longest
+    /// track's frames times their interval. None where the model lacks it.
+    #[must_use]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a track has far fewer frames than an f32 counts exactly"
+    )]
+    pub fn clip_seconds(&self, animation: &str) -> Option<f32> {
+        self.clips
+            .get(animation)?
+            .iter()
+            .flatten()
+            .map(|track| track.frames.len() as f32 * track.interval)
+            .reduce(f32::max)
+    }
+
+    /// Whether a clip, such as `L01`, moves the body: it has a track for a
+    /// bone below the root. A clip with only its root's track leaves every
+    /// other bone in its base pose. False where the model lacks the clip.
+    #[must_use]
+    pub fn clip_moves_body(&self, animation: &str) -> bool {
+        self.clips.get(animation).is_some_and(|clip| {
+            clip.iter()
+                .zip(&self.parents)
+                .any(|(track, parent)| track.is_some() && parent.is_some())
+        })
+    }
+
     /// Samples a clip, or the base pose when the clip is unavailable.
     /// No root motion is applied to the entity; movement remains owned by simulation.
     pub fn pose(&self, animation: &str, seconds: f32) -> Vec<CharacterPose> {
-        self.skin(&self.bones(animation, seconds, true))
+        self.skin_all(&self.joints(animation, seconds, true))
     }
 
     /// Plays a transition once and holds its final frame instead of looping it.
     pub fn pose_held(&self, animation: &str, seconds: f32) -> Vec<CharacterPose> {
-        self.skin(&self.bones(animation, seconds, false))
+        self.skin_all(&self.joints(animation, seconds, false))
     }
 
     /// Samples a clip, looping or held as [`Self::pose`] and [`Self::pose_held`]
@@ -299,11 +467,7 @@ impl CharacterAsset {
         looping: bool,
         shown: &[bool],
     ) -> (Vec<Option<CharacterPose>>, [Option<Mat4>; 3]) {
-        let bones = self.bones(animation, seconds, looping);
-        let attachments = self.attachments.map(|bone| {
-            bone.and_then(|bone| bones.get(bone))
-                .map(|matrix| eq_client_axes::wld_transform(*matrix))
-        });
+        let joints = self.joints(animation, seconds, looping);
         let poses = self
             .skins
             .iter()
@@ -313,10 +477,30 @@ impl CharacterAsset {
                     .get(index)
                     .copied()
                     .unwrap_or(false)
-                    .then(|| skin.pose(&bones))
+                    .then(|| skin.pose(&joints))
             })
             .collect();
-        (poses, attachments)
+        (poses, self.attachments(&joints))
+    }
+
+    /// Each bone's transform for a clip, looping or held as [`Self::pose`]
+    /// and [`Self::pose_held`] do, acting on the renderer's frame: placed by
+    /// its bone's joint, a vertex of [`Self::skin`] lands where the pose puts
+    /// it.
+    #[must_use]
+    pub fn joints(&self, animation: &str, seconds: f32, looping: bool) -> Vec<Mat4> {
+        self.bones(animation, seconds, looping)
+            .into_iter()
+            .map(eq_client_axes::wld_transform)
+            .collect()
+    }
+
+    /// Where each held item attaches with these joints, in [`Attachment`]
+    /// order, for the attachment points this skeleton has.
+    #[must_use]
+    pub fn attachments(&self, joints: &[Mat4]) -> [Option<Mat4>; 3] {
+        self.attachments
+            .map(|bone| bone.and_then(|bone| joints.get(bone)).copied())
     }
 
     /// Each bone's transform in native Z-up WLD space for a clip.
@@ -368,9 +552,92 @@ impl CharacterAsset {
         compose_hierarchy(&local, &self.parents)
     }
 
-    /// Skins every primitive with these bone transforms.
-    fn skin(&self, world: &[Mat4]) -> Vec<CharacterPose> {
-        self.skins.iter().map(|skin| skin.pose(world)).collect()
+    /// Skins every primitive with these joints.
+    fn skin_all(&self, joints: &[Mat4]) -> Vec<CharacterPose> {
+        self.skins.iter().map(|skin| skin.pose(joints)).collect()
+    }
+}
+
+#[cfg(feature = "testing")]
+impl CharacterAsset {
+    /// A one-triangle model for tests: a root bone and a child bone the
+    /// triangle hangs from, one unit up, whose `P01` turns it a quarter turn
+    /// about WLD up over a second and back, and whose `D05` lays it on the
+    /// ground behind the soles over a second, two to four units back along
+    /// heading 0.
+    #[must_use]
+    pub fn testing() -> Self {
+        let still = LocalTransform {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+        };
+        let raised = LocalTransform {
+            translation: Vec3::Z,
+            ..still
+        };
+        let turned = LocalTransform {
+            rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            ..raised
+        };
+        let lain = LocalTransform {
+            translation: Vec3::new(-3.0, 0.0, 0.0),
+            ..still
+        };
+        let positions = vec![[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let normals = vec![[0.0, 0.0, 1.0]; 3];
+        let mut asset = Self {
+            name: "TST".into(),
+            primitives: vec![ZonePrimitive {
+                positions: positions.clone(),
+                normals: normals.clone(),
+                texture_coordinates: Vec::new(),
+                indices: vec![0, 1, 2],
+                texture: None,
+                material_mode: MaterialMode::Opaque,
+            }],
+            textures: Vec::new(),
+            materials: vec![None],
+            pieces: vec![Piece::Body(0)],
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None, Some(0)],
+            base_pose: vec![still, raised],
+            clips: HashMap::from([
+                (
+                    "P01".into(),
+                    vec![
+                        None,
+                        Some(AnimationTrack {
+                            frames: vec![raised, turned],
+                            interval: 1.0,
+                        }),
+                    ],
+                ),
+                (
+                    "D05".into(),
+                    vec![
+                        None,
+                        Some(AnimationTrack {
+                            frames: vec![raised, lain],
+                            interval: 0.5,
+                        }),
+                    ],
+                ),
+            ]),
+            skins: vec![Skin {
+                positions,
+                normals,
+                bones: vec![1; 3],
+            }],
+            attachments: [Some(1), None, None],
+        };
+        let pose = asset.pose("", 0.0);
+        for (primitive, pose) in asset.primitives.iter_mut().zip(pose) {
+            primitive.positions = pose.positions;
+            primitive.normals = pose.normals;
+        }
+        asset
     }
 }
 
@@ -396,21 +663,25 @@ fn compose_hierarchy(local: &[Mat4], parents: &[Option<usize>]) -> Vec<Mat4> {
 /// # Errors
 /// Rejects missing models, unsupported legacy skins/tracks, invalid hierarchies,
 /// or skin groups that do not cover the mesh. It never fabricates missing bones.
-#[allow(clippy::too_many_lines)]
 pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadError> {
-    let file = File::open(path).map_err(|source| LoadError::OpenArchive {
-        path: path.to_owned(),
-        source,
-    })?;
-    let mut archive = PfsReader::open(file)?;
-    let stem = path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| invalid("archive name"))?;
-    let world_name = format!("{stem}.wld");
-    let bytes = archive
-        .get(&world_name)?
-        .ok_or(LoadError::MissingWorld(world_name))?;
+    load_with_donors(path, model, &[], &super::DonorArchives::default())
+}
+
+/// Loads a model as [`load_character`] does, reading its donor's animation
+/// tracks from the first of `donor_archives` that has them when the model's
+/// own archive has none. Each of those archives is parsed once per `parsed`
+/// handle; archives that cannot be read are skipped.
+///
+/// # Errors
+/// As [`load_character`], for the model's own archive only.
+#[allow(clippy::too_many_lines)]
+pub(super) fn load_with_donors(
+    path: &Path,
+    model: &str,
+    donor_archives: &[PathBuf],
+    parsed: &super::DonorArchives,
+) -> Result<CharacterAsset, LoadError> {
+    let (mut archive, bytes) = open_world(path)?;
     let doc = WldDoc::parse(&bytes)
         .map_err(|errors| invalid(&format!("WLD ({} parse errors)", errors.len())))?;
     let name = model.to_ascii_uppercase();
@@ -447,49 +718,22 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         }
     }
     validate_parents(&parents)?;
-    let mut clips: HashMap<String, Vec<Option<AnimationTrack>>> = HashMap::new();
+    let mut clips = HashMap::new();
     let source = animation_source(&name);
-    for track in doc.fragment_iter::<Track>() {
-        let Some(track_name) = doc.get_string(track.name_reference) else {
-            continue;
-        };
-        let Some((code, suffix)) = track_name.split_at_checked(3) else {
-            continue;
-        };
-        let inherited = source.is_some_and(|source| suffix.starts_with(source));
-        let Some(index) = bone_names.iter().position(|bone| {
-            *bone == suffix
-                || source.is_some_and(|source| {
-                    bone.strip_prefix(name.as_str())
-                        .zip(suffix.strip_prefix(source))
-                        .is_some_and(|(own, donor)| own == donor)
-                })
-        }) else {
-            continue;
-        };
-        let Some(definition) = doc.get(&track.reference) else {
-            continue;
-        };
-        let Some(frames) = &definition.frame_transforms else {
-            continue;
-        };
-        if frames.is_empty() {
-            continue;
+    let borrowed = gather_clips(&doc, &name, &bone_names, source, true, &mut clips);
+    // A donor kept in another archive (the dwarf's movements in global_chr for
+    // a zone's Coldain) lends its tracks from there.
+    if let Some(source) = source
+        && borrowed == 0
+    {
+        for other in donor_archives {
+            let lent = parsed.with(other, |doc| {
+                gather_clips(doc, &name, &bone_names, Some(source), false, &mut clips)
+            });
+            if lent.is_some_and(|tracks| tracks > 0) {
+                break;
+            }
         }
-        let interval = u16::try_from(track.sleep.unwrap_or(100))
-            .unwrap_or(100)
-            .max(1);
-        let tracks = clips
-            .entry(code.to_owned())
-            .or_insert_with(|| vec![None; parents.len()]);
-        // Model-specific tracks override inherited ones regardless of fragment order.
-        if inherited && tracks[index].is_some() {
-            continue;
-        }
-        tracks[index] = Some(AnimationTrack {
-            frames: frames.iter().map(LocalTransform::decode).collect(),
-            interval: f32::from(interval) / 1000.0,
-        });
     }
     let world = libeq::wld::load(&bytes).map_err(|error| invalid(&error.to_string()))?;
     let catalog = world
@@ -550,10 +794,15 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
         let piece = Piece::of(&name, mesh_name);
         for staged in stage_mesh(&mesh) {
             let material = staged.material.clone();
-            // Skinning starts from libeq's axes; poses convert to the renderer's.
+            // Bone-local, in the renderer's frame, where the joints act.
             skins.push(Skin {
-                positions: staged.positions.clone(),
-                normals: staged.normals.clone(),
+                positions: staged
+                    .positions
+                    .iter()
+                    .copied()
+                    .map(crate::render)
+                    .collect(),
+                normals: staged.normals.iter().copied().map(crate::render).collect(),
                 bones: bones.clone(),
             });
             primitives.push(staged.realize(&mut archive, &mut textures, &mut texture_indices)?);
@@ -592,21 +841,233 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
     Ok(asset)
 }
 
-/// Classic playable donors: <https://github.com/LanternEQ/LanternExtractor/blob/main/LanternExtractor/ClientData/animationsources.txt>
-fn animation_source(model: &str) -> Option<&'static str> {
-    match model {
-        "HUM" | "BAM" | "ERM" | "HIM" | "DAM" | "HAM" => Some("ELM"),
-        "HUF" | "BAF" | "ERF" | "HIF" | "DAF" | "HAF" => Some("ELF"),
-        "TRM" | "TRF" | "OGM" => Some("OGF"),
-        "HOM" | "GNM" => Some("DWM"),
-        "HOF" | "GNF" => Some("DWF"),
-        _ => None,
+/// Opens an archive and reads its WLD, named after the archive.
+fn open_world(path: &Path) -> Result<(PfsReader<File>, Vec<u8>), LoadError> {
+    let file = File::open(path).map_err(|source| LoadError::OpenArchive {
+        path: path.to_owned(),
+        source,
+    })?;
+    let mut archive = PfsReader::open(file)?;
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid("archive name"))?;
+    let world_name = format!("{stem}.wld");
+    let bytes = archive
+        .get(&world_name)?
+        .ok_or(LoadError::MissingWorld(world_name))?;
+    Ok((archive, bytes))
+}
+
+/// Parses another archive's WLD, for its animation tracks only.
+pub(super) fn read_world(path: &Path) -> Result<WldDoc, LoadError> {
+    let (_, bytes) = open_world(path)?;
+    WldDoc::parse(&bytes).map_err(|errors| invalid(&format!("WLD ({} parse errors)", errors.len())))
+}
+
+/// Adds a WLD's animation tracks for the bones of model `name`: the model's
+/// own when `own` is set, and those of its donor `source` under the same bone
+/// names. The model's own tracks win over inherited ones regardless of
+/// fragment order. Returns how many donor tracks it found.
+fn gather_clips(
+    doc: &WldDoc,
+    name: &str,
+    bone_names: &[&str],
+    source: Option<&str>,
+    own: bool,
+    clips: &mut HashMap<String, Vec<Option<AnimationTrack>>>,
+) -> usize {
+    let mut borrowed = 0;
+    for track in doc.fragment_iter::<Track>() {
+        let Some(track_name) = doc.get_string(track.name_reference) else {
+            continue;
+        };
+        let Some((code, suffix)) = track_name.split_at_checked(3) else {
+            continue;
+        };
+        let inherited = source.is_some_and(|source| suffix.starts_with(source));
+        let Some(index) = bone_names.iter().position(|bone| {
+            (own && *bone == suffix)
+                || source.is_some_and(|source| {
+                    bone.strip_prefix(name)
+                        .zip(suffix.strip_prefix(source))
+                        .is_some_and(|(own, donor)| own == donor)
+                })
+        }) else {
+            continue;
+        };
+        let Some(definition) = doc.get(&track.reference) else {
+            continue;
+        };
+        let Some(frames) = &definition.frame_transforms else {
+            continue;
+        };
+        if frames.is_empty() {
+            continue;
+        }
+        let interval = u16::try_from(track.sleep.unwrap_or(100))
+            .unwrap_or(100)
+            .max(1);
+        borrowed += usize::from(inherited);
+        let track = AnimationTrack {
+            frames: frames.iter().map(LocalTransform::decode).collect(),
+            interval: f32::from(interval) / 1000.0,
+        };
+        place_track(clips, bone_names.len(), code, index, inherited, track);
     }
+    borrowed
+}
+
+/// Puts one bone's track in its clip. An inherited track only fills a slot
+/// nothing holds yet, so the model's own tracks win whichever comes first.
+fn place_track(
+    clips: &mut HashMap<String, Vec<Option<AnimationTrack>>>,
+    bones: usize,
+    code: &str,
+    bone: usize,
+    inherited: bool,
+    track: AnimationTrack,
+) {
+    let tracks = clips
+        .entry(code.to_owned())
+        .or_insert_with(|| vec![None; bones]);
+    if !(inherited && tracks[bone].is_some()) {
+        tracks[bone] = Some(track);
+    }
+}
+
+// The table below comes from LanternExtractor, under this notice:
+//
+// MIT License
+//
+// Copyright (c) 2024 LanternEQ
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+/// The model whose animations a model plays when it has none of its own,
+/// from `LanternExtractor`'s `animationsources.txt`
+/// (<https://github.com/LanternEQ/LanternExtractor/blob/main/LanternExtractor/ClientData/animationsources.txt>).
+/// Its two rows with two-letter models (`CL`, `KA`) name no model and are
+/// left out.
+///
+/// Inferred: a community reading of the original client, which keeps this
+/// pairing in its program rather than its files; recording item 6.228.
+fn animation_source(model: &str) -> Option<&'static str> {
+    Some(match model {
+        "CPF" => "CPM",
+        "SDE" => "DML",
+        "GDR" | "WUR" => "DRA",
+        "FMO" | "GRI" | "SPH" => "DRK",
+        "CLF" | "COF" | "GNF" | "HOF" | "KAF" | "RIF" => "DWF",
+        "BRI" | "CLM" | "COK" | "COM" | "GNM" | "HOM" | "KAM" | "RIM" => "DWM",
+        "ABH" | "BAF" | "BRF" | "DAF" | "ERF" | "ERO" | "FEF" | "GFF" | "HAF" | "HAG" | "HIF"
+        | "HLF" | "HUF" | "QCF" | "SIR" | "ZOF" => "ELF",
+        "BAM" | "BGM" | "BRM" | "DAM" | "EGM" | "ENA" | "ERM" | "FEM" | "FPM" | "GFM" | "HAM"
+        | "HHM" | "HIM" | "HLM" | "HUM" | "NGM" | "QCM" | "SKE" | "TRI" | "ZOM" => "ELM",
+        "PIF" => "FAF",
+        "FDF" => "FDR",
+        "FRG" => "FRO",
+        "STG" => "FSG",
+        "GAM" | "IMP" => "GAR",
+        "GOL" | "GOM" => "GIA",
+        "MIN" | "YAK" => "GNN",
+        "GHU" => "GOB",
+        "ICF" | "ICM" | "ICN" | "IKF" | "IKS" => "IKM",
+        "BGG" => "KGO",
+        "LIF" | "PUM" | "STC" | "TIG" => "LIM",
+        "GRF" | "GRM" | "OGM" | "OKF" | "OKM" | "TRF" | "TRM" => "OGF",
+        "ARM" | "SKU" => "RAT",
+        "IKH" => "REA",
+        "BTM" => "RHI",
+        "TOT" => "SCA",
+        "SPC" => "SPE",
+        "BET" => "SPI",
+        "SSK" => "SRW",
+        "BWD" | "CCD" | "DR2" | "PRI" => "TRK",
+        "VRF" => "VRM",
+        "KOB" => "WER",
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn models_without_movements_borrow_from_the_listed_model() {
+        assert_eq!(animation_source("COM"), Some("DWM"));
+        assert_eq!(animation_source("COF"), Some("DWF"));
+        assert_eq!(animation_source("COK"), Some("DWM"));
+        assert_eq!(animation_source("KOB"), Some("WER"));
+        assert_eq!(animation_source("HUM"), Some("ELM"));
+        assert_eq!(animation_source("GNN"), None);
+        assert_eq!(animation_source("CL"), None);
+    }
+
+    #[test]
+    fn every_donor_has_movements_of_its_own() {
+        let models = (b'A'..=b'Z').flat_map(|a| {
+            (b'A'..=b'Z').flat_map(move |b| {
+                (b'0'..=b'Z').map(move |c| String::from_utf8(vec![a, b, c]).unwrap())
+            })
+        });
+        let mut rows = 0;
+        for model in models {
+            if let Some(donor) = animation_source(&model) {
+                rows += 1;
+                assert_eq!(donor.len(), 3, "{model}");
+                assert_ne!(donor, model);
+                assert_eq!(animation_source(donor), None, "{model} -> {donor}");
+            }
+        }
+        assert_eq!(rows, 99);
+    }
+
+    #[test]
+    fn own_tracks_win_and_borrowed_ones_fill_only_empty_bones() {
+        let track = |angle: f32| AnimationTrack {
+            frames: vec![LocalTransform {
+                translation: Vec3::ZERO,
+                rotation: Quat::from_rotation_z(angle),
+                scale: 1.0,
+            }],
+            interval: 0.1,
+        };
+        let angle = |clips: &HashMap<String, Vec<Option<AnimationTrack>>>, bone: usize| {
+            clips["L01"][bone]
+                .as_ref()
+                .map(|track| track.frames[0].rotation.to_axis_angle().1)
+        };
+        let mut clips = HashMap::new();
+        // Inherited first, then the model's own: the own track replaces it.
+        place_track(&mut clips, 3, "L01", 0, true, track(1.0));
+        place_track(&mut clips, 3, "L01", 0, false, track(2.0));
+        // Own first, then inherited: the own track stays.
+        place_track(&mut clips, 3, "L01", 1, false, track(2.0));
+        place_track(&mut clips, 3, "L01", 1, true, track(1.0));
+        // A later archive's donor fills only the bone nothing holds.
+        place_track(&mut clips, 3, "L01", 2, true, track(1.0));
+        for (bone, expected) in [(0, 2.0), (1, 2.0), (2, 1.0)] {
+            assert!((angle(&clips, bone).unwrap() - expected).abs() < 0.0001);
+        }
+    }
 
     #[test]
     fn held_pose_keeps_final_frame_while_locomotion_still_loops() {
@@ -651,6 +1112,78 @@ mod tests {
             assert!((asset.pose_held("P02", time)[0].positions[0][0] - 1.0).abs() < 0.0001);
         }
         assert!((asset.pose_held("missing", 10.0)[0].positions[0][0] - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn a_clip_lasts_as_long_as_its_longest_track() {
+        let still = LocalTransform {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+        };
+        let track = |frames: usize, interval: f32| {
+            Some(AnimationTrack {
+                frames: vec![still; frames],
+                interval,
+            })
+        };
+        let asset = CharacterAsset {
+            name: "synthetic".into(),
+            primitives: Vec::new(),
+            textures: Vec::new(),
+            materials: Vec::new(),
+            pieces: Vec::new(),
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None, Some(0), Some(0)],
+            base_pose: vec![still; 3],
+            clips: HashMap::from([
+                ("C05".into(), vec![track(4, 0.1), None, track(10, 0.08)]),
+                ("P01".into(), vec![None, None, None]),
+            ]),
+            skins: Vec::new(),
+            attachments: [None; 3],
+        };
+        assert!((asset.clip_seconds("C05").unwrap() - 0.8).abs() < 0.0001);
+        // A clip with no tracks, or none at all, has no length.
+        assert_eq!(asset.clip_seconds("P01"), None);
+        assert_eq!(asset.clip_seconds("C08"), None);
+    }
+
+    #[test]
+    fn a_clip_moves_the_body_only_with_a_track_below_the_root() {
+        let still = LocalTransform {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+        };
+        let track = || {
+            Some(AnimationTrack {
+                frames: vec![still; 2],
+                interval: 0.1,
+            })
+        };
+        let asset = CharacterAsset {
+            name: "synthetic".into(),
+            primitives: Vec::new(),
+            textures: Vec::new(),
+            materials: Vec::new(),
+            pieces: Vec::new(),
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None, Some(0), Some(1)],
+            base_pose: vec![still; 3],
+            clips: HashMap::from([
+                // The root's track only, as a gnoll's walk.
+                ("L01".into(), vec![track(), None, None]),
+                ("L02".into(), vec![track(), None, track()]),
+            ]),
+            skins: Vec::new(),
+            attachments: [None; 3],
+        };
+        assert!(!asset.clip_moves_body("L01"));
+        assert!(asset.clip_moves_body("L02"));
+        assert!(!asset.clip_moves_body("L09"));
     }
 
     #[test]
@@ -722,6 +1255,152 @@ mod tests {
         let hand = attachments[Attachment::RightHand.index()].unwrap();
         assert!((hand.transform_point3(Vec3::ZERO) - Vec3::new(0.0, 5.0, 0.0)).length() < 0.0001);
         assert!(attachments[Attachment::Shield.index()].is_none());
+    }
+
+    #[test]
+    fn the_top_is_the_drawn_heads_else_the_highest_drawn_point() {
+        let at = |heights: &[f32]| Skin {
+            positions: heights.iter().map(|y| [0.0, *y, 0.0]).collect(),
+            normals: vec![[0.0, 1.0, 0.0]; heights.len()],
+            bones: vec![0; heights.len()],
+        };
+        let asset = CharacterAsset {
+            name: "synthetic".into(),
+            primitives: Vec::new(),
+            textures: Vec::new(),
+            materials: Vec::new(),
+            pieces: vec![Piece::Body(0), Piece::Head(0), Piece::Head(1)],
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None],
+            base_pose: Vec::new(),
+            clips: HashMap::new(),
+            skins: vec![at(&[0.0, 6.0]), at(&[3.0, 4.5]), at(&[5.0])],
+            attachments: [None; 3],
+        };
+        let still = [Mat4::IDENTITY];
+        // Arms raised over a lowered head: the name stays with the head.
+        assert_eq!(asset.top(&still, &[true, true, false]), Some(4.5));
+        // A helmed head drawn instead of the bare one.
+        assert_eq!(asset.top(&still, &[true, false, true]), Some(5.0));
+        // No head drawn: the top of what is.
+        assert_eq!(asset.top(&still, &[true, false, false]), Some(6.0));
+        assert_eq!(asset.top(&still, &[false, false, false]), None);
+        // The joints place the points: a head lifted by 2.
+        let lifted = [Mat4::from_translation(Vec3::Y * 2.0)];
+        assert_eq!(asset.top(&lifted, &[true, true, false]), Some(6.5));
+    }
+
+    #[test]
+    fn a_model_stands_on_the_lowest_point_its_standing_clip_reaches() {
+        // A foot hung a unit under a hip bone, which the standing clip
+        // lowers by half a unit and back.
+        let hip = LocalTransform {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+        };
+        let lowered = LocalTransform {
+            translation: Vec3::NEG_Z * 0.5,
+            ..hip
+        };
+        // In the renderer's frame, where skins hold their vertices.
+        let foot = [0.0, -1.0, 0.0];
+        let model = |clips: HashMap<String, Vec<Option<AnimationTrack>>>| {
+            let mut asset = CharacterAsset {
+                name: "synthetic".into(),
+                primitives: vec![ZonePrimitive {
+                    positions: vec![[0.0; 3]],
+                    normals: vec![[0.0, 1.0, 0.0]],
+                    texture_coordinates: Vec::new(),
+                    indices: Vec::new(),
+                    texture: None,
+                    material_mode: MaterialMode::Opaque,
+                }],
+                textures: Vec::new(),
+                materials: vec![None],
+                pieces: vec![Piece::Body(0)],
+                source: PathBuf::new(),
+                catalog: HashMap::new(),
+                parents: vec![None, Some(0)],
+                base_pose: vec![hip, hip],
+                clips,
+                skins: vec![Skin {
+                    positions: vec![foot],
+                    normals: vec![[0.0, 1.0, 0.0]],
+                    bones: vec![1],
+                }],
+                attachments: [None; 3],
+            };
+            let pose = asset.pose("", 0.0);
+            asset.primitives[0].positions = pose[0].positions.clone();
+            asset
+        };
+        let standing = HashMap::from([(
+            STANDING_CLIP.into(),
+            vec![
+                None,
+                Some(AnimationTrack {
+                    frames: vec![hip, lowered],
+                    interval: 1.0,
+                }),
+            ],
+        )]);
+        let asset = model(standing);
+        assert_eq!(asset.span().map(|(bottom, _)| bottom), Some(-1.0));
+        let soles = asset.standing_bottom().unwrap();
+        assert!((soles + 1.5).abs() < 1e-5, "{soles}");
+        // Without a standing clip, the base pose's bottom.
+        assert_eq!(model(HashMap::new()).standing_bottom(), Some(-1.0));
+    }
+
+    #[test]
+    fn joints_place_the_bind_vertices_where_wld_skinning_puts_them() {
+        // One bone turned, scaled and moved in WLD space, as a track frame is.
+        let bone = LocalTransform {
+            translation: Vec3::new(1.0, -2.0, 3.0),
+            rotation: Quat::from_rotation_z(0.7) * Quat::from_rotation_x(-0.4),
+            scale: 1.5,
+        };
+        let libeq_position = [0.3, -1.2, 2.5];
+        let libeq_normal = [0.0, 0.6, 0.8];
+        let asset = CharacterAsset {
+            name: "synthetic".into(),
+            primitives: Vec::new(),
+            textures: Vec::new(),
+            materials: Vec::new(),
+            pieces: vec![Piece::Body(0)],
+            source: PathBuf::new(),
+            catalog: HashMap::new(),
+            parents: vec![None],
+            base_pose: vec![bone],
+            clips: HashMap::new(),
+            skins: vec![Skin {
+                positions: vec![crate::render(libeq_position)],
+                normals: vec![crate::render(libeq_normal)],
+                bones: vec![0],
+            }],
+            attachments: [None; 3],
+        };
+        // Skinning in WLD space, then converting to the renderer's frame.
+        let wld = bone.matrix();
+        let expected_position =
+            eq_client_axes::from_wld(wld.transform_point3(crate::wld(libeq_position)));
+        let expected_normal =
+            eq_client_axes::from_wld(wld.transform_vector3(crate::wld(libeq_normal)).normalize());
+        let joints = asset.joints("", 0.0, true);
+        assert_eq!(asset.bone_count(), 1);
+        let skin = asset.skin(0).unwrap();
+        let placed = joints[skin.bones[0]].transform_point3(Vec3::from_array(skin.positions[0]));
+        assert!((placed - expected_position).length() < 1e-5);
+        let pose = &asset.pose("", 0.0)[0];
+        assert!((Vec3::from_array(pose.positions[0]) - expected_position).length() < 1e-5);
+        assert!((Vec3::from_array(pose.normals[0]) - expected_normal).length() < 1e-5);
+        // A joint is a turn, a uniform scale and a move, which a transform
+        // holds as it is.
+        let (scale, _, _) = joints[0].to_scale_rotation_translation();
+        assert!((scale - Vec3::splat(1.5)).length() < 1e-5);
+        assert!(asset.skin(1).is_none());
     }
 
     #[test]

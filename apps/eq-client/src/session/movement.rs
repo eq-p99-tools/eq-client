@@ -209,6 +209,7 @@ mod tests {
             session_id,
             zone: "example".into(),
             far_clip: None,
+            spell_landing_flag: None,
             player: Box::new(PlayerState {
                 name: "Example".into(),
                 base_attributes: None,
@@ -223,6 +224,8 @@ mod tests {
                 endurance: None,
                 skills: None,
                 practice_points: None,
+                languages: None,
+                disciplines: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],
                 size: 6.0,
@@ -276,6 +279,7 @@ mod tests {
             player,
             zone,
             far_clip,
+            spell_landing_flag: None,
         };
         assert!(policy.observe(&still, now).is_none());
         let correction = WorldEvent::Position {

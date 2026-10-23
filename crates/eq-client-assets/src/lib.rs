@@ -5,8 +5,11 @@ pub mod items;
 pub mod maps;
 pub mod regions;
 pub mod sidl;
+pub mod sounds;
 pub mod spells;
 pub mod strings;
+#[cfg(test)]
+mod test_world;
 pub mod ui;
 
 use std::collections::HashMap;
@@ -167,6 +170,15 @@ pub enum LoadError {
     /// The WLD payload could not be parsed.
     #[error("could not parse WLD data: {0}")]
     ParseWorld(String),
+    /// The zone's files stopped libeq's reader part way, on data it cannot
+    /// read; its message says where.
+    #[error("could not read zone {zone}: the zone reader stopped: {message}")]
+    Unreadable {
+        /// The zone's short name.
+        zone: String,
+        /// What the reader said as it stopped.
+        message: String,
+    },
     /// A texture could not be decoded.
     #[error("could not decode texture {name}: {source}")]
     DecodeTexture {
@@ -203,6 +215,60 @@ pub(crate) fn zone_name(short_name: &str) -> Result<&str, LoadError> {
 /// unreadable, or an archive, world, or texture cannot be decoded.
 pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
     let short_name = zone_name(short_name)?;
+    guarded(short_name, || {
+        read_zone(eq_directory, short_name, Textures::Realize)
+    })
+}
+
+/// Loads a zone's solids alone: its collision, its regions and its placed
+/// objects with their models' collision, the same as [`load_zone`] gives
+/// them, but with no drawn geometry and no texture decoded. For building the
+/// navigation mesh, where the textures would be most of the time.
+///
+/// # Errors
+///
+/// As [`load_zone`], but for textures, which aren't read.
+pub fn load_zone_collision(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
+    let short_name = zone_name(short_name)?;
+    guarded(short_name, || {
+        read_zone(eq_directory, short_name, Textures::Skip)
+    })
+}
+
+/// Whether a zone's read decodes its drawn geometry and textures.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Textures {
+    Realize,
+    Skip,
+}
+
+/// Runs a zone's read through libeq, whose parser and model view panic on
+/// some data they cannot read (a count or index past the end of a list), and
+/// turns such a panic into [`LoadError::Unreadable`] carrying its message, so
+/// a zone the reader stops on is a zone that can't be loaded, said as such,
+/// rather than a panic in the loading task.
+fn guarded<T>(
+    zone: &str,
+    read: impl FnOnce() -> Result<T, LoadError> + std::panic::UnwindSafe,
+) -> Result<T, LoadError> {
+    std::panic::catch_unwind(read).unwrap_or_else(|panic| {
+        let message = panic
+            .downcast_ref::<&str>()
+            .map(|message| (*message).to_owned())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "no message".to_owned());
+        Err(LoadError::Unreadable {
+            zone: zone.to_owned(),
+            message,
+        })
+    })
+}
+
+fn read_zone(
+    eq_directory: &Path,
+    short_name: &str,
+    textures_read: Textures,
+) -> Result<ZoneAsset, LoadError> {
     let archive_path = eq_directory.join(format!("{short_name}.s3d"));
     let file = File::open(&archive_path).map_err(|source| LoadError::OpenArchive {
         path: archive_path,
@@ -220,9 +286,15 @@ pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, Loa
     let mut texture_indices = HashMap::<String, usize>::new();
     let mut primitives = Vec::new();
 
-    for mesh in world.meshes() {
-        for staged in stage_mesh(&mesh) {
-            primitives.push(staged.realize(&mut archive, &mut textures, &mut texture_indices)?);
+    if textures_read == Textures::Realize {
+        for mesh in world.meshes() {
+            for staged in stage_mesh(&mesh) {
+                primitives.push(staged.realize(
+                    &mut archive,
+                    &mut textures,
+                    &mut texture_indices,
+                )?);
+            }
         }
     }
 
@@ -235,8 +307,8 @@ pub fn load_zone(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, Loa
         eq_directory,
         short_name,
         placements,
-        &mut textures,
-        &mut texture_indices,
+        textures_read,
+        (&mut textures, &mut texture_indices),
     )?;
 
     Ok(ZoneAsset {
@@ -344,8 +416,8 @@ fn load_object_models(
     eq_directory: &Path,
     short_name: &str,
     placements: Vec<ObjectPlacement>,
-    textures: &mut Vec<ZoneTexture>,
-    texture_indices: &mut HashMap<String, usize>,
+    textures_read: Textures,
+    (textures, texture_indices): (&mut Vec<ZoneTexture>, &mut HashMap<String, usize>),
 ) -> Result<(Vec<ZoneModel>, Vec<ZoneObject>), LoadError> {
     let archive_path = eq_directory.join(format!("{short_name}_obj.s3d"));
     let file = match File::open(&archive_path) {
@@ -373,10 +445,20 @@ fn load_object_models(
         let (Some(name), Some(mesh)) = (model.name(), model.mesh()) else {
             continue;
         };
-        let primitives = load_mesh_primitives(&mesh, &mut archive, textures, texture_indices)?;
-        if primitives.is_empty() {
-            continue;
-        }
+        // A model with nothing drawn is left out either way, so both reads
+        // place the same objects.
+        let primitives = match textures_read {
+            Textures::Realize => {
+                let primitives =
+                    load_mesh_primitives(&mesh, &mut archive, textures, texture_indices)?;
+                if primitives.is_empty() {
+                    continue;
+                }
+                primitives
+            }
+            Textures::Skip if stage_mesh(&mesh).is_empty() => continue,
+            Textures::Skip => Vec::new(),
+        };
         model_indices.insert(name.to_owned(), models.len());
         models.push(ZoneModel {
             name: name.to_owned(),
@@ -616,7 +698,10 @@ mod tests {
         DrawStyle, Lighting, MaterialType, RenderMethod, Shading, TextureStyle,
     };
 
-    use super::{LoadError, MaterialMode, bmp_color_key, load_zone, material_mode};
+    use super::{
+        LoadError, MaterialMode, ZoneAsset, bmp_color_key, load_zone, load_zone_collision,
+        material_mode,
+    };
 
     #[test]
     fn unparseable_world_files_are_errors_not_crashes() {
@@ -624,6 +709,206 @@ mod tests {
             super::parse_wld(b"not a world file", "broken.wld"),
             Err(LoadError::ParseWorld(_))
         ));
+    }
+
+    /// A world file whose one mesh claims more faces for its material than it
+    /// has, which libeq's model view stops on with a panic.
+    fn world_the_reader_stops_on() -> Vec<u8> {
+        use crate::test_world::{Coordinates, OLD_FORMAT, WorldFile, material, palette, triangle};
+        let mut world = WorldFile::new(OLD_FORMAT);
+        let (m, p, t) = (
+            world.name("M_MDF"),
+            world.name("P_MP"),
+            world.name("T_DMSPRITEDEF"),
+        );
+        let material = world.fragment(0x30, material(m, 0x8000_0001));
+        let palette = world.fragment(0x31, palette(p, material));
+        let coordinates = Coordinates::Old([(0, 0), (256, 0), (0, 256)]);
+        world.fragment(0x36, triangle(t, palette, &coordinates, 2));
+        world.bytes()
+    }
+
+    #[test]
+    fn a_zone_the_reader_stops_on_is_an_error_not_a_panic() {
+        use libeq::pfs::PfsWriter;
+        use std::io::Cursor;
+        let install =
+            std::env::temp_dir().join(format!("eq-zone-unreadable-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        let mut writer = PfsWriter::create(Cursor::new(Vec::new())).unwrap();
+        writer
+            .insert("broken.wld", world_the_reader_stops_on().as_slice())
+            .unwrap();
+        std::fs::write(
+            install.join("broken.s3d"),
+            writer.finish().unwrap().into_inner(),
+        )
+        .unwrap();
+        let result = load_zone(&install, "broken");
+        std::fs::remove_dir_all(&install).unwrap();
+        let Err(LoadError::Unreadable { zone, message }) = result else {
+            panic!("expected the zone to be unreadable");
+        };
+        assert_eq!(zone, "broken");
+        assert_ne!(message, "");
+    }
+
+    /// A zone in the new WLD format, with an object file holding an
+    /// unlisted user-defined material and vertex animations of both
+    /// alignments.
+    fn write_new_format_zone(install: &Path) {
+        use crate::test_world::{
+            Coordinates, NEW_FORMAT, OLD_FORMAT, WorldFile, material, palette, triangle,
+            vertex_animation, write_archive,
+        };
+        let words = |words: &[u32]| -> Vec<u8> {
+            words.iter().flat_map(|word| word.to_le_bytes()).collect()
+        };
+
+        let mut zone = WorldFile::new(NEW_FORMAT);
+        let (m, p, t) = (
+            zone.name("M_MDF"),
+            zone.name("P_MP"),
+            zone.name("R1_DMSPRITEDEF"),
+        );
+        let terrain = zone.fragment(0x30, material(m, 0x8000_0001));
+        let terrain_palette = zone.fragment(0x31, palette(p, terrain));
+        let coordinates = Coordinates::New([(0.0, 0.0), (1.0, 0.0), (0.5, -2.25)]);
+        zone.fragment(0x36, triangle(t, terrain_palette, &coordinates, 1));
+
+        // One placement of the object: name, model, flags (a location),
+        // sphere, the location, and no user data.
+        let mut placements = WorldFile::new(OLD_FORMAT);
+        let model = placements.name("OBJ_ACTORDEF");
+        let mut placement = words(&[0, model.cast_unsigned(), 0x02, 0]);
+        for value in [10.0_f32, 20.0, 30.0, 0.0, 0.0, 0.0] {
+            placement.extend(value.to_le_bytes());
+        }
+        placement.extend(words(&[0, 0]));
+        placements.fragment(0x15, placement);
+
+        let mut objects = WorldFile::new(OLD_FORMAT);
+        let (w, p, t) = (
+            objects.name("W_MDF"),
+            objects.name("P_MP"),
+            objects.name("OBJ_DMSPRITEDEF"),
+        );
+        let (model, a1, a2) = (
+            objects.name("OBJ_ACTORDEF"),
+            objects.name("A1_DMTRACKDEF"),
+            objects.name("A2_DMTRACKDEF"),
+        );
+        let water = objects.fragment(0x30, material(w, 0x8000_0018));
+        let object_palette = objects.fragment(0x31, palette(p, water));
+        let coordinates = Coordinates::Old([(0, 0), (256, 0), (0, 256)]);
+        let mesh = objects.fragment(0x36, triangle(t, object_palette, &coordinates, 1));
+        // A sprite naming the mesh, then the model: name, flags, callback,
+        // no actions, one sprite reference, no bounds, the sprite, unknown.
+        let sprite = objects.fragment(0x2d, words(&[0, mesh.cast_unsigned(), 0]));
+        objects.fragment(
+            0x14,
+            words(&[
+                model.cast_unsigned(),
+                0,
+                0,
+                0,
+                1,
+                0,
+                sprite.cast_unsigned(),
+                0,
+            ]),
+        );
+        // 18 + 6 bytes ends on a word; 18 + 12 is padded with two more.
+        objects.fragment(0x37, vertex_animation(a1, 1));
+        objects.fragment(0x37, vertex_animation(a2, 2));
+
+        write_archive(
+            install,
+            "newzone.s3d",
+            &[
+                ("newzone.wld", zone.bytes()),
+                ("objects.wld", placements.bytes()),
+            ],
+        );
+        write_archive(
+            install,
+            "newzone_obj.s3d",
+            &[("newzone_obj.wld", objects.bytes())],
+        );
+    }
+
+    #[test]
+    fn a_new_format_zone_with_its_objects_loads_whole() {
+        let install =
+            std::env::temp_dir().join(format!("eq-zone-new-format-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        write_new_format_zone(&install);
+        let result = load_zone(&install, "newzone");
+        std::fs::remove_dir_all(&install).unwrap();
+        let zone = result.unwrap();
+
+        assert_eq!(zone.primitives.len(), 1);
+        assert_eq!(
+            zone.primitives[0].texture_coordinates,
+            vec![[0.0, 0.0], [1.0, 0.0], [0.5, -2.25]]
+        );
+        assert_eq!(zone.models.len(), 1);
+        assert_eq!(zone.models[0].name, "OBJ_ACTORDEF");
+        assert_eq!(zone.models[0].primitives.len(), 1);
+        // A user-defined type with no transparency mapping draws opaque.
+        assert_eq!(
+            zone.models[0].primitives[0].material_mode,
+            MaterialMode::Opaque
+        );
+        assert_eq!(zone.objects.len(), 1);
+        assert_eq!(zone.objects[0].model, 0);
+    }
+
+    #[test]
+    fn a_zones_solids_alone_are_the_same_as_in_the_whole_zone() {
+        let install =
+            std::env::temp_dir().join(format!("eq-zone-collision-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        write_new_format_zone(&install);
+        let (whole, solids) = (
+            load_zone(&install, "newzone"),
+            load_zone_collision(&install, "newzone"),
+        );
+        std::fs::remove_dir_all(&install).unwrap();
+        let (whole, solids) = (whole.unwrap(), solids.unwrap());
+        assert!(solids.primitives.is_empty() && solids.textures.is_empty());
+        assert_eq!(solids.collision, whole.collision);
+        assert_eq!(
+            solids.regions.liquid_region_count(),
+            whole.regions.liquid_region_count()
+        );
+        let models = |zone: &ZoneAsset| -> Vec<(String, Vec<[[f32; 3]; 3]>)> {
+            zone.models
+                .iter()
+                .map(|model| (model.name.clone(), model.collision.clone()))
+                .collect()
+        };
+        assert_eq!(models(&solids), models(&whole));
+        assert!(
+            solids
+                .models
+                .iter()
+                .all(|model| model.primitives.is_empty())
+        );
+        // Each placement's model, translation, rotation and scale.
+        let placed = |zone: &ZoneAsset| -> Vec<String> {
+            zone.objects
+                .iter()
+                .map(|object| {
+                    format!(
+                        "{} {:?} {:?} {:?}",
+                        object.model, object.translation, object.rotation, object.scale
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(placed(&solids), placed(&whole));
+        assert_eq!(solids.objects.len(), 1);
     }
 
     #[test]
@@ -681,9 +966,13 @@ mod tests {
     fn installed_triangles_wind_counter_clockwise_around_their_normals() {
         let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
         let zone = load_zone(Path::new(&install), "qeytoqrg").unwrap();
-        let human =
-            crate::characters::load_installed_character(Path::new(&install), "qeynos2", "HUM")
-                .unwrap();
+        let human = crate::characters::load_installed_character(
+            Path::new(&install),
+            "qeynos2",
+            "HUM",
+            &crate::characters::DonorArchives::default(),
+        )
+        .unwrap();
         let (terrain, character) = (
             counter_clockwise_share(&zone.primitives),
             counter_clockwise_share(&human.primitives),

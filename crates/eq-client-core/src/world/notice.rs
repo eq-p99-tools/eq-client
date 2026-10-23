@@ -60,7 +60,7 @@ pub enum Notice {
         /// The string's ID.
         id: u32,
         /// Its `%1`, `%2`, ... substitutions, in order.
-        arguments: Vec<String>,
+        arguments: Vec<crate::chat::RichText>,
         /// The message type the server gave it, by which the official client
         /// colours its line.
         message_type: Option<u32>,
@@ -110,6 +110,9 @@ pub enum Notice {
     TransferRefused(ZoneRejection),
     /// A zone line could not be crossed, and why.
     ZoneLineRefused(String),
+    /// The player arrived in a zone, named by its long name: at Enter World,
+    /// through a transfer or back at the bind.
+    Arrived(String),
     /// A target request was refused, and why.
     TargetRefused(String),
     /// An ability was not used, and why: in the official client's own words
@@ -268,5 +271,12 @@ pub enum Notice {
         string_id: u32,
         /// The caster's name, as the server sent it.
         caster: String,
+    },
+    /// A character the player asked for was not created.
+    CreationRefused {
+        /// The name asked for.
+        name: String,
+        /// Which refusal: the name, the creation, or the client's own.
+        outcome: crate::creation::CreationOutcome,
     },
 }

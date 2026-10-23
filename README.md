@@ -1,7 +1,7 @@
 # eq-client
 
-`eq-client` is an experimental native, top-down EverQuest client. The first
-milestone is an offline viewer for classic S3D/WLD zones. It loads game data
+`eq-client` is an experimental native, top-down EverQuest client with an offline
+viewer and capability-gated online gameplay. It loads game data
 from an EverQuest installation supplied by the user; this repository and its
 build artifacts do not contain or redistribute EverQuest assets.
 
@@ -17,11 +17,14 @@ The code is intentionally split at stable boundaries:
 - `eq-client-render` is the reusable Bevy presentation layer.
 - `eq-client` owns configuration and the network worker lifecycle.
 
-The stationary P99 preview translates typed events from the
+The online client translates typed events from the
 [`eq-network`](https://github.com/eq-p99-tools/eq-network) crates into
 `eq-client-core`. Packet parsing, connection state, game state, and rendering
-remain separate, so movement, zoning, inventory, combat, and other systems
-can be added without coupling the UI to a specific server protocol.
+remain separate. Movement, zoning, inventory, spells, targeting and combat
+already have client paths; availability depends on the session's capabilities.
+See [support and validation](SUPPORT.md) for the difference between implemented,
+offered and live-tested behavior, and [architecture contracts](ARCHITECTURE.md)
+before extending a feature.
 
 ## Offline East Commonlands demo
 
@@ -30,7 +33,7 @@ Install current stable Rust, then point the viewer at your own EQ directory:
 ```console
 cargo run -p eq-client --release -- \
   --eq-dir "/path/to/EverQuest" \
-  --zone ecommons
+  --offline --zone ecommons
 ```
 
 On Windows PowerShell:
@@ -38,8 +41,12 @@ On Windows PowerShell:
 ```powershell
 cargo run -p eq-client --release -- `
   --eq-dir "C:\Program Files (x86)\Sony\EverQuest" `
-  --zone ecommons
+  --offline --zone ecommons
 ```
+
+Without `--offline` the client opens its login screen instead (see
+[Logging in](#logging-in)). `--inspect-only`, `--screenshot`, the `--demo-*`
+previews and a script without a `login` step stay offline by themselves.
 
 Use WASD to move the locally loaded character across the terrain, drag with the
 right mouse button to orbit, and use the wheel to zoom. Add `--camera
@@ -80,28 +87,121 @@ drawn and how fast the camera turns; its Keyboard page lists the keys. Its
 QoL page holds the settings only this client has, kept per character (see
 [Quality of life](#quality-of-life)).
 
-## Stationary online preview
+## Logging in
+
+Run without `--offline` or `--online`, the client opens on its login screen:
+choose a login server, type the account and password, and **Connect** (or
+Enter; Tab moves between the boxes). The login server's list of worlds
+follows, with each world's players, or that it is down or locked, and the
+world last played on highlighted; Up and Down browse, Enter or a second
+click plays, and Escape goes back. A world the login server refuses says
+why, in the installed client's words for it where the server gives a login
+string (`eqlsstr_us.txt`), and the list stays up for another choice. The
+world's character list comes next, as in the online gameplay preview below.
+
+The login servers are presets in `login-servers.txt` in the settings
+directory (`--settings-dir` or `EQ_CLIENT_SETTINGS_DIR`, by default
+`eq-client` in the per-user settings directory). A first run writes one
+per server type: Project 1999 and Project Quarm at their login servers, and
+Local EQEmu and Local TAKP with only their usual ports. An emulator server
+runs wherever its owner runs it, and a guess at this machine could reach
+something else listening there, such as a P99 login proxy, so those two are
+greyed, saying why, until their `host` is set in the file, or a launch names
+one with `EQ_LOGIN_HOST` for that run. On a first run, `EQ_PROTOCOL`,
+`EQ_LOGIN_HOST` and `EQ_LOGIN_PORT`, as launchers set them today, go into
+their type's preset. The file is yours to edit:
+
+```ini
+# eq-client login servers v1
+last = Home server
+
+[Home server]
+type = eqemu
+host = 192.168.1.20
+port = 5998
+installation = C:\EverQuest
+```
+
+`type` is `p99`, `quarm`, `eqemu` or `takp`. The client writes the file
+back only to remember a preset's last account name and world, the
+installation it played with, and the preset last used; it never stores a
+password. A preset at the login server the installed Titanium client's
+`eqhost.txt` names starts from the account name and world that client last
+used (`eqlsPlayerData.ini`) until it remembers its own; both files are only
+read.
+
+A run keeps one installation: `--eq-dir` or `EQ_CLIENT_DIR`, else the
+starting preset's `installation`, else the standard one. A preset whose
+server type needs the other client (Titanium for P99 and EQEmu, TAKP's for
+Quarm and TAKP), or that names another installation, opens the client
+again with that installation when you connect. One for the other client
+with no installation named is greyed, with how to name one on hover: run
+`eq-client --eq-dir <folder> --preset "<name>"` once.
+
+Every screen can be skipped, for scripted runs and quick logins.
+`--preset <name>` (or `EQ_PRESET`) starts on that preset. `--server <world>`
+(`EQ_SERVER`) plays on that world without the list, and `--character
+<name>` (`EQ_CHARACTER`) enters that character without its list, both on
+the starting preset only. `--online` logs in at once, without the login
+screen, with `EQ_ACCOUNT` and `EQ_PASSWORD` from the environment, on
+`--preset` or else the first preset of `EQ_PROTOCOL`'s type (P99 by
+default). Account names and passwords are never taken as arguments.
+
+With an installation that has its login skin (the `EQLSUI` set beside the
+`EQUI_*.xml` files), the login screen and the list of worlds are drawn from
+it: the skin's connect and server select screens, 640 by 480, unscaled and
+centred on black (the placement is ours, inferred). Connect, Quick Connect,
+Cancel, Play, Play Last Server and Exit work. Quick Connect plays the world
+last played on that login server once the list shows it open, and the
+skin's other buttons, such as its chat and news, are greyed as not in this
+client yet. Exit on the list returns to the login screen, and Cancel with
+nothing logging in leaves the game, since this client draws no main menu
+(inferred). The login server picker, on the black above the screen where
+the window has room for it and else above the boxes, the status lines and
+the highlighted world's tint are ours. Without the set the client's own
+windows show.
+
+## Online gameplay preview
 
 Set `EQ_ACCOUNT`, `EQ_PASSWORD`, and `EQ_SERVER` in the process
-environment, then run with `--online`. The server's character list appears first;
+environment, then run with `--online` to skip the login screen; without
+`EQ_SERVER`, the login server's list of worlds shows. The character list follows;
 choose a character and click **Enter World** (or use Up/Down and Enter). With an
 installation it is the skin's character select window (`CharacterSelectWindow`):
 its eight character buttons show the server list's slots in order, each with
 its character's name, the level on hover, and the chosen one pressed; **Quit**
-leaves the game. An empty slot shows the skin's words for creating a character,
+goes back to the login screen with the account kept; in the offline preview
+it leaves the game. An empty slot shows the skin's words for creating a character,
 dimmed, and says on hover that this client cannot make one yet; the skin's
 buttons for creating, deleting and rotating characters, the tutorial, exploring
 and returning home are greyed with the same reason, as this client has none of
 them yet. The window opens where the skin puts it and can be dragged, but its
 place is not kept between runs: no character is chosen yet whose files could
 hold it.
+The list opens with its first character chosen, and the chosen character
+stands in its own zone behind the list, dressed in its gear, while the
+camera circles it slowly until you move the camera yourself: right-drag
+orbits it and the wheel zooms. Where it
+stands in each zone comes from this client's spots file
+(`crates/eq-client-core/data/select-spots.txt`); a zone without a line there
+shows the character at the middle of the zone. The character shows where the
+server type's list is checked to carry its look (EQEmu and TAKP); elsewhere
+the list stays on its dark cover. Under the list, a line names the chosen
+character with its level, class and zone, in the installed client's words
+for it (the official client shows that line only in its explore mode); where
+the server's list lacks the level or the class it names the zone alone, and
+where it lacks the zone it shows nothing. Spots for the file are proposed from each
+installed zone's shape by
+`cargo run --release -p eq-client-render --example propose_select_spots -- <EverQuest folder> [zone ...]`,
+which reads the installation only and prints unreviewed lines to look over.
 `EQ_CHARACTER` is optional and retains automatic entry for existing launchers.
 An empty account displays guidance instead of entering a made-up character.
 Use a secret manager or a private launcher;
 do not put credentials in command arguments, scripts checked into Git, or screenshots.
 The local P99 installation supplies both assets and validation checksums. For Quarm,
 set `EQ_PROTOCOL=quarm` and point `--eq-dir` to your TAKP installation.
-Use `--demo-character-select` without `--online` for a synthetic UI preview.
+Use `--demo-character-select` without `--online` for a synthetic UI preview,
+whose two synthetic characters stand in their zones as above.
 
 Each bag and its contents share a tinted group. Click the small **+** color control
 beside its icon to choose a background color. Colors belong to the storage slot and
@@ -147,9 +247,9 @@ worker. `--session-seconds 150` bounds a test; `--screenshot frame.png
 Allow the usual server logout timeout before another client uses the character.
 
 Online sessions are stationary by default. The opt-in P99 movement path is described
-below. `EQ_PROTOCOL` selects `p99` (default) or `quarm`, or a stock server for
-local testing: `eqemu` (Titanium) or `takp` (a TAKP server, which speaks
-Quarm's protocol).
+below. With `--online`, `EQ_PROTOCOL` selects `p99` (default) or `quarm`, or a
+stock server for local testing: `eqemu` (Titanium) or `takp` (a TAKP server,
+which speaks Quarm's protocol); on the login screen, each preset's type does.
 For Quarm, use the TAKP installation as `--eq-dir`; P99 checksum scanning is skipped.
 Both protocols supply server-selected terrain, character state, nearby spawns,
 position updates, despawns, HP, mana, and experience. Quarm's compressed profile and
@@ -195,6 +295,9 @@ Implemented locally:
   nearest entities are rendered. Distant entities retain state but have no render
   objects or animation work. Model textures/materials are shared, poses update
   at most 30 times per second, and new instances are created gradually.
+  A moving character walks or runs by its speed against its spawn record's
+  walk speed (the player by its walk toggle), and a model whose walk or run moves only its root plays the other
+  (inferred, recording checklist 6.232).
 - `--demo-entities` provides an explicitly offline moving player/wolf/orc scene
   using the same renderer. The player cycles through sitting, ducking, and walking
   in six-second phases. It cannot be combined with `--online`.
@@ -294,10 +397,37 @@ ducking (including server-side cast interruption), and V requests standing.
 Typing in chat or losing window focus suppresses these controls. The spell panel
 can be moved and minimized using its title bar.
 
-The 5-by-2 action bar accepts clicks and unmodified number keys. Defaults are
-1–8 for spell gems, 9 to sit, and 0 to stand. Hover a spell gem and press
-Ctrl+number to bind that gem to an action slot; Ctrl+Shift+number clears a slot.
-Hover an inventory item with a click effect and use Ctrl+number to bind it instead.
+The 5-by-2 action bar holds ten hotbuttons, used with a click or the unmodified
+number keys. A new character's defaults are 1–8 for the spell gems, 9 to sit and
+0 to stand; a character with no hotbar file of their own starts from the
+official client's first page of hotbuttons, where this client knows their kinds.
+Each character's hotbuttons are kept in `hotbar-<world>-<character>.txt` in the
+settings folder. A hotbutton holds a spell gem, a worn or carried item with a
+click effect, an Actions window ability, or one of the Actions window's Melee
+Attack, Sit, Stand, Camp, Invite, Follow and Disband buttons: it casts the gem's
+spell, uses the item as Alt+right-click does, or does exactly what the button
+does. Hold the left button on one of those (a gem with a spell, an Actions
+window button, such an item, or a hotbutton that holds one of them) for half a
+second and its hotkey comes onto the cursor, which shows the spell's icon, the
+item's picture or the button's name. A hotbutton held leaves its slot; a gem,
+button or item keeps what it has. Click a hotbutton to put the hotkey there, or
+let the hold go over another hotbutton, and what a hold on that hotbutton would
+pick up comes onto the cursor; a gem with no spell, or an item gone from its
+place, is simply replaced. A click anywhere else throws the hotkey away and does
+nothing else, which is how a hotbutton is emptied; anything else coming onto the
+cursor, or leaving the world, throws it away too. A control with something a
+hold can pick up acts when a quick click is let go over it, not when it is
+pressed; with Shift, Ctrl or Alt held, or with something on the cursor, a press
+acts at once as before. The hold time, that a click waits for its release, the
+swap, the drop where a hold is let go, the click that throws a hotkey away, what
+the cursor shows and which items can go on the bar (those with a click effect)
+are inferred, not yet checked against the official client. Hover any of those
+controls and press Ctrl+number to bind what a hold would pick up from it to that
+slot; Ctrl+Shift+number empties a slot. A hotbutton holding a kind with no
+picture (Sit, Stand, Melee Attack, Camp, the group's kinds or an ability) shows
+its name centred, as large as fits the button; a gem's spell and an item keep
+their picture with a small tag in the corner. That look is Adam's choice; the
+official client's is not yet checked.
 Item shortcuts show installed item artwork and use the same activation checks as
 Alt+right-click in inventory, including cursor, casting, charges and pending-request
 guards. They use the selected target, or self when no target is selected. Worker
@@ -305,7 +435,7 @@ feedback appears on the HUD even with inventory closed. Each item shortcut retai
 its slot and item ID: moving or replacing it leaves an unavailable binding until
 you rebind it. It never searches for another copy or silently uses another item.
 This path has offline command-submission coverage and awaits live validation.
-Bindings follow the current contents of the gem and are kept only in memory.
+A gem's hotbutton follows what the gem holds now.
 The action bar uses the same cast validation and cooldowns as direct gem input.
 Bound spells show local-install icons and hover details for the current gem contents,
 including cast acknowledgement and cooldown status. Empty gems and cleared bindings
@@ -431,6 +561,25 @@ models inherit missing tracks from their documented donor models, while their ow
 tracks retain priority. Human sitting and crouching have been rendered offline
 from the installed assets; live posture acknowledgements remain unverified.
 
+Swings, kicks and the other one-shot motions the server sends for a spawn in
+view, the player's own included, play their clip once over the stance and the
+walk, and a new one starts it again. A cast plays nothing while it runs; when
+its spell lands, anyone's cast included, the caster plays once the casting
+gesture the installed `spells_us.txt` names for the spell, as the official
+client does. An interrupted cast, a fizzle, and a landing with no cast under way
+(a proc, or a cast begun before the caster came into view) play nothing; the
+last two are inferred. Neither plays over sitting, lying, looting, crouching or
+a corpse. A spawn the player sees die plays its death clip once and stays on its
+last frame, lying on the ground; a corpse that comes into view already dead lies
+there without falling (inferred). Each
+of the servers' animation numbers plays the clip EQEmu's documented table gives
+it, at normal speed whatever speed the server sends. A model without that clip
+plays the lowest-numbered clip of the same kind it has, for an attack (1 to 11)
+or a casting gesture (42 to 44), so a creature whose model lacks its own swing
+still swings; for anything else it shows what it would have shown. Apart from
+when the casting gesture plays, which was checked against the official client,
+all of this, over the walk too, is inferred.
+
 Mode-3 server spell-bar refreshes start numeric gem cooldowns. Base recovery and
 recast durations come from the installed `spells_us.txt`; the server's reuse-time
 reduction applies to that spell's recast timer. The shared recovery interval also
@@ -468,12 +617,22 @@ additional model races and appearance updates, animated world textures and water
 Space jumps, and walking off a ledge falls, with gravity, terminal speed, floor
 landing and ceiling collision: offline, and online on stock `EQEmu` sessions.
 P99 and Quarm sessions keep grounded movement until official-client jumps and
-falls are measured. Each landing exposes local fall distance and impact speed for
-diagnostics; it does not calculate damage or send a damage report, so online falls
-do not hurt yet. The explicit tuning (gravity 32, terminal speed 40, jump speed 10
+falls are measured. On stock `EQEmu`, a landing reports its damage after the
+sample that lands, where the session takes the world's damage from the client
+and the player has not turned off **Take Environmental Damage (unsafe)** (see
+[Quality of life](#quality-of-life)):
+none up to 20 units of drop, then growing with the square of the drop past it,
+less the player's Safe Fall skill, and none where the feet land in water or lava.
+The server then applies its own reductions. All of this is inferred until
+official-client falls are measured. Offline, landings only log the damage they
+would do. The explicit tuning (gravity 32, terminal speed 40, jump speed 10
 in world units and seconds) is not calibrated EQ physics. Falls continue after
 movement keys are released or the window loses focus; chat/focus guards suppress
-new movement input. Spell slots
+new movement input. Every walk, route and fall keeps out of the zone's water
+and lava as the WLD's regions mark them (read as `EQEmu`'s water maps read
+them), since the client cannot swim yet and reports no drowning or burns: a
+step stops before the head would go under water or the feet into lava, shallow
+water is waded, and feet already in either may walk out. Spell slots
 show hover names, shortcuts, local base mana cost, cast time, range, reuse timing
 and remaining cooldowns, with distinct
 empty/available/waiting colors. Spell gems and book rows load icons from the user's
@@ -490,7 +649,11 @@ use **_** / **+** to minimize or restore it. Actions and spells use these title 
 too. Passive character-resource, target and diagnostic panels have no title bar;
 drag anywhere on their surface to move them, and they do not minimize.
 Window positions and minimized states survive HUD reconstruction during zone
-changes within the running application. They are not yet saved across app restarts.
+changes, and each character on each world keeps its own between runs, in the
+settings directory. A character this client has not placed windows for yet
+starts where the official client's UI file (`UI_<character>_<world>.ini`) last
+put them, and a window placed by neither opens in its default place (see
+**Open Windows Apart** under [Quality of life](#quality-of-life)).
 Moved panels are kept within the viewport after resizing or changing UI scale;
 oversized panels keep their title bar at the top left so they remain reachable.
 
@@ -508,6 +671,30 @@ cargo run -p eq-client-assets --example inspect_characters -- "/path/to/EverQues
 Development currently uses sibling path dependencies into
 `../network-refactor/eq-network`. Both checkouts contain local, unpublished API
 changes and must be kept together until a coordinated library release.
+
+## Sound
+
+Sounds come from the installed client's own files, read at runtime: for
+Titanium, the WAV files in its `snd*.pfs` archives and its `sounds` folder; the
+Mac-era client's are not read yet. Whether sounds play starts
+from `Sound` in `eqclient.ini`; the Options window's Sound Volume slider is this
+client's own, at 100% until the official `SoundVolume` scale is known. A file is read and test-decoded off
+the frame the first time it is asked for; one that cannot be decoded is logged
+once and never played. Without an audio device the client logs that sounds are
+off and plays on. Building on Linux needs ALSA's development files
+(`libasound2-dev` on Debian and Ubuntu).
+
+## Checks
+
+Pull request CI checks only formatting; the full suite (clippy, tests on Linux and
+Windows) runs on demand at milestones (Actions > CI > Run
+workflow). Run it locally before opening a pull request:
+
+```console
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+```
 
 ## License
 
@@ -589,6 +776,19 @@ offer is greyed, with the reason on hover. The settings:
   client's taskbar button flashes until the client is in front again; other
   systems show it their own way. Greyed where the session does not chat
   (`Talking`).
+- **Take Environmental Damage (unsafe)** (`take_environmental_damage`, on):
+  reports the damage the world does to the player to the server, as the
+  official client does: for now a fall's on stock `EQEmu` (see the movement
+  notes above). Turned off, the client keeps it to itself and the character
+  takes none, which is unsafe: a server may notice a character that never
+  takes it. The water and lava guard stays on either way. Greyed where the
+  session takes no damage from the client (`EnvironmentalDamage`).
+- **Corpses Lie Along the Ground** (`corpses_along_ground`, on): a corpse's
+  body is pitched and rolled to the slope of the floor under its soles, up to
+  35° each way, so it lies along a hillside rather than sinking into it; a
+  corpse seen dying leans into the slope as it falls. Turned off, corpses lie
+  level with their soles, as before. What the official client does is
+  inferred.
 
 Always on:
 
@@ -610,6 +810,13 @@ Always on:
   it, from when the buff landed.
 - **Show Weapon Ratio**: the item display shows a weapon's damage divided by
   its delay under those two.
+- **Open Windows Apart**: until the player places them, here or in the
+  official client, the windows always on screen open where none covers
+  another: the spells at the top left with the player, group and pet windows
+  beside them, the window selector and the target at the top centre, the
+  buffs down the right, the hotkeys at the bottom left, the chat at the bottom
+  centre with the casting bar above it, and the status panel at the bottom
+  right. The official client opens each where the UI skin puts it.
 
 ## Combat, looting, merchants, giving and camping
 
@@ -720,19 +927,26 @@ official client. These paths have synthetic tests; live verification is pending.
 
 `--script <file>` runs a bounded key script through the ordinary input paths, for
 repeatable live or offline checks. One step per line, `#` starts a comment:
+`login` (types `EQ_ACCOUNT` and `EQ_PASSWORD` from the environment into the
+login screen and connects; a script with it opens on the login screen),
+`wait_servers`, `server <name>` (plays on a world of the login server's list),
 `wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
+`wait_dead <ms>` (waits until the spawn targeted as it starts is an NPC's corpse or has left the zone; past the time, or with nothing targeted, the script stops; a player who dies leaves a player's corpse, so a wait on a player runs out its time),
 `press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch>`,
+`approach object <kind> <range> <ms>` (holds W toward the zone's nearest world container of one tradeskill container type, such as `21`, chosen as the step starts, until it is within the range; with none of that type in the zone, or out of time short of the range, the script stops),
+`walk object <kind> <range> <ms>` (the same container, chosen the same way, reached along `walk`'s searched path around walls, ledges and closed doors instead of a straight line; with none of that type in the zone, no route, a route that ends short of the range, or out of time, the script stops and the log gives where the player stood and how far was left),
 `camera player <offset> <pitch>`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...` (`click loot <place>` takes the item at a place on the corpse, from 0), `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
-`click character <1-8>`, `click enter_world` and `click quit_game` (the skin's character list), `click chat_tab <tab>` (a chat tab by its label, such as `say` or `ooc`), `click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `press delete`,
+`click character <1-8>`, `click enter_world` and `click quit_game` (the skin's character list), `click chat_tab <tab>` (a chat tab by its label, such as `say` or `ooc`), `click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `click hot_button <1-10>` (a hotbutton of the action bar, the client's own or the skin's), `press delete`,
 `give` (asks the target to take the cursor item, as clicking it does),
 `click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
 `click slider clip_plane|max_fps|mouse_sensitivity|quantity <percent>` (an Options window slider, or the quantity window's, pressed that far along),
 `click actions` (opens the skin's Actions window), `click tab <n>`, `click ability combat|abilities <n>`, `click attack`,
 `click buff <n>` and `click song <n>` (a button of the skin's effects windows, the lasting one or the short one, counted from 1; with `hover`, a buff's tooltip),
-`click window <key>` (a button that opens and closes the window, or hides and shows it, such as its selector button or the inventory's Skills button, by the window's key such as `skills`), `click close_box <window>` and `click minimize_box <window>` (a skinned window's title-bar boxes), `click scroll_up <window>` and `click scroll_down <window>` (a skinned window's scrollbar arrows),
+`click window <key>` (a button that opens and closes the window, or hides and shows it, such as its selector button or the inventory's Skills button, by the window's key such as `skills`), `click close_box <window>` and `click minimize_box <window>` (a skinned window's title-bar boxes), `click done <window>` (the Done or Close button in a skinned window's own body, such as the bank's or a tradeskill container's, which closes it as a player's click does; the script stops if the open window has none), `click button <window> <screen id>` (any button of a skinned window, by its window's key and the `ScreenID` the installed skin's file gives it, spelled exactly, such as `click button bank DoneButton`; it does what a player's click on it does, and the script stops with the button's hover reason if the button is greyed out), `click scroll_up <window>` and `click scroll_down <window>` (a skinned window's scrollbar arrows),
 `right_click` with the same targets (a bag's slot opens its window),
 `hover` with the same targets (rests the pointer there, so its tooltip shows and what rides the cursor hangs there, until the next click or hover),
-`slash camp|sit|stand`, `report <label>`, `screenshot <file.png>` and `quit`.
+`hold_click <ms>` with the same targets (holds the left button there that long, then lets it go there; held long enough, a gem, hotbutton, Actions window button or clicky item puts its hotkey on the cursor),
+`slash camp|sit|stand`, `report <label>`, `sound <file.wav>` (plays one of the installation's sound files by name, to check that sounds are heard), `screenshot <file.png>` and `quit`.
 Keys combine with `+` (for example `alt+1`). Scripts only run while the client
 window is focused (except offline, or on a local `EQEmu` or TAKP server), stop if focus is lost while a key is held, cap each hold, wait
 and the whole run, inject clicks only while the real pointer is outside the

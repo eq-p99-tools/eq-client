@@ -45,37 +45,63 @@ pub(super) struct DoorEntity {
     collider: Option<Arc<CollisionMesh>>,
 }
 
+/// How far each drawn hinged door has swung toward its open pose, from 0
+/// shut to 1 open, as drawn this frame; the same pose its collider takes.
+#[derive(Resource, Default)]
+pub(super) struct Hinges(pub BTreeMap<u8, f32>);
+
 /// A hinged door's swing: a quarter turn, in EQ heading units.
-const QUARTER_TURN: f32 = eq_client_core::FULL_TURN / 4.0;
+pub(super) const QUARTER_TURN: f32 = eq_client_core::FULL_TURN / 4.0;
 
 /// Hinged types turn a quarter of the way around, to opposite sides, from their
 /// placed heading. The turn is in EQ's own heading units, so it shows the right
 /// way round in the renderer like every other heading. Other mechanisms need
 /// their own motion.
 fn hinge_target(door: &eq_client_core::doors::Door) -> Option<f32> {
+    let open = open_swing(door)?;
+    Some(if door.active_endpoint()? { open } else { 0.0 })
+}
+
+/// How far a hinged door turns from its placed heading to stand open.
+fn open_swing(door: &eq_client_core::doors::Door) -> Option<f32> {
     if door.incline != 0 {
         return None;
     }
-    let direction = match door.open_type {
-        0..=4 | 8 => 1.0,
-        5..=7 => -1.0,
-        _ => return None,
-    };
-    Some(if door.active_endpoint()? {
-        direction * QUARTER_TURN
-    } else {
-        0.0
-    })
+    match door.open_type {
+        0..=4 | 8 => Some(QUARTER_TURN),
+        5..=7 => Some(-QUARTER_TURN),
+        _ => None,
+    }
+}
+
+/// A door a route may pass by clicking it while it is shut, as the player
+/// would: one this client swings on its hinge, so its open pose is drawn and
+/// walked against. Its state now does not matter, since an open door shuts
+/// again on its own before the walker may reach it. Other mechanisms stay
+/// walls to a route.
+pub(super) fn swings(door: &eq_client_core::doors::Door) -> bool {
+    hinge_target(door).is_some()
 }
 
 /// Cosmetic interpolation only, half a turn a second; this rate does not drive
-/// packets or claim original-client timing.
-fn advance_hinge(current: f32, target: f32, seconds: f32) -> f32 {
+/// packets or claim original-client timing. A frame swings the hinge by at
+/// most a tenth of a second's turn, and the last one lands it exactly on its
+/// target, so a walk waiting for the swing to end sees it end.
+pub(super) fn advance_hinge(current: f32, target: f32, seconds: f32) -> f32 {
     if !seconds.is_finite() || seconds <= 0.0 {
         return current;
     }
     let step = 2.0 * QUARTER_TURN * seconds.min(0.1);
-    current + (target - current).clamp(-step, step)
+    if (target - current).abs() <= step {
+        target
+    } else {
+        current + step.copysign(target - current)
+    }
+}
+
+/// How far a hinge swung this far stands toward its open swing, 0 to 1.
+fn hinge_fraction(swing: f32, open: f32) -> f32 {
+    (swing / open).clamp(0.0, 1.0)
 }
 
 /// The door's transform once it has swung this far from its placed heading.
@@ -149,7 +175,9 @@ pub(super) fn reconcile(
     models: Option<Res<Models>>,
     mut collision: Option<ResMut<super::Collision>>,
     mut rendered: Query<(Entity, &mut DoorEntity, &mut Transform)>,
+    mut hinges: ResMut<Hinges>,
 ) {
+    hinges.0.clear();
     let mut obstacles = Vec::new();
     let mut remaining = BTreeSet::new();
     if state.world().connected()
@@ -180,6 +208,9 @@ pub(super) fn reconcile(
                 door.swing = advance_hinge(door.swing, target, time.delta_secs());
             }
             door.definition = definition.clone();
+            if let Some(open) = open_swing(definition) {
+                hinges.0.insert(door.id, hinge_fraction(door.swing, open));
+            }
             let next = posed(definition, door.swing);
             if *transform != next {
                 door.collider = models
@@ -188,7 +219,7 @@ pub(super) fn reconcile(
                     .and_then(|model| collider(model, &next));
                 *transform = next;
             }
-            obstacles.extend(door.collider.iter().cloned());
+            obstacles.extend(door.collider.iter().map(|mesh| (door.id, Arc::clone(mesh))));
         }
     }
     let Some(models) = models else {
@@ -196,7 +227,7 @@ pub(super) fn reconcile(
             .as_mut()
             .and_then(|collision| collision.0.as_mut())
         {
-            world.set_obstacles(Vec::new());
+            world.set_door_obstacles(Vec::new());
         }
         return;
     };
@@ -205,16 +236,20 @@ pub(super) fn reconcile(
         let Some(model) = models.0.get(&model_key(&door.model)) else {
             continue;
         };
-        let transform = posed(door, hinge_target(door).unwrap_or(0.0));
+        let swing = hinge_target(door).unwrap_or(0.0);
+        if let Some(open) = open_swing(door) {
+            hinges.0.insert(id, hinge_fraction(swing, open));
+        }
+        let transform = posed(door, swing);
         let collider = collider(model, &transform);
-        obstacles.extend(collider.iter().cloned());
+        obstacles.extend(collider.iter().map(|mesh| (id, Arc::clone(mesh))));
         commands
             .spawn((
                 super::SceneEntity,
                 DoorEntity {
                     id,
                     model: model_key(&door.model),
-                    swing: hinge_target(door).unwrap_or(0.0),
+                    swing,
                     definition: door.clone(),
                     collider,
                 },
@@ -231,7 +266,7 @@ pub(super) fn reconcile(
         .as_mut()
         .and_then(|collision| collision.0.as_mut())
     {
-        world.set_obstacles(obstacles);
+        world.set_door_obstacles(obstacles);
     }
 }
 
@@ -268,6 +303,37 @@ mod tests {
     }
 
     #[test]
+    fn a_route_may_open_only_a_hinged_door_open_or_shut() {
+        let mut door = eq_client_core::doors::Door {
+            id: 1,
+            model: "DOOR".into(),
+            position: default(),
+            incline: 0,
+            size: 100,
+            open_type: 5,
+            state_at_spawn: 0,
+            invert_state: 0,
+            parameter: 0,
+            action: None,
+        };
+        assert!(swings(&door));
+        door.action = Some(2);
+        assert!(swings(&door), "open now, shut again later");
+        door.action = Some(3);
+        assert!(swings(&door));
+        for open_type in [9, 58, 255] {
+            assert!(!swings(&eq_client_core::doors::Door {
+                open_type,
+                ..door.clone()
+            }));
+        }
+        assert!(!swings(&eq_client_core::doors::Door {
+            incline: 90,
+            ..door
+        }));
+    }
+
+    #[test]
     #[allow(
         clippy::float_cmp,
         reason = "Exact equality verifies unchanged or explicitly assigned state"
@@ -283,11 +349,26 @@ mod tests {
         };
         let door = &mut doors[0];
         assert_eq!(hinge_target(door), Some(0.0));
+        let shut_action = door.action;
         door.action = Some(2);
         let swing = hinge_target(door).unwrap();
         assert_eq!(swing, QUARTER_TURN);
         door.open_type = 5;
         assert_eq!(hinge_target(door), Some(-swing));
+        // A door first drawn while the server holds it open is drawn at its
+        // open pose, so a walk reads its hinge as fully swung, whichever way
+        // it turns; one drawn shut reads 0.
+        for open_type in [0, 5] {
+            door.open_type = open_type;
+            let open = open_swing(door).unwrap();
+            assert_eq!(hinge_fraction(hinge_target(door).unwrap(), open), 1.0);
+            let shut = eq_client_core::doors::Door {
+                action: shut_action,
+                ..door.clone()
+            };
+            assert_eq!(hinge_fraction(hinge_target(&shut).unwrap(), open), 0.0);
+        }
+        door.open_type = 5;
         let partway = advance_hinge(0.0, swing, 0.1);
         assert!(partway > 0.0 && partway < swing);
         assert_eq!(advance_hinge(partway, 0.0, 0.1), 0.0);
@@ -326,6 +407,8 @@ mod tests {
                 deity: None,
                 skills: None,
                 practice_points: None,
+                languages: None,
+                disciplines: None,
                 gender: 0,
                 level: 1,
                 position: default(),
@@ -387,11 +470,19 @@ mod tests {
             .id();
         app.insert_resource(state)
             .insert_resource(models)
+            .init_resource::<Hinges>()
             .add_systems(Update, reconcile);
         app.update();
         let mut roots = app.world_mut().query::<(&DoorEntity, &Children)>();
         assert_eq!(roots.iter(app.world()).count(), 1);
         assert_eq!(roots.single(app.world()).unwrap().1.len(), 1);
+        // Drawn from its first frame, so a walk knows how far it has swung.
+        let (drawn, _) = roots.single(app.world()).unwrap();
+        assert_eq!(
+            app.world().resource::<Hinges>().0.get(&drawn.id).copied(),
+            open_swing(&drawn.definition).map(|open| hinge_fraction(drawn.swing, open))
+        );
+        assert!(open_swing(&drawn.definition).is_some(), "a hinged door");
         let ground = |app: &App| {
             app.world()
                 .resource::<super::super::Collision>()

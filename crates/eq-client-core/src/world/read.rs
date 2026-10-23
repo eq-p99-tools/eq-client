@@ -1,8 +1,8 @@
 //! What the world knows, for any front end to read; only the session's news
 //! and the player's own choices change it.
 use super::{
-    Camp, Casting, CharacterList, ClientWorld, Exchange, Loot, Merchant, MotionGrant, Spawn,
-    Target, Vitals,
+    Camp, CastDone, Casting, CharacterList, ClientWorld, Exchange, Landing, Loot, Merchant, Motion,
+    MotionGrant, ServerList, Spawn, Target, Vitals,
 };
 use crate::{
     BookActionStatus, Coins, Death, PlayerState, PostureState, SpellBook, ZoneOffer,
@@ -43,10 +43,23 @@ impl ClientWorld {
         self.world_name.as_deref()
     }
 
+    /// The worlds the login server listed, until the chosen world lists
+    /// characters.
+    #[must_use]
+    pub const fn servers(&self) -> Option<&ServerList> {
+        self.servers.as_ref()
+    }
+
     /// The characters the world server offered, until one enters the world.
     #[must_use]
     pub const fn characters(&self) -> Option<&CharacterList> {
         self.characters.as_ref()
+    }
+
+    /// The world's last answer to a character the player asked for.
+    #[must_use]
+    pub const fn creation(&self) -> Option<&super::Creation> {
+        self.creation.as_ref()
     }
 
     /// What the admission lets the player do: a front end greys out or hides
@@ -90,6 +103,15 @@ impl ClientWorld {
         &self.zone_name
     }
 
+    /// The zone's long name, from the zone list, or its short name for a
+    /// zone the list lacks. Inferred: the official client names the zone as
+    /// the server's zone header does, which the session doesn't read, and
+    /// the list is taken to agree with it.
+    #[must_use]
+    pub fn zone_long_name(&self) -> &str {
+        crate::zones::long_name(&self.zone_name).unwrap_or(&self.zone_name)
+    }
+
     /// The zone's far clip distance, when the server gave one.
     #[must_use]
     pub const fn far_clip(&self) -> Option<f32> {
@@ -100,6 +122,13 @@ impl ClientWorld {
     #[must_use]
     pub const fn death(&self) -> Option<&Death> {
         self.death.as_ref()
+    }
+
+    /// The player's HP, with what their items add, when the server's last
+    /// report said they bled out and no front end has reported it yet.
+    #[must_use]
+    pub const fn bled_out(&self) -> Option<i64> {
+        self.bled_out
     }
 
     /// The transfer the server offered, until it is answered.
@@ -227,6 +256,41 @@ impl ClientWorld {
         self.player
             .as_ref()
             .is_some_and(|player| player.spawn_id == id)
+    }
+
+    /// A spawn's latest one-shot motion, such as a swing, the player's own
+    /// included, while it is in view.
+    #[must_use]
+    pub fn motion_of(&self, id: u16) -> Option<Motion> {
+        self.zone.motions.get(&id).copied()
+    }
+
+    /// When a corpse in view died, for one the player saw die rather than
+    /// one that arrived dead.
+    #[must_use]
+    pub fn died_at(&self, id: u16) -> Option<std::time::Instant> {
+        self.zone.deaths.get(&id).copied()
+    }
+
+    /// The latest cast a spawn completed, the player's own included, while
+    /// it is in view: its spell landed while the cast was under way.
+    #[must_use]
+    pub fn completed_cast_of(&self, id: u16) -> Option<CastDone> {
+        self.zone.completions.get(&id).copied()
+    }
+
+    /// The spell a spawn is casting, the player's own included, while the
+    /// cast is under way and the spawn in view.
+    #[must_use]
+    pub fn casting_of(&self, id: u16) -> Option<u16> {
+        self.zone.casts.get(&id).map(|cast| cast.spell_id)
+    }
+
+    /// The latest spell that landed on a spawn, the player included, while
+    /// it is in view.
+    #[must_use]
+    pub fn landing_on(&self, id: u16) -> Option<Landing> {
+        self.zone.landings.get(&id).copied()
     }
 
     /// The posture last reported for the player or a spawn.

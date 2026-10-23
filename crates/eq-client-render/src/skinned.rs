@@ -10,6 +10,7 @@ use bindings::{Does, buff_label, does, pet_posture_button, qol_checkbox_id};
 #[cfg(test)]
 use bindings::{GroupButton, RaidButton, effect_label, selector_button};
 mod controls;
+mod fit;
 mod frame;
 mod items;
 pub(crate) mod looks;
@@ -17,23 +18,24 @@ pub(crate) mod scrollbar;
 
 pub(crate) use controls::{
     AmountBox, Choosing, DropDown, DropDownChoice, KeyFilter, Sets, SkinSlider, drop_downs,
-    fill_lists, light_choices, scroll_lists, show_amount, show_choices, show_sliders, slide,
-    type_amount,
+    fill_lists, headings, light_choices, scroll_lists, show_amount, show_choices, show_sliders,
+    slide, type_amount,
 };
 
 pub(crate) use items::{
     Closes, TheirSlot, close, contents, frames, loot, quantity, theirs, toggle_bag,
 };
 
-use super::windows::WindowId;
+use super::{hud::hotbar, windows::WindowId};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_assets::{
-    sidl::{Align, ButtonLook, Element, Gauge, Label, Library, Piece, Screen},
+    sidl::{Align, Anchor, Anchors, ButtonLook, Element, Gauge, Label, Library, Piece, Screen},
     ui::Area,
 };
 use eq_client_core::{
     buffs::EffectWindow,
+    hotbar::Binding,
     inventory::InventorySlot,
     money::{Coin, CoinPlace},
 };
@@ -116,6 +118,8 @@ pub(crate) enum Shows {
     Buff(EffectWindow, u32),
     /// The name of the buff on this button of an effects window.
     BuffName(EffectWindow, u32),
+    /// The name of the spell memorized in this gem, counted from 0.
+    GemName(u8),
     /// The player's practice points, which the Training window counts.
     PracticePoints,
     /// The name of the corpse the loot window is open on.
@@ -133,6 +137,10 @@ pub(crate) enum Shows {
     BookName(u8),
     /// The number of the spellbook's right page (true) or its left.
     BookPage(bool),
+    /// The player's pet's gauge, shown only while they have a pet in view,
+    /// as a group member's pet's is (inferred): the skins lay it over the
+    /// player's own gauges.
+    Pet,
     /// A group member's gauge, shown only while their place in the group
     /// window, counted from 0, holds a member.
     Member(usize),
@@ -318,9 +326,10 @@ pub(crate) fn cursor_look(
     }
 }
 
-/// The skin a frame is drawn in.
+/// The skin a frame is drawn in, and how many places the container it
+/// shows has, where its window fits its container ([`fit`]).
 #[derive(Component)]
-pub(crate) struct Drawn(String);
+pub(crate) struct Drawn(String, Option<u8>);
 
 /// The windows drawn from the skin.
 #[derive(Resource, Default)]
@@ -339,9 +348,17 @@ impl Skinned {
     }
 }
 
+/// A skin's button by what its window's file calls it (`ScreenID`), as a
+/// script names it.
+#[derive(Component)]
+pub(crate) struct SkinId {
+    pub(crate) window: WindowId,
+    pub(crate) id: String,
+}
+
 /// A button drawn from the skin, with its piece for each state.
 #[derive(Component, Clone)]
-pub(crate) struct SkinButton(ButtonLook);
+pub(crate) struct SkinButton(pub(crate) ButtonLook);
 
 /// A box on a skinned window's title bar: its close box, or its minimize box.
 #[derive(Component, Clone, Copy)]
@@ -409,9 +426,10 @@ pub(crate) fn apply(
     mut screens: ResMut<Screens>,
     mut frames: Frames,
     mut art: crate::sheets::Art,
-    (paperdoll, mut skinned): (
+    (paperdoll, mut skinned, online): (
         Option<Res<super::paperdoll::PaperdollImage>>,
         ResMut<Skinned>,
+        Option<Res<crate::online::OnlineState>>,
     ),
 ) {
     let Some(directory) = settings.0.eq_directory.as_deref() else {
@@ -423,16 +441,31 @@ pub(crate) fn apply(
         .on(eq_client_core::qol::Fix::HiddenWindows);
     for (frame, id, mut node, mut background, mut border, drawn, mut state) in &mut frames {
         let from = drawn_from(&mut screens, directory, (&skin.0, *id), hidden_too);
-        if drawn.is_some_and(|drawn| drawn.0 == from) {
+        let places = online
+            .as_deref()
+            .and_then(|online| fit::places(online.world(), *id));
+        if drawn.is_some_and(|drawn| drawn.0 == from && drawn.1 == places) {
             continue;
         }
+        let arranged = if state.placed() {
+            None
+        } else {
+            arranged(
+                &mut screens,
+                directory,
+                (&skin.0, *id),
+                &options.options.qol,
+            )
+        };
         let Some(screen) = screens.get(directory, &from, *id) else {
             continue;
         };
-        commands.entity(frame).insert(Drawn(from.clone()));
+        let fitted = places.and_then(|places| fit::fitted(screen, places));
+        let screen = fitted.as_ref().unwrap_or(screen);
+        commands.entity(frame).insert(Drawn(from.clone(), places));
         art.draw_in((from != skin.0).then(|| from.clone()));
         skinned.0.insert(*id);
-        reshape(&mut node, screen, state.placed(), *id);
+        reshape(&mut node, screen, state.placed(), (*id, arranged));
         super::windows::drag_anywhere(&mut commands, frame, *id);
         background.0 = Color::NONE;
         *border = BorderColor::all(Color::NONE);
@@ -452,11 +485,50 @@ pub(crate) fn apply(
     }
 }
 
+/// A window's size as drawn: from the skin it is drawn from, zero where that
+/// skin draws no such window or sizes it to nothing.
+fn drawn_size(
+    screens: &mut Screens,
+    directory: &std::path::Path,
+    (skin, id): (&str, WindowId),
+    hidden_too: bool,
+) -> Vec2 {
+    let from = drawn_from(screens, directory, (skin, id), hidden_too);
+    screens
+        .get(directory, &from, id)
+        .map_or(Vec2::ZERO, |screen| {
+            Vec2::new(screen.area.width, screen.area.height).max(Vec2::ZERO)
+        })
+}
+
+/// Where the client's arrangement opens a window drawn from the skin
+/// ([`WindowId::arranged`]), by the sizes the windows are drawn at, while
+/// Open Windows Apart is on ([`eq_client_core::qol::Fix::WindowsApart`]);
+/// None where the window opens where the skin puts it.
+fn arranged(
+    screens: &mut Screens,
+    directory: &std::path::Path,
+    (skin, id): (&str, WindowId),
+    qol: &eq_client_core::qol::Settings,
+) -> Option<super::windows::Placement> {
+    use eq_client_core::qol::Fix;
+    if !qol.on(Fix::WindowsApart) {
+        return None;
+    }
+    let hidden_too = qol.on(Fix::HiddenWindows);
+    id.arranged(|other| drawn_size(screens, directory, (skin, other), hidden_too))
+}
+
 /// Sizes the frame as the skin does. A window placed neither by the player
-/// nor by the official client's UI file opens where the skin puts it, as
-/// the official client opens it, unless its description declares a place of
-/// its own (`Description::opening`).
-fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
+/// nor by the official client's UI file opens where it opens by default
+/// ([`open_by_default`]), unless its description declares a place of its
+/// own (`Description::opening`).
+fn reshape(
+    node: &mut Node,
+    screen: &Screen,
+    placed: bool,
+    (id, arranged): (WindowId, Option<super::windows::Placement>),
+) {
     node.width = px(screen.area.width);
     node.height = px(screen.area.height);
     // The skin's size is the window's: no caps or scrolling of the client's own.
@@ -469,12 +541,55 @@ fn reshape(node: &mut Node, screen: &Screen, placed: bool, id: WindowId) {
     node.border = UiRect::ZERO;
     node.row_gap = Val::ZERO;
     if !placed && id.describe().opening == super::windows::Opening::Skin {
-        node.position_type = PositionType::Absolute;
-        node.left = px(screen.area.x);
-        node.top = px(screen.area.y);
-        node.right = Val::Auto;
-        node.bottom = Val::Auto;
-        node.margin = UiRect::ZERO;
+        open_by_default(node, screen, arranged);
+    }
+}
+
+/// Puts a window drawn from the skin where it opens by default: where the
+/// client's arrangement puts it ([`WindowId::arranged`]), or else where the
+/// skin puts it, as the official client opens it.
+fn open_by_default(node: &mut Node, screen: &Screen, arranged: Option<super::windows::Placement>) {
+    if let Some(place) = arranged {
+        place.apply(node);
+        return;
+    }
+    node.position_type = PositionType::Absolute;
+    node.left = px(screen.area.x);
+    node.top = px(screen.area.y);
+    node.right = Val::Auto;
+    node.bottom = Val::Auto;
+    node.margin = UiRect::ZERO;
+}
+
+/// Keeps the client's own panels, which no skin draws, where the arrangement
+/// puts them while the skin draws the HUD and the player has not placed
+/// them ([`WindowId::arranged`], [`eq_client_core::qol::Fix::WindowsApart`]):
+/// the Status panel in the bottom right corner, clear of the skin's windows.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn place_own(
+    (skinned, options): (Res<Skinned>, Res<super::options::OptionsState>),
+    mut frames: Query<(&WindowId, &mut Node, &super::windows::Frame), Without<Drawn>>,
+) {
+    if !skinned.has(WindowId::Player)
+        || !options
+            .options
+            .qol
+            .on(eq_client_core::qol::Fix::WindowsApart)
+    {
+        return;
+    }
+    for (id, mut node, frame) in &mut frames {
+        if frame.placed() || id.official().is_some() {
+            continue;
+        }
+        let Some(place) = id.arranged(|_| Vec2::ZERO) else {
+            continue;
+        };
+        let mut wanted = node.clone();
+        place.apply(&mut wanted);
+        if wanted != *node {
+            *node = wanted;
+        }
     }
 }
 
@@ -565,6 +680,9 @@ fn pieces(
 ) {
     let inside = *inside;
     for (name, element) in pieces {
+        if augment_section(context.id, name, element) {
+            continue;
+        }
         match element {
             Element::Gauge(gauge) => self::gauge(window, art, gauge, &inside),
             Element::Label(label) => self::label(window, name, label, &inside, context.id),
@@ -756,7 +874,7 @@ fn text_box(
             }
         });
         if let Some(look) = bar {
-            scrollbar::spawn(frame, art, look, &client, (words_box, owner));
+            scrollbar::spawn(frame, art, look, &client, (words_box, Some(owner)));
         }
     });
 }
@@ -822,7 +940,7 @@ fn chat_box(
                         (art, tab_frame),
                     );
                     if let Some(look) = bar {
-                        scrollbar::spawn(frame, art, look, &client, (lines, WindowId::Chat));
+                        scrollbar::spawn(frame, art, look, &client, (lines, Some(WindowId::Chat)));
                     }
                 }
                 Some("CWChatInput") => super::chat::skinned_input(
@@ -910,7 +1028,7 @@ fn view(
                 }
             });
             if let Some(look) = bar {
-                scrollbar::spawn(frame, art, look, &client, (scrolled, context.id));
+                scrollbar::spawn(frame, art, look, &client, (scrolled, Some(context.id)));
             }
         });
 }
@@ -918,6 +1036,27 @@ fn view(
 /// A window within a window that scrolls its pieces.
 #[derive(Component)]
 pub(crate) struct ScrolledView;
+
+/// Whether a piece is part of a container window's augment section: its
+/// list, its two labels (named by piece, as labels keep no `ScreenID`) and
+/// its Insert, Remove and Delete buttons. The client does not augment, so
+/// the section is not drawn at all rather than drawn greyed, as the project
+/// owner asked; a skin parks it beside the slots, where a window fitted to
+/// its bag ([`fit`]) would otherwise show its edge.
+fn augment_section(owner: WindowId, name: &str, element: &Element) -> bool {
+    if !matches!(owner, WindowId::Bag(_) | WindowId::WorldContainer) {
+        return false;
+    }
+    match element {
+        Element::Button(button) => matches!(
+            button.id.as_deref(),
+            Some("InsertButton" | "RemoveButton" | "DeleteButton")
+        ),
+        Element::Listbox(list) => list.id.as_deref() == Some("AugmentList"),
+        Element::Label(_) => matches!(name, "Augment_Label" | "AugmentInfoLabel"),
+        _ => false,
+    }
+}
 
 /// Where a piece sits in its container, when the skin places it.
 const fn placed_area(element: &Element) -> Option<Area> {
@@ -1244,6 +1383,7 @@ fn spell_gem(
         .spawn((
             Button,
             super::hud::SpellGem(index),
+            hotbar::Pickable(hotbar::Source::Gem(index)),
             crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
             BackgroundColor(Color::NONE),
             node,
@@ -1308,12 +1448,70 @@ fn with_qol_page(
     };
     // The page's room under the row of tabs, its own tab among them.
     let room = inside_height - tab_strip(pages.iter().chain([&qol]));
+    let mut pieces = qol_checkboxes(&checkbox, room);
+    pieces.extend(qol_scale(pages, &checkbox, room));
     let mut all = pages.to_vec();
-    all.push(eq_client_assets::sidl::Page {
-        pieces: qol_checkboxes(&checkbox, room),
-        ..qol
-    });
+    all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
+}
+
+/// The quality-of-life page's interface scale, in the next place after its checkboxes:
+/// a caption, a slider cut from the skin's first slider on the Options
+/// window's pages, and the label that shows its value, cut from that
+/// slider's own; none where the skin has no slider and value label.
+fn qol_scale(
+    pages: &[eq_client_assets::sidl::Page],
+    checkbox: &eq_client_assets::sidl::Button,
+    room: f32,
+) -> Vec<(String, eq_client_assets::sidl::Element)> {
+    use eq_client_assets::sidl::Element;
+    let pieces = || pages.iter().flat_map(|page| &page.pieces);
+    let slider = pieces().find_map(|(_, element)| match element {
+        Element::Slider(slider) => Some(slider.clone()),
+        _ => None,
+    });
+    let label = pieces().find_map(|(name, element)| match element {
+        Element::Label(label) if name.ends_with("ValueLabel") => Some(label.clone()),
+        _ => None,
+    });
+    let (Some(mut slider), Some(mut value)) = (slider, label) else {
+        return Vec::new();
+    };
+    // The caption over the slider, in the next place with room for both
+    // down the page, else at the top of the next column.
+    let tall = value.area.height + 2.0 + slider.area.height;
+    let first = eq_client_core::qol::Fix::settings().count();
+    let (x, y, width) = (first..first + 64)
+        .map(|index| qol_place(checkbox, room, index))
+        .find(|&(_, y, _)| y + tall <= room - 10.0 || y <= 10.0)
+        .unwrap_or_default();
+    let mut caption = value.clone();
+    caption.eq_type = None;
+    "Interface scale".clone_into(&mut caption.text);
+    caption.area = Area {
+        x,
+        y,
+        width,
+        height: value.area.height,
+    };
+    slider.id = Some(controls::UI_SCALE_SLIDER.to_owned());
+    slider.area.x = x;
+    slider.area.y = y + value.area.height + 2.0;
+    slider.area.width = slider
+        .area
+        .width
+        .min(width - value.area.width.max(40.0) - 4.0);
+    value.eq_type = None;
+    value.area.x = slider.area.x + slider.area.width + 4.0;
+    value.area.y = slider.area.y;
+    vec![
+        ("EQC_QoL_UiScaleLabel".to_owned(), Element::Label(caption)),
+        (
+            controls::UI_SCALE_SLIDER.to_owned(),
+            Element::Slider(slider),
+        ),
+        (controls::UI_SCALE_VALUE.to_owned(), Element::Label(value)),
+    ]
 }
 
 /// A checkbox cut from the skin's own for each quality-of-life setting, in
@@ -1328,28 +1526,73 @@ fn qol_checkboxes(
     checkbox: &eq_client_assets::sidl::Button,
     room: f32,
 ) -> Vec<(String, eq_client_assets::sidl::Element)> {
-    /// Room left around the checkboxes, and between columns.
-    const MARGIN: f32 = 10.0;
-    /// Room between one checkbox and the next one down.
-    const GAP: f32 = 6.0;
-    let row = checkbox.area.height + GAP;
-    let width = checkbox.area.width.max(190.0);
-    // As many rows as fit inside the margins, and at least one.
-    let rows = (((room - 2.0 * MARGIN + GAP) / row).floor() as u32).max(1);
-    (0u32..)
-        .zip(eq_client_core::qol::Fix::settings())
+    eq_client_core::qol::Fix::settings()
+        .enumerate()
         .map(|(index, fix)| {
             let mut checkbox = checkbox.clone();
             let id = qol_checkbox_id(fix);
+            let (x, y, width) = qol_place(&checkbox, room, index);
             checkbox.id = Some(id.clone());
             checkbox.text = Some(fix.label().to_owned());
             checkbox.tooltip = Some(fix.tooltip().to_owned());
-            checkbox.area.x = MARGIN + to_f32(index / rows) * (width + MARGIN);
-            checkbox.area.y = MARGIN + to_f32(index % rows) * row;
+            checkbox.area.x = x;
+            checkbox.area.y = y;
             checkbox.area.width = width;
             (id, eq_client_assets::sidl::Element::Button(checkbox))
         })
         .collect()
+}
+
+/// Where the quality-of-life page's place this far along sits, and how wide it is: one
+/// under another down a page this tall, then on down the next column, each
+/// as tall as the skin's checkbox and two such rows for the scale.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a page holds few rows"
+)]
+fn qol_place(
+    checkbox: &eq_client_assets::sidl::Button,
+    room: f32,
+    index: usize,
+) -> (f32, f32, f32) {
+    /// Room left around the places, and between columns.
+    const MARGIN: f32 = 10.0;
+    /// Room between one place and the next one down.
+    const GAP: f32 = 6.0;
+    let row = checkbox.area.height + GAP;
+    let width = checkbox.area.width.max(190.0);
+    // As many rows as fit inside the margins, and at least one.
+    let rows = (((room - 2.0 * MARGIN + GAP) / row).floor() as usize).max(1);
+    (
+        MARGIN + to_f32(u32::try_from(index / rows).unwrap_or(u32::MAX)) * (width + MARGIN),
+        MARGIN + to_f32(u32::try_from(index % rows).unwrap_or(u32::MAX)) * row,
+        width,
+    )
+}
+
+/// The gem, counted from 0, whose spell a label names, by the label's number
+/// (`EQType`): 60 for the first gem to 67 for the eighth, in whichever
+/// window it is. The skins that name their gems' spells give the label
+/// beside each gem these numbers in the gems' order; that the official
+/// client fills them so is inferred.
+fn gem_label(kind: u32) -> Option<u8> {
+    match kind {
+        60..=67 => u8::try_from(kind - 60).ok(),
+        _ => None,
+    }
+}
+
+/// The name of the spell memorized in this gem, or nothing while the gem is
+/// empty.
+fn gem_name(
+    world: &eq_client_core::world::ClientWorld,
+    names: &super::spellbook::SpellNames,
+    gem: u8,
+) -> String {
+    world
+        .gem(usize::from(gem))
+        .map_or_else(String::new, |spell| names.label(spell))
 }
 
 /// A skin's button: what the client does with it, or greyed out where it
@@ -1364,12 +1607,7 @@ fn button(
     let Some(does) = does(button.id.as_deref().unwrap_or_default(), owner) else {
         return;
     };
-    let area = match does {
-        Does::Buff(_, index) if !button.placed => stacked(button.area, index, inside),
-        _ => button.anchors.map_or(button.area, |anchors| {
-            anchors.within(inside.width, inside.height)
-        }),
-    };
+    let area = button_area(button, does, inside);
     let node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -1398,6 +1636,12 @@ fn button(
         None => window.spawn(node),
     };
     behave(&mut drawn, does, button, owner);
+    if let Some(id) = &button.id {
+        drawn.insert(SkinId {
+            window: owner,
+            id: id.clone(),
+        });
+    }
     if let Some(shows) = paired(does, owner) {
         drawn.insert((shows, Visibility::Hidden));
     }
@@ -1428,22 +1672,37 @@ fn button(
     });
 }
 
-/// Where an effects window's button goes when the skin gives it no place:
-/// down the window's left edge a row each, a pixel apart, then on in the
-/// next column, so it lines up with the rows of the skins that leave their
-/// buttons unplaced and name each buff beside it. How the official client
-/// places them is not checked yet.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "a window holds few rows"
-)]
-fn stacked(area: Area, index: u32, inside: &Area) -> Area {
-    let pitch = area.height + 1.0;
-    let rows = (((inside.height + 1.0) / pitch).floor() as u32).max(1);
+/// Where a skin's button sits in its window: where the skin places it or
+/// its anchors put it. A buff slot the skin does neither for, an effects
+/// window's or the pet window's, is stacked ([`stacked`]); any other such
+/// button keeps the skin's default place, the window's top left.
+fn button_area(button: &eq_client_assets::sidl::Button, does: Does, inside: &Area) -> Area {
+    let slot = match does {
+        Does::Buff(_, index) => Some(index),
+        Does::PetBuff(slot) => u32::try_from(slot).ok(),
+        _ => None,
+    };
+    match slot {
+        Some(slot) if !button.placed && button.anchors.is_none() => {
+            stacked(button.area, slot, inside)
+        }
+        _ => button.anchors.map_or(button.area, |anchors| {
+            anchors.within(inside.width, inside.height)
+        }),
+    }
+}
+
+/// Where a buff slot's button goes when the skin gives it no place and no
+/// anchors: down the window's right edge in one column, a pixel in from the
+/// right and the top and a pixel apart, in the slots' order. Slots past the
+/// window's bottom wait below it, as the skins that leave these buttons
+/// unplaced number their slots on down. That is where those skins draw the
+/// numbered slots, and the project owner saw the official client fill them;
+/// that it places such buttons so is inferred (a recording item).
+fn stacked(area: Area, slot: u32, inside: &Area) -> Area {
     Area {
-        x: to_f32(index / rows) * (area.width + 1.0),
-        y: to_f32(index % rows) * pitch,
+        x: inside.width - area.width - 1.0,
+        y: 1.0 + to_f32(slot) * (area.height + 1.0),
         ..area
     }
 }
@@ -1488,15 +1747,24 @@ fn behave(
         Does::Closes => drawn.insert((Button, items::Closes(owner), skin())),
         Does::Gives => drawn.insert((Button, super::give::GiveButton)),
         Does::Coins(place, coin) => drawn.insert((Button, super::coins::CoinBox { place, coin })),
-        Does::Attack => drawn.insert((
-            Button,
-            AttackButton,
-            skin(),
-            crate::outbox::Needs::Capability(Capability::Combat),
-        )),
+        Does::Bound(binding) => {
+            drawn.insert((
+                Button,
+                skin(),
+                hotbar::Pickable(hotbar::Source::Fixed(binding)),
+                hotbar::need(Some(binding)),
+            ));
+            // The button and its hotbutton run one command, from one table;
+            // Melee Attack, which has none, toggles in `combat::input`.
+            match hotbar::command(binding) {
+                Some(command) => drawn.insert(SlashButton(command)),
+                None => drawn.insert(AttackButton),
+            }
+        }
         Does::Ability(place) => drawn.insert((
             Button,
             place,
+            hotbar::Pickable(hotbar::Source::Ability(place)),
             skin(),
             crate::outbox::Needs::Capability(Capability::Abilities),
         )),
@@ -1560,7 +1828,8 @@ fn behave(
         Does::Maps(action) => drawn.insert((Button, action, skin())),
         Does::HotButton(index) => drawn.insert((
             Button,
-            super::hud::hotbar::Slot(index),
+            hotbar::Slot(index),
+            hotbar::Pickable(hotbar::Source::Slot(index)),
             skin(),
             crate::outbox::Needs::Nothing,
         )),
@@ -1647,6 +1916,18 @@ fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::B
     ));
 }
 
+/// Where a buff slot's icon goes in its button: where the skin puts the
+/// button's picture (its decal), or else just inside the button at its
+/// height; its left and top, and its size.
+fn buff_icon_place(button: &eq_client_assets::sidl::Button, area: Area) -> ((f32, f32), f32) {
+    if button.decal_area.is_some() {
+        let (x, y, size) = decal_place(button);
+        ((x, y), size)
+    } else {
+        (super::spell_icons::INSET, area.height.min(area.width) - 4.0)
+    }
+}
+
 /// Where a button's picture of an item goes: where the skin puts its
 /// sample picture, or else just inside the button; its left, top and size.
 fn decal_place(button: &eq_client_assets::sidl::Button) -> (f32, f32, f32) {
@@ -1697,11 +1978,13 @@ fn caption(
         Does::Ability(place) => {
             inner.spawn((super::abilities::AbilityLabel(place), words("")));
         }
-        Does::HotButton(index) => super::hud::hotbar::contents(inner, index),
+        Does::HotButton(index) => hotbar::contents(inner, index),
         Does::PetBuff(slot) => {
-            inner.spawn(super::spell_icons::artwork(
+            let (place, size) = buff_icon_place(button, area);
+            inner.spawn(super::spell_icons::artwork_at(
                 super::spell_icons::Source::PetBuff(slot),
-                area.height.min(area.width) - 4.0,
+                place,
+                size,
             ));
         }
         // The spell's picture, where the skin puts its sample, and the
@@ -1725,9 +2008,11 @@ fn caption(
             ));
         }
         Does::Buff(window, index) => {
-            inner.spawn(super::spell_icons::artwork(
+            let (place, size) = buff_icon_place(button, area);
+            inner.spawn(super::spell_icons::artwork_at(
                 super::spell_icons::Source::Window(window, index),
-                area.height.min(area.width) - 4.0,
+                place,
+                size,
             ));
         }
         // A box with a picture shows a value, such as the bank's coins;
@@ -1741,7 +2026,7 @@ fn caption(
         Does::Toggles(_)
         | Does::Closes
         | Does::Gives
-        | Does::Attack
+        | Does::Bound(_)
         | Does::Slash(_)
         | Does::Group(_)
         | Does::Raid(_)
@@ -1803,21 +2088,17 @@ pub(crate) struct AttackButton;
 #[derive(Component, Clone, Copy)]
 pub(crate) struct SlashButton(pub(crate) &'static str);
 
-/// Runs a pressed slash button's command, as typing it would; a refusal
+/// Runs a clicked slash button's command, as typing it would; a refusal
 /// shows in chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn slash(
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut chat: ResMut<super::chat::ChatState>,
-    buttons: Query<(&Interaction, &SlashButton), Changed<Interaction>>,
+    buttons: hotbar::Clicks<SlashButton>,
 ) {
-    for (interaction, SlashButton(command)) in &buttons {
-        if *interaction == Interaction::Pressed
-            && let Err(reason) = super::chat::submit_game_command(command, &online, &outbox)
-        {
-            chat.history.push(super::chat::system_line(reason));
-        }
+    for SlashButton(command) in buttons.iter() {
+        super::chat::run_game_command(command, &online, &outbox, &mut chat);
     }
 }
 
@@ -1921,7 +2202,7 @@ fn border_insets(border: &eq_client_assets::sidl::Border) -> frame::Insets {
 
 /// The border's corners and its edges stretched between them; what lies
 /// inside it is the window's.
-fn border(
+pub(crate) fn border(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
     border: &eq_client_assets::sidl::Border,
@@ -2088,17 +2369,102 @@ fn title_boxes(
     }
 }
 
-/// Whose a group window's gauge is, by its number (`EQType`): 11 to 15
-/// the members' in their places, 17 to 21 their pets'.
-const fn member_gauge(kind: u32) -> Option<Shows> {
+/// Whose a gauge is, for one that shows only while its owner is there, by
+/// its number (`EQType`): 11 to 15 the group members' in their places, 16
+/// the player's pet's, 17 to 21 the members' pets'.
+const fn owned_gauge(kind: u32) -> Option<Shows> {
     match kind {
         11..=15 => Some(Shows::Member((kind - 11) as usize)),
+        16 => Some(Shows::Pet),
         17..=21 => Some(Shows::MemberPet((kind - 17) as usize)),
         _ => None,
     }
 }
 
-/// A gauge: its text, then its bar below it, filled as far as its fraction.
+/// Where a gauge's bar and its ends lie in the gauge, each piece at its own
+/// size from where the skin starts the bar: the left end, then the bar, as
+/// long as its background (or its fill, without one), then the right end.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BarParts {
+    left: Option<Area>,
+    bar: Area,
+    right: Option<Area>,
+}
+
+/// Lays out a gauge's bar. The pieces keep their own sizes rather than
+/// stretching to the gauge (inferred): the skins fit their gauges to them.
+/// The default skin's gauges are exactly as wide as their ends and bar, and
+/// its pet line, as wide as the hit point gauge but with no ends, lies under
+/// that bar's middle only at its pieces' size. The Velious skin's hit point
+/// background sits in a gauge wider than its window, and only at its own
+/// size does it end where the bar's fill does.
+fn bar_parts(gauge: &Gauge) -> BarParts {
+    let look = &gauge.look;
+    let (x, y) = (gauge.bar_left, gauge.bar_offset);
+    let sized = |piece: &Piece, x: f32| Area {
+        x,
+        y,
+        width: to_f32(piece.width),
+        height: to_f32(piece.height),
+    };
+    let left = look.cap_left.as_ref().map(|cap| sized(cap, x));
+    let start = x + left.map_or(0.0, |cap| cap.width);
+    let pieces = [&look.background, &look.fill, &look.lines];
+    let mut middle = pieces.iter().copied().flatten();
+    let bar = Area {
+        x: start,
+        y,
+        width: middle.next().map_or(0.0, |piece| to_f32(piece.width)),
+        height: pieces
+            .iter()
+            .copied()
+            .flatten()
+            .map(|piece| to_f32(piece.height))
+            .fold(0.0, f32::max),
+    };
+    let right = look
+        .cap_right
+        .as_ref()
+        .map(|cap| sized(cap, start + bar.width));
+    BarParts { left, bar, right }
+}
+
+/// A step of a bar the skin builds from gauges stacked over one another,
+/// each its own colour: one whose fill starts left of its box and is wider
+/// than the box, as each part of the Velious skin's hit point bars past its
+/// first fifth is. Its fill shows whole, from the bar's start to the level,
+/// only while the level ends past the box's left edge, so the highest step
+/// the level reaches colours the whole filled part (inferred from how the
+/// project owner saw the official client; a recording item). Decided from
+/// the gauge alone.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Step {
+    /// How far along the bar the box starts, as a fraction of the bar.
+    from: f32,
+}
+
+impl Step {
+    /// The step a gauge is, if it is one.
+    fn of(gauge: &Gauge, parts: &BarParts) -> Option<Self> {
+        let fill = gauge.look.fill.as_ref()?;
+        (parts.bar.x < 0.0 && to_f32(fill.width) > gauge.area.width).then_some(Self {
+            from: -parts.bar.x / parts.bar.width,
+        })
+    }
+
+    /// Whether the fill shows at this fraction: once the level ends past
+    /// the box's left edge. Both are fractions of the bar, so at an exact
+    /// step they are equal and the lower colour shows.
+    fn shows(self, fraction: f32) -> bool {
+        fraction > self.from
+    }
+}
+
+/// A gauge: its text, then its bar, filled as far as its fraction. The
+/// gauge cuts off whatever lies outside it, as the skins expect (inferred):
+/// both skins move the pet gauge's text out of its two pixel high box. A
+/// [`Step`]'s fill is the one thing that crosses its box's sides, drawn
+/// between what lies under it and over it, both still cut.
 fn gauge(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
@@ -2106,79 +2472,124 @@ fn gauge(
     inside: &Area,
 ) {
     let area = gauge.area;
-    let look = &gauge.look;
-    // The bar is its piece's height, or less if the gauge is thinner, as the
-    // pet's line under the player's hit points is.
-    let bar_height = look
-        .background
-        .as_ref()
-        .or(look.fill.as_ref())
-        .map_or(4.0, |piece| to_f32(piece.height))
-        .min(area.height - gauge.bar_offset.max(0.0))
-        .max(1.0);
-    // The bar runs from where the skin starts it to the gauge's right edge.
-    let bar_width = (area.width - gauge.bar_left).max(0.0);
-    let mut root = window.spawn(at(
-        inside.x + area.x,
-        inside.y + area.y,
-        area.width,
-        area.height,
-    ));
-    if let Some(shows) = gauge.eq_type.and_then(member_gauge) {
+    let parts = bar_parts(gauge);
+    let step = Step::of(gauge, &parts);
+    let mut root = window.spawn(Node {
+        overflow: if step.is_some() {
+            Overflow::clip_y()
+        } else {
+            Overflow::clip()
+        },
+        ..at(
+            inside.x + area.x,
+            inside.y + area.y,
+            area.width,
+            area.height,
+        )
+    });
+    if let Some(shows) = gauge.eq_type.and_then(owned_gauge) {
         root.insert((shows, Visibility::Hidden));
     }
     root.with_children(|root| {
-        if let Some(kind) = gauge.eq_type {
-            let ink = gauge.text_color.map_or(theme::INK_BRIGHT, rgb);
-            root.spawn((
-                Shows::GaugeText(kind),
-                theme::text("", Size::Small, ink),
-                at(gauge.text_offset.0, gauge.text_offset.1, area.width, 12.0),
-                TextLayout::new(Justify::Left, LineBreak::NoWrap),
-            ));
+        if step.is_none() {
+            gauge_layer(root, art, gauge, &parts, Layer::Whole);
+            return;
         }
-        root.spawn(at(gauge.bar_left, gauge.bar_offset, bar_width, bar_height))
-            .with_children(|bar| {
-                if let Some(piece) = &look.background {
-                    picture(bar, art, piece, at(0.0, 0.0, bar_width, bar_height));
-                }
-                if let Some(piece) = &look.fill {
-                    let mut fill = bar.spawn((
-                        gauge.eq_type.map_or(Shows::Fill(0), Shows::Fill),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(0),
-                            top: px(0),
-                            width: percent(0),
-                            height: px(bar_height),
-                            overflow: Overflow::clip(),
-                            ..default()
-                        },
-                    ));
-                    fill.with_children(|fill| {
-                        if let Some(mut image) = art.cut(piece) {
-                            image.color = gauge.fill_tint.map_or(Color::WHITE, rgb);
-                            fill.spawn((image, at(0.0, 0.0, bar_width, bar_height)));
-                        }
-                    });
-                }
-                if let Some(piece) = &look.lines {
-                    picture(bar, art, piece, at(0.0, 0.0, bar_width, bar_height));
-                }
-                if let Some(piece) = &look.cap_left {
-                    picture(
-                        bar,
-                        art,
-                        piece,
-                        at(0.0, 0.0, to_f32(piece.width), bar_height),
-                    );
-                }
-                if let Some(piece) = &look.cap_right {
-                    let cap = to_f32(piece.width);
-                    picture(bar, art, piece, at(bar_width - cap, 0.0, cap, bar_height));
+        let cut = || Node {
+            overflow: Overflow::clip(),
+            ..at(0.0, 0.0, area.width, area.height)
+        };
+        root.spawn(cut())
+            .with_children(|under| gauge_layer(under, art, gauge, &parts, Layer::Under));
+        gauge_layer(root, art, gauge, &parts, Layer::Fill(step));
+        root.spawn(cut())
+            .with_children(|over| gauge_layer(over, art, gauge, &parts, Layer::Over));
+    });
+}
+
+/// The pieces of a gauge one drawing pass puts down.
+#[derive(Clone, Copy)]
+enum Layer {
+    /// Everything, in order: the text, the background, the fill, the lines
+    /// and the ends.
+    Whole,
+    /// The text and the background.
+    Under,
+    /// The fill alone, a step's.
+    Fill(Option<Step>),
+    /// The lines and the ends.
+    Over,
+}
+
+/// Puts down a gauge's pieces of this layer, each where the skin starts it.
+fn gauge_layer(
+    parent: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    gauge: &Gauge,
+    parts: &BarParts,
+    layer: Layer,
+) {
+    let look = &gauge.look;
+    let natural = |piece: &Piece| at(0.0, 0.0, to_f32(piece.width), to_f32(piece.height));
+    let placed = |place: Area| at(place.x, place.y, place.width, place.height);
+    let (under, fill, over) = match layer {
+        Layer::Whole => (true, Some(None), true),
+        Layer::Under => (true, None, false),
+        Layer::Fill(step) => (false, Some(step), false),
+        Layer::Over => (false, None, true),
+    };
+    if under && let Some(kind) = gauge.eq_type {
+        let ink = gauge.text_color.map_or(theme::INK_BRIGHT, rgb);
+        parent.spawn((
+            Shows::GaugeText(kind),
+            theme::text("", Size::Small, ink),
+            at(
+                gauge.text_offset.0,
+                gauge.text_offset.1,
+                gauge.area.width,
+                12.0,
+            ),
+            TextLayout::new(Justify::Left, LineBreak::NoWrap),
+        ));
+    }
+    parent.spawn(placed(parts.bar)).with_children(|bar| {
+        if under && let Some(piece) = &look.background {
+            picture(bar, art, piece, natural(piece));
+        }
+        if let (Some(step), Some(piece)) = (fill, &look.fill) {
+            let mut node = bar.spawn((
+                gauge.eq_type.map_or(Shows::Fill(0), Shows::Fill),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(0),
+                    top: px(0),
+                    width: percent(0),
+                    height: px(piece.height),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ));
+            if let Some(step) = step {
+                node.insert(step);
+            }
+            node.with_children(|fill| {
+                if let Some(mut image) = art.cut(piece) {
+                    image.color = gauge.fill_tint.map_or(Color::WHITE, rgb);
+                    fill.spawn((image, natural(piece)));
                 }
             });
+        }
+        if over && let Some(piece) = &look.lines {
+            picture(bar, art, piece, natural(piece));
+        }
     });
+    if over {
+        for (piece, place) in [(&look.cap_left, parts.left), (&look.cap_right, parts.right)] {
+            if let (Some(piece), Some(place)) = (piece, place) {
+                picture(parent, art, piece, placed(place));
+            }
+        }
+    }
 }
 
 /// What a loot, merchant or spellbook window's label shows: the corpse's
@@ -2276,12 +2687,16 @@ fn label(
         font(label.font),
         label.color.map_or(theme::INK_BRIGHT, rgb),
     );
-    let node = at(
+    let mut node = at(
         inside.x + area.x,
         inside.y + area.y,
         area.width,
         area.height,
     );
+    // Wrapping words in a box stretching down the window start at its top.
+    if line_at_top(label.anchors, label.wraps) {
+        node.height = Val::Auto;
+    }
     let buff_name = buff_label(owner, label.eq_type);
     match (label.eq_type, bag) {
         (Some(_), _) if let Some((effects, index)) = buff_name => aligned(
@@ -2290,6 +2705,9 @@ fn label(
             label.align,
             (text, Shows::BuffName(effects, index)),
         ),
+        (Some(kind), _) if let Some(gem) = gem_label(kind) => {
+            aligned(window, node, label.align, (text, Shows::GemName(gem)));
+        }
         (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
         (None, Some(bag)) => aligned(window, node, label.align, (text, bag)),
         (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
@@ -2327,14 +2745,38 @@ fn label(
     }
 }
 
+/// Whether a label's text sits at the top of its box: one whose words wrap
+/// in a box stretching down its window, from its top to near its foot, as
+/// the merchant window's name, which the skins follow with the list just
+/// under that top (inferred, recording item 6.220). Any other box,
+/// including a one-line row filling its container, centres its line.
+fn line_at_top(anchors: Option<Anchors>, wraps: bool) -> bool {
+    wraps
+        && anchors.is_some_and(|anchors| {
+            matches!(
+                (anchors.top, anchors.bottom),
+                (Anchor::Start(_), Anchor::End(_))
+            )
+        })
+}
+
 /// Text in a box the skin sizes, aligned in it as the skin aligns it, on
-/// one line.
-fn aligned(window: &mut ChildSpawnerCommands, mut node: Node, align: Align, text: impl Bundle) {
+/// one line in the middle of the box's height.
+pub(crate) fn aligned(
+    window: &mut ChildSpawnerCommands,
+    mut node: Node,
+    align: Align,
+    text: impl Bundle,
+) {
     node.justify_content = match align {
         Align::Left => JustifyContent::FlexStart,
         Align::Center => JustifyContent::Center,
         Align::Right => JustifyContent::FlexEnd,
     };
+    // The one line sits in the middle of the box's height, so a box taller
+    // than its text, such as a gem's name row, doesn't leave it at the top
+    // (inferred, recording item 6.220).
+    node.align_items = AlignItems::Center;
     node.overflow = Overflow::clip();
     window
         .spawn(node)
@@ -2342,7 +2784,7 @@ fn aligned(window: &mut ChildSpawnerCommands, mut node: Node, align: Align, text
 }
 
 /// A piece of the skin, stretched over this node.
-fn picture(
+pub(crate) fn picture(
     parent: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
     piece: &Piece,
@@ -2354,7 +2796,7 @@ fn picture(
 }
 
 /// A node at this place and size in its parent.
-fn at(x: f32, y: f32, width: f32, height: f32) -> Node {
+pub(crate) fn at(x: f32, y: f32, width: f32, height: f32) -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: px(x),
@@ -2375,7 +2817,7 @@ pub(crate) const fn font(number: Option<u8>) -> Size {
     }
 }
 
-fn rgb([red, green, blue]: [u8; 3]) -> Color {
+pub(crate) fn rgb([red, green, blue]: [u8; 3]) -> Color {
     Color::srgb_u8(red, green, blue)
 }
 
@@ -2409,6 +2851,7 @@ fn shown_now(
             .and_then(|buffs| buffs.slots.get(slot).copied().flatten())
             .is_some(),
         Shows::Buff(window, index) => world.buffs().in_window(window, index).is_some(),
+        Shows::Pet => world.pet().is_some(),
         Shows::Member(place) => world.group_place(place).is_some(),
         Shows::MemberPet(place) => world.group_pet(place).is_some(),
         Shows::WhileInvited(invited) => world.group_invitation().is_some() == invited,
@@ -2416,6 +2859,24 @@ fn shown_now(
         Shows::WhileRaidLocked(locked) => world.raid().is_some_and(|raid| raid.locked) == locked,
         _ => return None,
     })
+}
+
+/// Fills a gauge's bar as far as this fraction, from 0 to 1, showing a
+/// step's fill only once the level passes its box. A node changes only
+/// when what it shows does.
+fn fill_to(node: &mut Mut<Node>, step: Option<&Step>, fraction: f32) {
+    let width = percent(fraction * 100.0);
+    if node.width != width {
+        node.width = width;
+    }
+    let display = if step.is_none_or(|step| step.shows(fraction)) {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    if node.display != display {
+        node.display = display;
+    }
 }
 
 /// Shows the world in the skinned windows' gauges and labels.
@@ -2433,7 +2894,7 @@ pub(crate) fn show(
         Res<super::spellbook::BookView>,
         Res<super::hud::action_bar::ActionRequests>,
     ),
-    mut fills: Query<(&Shows, &mut Node), Without<Text>>,
+    mut fills: Query<(&Shows, &mut Node, Option<&Step>), Without<Text>>,
     mut texts: Query<(&Shows, &mut Text, &mut TextColor)>,
     mut boxes: Query<(&Shows, &mut Visibility)>,
 ) {
@@ -2448,14 +2909,10 @@ pub(crate) fn show(
             Visibility::Hidden
         });
     }
-    for (shows, mut node) in &mut fills {
-        let Shows::Fill(kind) = *shows else {
-            continue;
-        };
-        let fraction = filled(world, (hud.resource_estimate, &requests), kind);
-        let width = percent(fraction.clamp(0.0, 1.0) * 100.0);
-        if node.width != width {
-            node.width = width;
+    for (shows, mut node, step) in &mut fills {
+        if let Shows::Fill(kind) = *shows {
+            let fraction = filled(world, (hud.resource_estimate, &requests), kind);
+            fill_to(&mut node, step, fraction.clamp(0.0, 1.0));
         }
     }
     for (shows, mut text, mut color) in &mut texts {
@@ -2475,6 +2932,7 @@ pub(crate) fn show(
                     .map_or_else(String::new, |shown| names.label(shown.spell_id())),
                 None,
             ),
+            Shows::GemName(gem) => (gem_name(world, &names, gem), None),
             Shows::Coins(place, coin) => (super::coins::shown(world, place, coin), None),
             Shows::Offered(coin) => (
                 world
@@ -2522,6 +2980,7 @@ pub(crate) fn show(
             | Shows::PetBuff(_)
             | Shows::Buff(..)
             | Shows::WhileSelling(_)
+            | Shows::Pet
             | Shows::Member(_)
             | Shows::MemberPet(_)
             | Shows::WhileInvited(_)
@@ -2643,18 +3102,8 @@ fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String,
         ),
         6 => {
             let target = world.target().selected;
-            let name = target
-                .and_then(|id| world.spawn(id))
-                .map(|spawn| eq_client_core::entities::display_name(&spawn.state.name))
-                .or_else(|| {
-                    world
-                        .player()
-                        .filter(|player| Some(player.spawn_id) == target)
-                        .map(|player| player.name.clone())
-                })
-                .unwrap_or_default();
             let color = theme::con(target.and_then(|id| world.considered(id)));
-            (name, Some(color))
+            (target_name(world), Some(color))
         }
         // A group member's name over their health (inferred).
         11..=15 => (
@@ -2664,21 +3113,37 @@ fn gauge_text(world: &eq_client_core::world::ClientWorld, kind: u32) -> (String,
                 .to_owned(),
             None,
         ),
-        // The pet's name, or the skin's own words without one.
+        // The pet's name; without a pet, the gauge hides.
         16 => (
-            world.pet().map_or_else(
-                || "No Pet".to_owned(),
-                |pet| eq_client_core::entities::display_name(&pet.state.name),
-            ),
+            world
+                .pet()
+                .map(|pet| eq_client_core::entities::display_name(&pet.state.name))
+                .unwrap_or_default(),
             None,
         ),
         _ => (String::new(), None),
     }
 }
 
+/// The target's name: a spawn's as players see it, or the player's own
+/// while they target themselves; nothing without a target.
+fn target_name(world: &eq_client_core::world::ClientWorld) -> String {
+    let target = world.target().selected;
+    target
+        .and_then(|id| world.spawn(id))
+        .map(|spawn| eq_client_core::entities::display_name(&spawn.state.name))
+        .or_else(|| {
+            world
+                .player()
+                .filter(|player| Some(player.spawn_id) == target)
+                .map(|player| player.name.clone())
+        })
+        .unwrap_or_default()
+}
+
 /// A label's text, by the official client's numbering: percentages of the
-/// player's hit points, mana and stamina, of the target's hit points and
-/// of each group member's, and the members' names.
+/// player's hit points, mana and stamina, the target's name and hit points,
+/// each group member's, and the members' names.
 fn label_text(
     world: &eq_client_core::world::ClientWorld,
     estimate: Option<(u32, u32)>,
@@ -2724,6 +3189,10 @@ fn label_text(
         19 => percent(fraction(world, estimate, 1)),
         20 => percent(fraction(world, estimate, 2)),
         21 => percent(fraction(world, estimate, 3)),
+        // The target's name, in the skin's colour; whether the official
+        // client tints it by consider colour, as the target gauge's text is
+        // tinted, is inferred.
+        28 => target_name(world),
         29 => target_health(world).map_or_else(String::new, |health| health.to_string()),
         // The group's other members' names and health, in their places.
         30..=34 => world
@@ -2857,7 +3326,7 @@ mod tests {
         let skin = (px(120.0), px(80.0));
         let at = |id, placed| {
             let mut node = super::super::windows::placed(id, Node::default());
-            reshape(&mut node, &screen, placed, id);
+            reshape(&mut node, &screen, placed, (id, None));
             (node.left, node.top)
         };
         // Pop-ups open at the skin's place as the HUD does.
@@ -2873,6 +3342,43 @@ mod tests {
         assert_ne!(at(WindowId::Give, true), skin);
         // A bag keeps its own place until the official client's is known.
         assert_ne!(at(WindowId::Bag(22), false), skin);
+        // The client's arrangement, for a panel it places, comes before the
+        // skin's place, and a placed window stays where it was put.
+        let arranged = |placed| {
+            let mut node = Node::default();
+            let place = super::super::windows::Placement::TopRight(0.0, 0.0);
+            reshape(&mut node, &screen, placed, (WindowId::Effects, Some(place)));
+            (node.left, node.right, node.top)
+        };
+        assert_eq!(arranged(false), (Val::Auto, px(0.0), px(0.0)));
+        assert_eq!(arranged(true), (Val::Auto, Val::Auto, Val::Auto));
+    }
+
+    #[test]
+    fn the_status_panel_moves_clear_of_the_skins_hud() {
+        let mut app = App::new();
+        app.init_resource::<Skinned>()
+            .init_resource::<crate::options::OptionsState>()
+            .add_systems(Update, place_own);
+        let opens = super::super::windows::placed(WindowId::Status, Node::default());
+        let status = app
+            .world_mut()
+            .spawn((
+                WindowId::Status,
+                opens.clone(),
+                crate::windows::Frame::default(),
+            ))
+            .id();
+        app.update();
+        // The client's own HUD keeps it where the registry opens it.
+        assert_eq!(app.world().get::<Node>(status), Some(&opens));
+        app.insert_resource(Skinned::of(&[WindowId::Player]));
+        app.update();
+        let node = app.world().get::<Node>(status).unwrap();
+        assert_eq!(
+            (node.left, node.top, node.right, node.bottom),
+            (Val::Auto, Val::Auto, px(0.0), px(0.0))
+        );
     }
 
     #[test]
@@ -2900,6 +3406,105 @@ mod tests {
     }
 
     #[test]
+    fn the_actions_windows_buttons_run_what_their_hotbuttons_run_and_a_hold_picks_them_up() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element};
+        let kinds = [
+            ("ACP_MeleeAttackButton", Binding::Attack),
+            ("AMP_SitButton", Binding::Sit),
+            ("AMP_StandButton", Binding::Stand),
+            ("AMP_CampButton", Binding::Camp),
+            ("AMP_InviteButton", Binding::Invite),
+            ("AMP_FollowButton", Binding::Follow),
+            ("AMP_DisbandButton", Binding::Disband),
+        ];
+        let button = |id: &str| {
+            let area = Area {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            };
+            Element::Button(Button {
+                id: Some(id.into()),
+                area,
+                placed: true,
+                anchors: None,
+                look: ButtonLook::default(),
+                checkbox: false,
+                text: None,
+                text_color: None,
+                font: None,
+                decal: None,
+                decal_area: None,
+                tooltip: None,
+            })
+        };
+        let screen = Screen {
+            name: "ActionsWindow".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 140.0,
+                height: 30.0,
+            },
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: kinds
+                .iter()
+                .map(|(id, _)| ((*id).to_owned(), button(id)))
+                .collect(),
+            tab_frame: None,
+            transparent: false,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id: WindowId::ActionsWindow,
+                        paperdoll: None,
+                        depth: 0,
+                        tab_frame: None,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            );
+        app.update();
+        let mut controls = app.world_mut().query::<(
+            &hotbar::Pickable,
+            &crate::outbox::Needs,
+            Option<&SlashButton>,
+            Has<AttackButton>,
+        )>();
+        let mut drawn = Vec::new();
+        for (pickable, needs, slash, attack) in controls.iter(app.world()) {
+            let hotbar::Source::Fixed(binding) = pickable.0 else {
+                panic!("{pickable:?}");
+            };
+            // Each runs what its hotbutton runs, and is veiled as it is.
+            assert_eq!(*needs, hotbar::need(Some(binding)), "{binding:?}");
+            assert_eq!(slash.map(|slash| slash.0), hotbar::command(binding));
+            assert_eq!(attack, binding == Binding::Attack, "{binding:?}");
+            drawn.push(format!("{binding:?}"));
+        }
+        let mut wanted: Vec<_> = kinds.iter().map(|(_, b)| format!("{b:?}")).collect();
+        drawn.sort();
+        wanted.sort();
+        assert_eq!(drawn, wanted);
+    }
+
+    #[test]
     fn a_button_the_client_does_not_have_yet_says_so_on_hover() {
         use crate::outbox::Needs;
         use eq_client_assets::sidl::{Button, ButtonLook, Element};
@@ -2918,6 +3523,7 @@ mod tests {
                 checkbox: false,
                 text: None,
                 text_color: None,
+                font: None,
                 decal: None,
                 decal_area: None,
                 tooltip: Some("Sample".into()),
@@ -2982,6 +3588,152 @@ mod tests {
         assert_eq!(drawn.len(), 2);
         assert!(drawn.contains(&(Needs::Missing, true, false, true)));
         assert!(drawn.contains(&(Needs::Nothing, true, true, true)));
+        // Each keeps what the skin's file calls it, as a script names it.
+        let mut skins = app.world_mut().query::<&SkinId>();
+        let mut names: Vec<_> = skins
+            .iter(app.world())
+            .map(|skin| (skin.window, skin.id.clone()))
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                (WindowId::Actions, "HB_Button1".to_owned()),
+                (WindowId::Actions, "HB_PageLeftButton".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_containers_augment_section_is_not_drawn() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element};
+        let button = |id: &str, x| {
+            Element::Button(Button {
+                id: Some(id.into()),
+                area: Area {
+                    x,
+                    y: 0.0,
+                    width: 20.0,
+                    height: 20.0,
+                },
+                placed: true,
+                anchors: None,
+                look: ButtonLook::default(),
+                checkbox: false,
+                text: None,
+                text_color: None,
+                font: None,
+                decal: None,
+                decal_area: None,
+                tooltip: None,
+            })
+        };
+        let screen = Screen {
+            name: "Container".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 30.0,
+            },
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![
+                ("combine".into(), button("Container_Combine", 0.0)),
+                ("insert".into(), button("InsertButton", 20.0)),
+                ("delete".into(), button("DeleteButton", 40.0)),
+            ],
+            tab_frame: None,
+            transparent: false,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    for id in [
+                        WindowId::Bag(23),
+                        WindowId::WorldContainer,
+                        WindowId::Actions,
+                    ] {
+                        let context = Context {
+                            id,
+                            paperdoll: None,
+                            depth: 0,
+                            tab_frame: None,
+                        };
+                        commands.spawn(Node::default()).with_children(|window| {
+                            draw(window, &screen, &mut art, &context);
+                        });
+                    }
+                },
+            );
+        app.update();
+        let mut skins = app.world_mut().query::<&SkinId>();
+        let mut names: Vec<_> = skins
+            .iter(app.world())
+            .map(|skin| (skin.window, skin.id.clone()))
+            .collect();
+        names.sort();
+        // A bag and a world container keep Combine and draw no augment
+        // button; another window with buttons of those names draws them.
+        assert_eq!(
+            names,
+            [
+                (WindowId::Actions, "Container_Combine".to_owned()),
+                (WindowId::Actions, "DeleteButton".to_owned()),
+                (WindowId::Actions, "InsertButton".to_owned()),
+                (WindowId::Bag(23), "Container_Combine".to_owned()),
+                (WindowId::WorldContainer, "Container_Combine".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_containers_augment_labels_go_with_its_buttons() {
+        let label = Element::Label(eq_client_assets::sidl::Label {
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            anchors: None,
+            eq_type: None,
+            text: String::new(),
+            color: None,
+            align: eq_client_assets::sidl::Align::Left,
+            font: None,
+            wraps: false,
+        });
+        assert!(augment_section(
+            WindowId::Bag(23),
+            "AugmentInfoLabel",
+            &label
+        ));
+        assert!(augment_section(
+            WindowId::WorldContainer,
+            "Augment_Label",
+            &label
+        ));
+        assert!(!augment_section(
+            WindowId::Bag(23),
+            "Container_Label",
+            &label
+        ));
+        assert!(!augment_section(
+            WindowId::Merchant,
+            "Augment_Label",
+            &label
+        ));
     }
 
     /// An Options window with a checkbox the client keeps nothing for, one it
@@ -3003,6 +3755,7 @@ mod tests {
                 checkbox: true,
                 text: None,
                 text_color: None,
+                font: None,
                 decal: None,
                 decal_area: None,
                 tooltip: None,
@@ -3024,6 +3777,7 @@ mod tests {
                 header: None,
             }],
             scrollbar: Some(ScrollbarLook::default()),
+            font: None,
             header: None,
         });
         Screen {
@@ -3079,6 +3833,7 @@ mod tests {
                         anchors: None,
                         template: None,
                         color: None,
+                        font: None,
                         scrollbar: None,
                     }),
                 ),
@@ -3315,6 +4070,7 @@ mod tests {
             anchors: None,
             template: None,
             color: None,
+            font: None,
             scrollbar: Some(ScrollbarLook::default()),
         };
         let mut app = App::new();
@@ -3399,6 +4155,7 @@ mod tests {
             checkbox: true,
             text: Some("Pet Window Popup".into()),
             text_color: None,
+            font: None,
             decal: None,
             decal_area: None,
             tooltip: None,
@@ -3461,6 +4218,110 @@ mod tests {
     }
 
     #[test]
+    fn the_qol_page_ends_with_the_interface_scale_cut_from_the_skins_slider() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element, Page};
+        let area = |x, y, width, height| Area {
+            x,
+            y,
+            width,
+            height,
+        };
+        let checkbox = Button {
+            id: Some("OGP_PetWindowPopupCheckbox".into()),
+            area: area(10.0, 175.0, 150.0, 20.0),
+            placed: true,
+            anchors: None,
+            look: ButtonLook::default(),
+            checkbox: true,
+            text: Some("Pet Window Popup".into()),
+            text_color: None,
+            font: None,
+            decal: None,
+            decal_area: None,
+            tooltip: None,
+        };
+        let general = Page {
+            name: "OptionsGeneralPage".into(),
+            title: Some("General".into()),
+            area: None,
+            template: None,
+            pieces: vec![("checkbox".into(), Element::Button(checkbox))],
+            icon: [None, None],
+            title_colors: [None, None],
+            tooltip: None,
+        };
+        let settings: Vec<_> = eq_client_core::qol::Fix::settings().collect();
+        // With the skin's slider and its value label on a page, the QoL page
+        // ends with the interface scale: a caption over a slider cut from
+        // the skin's, its value beside it, all inside the page.
+        let display = Page {
+            name: "OptionsDisplayPage".into(),
+            title: Some("Display".into()),
+            pieces: vec![
+                (
+                    "ODP_ClipPlaneSlider".into(),
+                    Element::Slider(eq_client_assets::sidl::Slider {
+                        id: Some("ODP_ClipPlaneSlider".into()),
+                        area: area(20.0, 40.0, 150.0, 16.0),
+                        look: eq_client_assets::sidl::SliderLook::default(),
+                    }),
+                ),
+                (
+                    "ODP_ClipPlaneValueLabel".into(),
+                    Element::Label(eq_client_assets::sidl::Label {
+                        area: area(180.0, 40.0, 40.0, 14.0),
+                        anchors: None,
+                        eq_type: None,
+                        text: "100 %".into(),
+                        color: None,
+                        align: eq_client_assets::sidl::Align::Left,
+                        font: None,
+                        wraps: false,
+                    }),
+                ),
+            ],
+            ..general.clone()
+        };
+        let skin = [general.clone(), display];
+        let pages = with_qol_page(&skin, WindowId::Options, 400.0);
+        let qol = &pages[2].pieces;
+        assert_eq!(qol.len(), settings.len() + 3);
+        let last_checkbox = match &qol[settings.len() - 1].1 {
+            Element::Button(checkbox) => checkbox.area,
+            _ => panic!("a checkbox"),
+        };
+        let [
+            (_, Element::Label(caption)),
+            (slider_id, Element::Slider(slider)),
+            (value_id, Element::Label(value)),
+        ] = &qol[settings.len()..]
+        else {
+            panic!("a caption, a slider and its value")
+        };
+        assert_eq!(caption.text, "Interface scale");
+        assert_eq!(slider.id.as_deref(), Some(slider_id.as_str()));
+        assert_eq!(
+            controls::slider_sets(slider.id.as_deref(), WindowId::Options),
+            Some(controls::Sets::Level(
+                eq_client_core::options::Level::UiScale
+            ))
+        );
+        assert!(matches!(
+            controls::value_label(value_id, WindowId::Options),
+            Some(controls::ValueLabel::Shows(
+                eq_client_core::options::Level::UiScale
+            ))
+        ));
+        let below = |area: Area| {
+            area.y >= last_checkbox.y + last_checkbox.height || area.x > last_checkbox.x
+        };
+        assert!(below(caption.area) && below(slider.area));
+        assert!(slider.area.y >= caption.area.y + caption.area.height);
+        assert!(value.area.x >= slider.area.x + slider.area.width);
+        assert!(slider.area.y + slider.area.height <= 400.0);
+    }
+
+    #[test]
     fn a_window_the_skin_hides_is_drawn_from_the_default_skin_when_asked() {
         let install =
             std::env::temp_dir().join(format!("eq-hidden-windows-{}", std::process::id()));
@@ -3494,7 +4355,7 @@ mod tests {
     }
 
     #[test]
-    fn unplaced_effects_buttons_stack_down_the_window_a_row_each() {
+    fn unplaced_buff_slots_stack_down_the_windows_right_edge() {
         let button = Area {
             x: 0.0,
             y: 0.0,
@@ -3507,15 +4368,97 @@ mod tests {
             width: 200.0,
             height: 375.0,
         };
-        let place = |index| {
-            let area = stacked(button, index, &window);
+        let place = |slot| {
+            let area = stacked(button, slot, &window);
             (area.x, area.y)
         };
-        assert_eq!(place(0), (0.0, 0.0));
-        assert_eq!(place(1), (0.0, 25.0));
-        // Fifteen rows fill the window; the sixteenth starts a column.
-        assert_eq!(place(14), (0.0, 350.0));
-        assert_eq!(place(15), (25.0, 0.0));
+        // A pixel in from the right and the top, a pixel apart.
+        assert_eq!(place(0), (175.0, 1.0));
+        assert_eq!(place(1), (175.0, 26.0));
+        assert_eq!(place(14), (175.0, 351.0));
+        // One column: the sixteenth waits below the window's bottom.
+        assert_eq!(place(15), (175.0, 376.0));
+        assert_eq!(place(24), (175.0, 601.0));
+    }
+
+    /// A buff button as the effects windows' skins lay them out: no place
+    /// of its own, no anchors and no picture.
+    fn buff_button(width: f32) -> eq_client_assets::sidl::Button {
+        eq_client_assets::sidl::Button {
+            id: Some("Buff1".into()),
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: 24.0,
+            },
+            placed: false,
+            anchors: None,
+            look: ButtonLook::default(),
+            checkbox: false,
+            text: None,
+            text_color: None,
+            font: None,
+            decal: None,
+            decal_area: None,
+            tooltip: None,
+        }
+    }
+
+    #[test]
+    fn an_effects_button_the_skin_anchors_goes_where_its_anchors_put_it() {
+        use eq_client_assets::sidl::{Anchor, Anchors};
+        let window = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 375.0,
+        };
+        let buff = Does::Buff(EffectWindow::Long, 1);
+        let place = |button: &eq_client_assets::sidl::Button| {
+            let area = button_area(button, buff, &window);
+            (area.x, area.y, area.width, area.height)
+        };
+        let mut button = buff_button(24.0);
+        // Neither placed nor anchored: stacked down the right edge, as the
+        // pet window's buff slots are; other buttons keep the window's top
+        // left.
+        assert_eq!(place(&button), (175.0, 26.0, 24.0, 24.0));
+        let pet = button_area(&button, Does::PetBuff(2), &window);
+        assert_eq!((pet.x, pet.y), (175.0, 51.0));
+        let other = button_area(&button, Does::Closes, &window);
+        assert_eq!((other.x, other.y), (0.0, 0.0));
+        // Anchored to the window's right edge, where its anchors put it.
+        button.anchors = Some(Anchors {
+            left: Anchor::End(24.0),
+            top: Anchor::Start(25.0),
+            right: Anchor::End(0.0),
+            bottom: Anchor::Start(49.0),
+        });
+        assert_eq!(place(&button), (176.0, 25.0, 24.0, 24.0));
+        // A placed button stays where the skin placed it.
+        button.anchors = None;
+        button.placed = true;
+        button.area.x = 30.0;
+        assert_eq!(place(&button), (30.0, 0.0, 24.0, 24.0));
+    }
+
+    #[test]
+    fn a_buff_slots_icon_sits_where_the_skin_puts_the_buttons_picture() {
+        let mut button = buff_button(200.0);
+        // No picture: just inside the button, at its height, as before.
+        assert_eq!(
+            buff_icon_place(&button, button.area),
+            (crate::spell_icons::INSET, 20.0)
+        );
+        // A picture on the right: the icon fills it.
+        button.decal_area = Some(Area {
+            x: 176.0,
+            y: 2.0,
+            width: 20.0,
+            height: 20.0,
+        });
+        assert_eq!(buff_icon_place(&button, button.area), ((176.0, 2.0), 20.0));
     }
 
     #[test]
@@ -3633,9 +4576,227 @@ mod tests {
         // Numbers the client does not know yet show nothing.
         assert_eq!(label_text(world, None, 99), "");
         assert_eq!(fraction(world, None, 16), None);
-        // With no target, the target's gauge is empty.
+        // With no target, the target's gauge is empty, and so is the
+        // label for its name.
         assert_eq!(gauge_text(world, 6).0, "");
+        assert_eq!(label_text(world, None, 28), "");
         assert_eq!(fraction(world, None, 6), None);
+        // A creature targeted: its name as players see it, in the label and
+        // the gauge alike.
+        let mut creature = testing::pet(9, 7);
+        creature.name = "a_gnoll001".into();
+        creature.pet_owner = None;
+        testing::spawn_entry(&mut state, 9, creature);
+        state.select_target(Some(9));
+        assert_eq!(label_text(state.world(), None, 28), "a gnoll");
+        assert_eq!(gauge_text(state.world(), 6).0, "a gnoll");
+        // The player targeting themselves.
+        state.select_target(Some(7));
+        assert_eq!(label_text(state.world(), None, 28), "Example");
+        assert_eq!(gauge_text(state.world(), 6).0, "Example");
+    }
+
+    /// Draws labels with these numbers into one window, as a skin lays them
+    /// out, and gives each label's text with what it shows.
+    fn draw_labels(app: &mut App, owner: WindowId, kinds: &[u32]) -> Vec<(Shows, Entity)> {
+        use bevy::ecs::system::RunSystemOnce;
+        let inside = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 130.0,
+            height: 215.0,
+        };
+        let kinds = kinds.to_vec();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(|window| {
+                    for kind in &kinds {
+                        let words = Label {
+                            area: Area {
+                                x: 25.0,
+                                y: 15.0,
+                                width: 95.0,
+                                height: 23.0,
+                            },
+                            anchors: None,
+                            eq_type: Some(*kind),
+                            text: String::new(),
+                            color: None,
+                            align: Align::Center,
+                            font: None,
+                            wraps: false,
+                        };
+                        label(window, "Name", &words, &inside, owner);
+                    }
+                });
+            })
+            .unwrap();
+        let world = app.world_mut();
+        world
+            .query_filtered::<(Entity, &Shows), With<Text>>()
+            .iter(world)
+            .map(|(entity, shows)| (*shows, entity))
+            .collect()
+    }
+
+    #[test]
+    fn a_line_of_text_sits_in_the_middle_of_a_taller_box() {
+        use bevy::ecs::system::RunSystemOnce;
+        for (align, justify) in [
+            (Align::Left, JustifyContent::FlexStart),
+            (Align::Center, JustifyContent::Center),
+            (Align::Right, JustifyContent::FlexEnd),
+        ] {
+            let mut app = App::new();
+            app.world_mut()
+                .run_system_once(move |mut commands: Commands| {
+                    commands.spawn(Node::default()).with_children(|window| {
+                        // A gem's name row in the Velious skin: 23 tall.
+                        aligned(
+                            window,
+                            at(25.0, 15.0, 95.0, 23.0),
+                            align,
+                            Text::new("Courage"),
+                        );
+                    });
+                })
+                .unwrap();
+            let mut texts = app.world_mut().query::<(Entity, &Text, &ChildOf)>();
+            let (line, row) = texts
+                .iter(app.world())
+                .find(|(_, text, _)| text.0 == "Courage")
+                .map(|(line, _, parent)| (line, parent.parent()))
+                .unwrap();
+            let node = app.world().get::<Node>(row).unwrap();
+            assert_eq!(node.align_items, AlignItems::Center);
+            // Across, the line keeps the skin's alignment, and the box keeps
+            // the skin's size.
+            assert_eq!(node.justify_content, justify);
+            assert_eq!(node.width, Val::Px(95.0));
+            assert_eq!(node.height, Val::Px(23.0));
+            let layout = app.world().get::<TextLayout>(line).unwrap();
+            assert_eq!(layout.linebreak, LineBreak::NoWrap);
+        }
+    }
+
+    #[test]
+    fn wrapping_words_in_a_box_stretching_down_the_window_start_at_its_top() {
+        use bevy::ecs::system::RunSystemOnce;
+        let stretched = |top, bottom| Anchors {
+            left: Anchor::Start(4.0),
+            top,
+            right: Anchor::End(4.0),
+            bottom,
+        };
+        // The merchant window's name: from 4 below the top to 24 above the
+        // foot, its words wrapping.
+        let name = stretched(Anchor::Start(4.0), Anchor::End(24.0));
+        assert!(line_at_top(Some(name), true));
+        // One-line rows filling their container, and fixed boxes, centre.
+        assert!(!line_at_top(Some(name), false));
+        assert!(!line_at_top(
+            Some(stretched(Anchor::Start(0.0), Anchor::End(0.0))),
+            false
+        ));
+        assert!(!line_at_top(
+            Some(stretched(Anchor::Start(4.0), Anchor::Start(20.0))),
+            true
+        ));
+        assert!(!line_at_top(None, true));
+        // Drawn in a merchant window 480 high, the name keeps to the top
+        // instead of the middle, where the list drawn after it covers it.
+        let mut app = App::new();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(|window| {
+                    let words = Label {
+                        area: Area {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 0.0,
+                            height: 0.0,
+                        },
+                        anchors: Some(name),
+                        eq_type: None,
+                        text: "Sample".into(),
+                        color: None,
+                        align: Align::Center,
+                        font: None,
+                        wraps: true,
+                    };
+                    let inside = Area {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 382.0,
+                        height: 456.0,
+                    };
+                    label(
+                        window,
+                        "MW_MerchantName",
+                        &words,
+                        &inside,
+                        WindowId::Merchant,
+                    );
+                });
+            })
+            .unwrap();
+        let mut boxes = app.world_mut().query::<(&Shows, &ChildOf)>();
+        let row = boxes
+            .iter(app.world())
+            .find(|(shows, _)| **shows == Shows::Merchant)
+            .map(|(_, parent)| parent.parent())
+            .unwrap();
+        let node = app.world().get::<Node>(row).unwrap();
+        assert_eq!((node.top, node.height), (Val::Px(4.0), Val::Auto));
+        assert_eq!(node.width, Val::Px(374.0));
+    }
+
+    #[test]
+    fn the_gem_bars_labels_name_the_spell_in_each_gem() {
+        // By number, in the gems' order.
+        assert_eq!(gem_label(59), None);
+        assert_eq!(gem_label(60), Some(0));
+        assert_eq!(gem_label(67), Some(7));
+        assert_eq!(gem_label(68), None);
+        let mut app = crate::testing::app();
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.memorized_spells = [None; 8];
+        player.memorized_spells[0] = Some(42);
+        player.memorized_spells[7] = Some(43);
+        testing::admit(&mut online, 1, player);
+        app.insert_resource(online)
+            .insert_resource(super::super::spellbook::SpellNames::parse(
+                "42^First synthetic spell\n43^Second synthetic spell",
+            ))
+            .add_systems(Update, show);
+        let labels = draw_labels(&mut app, WindowId::Spells, &[60, 61, 67, 28]);
+        let text = |app: &App, shows| {
+            let (_, label) = labels
+                .iter()
+                .find(|(each, _)| *each == shows)
+                .expect("a label showing this");
+            app.world().get::<Text>(*label).unwrap().0.clone()
+        };
+        app.update();
+        assert_eq!(text(&app, Shows::GemName(0)), "First synthetic spell");
+        // An empty gem's label is blank.
+        assert_eq!(text(&app, Shows::GemName(1)), "");
+        assert_eq!(text(&app, Shows::GemName(7)), "Second synthetic spell");
+        // Other numbers keep their own meaning.
+        assert_eq!(text(&app, Shows::Label(28)), "");
+        // Forgotten, the first gem's name goes.
+        testing::spell(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            eq_client_core::SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 42,
+                mode: 2,
+            },
+        );
+        app.update();
+        assert_eq!(text(&app, Shows::GemName(0)), "");
+        assert_eq!(text(&app, Shows::GemName(7)), "Second synthetic spell");
     }
 
     #[test]
@@ -3691,15 +4852,404 @@ mod tests {
         assert_eq!(shown(Shows::MemberPet(1)), Some(false));
         assert_eq!(shown(Shows::WhileInvited(false)), Some(true));
         assert_eq!(shown(Shows::WhileInvited(true)), Some(false));
-        // Which piece is whose.
-        assert_eq!(member_gauge(15), Some(Shows::Member(4)));
-        assert_eq!(member_gauge(17), Some(Shows::MemberPet(0)));
-        assert_eq!(member_gauge(16), None);
+        // Which piece is whose; the player's own always shows.
+        assert_eq!(owned_gauge(15), Some(Shows::Member(4)));
+        assert_eq!(owned_gauge(16), Some(Shows::Pet));
+        assert_eq!(owned_gauge(17), Some(Shows::MemberPet(0)));
+        assert_eq!(owned_gauge(1), None);
         assert_eq!(
             window_label(WindowId::Group, "GW_HPPercLabel3"),
             Some(Shows::MemberPercent(2))
         );
         assert_eq!(window_label(WindowId::Group, "GW_HPPercLabel6"), None);
+    }
+
+    #[test]
+    fn the_players_pet_gauge_shows_only_while_they_have_a_pet() {
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let shown = |state: &OnlineState| {
+            shown_now(
+                Shows::Pet,
+                state.world(),
+                &crate::combat::CombatState::default(),
+                &crate::trade::TradeState::default(),
+            )
+        };
+        // Without a pet, the gauge hides and says nothing.
+        assert_eq!(shown(&state), Some(false));
+        assert_eq!(gauge_text(state.world(), 16).0, "");
+        // Another player's pet is not theirs.
+        testing::spawn_entry(&mut state, 8, testing::pet(8, 9));
+        assert_eq!(shown(&state), Some(false));
+        testing::spawn_entry(&mut state, 10, testing::pet(10, 7));
+        assert_eq!(shown(&state), Some(true));
+        assert_eq!(gauge_text(state.world(), 16).0, "Gabober");
+        assert_eq!(fraction(state.world(), None, 16), Some(1.0));
+    }
+
+    /// A piece of a gauge, of this size.
+    fn gauge_piece(width: u32, height: u32) -> Piece {
+        Piece {
+            texture: "gauge.tga".into(),
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }
+    }
+
+    /// A gauge 90 by 30 at the window's corner, its bar started here.
+    fn test_gauge(
+        look: eq_client_assets::sidl::GaugeLook,
+        bar_left: f32,
+        bar_offset: f32,
+    ) -> Gauge {
+        Gauge {
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 90.0,
+                height: 30.0,
+            },
+            eq_type: Some(1),
+            look,
+            fill_tint: None,
+            text_color: None,
+            text_offset: (0.0, 0.0),
+            bar_offset,
+            bar_left,
+        }
+    }
+
+    #[test]
+    fn a_gauges_pieces_keep_their_own_sizes_from_where_the_skin_starts_the_bar() {
+        use eq_client_assets::sidl::GaugeLook;
+        let area = |x, y, width, height| Area {
+            x,
+            y,
+            width,
+            height,
+        };
+        // Its ends either side of the bar, and the bar as long as its
+        // background, though the gauge is longer.
+        let ended = GaugeLook {
+            background: Some(gauge_piece(60, 8)),
+            fill: Some(gauge_piece(60, 8)),
+            lines: Some(gauge_piece(60, 8)),
+            cap_left: Some(gauge_piece(3, 8)),
+            cap_right: Some(gauge_piece(3, 8)),
+        };
+        assert_eq!(
+            bar_parts(&test_gauge(ended, 2.0, 20.0)),
+            BarParts {
+                left: Some(area(2.0, 20.0, 3.0, 8.0)),
+                bar: area(5.0, 20.0, 60.0, 8.0),
+                right: Some(area(65.0, 20.0, 3.0, 8.0)),
+            }
+        );
+        // A fill alone, started before the gauge: the gauge shows the part
+        // of it past its own left edge.
+        let fill = GaugeLook {
+            fill: Some(gauge_piece(60, 6)),
+            ..GaugeLook::default()
+        };
+        assert_eq!(
+            bar_parts(&test_gauge(fill, -20.0, 0.0)),
+            BarParts {
+                left: None,
+                bar: area(-20.0, 0.0, 60.0, 6.0),
+                right: None,
+            }
+        );
+        // Nothing to draw.
+        assert_eq!(
+            bar_parts(&test_gauge(GaugeLook::default(), 0.0, 16.0)).bar,
+            area(0.0, 16.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn a_gauge_cuts_off_what_lies_outside_it() {
+        use bevy::ecs::system::RunSystemOnce;
+        use eq_client_assets::sidl::GaugeLook;
+        // A thin pet line whose bar starts above it and whose text the skin
+        // puts far above it.
+        let line = Gauge {
+            area: Area {
+                x: 4.0,
+                y: 30.0,
+                width: 70.0,
+                height: 2.0,
+            },
+            eq_type: Some(16),
+            text_offset: (0.0, -40.0),
+            ..test_gauge(
+                GaugeLook {
+                    background: Some(gauge_piece(60, 8)),
+                    fill: Some(gauge_piece(60, 8)),
+                    ..GaugeLook::default()
+                },
+                0.0,
+                -3.0,
+            )
+        };
+        let inside = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<crate::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()));
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands, mut art: crate::sheets::Art| {
+                commands
+                    .spawn(Node::default())
+                    .with_children(|window| gauge(window, &mut art, &line, &inside));
+            })
+            .unwrap();
+        let world = app.world_mut();
+        let pieces: Vec<(Entity, Shows, Node)> = world
+            .query::<(Entity, &Shows, &Node)>()
+            .iter(world)
+            .map(|(entity, shows, node)| (entity, *shows, node.clone()))
+            .collect();
+        let find = |wanted: Shows| {
+            pieces
+                .iter()
+                .find(|(_, shows, _)| *shows == wanted)
+                .cloned()
+                .unwrap()
+        };
+        // The gauge cuts off what lies outside its box, its text included;
+        // it hides while the player has no pet.
+        let (root, _, root_node) = find(Shows::Pet);
+        assert_eq!(root_node.overflow, Overflow::clip());
+        assert_eq!(world.get::<Visibility>(root), Some(&Visibility::Hidden));
+        let (text, ..) = find(Shows::GaugeText(16));
+        assert_eq!(world.get::<ChildOf>(text).unwrap().parent(), root);
+        // The bar keeps its pieces' size from where the skin starts it, so
+        // only its rows inside the line show.
+        let (fill, _, fill_node) = find(Shows::Fill(16));
+        assert_eq!(fill_node.height, px(8));
+        let bar = world.get::<ChildOf>(fill).unwrap().parent();
+        let bar_node = world.get::<Node>(bar).unwrap();
+        assert_eq!(world.get::<ChildOf>(bar).unwrap().parent(), root);
+        assert_eq!(
+            (bar_node.left, bar_node.top, bar_node.width, bar_node.height),
+            (px(0), px(-3), px(60), px(8))
+        );
+    }
+
+    /// Draws these gauges into one window, in their order.
+    fn draw_gauges(app: &mut App, gauges: Vec<Gauge>) {
+        use bevy::ecs::system::RunSystemOnce;
+        let inside = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 50.0,
+        };
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands, mut art: crate::sheets::Art| {
+                commands.spawn(Node::default()).with_children(|window| {
+                    for each in &gauges {
+                        gauge(window, &mut art, each, &inside);
+                    }
+                });
+            })
+            .unwrap();
+    }
+
+    /// Each gauge's fill, with the bar it lies in and the gauge's root.
+    fn gauge_fills(world: &mut World) -> Vec<(Entity, Entity, Entity)> {
+        let fills: Vec<Entity> = world
+            .query::<(Entity, &Shows)>()
+            .iter(world)
+            .filter(|(_, shows)| matches!(shows, Shows::Fill(_)))
+            .map(|(entity, _)| entity)
+            .collect();
+        fills
+            .into_iter()
+            .map(|fill| {
+                let bar = world.get::<ChildOf>(fill).unwrap().parent();
+                let root = world.get::<ChildOf>(bar).unwrap().parent();
+                (fill, bar, root)
+            })
+            .collect()
+    }
+
+    /// A length in pixels.
+    fn pixels(value: Val) -> f32 {
+        let Val::Px(pixels) = value else {
+            panic!("{value:?} is not in pixels");
+        };
+        pixels
+    }
+
+    #[test]
+    fn a_gauge_started_left_of_its_box_stays_cut_unless_its_fill_is_wider() {
+        use eq_client_assets::sidl::GaugeLook;
+        // Started a pixel left of its box, its fill as wide as the box.
+        let lone = test_gauge(
+            GaugeLook {
+                background: Some(gauge_piece(90, 8)),
+                fill: Some(gauge_piece(90, 8)),
+                ..GaugeLook::default()
+            },
+            -1.0,
+            0.0,
+        );
+        assert_eq!(Step::of(&lone, &bar_parts(&lone)), None);
+        let mut app = crate::testing::app();
+        draw_gauges(&mut app, vec![lone]);
+        let world = app.world_mut();
+        let fills = gauge_fills(world);
+        let [(fill, _, root)] = fills[..] else {
+            panic!("one fill: {fills:?}");
+        };
+        assert_eq!(world.get::<Node>(root).unwrap().overflow, Overflow::clip());
+        assert_eq!(world.get::<Step>(fill), None);
+    }
+
+    #[test]
+    fn a_steps_fill_alone_crosses_its_box_from_the_bars_start() {
+        use eq_client_assets::sidl::GaugeLook;
+        // A box 90 wide whose bar starts 30 to its left, after a 3 wide end,
+        // with a fill 120 long, wider than the box, and text, a background,
+        // lines and ends.
+        let step = Gauge {
+            text_offset: (-30.0, 0.0),
+            ..test_gauge(
+                GaugeLook {
+                    background: Some(gauge_piece(120, 8)),
+                    fill: Some(gauge_piece(120, 8)),
+                    lines: Some(gauge_piece(120, 8)),
+                    cap_left: Some(gauge_piece(3, 8)),
+                    cap_right: Some(gauge_piece(3, 8)),
+                },
+                -33.0,
+                0.0,
+            )
+        };
+        assert_eq!(
+            Step::of(&step, &bar_parts(&step)),
+            Some(Step { from: 0.25 })
+        );
+        let mut app = crate::testing::app();
+        draw_gauges(&mut app, vec![step]);
+        let world = app.world_mut();
+        let fills = gauge_fills(world);
+        let [(fill, bar, root)] = fills[..] else {
+            panic!("one fill: {fills:?}");
+        };
+        // The fill lies in the gauge, cut only above and below, in a bar
+        // started where the skin starts it.
+        assert_eq!(world.get::<Step>(fill), Some(&Step { from: 0.25 }));
+        assert_eq!(
+            world.get::<Node>(root).unwrap().overflow,
+            Overflow::clip_y()
+        );
+        let bar_node = world.get::<Node>(bar).unwrap();
+        assert_eq!((bar_node.left, bar_node.width), (px(-30), px(120)));
+        // Everything else lies in a node cut at the box: the text and the
+        // background under the fill, the lines and the ends over it.
+        let layers = world.get::<Children>(root).unwrap().to_vec();
+        let [under, middle, over] = layers[..] else {
+            panic!("three layers: {layers:?}");
+        };
+        assert_eq!(middle, bar);
+        for cut in [under, over] {
+            let node = world.get::<Node>(cut).unwrap();
+            assert_eq!(node.overflow, Overflow::clip());
+            assert_eq!(
+                (node.left, node.top, node.width, node.height),
+                (px(0), px(0), px(90), px(30))
+            );
+        }
+        let text = world
+            .query::<(Entity, &Shows)>()
+            .iter(world)
+            .find(|(_, shows)| **shows == Shows::GaugeText(1))
+            .map(|(entity, _)| entity)
+            .unwrap();
+        assert_eq!(world.get::<ChildOf>(text).unwrap().parent(), under);
+    }
+
+    #[test]
+    fn a_bar_coloured_in_steps_takes_the_colour_of_the_highest_step_reached() {
+        use eq_client_assets::sidl::GaugeLook;
+        // A bar 50 long at the window's x 10, coloured in five steps as the
+        // Velious skin builds its hit point bars (made-up numbers): a gauge
+        // over the whole bar, then one per further fifth, its box from there
+        // to the bar's end and its fill, 50 long, started at the bar's start.
+        let steps: Vec<Gauge> = (0..5u8)
+            .map(|step| {
+                let start = 10.0 * f32::from(step);
+                Gauge {
+                    area: Area {
+                        x: 10.0 + start,
+                        y: 4.0,
+                        width: 50.0 - start,
+                        height: 6.0,
+                    },
+                    ..test_gauge(
+                        GaugeLook {
+                            fill: Some(gauge_piece(50, 6)),
+                            ..GaugeLook::default()
+                        },
+                        -start,
+                        0.0,
+                    )
+                }
+            })
+            .collect();
+        // The steps whose fills draw at this hit point percent. Each one
+        // draws from the bar's start to the level, and later gauges draw
+        // over earlier ones, so the highest step drawn colours it all.
+        let drawn = |level: u8| {
+            let mut app = crate::testing::app();
+            let mut online = OnlineState::new(true);
+            let mut player = testing::player(7);
+            player.hp_percent = Some(level);
+            testing::admit(&mut online, 1, player);
+            app.insert_resource(online).add_systems(Update, show);
+            draw_gauges(&mut app, steps.clone());
+            app.update();
+            let world = app.world_mut();
+            let mut drawn = Vec::new();
+            for (fill, bar, root) in gauge_fills(world) {
+                let fill = world.get::<Node>(fill).unwrap();
+                let place = pixels(world.get::<Node>(root).unwrap().left);
+                let start = place + pixels(world.get::<Node>(bar).unwrap().left);
+                let Val::Percent(width) = fill.width else {
+                    panic!("{:?}", fill.width);
+                };
+                assert!((start - 10.0).abs() < 0.001, "{start}");
+                assert!((width - f32::from(level)).abs() < 0.001, "{width}");
+                if fill.display != Display::None {
+                    let step = [10.0, 20.0, 30.0, 40.0, 50.0]
+                        .iter()
+                        .position(|at: &f32| (place - at).abs() < 0.001)
+                        .unwrap();
+                    drawn.push(step);
+                }
+            }
+            drawn.sort_unstable();
+            drawn
+        };
+        // 70%: three steps draw, the third on top.
+        assert_eq!(drawn(70), [0, 1, 2, 3]);
+        // At an exact step, the lower colour shows.
+        assert_eq!(drawn(60), [0, 1, 2]);
+        assert_eq!(drawn(100), [0, 1, 2, 3, 4]);
+        assert_eq!(drawn(21), [0, 1]);
+        assert_eq!(drawn(10), [0]);
+        assert_eq!(drawn(0), [0]);
     }
 
     #[test]
@@ -3716,13 +5266,13 @@ mod tests {
             group("DeclineButton", WindowId::Group),
             Some(GroupButton::Decline)
         );
-        assert_eq!(
-            group("AMP_FollowButton", WindowId::ActionsWindow),
-            Some(GroupButton::Follow)
-        );
         // Looking For Group is left out.
         assert!(does("LFGButton", WindowId::Group).is_none());
-        // Decline disbands, which declines the invitation waiting.
+        // Each runs what the Actions window's button runs; Decline disbands,
+        // which declines the invitation waiting.
+        assert_eq!(GroupButton::Invite.command(), "/invite");
+        assert_eq!(GroupButton::Follow.command(), "/follow");
+        assert_eq!(GroupButton::Disband.command(), "/disband");
         assert_eq!(GroupButton::Decline.command(), "/disband");
         // In the group window, Follow and Decline take Invite's and
         // Disband's places while an invitation waits.

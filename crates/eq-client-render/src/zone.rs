@@ -4,14 +4,12 @@
 //! door models.
 use super::{
     Collision, HudText, OrbitCamera, Player, PlayerBody, SceneEntity, SceneInfo, TerrainSurface,
-    build_collision, character, doors, hud, spawn_player_and_hud, spawn_static_zone,
+    ViewerSettings, character, collision_triangles, collision_world, doors, hud,
+    spawn_player_and_hud, spawn_static_zone, zone_navmesh::ZoneNavMesh,
 };
 use bevy::{ecs::system::SystemParam, prelude::*};
 use eq_client_assets::{ZoneAsset, characters::CharacterAsset, regions::ZoneRegions};
-use eq_client_core::{
-    render_position,
-    world::{ClientWorld, Reset},
-};
+use eq_client_core::{render_position, world::Reset};
 
 /// What a zone's entry spawns: its scene, the player and the HUD.
 type Roots = Or<(With<SceneEntity>, With<HudText>, With<hud::HudRoot>)>;
@@ -26,24 +24,84 @@ pub(super) struct Entry {
     pub body: PlayerBody,
 }
 
+/// CPU-heavy scene data prepared before returning to the render thread.
+pub(super) struct PreparedEntry {
+    entry: Entry,
+    collision: Collision,
+    terrain: TerrainSurface,
+    /// The triangles to build the zone's navigation mesh over, when it is
+    /// built.
+    navmesh: Option<Vec<[[f32; 3]; 3]>>,
+}
+
+impl PreparedEntry {
+    /// Uses the latest placement, including corrections received while loading.
+    pub(super) fn place(&mut self, position: eq_client_core::WorldPosition) {
+        self.entry.placed = placement(position);
+    }
+
+    /// The renderer yaw the placed character faces.
+    pub(super) fn facing(&self) -> f32 {
+        self.entry.placed.rotation.to_euler(EulerRot::YXZ).0
+    }
+
+    /// Stands the character on the floor at a character select spot: the
+    /// first floor at or below the spot's height and a little above it, or
+    /// without a spot (or a floor under it) the highest surface at the
+    /// centre of the zone's bounds, as the offline viewer starts.
+    pub(super) fn stand(&mut self, spot: Option<&eq_client_core::select_spots::Spot>) {
+        let (min, max) = self
+            .entry
+            .zone
+            .bounds()
+            .map_or((Vec3::splat(-100.0), Vec3::splat(100.0)), |(min, max)| {
+                (Vec3::from_array(min), Vec3::from_array(max))
+            });
+        let centre = (min + max) * 0.5;
+        let on_spot = spot.and_then(|spot| {
+            let position = spot.position();
+            let point = Vec3::from_array(render_position(position));
+            let floor = self.terrain.height_below(
+                point.x,
+                point.z,
+                point.y + eq_client_core::select_spots::ABOVE_FLOOR,
+            )?;
+            Some((Vec3::new(point.x, floor, point.z), position.heading))
+        });
+        let (feet, heading) = on_spot.unwrap_or_else(|| {
+            let floor = self
+                .terrain
+                .height_at(centre.x, centre.z)
+                .unwrap_or(centre.y);
+            (Vec3::new(centre.x, floor, centre.z), 0.0)
+        });
+        self.entry.placed =
+            Transform::from_translation(feet + Vec3::Y * self.entry.body.feet_offset)
+                .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
+                    heading,
+                )));
+    }
+}
+
 impl Entry {
     /// The zone the world admitted the player to, with the player where the
     /// server put them, or why it cannot be shown.
     pub(super) fn admission(
-        world: &ClientWorld,
+        zone_name: &str,
+        player: &eq_client_core::PlayerState,
         directory: &std::path::Path,
     ) -> Result<Self, String> {
-        let player = world
-            .player()
-            .ok_or_else(|| "No admitted player".to_owned())?;
-        let zone = eq_client_assets::load_zone(directory, world.zone())
-            .map_err(|error| format!("Zone {} could not be loaded: {error}", world.zone()))?;
+        let zone = eq_client_assets::load_zone(directory, zone_name)
+            .map_err(|error| format!("Zone {zone_name} could not be loaded: {error}"))?;
         let character =
             eq_client_core::races::model(player.race, player.gender).and_then(|model| {
+                // The player's own model is a single load, so its donor
+                // archives need not outlive it.
                 match eq_client_assets::characters::load_installed_character(
                     directory,
-                    world.zone(),
+                    zone_name,
                     model,
+                    &eq_client_assets::characters::DonorArchives::default(),
                 ) {
                     Ok(asset) => Some(asset),
                     Err(error) => {
@@ -68,8 +126,59 @@ impl Entry {
             body: PlayerBody {
                 feet_offset,
                 height,
+                size: eq_client_core::size_or_default(player.race, player.size),
             },
         })
+    }
+
+    /// A listed character's zone at character select, with the character's
+    /// model standing in it once [`PreparedEntry::stand`] places it, or why
+    /// it cannot be shown.
+    pub(super) fn preview(
+        zone_name: &str,
+        (race, gender): (u32, u8),
+        directory: &std::path::Path,
+    ) -> Result<Self, String> {
+        let zone = eq_client_assets::load_zone(directory, zone_name)
+            .map_err(|error| format!("Zone {zone_name} could not be loaded: {error}"))?;
+        let character = eq_client_core::races::model(race, u32::from(gender))
+            .ok_or_else(|| format!("No model for race {race}"))
+            .and_then(|model| {
+                eq_client_assets::characters::load_installed_character(
+                    directory,
+                    zone_name,
+                    model,
+                    &eq_client_assets::characters::DonorArchives::default(),
+                )
+                .map_err(|error| format!("Character model: {error}"))
+            })?;
+        let height = character.height();
+        Ok(Self {
+            zone,
+            character: Some(character),
+            placed: Transform::IDENTITY,
+            body: PlayerBody {
+                // The racial default size, as no list gives one.
+                feet_offset: eq_client_core::z_offset(race, 0.0),
+                height,
+                size: eq_client_core::size_or_default(race, 0.0),
+            },
+        })
+    }
+
+    /// Builds collision and terrain indices alongside archive decoding, and
+    /// with `navmesh`, gathers the triangles the zone's mesh is built over.
+    pub(super) fn prepare(self, navmesh: bool) -> PreparedEntry {
+        let triangles = collision_triangles(&self.zone);
+        let navmesh = navmesh.then(|| triangles.clone());
+        let collision = Collision(collision_world(&self.zone, triangles));
+        let terrain = TerrainSurface::from_primitives(&self.zone.primitives);
+        PreparedEntry {
+            entry: self,
+            collision,
+            terrain,
+            navmesh,
+        }
     }
 }
 
@@ -89,9 +198,12 @@ pub(super) struct Scene<'w, 's> {
     images: ResMut<'w, Assets<Image>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
+    bindposes: ResMut<'w, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     nearby: Option<ResMut<'w, super::entities::NearbyEntities>>,
     wardrobe: Option<ResMut<'w, super::outfit::Wardrobe>>,
     items: Option<ResMut<'w, super::item_models::ItemLibrary>>,
+    navmesh: Option<ResMut<'w, ZoneNavMesh>>,
+    settings: Option<Res<'w, ViewerSettings>>,
 }
 
 impl Scene<'_, '_> {
@@ -117,7 +229,7 @@ impl Scene<'_, '_> {
 
     /// Leaves the zone shown: its scene, the player and the HUD, and
     /// everything built from the zone's assets.
-    pub(super) fn leave(&self, commands: &mut Commands, regions: &mut ZoneRegions) {
+    pub(super) fn leave(&mut self, commands: &mut Commands, regions: &mut ZoneRegions) {
         for entity in &self.roots {
             commands.entity(entity).despawn();
         }
@@ -128,6 +240,9 @@ impl Scene<'_, '_> {
             zone_name: String::new(),
         });
         *regions = ZoneRegions::default();
+        if let Some(navmesh) = self.navmesh.as_mut() {
+            navmesh.leave();
+        }
     }
 
     /// Shows a zone with the player in it, the camera on them, and returns
@@ -135,22 +250,37 @@ impl Scene<'_, '_> {
     pub(super) fn enter(
         &mut self,
         commands: &mut Commands,
-        entry: Entry,
+        prepared: PreparedEntry,
         terrain_only: bool,
         regions: &mut ZoneRegions,
     ) -> Entity {
+        let PreparedEntry {
+            entry,
+            collision,
+            terrain,
+            navmesh,
+        } = prepared;
         let Entry {
             zone,
             character,
             placed,
             body,
         } = entry;
-        commands.insert_resource(Collision(build_collision(&zone)));
-        commands.insert_resource(TerrainSurface::from_primitives(&zone.primitives));
+        // A clone shares the world's geometry.
+        let world = collision.0.clone();
+        commands.insert_resource(collision);
+        commands.insert_resource(terrain);
         commands.insert_resource(SceneInfo {
             zone_name: zone.short_name.clone(),
         });
         regions.clone_from(&zone.regions);
+        if let (Some(triangles), Some(mesh)) = (navmesh, self.navmesh.as_mut()) {
+            let directory = self
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.0.settings_directory.clone());
+            mesh.start(&zone.short_name, triangles, world, directory);
+        }
         spawn_static_zone(
             commands,
             zone,
@@ -159,6 +289,17 @@ impl Scene<'_, '_> {
             &mut self.meshes,
             &mut self.materials,
         );
+        let character = character.and_then(|asset| {
+            character::prepare(
+                asset,
+                (
+                    &mut self.images,
+                    &mut self.meshes,
+                    &mut self.materials,
+                    &mut self.bindposes,
+                ),
+            )
+        });
         let player = spawn_player_and_hud(
             commands,
             placed.translation,
@@ -167,19 +308,16 @@ impl Scene<'_, '_> {
             &mut self.meshes,
             &mut self.materials,
         );
-        if let Some(asset) = character {
-            character::spawn(
-                commands,
-                player,
-                asset,
-                body.feet_offset,
-                &mut self.images,
-                &mut self.meshes,
-                &mut self.materials,
-            );
+        if let Some(prepared) = character {
+            character::spawn(commands, player, prepared, body.feet_offset);
         }
         commands.entity(player).insert(placed);
         self.focus(placed.translation);
+        // Each zone entry starts the camera behind the player's new heading;
+        // its pitch and zoom stay as chosen. Inferred, item 6.240.
+        for mut camera in &mut self.cameras {
+            super::start_behind(&mut camera, &placed);
+        }
         player
     }
 

@@ -75,7 +75,7 @@ impl Art<'_> {
     }
 
     /// A rectangle of a texture, stretched over its node as the skin's
-    /// pieces are: a border's edge or a gauge spans its whole length.
+    /// pieces are: a border's edge spans its whole length.
     fn piece(&mut self, file: &str, rect: Rect) -> Option<ImageNode> {
         Some(ImageNode {
             image: self.texture(file)?,
@@ -86,7 +86,7 @@ impl Art<'_> {
     }
 }
 
-fn image(pixels: image::RgbaImage) -> Image {
+pub(crate) fn image(pixels: image::RgbaImage) -> Image {
     let (width, height) = pixels.dimensions();
     let mut texture = Image::new(
         bevy::render::render_resource::Extent3d {

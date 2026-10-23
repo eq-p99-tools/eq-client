@@ -1,7 +1,17 @@
-//! CPU skinning for the small classic models; asset and pose math stay renderer independent.
+//! Skinning for the small classic models: the GPU places each vertex by its
+//! bone's joint, so animating moves only the joints and never a mesh; asset
+//! and pose math stay renderer independent.
 
-use bevy::prelude::*;
-use eq_client_assets::characters::CharacterAsset;
+use bevy::{
+    asset::RenderAssetUsages,
+    camera::visibility::DynamicSkinnedMeshBounds,
+    mesh::{
+        VertexAttributeValues,
+        skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
+    },
+    prelude::*,
+};
+use eq_client_assets::characters::{CharacterAsset, STANDING_CLIP};
 use std::sync::Arc;
 
 use super::{create_render_primitives, create_texture_images};
@@ -9,8 +19,9 @@ use super::{create_render_primitives, create_texture_images};
 #[derive(Component)]
 pub(super) struct AnimatedCharacter {
     pub(super) asset: Arc<CharacterAsset>,
-    /// Per drawn primitive, its asset index and this instance's posed mesh.
-    meshes: Vec<(usize, Handle<Mesh>)>,
+    /// The entities its bones' joints are, in bone order: what the GPU
+    /// places its vertices by.
+    joints: Vec<Entity>,
     /// The entities drawing the primitives.
     pub(super) parts: Vec<Part>,
     /// The gear last drawn and whether its helm showed, if dressed yet.
@@ -29,13 +40,64 @@ pub(super) struct AnimatedCharacter {
     elapsed: f32,
     since_pose: f32,
     moving_for: f32,
-    previous_position: Vec3,
+    /// Where it stood when last posed; none before its first pose, so a
+    /// character newly drawn at its place is not taken for moving there.
+    previous_position: Option<Vec3>,
     clip: (&'static str, bool),
+    /// While it stands up from sitting: the time in the sitting clip it is
+    /// drawn at, running back towards the clip's start. See [`rising`].
+    rise: Option<f32>,
+    /// The swings the server sent for the spawn drawn.
+    swings: Swings,
+    /// How far the model hangs above its root: what lifts a pose's top to
+    /// the root's [`super::names::Overhead`].
+    lift: f32,
+    /// Where its soles are in the model's own frame: the lowest point it
+    /// reaches standing.
+    pub(super) soles: f32,
+    /// When its soles were last logged while it stood still.
+    measured: Option<std::time::Instant>,
 }
 
-/// A corpse: drawn with its race's model, lying as it fell.
+/// A corpse: drawn with its race's model, falling from when it died if the
+/// player saw it die, else lying as it fell; where the setting is on, along
+/// the floor under it ([`lie`]).
 #[derive(Component, Clone, Copy, Debug, Default)]
-pub(super) struct Corpse;
+pub(super) struct Corpse {
+    /// When it died, for a death the player saw.
+    pub(super) fell: Option<std::time::Instant>,
+    /// How far its body lies from its soles along the way it faces, in
+    /// world units, negative where it lies behind them
+    /// ([`PreparedCharacter::lying`] scaled as drawn); None for a model
+    /// without a death clip, which never leans.
+    pub(super) length: Option<f32>,
+    /// How it leans to lie along the floor under it, found when it is first
+    /// drawn and again when a report moves it; None until then, or without
+    /// a floor to find it on.
+    pub(super) tilt: Option<eq_client_core::Tilt>,
+}
+
+impl Corpse {
+    /// Seconds since it fell: for one that arrived dead, a time long past,
+    /// so it lies rather than falling each time it is drawn.
+    fn lying(self, now: std::time::Instant) -> f32 {
+        self.fell.map_or(1.0e6, |fell| {
+            now.saturating_duration_since(fell).as_secs_f32()
+        })
+    }
+}
+
+impl Corpse {
+    /// How much of its lean it shows: it leans into the floor as it falls,
+    /// over the death clip's `seconds`, and one that arrived dead leans all
+    /// the way from its first frame.
+    fn leaning(self, now: std::time::Instant, seconds: Option<f32>) -> f32 {
+        let lying = self.lying(now);
+        seconds
+            .filter(|seconds| *seconds > 0.0)
+            .map_or(1.0, |seconds| (lying / seconds).clamp(0.0, 1.0))
+    }
+}
 
 /// The death clip, whose last frame is the body lying on the ground.
 const DEATH: (&str, bool) = ("D05", true);
@@ -67,6 +129,18 @@ pub(super) struct Held {
 #[derive(Component)]
 pub(super) struct HeldItem;
 
+/// Marks a bone's joint, which animation moves.
+#[derive(Component)]
+pub(super) struct Joint;
+
+/// Joints, moved by their character's animation.
+type Joints<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Transform,
+    (With<Joint>, Without<AnimatedCharacter>, Without<HeldItem>),
+>;
+
 /// Held items, placed and shown by their character's animation.
 type HeldItems<'w, 's> = Query<
     'w,
@@ -74,6 +148,13 @@ type HeldItems<'w, 's> = Query<
     (&'static mut Transform, &'static mut Visibility),
     (With<HeldItem>, Without<AnimatedCharacter>),
 >;
+
+/// Where the models were last placed, and the zone's floors: what a look's
+/// debug lines measure the drawn soles by.
+type Placed<'w, 's> = (
+    Query<'w, 's, &'static GlobalTransform>,
+    Option<Res<'w, super::Collision>>,
+);
 
 /// The model a movement root wears, for views that draw it again elsewhere.
 #[derive(Component)]
@@ -83,39 +164,92 @@ pub(super) struct Model(pub PreparedCharacter);
 pub(super) fn spawn(
     commands: &mut Commands,
     parent: Entity,
-    asset: CharacterAsset,
+    prepared: PreparedCharacter,
     feet_offset: f32,
-    images: &mut Assets<Image>,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
 ) {
-    let prepared = prepare(asset, images, meshes, materials);
-    spawn_prepared(commands, parent, &prepared, feet_offset, meshes);
+    spawn_prepared(commands, parent, &prepared, feet_offset);
     commands.entity(parent).insert(Model(prepared));
 }
 
-/// Shared immutable model, texture, and material data for nearby instances.
+/// Shared immutable model, mesh, texture, and material data for nearby
+/// instances: every instance draws the same meshes, each placed by its own
+/// joints.
 #[derive(Clone)]
 pub(super) struct PreparedCharacter {
     asset: Arc<CharacterAsset>,
     /// Drawable primitives, each with the index of its asset primitive, which
-    /// also indexes its pose and base material name.
+    /// also indexes its skin and base material name.
     primitives: Vec<(usize, Handle<Mesh>, Handle<StandardMaterial>)>,
+    /// The model's inverse bind poses: identities, as its vertices are
+    /// already bone-local.
+    bindposes: Handle<SkinnedMeshInverseBindposes>,
+    /// The lowest point its base pieces reach standing, which its soles
+    /// hang by.
+    soles: f32,
+    /// How far its body lies from its soles along the way it faces, in
+    /// model units, in the death clip's last frame ([`lying_length`]).
+    lying: Option<f32>,
 }
+
+/// The stores a model's textures, meshes, materials and bind poses go in.
+pub(super) type ModelStores<'a> = (
+    &'a mut Assets<Image>,
+    &'a mut Assets<Mesh>,
+    &'a mut Assets<StandardMaterial>,
+    &'a mut Assets<SkinnedMeshInverseBindposes>,
+);
 
 impl PreparedCharacter {
     pub fn height(&self) -> f32 {
         self.asset.height()
     }
+
+    /// How far its body lies from its soles along the way it faces, in
+    /// model units, negative where it lies behind them, read once from the
+    /// death clip's last frame; None for a model without that clip.
+    pub fn lying(&self) -> Option<f32> {
+        self.lying
+    }
 }
 
-/// Uploads model textures once; posed vertex buffers remain per-instance.
+/// How far a model's body lies from its soles along the way it faces, in
+/// model units, in the death clip's last frame: of the base pieces' reach
+/// behind and ahead along the heading axis in the model's frame, from its
+/// soles' vertical, the farther, negative where that is behind. The pose
+/// says which way the body falls, not an assumption. None for a model
+/// without the death clip, or with no reach either way.
+fn lying_length(asset: &CharacterAsset) -> Option<f32> {
+    let (clip, _) = DEATH;
+    let seconds = asset.clip_seconds(clip)?;
+    // The model is turned by `model_yaw` to face its root's +Z.
+    let axis = Quat::from_rotation_y(-eq_client_core::model_yaw()) * Vec3::Z;
+    let (behind, ahead) = asset.extent(&asset.joints(clip, seconds, false), axis)?;
+    let length = if ahead >= -behind { ahead } else { behind };
+    (length.is_finite() && length != 0.0).then_some(length)
+}
+
+/// Where the meshes of models hung under a spawn, its body and the items it
+/// holds, keep their data: in the main world as well as for drawing, since
+/// clicks are picked against them there.
+pub(super) const ON_A_SPAWN: RenderAssetUsages =
+    RenderAssetUsages::MAIN_WORLD.union(RenderAssetUsages::RENDER_WORLD);
+
+/// Uploads a model's textures and meshes once, each mesh holding its
+/// vertices bone-local with the bone that places them. None, with a
+/// warning, for a model the GPU cannot skin: more bones than a skin may
+/// have joints, or a skin that does not match its mesh.
 pub(super) fn prepare(
     asset: CharacterAsset,
-    images: &mut Assets<Image>,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-) -> PreparedCharacter {
+    (images, meshes, materials, bindposes): ModelStores,
+) -> Option<PreparedCharacter> {
+    let bones = asset.bone_count();
+    if bones > bevy::pbr::MAX_JOINTS {
+        warn!(
+            model = asset.name,
+            bones, "Model not drawn: more bones than a skin may have joints"
+        );
+        return None;
+    }
     let textures = create_texture_images(asset.textures.clone(), images);
     // Empty primitives draw nothing; the rest keep their asset index.
     let drawn: Vec<usize> = (0..asset.primitives.len())
@@ -133,37 +267,86 @@ pub(super) fn prepare(
         meshes,
         materials,
         true,
+        ON_A_SPAWN,
     );
-    for (handle, _) in &rendered {
-        if let Some(mut mesh) = meshes.get_mut(handle) {
-            mesh.asset_usage = bevy::asset::RenderAssetUsages::MAIN_WORLD
-                | bevy::asset::RenderAssetUsages::RENDER_WORLD;
+    for (index, (handle, _)) in drawn.iter().zip(&rendered) {
+        let skinned = meshes
+            .get_mut(handle)
+            .and_then(|mut mesh| asset.skin(*index).and_then(|skin| bind(&mut mesh, skin)));
+        if skinned.is_none() {
+            warn!(
+                model = asset.name,
+                primitive = index,
+                "Model not drawn: a skin does not match its mesh"
+            );
+            for (handle, _) in &rendered {
+                meshes.remove(handle);
+            }
+            return None;
         }
     }
-    PreparedCharacter {
+    let soles = asset.standing_bottom().unwrap_or_default();
+    let lying = lying_length(&asset);
+    Some(PreparedCharacter {
+        soles,
+        lying,
         asset: Arc::new(asset),
         primitives: drawn
             .into_iter()
             .zip(rendered)
             .map(|(index, (mesh, material))| (index, mesh, material))
             .collect(),
-    }
+        bindposes: bindposes.add(SkinnedMeshInverseBindposes::from(vec![
+            Mat4::IDENTITY;
+            bones
+        ])),
+    })
 }
 
-/// Creates an independently animated instance sharing its model's textures/materials.
+/// Gives a mesh its skin: its vertices bone-local, each with its one bone
+/// at full weight, and the bounds the joints carry it within. None when the
+/// skin and the mesh differ in their vertices.
+fn bind(mesh: &mut Mesh, skin: eq_client_assets::characters::SkinBind) -> Option<()> {
+    let vertices = mesh.count_vertices();
+    let normals = mesh.contains_attribute(Mesh::ATTRIBUTE_NORMAL);
+    if skin.positions.len() != vertices
+        || skin.bones.len() < vertices
+        || (normals && skin.normals.len() != vertices)
+    {
+        return None;
+    }
+    let joints = skin.bones[..vertices]
+        .iter()
+        .map(|bone| Some([u16::try_from(*bone).ok()?, 0, 0, 0]))
+        .collect::<Option<Vec<_>>>()?;
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, skin.positions.to_vec());
+    if normals {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, skin.normals.to_vec());
+    }
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_JOINT_INDEX,
+        VertexAttributeValues::Uint16x4(joints),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_JOINT_WEIGHT,
+        vec![[1.0_f32, 0.0, 0.0, 0.0]; vertices],
+    );
+    mesh.generate_skinned_mesh_bounds().ok()
+}
+
+/// Creates an independently animated instance sharing its model's meshes,
+/// textures and materials.
 pub(super) fn spawn_prepared(
     commands: &mut Commands,
     parent: Entity,
     prepared: &PreparedCharacter,
     feet_offset: f32,
-    meshes: &mut Assets<Mesh>,
 ) {
     spawn_on_layers(
         commands,
         parent,
         prepared,
         feet_offset,
-        meshes,
         &bevy::camera::visibility::RenderLayers::default(),
     );
 }
@@ -174,55 +357,56 @@ pub(super) fn spawn_on_layers(
     parent: Entity,
     prepared: &PreparedCharacter,
     feet_offset: f32,
-    meshes: &mut Assets<Mesh>,
     layers: &bevy::camera::visibility::RenderLayers,
 ) {
     let asset = prepared.asset.clone();
-    let primitives: Vec<_> = prepared
-        .primitives
-        .iter()
-        .filter_map(|(index, handle, material)| {
-            let mesh = meshes.get(handle)?.clone();
-            Some((*index, meshes.add(mesh), material.clone()))
-        })
-        .collect();
-    let handles = primitives
-        .iter()
-        .map(|(index, mesh, _)| (*index, mesh.clone()))
-        .collect();
-    let (bottom, top) = asset.span().unwrap_or_default();
+    let (_, top) = asset.span().unwrap_or_default();
+    // The soles hang by the lowest point the model reaches standing, as it
+    // is drawn, not by its base pose's (inferred, item 6.277).
+    let lift = -feet_offset - prepared.soles;
     // Until gear says otherwise, only the base body and bare head show.
     let shown: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
-    let mut parts = Vec::with_capacity(primitives.len());
+    let mut parts = Vec::with_capacity(prepared.primitives.len());
+    let mut joints = Vec::with_capacity(asset.bone_count());
     let child = commands
         .spawn((
             // Classic character meshes face heading 0 as stored, like all WLD
             // geometry (installed HUM/ERM/ELM/DWM toes extend along it), not
             // the movement root's +Z. Keep protocol heading on the root and
             // turn the model once here.
-            Transform::from_xyz(0.0, -feet_offset - bottom, 0.0)
+            Transform::from_xyz(0.0, lift, 0.0)
                 .with_rotation(Quat::from_rotation_y(eq_client_core::model_yaw())),
             Visibility::Inherited,
         ))
         .with_children(|parent| {
-            for (index, mesh, material) in primitives {
-                let visibility = if shown.get(index).copied().unwrap_or(true) {
+            // The joints hang from the model beside its parts, in the base
+            // pose until the first pose moves them.
+            for joint in asset.joints("", 0.0, true) {
+                joints.push(parent.spawn((Joint, Transform::from_matrix(joint))).id());
+            }
+            for (index, mesh, material) in &prepared.primitives {
+                let visibility = if shown.get(*index).copied().unwrap_or(true) {
                     Visibility::Inherited
                 } else {
                     Visibility::Hidden
                 };
                 let part = parent
                     .spawn((
-                        Mesh3d(mesh),
+                        Mesh3d(mesh.clone()),
                         MeshMaterial3d(material.clone()),
+                        SkinnedMesh {
+                            inverse_bindposes: prepared.bindposes.clone(),
+                            joints: joints.clone(),
+                        },
+                        DynamicSkinnedMeshBounds,
                         visibility,
                         layers.clone(),
                     ))
                     .id();
                 parts.push(Part {
-                    index,
+                    index: *index,
                     entity: part,
-                    base: material,
+                    base: material.clone(),
                 });
             }
         })
@@ -231,11 +415,11 @@ pub(super) fn spawn_on_layers(
         .entity(parent)
         .add_child(child)
         // The model hangs with its soles at the feet, so its top is this far
-        // above the root.
-        .insert(super::names::Overhead(top - bottom - feet_offset))
+        // above the root until the first pose places it.
+        .insert(super::names::Overhead(top + lift))
         .insert(AnimatedCharacter {
             asset,
-            meshes: handles,
+            joints,
             parts,
             dressed: None,
             model: child,
@@ -246,22 +430,30 @@ pub(super) fn spawn_on_layers(
             elapsed: 0.0,
             since_pose: 0.0,
             moving_for: 0.0,
-            previous_position: Vec3::ZERO,
-            clip: ("P01", false),
+            previous_position: None,
+            clip: (STANDING_CLIP, false),
+            rise: None,
+            swings: Swings::default(),
+            lift,
+            soles: prepared.soles,
+            measured: None,
         });
 }
 
 /// The characters the animation poses, with what decides their clip: the
-/// spawn they draw, whether they are the player, and whether a corpse.
+/// spawn they draw, whether they are the player, and whether a corpse and
+/// when it fell; and
+/// where their name goes.
 type Animated<'w, 's> = Query<
     'w,
     's,
     (
         &'static Transform,
         &'static mut AnimatedCharacter,
+        Option<&'static mut super::names::Overhead>,
         Option<&'static super::entities::RemoteEntity>,
         Has<super::Player>,
-        Has<Corpse>,
+        Option<&'static Corpse>,
     ),
 >;
 
@@ -269,26 +461,47 @@ type Animated<'w, 's> = Query<
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn animate(
     time: Res<Time>,
-    online: Res<super::online::OnlineState>,
+    (online, spells, controls): (
+        Res<super::online::OnlineState>,
+        Res<super::spellbook::SpellNames>,
+        Option<Res<super::motion::Controls>>,
+    ),
     mut characters: Animated,
     mut held_items: HeldItems,
-    mut meshes: ResMut<Assets<Mesh>>,
+    (mut joints, placed): (Joints, Placed),
 ) {
-    for (transform, mut character, remote, own, corpse) in &mut characters {
+    let now = std::time::Instant::now();
+    let world = online.world();
+    let measuring = bevy::log::tracing::enabled!(bevy::log::Level::DEBUG);
+    for (transform, mut character, overhead, remote, own, corpse) in &mut characters {
         let id = remote.map(|entity| entity.id).or_else(|| {
-            own.then(|| online.world().player().map(|player| player.spawn_id))
+            own.then(|| world.player().map(|player| player.spawn_id))
                 .flatten()
         });
-        let posture = id.and_then(|id| online.world().posture(id));
-        let moving = transform
-            .translation
-            .distance_squared(character.previous_position)
-            > 0.0001;
-        character.previous_position = transform.translation;
+        let posture = id.and_then(|id| world.posture(id));
+        let moving = character
+            .previous_position
+            .is_some_and(|previous| transform.translation.distance_squared(previous) > 0.0001);
+        character.previous_position = Some(transform.translation);
+        let dt = time.delta_secs().min(0.1);
+        // The latest of the spawn's swing and its completed cast, which
+        // plays its spell's casting gesture.
+        let latest = id.and_then(|id| {
+            let swing = world
+                .motion_of(id)
+                .map(|motion| (motion.count, motion.action));
+            let cast = world.completed_cast_of(id).and_then(|done| {
+                Some((
+                    done.count,
+                    spells.casting_animation(u32::from(done.spell_id))?,
+                ))
+            });
+            swing.max(cast)
+        });
+        character.swings.follow(latest, dt);
         if posture == Some(eq_client_core::PostureState::Frozen) {
             continue;
         }
-        let dt = time.delta_secs().min(0.1);
         character.elapsed += dt;
         character.since_pose += dt;
         character.moving_for = if moving {
@@ -299,17 +512,46 @@ pub(super) fn animate(
         if character.since_pose < 1.0 / 30.0 {
             continue;
         }
+        let step = character.since_pose;
         character.since_pose = 0.0;
-        let (selected, start) = chosen_clip(corpse, posture, character.moving_for > 0.0);
-        if selected != character.clip {
+        // A corpse seen dying falls from its death; one that arrived dead
+        // lies in the death clip's last frame.
+        let lying = corpse.map(|corpse| corpse.lying(now));
+        let (selected, pinned) = character.next_clip(lying, posture, step);
+        let selected = paced(
+            selected,
+            character.clip,
+            &character.asset,
+            (world, id, own, controls.as_deref()),
+        );
+        let changed = selected != character.clip;
+        if changed {
             character.clip = selected;
-            character.elapsed = start;
+            character.elapsed = 0.0;
+        }
+        if let Some(seconds) = pinned {
+            character.elapsed = seconds;
         }
         let (clip, held) = selected;
-        let (mut poses, attachments) =
-            character
-                .asset
-                .pose_with_attachments(clip, character.elapsed, !held, &character.shown);
+        let posed = character.asset.joints(clip, character.elapsed, !held);
+        if measuring {
+            log_soles(
+                &mut character,
+                (id, id.and_then(|id| world.spawn(id)), remote.is_some()),
+                (&posed, &placed),
+                (transform.translation, changed, now),
+            );
+        }
+        let attachments = character.asset.attachments(&posed);
+        // The name rides just over the head as the pose moves it (inferred,
+        // a recording item); a corpse's stays where its lying body puts it.
+        if let (Some(mut overhead), Some(top), None) = (
+            overhead,
+            character.asset.top(&posed, &character.shown),
+            lying,
+        ) {
+            overhead.set_if_neq(super::names::Overhead(top + character.lift));
+        }
         // Held items follow their hand or shield point, and stay hidden on a
         // skeleton without one rather than sitting at the model's origin.
         character.attachments = attachments;
@@ -328,47 +570,557 @@ pub(super) fn animate(
             };
             shown.set_if_neq(visibility);
         }
-        for (index, handle) in &character.meshes {
-            let Some(pose) = poses.get_mut(*index).and_then(Option::take) else {
-                continue;
-            };
-            if let Some(mut mesh) = meshes.get_mut(handle) {
-                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pose.positions);
-                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, pose.normals);
+        // The GPU places the vertices by the joints; no mesh changes.
+        for (entity, joint) in character.joints.iter().zip(&posed) {
+            if let Ok(mut transform) = joints.get_mut(*entity) {
+                transform.set_if_neq(Transform::from_matrix(*joint));
             }
         }
     }
 }
 
-/// The clip a character shows, and where in it a newly chosen clip starts:
-/// a corpse lies as it fell, in the death clip's last frame, rather than
-/// falling each time it is drawn (a held clip stays on its last frame).
+impl AnimatedCharacter {
+    /// The clip it shows next and the time in it when that is pinned, as
+    /// [`chosen_clip`] picks it, carrying a rise from sitting on by the
+    /// `step` seconds since its last pose.
+    fn next_clip(
+        &mut self,
+        lying: Option<f32>,
+        posture: Option<eq_client_core::PostureState>,
+        step: f32,
+    ) -> ((&'static str, bool), Option<f32>) {
+        let gesture = self.swings.gesture(|clip| self.asset.clip_seconds(clip));
+        let moving = self.moving_for > 0.0;
+        self.rise = rising(
+            self.rise,
+            (self.clip, self.elapsed, step),
+            self.asset.clip_seconds(SITTING_CLIP.0),
+            lying.is_some() || moving || gesture.is_some() || posed(posture),
+        );
+        chosen_clip(lying, posture, moving, gesture, self.rise)
+    }
+
+    /// The casting gesture it is playing, if any: the seconds since it began
+    /// and the seconds left of its clip.
+    pub(super) fn casting_gesture(&self) -> Option<(f32, f32)> {
+        let (_, action, _) = self.swings.latest?;
+        if !(42..=44).contains(&action) {
+            return None;
+        }
+        let length = |clip: &str| self.asset.clip_seconds(clip);
+        let gesture = self.swings.gesture(length)?;
+        Some((gesture.since, length(gesture.clip)? - gesture.since))
+    }
+}
+
+impl AnimatedCharacter {
+    /// Where its model hangs from its root, leaning by `tilt` about its
+    /// soles' point under the root, which stays where the root puts it.
+    /// Upright, exactly as it was first hung.
+    fn hung(&self, tilt: eq_client_core::Tilt) -> Transform {
+        let upright = Transform::from_xyz(0.0, self.lift, 0.0)
+            .with_rotation(Quat::from_rotation_y(eq_client_core::model_yaw()));
+        if tilt.upright() {
+            return upright;
+        }
+        let turn = tilt.rotation();
+        let soles = Vec3::Y * (self.lift + self.soles);
+        Transform {
+            translation: soles + turn * (upright.translation - soles),
+            rotation: turn * upright.rotation,
+            ..upright
+        }
+    }
+}
+
+/// Lays each drawn corpse along the floor under it, where the
+/// quality-of-life setting is on ([`Fix::CorpsesAlongGround`]): its model
+/// leans about its soles by the tilt found for it, heading × pitch × roll
+/// with its root's heading, a share of it while it falls. Off, or with no
+/// tilt found, it lies level as before. Adam's choice (10-20); what the
+/// official client does is inferred, checklist item 6.282.
+///
+/// [`Fix::CorpsesAlongGround`]: eq_client_core::qol::Fix::CorpsesAlongGround
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn lie(
+    options: Res<crate::options::OptionsState>,
+    corpses: Query<(&AnimatedCharacter, &Corpse)>,
+    mut models: Query<&mut Transform>,
+) {
+    let on = options
+        .options
+        .qol
+        .on(eq_client_core::qol::Fix::CorpsesAlongGround);
+    let now = std::time::Instant::now();
+    for (character, corpse) in &corpses {
+        let tilt = corpse
+            .tilt
+            .filter(|_| on)
+            .map(|tilt| tilt.share(corpse.leaning(now, character.asset.clip_seconds(DEATH.0))))
+            .unwrap_or_default();
+        if let Ok(mut model) = models.get_mut(character.model) {
+            model.set_if_neq(character.hung(tilt));
+        }
+    }
+}
+
+/// Logs at debug level where a posed character's soles are drawn: on its
+/// "Clip" line when its clip changed, and once a second while a remote
+/// spawn stands where its latest report left it, with how far its root is
+/// drawn across the ground from that report, for reading a shot taken then
+/// against. It changes nothing drawn.
+fn log_soles(
+    character: &mut AnimatedCharacter,
+    (id, spawn, remote): (Option<u16>, Option<&eq_client_core::world::Spawn>, bool),
+    (posed, (placed, collision)): (&[Mat4], &Placed),
+    (root, changed, now): (Vec3, bool, std::time::Instant),
+) {
+    let (clip, held) = character.clip;
+    let model = placed.get(character.model).ok();
+    let floors = collision
+        .as_ref()
+        .and_then(|collision| collision.0.as_ref());
+    let soles = || {
+        let reach = spawn.map_or(0.0, |spawn| {
+            eq_client_core::drawn_feet_offset(spawn.state.race, spawn.state.size)
+        });
+        DrawnSoles::of(&character.asset, model?, posed, floors, reach)
+    };
+    if changed {
+        // Which clip a drawn spawn plays and where its soles are drawn in
+        // it, for reading a look against.
+        let soles = soles();
+        debug!(
+            spawn = id,
+            clip,
+            held,
+            soles = soles.as_ref().map(bevy::log::tracing::field::display),
+            "Clip"
+        );
+    }
+    let (Some(id), Some(spawn), true) = (id, spawn, remote) else {
+        return;
+    };
+    let since = now.saturating_duration_since(spawn.reported);
+    let still = spawn.state.velocity.iter().all(|speed| *speed == 0.0);
+    let due = character
+        .measured
+        .is_none_or(|last| now.saturating_duration_since(last) >= STILL_EVERY);
+    if !(still && since <= STILL_FOR && due) {
+        return;
+    }
+    let reported = Vec3::from_array(eq_client_core::render_position(spawn.state.position));
+    let across = Vec2::new(root.x, root.z).distance(Vec2::new(reported.x, reported.z));
+    let soles = soles().map_or_else(|| "none".to_owned(), |soles| soles.to_string());
+    character.measured = Some(now);
+    debug!(
+        "spawn {id} still {:.1} s after its report in {clip}: root {across:.2} across \
+         from the report, soles {soles}",
+        since.as_secs_f32(),
+    );
+}
+
+/// How often a still spawn's soles are logged, and for how long after its
+/// latest report.
+const STILL_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+const STILL_FOR: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Where a posed character's soles are drawn and the floor under them, in
+/// the renderer's frame, for a debug line a look reads; it changes nothing
+/// drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DrawnSoles {
+    /// The height of the lowest point of its base pieces.
+    height: f32,
+    /// The collision floor nearest that point, straight under or over it,
+    /// within the reach it was looked for in.
+    floor: Option<f32>,
+}
+
+impl DrawnSoles {
+    /// The soles of `posed` hung from the model where it was last placed
+    /// (its `GlobalTransform`, as the GPU places the vertices by, one frame
+    /// old), and the floor of `floors` nearest them within `reach` either
+    /// way. None for a model without base pieces.
+    fn of(
+        asset: &CharacterAsset,
+        model: &GlobalTransform,
+        posed: &[Mat4],
+        floors: Option<&eq_client_core::movement::CollisionWorld>,
+        reach: f32,
+    ) -> Option<Self> {
+        let model = model.to_matrix();
+        let hung: Vec<Mat4> = posed.iter().map(|joint| model * *joint).collect();
+        let lowest = asset.bottom(&hung)?;
+        let floor = floors.and_then(|floors| floors.nearest_ground(lowest, reach, reach));
+        Some(Self {
+            height: lowest.y,
+            floor,
+        })
+    }
+}
+
+impl std::fmt::Display for DrawnSoles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.floor {
+            Some(floor) => write!(
+                f,
+                "{:.2}, {:+.2} from the floor at {floor:.2}",
+                self.height,
+                self.height - floor
+            ),
+            None => write!(f, "{:.2} with no floor in reach", self.height),
+        }
+    }
+}
+
+/// What a character plays once over its stance and walk: a swing the
+/// server sent, or the casting gesture of a cast it completed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Gesture {
+    /// The clip, such as `C05`.
+    clip: &'static str,
+    /// Seconds since it came.
+    since: f32,
+}
+
+/// The swings the server sent for one character and the casts it completed,
+/// as its animation follows them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Swings {
+    /// Whether the character has followed the world's motions yet.
+    followed: bool,
+    /// The latest swing's or completed cast's count and animation number,
+    /// and the seconds since it came.
+    latest: Option<(u64, u16, f32)>,
+}
+
+impl Swings {
+    /// Follows the world's latest swing or completed cast for the
+    /// character, its count and animation number, over a frame of `dt`
+    /// seconds. A new one starts from its beginning, two alike in a row
+    /// included; the one already there when the character was first drawn
+    /// came before it and is over.
+    fn follow(&mut self, news: Option<(u64, u16)>, dt: f32) {
+        let latest = self
+            .latest
+            .map(|(count, action, since)| (count, action, since + dt));
+        self.latest = match news {
+            Some((count, action)) if latest.is_none_or(|(last, ..)| last != count) => {
+                let since = if self.followed { 0.0 } else { f32::INFINITY };
+                Some((count, action, since))
+            }
+            _ => latest,
+        };
+        self.followed = true;
+    }
+
+    /// What the character plays over its stance: the latest swing or
+    /// casting gesture until its clip ends, in the clip the model has for it
+    /// (`length` gives none for a clip the model lacks). Nothing plays
+    /// during a cast, only once it completes, as the official client does
+    /// (checked against it, 10-14).
+    fn gesture(&self, length: impl Fn(&str) -> Option<f32>) -> Option<Gesture> {
+        let (_, action, since) = self.latest?;
+        let clip = played_clip(action, |clip| length(clip).is_some())?;
+        (since < length(clip)?).then_some(Gesture { clip, since })
+    }
+}
+
+/// The sitting clip: sitting down, held on its last frame once seated.
+const SITTING_CLIP: (&str, bool) = ("P02", true);
+
+/// Whether the posture is one a character holds a clip for, which a
+/// gesture does not play over.
+fn posed(posture: Option<eq_client_core::PostureState>) -> bool {
+    use eq_client_core::PostureState;
+    matches!(
+        posture,
+        Some(
+            PostureState::Sitting
+                | PostureState::Lying
+                | PostureState::Looting
+                | PostureState::Ducking
+        )
+    )
+}
+
+/// Where a character standing up from sitting is drawn in the sitting
+/// clip, if it is: the sitting clip played backwards at its own frame
+/// timing, once, from the frame the sit left it on, so it rises rather than
+/// popping to its stance. `previous` is the rise so far; `shown` the clip
+/// last drawn, the time in it and the seconds since that pose; `length` the
+/// sitting clip's, if the model has one. `held` is a posture, a gesture,
+/// movement or death taking over, which ends the rise at once; sitting again
+/// mid-rise resumes the sit from where the rise left it, since the clip
+/// drawn is the same and runs on from there.
+///
+/// Adam's choice (10-20): the official client's stand is inferred to be its
+/// sit reversed, at the sit's speed (recording checklist 6.281).
+fn rising(
+    previous: Option<f32>,
+    (shown, elapsed, step): ((&'static str, bool), f32, f32),
+    length: Option<f32>,
+    held: bool,
+) -> Option<f32> {
+    if held {
+        return None;
+    }
+    match previous {
+        Some(at) => Some(at - step).filter(|at| *at > 0.0),
+        None if shown == SITTING_CLIP => length
+            .map(|length| elapsed.min(length))
+            .filter(|at| *at > 0.0),
+        None => None,
+    }
+}
+
+/// The clip a character shows, and the time in it when that is pinned
+/// rather than run on from when the clip was chosen. A corpse plays the
+/// death clip from `corpse` seconds since it fell, staying on its last
+/// frame, the body lying on the ground (a held clip stays there); one that
+/// arrived dead is given a time long past, so it lies rather than falling
+/// each time it is drawn (the fall is inferred). Sitting, lying, looting and
+/// ducking show their posture; otherwise a swing or a completed cast's
+/// gesture plays once over the stance and the walk alike, its clips being
+/// the whole body's (inferred). Standing up from sitting comes after the
+/// gesture: the sitting clip at the time [`rising`] gives.
 fn chosen_clip(
-    corpse: bool,
+    corpse: Option<f32>,
     posture: Option<eq_client_core::PostureState>,
     moving: bool,
-) -> ((&'static str, bool), f32) {
-    if corpse {
-        (DEATH, 1.0e6)
+    gesture: Option<Gesture>,
+    rise: Option<f32>,
+) -> ((&'static str, bool), Option<f32>) {
+    if let Some(since) = corpse {
+        return (DEATH, Some(since));
+    }
+    match (gesture, rise) {
+        (Some(Gesture { clip, since }), _) if !posed(posture) => ((clip, true), Some(since)),
+        (_, Some(at)) if !posed(posture) && !moving => (SITTING_CLIP, Some(at)),
+        _ => (posture_clip(posture, moving), None),
+    }
+}
+
+/// The clip each of the servers' animation numbers plays, from 1, as
+/// `EQEmu` documents them (eqemu-docs-v2, docs/server/npc/animations.md);
+/// TAKP numbers its animations the same. The codes are the models' own clip
+/// names. Inferred: which clip the official client plays for a number is a
+/// recording item.
+#[rustfmt::skip]
+const ACTION_CLIPS: [&str; 73] = [
+    // 1 to 11: the weapon swings, kicks and the bow.
+    "C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08", "C09", "C10", "C11",
+    // 12 to 16: struck, drowning and dying.
+    "D01", "D02", "D03", "D04", "D05",
+    // 17 to 26: moving about, and standing.
+    "L01", "L02", "L03", "L04", "L05", "L06", "L07", "L08", "L09", "O01",
+    // 27 to 31: socials.
+    "S01", "S02", "S03", "S04", "S05",
+    // 32 to 38: stances.
+    "P01", "P02", "P03", "P04", "P05", "P06", "P07",
+    // 39 to 47: the instruments, the three casting gestures and the monk
+    // attacks.
+    "T01", "T02", "T03", "T04", "T05", "T06", "T07", "T08", "T09",
+    // 48 to 70: socials.
+    "S06", "S07", "S08", "S09", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17",
+    "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28",
+    // 71 to 73: stances.
+    "P08", "O02", "O03",
+];
+
+/// The clip a server animation number plays; None for a number without one.
+fn action_clip(action: u16) -> Option<&'static str> {
+    ACTION_CLIPS
+        .get(usize::from(action).checked_sub(1)?)
+        .copied()
+}
+
+/// The clip a model plays for a server animation number: the table's, or
+/// where the model lacks it, the lowest-numbered clip of its kind the model
+/// has. An attack (1 to 11) stands in with another attack, and a casting
+/// gesture (42 to 44) with another casting gesture; anything else the model
+/// lacks plays nothing. Inferred, a recording item: `EQEmu`'s documentation
+/// notes that a number plays differently from one race's model to
+/// another's, and the gnoll's model has no clip for its own hand-to-hand
+/// swing, kick or bash.
+fn played_clip(action: u16, has: impl Fn(&str) -> bool) -> Option<&'static str> {
+    let clip = action_clip(action)?;
+    if has(clip) {
+        return Some(clip);
+    }
+    let kin = match action {
+        1..=11 => 1..=11,
+        42..=44 => 42..=44,
+        _ => return None,
+    };
+    kin.filter_map(action_clip).find(|clip| has(clip))
+}
+
+/// The clip a character plays at its pace ([`paced_clip`]); a change into
+/// the walk or the run logs the pace it was chosen by.
+fn paced(
+    selected: (&'static str, bool),
+    current: (&'static str, bool),
+    asset: &CharacterAsset,
+    (world, id, own, controls): (
+        &eq_client_core::world::ClientWorld,
+        Option<u16>,
+        bool,
+        Option<&super::motion::Controls>,
+    ),
+) -> (&'static str, bool) {
+    use eq_client_core::movement::{record_speed, runs};
+    let (speed, walk_speed, run_speed) = pace(world, id, own, controls);
+    // The player moves at the pace it chose: its run, or its walk while
+    // the walk toggle is on.
+    let runs = if own {
+        !controls.is_some_and(|controls| controls.walking)
     } else {
-        (posture_clip(posture, moving), 0.0)
+        runs(speed, walk_speed)
+    };
+    let selected = paced_clip(selected, runs, |clip| asset.clip_moves_body(clip));
+    if selected != current && matches!(selected.0, "L01" | "L02") {
+        debug!(
+            spawn = id,
+            own,
+            clip = selected.0,
+            speed,
+            walk = record_speed(walk_speed),
+            run = record_speed(run_speed),
+            "Moving pace"
+        );
+    }
+    selected
+}
+
+/// The pace a drawn character moves at, in units per second, with its
+/// record's walk and run speeds: another spawn's by the speed of its latest
+/// report, from which [`eq_client_core::movement::runs`] decides; the
+/// player's by the speed its movement asks for (its run, or its walk while
+/// walking), logged beside its choice.
+fn pace(
+    world: &eq_client_core::world::ClientWorld,
+    id: Option<u16>,
+    own: bool,
+    controls: Option<&super::motion::Controls>,
+) -> (f32, f32, f32) {
+    use eq_client_core::movement::record_speed;
+    if own {
+        let walking = controls.is_some_and(|controls| controls.walking);
+        let (walk, run) = world
+            .player()
+            .map_or((0.0, 0.0), |player| (player.walk_speed, player.run_speed));
+        // The record's own speeds where it has them; else what the session
+        // lets the player move at.
+        let asked = if walk > 0.0 && run > walk {
+            record_speed(if walking { walk } else { run })
+        } else {
+            controls
+                .and_then(|controls| {
+                    if walking {
+                        controls.walk_speed
+                    } else {
+                        controls.speed
+                    }
+                })
+                .unwrap_or(0.0)
+        };
+        return (asked, walk, run);
+    }
+    id.and_then(|id| world.spawn(id))
+        .map_or((0.0, 0.0, 0.0), |spawn| {
+            let [x, y, _] = spawn.state.velocity;
+            (x.hypot(y), spawn.state.walk_speed, spawn.state.run_speed)
+        })
+}
+
+/// The moving clip a character plays at its pace: the run (`L02`) when it
+/// `runs`, else the walk (`L01`); either one the model has only for its root
+/// gives way to the other, and a ducking walk (`L06`) the model has only for
+/// its root gives way to the ducked stance (`L08`). `moves` says whether the
+/// model's clip moves the body. A model lacking both moving clips shows what
+/// it chose. Other clips pass unchanged. Inferred, recording checklist item
+/// 6.232.
+fn paced_clip(
+    (clip, held): (&'static str, bool),
+    runs: bool,
+    moves: impl Fn(&str) -> bool,
+) -> (&'static str, bool) {
+    match clip {
+        "L01" => {
+            let (chosen, other) = if runs { ("L02", "L01") } else { ("L01", "L02") };
+            let clip = if !moves(chosen) && moves(other) {
+                other
+            } else {
+                chosen
+            };
+            (clip, held)
+        }
+        "L06" if !moves("L06") => ("L08", true),
+        _ => (clip, held),
     }
 }
 
 /// WLD clip names documented by `EQEmu`; presentation never changes network position.
+/// A moving character's walk (`L01`) is paced into its run by [`paced_clip`].
 fn posture_clip(
     posture: Option<eq_client_core::PostureState>,
     moving: bool,
 ) -> (&'static str, bool) {
     use eq_client_core::PostureState;
     match posture {
-        Some(PostureState::Sitting) => ("P02", true),
+        Some(PostureState::Sitting) => SITTING_CLIP,
         Some(PostureState::Ducking) if moving => ("L06", false),
         Some(PostureState::Ducking) => ("L08", true),
         Some(PostureState::Looting) => ("P05", true),
         Some(PostureState::Lying) => ("D05", true),
         _ if moving => ("L01", false),
-        _ => ("P01", false),
+        _ => (STANDING_CLIP, false),
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// The stores a model goes in, empty, on an app or world.
+    pub(crate) fn stores(world: &mut World) {
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<SkinnedMeshInverseBindposes>>();
+    }
+
+    /// The test model, prepared in the world's stores.
+    pub(crate) fn prepared(world: &mut World) -> PreparedCharacter {
+        world
+            .run_system_once(
+                |mut images: ResMut<Assets<Image>>,
+                 mut meshes: ResMut<Assets<Mesh>>,
+                 mut materials: ResMut<Assets<StandardMaterial>>,
+                 mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>| {
+                    prepare(
+                        CharacterAsset::testing(),
+                        (&mut images, &mut meshes, &mut materials, &mut bindposes),
+                    )
+                },
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Draws the prepared model under a new root; the root.
+    pub(crate) fn drawn(world: &mut World, prepared: &PreparedCharacter) -> Entity {
+        let prepared = prepared.clone();
+        world
+            .run_system_once(move |mut commands: Commands| {
+                let root = commands.spawn(Transform::IDENTITY).id();
+                spawn_prepared(&mut commands, root, &prepared, 0.0);
+                root
+            })
+            .unwrap()
     }
 }
 
@@ -377,15 +1129,525 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_corpse_lies_in_the_death_clips_last_frame_whatever_its_posture() {
-        use eq_client_core::PostureState;
-        let (clip, start) = chosen_clip(true, Some(PostureState::Standing), true);
-        assert_eq!(clip, ("D05", true));
-        assert!(start > 1000.0);
-        assert_eq!(
-            chosen_clip(false, Some(PostureState::Sitting), false),
-            (("P02", true), 0.0)
+    fn a_model_is_skinned_once_and_its_instances_share_its_meshes() {
+        let mut world = World::new();
+        testing::stores(&mut world);
+        let prepared = testing::prepared(&mut world);
+        let first = testing::drawn(&mut world, &prepared);
+        let second = testing::drawn(&mut world, &prepared);
+        let parts = |world: &mut World, root: Entity| {
+            let character = world.get::<AnimatedCharacter>(root).unwrap();
+            let joints = character.joints.clone();
+            let parts: Vec<_> = character.parts.iter().map(|part| part.entity).collect();
+            let meshes: Vec<_> = parts
+                .iter()
+                .map(|part| world.get::<Mesh3d>(*part).unwrap().0.clone())
+                .collect();
+            let skinned = world.get::<SkinnedMesh>(parts[0]).unwrap().joints.clone();
+            (joints, meshes, skinned)
+        };
+        let (first_joints, first_meshes, first_skin) = parts(&mut world, first);
+        let (second_joints, second_meshes, _) = parts(&mut world, second);
+        // One mesh per piece, shared; each instance has joints of its own.
+        assert_eq!(first_meshes, second_meshes);
+        assert_eq!(world.resource::<Assets<Mesh>>().len(), 1);
+        assert_eq!(first_joints.len(), 2);
+        assert_eq!(first_skin, first_joints);
+        assert!(
+            first_joints
+                .iter()
+                .all(|joint| !second_joints.contains(joint))
         );
+        // The mesh holds its vertices bone-local, each with its bone at full
+        // weight, and the bounds the joints carry it within.
+        let meshes = world.resource::<Assets<Mesh>>();
+        let mesh = meshes.get(&first_meshes[0]).unwrap();
+        let Some(VertexAttributeValues::Uint16x4(joints)) =
+            mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)
+        else {
+            panic!("no joint indices");
+        };
+        assert_eq!(joints, &vec![[1, 0, 0, 0]; 3]);
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("no positions");
+        };
+        assert_eq!(positions[2], [0.0, 1.0, 0.0]);
+        assert!(mesh.skinned_mesh_bounds().is_some());
+    }
+
+    #[test]
+    fn animation_moves_the_joints_and_leaves_the_meshes_alone() {
+        let mut app = crate::testing::app();
+        testing::stores(app.world_mut());
+        app.init_resource::<Time>().add_systems(Update, animate);
+        let prepared = testing::prepared(app.world_mut());
+        let root = testing::drawn(app.world_mut(), &prepared);
+        let (joint, handle) = {
+            let world = app.world();
+            let character = world.get::<AnimatedCharacter>(root).unwrap();
+            let part = character.parts[0].entity;
+            (
+                character.joints[1],
+                world.get::<Mesh3d>(part).unwrap().0.clone(),
+            )
+        };
+        let positions = |app: &App| {
+            app.world()
+                .resource::<Assets<Mesh>>()
+                .get(&handle)
+                .unwrap()
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .and_then(VertexAttributeValues::as_float3)
+                .unwrap()
+                .to_vec()
+        };
+        let before = positions(&app);
+        let rest = *app.world().get::<Transform>(joint).unwrap();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        // The stance turns the bone a tenth of its quarter turn in its first
+        // tenth of a second; the mesh keeps its vertices as they were.
+        let turned = *app.world().get::<Transform>(joint).unwrap();
+        assert!(turned.rotation.angle_between(rest.rotation) > 0.1);
+        assert_eq!(turned.translation, rest.translation);
+        assert_eq!(positions(&app), before);
+    }
+
+    #[test]
+    fn a_skin_that_does_not_fit_its_mesh_is_refused() {
+        fn skin(bones: &[usize]) -> eq_client_assets::characters::SkinBind<'_> {
+            eq_client_assets::characters::SkinBind {
+                positions: &[[0.0; 3]; 3],
+                normals: &[],
+                bones,
+            }
+        }
+        let mut meshes = Assets::<Mesh>::default();
+        let mut mesh = Mesh::new(
+            bevy::mesh::PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD,
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 3]);
+        let handle = meshes.add(mesh);
+        // A bone past what a joint index holds, or too few bones, is refused.
+        assert!(bind(&mut meshes.get_mut(&handle).unwrap(), skin(&[0, 70_000, 1])).is_none());
+        assert!(bind(&mut meshes.get_mut(&handle).unwrap(), skin(&[0, 1])).is_none());
+        assert!(bind(&mut meshes.get_mut(&handle).unwrap(), skin(&[0, 1, 1])).is_some());
+    }
+
+    #[test]
+    fn a_corpse_falls_from_its_death_or_lies_in_the_death_clips_last_frame() {
+        use eq_client_core::PostureState;
+        let swing = Gesture {
+            clip: "C05",
+            since: 0.1,
+        };
+        // One that arrived dead lies; one seen dying falls from its death.
+        let now = std::time::Instant::now();
+        let arrived = Corpse::default().lying(now);
+        let (clip, pinned) = chosen_clip(
+            Some(arrived),
+            Some(PostureState::Standing),
+            true,
+            Some(swing),
+            None,
+        );
+        assert_eq!(clip, ("D05", true));
+        assert!(pinned.is_some_and(|seconds| seconds > 1000.0));
+        let seen = Corpse {
+            fell: now.checked_sub(std::time::Duration::from_millis(400)),
+            ..Corpse::default()
+        };
+        assert_eq!(
+            chosen_clip(Some(seen.lying(now)), None, false, None, None),
+            (("D05", true), Some(0.4))
+        );
+        assert_eq!(
+            chosen_clip(None, Some(PostureState::Sitting), false, None, None),
+            (("P02", true), None)
+        );
+    }
+
+    #[test]
+    fn a_body_lies_as_far_as_the_death_clips_last_frame_lays_it() {
+        let mut world = World::new();
+        testing::stores(&mut world);
+        let prepared = testing::prepared(&mut world);
+        // The test model falls back: its last frame lays it two to four
+        // behind its soles, so it lies four behind them.
+        let length = prepared.lying().unwrap();
+        assert!((length + 4.0).abs() < 1e-4, "{length}");
+    }
+
+    /// The test model drawn under a root placed and turned on the floor,
+    /// with `lie` laying it, and the model's upright hang.
+    fn lain() -> (App, Entity, Transform) {
+        let mut app = App::new();
+        testing::stores(app.world_mut());
+        app.init_resource::<crate::options::OptionsState>()
+            .add_systems(Update, lie);
+        let prepared = testing::prepared(app.world_mut());
+        let root = testing::drawn(app.world_mut(), &prepared);
+        app.world_mut().entity_mut(root).insert(
+            Transform::from_xyz(4.0, 2.0, 7.0)
+                .with_rotation(Quat::from_rotation_y(0.9))
+                .with_scale(Vec3::splat(0.7)),
+        );
+        let model = app.world().get::<AnimatedCharacter>(root).unwrap().model;
+        let upright = *app.world().get::<Transform>(model).unwrap();
+        (app, root, upright)
+    }
+
+    /// The model's hang once `lie` has laid a corpse that fell then.
+    fn laid(app: &mut App, root: Entity, corpse: Corpse) -> Transform {
+        app.world_mut().entity_mut(root).insert(corpse);
+        app.update();
+        let model = app.world().get::<AnimatedCharacter>(root).unwrap().model;
+        *app.world().get::<Transform>(model).unwrap()
+    }
+
+    #[test]
+    fn a_corpse_seen_dying_leans_into_the_floor_as_it_falls() {
+        use std::time::{Duration, Instant};
+        let (mut app, root, upright) = lain();
+        let tilt = eq_client_core::Tilt {
+            pitch: -0.3,
+            roll: 0.2,
+        };
+        let fell = |ago: u64| Corpse {
+            fell: Instant::now().checked_sub(Duration::from_millis(ago)),
+            length: Some(-4.0),
+            tilt: Some(tilt),
+        };
+        let lean = |hung: Transform| hung.rotation * upright.rotation.inverse();
+        // Just fallen it stands upright, half way through the one-second
+        // death clip it leans half way, and once it lies it leans all the
+        // way, as one that arrived dead does from its first frame.
+        let now = lean(laid(&mut app, root, fell(0)));
+        assert!(now.angle_between(Quat::IDENTITY) < 0.01, "{now}");
+        let half = lean(laid(&mut app, root, fell(500)));
+        assert!(
+            half.angle_between(tilt.share(0.5).rotation()) < 0.02,
+            "{half}"
+        );
+        for corpse in [
+            fell(1000),
+            Corpse {
+                fell: None,
+                ..fell(0)
+            },
+        ] {
+            let hung = laid(&mut app, root, corpse);
+            assert!(lean(hung).angle_between(tilt.rotation()) < 1e-3);
+            // It leans about its soles, which stay under the root.
+            let character = app.world().get::<AnimatedCharacter>(root).unwrap();
+            let soles = Vec3::Y * character.soles;
+            assert!((hung.transform_point(soles) - upright.transform_point(soles)).length() < 1e-5);
+        }
+        // A model without a death clip, or without a floor found, stays
+        // upright.
+        for corpse in [
+            Corpse {
+                tilt: None,
+                ..fell(1000)
+            },
+            Corpse::default(),
+        ] {
+            assert_eq!(laid(&mut app, root, corpse), upright);
+        }
+    }
+
+    #[test]
+    fn with_the_setting_off_a_corpse_lies_level_as_before() {
+        use eq_client_core::qol::Fix;
+        let (mut app, root, upright) = lain();
+        let corpse = Corpse {
+            fell: None,
+            length: Some(-4.0),
+            tilt: Some(eq_client_core::Tilt {
+                pitch: -0.3,
+                roll: 0.2,
+            }),
+        };
+        assert_ne!(laid(&mut app, root, corpse), upright);
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::CorpsesAlongGround, false);
+        assert_eq!(laid(&mut app, root, corpse), upright);
+    }
+
+    #[test]
+    fn on_flat_ground_a_corpse_lying_along_it_logs_the_same_soles() {
+        use eq_client_core::qol::Fix;
+        let (mut app, root, upright) = lain();
+        let corners = [
+            [-50.0, 2.0, -50.0],
+            [50.0, 2.0, -50.0],
+            [50.0, 2.0, 50.0],
+            [-50.0, 2.0, 50.0],
+        ];
+        let floor = eq_client_core::movement::CollisionWorld::new([
+            [corners[0], corners[1], corners[2]],
+            [corners[0], corners[2], corners[3]],
+        ])
+        .unwrap();
+        // Its soles hang at the root, on the floor, as `interpolate` finds
+        // its tilt there.
+        let placed = *app.world().get::<Transform>(root).unwrap();
+        let length = -4.0 * 0.7;
+        let tilt = eq_client_core::corpse_tilt(&floor, placed.translation, 0.9, length, 60, 6.0);
+        assert!(tilt.upright(), "{tilt:?}");
+        let corpse = Corpse {
+            fell: None,
+            length: Some(length),
+            tilt: Some(tilt),
+        };
+        let line = |app: &mut App, on: bool| {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .qol
+                .set(Fix::CorpsesAlongGround, on);
+            let hung = laid(app, root, corpse);
+            assert_eq!(hung, upright);
+            let asset = &app.world().get::<AnimatedCharacter>(root).unwrap().asset;
+            let posed = asset.joints(DEATH.0, 1.0e6, false);
+            let model = GlobalTransform::from(placed).mul_transform(hung);
+            DrawnSoles::of(asset, &model, &posed, Some(&floor), 3.75)
+                .unwrap()
+                .to_string()
+        };
+        // The soles line reads the same with the setting on as off.
+        let off = line(&mut app, false);
+        assert_eq!(line(&mut app, true), off);
+        assert_eq!(off, "1.30, -0.70 from the floor at 2.00");
+    }
+
+    #[test]
+    fn a_moving_character_walks_or_runs_in_the_clip_that_moves_its_body() {
+        let full = |clip: &str| clip != "missing";
+        // Its pace picks the walk or the run.
+        assert_eq!(paced_clip(("L01", false), false, full), ("L01", false));
+        assert_eq!(paced_clip(("L01", false), true, full), ("L02", false));
+        // A clip moving only the root gives way to the other, as a gnoll's
+        // walk to its run.
+        let root_walk = |clip: &str| clip != "L01";
+        assert_eq!(paced_clip(("L01", false), false, root_walk), ("L02", false));
+        let root_run = |clip: &str| clip != "L02";
+        assert_eq!(paced_clip(("L01", false), true, root_run), ("L01", false));
+        // A model with neither shows what it chose.
+        let neither = |_: &str| false;
+        assert_eq!(paced_clip(("L01", false), true, neither), ("L02", false));
+        // A ducking walk with only the root's track ducks in place.
+        assert_eq!(paced_clip(("L06", false), false, neither), ("L08", true));
+        assert_eq!(paced_clip(("L06", false), true, full), ("L06", false));
+        // Standing and the other clips are left as they are.
+        assert_eq!(paced_clip(("P01", false), true, neither), ("P01", false));
+        assert_eq!(paced_clip(("C05", true), true, full), ("C05", true));
+    }
+
+    #[test]
+    fn the_servers_animation_numbers_play_eqemus_documented_clips() {
+        assert_eq!(action_clip(5), Some("C05"));
+        assert_eq!(action_clip(8), Some("C08"));
+        assert_eq!(action_clip(43), Some("T05"));
+        assert_eq!(action_clip(1), Some("C01"));
+        assert_eq!(action_clip(16), Some("D05"));
+        assert_eq!(action_clip(26), Some("O01"));
+        assert_eq!(action_clip(48), Some("S06"));
+        assert_eq!(action_clip(71), Some("P08"));
+        assert_eq!(action_clip(73), Some("O03"));
+        for none in [0, 74, 76, u16::MAX] {
+            assert_eq!(action_clip(none), None, "{none}");
+        }
+        // The postures this module plays agree with the table.
+        for (action, posture) in [(32, "P01"), (33, "P02"), (36, "P05"), (17, "L01")] {
+            assert_eq!(action_clip(action), Some(posture));
+        }
+    }
+
+    #[test]
+    fn a_model_lacking_an_attack_or_gesture_plays_the_lowest_of_its_kind_it_has() {
+        // A model like the Qeynos Hills gnoll's: C05, C09 and C10 its only
+        // attacks, and T06 its only casting gesture.
+        let gnoll = |clip: &str| ["C05", "C09", "C10", "D02", "P01", "T06"].contains(&clip);
+        // Its own hand-to-hand swing, kick and bash stand in with its lowest
+        // attack; the attacks it has play as they are.
+        for action in [8, 1, 7, 5] {
+            assert_eq!(played_clip(action, gnoll), Some("C05"), "{action}");
+        }
+        assert_eq!(played_clip(9, gnoll), Some("C09"));
+        // Every casting gesture plays the one it has.
+        for action in [42, 43, 44] {
+            assert_eq!(played_clip(action, gnoll), Some("T06"), "{action}");
+        }
+        // Anything else it lacks, a monk's attack included, plays nothing,
+        // and what it has plays.
+        for action in [12, 27, 33, 39, 46, 74] {
+            assert_eq!(played_clip(action, gnoll), None, "{action}");
+        }
+        assert_eq!(played_clip(13, gnoll), Some("D02"));
+        // The lowest-numbered of a kind stands in.
+        let clawed = |clip: &str| ["C02", "C03", "T05", "T06"].contains(&clip);
+        assert_eq!(played_clip(8, clawed), Some("C02"));
+        assert_eq!(played_clip(42, clawed), Some("T05"));
+        // A model with every clip plays the table's.
+        assert_eq!(played_clip(8, |_| true), Some("C08"));
+        assert_eq!(played_clip(44, |_| true), Some("T06"));
+        // One with no attack or gesture at all plays nothing for them.
+        assert_eq!(played_clip(8, |clip| clip == "P01"), None);
+        assert_eq!(played_clip(43, |clip| clip == "P01"), None);
+    }
+
+    #[test]
+    fn a_swing_plays_once_over_the_stance_and_walk_but_not_over_a_posture() {
+        use eq_client_core::PostureState;
+        let swing = Some(Gesture {
+            clip: "C05",
+            since: 0.25,
+        });
+        for moving in [false, true] {
+            assert_eq!(
+                chosen_clip(None, Some(PostureState::Standing), moving, swing, None),
+                (("C05", true), Some(0.25))
+            );
+        }
+        assert_eq!(
+            chosen_clip(None, None, true, swing, None),
+            (("C05", true), Some(0.25))
+        );
+        for (posture, shown) in [
+            (PostureState::Sitting, ("P02", true)),
+            (PostureState::Lying, ("D05", true)),
+            (PostureState::Looting, ("P05", true)),
+            (PostureState::Ducking, ("L08", true)),
+        ] {
+            assert_eq!(
+                chosen_clip(None, Some(posture), false, swing, None),
+                (shown, None)
+            );
+        }
+        // With nothing to play the stance or walk shows.
+        assert_eq!(
+            chosen_clip(None, Some(PostureState::Standing), true, None, None),
+            (("L01", false), None)
+        );
+    }
+
+    #[test]
+    fn standing_up_plays_the_sit_backwards_once_from_where_the_sit_left_it() {
+        use eq_client_core::PostureState;
+        let sitting = SITTING_CLIP;
+        let length = Some(1.0);
+        // Seated (the hold long past the clip's end), it rises from the
+        // clip's last frame, and runs back by each pose's step.
+        let rise = rising(None, (sitting, 30.0, 0.03), length, false);
+        assert_eq!(rise, Some(1.0));
+        let rise = rising(rise, (sitting, 1.0, 0.25), length, false);
+        assert_eq!(rise, Some(0.75));
+        // Half sat, it rises from where the sit had reached.
+        assert_eq!(rising(None, (sitting, 0.4, 0.03), length, false), Some(0.4));
+        // It ends at the clip's start, and a standing character does not rise.
+        assert_eq!(rising(Some(0.1), (sitting, 0.1, 0.25), length, false), None);
+        assert_eq!(
+            rising(None, ((STANDING_CLIP, false), 2.0, 0.03), length, false),
+            None
+        );
+        // A model without the clip pops to its stance as before.
+        assert_eq!(rising(None, (sitting, 30.0, 0.03), None, false), None);
+        // Moving, a gesture, a posture or death ends it at once.
+        assert_eq!(rising(Some(0.5), (sitting, 0.5, 0.03), length, true), None);
+        // While rising the sitting clip shows at the rise's time; moving
+        // cuts it to the walk.
+        let standing = Some(PostureState::Standing);
+        assert_eq!(
+            chosen_clip(None, standing, false, None, Some(0.75)),
+            (sitting, Some(0.75))
+        );
+        assert_eq!(
+            chosen_clip(None, standing, true, None, Some(0.75)),
+            (("L01", false), None)
+        );
+        // Sitting again mid-rise shows the sit unpinned, so it runs on from
+        // the frame the rise left rather than restarting.
+        assert_eq!(
+            chosen_clip(None, Some(PostureState::Sitting), false, None, Some(0.75)),
+            (sitting, None)
+        );
+    }
+
+    #[test]
+    fn a_gesture_plays_before_a_rise() {
+        use eq_client_core::PostureState;
+        let swing = Some(Gesture {
+            clip: "C05",
+            since: 0.25,
+        });
+        assert_eq!(
+            chosen_clip(None, Some(PostureState::Standing), false, swing, Some(0.5)),
+            (("C05", true), Some(0.25))
+        );
+        // And a gesture's start ends the rise, so the stance follows it.
+        assert_eq!(
+            rising(Some(0.5), (SITTING_CLIP, 0.5, 0.03), Some(1.0), true),
+            None
+        );
+    }
+
+    #[test]
+    fn a_new_swing_or_completed_cast_plays_from_its_start_until_its_clip_ends() {
+        let length = |clip: &str| match clip {
+            "C05" => Some(0.8),
+            "T05" => Some(1.2),
+            _ => None,
+        };
+        let playing = |clip, since| Some(Gesture { clip, since });
+        // The swing already there when the character is first drawn is over.
+        let mut swings = Swings::default();
+        swings.follow(Some((3, 5)), 0.0);
+        assert_eq!(swings.gesture(length), None);
+        // A new one plays from its start, and a second alike restarts it.
+        swings.follow(Some((4, 5)), 0.1);
+        assert_eq!(swings.gesture(length), playing("C05", 0.0));
+        swings.follow(Some((4, 5)), 0.5);
+        swings.follow(Some((5, 5)), 0.1);
+        assert_eq!(swings.gesture(length), playing("C05", 0.0));
+        // It ends with its clip, and the stance shows again.
+        swings.follow(Some((5, 5)), 0.5);
+        assert!(matches!(
+            swings.gesture(length),
+            Some(Gesture { since, .. }) if (since - 0.5).abs() < 0.0001
+        ));
+        swings.follow(Some((5, 5)), 0.3);
+        assert_eq!(swings.gesture(length), None);
+        // A completed cast plays its gesture once the same way.
+        swings.follow(Some((6, 43)), 0.1);
+        assert_eq!(swings.gesture(length), playing("T05", 0.0));
+        swings.follow(Some((6, 43)), 1.3);
+        assert_eq!(swings.gesture(length), None);
+        // A model without the clip plays the lowest of its kind it has.
+        swings.follow(Some((7, 8)), 0.1);
+        assert_eq!(swings.gesture(length), playing("C05", 0.0));
+        swings.follow(Some((8, 42)), 0.1);
+        assert_eq!(swings.gesture(length), playing("T05", 0.0));
+        // One with none of its kind plays nothing for it.
+        let bare = |clip: &str| (clip == "P01").then_some(1.0);
+        swings.follow(Some((9, 8)), 0.1);
+        assert_eq!(swings.gesture(bare), None);
+        // A character first drawn before any swing or cast plays the first.
+        let mut fresh = Swings::default();
+        fresh.follow(None, 0.1);
+        fresh.follow(Some((10, 5)), 0.1);
+        assert!(matches!(
+            fresh.gesture(length),
+            Some(Gesture { clip: "C05", .. })
+        ));
     }
 
     #[test]
@@ -411,5 +1673,105 @@ mod tests {
             posture_clip(Some(PostureState::Unknown(999)), false),
             ("P01", false)
         );
+    }
+
+    #[test]
+    fn the_drawn_soles_are_the_lowest_placed_point_over_the_floor_under_it() {
+        // The test model's triangle hangs from a bone a unit up, its lowest
+        // edge on the bone; hung half size two under a root, it is drawn
+        // at -1.5, 1.5 over a floor at -3.
+        let asset = CharacterAsset::testing();
+        let posed = asset.joints("", 0.0, true);
+        let model =
+            GlobalTransform::from(Transform::from_xyz(4.0, -2.0, 7.0).with_scale(Vec3::splat(0.5)));
+        let floor = |y: f32| {
+            let corners = [
+                [-50.0, y, -50.0],
+                [50.0, y, -50.0],
+                [50.0, y, 50.0],
+                [-50.0, y, 50.0],
+            ];
+            eq_client_core::movement::CollisionWorld::new([
+                [corners[0], corners[1], corners[2]],
+                [corners[0], corners[2], corners[3]],
+            ])
+            .unwrap()
+        };
+        let ground = floor(-3.0);
+        let soles = DrawnSoles::of(&asset, &model, &posed, Some(&ground), 2.0).unwrap();
+        assert!((soles.height + 1.5).abs() < 1e-4, "{soles:?}");
+        assert!(
+            soles.floor.is_some_and(|floor| (floor + 3.0).abs() < 1e-3),
+            "{soles:?}"
+        );
+        assert_eq!(soles.to_string(), "-1.50, +1.50 from the floor at -3.00");
+        // A floor beyond the reach either way is not the soles' floor.
+        let far = DrawnSoles::of(&asset, &model, &posed, Some(&ground), 1.0).unwrap();
+        assert_eq!(far.to_string(), "-1.50 with no floor in reach");
+        let over = floor(-1.0);
+        let sunk = DrawnSoles::of(&asset, &model, &posed, Some(&over), 2.0).unwrap();
+        assert_eq!(sunk.to_string(), "-1.50, -0.50 from the floor at -1.00");
+    }
+
+    #[test]
+    fn the_joints_place_a_scaled_hung_model_where_its_pose_puts_it() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins(bevy::transform::TransformPlugin);
+        testing::stores(app.world_mut());
+        let prepared = testing::prepared(app.world_mut());
+        let feet = 1.3;
+        let root = app
+            .world_mut()
+            .spawn(
+                Transform::from_xyz(4.0, -2.0, 7.0)
+                    .with_rotation(Quat::from_rotation_y(0.9))
+                    .with_scale(Vec3::splat(0.7)),
+            )
+            .id();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                spawn_prepared(&mut commands, root, &prepared, feet);
+            })
+            .unwrap();
+        app.update();
+        let world = app.world();
+        let character = world.get::<AnimatedCharacter>(root).unwrap();
+        let part = character.parts[0].entity;
+        let skin = world.get::<SkinnedMesh>(part).unwrap();
+        let mesh = world
+            .resource::<Assets<Mesh>>()
+            .get(&world.get::<Mesh3d>(part).unwrap().0)
+            .unwrap();
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(VertexAttributeValues::as_float3)
+            .unwrap();
+        let Some(VertexAttributeValues::Uint16x4(bones)) =
+            mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)
+        else {
+            panic!("no joint indices");
+        };
+        // Where the GPU puts each vertex: its joint's world transform.
+        let placed: Vec<Vec3> = positions
+            .iter()
+            .zip(bones)
+            .map(|(position, bone)| {
+                world
+                    .get::<GlobalTransform>(skin.joints[usize::from(bone[0])])
+                    .unwrap()
+                    .transform_point(Vec3::from_array(*position))
+            })
+            .collect();
+        // Where the pose puts it, hung under the root as a mesh would be.
+        let model = world.get::<GlobalTransform>(character.model).unwrap();
+        let posed = &character.asset.pose("", 0.0)[0].positions;
+        for (placed, posed) in placed.iter().zip(posed) {
+            let expected = model.transform_point(Vec3::from_array(*posed));
+            assert!((*placed - expected).length() < 1e-4, "{placed} {expected}");
+        }
+        // The soles sit the feet offset, scaled, under the root.
+        let soles = placed.iter().map(|point| point.y).reduce(f32::min).unwrap();
+        assert!((soles - (-2.0 - feet * 0.7)).abs() < 1e-4, "{soles}");
     }
 }

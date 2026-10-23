@@ -1,11 +1,22 @@
 //! Conservative ground locomotion and continuous collision queries.
 
 mod airborne;
+mod falls;
+mod liquids;
+mod navigator;
+pub mod navmesh;
+mod pace;
 mod path;
 mod route;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
+pub use falls::{HARMLESS_DROP, fall_damage};
+pub use liquids::{GuardView, Liquid, Liquids};
+pub use navigator::{
+    Fallback, GridNavigator, Navigator, Planned, Refusals, RouteSearch, Scope, SearchRequest,
+};
+pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};
-pub use route::{Route, RouteStep};
+pub use route::{Background, Route, RouteStep, SearchTiming};
 
 #[derive(Clone, Copy)]
 enum Support {
@@ -27,9 +38,24 @@ use std::sync::Arc;
 /// and uneven ground never register as walls.
 const LIFT: f32 = 0.85;
 
+/// The collision capsule's radius.
+const CAPSULE_RADIUS: f32 = 0.4;
+/// How far a sweep stops short of what it hits.
+const SKIN: f32 = 0.03;
+/// How far from the capsule's centre the ground under it is sampled.
+const SUPPORT_SPREAD: f32 = 0.4;
+/// How far across the ground from the feet any one movement probe reaches,
+/// beyond the distance moved: the capsule with its skin, or the ground
+/// samples around it.
+pub(super) const BODY_REACH: f32 = if CAPSULE_RADIUS + SKIN > SUPPORT_SPREAD {
+    CAPSULE_RADIUS + SKIN
+} else {
+    SUPPORT_SPREAD
+};
+
 /// The character's collision capsule at `feet`, floating `LIFT` above them.
 fn body(feet: Vec3, height: f32) -> (Pose, Capsule) {
-    let radius = 0.4;
+    let radius = CAPSULE_RADIUS;
     let center = feet + Vec3::Y * (height * 0.5 + LIFT);
     (
         Pose::translation(center.x, center.y, center.z),
@@ -67,10 +93,15 @@ impl CollisionMesh {
     }
 }
 
-/// Static zone geometry plus replaceable nearby obstacles.
+/// Static zone geometry plus replaceable nearby obstacles, and the zone's
+/// water and lava where they are known. A clone shares all of it, so a
+/// snapshot for another thread costs a few reference counts.
+#[derive(Clone)]
 pub struct CollisionWorld {
-    terrain: CollisionMesh,
-    obstacles: Vec<Arc<CollisionMesh>>,
+    terrain: Arc<CollisionMesh>,
+    /// Each obstacle with the door it belongs to, if any.
+    obstacles: Vec<(Option<u8>, Arc<CollisionMesh>)>,
+    liquids: Option<Arc<dyn Liquids>>,
 }
 
 impl CollisionWorld {
@@ -80,18 +111,121 @@ impl CollisionWorld {
     /// Rejects empty geometry, excessive vertex counts, and invalid meshes.
     pub fn new(triangles: impl IntoIterator<Item = [[f32; 3]; 3]>) -> Result<Self, String> {
         Ok(Self {
-            terrain: CollisionMesh::new(triangles)?,
+            terrain: Arc::new(CollisionMesh::new(triangles)?),
             obstacles: Vec::new(),
+            liquids: None,
         })
     }
 
     /// Replaces dynamic obstacles without rebuilding the zone's acceleration structure.
     pub fn set_obstacles(&mut self, obstacles: Vec<Arc<CollisionMesh>>) {
-        self.obstacles = obstacles;
+        self.obstacles = obstacles.into_iter().map(|mesh| (None, mesh)).collect();
+    }
+
+    /// Replaces dynamic obstacles with doors' colliders, each with its door id,
+    /// so a route search can tell which door stands in its way.
+    pub fn set_door_obstacles(&mut self, doors: Vec<(u8, Arc<CollisionMesh>)>) {
+        self.obstacles = doors
+            .into_iter()
+            .map(|(id, mesh)| (Some(id), mesh))
+            .collect();
+    }
+
+    /// The same world with these doors' colliders left out, sharing its
+    /// geometry, as if they stood open.
+    #[must_use]
+    pub fn without_doors(&self, doors: &[u8]) -> Self {
+        Self {
+            terrain: Arc::clone(&self.terrain),
+            obstacles: self
+                .obstacles
+                .iter()
+                .filter(|(door, _)| door.is_none_or(|door| !doors.contains(&door)))
+                .cloned()
+                .collect(),
+            liquids: self.liquids.clone(),
+        }
+    }
+
+    /// The same world keeping only the obstacles that come within `reach` of
+    /// `center` across the ground, sharing its geometry. Any movement that
+    /// stays within `reach` of `center` meets exactly what it would in the
+    /// whole world.
+    #[must_use]
+    pub fn near(&self, center: Vec3, reach: f32) -> Self {
+        Self {
+            terrain: Arc::clone(&self.terrain),
+            obstacles: self
+                .obstacles
+                .iter()
+                .filter(|(_, mesh)| {
+                    let bounds = mesh.mesh.local_aabb();
+                    center.x >= bounds.mins.x - reach
+                        && center.x <= bounds.maxs.x + reach
+                        && center.z >= bounds.mins.z - reach
+                        && center.z <= bounds.maxs.z + reach
+                })
+                .cloned()
+                .collect(),
+            liquids: self.liquids.clone(),
+        }
+    }
+
+    /// The zone's own triangles, without the obstacles, as a zone's mesh is
+    /// built from them.
+    #[cfg(test)]
+    pub(crate) fn terrain_triangles(&self) -> Vec<[[f32; 3]; 3]> {
+        let mesh = &self.terrain.mesh;
+        let vertices = mesh.vertices();
+        mesh.indices()
+            .iter()
+            .map(|triangle| triangle.map(|i| vertices[i as usize].into()))
+            .collect()
+    }
+
+    /// Each door collider's id and bounds, low corner then high.
+    #[must_use]
+    pub fn door_bounds(&self) -> Vec<(u8, Vec3, Vec3)> {
+        self.obstacles
+            .iter()
+            .filter_map(|(door, mesh)| {
+                let bounds = mesh.mesh.local_aabb();
+                Some((
+                    (*door)?,
+                    Vec3::from_array(bounds.mins.into()),
+                    Vec3::from_array(bounds.maxs.into()),
+                ))
+            })
+            .collect()
+    }
+
+    /// How many obstacles stand in the world, for diagnostics.
+    #[must_use]
+    pub fn obstacle_count(&self) -> usize {
+        self.obstacles.len()
+    }
+
+    /// The first of these doors whose collider comes within `margin` of the box
+    /// spanning `from` and `to`.
+    #[must_use]
+    pub fn door_between(&self, doors: &[u8], from: Vec3, to: Vec3, margin: f32) -> Option<u8> {
+        let (low, high) = (
+            from.min(to) - Vec3::splat(margin),
+            from.max(to) + Vec3::splat(margin),
+        );
+        self.obstacles.iter().find_map(|(door, mesh)| {
+            let door = (*door).filter(|door| doors.contains(door))?;
+            let bounds = mesh.mesh.local_aabb();
+            let (mins, maxs) = (
+                Vec3::from_array(bounds.mins.into()),
+                Vec3::from_array(bounds.maxs.into()),
+            );
+            (mins.cmple(high).all() && maxs.cmpge(low).all()).then_some(door)
+        })
     }
 
     fn meshes(&self) -> impl Iterator<Item = &TriMesh> {
-        std::iter::once(&self.terrain.mesh).chain(self.obstacles.iter().map(|mesh| &mesh.mesh))
+        std::iter::once(&self.terrain.mesh).chain(self.obstacles.iter().map(|(_, mesh)| &mesh.mesh))
     }
 
     /// Returns the nearest solid obstruction along a normalized viewing ray.
@@ -138,6 +272,52 @@ impl CollisionWorld {
             .then(|| floor.clamp(position.y - drop, position.y + step_up))
     }
 
+    /// Finds the floor nearest `position`'s height between `step_up` above
+    /// it and `drop` below, never a wall. Where floors are stacked in that
+    /// window, as a bridge over the ground, the one closest to `position`
+    /// wins, not simply the highest.
+    pub fn nearest_ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
+        // The window's edges are inclusive, as in `ground`; each next ray
+        // starts a hair under the surface the last one met.
+        const EDGE: f32 = 0.000_1;
+        const SURFACES: usize = 32;
+        let bottom = position.y - drop - EDGE;
+        let mut from = position.y + step_up + EDGE;
+        let mut nearest: Option<f32> = None;
+        for _ in 0..SURFACES {
+            if from <= bottom {
+                break;
+            }
+            let origin = Vector::from_array(Vec3::new(position.x, from, position.z).to_array());
+            let Some(hit) = self
+                .meshes()
+                .filter_map(|mesh| {
+                    mesh.cast_local_ray_and_get_normal(
+                        &Ray::new(origin, -Vector::Y),
+                        from - bottom + EDGE,
+                        false,
+                    )
+                })
+                .min_by(|a, b| a.time_of_impact.total_cmp(&b.time_of_impact))
+            else {
+                break;
+            };
+            let met = from - hit.time_of_impact;
+            if met < bottom {
+                break;
+            }
+            if hit.normal.y.abs() >= 0.7 {
+                let floor = met.clamp(position.y - drop, position.y + step_up);
+                if nearest.is_none_or(|best| (floor - position.y).abs() < (best - position.y).abs())
+                {
+                    nearest = Some(floor);
+                }
+            }
+            from = met - EDGE;
+        }
+        nearest
+    }
+
     /// Signed distance from the character's collision capsule to the nearest solid
     /// within `range`; a negative value is how deep the capsule overlaps it.
     pub fn clearance(&self, feet: Vec3, height: f32, range: f32) -> Option<f32> {
@@ -161,19 +341,28 @@ impl CollisionWorld {
     }
 
     /// Sweeps the character capsule and slides along walls without crossing cliffs or steep slopes.
-    /// Movement stops rather than attempting automatic jumps, swimming, or falling.
+    /// Movement stops rather than attempting automatic jumps, swimming, or falling, and
+    /// before deep water or lava where the world knows the zone's liquids.
     pub fn step(&self, feet: Vec3, displacement: Vec3, height: f32) -> Vec3 {
         self.walk(feet, displacement, height, Support::Required)
+    }
+
+    /// The floor the airborne controller stands feet here on, as its step
+    /// finds it: under the footprint, from just above the feet to a little
+    /// below them. None means the next step falls.
+    #[must_use]
+    pub fn support(&self, feet: Vec3) -> Option<f32> {
+        self.support_height(feet, 0.01, 0.05)
     }
 
     /// Samples support under the capsule footprint, including contact before its center reaches a stair.
     fn support_height(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
         const OFFSETS: [(f32, f32); 9] = [
             (0.0, 0.0),
-            (0.4, 0.0),
-            (-0.4, 0.0),
-            (0.0, 0.4),
-            (0.0, -0.4),
+            (SUPPORT_SPREAD, 0.0),
+            (-SUPPORT_SPREAD, 0.0),
+            (0.0, SUPPORT_SPREAD),
+            (0.0, -SUPPORT_SPREAD),
             (0.282_842_7, 0.282_842_7),
             (-0.282_842_7, 0.282_842_7),
             (0.282_842_7, -0.282_842_7),
@@ -194,8 +383,16 @@ impl CollisionWorld {
         if !feet.is_finite() || !displacement.is_finite() || !height.is_finite() || height < 1.0 {
             return feet;
         }
+        // Feet in deep water or lava now may go anywhere, so they can leave.
+        let guarded = !self.submerged(feet, height);
         if matches!(support, Support::Airborne) {
-            return self.stride(feet, displacement, height, support);
+            let next = self.stride(feet, displacement, height, support);
+            // In the air, a move whose fall would end in deep water or lava is not made.
+            return if guarded && !self.dry(next, height) {
+                feet
+            } else {
+                next
+            };
         }
         let horizontal = Vec3::new(displacement.x, 0.0, displacement.z);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped.
@@ -203,13 +400,17 @@ impl CollisionWorld {
         let part = horizontal / f32::from(count);
         let mut position = feet;
         for _ in 0..count {
-            let next = self.stride(position, part, height, support);
+            let mut next = self.stride(position, part, height, support);
+            let wet = guarded && !self.dry(next, height);
+            if wet {
+                next = self.dry_part(position, part, height, support);
+            }
             if (next.y - feet.y).abs() > MAX_GROUNDED_STEP + 0.001 {
                 break;
             }
             let moved = next.distance_squared(position) > 1e-10;
             position = next;
-            if !moved {
+            if !moved || wet {
                 break;
             }
         }
@@ -369,7 +570,7 @@ impl CollisionWorld {
         // goes deeper; one that stops there would pin the character in every direction.
         let options = ShapeCastOptions {
             max_time_of_impact: 1.0,
-            target_distance: 0.03,
+            target_distance: SKIN,
             stop_at_penetration: false,
             compute_impact_geometry_on_penetration: true,
         };

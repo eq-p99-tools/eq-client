@@ -2,7 +2,8 @@
 //! `eq_client_core::names::label`, while the Options window's Show PC Names
 //! and Show NPC Names allow them. They follow the models through the frame
 //! and draw under every window; one whose head leaves the view is clipped
-//! at the window's edge.
+//! at the window's edge. A name whose place has zone geometry between it
+//! and the camera is hidden with the body behind it (inferred, item 6.234).
 use bevy::prelude::*;
 use eq_client_core::names::{ShowNames, is_pc, label};
 use std::collections::BTreeMap;
@@ -10,8 +11,14 @@ use std::collections::BTreeMap;
 /// How far above the head a name sits, in world units.
 const ABOVE_HEAD: f32 = 0.6;
 
+/// How far short of a name's place geometry must stop to hide it, as the
+/// camera keeps off the walls it pulls in against: a place touching a
+/// ceiling or wall face is not hidden by the surface it touches.
+const SIGHT_MARGIN: f32 = 0.5;
+
 /// The top of what a model root draws, in the root's own units: where a
-/// name over it sits. Whatever draws a root sets it.
+/// name over it sits. Whatever draws a root sets it, and an animated model
+/// moves it with the head each pose.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Overhead(pub(crate) f32);
 
@@ -52,7 +59,7 @@ pub(crate) fn request(
 
 /// Draws a name over the player's head and every drawn spawn's, and takes
 /// away those of spawns gone or hidden by the options.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Bevy system parameters.
 pub(crate) fn update(
     mut commands: Commands,
     (online, nearby, options, scale): (
@@ -61,6 +68,7 @@ pub(crate) fn update(
         Res<crate::options::OptionsState>,
         Option<Res<UiScale>>,
     ),
+    collision: Option<Res<crate::Collision>>,
     mut drawn: ResMut<NameTags>,
     player: Query<Entity, With<crate::Player>>,
     roots: Query<(&Transform, &Overhead)>,
@@ -110,12 +118,18 @@ pub(crate) fn update(
     // them: reading those rather than the propagated ones keeps the names in
     // step with this frame's moves.
     let camera = cameras.single().ok();
+    let geometry = collision
+        .as_deref()
+        .and_then(|collision| collision.0.as_ref());
     for (root, words) in wanted {
         // Where the head's top shows, in the UI's pixels from the window's
-        // left and bottom edges; none behind the camera.
+        // left and bottom edges; none behind the camera or behind a wall.
         let place = camera.and_then(|(camera, view)| {
             let (transform, Overhead(top)) = roots.get(root).ok()?;
             let above = transform.transform_point(Vec3::Y * *top) + Vec3::Y * ABOVE_HEAD;
+            if behind_geometry(geometry, view.translation, above) {
+                return None;
+            }
             let at = camera
                 .world_to_viewport(&GlobalTransform::from(*view), above)
                 .ok()?;
@@ -145,6 +159,23 @@ pub(crate) fn update(
         }
         visibility.set_if_neq(Visibility::Inherited);
     }
+}
+
+/// Whether zone geometry stands between the camera and a name's place.
+/// Without the zone's geometry nothing is.
+fn behind_geometry(
+    geometry: Option<&eq_client_core::movement::CollisionWorld>,
+    camera: Vec3,
+    place: Vec3,
+) -> bool {
+    let offset = place - camera;
+    let distance = offset.length();
+    geometry.is_some_and(|geometry| {
+        distance > SIGHT_MARGIN
+            && geometry
+                .ray_distance(camera, offset / distance, distance - SIGHT_MARGIN)
+                .is_some()
+    })
 }
 
 /// A name that shows once it is placed.
@@ -293,6 +324,71 @@ mod tests {
             shown(&mut app),
             [everyone[0], everyone[1], everyone[2], everyone[4]]
         );
+    }
+
+    #[test]
+    fn a_name_behind_zone_geometry_hides_with_its_body() {
+        let mut app = app();
+        // A camera looking down -Z from behind everyone, onto an 800 by 600
+        // window.
+        let mut camera = Camera::default();
+        camera.computed.clip_from_view =
+            Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_4, 4.0 / 3.0, 0.1);
+        camera.computed.target_info = Some(bevy::camera::RenderTargetInfo {
+            physical_size: UVec2::new(800, 600),
+            scale_factor: 1.0,
+        });
+        app.world_mut().spawn((
+            camera,
+            Transform::from_xyz(0.0, 3.6, 20.0).looking_at(Vec3::new(0.0, 3.6, 0.0), Vec3::Y),
+            crate::OrbitCamera {
+                focus: Vec3::ZERO,
+                radius: 20.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                pulled: None,
+            },
+        ));
+        // The gnoll stands behind a wall; everyone else in the open.
+        let gnoll = app
+            .world()
+            .resource::<crate::entities::NearbyEntities>()
+            .rendered[&3];
+        *app.world_mut().get_mut::<Transform>(gnoll).unwrap() =
+            Transform::from_xyz(0.0, 0.0, -10.0);
+        let wall = |z: f32| {
+            let corner = |x: f32, y: f32| [x, y, z];
+            [
+                [corner(-5.0, -10.0), corner(5.0, -10.0), corner(5.0, 10.0)],
+                [corner(-5.0, -10.0), corner(5.0, 10.0), corner(-5.0, 10.0)],
+            ]
+        };
+        app.insert_resource(crate::Collision(Some(
+            eq_client_core::movement::CollisionWorld::new(wall(-5.0)).unwrap(),
+        )));
+        let visible = |app: &mut App| {
+            let mut tags: Vec<(String, bool)> = app
+                .world_mut()
+                .query_filtered::<(&Text, &Visibility), With<NameTag>>()
+                .iter(app.world())
+                .map(|(text, visibility)| (text.0.clone(), *visibility == Visibility::Inherited))
+                .collect();
+            tags.sort();
+            tags
+        };
+        app.update();
+        let shown = visible(&mut app);
+        assert!(
+            shown
+                .iter()
+                .all(|(words, shown)| *shown == (words != "a gnoll")),
+            "{shown:?}"
+        );
+        // Without the zone's geometry, nothing stands in the way.
+        app.insert_resource(crate::Collision(None));
+        app.update();
+        let shown = visible(&mut app);
+        assert!(shown.iter().all(|(_, shown)| *shown), "{shown:?}");
     }
 
     #[test]

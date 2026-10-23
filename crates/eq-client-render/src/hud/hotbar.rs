@@ -2,16 +2,18 @@
 //! normal command validators.
 use crate::theme::{self, Size};
 use bevy::prelude::*;
-use eq_client_core::{hotbar::Hotbar, qol::Fix};
+use eq_client_core::{hotbar::Hotbar, qol::Fix, world::ClientWorld};
 use std::path::PathBuf;
+pub(crate) mod carry;
 mod item_art;
 #[cfg(test)]
 mod item_tests;
-pub(super) use eq_client_core::hotbar::Binding as Action;
+pub(crate) use carry::{Clicks, Pickable, Source};
+pub(crate) use eq_client_core::hotbar::Binding as Action;
 pub(crate) use item_art::update as item_artwork;
 
 #[derive(Resource)]
-pub(crate) struct Bindings(pub(super) [Option<Action>; 10]);
+pub(crate) struct Bindings(pub(crate) [Option<Action>; 10]);
 
 impl Default for Bindings {
     fn default() -> Self {
@@ -105,7 +107,15 @@ impl Bindings {
     pub(crate) fn gem(&self, slot: usize) -> Option<usize> {
         match self.0.get(slot).copied().flatten()? {
             Action::Gem(gem) => Some(usize::from(gem)),
-            Action::Sit | Action::Stand | Action::Item { .. } | Action::Ability(_) => None,
+            Action::Sit
+            | Action::Stand
+            | Action::Item { .. }
+            | Action::Ability(_)
+            | Action::Attack
+            | Action::Camp
+            | Action::Invite
+            | Action::Follow
+            | Action::Disband => None,
         }
     }
 }
@@ -114,6 +124,31 @@ impl Bindings {
 pub(crate) struct Slot(pub usize);
 #[derive(Component)]
 pub(crate) struct Caption(pub usize);
+/// A slot's words, centred in its button, for what it holds with no
+/// picture: Sit, Stand, Melee Attack, Camp, the group's kinds and the
+/// abilities.
+#[derive(Component)]
+pub(crate) struct Words(pub usize);
+/// The size a slot's words are drawn at now, and whether that size fits
+/// yet ([`fit_words`]); the words stay hidden until it does.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Fit {
+    size: Size,
+    settled: bool,
+}
+
+impl Default for Fit {
+    fn default() -> Self {
+        Self {
+            size: WORDS_LARGEST,
+            settled: false,
+        }
+    }
+}
+
+/// The size a slot's words start from, before [`fit_words`] steps them down
+/// to fit the button.
+const WORDS_LARGEST: Size = Size::Heading;
 #[derive(Component)]
 pub(crate) struct Hint;
 
@@ -131,7 +166,12 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
             let button = super::slot(commands, row, key, 40.0, true);
             commands
                 .entity(button)
-                .insert((Button, Slot(index), crate::outbox::Needs::Nothing))
+                .insert((
+                    Button,
+                    Slot(index),
+                    Pickable(Source::Slot(index)),
+                    crate::outbox::Needs::Nothing,
+                ))
                 .with_children(|button| contents(button, index));
         }
     }
@@ -147,7 +187,8 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
 }
 
 /// What a slot's button shows of what it holds: the spell's icon, the
-/// item's picture and a caption, in the client's own window and in the
+/// item's picture and a caption in the corner, or the words of a kind with
+/// no picture centred in the button, in the client's own window and in the
 /// skin's Hot Button window alike.
 pub(crate) fn contents(button: &mut ChildSpawnerCommands, index: usize) {
     button.spawn(crate::spell_icons::artwork(
@@ -166,6 +207,28 @@ pub(crate) fn contents(button: &mut ChildSpawnerCommands, index: usize) {
         },
         bevy::ui::FocusPolicy::Pass,
     ));
+    button
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: px(0),
+                width: percent(100),
+                height: percent(100),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            bevy::ui::FocusPolicy::Pass,
+        ))
+        .with_child((
+            Words(index),
+            Fit::default(),
+            Visibility::Hidden,
+            theme::text("", WORDS_LARGEST, theme::INK),
+            TextLayout::new(Justify::Center, LineBreak::WordBoundary),
+            bevy::ui::FocusPolicy::Pass,
+        ));
 }
 
 /// The first of the ten slots whose action the keys freshly pressed.
@@ -175,72 +238,54 @@ fn slot_pressed(keys: &crate::keys::Keys, act: fn(u8) -> crate::keys::Act) -> Op
         .map(usize::from)
 }
 
-/// Resolves a slot's key or a button press into a typed action.
-pub(super) fn requested(
+/// Resolves a slot's key or a click on its button into a typed action.
+pub(crate) fn requested(
     keys: &crate::keys::Keys,
     bindings: &Bindings,
-    clicks: &Query<(&Interaction, &Slot), Changed<Interaction>>,
+    clicks: &Clicks<Slot>,
 ) -> Option<Action> {
     let slot = clicks
         .iter()
-        .find(|(interaction, _)| **interaction == Interaction::Pressed)
-        .map(|(_, slot)| slot.0)
+        .next()
+        .map(|slot| slot.0)
         .or_else(|| slot_pressed(keys, crate::keys::Act::Slot))?;
     bindings.0.get(slot).copied().flatten()
 }
 
-/// The spell gems and the Actions window's ability buttons, which Ctrl and a
-/// number bind while under the pointer.
-type Bindable<'w, 's> = (
-    Query<'w, 's, (&'static Interaction, &'static super::SpellGem)>,
-    Query<
-        'w,
-        's,
-        (
-            &'static Interaction,
-            &'static crate::abilities::AbilityButton,
-        ),
-    >,
-);
+/// The slash command a binding runs, as its Actions window button runs it:
+/// the one table for both. None for a kind that sends its own request (a
+/// gem's spell, an item, an ability, melee attack).
+pub(crate) const fn command(action: Action) -> Option<&'static str> {
+    match action {
+        Action::Sit => Some("/sit"),
+        Action::Stand => Some("/stand"),
+        Action::Camp => Some("/camp"),
+        Action::Invite => Some("/invite"),
+        Action::Follow => Some("/follow"),
+        Action::Disband => Some("/disband"),
+        Action::Gem(_) | Action::Item { .. } | Action::Ability(_) | Action::Attack => None,
+    }
+}
 
-/// Ctrl+number binds the hovered gem, ability or item; Ctrl+Shift+number
-/// clears the slot.
+/// Ctrl+number binds what the control under the pointer gives the action
+/// bar, as a hold would pick it up ([`Source::binding`]); Ctrl+Shift+number
+/// empties the slot.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update(
     keys: crate::keys::Keys,
-    (gems, abilities): Bindable,
-    items: Query<(&Interaction, &crate::inventory::SlotButton)>,
-    online: Option<Res<crate::online::OnlineState>>,
+    controls: Query<(&Interaction, &Pickable)>,
+    online: Res<crate::online::OnlineState>,
     mut bindings: ResMut<Bindings>,
 ) {
     if let Some(index) = slot_pressed(&keys, crate::keys::Act::ClearSlot) {
         bindings.0[index] = None;
-    } else if let Some(index) = slot_pressed(&keys, crate::keys::Act::BindSlot) {
-        let ability = online.as_ref().and_then(|online| {
-            abilities
-                .iter()
-                .find(|(interaction, _)| **interaction != Interaction::None)
-                .and_then(|(_, button)| crate::abilities::assigned(online.world(), *button))
-        });
-        if let Some((_, gem)) = gems
+    } else if let Some(index) = slot_pressed(&keys, crate::keys::Act::BindSlot)
+        && let Some(binding) = controls
             .iter()
-            .find(|(interaction, _)| **interaction != Interaction::None)
-        {
-            bindings.0[index] = Some(Action::Gem(gem.0));
-        } else if let Some(ability) = ability {
-            bindings.0[index] = Some(Action::Ability(ability));
-        } else if let Some(online) = online
-            && let Some((_, slot)) = items
-                .iter()
-                .find(|(interaction, _)| **interaction != Interaction::None)
-            && let Some(item) = online.world().inventory().items().get(&slot.0)
-            && item.activation.effect.is_some()
-        {
-            bindings.0[index] = Some(Action::Item {
-                slot: slot.0,
-                id: item.details.id,
-            });
-        }
+            .filter(|(interaction, _)| **interaction != Interaction::None)
+            .find_map(|(_, pickable)| pickable.0.binding(online.world(), &bindings))
+    {
+        bindings.0[index] = Some(binding);
     }
 }
 
@@ -260,6 +305,19 @@ type SlotButtons<'w, 's> = Query<
     ),
 >;
 
+/// The hotbar's texts: a slot's corner caption or centred words, and the
+/// window's detail line.
+type Labels<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Text,
+        Option<&'static Caption>,
+        Option<&'static Words>,
+        Option<&'static Hint>,
+    ),
+>;
+
 /// Presents current bindings, spell identity and cooldowns independently of keyboard focus.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn presentation(
@@ -271,7 +329,7 @@ pub(crate) fn presentation(
     ),
     (names, map): (Res<crate::spellbook::SpellNames>, Res<crate::keys::KeyMap>),
     mut slots: SlotButtons,
-    mut labels: Query<(&mut Text, Option<&Caption>, Option<&Hint>)>,
+    mut labels: Labels,
 ) {
     let now = std::time::Instant::now();
     let inventory = online.world().inventory();
@@ -316,22 +374,17 @@ pub(crate) fn presentation(
             color.0 = theme::readiness(*interaction != Interaction::None, empty, waiting);
         }
     }
-    for (mut text, caption, hint) in &mut labels {
-        if let Some(caption) = caption {
-            text.0 = match bindings.0[caption.0] {
-                Some(Action::Gem(gem)) => {
-                    if online.world().gem(usize::from(gem)).is_some() {
-                        format!("G{}", gem + 1)
-                    } else {
-                        "-".into()
-                    }
-                }
-                Some(Action::Sit) => "Sit".into(),
-                Some(Action::Stand) => "Stand".into(),
-                Some(Action::Item { .. }) => "Item".into(),
-                Some(Action::Ability(ability)) => ability.name().into(),
-                None => "-".into(),
-            };
+    for (mut text, caption, words, hint) in &mut labels {
+        // Written only when they change, so `fit_words` sees a change.
+        let wanted = match (caption, words) {
+            (Some(caption), _) => Some(faces(bindings.0[caption.0], online.world()).0),
+            (_, Some(words)) => Some(faces(bindings.0[words.0], online.world()).1),
+            _ => None,
+        };
+        if let Some(wanted) = wanted
+            && text.0 != wanted
+        {
+            text.0 = wanted;
         }
         if hint.is_some() {
             text.0 = hovered_detail(
@@ -345,14 +398,104 @@ pub(crate) fn presentation(
     }
 }
 
+/// Where a slot's button puts its words: in the corner, over a gem's spell
+/// icon or an item's picture, or as the small mark of an empty slot or gem;
+/// or centred in the button for a kind with no picture. Centred and sized
+/// to fit, as Adam chose (10-20); what the official client draws on such a
+/// hotbutton is not checked.
+fn faces(action: Option<Action>, world: &ClientWorld) -> (String, String) {
+    let words = caption_text(action, world);
+    match action {
+        Some(Action::Gem(_) | Action::Item { .. }) | None => (words, String::new()),
+        Some(
+            Action::Sit
+            | Action::Stand
+            | Action::Ability(_)
+            | Action::Attack
+            | Action::Camp
+            | Action::Invite
+            | Action::Follow
+            | Action::Disband,
+        ) => (String::new(), words),
+    }
+}
+
+/// A slot's centred words, with the size they are drawn at, what Bevy
+/// measured of them, and the node they are centred in.
+type SlotWords<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Ref<'static, Text>,
+        &'static mut Fit,
+        &'static mut TextFont,
+        &'static mut Visibility,
+        &'static bevy::text::TextLayoutInfo,
+        &'static ChildOf,
+    ),
+    With<Words>,
+>;
+
+/// Draws each slot's words as large as fits its button, measured while
+/// hidden and shown once at their final size: from [`WORDS_LARGEST`] down the
+/// type scale, a step a frame while Bevy's measured text is wider or taller
+/// than the button, and hidden again from the largest when the words change.
+/// A button not laid out yet (a hidden window) waits until it is.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn fit_words(mut words: SlotWords, areas: Query<&ComputedNode>) {
+    for (text, mut fit, mut font, mut visibility, measured, parent) in &mut words {
+        if text.is_changed() {
+            fit.set_if_neq(Fit::default());
+        } else if !fit.settled {
+            let Ok(area) = areas.get(parent.parent()) else {
+                continue;
+            };
+            let room = area.size * area.inverse_scale_factor();
+            if room.x <= 0.0 || room.y <= 0.0 {
+                continue;
+            }
+            let over = measured.size.x > room.x + 0.5 || measured.size.y > room.y + 0.5;
+            match fit.size.smaller() {
+                Some(smaller) if over => fit.size = smaller,
+                _ => fit.settled = true,
+            }
+        }
+        if font.font_size != theme::font(fit.size).font_size {
+            *font = theme::font(fit.size);
+        }
+        visibility.set_if_neq(if fit.settled {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
+}
+
+/// The words a slot's button shows for what it holds, which a hotkey with
+/// no picture shows on the cursor too.
+pub(crate) fn caption_text(action: Option<Action>, world: &ClientWorld) -> String {
+    match action {
+        Some(Action::Gem(gem)) if world.gem(usize::from(gem)).is_some() => {
+            format!("G{}", gem + 1)
+        }
+        Some(Action::Sit) => "Sit".into(),
+        Some(Action::Stand) => "Stand".into(),
+        Some(Action::Item { .. }) => "Item".into(),
+        Some(Action::Ability(ability)) => ability.name().into(),
+        Some(Action::Attack) => "Attack".into(),
+        Some(Action::Camp) => "Camp".into(),
+        Some(Action::Invite) => "Invite".into(),
+        Some(Action::Follow) => "Follow".into(),
+        Some(Action::Disband) => "Disband".into(),
+        Some(Action::Gem(_)) | None => "-".into(),
+    }
+}
+
 /// What the hovered slot holds, for the window's detail line.
 fn hovered_detail(
     bindings: &Bindings,
     hovered: Option<usize>,
-    (world, qol): (
-        &eq_client_core::world::ClientWorld,
-        &eq_client_core::qol::Settings,
-    ),
+    (world, qol): (&ClientWorld, &eq_client_core::qol::Settings),
     (names, map): (&crate::spellbook::SpellNames, &crate::keys::KeyMap),
     now: std::time::Instant,
 ) -> String {
@@ -378,6 +521,11 @@ fn hovered_detail(
         },
         Some(Action::Sit) => "Sit down".into(),
         Some(Action::Stand) => "Stand up".into(),
+        Some(Action::Attack) => "Melee attack\nTurns auto attack on or off".into(),
+        Some(Action::Camp) => "Camp\nSits down and leaves the world".into(),
+        Some(Action::Invite) => "Invite\nInvites the target into your group".into(),
+        Some(Action::Follow) => "Follow\nJoins the group you were invited to".into(),
+        Some(Action::Disband) => "Disband\nLeaves your group, or declines an invitation".into(),
         Some(Action::Ability(ability)) => match world.ability_wait(ability, now) {
             Some(wait) => format!(
                 "{}\nAvailable in {:.0}s",
@@ -423,8 +571,10 @@ fn bound_item<'a>(
 
 /// What a slot needs of the session for what it holds, as the command it
 /// sends needs it (`ClientCommand::capability`): sitting and standing are
-/// moves, an ability is one the server type lists, and a gem's spell or an
-/// item's click effect is a cast. An empty slot needs nothing.
+/// moves, an ability is one the server type lists, a gem's spell or an
+/// item's click effect is a cast, melee attack is combat, camping is
+/// camping, and inviting, following and disbanding are grouping. An empty
+/// slot needs nothing.
 pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
     use crate::outbox::Needs;
     use eq_client_core::Capability;
@@ -433,6 +583,11 @@ pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
         Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Moving),
         Some(Action::Ability(ability)) => Needs::Ability(ability),
         Some(Action::Gem(_) | Action::Item { .. }) => Needs::Capability(Capability::Casting),
+        Some(Action::Attack) => Needs::Capability(Capability::Combat),
+        Some(Action::Camp) => Needs::Capability(Capability::Camping),
+        Some(Action::Invite | Action::Follow | Action::Disband) => {
+            Needs::Capability(Capability::Grouping)
+        }
     }
 }
 
@@ -453,7 +608,7 @@ pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate
 pub(crate) fn item_actions(
     keys: crate::keys::Keys,
     bindings: Res<Bindings>,
-    clicks: Query<(&Interaction, &Slot), Changed<Interaction>>,
+    clicks: Clicks<Slot>,
     (online, options): (
         Res<crate::online::OnlineState>,
         Res<crate::options::OptionsState>,
@@ -512,6 +667,179 @@ mod tests {
         }
         let bash = eq_client_core::abilities::Ability::Bash;
         assert_eq!(need(Some(Action::Ability(bash))), Needs::Ability(bash));
+    }
+
+    #[test]
+    fn the_actions_windows_kinds_need_what_their_commands_need() {
+        use crate::outbox::Needs;
+        use eq_client_core::ClientCommand;
+        let created = std::time::Instant::now();
+        let sent = [
+            (
+                Action::Attack,
+                ClientCommand::AutoAttack {
+                    session_id: 1,
+                    enabled: true,
+                    created,
+                },
+            ),
+            (
+                Action::Camp,
+                ClientCommand::Camp {
+                    session_id: 1,
+                    created,
+                },
+            ),
+            (
+                Action::Invite,
+                ClientCommand::InviteToGroup {
+                    session_id: 1,
+                    name: "Example".into(),
+                },
+            ),
+            (Action::Follow, ClientCommand::FollowGroup { session_id: 1 }),
+            (Action::Disband, ClientCommand::Disband { session_id: 1 }),
+        ];
+        for (action, command) in sent {
+            let capability = command.capability().unwrap();
+            assert_eq!(
+                need(Some(action)),
+                Needs::Capability(capability),
+                "{action:?}"
+            );
+        }
+    }
+
+    /// The viewer's app with a player in the world whose first gem holds a
+    /// spell, the default hotbar, and the slots' words presented and fitted.
+    fn words_app() -> App {
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        crate::online::testing::spell(
+            &mut online,
+            eq_client_core::SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 73,
+                mode: 1,
+            },
+        );
+        app.init_resource::<Bindings>()
+            .init_resource::<crate::options::OptionsState>()
+            .init_resource::<crate::spellbook::SpellNames>()
+            .insert_resource(online)
+            .add_systems(Update, (presentation, fit_words).chain());
+        app
+    }
+
+    fn text(app: &App, entity: Entity) -> &str {
+        &app.world().get::<Text>(entity).unwrap().0
+    }
+
+    #[test]
+    fn a_kind_without_a_picture_shows_its_words_centred_and_a_picture_its_corner_tag() {
+        let mut app = words_app();
+        app.world_mut().resource_mut::<Bindings>().0[3] = None;
+        let spawn = |app: &mut App, slot| {
+            let corner = app.world_mut().spawn((Caption(slot), Text::default())).id();
+            let words = app.world_mut().spawn((Words(slot), Text::default())).id();
+            (corner, words)
+        };
+        let gem = spawn(&mut app, 0);
+        let sit = spawn(&mut app, 8);
+        let empty = spawn(&mut app, 3);
+        let spellless = spawn(&mut app, 1);
+        app.update();
+        // A gem's spell icon keeps its corner tag; Sit's words are centred;
+        // an empty slot or gem keeps its small mark in the corner.
+        assert_eq!((text(&app, gem.0), text(&app, gem.1)), ("G1", ""));
+        assert_eq!((text(&app, sit.0), text(&app, sit.1)), ("", "Sit"));
+        assert_eq!((text(&app, empty.0), text(&app, empty.1)), ("-", ""));
+        assert_eq!(
+            (text(&app, spellless.0), text(&app, spellless.1)),
+            ("-", "")
+        );
+    }
+
+    #[test]
+    fn words_are_measured_hidden_and_shown_once_at_the_largest_size_that_fits() {
+        let mut app = words_app();
+        // A button 40 logical pixels square, at a scale factor of 2.
+        let button = app
+            .world_mut()
+            .spawn(ComputedNode {
+                size: Vec2::new(80.0, 80.0),
+                inverse_scale_factor: 0.5,
+                ..default()
+            })
+            .id();
+        let words = app
+            .world_mut()
+            .spawn((
+                Words(8),
+                Fit::default(),
+                Visibility::Hidden,
+                Text::default(),
+                TextFont::default(),
+                bevy::text::TextLayoutInfo::default(),
+                ChildOf(button),
+            ))
+            .id();
+        let measure = |app: &mut App, width: f32, height: f32| {
+            app.world_mut()
+                .get_mut::<bevy::text::TextLayoutInfo>(words)
+                .unwrap()
+                .size = Vec2::new(width, height);
+        };
+        let shown = |app: &App| {
+            let fit = *app.world().get::<Fit>(words).unwrap();
+            let font = app.world().get::<TextFont>(words).unwrap().font_size;
+            assert_eq!(font, theme::font(fit.size).font_size);
+            (
+                fit.size,
+                *app.world().get::<Visibility>(words).unwrap() == Visibility::Inherited,
+            )
+        };
+        measure(&mut app, 60.0, 15.0);
+        app.update();
+        assert_eq!(text(&app, words), "Sit");
+        assert_eq!(shown(&app), (Size::Heading, false));
+        // Too wide: a size smaller, still hidden.
+        app.update();
+        assert_eq!(shown(&app), (Size::Label, false));
+        // It fits: shown at that size, and kept there while the words stay.
+        measure(&mut app, 30.0, 14.0);
+        app.update();
+        assert_eq!(shown(&app), (Size::Label, true));
+        app.update();
+        assert_eq!(shown(&app), (Size::Label, true));
+        // New words start hidden from the largest again.
+        app.world_mut().resource_mut::<Bindings>().0[8] = Some(Action::Stand);
+        app.update();
+        assert_eq!(
+            (text(&app, words), shown(&app)),
+            ("Stand", (Size::Heading, false))
+        );
+        app.update();
+        assert_eq!(shown(&app), (Size::Heading, true));
+        // Words that never fit show at the smallest size.
+        app.world_mut().resource_mut::<Bindings>().0[8] = Some(Action::Disband);
+        measure(&mut app, 100.0, 15.0);
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(shown(&app), (Size::Caption, true));
+        // A button not laid out yet keeps them hidden.
+        app.world_mut()
+            .get_mut::<ComputedNode>(button)
+            .unwrap()
+            .size = Vec2::ZERO;
+        app.world_mut().resource_mut::<Bindings>().0[8] = Some(Action::Camp);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(shown(&app), (Size::Heading, false));
     }
 
     #[test]
@@ -591,9 +919,20 @@ mod tests {
     fn binding_and_clearing_requires_focused_non_chat_input() {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        crate::online::testing::spell(
+            &mut online,
+            eq_client_core::SpellUpdate::Slot {
+                slot: 4,
+                spell_id: 73,
+                mode: 1,
+            },
+        );
         app.init_resource::<Bindings>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::chat::ChatState>()
+            .insert_resource(online)
             .add_systems(Update, update);
         let window = app
             .world_mut()
@@ -605,8 +944,10 @@ mod tests {
                 bevy::window::PrimaryWindow,
             ))
             .id();
-        app.world_mut()
-            .spawn((Interaction::Hovered, super::super::SpellGem(4)));
+        let gem = app
+            .world_mut()
+            .spawn((Interaction::Hovered, Pickable(Source::Gem(4))))
+            .id();
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::ControlLeft);
@@ -617,6 +958,41 @@ mod tests {
             app.world().resource::<Bindings>().0[0],
             Some(Action::Gem(4))
         );
+        // An Actions window button binds what it does; an empty gem binds
+        // nothing, as a hold picks nothing up from it.
+        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
+        let attack = app
+            .world_mut()
+            .spawn((
+                Interaction::Hovered,
+                Pickable(Source::Fixed(Action::Attack)),
+            ))
+            .id();
+        // Only the digit pressed last is fresh, with Ctrl still held.
+        let press = |app: &mut App, digit| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            for key in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3] {
+                keys.release(key);
+            }
+            keys.clear();
+            keys.press(digit);
+        };
+        press(&mut app, KeyCode::Digit2);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Bindings>().0[1],
+            Some(Action::Attack)
+        );
+        app.world_mut().entity_mut(attack).despawn();
+        app.world_mut()
+            .spawn((Interaction::Hovered, Pickable(Source::Gem(5))));
+        press(&mut app, KeyCode::Digit3);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Bindings>().0[2],
+            Some(Action::Gem(2))
+        );
+        press(&mut app, KeyCode::Digit1);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::ShiftLeft);

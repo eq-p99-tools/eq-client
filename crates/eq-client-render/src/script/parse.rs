@@ -2,6 +2,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use bevy::input::keyboard::{Key, NativeKey};
 use bevy::prelude::KeyCode;
 
 /// Most steps one script may queue, counting steps appended while following.
@@ -12,8 +13,9 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 24] = [
-    // GM mode on or off: off, the server lets the player go hungry.
+const GM_COMMANDS: [&str; 31] = [
+    // GM mode on or off: off, the server lets the player go hungry. On, the
+    // book and gem commands below act on a player target instead of the GM.
     "gm",
     // A rule changed in this zone only, such as how fast hunger comes, or
     // the zone's rules reloaded; never stored or reset.
@@ -48,11 +50,34 @@ const GM_COMMANDS: [&str; 24] = [
     "wc",
     // The targeted NPC says a line, as its quest dialogue would.
     "npcsay",
+    // Readies another test character: every spell they can use up to a
+    // level scribed in their book, every skill at its most for their
+    // level, and an item onto their cursor, as summonitem puts one on the
+    // GM's.
+    "scribespells",
+    "maxskills",
+    "giveitem",
+    // Another test character's standing with a faction: `faction view` and
+    // `faction review` read it, `factionassociation <id> <amount>` raises
+    // it as a quest reward would, and `faction reset <id>` puts it back.
+    "faction",
+    "factionassociation",
+    // Puts them back as they were for another run: a spell taken out of
+    // their gems, and every buff taken off them.
+    "unmemspell",
+    "nukebuffs",
 ];
 
 /// One scripted action.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
+    /// Types the account and password the environment holds (`EQ_ACCOUNT`,
+    /// `EQ_PASSWORD`) into the login screen and connects.
+    Login,
+    /// Waits until the login server's list of worlds is shown.
+    WaitServers,
+    /// Highlights a listed world by name and plays on it.
+    Server(String),
     /// Waits until the character selection list is shown.
     WaitSelect,
     /// Highlights a listed character by name and presses Enter.
@@ -63,6 +88,10 @@ pub enum Step {
     WaitOnline,
     /// Waits until the named zone is admitted with a player present.
     WaitZone(String),
+    /// Waits, for a bounded duration, until the spawn targeted as the step
+    /// starts is an NPC's corpse or has left the zone: a fight's end, however
+    /// long it lasts.
+    WaitDead(Duration),
     /// Runs a game slash command such as `/camp`; chat text is refused.
     Slash(String),
     /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
@@ -96,9 +125,39 @@ pub enum Step {
     /// Holds W toward the current target until it is within a distance, for a
     /// bounded duration.
     Approach(f32, Duration),
+    /// Chases the current target as a player's hands would: every frame it
+    /// faces where the target is drawn now (its last reported position
+    /// carried forward at its reported velocity) and holds W while the target
+    /// is beyond the distance, standing within it. It ends only when the
+    /// target dies or leaves the zone, or when the time runs out, never
+    /// merely on reaching the target; auto-attack is the script's to turn on
+    /// first.
+    Chase(f32, Duration),
+    /// Holds W toward the nearest world container of one tradeskill kind
+    /// (its container type, such as a pottery wheel's), chosen as the step
+    /// starts, until it is within a distance, for a bounded duration.
+    ApproachObject {
+        /// The container type the object must have.
+        kind: u8,
+        /// Flat distance at which the step ends.
+        range: f32,
+        /// Longest the step may walk.
+        duration: Duration,
+    },
     /// Walks a searched path around walls to within a distance of the current
     /// target, for a bounded duration.
     Walk(f32, Duration),
+    /// Walks a searched path around walls toward the nearest world container
+    /// of one tradeskill kind, chosen as the step starts, until it is within a
+    /// distance, for a bounded duration.
+    WalkObject {
+        /// The container type the object must have.
+        kind: u8,
+        /// Flat distance at which the step ends.
+        range: f32,
+        /// Longest the step may walk.
+        duration: Duration,
+    },
     /// Asks the current target to take the item on the cursor, as clicking
     /// it with the item does.
     Give,
@@ -110,8 +169,15 @@ pub enum Step {
     /// Rests the pointer on one UI control, found as a click finds it, so
     /// its tooltip shows; it stays hovered until the next click or hover.
     Hover(ClickTarget),
+    /// Holds the left button on one UI control, found as a click finds it,
+    /// for a bounded duration, then lets it go there: a hold long enough
+    /// picks a hotkey up onto the cursor.
+    HoldClick(ClickTarget, Duration),
     /// Logs a numeric summary of player, resource, cast and buff state.
     Report(String),
+    /// Plays one of the installation's sound files by its name, on the
+    /// listener, as a check that sounds are heard.
+    Sound(String),
     /// Saves the primary window to a PNG beside the script.
     Screenshot(PathBuf),
     /// Closes the client.
@@ -157,6 +223,12 @@ pub enum ClickTarget {
     /// A box on a skinned window's title bar, by the window's key: its
     /// close box (true) or its minimize box.
     TitleBox(&'static str, bool),
+    /// The button in a skinned window's own body that closes it, by the
+    /// window's key: its Done or Close, as a player presses it.
+    Done(&'static str),
+    /// Any button of a skinned window, by the window's key and what the
+    /// installed skin's file calls the button (`ScreenID`), spelled exactly.
+    Button(&'static str, &'static str),
     /// An arrow of a skinned window's scrollbar, by the window's key: the
     /// one that scrolls up (true) or down.
     Scroll(&'static str, bool),
@@ -205,6 +277,9 @@ pub enum ClickTarget {
     BookPage(bool),
     /// A spell gem of the skin's spell bar, from zero.
     SpellGem(u8),
+    /// A hotbutton of the action bar, the client's own or the skin's, from
+    /// zero.
+    HotButton(usize),
 }
 
 /// The skin's character list's buttons.
@@ -304,6 +379,12 @@ pub enum TradeClick {
     SellChosen,
 }
 
+/// Whether a name is a WAV file's, such as `levelup.wav`.
+fn wav_name(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(stem, extension)| !stem.is_empty() && extension.eq_ignore_ascii_case("wav"))
+}
+
 /// Parses a script: one step per line, `#` starts a comment.
 ///
 /// # Errors
@@ -348,12 +429,23 @@ fn parse_step(line: &str) -> Result<Step, String> {
             .ok_or_else(|| format!("expected a number from {low} to {high}"))
     };
     let chord = |keys: &str| keys_from(keys).ok_or_else(|| String::from("unknown key"));
+    // A world container that combines: a station, not a bag that only holds things.
+    let station = |kind: &str| {
+        kind.parse::<u8>()
+            .ok()
+            .filter(|kind| eq_client_core::tradeskills::combines(*kind))
+            .ok_or("expected a tradeskill container type")
+    };
     Ok(match (command, rest.as_slice()) {
+        ("login", []) => Step::Login,
+        ("wait_servers", []) => Step::WaitServers,
+        ("server", name) if !name.is_empty() => Step::Server(name.join(" ")),
         ("wait_select", []) => Step::WaitSelect,
         ("select", [name]) => Step::Select((*name).to_owned()),
         ("create", arguments) => parse_create(arguments)?,
         ("wait_online", []) => Step::WaitOnline,
         ("wait_zone", [zone]) => Step::WaitZone(zone.to_ascii_lowercase()),
+        ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
         ("slash", words) => parse_slash(words)?,
         ("gm", words) => parse_gm(words)?,
         ("chat", words) => parse_chat(words)?,
@@ -378,9 +470,22 @@ fn parse_step(line: &str) -> Result<Step, String> {
         },
         ("trace", [duration]) => Step::Trace(millis(duration, MAX_TRACE)?),
         ("face", []) => Step::Face,
+        ("approach", ["object", kind, range, duration]) => Step::ApproachObject {
+            kind: station(kind)?,
+            range: number(range, 1.0, 200.0)?,
+            duration: millis(duration, MAX_HOLD)?,
+        },
         ("approach", [range, duration]) => {
             Step::Approach(number(range, 1.0, 200.0)?, millis(duration, MAX_HOLD)?)
         }
+        ("chase", [range, limit]) => {
+            Step::Chase(number(range, 1.0, 200.0)?, millis(limit, MAX_WAIT)?)
+        }
+        ("walk", ["object", kind, range, duration]) => Step::WalkObject {
+            kind: station(kind)?,
+            range: number(range, 1.0, 200.0)?,
+            duration: millis(duration, MAX_WALK)?,
+        },
         ("walk", [range, duration]) => {
             Step::Walk(number(range, 1.0, 200.0)?, millis(duration, MAX_WALK)?)
         }
@@ -388,7 +493,11 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("click", target) => Step::Click(parse_click(target)?),
         ("right_click", target) => Step::RightClick(parse_click(target)?),
         ("hover", target) => Step::Hover(parse_click(target)?),
+        ("hold_click", [duration, target @ ..]) => {
+            Step::HoldClick(parse_click(target)?, millis(duration, MAX_HOLD)?)
+        }
         ("report", label) => Step::Report(label.join(" ")),
+        ("sound", [name]) if wav_name(name) => Step::Sound((*name).to_owned()),
         ("screenshot", [name])
             if Path::new(name)
                 .file_name()
@@ -575,6 +684,8 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["actions"] => ClickTarget::ActionsWindow,
         ["window", key] => ClickTarget::Toggle(window_key(key)?),
         ["close_box", key] => ClickTarget::TitleBox(window_key(key)?, true),
+        ["done", key] => ClickTarget::Done(window_key(key)?),
+        ["button", key, id] => ClickTarget::Button(window_key(key)?, screen_id(id)?),
         ["minimize_box", key] => ClickTarget::TitleBox(window_key(key)?, false),
         ["scroll_up", key] => ClickTarget::Scroll(window_key(key)?, true),
         ["scroll_down", key] => ClickTarget::Scroll(window_key(key)?, false),
@@ -629,6 +740,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ),
         ["memorize", gem] => ClickTarget::MemorizeGem(gem_number(gem)?),
         ["spell_gem", gem] => ClickTarget::SpellGem(gem_number(gem)?),
+        ["hot_button", number] => ClickTarget::HotButton(hot_button(number)?),
         ["book_place", place] => ClickTarget::BookPlace(
             place
                 .parse::<u8>()
@@ -668,6 +780,17 @@ fn gem_number(gem: &str) -> Result<u8, String> {
         .filter(|gem| (1..=8).contains(gem))
         .map(|gem| gem - 1)
         .ok_or_else(|| String::from("expected a gem from 1 to 8"))
+}
+
+/// A hotbutton a script names, from 1 to 10 as its keys are, as a slot from
+/// zero.
+fn hot_button(number: &str) -> Result<usize, String> {
+    number
+        .parse::<usize>()
+        .ok()
+        .filter(|number| (1..=eq_client_core::hotbar::SLOTS).contains(number))
+        .map(|number| number - 1)
+        .ok_or_else(|| String::from("expected a hotbutton from 1 to 10"))
 }
 
 /// The slider a script names: an Options window setting's, or the
@@ -782,6 +905,31 @@ fn window_key(key: &str) -> Result<&'static str, String> {
         .ok_or_else(|| "expected a window, by its key such as skills".into())
 }
 
+/// A skin button's `ScreenID` as a script names it: letters, digits and
+/// underscores. Kept for the run, once per name; a script holds at most
+/// `MAX_STEPS` steps, so few are ever kept.
+fn screen_id(id: &str) -> Result<&'static str, String> {
+    static NAMES: std::sync::Mutex<std::collections::BTreeSet<&'static str>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err("expected a button, by its ScreenID in the skin's file".into());
+    }
+    let mut names = NAMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(name) = names.get(id) {
+        return Ok(name);
+    }
+    let name: &'static str = Box::leak(id.into());
+    names.insert(name);
+    Ok(name)
+}
+
 /// `chat <say|ooc|shout|auction|group|guild|raid> <words>` or `chat tell
 /// <Name> <words>`: a line as a player types it. The words are printable
 /// ASCII and never a `#` command, which only a `gm` step sends.
@@ -849,61 +997,76 @@ fn keys_from(text: &str) -> Option<Vec<KeyCode>> {
     text.split('+').map(key).collect()
 }
 
+const LETTERS: [KeyCode; 26] = [
+    KeyCode::KeyA,
+    KeyCode::KeyB,
+    KeyCode::KeyC,
+    KeyCode::KeyD,
+    KeyCode::KeyE,
+    KeyCode::KeyF,
+    KeyCode::KeyG,
+    KeyCode::KeyH,
+    KeyCode::KeyI,
+    KeyCode::KeyJ,
+    KeyCode::KeyK,
+    KeyCode::KeyL,
+    KeyCode::KeyM,
+    KeyCode::KeyN,
+    KeyCode::KeyO,
+    KeyCode::KeyP,
+    KeyCode::KeyQ,
+    KeyCode::KeyR,
+    KeyCode::KeyS,
+    KeyCode::KeyT,
+    KeyCode::KeyU,
+    KeyCode::KeyV,
+    KeyCode::KeyW,
+    KeyCode::KeyX,
+    KeyCode::KeyY,
+    KeyCode::KeyZ,
+];
+const DIGITS: [KeyCode; 10] = [
+    KeyCode::Digit0,
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+];
+const FUNCTIONS: [KeyCode; 12] = [
+    KeyCode::F1,
+    KeyCode::F2,
+    KeyCode::F3,
+    KeyCode::F4,
+    KeyCode::F5,
+    KeyCode::F6,
+    KeyCode::F7,
+    KeyCode::F8,
+    KeyCode::F9,
+    KeyCode::F10,
+    KeyCode::F11,
+    KeyCode::F12,
+];
+const FUNCTION_KEYS: [Key; 12] = [
+    Key::F1,
+    Key::F2,
+    Key::F3,
+    Key::F4,
+    Key::F5,
+    Key::F6,
+    Key::F7,
+    Key::F8,
+    Key::F9,
+    Key::F10,
+    Key::F11,
+    Key::F12,
+];
+
 fn key(name: &str) -> Option<KeyCode> {
-    const LETTERS: [KeyCode; 26] = [
-        KeyCode::KeyA,
-        KeyCode::KeyB,
-        KeyCode::KeyC,
-        KeyCode::KeyD,
-        KeyCode::KeyE,
-        KeyCode::KeyF,
-        KeyCode::KeyG,
-        KeyCode::KeyH,
-        KeyCode::KeyI,
-        KeyCode::KeyJ,
-        KeyCode::KeyK,
-        KeyCode::KeyL,
-        KeyCode::KeyM,
-        KeyCode::KeyN,
-        KeyCode::KeyO,
-        KeyCode::KeyP,
-        KeyCode::KeyQ,
-        KeyCode::KeyR,
-        KeyCode::KeyS,
-        KeyCode::KeyT,
-        KeyCode::KeyU,
-        KeyCode::KeyV,
-        KeyCode::KeyW,
-        KeyCode::KeyX,
-        KeyCode::KeyY,
-        KeyCode::KeyZ,
-    ];
-    const DIGITS: [KeyCode; 10] = [
-        KeyCode::Digit0,
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-        KeyCode::Digit7,
-        KeyCode::Digit8,
-        KeyCode::Digit9,
-    ];
-    const FUNCTIONS: [KeyCode; 12] = [
-        KeyCode::F1,
-        KeyCode::F2,
-        KeyCode::F3,
-        KeyCode::F4,
-        KeyCode::F5,
-        KeyCode::F6,
-        KeyCode::F7,
-        KeyCode::F8,
-        KeyCode::F9,
-        KeyCode::F10,
-        KeyCode::F11,
-        KeyCode::F12,
-    ];
     let upper = name.to_ascii_uppercase();
     let bytes = upper.as_bytes();
     match upper.as_str() {
@@ -913,6 +1076,7 @@ fn key(name: &str) -> Option<KeyCode> {
         "BACKSPACE" => Some(KeyCode::Backspace),
         "DELETE" => Some(KeyCode::Delete),
         "TAB" => Some(KeyCode::Tab),
+        "SLASH" => Some(KeyCode::Slash),
         "UP" => Some(KeyCode::ArrowUp),
         "DOWN" => Some(KeyCode::ArrowDown),
         "LEFT" => Some(KeyCode::ArrowLeft),
@@ -930,6 +1094,51 @@ fn key(name: &str) -> Option<KeyCode> {
             .strip_prefix('F')
             .and_then(|number| number.parse::<usize>().ok())
             .and_then(|number| FUNCTIONS.get(number.checked_sub(1)?).copied()),
+    }
+}
+
+/// What a key on a US keyboard means and types, as the window reports it
+/// with the key's press: the logical key, and the text it types, which
+/// Shift makes upper case and Ctrl or Alt makes none.
+pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<String>) {
+    let character = |text: String| {
+        (
+            Key::Character(text.as_str().into()),
+            (!chorded).then_some(text),
+        )
+    };
+    if let Some(index) = LETTERS.iter().position(|letter| *letter == key) {
+        let letter = char::from(b'a' + u8::try_from(index).unwrap_or_default());
+        let letter = if shift {
+            letter.to_ascii_uppercase()
+        } else {
+            letter
+        };
+        return character(letter.to_string());
+    }
+    if let Some(index) = DIGITS.iter().position(|digit| *digit == key) {
+        return character(index.to_string());
+    }
+    if let Some(index) = FUNCTIONS.iter().position(|function| *function == key) {
+        return (FUNCTION_KEYS[index].clone(), None);
+    }
+    match key {
+        KeyCode::Slash if shift => character("?".to_owned()),
+        KeyCode::Slash => character("/".to_owned()),
+        KeyCode::Space => (Key::Space, (!chorded).then(|| " ".to_owned())),
+        KeyCode::Escape => (Key::Escape, None),
+        KeyCode::Enter => (Key::Enter, None),
+        KeyCode::Backspace => (Key::Backspace, None),
+        KeyCode::Delete => (Key::Delete, None),
+        KeyCode::Tab => (Key::Tab, None),
+        KeyCode::ArrowUp => (Key::ArrowUp, None),
+        KeyCode::ArrowDown => (Key::ArrowDown, None),
+        KeyCode::ArrowLeft => (Key::ArrowLeft, None),
+        KeyCode::ArrowRight => (Key::ArrowRight, None),
+        KeyCode::ShiftLeft => (Key::Shift, None),
+        KeyCode::ControlLeft => (Key::Control, None),
+        KeyCode::AltLeft => (Key::Alt, None),
+        _ => (Key::Unidentified(NativeKey::Unidentified), None),
     }
 }
 
@@ -952,6 +1161,23 @@ mod tests {
             ]
         );
         assert!(parse("click scroll_up nowhere\n", Path::new("private")).is_err());
+    }
+
+    #[test]
+    fn parses_the_login_steps() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("login\nwait_servers\nserver Example  World\n", base).unwrap(),
+            [
+                Step::Login,
+                Step::WaitServers,
+                Step::Server("Example World".into()),
+            ]
+        );
+        // The account and password come only from the environment.
+        for bad in ["login someone", "wait_servers now", "server"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -1056,6 +1282,110 @@ mod tests {
         assert_eq!(
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
+        );
+    }
+
+    #[test]
+    fn an_object_approach_names_a_tradeskill_container_kind() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("approach object 21 12 8000\n", base).unwrap(),
+            [Step::ApproachObject {
+                kind: 21,
+                range: 12.0,
+                duration: Duration::from_secs(8),
+            }]
+        );
+        // Bags that only hold things are not stations; the range and time
+        // keep the targeted approach's bounds.
+        for bad in [
+            "approach object",
+            "approach object 21 12",
+            "approach object 51 12 8000",
+            "approach object 8 12 8000",
+            "approach object 256 12 8000",
+            "approach object wheel 12 8000",
+            "approach object 21 0 8000",
+            "approach object 21 12 10001",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_object_walk_names_a_tradeskill_container_kind() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("walk object 21 12 20000\n", base).unwrap(),
+            [Step::WalkObject {
+                kind: 21,
+                range: 12.0,
+                duration: Duration::from_secs(20),
+            }]
+        );
+        // The kinds are `approach object`'s; the range and time keep `walk`'s bounds.
+        for bad in [
+            "walk object",
+            "walk object 21 12",
+            "walk object 51 12 8000",
+            "walk object 8 12 8000",
+            "walk object 256 12 8000",
+            "walk object wheel 12 8000",
+            "walk object 21 0 8000",
+            "walk object 21 12 60001",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_death_wait_takes_a_time_up_to_the_longest_wait() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("wait_dead 90000\nwait_dead 120000\n", base).unwrap(),
+            [
+                Step::WaitDead(Duration::from_secs(90)),
+                Step::WaitDead(MAX_WAIT),
+            ]
+        );
+        for bad in ["wait_dead", "wait_dead 120001", "wait_dead soon"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_gm_may_ready_another_test_character_and_put_them_back() {
+        assert_eq!(
+            parse(
+                "gm gm on\ngm scribespells 10\ngm maxskills\ngm giveitem 1001 1\n\
+                 gm unmemspell 200\ngm nukebuffs\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Gm("gm on".into()),
+                Step::Gm("scribespells 10".into()),
+                Step::Gm("maxskills".into()),
+                Step::Gm("giveitem 1001 1".into()),
+                Step::Gm("unmemspell 200".into()),
+                Step::Gm("nukebuffs".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gm_may_read_raise_and_reset_another_test_characters_faction() {
+        assert_eq!(
+            parse(
+                "gm faction view\ngm factionassociation 406 1500\ngm faction reset 406\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Gm("faction view".into()),
+                Step::Gm("factionassociation 406 1500".into()),
+                Step::Gm("faction reset 406".into()),
+            ]
         );
     }
 
@@ -1192,6 +1522,49 @@ chat tell Friend inc now
     }
 
     #[test]
+    fn parses_a_sound_by_its_file_name() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("sound LevelUp.WAV\n", base).unwrap(),
+            [Step::Sound("LevelUp.WAV".into())]
+        );
+        for bad in [
+            "sound",
+            "sound .wav",
+            "sound theme.mp3",
+            "sound a.wav b.wav",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parses_hotbuttons_and_holds_that_pick_hotkeys_up() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "click hot_button 1\nhold_click 800 spell_gem 1\nhold_click 600 hot_button 10\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::HotButton(0)),
+                Step::HoldClick(ClickTarget::SpellGem(0), Duration::from_millis(800)),
+                Step::HoldClick(ClickTarget::HotButton(9), Duration::from_millis(600)),
+            ]
+        );
+        for bad in [
+            "click hot_button 0",
+            "click hot_button 11",
+            "hold_click 800",
+            "hold_click spell_gem 1",
+            "hold_click 20000 spell_gem 1",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn parses_bag_tint_clicks() {
         let base = Path::new("private");
         assert_eq!(
@@ -1258,6 +1631,54 @@ click sell_chosen
                 Step::Click(ClickTarget::Trade(TradeClick::SellChosen)),
             ]
         );
+    }
+
+    #[test]
+    fn parses_a_windows_own_done_button() {
+        assert_eq!(
+            parse(
+                "click done bank\nhover done world-container\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Done("bank")),
+                Step::Hover(ClickTarget::Done("world-container")),
+            ]
+        );
+        assert!(parse("click done nowhere\n", Path::new("private")).is_err());
+    }
+
+    #[test]
+    fn parses_a_skin_button_by_its_screen_id() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "click button bank Fake_Button1\nright_click button bank Fake_Button1\n\
+                 hover button merchant FakeButton\nhold_click 500 button bank FakeButton\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Button("bank", "Fake_Button1")),
+                Step::RightClick(ClickTarget::Button("bank", "Fake_Button1")),
+                Step::Hover(ClickTarget::Button("merchant", "FakeButton")),
+                Step::HoldClick(
+                    ClickTarget::Button("bank", "FakeButton"),
+                    Duration::from_millis(500)
+                ),
+            ]
+        );
+        for bad in [
+            "click button bank",
+            "click button nowhere FakeButton",
+            "click button bank Fake-Button",
+            "click button bank Fake Button",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+        let long = format!("click button bank {}", "A".repeat(65));
+        assert!(parse(&long, base).is_err());
     }
 
     #[test]

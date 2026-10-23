@@ -15,7 +15,7 @@ pub(super) struct Shape {
 }
 
 /// The installed item models, opened when the first one is needed, and the
-/// shapes built during the current admission. Archive access can outlive zones.
+/// shapes built during this admission. Archive access can outlive zones.
 #[derive(Resource, Default)]
 pub(super) struct ItemLibrary {
     models: Option<eq_client_assets::items::ItemModels>,
@@ -38,7 +38,7 @@ pub(super) type Gpu<'a, 'b, 'c> = (
 );
 
 impl ItemLibrary {
-    /// Releases cached GPU shapes while keeping the installed archive open.
+    /// Releases cached shapes; active entities retain their own asset handles.
     pub(super) fn clear_shapes(&mut self) {
         self.shapes.clear();
     }
@@ -85,12 +85,16 @@ fn build(model: eq_client_assets::items::ItemModel, (images, meshes, materials):
     let bounds = bounds(model.primitives.iter().flat_map(|part| &part.positions));
     let textures = super::create_texture_images(model.textures, images);
     Shape {
+        // Held items hang under a spawn. A shape is built once and shared
+        // with every holder and the ground, so it keeps its data from the
+        // start: data moved to the render world doesn't come back.
         primitives: super::create_render_primitives(
             model.primitives,
             &textures,
             meshes,
             materials,
             true,
+            super::character::ON_A_SPAWN,
         ),
         bounds,
         flat: model.flat,
@@ -131,5 +135,35 @@ mod tests {
         assert!(lifetime.upgrade().is_some());
         drop(active);
         assert!(lifetime.upgrade().is_none());
+    }
+    use bevy::asset::RenderAssetUsages;
+    use eq_client_assets::{MaterialMode, ZonePrimitive, items::ItemModel};
+
+    #[test]
+    fn shapes_keep_their_vertices_where_clicks_are_picked() {
+        let mut images = Assets::<Image>::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let model = ItemModel {
+            name: "IT1".into(),
+            primitives: vec![ZonePrimitive {
+                positions: vec![[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]],
+                normals: Vec::new(),
+                texture_coordinates: Vec::new(),
+                indices: vec![0, 1, 2],
+                texture: None,
+                material_mode: MaterialMode::Opaque,
+            }],
+            textures: Vec::new(),
+            flat: false,
+        };
+        let shape = build(model, (&mut images, &mut meshes, &mut materials));
+        assert_eq!(shape.primitives.len(), 1);
+        for (mesh, _) in &shape.primitives {
+            let usage = meshes.get(mesh).unwrap().asset_usage;
+            assert!(
+                usage.contains(RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD)
+            );
+        }
     }
 }

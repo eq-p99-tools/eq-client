@@ -102,6 +102,11 @@ impl Outbox {
         }
     }
 
+    /// Sends to another session's queue from now on, or to none.
+    pub(crate) fn connect(&mut self, queue: Option<SyncSender<ClientCommand>>) {
+        self.queue = queue;
+    }
+
     /// The stamp for a command made now in the current admission.
     ///
     /// # Errors
@@ -386,6 +391,7 @@ mod tests {
                     [None; 8],
                 )),
                 far_clip: None,
+                spell_landing_flag: None,
             }),
             WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {
@@ -587,6 +593,7 @@ mod hud_tests {
                     [None; 8],
                 )),
                 far_clip: None,
+                spell_landing_flag: None,
             }),
             eq_client_core::WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {

@@ -5,6 +5,7 @@
 //! right click uses it, as in the client's own inventory window.
 use super::{Skinned, at, picture};
 use crate::{
+    hud::hotbar,
     inventory::SlotButton,
     sheets::Art,
     theme::{self, Size},
@@ -90,7 +91,7 @@ pub(super) fn slot(
     let Some((number, in_bag)) = slot.slot.and_then(|number| slot_of(owner, number)) else {
         return;
     };
-    let area = slot.area;
+    let area = slot.area_in(inside.width, inside.height);
     let node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -106,7 +107,13 @@ pub(super) fn slot(
         Some(index) if owner == WindowId::Trade && index < 8 => {
             window.spawn((Button, TheirSlot(index), node))
         }
-        _ => window.spawn((Button, SlotButton(number), SkinSlot { in_bag }, node)),
+        _ => window.spawn((
+            Button,
+            SlotButton(number),
+            hotbar::Pickable(hotbar::Source::Item(number)),
+            SkinSlot { in_bag },
+            node,
+        )),
     };
     cell.with_children(|cell| {
         if let Some(piece) = &slot.background {
@@ -128,7 +135,7 @@ fn loot_slot(window: &mut ChildSpawnerCommands, art: &mut Art, slot: &InvSlot, i
     else {
         return;
     };
-    let area = slot.area;
+    let area = slot.area_in(inside.width, inside.height);
     window
         .spawn((
             Button,

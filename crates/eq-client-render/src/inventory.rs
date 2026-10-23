@@ -318,7 +318,10 @@ pub(super) fn input(
         ResMut<crate::trade::TradeState>,
     ),
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
-    slots: Query<(&Interaction, &SlotButton)>,
+    (slots, clicks): (
+        Query<(&Interaction, &SlotButton)>,
+        crate::hud::hotbar::Clicks<SlotButton>,
+    ),
     store: Query<&Interaction, (With<StoreCursor>, Changed<Interaction>)>,
     split_buttons: Query<(&Interaction, &interaction::SplitAction), Changed<Interaction>>,
     stack_counts: Query<(&Interaction, &SplitStack), Changed<Interaction>>,
@@ -403,27 +406,30 @@ pub(super) fn input(
             } else {
                 right_click(slot.0, &online, &sender, &mut shown, &skinned, &mut items);
             }
-        } else if mouse.just_pressed(MouseButton::Left) && *interaction == Interaction::Pressed {
-            if keys
-                .input
-                .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
-            {
-                state.select_split(slot.0, online.world().inventory());
-            } else if skinned.has(super::windows::WindowId::Merchant)
-                && !online
-                    .world()
-                    .inventory()
-                    .items()
-                    .contains_key(&InventorySlot::CURSOR)
-                && trade.offer(slot.0.0)
-            {
-                // With the skin's merchant window open, a click on a
-                // carried item chooses it to sell, as its one place for a
-                // chosen item and its Sell button suggest; the official
-                // client's click there is not checked yet.
-            } else {
-                state.click_slot(slot.0, false, &online, &sender);
-            }
+        }
+    }
+    // A slot a hold picks up from is clicked when its quick press is let go
+    // (`hud::hotbar::Clicks`).
+    if let Some(SlotButton(slot)) = clicks.iter().next() {
+        if keys
+            .input
+            .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+        {
+            state.select_split(*slot, online.world().inventory());
+        } else if skinned.has(super::windows::WindowId::Merchant)
+            && !online
+                .world()
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot::CURSOR)
+            && trade.offer(slot.0)
+        {
+            // With the skin's merchant window open, a click on a carried
+            // item chooses it to sell, as its one place for a chosen item
+            // and its Sell button suggest; the official client's click there
+            // is not checked yet.
+        } else {
+            state.click_slot(*slot, false, &online, &sender);
         }
     }
 }
@@ -736,6 +742,7 @@ mod tests {
             Update,
             (
                 crate::windows::toggle,
+                crate::hud::hotbar::carry::route,
                 input,
                 settle,
                 update,

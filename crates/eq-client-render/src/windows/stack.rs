@@ -434,6 +434,7 @@ mod tests {
                 zone: "qeytoqrg".into(),
                 player: Box::new(crate::online::testing::player(7)),
                 far_clip: None,
+                spell_landing_flag: None,
             }],
         );
         app.insert_resource(online);

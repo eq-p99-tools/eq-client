@@ -1,7 +1,9 @@
 //! Typed chat presentation and bounded per-tab history.
+mod text;
 use chrono::NaiveDateTime;
-pub use eq_network_game::chat::{ChannelName, Message, SpeakMode};
+pub use eq_network_game::chat::{ChannelName, ItemLink, Message, SpeakMode};
 use std::collections::{BTreeMap, VecDeque};
+pub use text::RichText;
 
 /// Whose words a chat line holds, which decides whether the official
 /// client's log takes it: the server's and the official client's go in, this

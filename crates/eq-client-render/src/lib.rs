@@ -1,10 +1,11 @@
 #![doc = "Bevy scene and camera support for renderer-independent EQ zone assets."]
 
-use std::{path::PathBuf, sync::mpsc::Receiver};
+use std::path::PathBuf;
 use theme::Size;
 
 mod abilities;
 mod attention;
+mod background;
 mod book_delete;
 mod buffs;
 mod character;
@@ -14,6 +15,7 @@ mod coins;
 mod combat;
 mod confirm;
 mod daylight;
+mod device_pixels;
 mod doors;
 mod entities;
 mod escape;
@@ -28,11 +30,14 @@ mod inventory;
 mod item_models;
 mod items;
 mod keys;
+mod loading;
+mod login;
 mod logs;
 mod map;
 mod motion;
 mod names;
 mod navigation;
+mod navmesh_prebuild;
 mod notices;
 mod online;
 mod options;
@@ -49,10 +54,13 @@ mod reading;
 mod resources;
 mod resurrection;
 pub mod script;
+mod select_preview;
 mod sheets;
 mod skills;
 mod skin;
 mod skinned;
+mod sounds;
+mod spell_effects;
 mod spell_icons;
 mod spellbook;
 mod target;
@@ -63,8 +71,10 @@ mod tradeskills;
 mod training;
 mod whereabouts;
 mod who;
+mod window_size;
 mod windows;
 mod zone;
+mod zone_navmesh;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
@@ -75,7 +85,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Captured, Screenshot, save_to_disk};
 use eq_client_assets::characters::CharacterAsset;
 use eq_client_assets::{BlendOpacity, MaterialMode, ZoneAsset, ZonePrimitive};
-use eq_client_core::{WorldPosition, WorldUpdate, render_position, world_position};
+use eq_client_core::{WorldPosition, render_position, world_position};
 use image::{RgbaImage, imageops::FilterType};
 
 /// The projection used by the top-down camera.
@@ -97,16 +107,18 @@ pub enum ValidationAction {
     InspectFirstItem,
 }
 
+pub use login::{Availability, Connection, LoginServer, Logins, Session, Worker};
 pub use preview::Preview;
 
 /// Where the viewer's world comes from.
 pub enum Source {
-    /// A server session: its news, and the channel for the player's requests.
+    /// Servers: the login screen and the sessions it starts, beginning with
+    /// the session the launch began, if any.
     Online {
-        /// What the session tells the client.
-        updates: Receiver<WorldUpdate>,
-        /// What the player asks the session to send.
-        commands: std::sync::mpsc::SyncSender<eq_client_core::ClientCommand>,
+        /// The login servers the login screen offers, and how to log in.
+        logins: Box<dyn Logins>,
+        /// The session the launch began, which skips the login screen.
+        session: Option<Session>,
     },
     /// No server. The offline preview, if it shows anything, stands in for one.
     Offline(Preview),
@@ -146,6 +158,9 @@ pub struct ViewerConfig {
     pub script: Option<Vec<script::Step>>,
     /// Script file and byte offset to keep reading appended steps from.
     pub script_follow: Option<(PathBuf, usize)>,
+    /// Leave the script pointer's arrow undrawn while a script runs; it is
+    /// drawn by default, so a recording shows where each click lands.
+    pub hide_script_pointer: bool,
     /// The network session refuses servers outside this machine's network (a local
     /// `EQEmu` test server), so scripts may send `gm` steps and run unwatched.
     pub local_session: bool,
@@ -161,9 +176,15 @@ pub struct ViewerConfig {
     pub settings_directory: Option<PathBuf>,
     /// Optional top-left window corner in physical desktop pixels.
     pub window_position: Option<(i32, i32)>,
-    /// Add the developer's readings to the status box: coordinates, the
-    /// movement mode with its keys, and the count of nearby entities.
+    /// Optional size of the window's drawing area in physical pixels.
+    pub window_size: Option<(u32, u32)>,
+    /// Add the developer's readings to the status box: the zone's short
+    /// name, coordinates, the movement mode with its keys, and the count of
+    /// nearby entities.
     pub debug_overlay: bool,
+    /// Build each zone's navigation mesh at entry, for probes, scripts and
+    /// looks; never a player setting. Nothing plans over it yet.
+    pub navmesh: bool,
 }
 
 impl ViewerConfig {
@@ -209,6 +230,19 @@ struct Player;
 struct PlayerBody {
     feet_offset: f32,
     height: f32,
+    /// The size the player is drawn at, which picks its walker size on the
+    /// navigation mesh. Its collision height is still the model's own.
+    size: f32,
+}
+
+impl PlayerBody {
+    /// The walker size the player plans on the navigation mesh by: its
+    /// drawn size, but never shorter than its collision height, so the mesh
+    /// offers no way its body's own checks would refuse. Its size alone
+    /// once collision follows the size.
+    fn mesh_size(&self) -> f32 {
+        self.size.max(self.height)
+    }
 }
 
 #[derive(Component)]
@@ -223,6 +257,9 @@ struct OrbitCamera {
     radius: f32,
     yaw: f32,
     pitch: f32,
+    /// The distance shown while a roof or wall holds the camera short of
+    /// `radius`; None once it is back out at the chosen zoom.
+    pulled: Option<f32>,
 }
 
 /// Opens a window and renders a loaded zone until the user closes it.
@@ -234,6 +271,7 @@ pub fn run(
 ) -> i32 {
     let screenshot = config.screenshot.clone();
     let steps = config.script.clone();
+    let arrow = !config.hide_script_pointer;
     let follow = config.script_follow.clone();
     let local_session = config.local_session;
     let installed_client = config.installed_client;
@@ -245,6 +283,7 @@ pub fn run(
         let official = settings.options();
         for (toggle, setting) in [
             (Toggle::Log, official.log),
+            (Toggle::Sound, official.sound),
             (Toggle::PcNames, official.pc_names),
             (Toggle::NpcNames, official.npc_names),
         ] {
@@ -265,12 +304,24 @@ pub fn run(
     }
     let online = matches!(source, Source::Online { .. });
     let screenshot_after = config.screenshot_after.unwrap_or(2.0).max(0.1);
-    let window = primary_window(online, screenshot.is_none(), config.window_position);
+    let window_size = config.window_size;
+    let window = primary_window(
+        online,
+        screenshot.is_none(),
+        config.window_position,
+        window_size,
+    );
     let mut app = App::new();
-    let (updates, commands) = match source {
-        Source::Online { updates, commands } => (Some(updates), Some(commands)),
-        Source::Offline(preview) => (preview::install(&mut app, preview), None),
+    let (front, updates, commands) = match source {
+        Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
+        Source::Offline(preview) => (
+            login::FrontEnd::default(),
+            preview::install(&mut app, preview),
+            None,
+        ),
     };
+    app.insert_resource(front);
+    app.insert_resource(login::LoginStrings::load(config.eq_directory.as_deref()));
     app.insert_resource(spellbook::SpellNames::load(config.eq_directory.as_deref()));
     app.insert_resource(hud::messages::Messages::load(
         config.eq_directory.as_deref(),
@@ -299,15 +350,21 @@ pub fn run(
             }),
     );
     theme::install_font(&mut app, installed_client);
-    app.add_systems(Startup, setup_scene)
+    app.add_systems(Startup, (setup_scene, navmesh_prebuild::offer))
         .add_systems(Update, exit_log::close_requests);
     schedule(&mut app);
     navigation::install(&mut app);
+    zone_navmesh::install(&mut app);
     frame_limit::install(&mut app);
     attention::install(&mut app);
+    if let Some(size) = window_size {
+        window_size::install(&mut app, size);
+    }
+    loading::install(&mut app);
+    device_pixels::install(&mut app);
     install_overlays(&mut app);
     if let Some(steps) = steps {
-        install_script(&mut app, steps, follow, (local_session, online));
+        install_script(&mut app, (steps, follow), (local_session, online), arrow);
     }
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
@@ -322,7 +379,10 @@ pub fn run(
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 fn init_presentation(app: &mut App) {
-    app.init_resource::<options::OptionsState>()
+    app.init_resource::<spell_effects::SpellParticles>()
+        .init_resource::<sounds::Sounds>()
+        .init_resource::<doors::Hinges>()
+        .init_resource::<options::OptionsState>()
         .init_resource::<logs::ChatLog>()
         .init_resource::<hud::HudState>()
         .init_resource::<hud::action_bar::ActionRequests>()
@@ -332,6 +392,8 @@ fn init_presentation(app: &mut App) {
         .init_resource::<windows::pointer::Wheel>()
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
+        .init_resource::<hud::hotbar::carry::Presses>()
+        .init_resource::<hud::hotbar::carry::Carry>()
         .init_resource::<spellbook::BookView>()
         .init_resource::<spellbook::BookSelection>()
         .init_resource::<spellbook::BookHand>()
@@ -353,6 +415,7 @@ fn init_presentation(app: &mut App) {
         .init_resource::<names::NameTags>()
         .init_resource::<item_models::ItemLibrary>()
         .init_resource::<outfit::Wardrobe>()
+        .init_resource::<select_preview::Preview>()
         .init_resource::<windows::DragState>()
         .init_resource::<windows::Layouts>()
         .init_resource::<windows::Shown>()
@@ -363,7 +426,9 @@ fn init_presentation(app: &mut App) {
         .init_resource::<raid::RaidChoice>()
         .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
-        .init_resource::<map::MapView>();
+        .init_resource::<map::MapView>()
+        .init_resource::<login::FrontEnd>()
+        .init_resource::<login::LoginLook>();
 }
 
 /// What the tests of the windows start from.
@@ -427,18 +492,39 @@ fn exit_status(exit: &AppExit) -> i32 {
 
 /// Drives a script after UI focus, optionally following its file; it is
 /// attended unless the session is local-only or the preview is offline.
+/// The script pointer's arrow is drawn while it runs, unless `arrow` is false.
 fn install_script(
     app: &mut App,
-    steps: Vec<script::Step>,
-    follow: Option<(PathBuf, usize)>,
+    (steps, follow): (Vec<script::Step>, Option<(PathBuf, usize)>),
     (local_session, online): (bool, bool),
+    arrow: bool,
 ) {
     let script = match follow {
         Some((path, offset)) => script::Script::following(steps, path, offset),
         None => script::Script::new(steps),
     };
     app.insert_resource(script.local_session(local_session).offline_preview(!online));
-    app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus));
+    app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus))
+        .add_systems(
+            Update,
+            (
+                script::pointer::draw,
+                // A scripted notch of the wheel replaces the real wheel's
+                // turn, read just before, and reaches the lists as one does.
+                script::pointer::turn
+                    .after(windows::pointer::wheel)
+                    .after(skinned::scrollbar::scroll)
+                    .in_set(Stage::Typing),
+            ),
+        );
+    if arrow {
+        app.init_resource::<script::pointer::SkinArrow>()
+            .add_systems(Startup, script::pointer::spawn)
+            .add_systems(
+                Update,
+                script::pointer::read_arrow.before(script::pointer::draw),
+            );
+    }
 }
 
 /// Orders world reduction before scene reconciliation, then text entry before
@@ -466,18 +552,30 @@ fn schedule(app: &mut App) {
     .add_systems(
         Update,
         (
-            (online::receive, online::tick, daylight::update)
+            (
+                online::receive,
+                online::report_bleed_out,
+                login::watch,
+                online::tick,
+                daylight::update,
+                spell_effects::load,
+                sounds::load,
+            )
                 .chain()
                 .in_set(Stage::Receive),
             (
                 entities::reconcile,
                 entities::interpolate,
+                character::lie,
                 doors::reconcile,
                 ground::reconcile,
+                select_preview::show,
+                select_preview::turn,
             )
                 .chain()
                 .in_set(Stage::Scene),
             (
+                login::claim,
                 windows::pointer::wheel,
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
@@ -487,7 +585,7 @@ fn schedule(app: &mut App) {
             )
                 .chain()
                 .in_set(Stage::Typing),
-            escape::route.in_set(Stage::Route),
+            (escape::route, hud::hotbar::carry::route).in_set(Stage::Route),
         ),
     )
     .add_systems(
@@ -524,11 +622,29 @@ fn schedule(app: &mut App) {
             (hud::hotbar::update, hud::hotbar::persist).chain(),
             hud::hotbar::item_actions,
             (
-                spellbook::update,
-                spellbook::book_clicks,
-                spellbook::say_book_lines,
+                // A book the player stands up from closes before it draws.
+                spellbook::seat,
+                (
+                    spellbook::update,
+                    spellbook::book_clicks,
+                    spellbook::say_book_lines,
+                ),
+            )
+                .chain(),
+            (
+                // Which login screens show decides which take the presses.
+                (
+                    login::read_look,
+                    (login::form, login::worlds, login::light),
+                    navmesh_prebuild::run_batch(),
+                )
+                    .chain(),
+                (
+                    character_select::update,
+                    character_select::names,
+                    login::quit,
+                ),
             ),
-            (character_select::update, character_select::names),
             windows::input,
             move_player,
             motion::input,
@@ -551,6 +667,7 @@ fn schedule(app: &mut App) {
                 combat::target_color,
                 trade::present,
                 trade::scroll,
+                (login::login_screen, login::worlds_screen, login::scroll).chain(),
                 skinned::scroll_lists,
                 motion::interpolate,
                 orbit_camera,
@@ -575,7 +692,7 @@ fn schedule(app: &mut App) {
                 hud::key_help,
                 target::key_help,
                 hud::hotbar::item_artwork,
-                hud::hotbar::presentation,
+                (hud::hotbar::presentation, hud::hotbar::fit_words).chain(),
                 spellbook::scribe_presentation,
                 buffs::update,
                 (buffs::hover, buffs::skinned_details, buffs::short_window),
@@ -593,7 +710,13 @@ fn schedule(app: &mut App) {
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),
                 skinned::frames,
-                (skinned::apply, skinned::looks::load, skinned::looks::dress).chain(),
+                (
+                    skinned::apply,
+                    skinned::place_own,
+                    skinned::looks::load,
+                    skinned::looks::dress,
+                )
+                    .chain(),
                 skinned::show,
                 skinned::buttons,
                 (
@@ -635,9 +758,13 @@ fn schedule(app: &mut App) {
                 abilities::needs,
                 outbox::veil,
                 outbox::grey_out,
+                tooltip::end_scripted_presses,
                 tooltip::show,
+                select_preview::veil,
                 outfit::dress,
                 character::animate,
+                spell_effects::update,
+                sounds::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
                 schedule_screenshot,
@@ -661,7 +788,8 @@ pub(crate) enum Stage {
     Scene,
     /// The chat takes the keyboard first, and the wheel goes to one surface.
     Typing,
-    /// Escape and the window stack decide what a press belongs to.
+    /// Escape and the window stack decide what a press belongs to, and so
+    /// does a hotkey on the cursor or a hold that picks one up.
     Route,
     /// Keys and clicks become requests and moves.
     Input,
@@ -686,7 +814,12 @@ fn install_overlays(app: &mut App) {
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
-fn primary_window(online: bool, visible: bool, position: Option<(i32, i32)>) -> Window {
+fn primary_window(
+    online: bool,
+    visible: bool,
+    position: Option<(i32, i32)>,
+    size: Option<(u32, u32)>,
+) -> Window {
     Window {
         title: if online {
             "eq-client"
@@ -698,6 +831,7 @@ fn primary_window(online: bool, visible: bool, position: Option<(i32, i32)>) -> 
         position: position.map_or(WindowPosition::Automatic, |(x, y)| {
             WindowPosition::At(IVec2::new(x, y))
         }),
+        resolution: size.map(window_size::resolution).unwrap_or_default(),
         ..default()
     }
 }
@@ -741,6 +875,7 @@ fn setup_scene(
     let body = PlayerBody {
         feet_offset: height * 0.5,
         height,
+        size: 6.0,
     };
     let player_position = Vec3::new(start_x, start_y + body.feet_offset, start_z);
     let default_radius = 120.0;
@@ -749,24 +884,21 @@ fn setup_scene(
         .camera_distance
         .unwrap_or(default_radius)
         .clamp(20.0, 20_000.0);
+    let placed = Transform::from_translation(player_position);
     scene.enter(
         &mut commands,
         zone::Entry {
             zone,
             character,
-            placed: Transform::from_translation(player_position),
+            placed,
             body,
-        },
+        }
+        .prepare(settings.0.navmesh),
         settings.0.terrain_only,
         &mut online.regions,
     );
     spawn_lighting(&mut commands, &mut ambient_light);
-    spawn_camera(
-        &mut commands,
-        player_position,
-        radius,
-        settings.0.projection,
-    );
+    spawn_camera(&mut commands, placed, radius, settings.0.projection);
 }
 
 fn spawn_static_zone(
@@ -778,8 +910,14 @@ fn spawn_static_zone(
     materials: &mut Assets<StandardMaterial>,
 ) {
     let texture_images = create_texture_images(zone.textures, images);
-    let terrain =
-        create_render_primitives(zone.primitives, &texture_images, meshes, materials, true);
+    let terrain = create_render_primitives(
+        zone.primitives,
+        &texture_images,
+        meshes,
+        materials,
+        true,
+        RenderAssetUsages::RENDER_WORLD,
+    );
     commands.spawn_batch(
         terrain
             .into_iter()
@@ -802,6 +940,7 @@ fn spawn_static_zone(
                 meshes,
                 materials,
                 true,
+                RenderAssetUsages::RENDER_WORLD,
             );
             door_models.0.insert(
                 doors::model_key(&model.name),
@@ -893,26 +1032,42 @@ fn spawn_lighting(commands: &mut Commands, ambient_light: &mut GlobalAmbientLigh
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.0, -0.8, 0.0)),
         daylight::Sun,
     ));
-    let [red, green, blue] = daylight::DAY_AMBIENT_COLOR;
-    *ambient_light = GlobalAmbientLight {
-        color: Color::srgb(red, green, blue),
-        brightness: daylight::DAY_AMBIENT,
-        affects_lightmapped_meshes: true,
-    };
+    *ambient_light = daylight::launch_ambient();
+}
+
+/// The chase view's pitch as it first opens: a little above the player,
+/// looking down past them. Inferred, item 6.240.
+const CHASE_PITCH: f32 = -20.0_f32.to_radians();
+
+/// The orbit yaw that puts the camera behind whatever faces the render yaw
+/// `facing`, looking along it, so W walks that way: the camera sits opposite
+/// the direction it looks.
+fn behind(facing: f32) -> f32 {
+    facing + std::f32::consts::PI
+}
+
+/// Turns the camera to start behind a placed player, looking the way they
+/// face, keeping the pitch and zoom the player chose.
+fn start_behind(camera: &mut OrbitCamera, placed: &Transform) {
+    camera.yaw = behind(placed.rotation.to_euler(EulerRot::YXZ).0);
 }
 
 fn spawn_camera(
     commands: &mut Commands,
-    player_position: Vec3,
+    placed: Transform,
     radius: f32,
     projection_style: ProjectionStyle,
 ) {
-    let orbit = OrbitCamera {
-        focus: player_position,
+    let mut orbit = OrbitCamera {
+        focus: placed.translation,
         radius,
-        yaw: 0.75,
-        pitch: -60.0_f32.to_radians(),
+        yaw: 0.0,
+        pitch: CHASE_PITCH,
+        pulled: None,
     };
+    // The first zone is entered before this camera exists, so it starts
+    // behind the player here; later entries turn it in `Scene::enter`.
+    start_behind(&mut orbit, &placed);
     let mut projection = match projection_style {
         ProjectionStyle::Perspective => Projection::Perspective(PerspectiveProjection {
             near: 1.0,
@@ -928,6 +1083,7 @@ fn spawn_camera(
         projection,
         orbit_transform(&orbit),
         orbit,
+        sounds::listener(),
     ));
 }
 
@@ -936,12 +1092,11 @@ fn schedule_screenshot(
     mut commands: Commands,
     time: Res<Time>,
     request: Option<ResMut<CaptureRequest>>,
-    online: Res<online::OnlineState>,
+    (online, front): (Res<online::OnlineState>, Res<login::FrontEnd>),
+    loading: Option<Res<loading::Loading>>,
 ) {
-    // Online, the scene is ready once the player is in the world, or once the
-    // character list shows.
-    let admitted = online.world().connected() && online.world().player().is_some();
-    if online.enabled && !admitted && online.selection.is_none() {
+    let covered = loading.is_some_and(|loading| loading.covered());
+    if !screenshot_ready(&front, &online, covered) {
         return;
     }
     let Some(mut request) = request else {
@@ -956,6 +1111,15 @@ fn schedule_screenshot(
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
     commands.remove_resource::<CaptureRequest>();
+}
+
+/// Whether a screenshot may count down: offline at once; online once a
+/// login screen, the list of worlds or the character list has settled, or
+/// once the player is in a zone with the loading screen lifted, as a
+/// script's wait for the zone has it. The screen stays up while the zone's
+/// scene loads, so the picture is the zone, not the cover.
+fn screenshot_ready(front: &login::FrontEnd, online: &online::OnlineState, covered: bool) -> bool {
+    !online.enabled || (front.settled(online) && !covered)
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -1042,12 +1206,16 @@ fn generate_mip_chain(width: u32, height: u32, pixels: Vec<u8>) -> (Vec<u8>, u32
     (chain, level_count)
 }
 
+/// Builds a model's or zone's draw calls. `usage` says where the meshes' data
+/// lives: zones draw only, while models hung under a spawn keep theirs in
+/// the main world too, where clicks are picked against them.
 fn create_render_primitives(
     primitives: Vec<ZonePrimitive>,
     texture_images: &[TextureImages],
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     unlit: bool,
+    usage: RenderAssetUsages,
 ) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
     primitives
         .into_iter()
@@ -1057,10 +1225,7 @@ fn create_render_primitives(
                 .texture
                 .and_then(|index| texture_images.get(index));
             let material = create_material(primitive.material_mode, texture, materials, unlit);
-            let mut mesh = Mesh::new(
-                PrimitiveTopology::TriangleList,
-                RenderAssetUsages::RENDER_WORLD,
-            );
+            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usage);
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, primitive.positions);
             if !primitive.normals.is_empty() {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, primitive.normals);
@@ -1139,8 +1304,63 @@ fn object_transform(object: &eq_client_assets::ZoneObject) -> Transform {
     }
 }
 
-/// Includes solid terrain and transformed object geometry, including hidden boundaries.
+/// The zone's water and lava as its regions mark them, which every walk keeps
+/// out of.
+struct ZoneLiquids(eq_client_assets::regions::ZoneRegions);
+
+impl eq_client_core::movement::Liquids for ZoneLiquids {
+    fn liquid_at(&self, point: Vec3) -> Option<eq_client_core::movement::Liquid> {
+        self.0.liquid_at(point.to_array()).map(movement_liquid)
+    }
+
+    fn passes_through(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        liquid: eq_client_core::movement::Liquid,
+    ) -> bool {
+        use eq_client_assets::regions::Liquid;
+        let liquid = match liquid {
+            eq_client_core::movement::Liquid::Water => Liquid::Water,
+            eq_client_core::movement::Liquid::Lava => Liquid::Lava,
+        };
+        self.0
+            .passes_through(from.to_array(), to.to_array(), liquid)
+    }
+
+    fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn eq_client_core::movement::Liquids>> {
+        let regions = self.0.within(low.to_array(), high.to_array())?;
+        Some(Box::new(Self(regions)))
+    }
+}
+
+/// A liquid the zone's regions mark, as movement knows it.
+fn movement_liquid(liquid: eq_client_assets::regions::Liquid) -> eq_client_core::movement::Liquid {
+    use eq_client_assets::regions::Liquid;
+    match liquid {
+        Liquid::Water => eq_client_core::movement::Liquid::Water,
+        Liquid::Lava => eq_client_core::movement::Liquid::Lava,
+    }
+}
+
+/// Includes solid terrain and transformed object geometry, including hidden boundaries,
+/// and the zone's water and lava.
+/// A zone's solid geometry as movement and the camera meet it: its own
+/// collision with its placed objects', and its water and lava; None where
+/// it has none that can be built. For tools that weigh a zone's shape, such
+/// as the character select spot proposer.
+#[must_use]
+pub fn zone_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
+    build_collision(zone)
+}
+
 fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
+    collision_world(zone, collision_triangles(zone))
+}
+
+/// The zone's collision triangles with every placed object's: the solids the
+/// walker meets, doors aside.
+fn collision_triangles(zone: &ZoneAsset) -> Vec<[[f32; 3]; 3]> {
     let mut triangles = zone.collision.clone();
     for object in &zone.objects {
         let Some(model) = zone.models.get(object.model) else {
@@ -1151,8 +1371,16 @@ fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Collisi
             triangle.map(|p| transform.transform_point3(Vec3::from_array(p)).to_array())
         }));
     }
+    triangles
+}
+
+fn collision_world(
+    zone: &ZoneAsset,
+    triangles: Vec<[[f32; 3]; 3]>,
+) -> Option<eq_client_core::movement::CollisionWorld> {
     match eq_client_core::movement::CollisionWorld::new(triangles) {
-        Ok(world) => Some(world),
+        Ok(world) if zone.regions.liquid_region_count() == 0 => Some(world),
+        Ok(world) => Some(world.with_liquids(ZoneLiquids(zone.regions.clone()))),
         Err(error) => {
             warn!("Collision unavailable: {error}");
             None
@@ -1279,7 +1507,9 @@ fn move_player(
         debug!(
             fall_distance = landing.fall_distance,
             impact_speed = landing.impact_speed,
-            "Offline landing; no damage calculated"
+            damage =
+                world.landing_damage(player.translation - Vec3::Y * body.feet_offset, landing, 0),
+            "Offline landing; nothing is sent"
         );
     }
     camera.focus = player.translation;
@@ -1291,8 +1521,9 @@ fn camera_relative_direction(horizontal: f32, vertical: f32, yaw: f32) -> Vec3 {
     (right * horizontal + forward * vertical).normalize_or_zero()
 }
 
-/// Shows the zone, the status line and what the player can use here; the
-/// developer's readings only when the debug overlay is on.
+/// Shows the status line and what the player can use here, and the
+/// developer's readings (the zone's short name among them) only when the
+/// debug overlay is on. With nothing to show, the box hides.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn update_hud(
     motion: Res<motion::Controls>,
@@ -1305,12 +1536,13 @@ fn update_hud(
     nearby: Res<entities::NearbyEntities>,
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
-    mut labels: Query<&mut Text, With<HudText>>,
+    mut labels: Query<(&mut Text, &mut Visibility), With<HudText>>,
 ) {
-    let (Ok(player), Ok(mut label)) = (players.single(), labels.single_mut()) else {
+    let (Ok(player), Ok((mut label, mut visibility))) = (players.single(), labels.single_mut())
+    else {
         return;
     };
-    let mut lines = vec![scene.zone_name.clone(), notices.status.text().to_owned()];
+    let mut lines = vec![notices.status.text().to_owned()];
     if online.enabled && online.in_world() && motion.speed.is_none() {
         lines.push("Movement unavailable: start with --movement-calibration".into());
     }
@@ -1323,6 +1555,7 @@ fn update_hud(
         None => String::new(),
     });
     if settings.0.debug_overlay {
+        lines.push(scene.zone_name.clone());
         let position = world_position(player.translation.to_array(), 0.0);
         lines.push(format!(
             "{:.0}, {:.0}, {:.0}",
@@ -1339,6 +1572,16 @@ fn update_hud(
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
+    // The official client has no such box, so it shows only while it has
+    // something to say.
+    let wanted = if text.is_empty() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    if *visibility != wanted {
+        *visibility = wanted;
+    }
     if label.0 != text {
         label.0 = text;
     }
@@ -1382,6 +1625,7 @@ fn movement_help(
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 fn orbit_camera(
     collision: Option<Res<Collision>>,
+    time: Res<Time>,
     chat: Res<chat::ChatState>,
     items: Res<items::ItemState>,
     inventory: Res<inventory::InventoryState>,
@@ -1390,9 +1634,11 @@ fn orbit_camera(
     (wheel, options): (Res<windows::pointer::Wheel>, Res<options::OptionsState>),
     online: Res<online::OnlineState>,
     mut cameras: Query<(&mut OrbitCamera, &mut Transform, Option<&mut Projection>)>,
+    bodies: Query<&PlayerBody, With<Player>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
 ) {
+    let head = bodies.single().map_or(0.0, |body| body.height * HEAD_LINE);
     let accepts_input = windows.single().is_ok_and(|window| {
         window.focused
             && !window
@@ -1438,8 +1684,10 @@ fn orbit_camera(
             fit_projection(&mut projection, radius, clip);
         }
         *transform = unobstructed_orbit(
-            &camera,
+            &mut camera,
             collision.as_ref().and_then(|world| world.0.as_ref()),
+            head,
+            time.delta_secs(),
         );
     }
 }
@@ -1486,25 +1734,181 @@ fn orbit_transform(camera: &OrbitCamera) -> Transform {
     Transform::from_translation(position).looking_at(camera.focus, Vec3::Y)
 }
 
-/// Keeps the camera on the player's side of roofs and walls without changing chosen zoom.
+/// Keeps the camera on the player's side of roofs and walls without changing
+/// the chosen zoom: it pulls in at once to just short of whatever stands
+/// between it and the player, then eases back out as the way clears, never
+/// past the chosen radius. Both the line from the focus (the body's middle)
+/// and the line from near the top of the head, `head` above it, must reach
+/// the camera clear, so a wall top never hides the head while the waist is in
+/// view. Display only; inferred, item 6.233.
 fn unobstructed_orbit(
-    camera: &OrbitCamera,
+    camera: &mut OrbitCamera,
     collision: Option<&eq_client_core::movement::CollisionWorld>,
+    head: f32,
+    seconds: f32,
 ) -> Transform {
     let mut pose = orbit_transform(camera);
     let offset = pose.translation - camera.focus;
     let distance = offset.length();
-    if distance > 0.001
-        && let Some(hit) = collision
-            .and_then(|world| world.ray_distance(camera.focus, offset / distance, distance))
-    {
-        pose.translation = camera.focus + offset / distance * (hit - 0.5).max(0.01);
+    if distance <= 0.001 {
+        camera.pulled = None;
+        return pose;
+    }
+    let direction = offset / distance;
+    let allowed = collision.map_or(distance, |world| {
+        let along_focus = world
+            .ray_distance(camera.focus, direction, distance)
+            .map_or(distance, |hit| (hit - 0.5).max(0.01));
+        clear_of_head(world, camera.focus, Vec3::Y * head, direction, along_focus)
+    });
+    camera.pulled = camera
+        .pulled
+        .map(|shown| eased_distance(shown, allowed, seconds))
+        .or((allowed < distance).then_some(allowed))
+        .filter(|shown| distance - shown > PULLED_DONE);
+    if let Some(shown) = camera.pulled {
+        pose.translation = camera.focus + direction * shown;
     }
     pose
 }
 
+/// Where the head line starts, as a share of the body's height above its
+/// middle: near the top of the head.
+const HEAD_LINE: f32 = 0.4;
+
+/// How many times the head line is cast before the distance it gives stands.
+const HEAD_CASTS: usize = 3;
+
+/// The distance along the orbit, at most `along_focus`, at which the line from
+/// the head (`rise` above the focus) to the camera is clear: each hit pulls the
+/// camera in by the share of the line that was clear, then the line is cast
+/// again, a bounded number of times.
+fn clear_of_head(
+    world: &eq_client_core::movement::CollisionWorld,
+    focus: Vec3,
+    rise: Vec3,
+    direction: Vec3,
+    along_focus: f32,
+) -> f32 {
+    let head = focus + rise;
+    let mut distance = along_focus;
+    for _ in 0..HEAD_CASTS {
+        let line = focus + direction * distance - head;
+        let length = line.length();
+        if length <= 0.001 {
+            break;
+        }
+        let Some(hit) = world.ray_distance(head, line / length, length) else {
+            break;
+        };
+        distance = (distance * (hit - 0.5).max(0.0) / length).max(0.01);
+    }
+    distance
+}
+
+/// How close to the chosen radius an easing camera counts as back out.
+const PULLED_DONE: f32 = 0.05;
+
+/// The camera's eased-out time constant: about 95% of the way back in 0.3 s.
+const PULL_OUT_SECONDS: f32 = 0.1;
+
+/// The shown distance one frame on: in at once to `allowed`, so geometry
+/// never sits between the camera and the player; out toward it eased, so
+/// it never passes `allowed` however long the frame.
+fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
+    if allowed <= shown {
+        allowed
+    } else {
+        shown + (allowed - shown) * (1.0 - (-seconds.max(0.0) / PULL_OUT_SECONDS).exp())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_player_plans_on_a_mesh_no_shorter_than_its_collision() {
+        let body = |height, size| super::PlayerBody {
+            feet_offset: 0.0,
+            height,
+            size,
+        };
+        // A gnome drawn 3 tall with a 6.8 collision plans as 6.8.
+        assert!((body(6.8, 3.0).mesh_size() - 6.8).abs() < 1e-6);
+        // An ogre drawn 9 tall plans as 9.
+        assert!((body(6.4, 9.0).mesh_size() - 9.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_screenshot_waits_for_the_loading_screen_to_lift() {
+        use super::*;
+        // A session logging in, as `--online` starts one.
+        let (_updates, receive) = std::sync::mpsc::sync_channel(1);
+        let (commands, _queue) = std::sync::mpsc::sync_channel(1);
+        let (front, ..) = login::FrontEnd::launched(
+            Box::new(login::testing::Fake {
+                servers: vec![login::testing::server("Example", "someone")],
+                heard: std::sync::Arc::default(),
+            }),
+            Some(login::Session {
+                updates: receive,
+                commands,
+                worker: Box::new(login::testing::Thread::default()),
+            }),
+        );
+        let mut online = online::OnlineState::new(true);
+        assert!(!screenshot_ready(&front, &online, false));
+        online::testing::admit(&mut online, 1, online::testing::player(7));
+        // In the zone, but the cover is still up while its scene loads.
+        assert!(!screenshot_ready(&front, &online, true));
+        assert!(screenshot_ready(&front, &online, false));
+        // Offline there is nothing to wait for.
+        let offline = online::OnlineState::new(false);
+        assert!(screenshot_ready(&front, &offline, true));
+    }
+
+    #[test]
+    fn the_status_box_shows_only_while_it_has_something_to_say() {
+        use super::*;
+        let mut app = testing::app();
+        app.insert_resource(SceneInfo {
+            zone_name: "qeytoqrg".into(),
+        })
+        .add_systems(Update, update_hud);
+        app.world_mut().spawn((Player, Transform::default()));
+        let status = app
+            .world_mut()
+            .spawn((HudText, Text::new(""), Visibility::Inherited))
+            .id();
+        let shown = |app: &mut App| {
+            app.update();
+            let text = app.world().get::<Text>(status).unwrap().0.clone();
+            let visibility = *app.world().get::<Visibility>(status).unwrap();
+            (text, visibility)
+        };
+        // Nothing to say: no zone name, and no box.
+        assert_eq!(shown(&mut app), (String::new(), Visibility::Hidden));
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .status
+            .set("Camped - choose a character");
+        assert_eq!(
+            shown(&mut app),
+            ("Camped - choose a character".into(), Visibility::Inherited)
+        );
+        // The developer's readings name the zone.
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .status
+            .set("");
+        app.world_mut()
+            .resource_mut::<ViewerSettings>()
+            .0
+            .debug_overlay = true;
+        let (text, visibility) = shown(&mut app);
+        assert!(text.starts_with("qeytoqrg\n"), "{text}");
+        assert_eq!(visibility, Visibility::Inherited);
+    }
+
     #[test]
     #[allow(
         clippy::float_cmp,
@@ -1530,25 +1934,271 @@ mod tests {
             radius: 40.0,
             yaw: 0.75,
             pitch: -60.0_f32.to_radians(),
+            pulled: None,
         };
         let requested = orbit_transform(&camera);
-        let inside = unobstructed_orbit(&camera, Some(&roof));
+        let mut under = OrbitCamera { ..camera };
+        let inside = unobstructed_orbit(&mut under, Some(&roof), 0.0, 1.0 / 60.0);
         assert!(inside.translation.y < 8.0);
         assert!(
             (inside.translation.length() - (8.0 / 60.0_f32.to_radians().sin() - 0.5)).abs() < 0.001
         );
         assert_eq!(inside.rotation, requested.rotation);
-        assert_eq!(camera.radius, 40.0);
-        assert_eq!(unobstructed_orbit(&camera, None), requested);
-        let outside = OrbitCamera {
+        assert_eq!(under.radius, 40.0);
+        let mut open = OrbitCamera { ..camera };
+        assert_eq!(
+            unobstructed_orbit(&mut open, None, 0.0, 1.0 / 60.0),
+            requested
+        );
+        let mut outside = OrbitCamera {
             focus: Vec3::new(200.0, 0.0, 200.0),
             ..camera
         };
+        let expected = orbit_transform(&outside);
         assert_eq!(
-            unobstructed_orbit(&outside, Some(&roof)),
-            orbit_transform(&outside)
+            unobstructed_orbit(&mut outside, Some(&roof), 0.0, 1.0 / 60.0),
+            expected
         );
     }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "Exact equality verifies the camera is back at the chosen zoom"
+    )]
+    fn camera_pulls_in_at_once_and_eases_back_out_to_the_chosen_zoom() {
+        use super::*;
+        let roof = eq_client_core::movement::CollisionWorld::new([
+            [
+                [-100.0, 8.0, -100.0],
+                [100.0, 8.0, -100.0],
+                [100.0, 8.0, 100.0],
+            ],
+            [
+                [-100.0, 8.0, -100.0],
+                [100.0, 8.0, 100.0],
+                [-100.0, 8.0, 100.0],
+            ],
+        ])
+        .unwrap();
+        let mut camera = OrbitCamera {
+            focus: Vec3::new(200.0, 0.0, 0.0),
+            radius: 40.0,
+            yaw: 0.75,
+            pitch: -60.0_f32.to_radians(),
+            pulled: None,
+        };
+        // Walking under the roof's edge and back out, a frame at a time, with
+        // the head's line as well as the middle's.
+        let frame = 1.0 / 60.0;
+        let rise = 6.0 * HEAD_LINE;
+        let mut shown = Vec::new();
+        for step in 0..240_u16 {
+            let x = if step < 120 {
+                140.0 - f32::from(step)
+            } else {
+                20.0 + f32::from(step - 120) * 2.0
+            };
+            camera.focus.x = x;
+            let unobstructed = unobstructed_orbit(
+                &mut OrbitCamera {
+                    pulled: None,
+                    ..camera
+                },
+                Some(&roof),
+                rise,
+                frame,
+            );
+            let pose = unobstructed_orbit(&mut camera, Some(&roof), rise, frame);
+            let distance = (pose.translation - camera.focus).length();
+            let limit = (unobstructed.translation - camera.focus).length();
+            assert!(
+                distance <= limit + 0.001,
+                "step {step}: {distance} past {limit}"
+            );
+            assert!(distance <= camera.radius + 0.001);
+            shown.push(distance);
+        }
+        // It went in under the roof and was easing out, not jumping, as it cleared.
+        assert!(shown.iter().any(|distance| *distance < 20.0));
+        assert!(
+            shown
+                .windows(2)
+                .any(|pair| pair[0] < pair[1] && pair[1] < 39.0)
+        );
+        // Out in the open again, a few frames later it is back at the radius.
+        for _ in 0..60 {
+            unobstructed_orbit(&mut camera, Some(&roof), rise, frame);
+        }
+        assert_eq!(camera.pulled, None);
+        assert_eq!(
+            unobstructed_orbit(&mut camera, Some(&roof), rise, frame),
+            orbit_transform(&camera)
+        );
+    }
+
+    #[test]
+    fn a_wall_top_across_the_head_line_pulls_the_camera_in() {
+        use super::*;
+        // A lintel hanging from 2 to 4 units up, 10 units behind the player:
+        // under the line from the body's middle, across the line from the head.
+        let lintel = eq_client_core::movement::CollisionWorld::new([
+            [[-10.0, 2.0, 10.0], [10.0, 2.0, 10.0], [10.0, 4.0, 10.0]],
+            [[-10.0, 2.0, 10.0], [10.0, 4.0, 10.0], [-10.0, 4.0, 10.0]],
+        ])
+        .unwrap();
+        let camera = OrbitCamera {
+            focus: Vec3::ZERO,
+            radius: 40.0,
+            yaw: 0.0,
+            pitch: -0.15,
+            pulled: None,
+        };
+        let requested = orbit_transform(&camera);
+        let rise = 6.0 * HEAD_LINE;
+        // The middle's line alone is clear, so it stays out at the radius.
+        let mut waist_only = OrbitCamera { ..camera };
+        assert_eq!(
+            unobstructed_orbit(&mut waist_only, Some(&lintel), 0.0, 1.0 / 60.0),
+            requested
+        );
+        // With the head's line, it comes in to this side of the lintel.
+        let mut both = OrbitCamera { ..camera };
+        let pose = unobstructed_orbit(&mut both, Some(&lintel), rise, 1.0 / 60.0);
+        assert!(pose.translation.z < 10.0, "{:?}", pose.translation);
+        assert_eq!(pose.rotation, requested.rotation);
+        let head = Vec3::Y * rise;
+        let line = pose.translation - head;
+        assert!(
+            lintel
+                .ray_distance(head, line.normalize(), line.length())
+                .is_none()
+        );
+        assert!(both.pulled.is_some_and(|shown| shown < 40.0));
+    }
+
+    /// The EQ heading W walks along with the camera at `yaw`, as the script's
+    /// `camera` step test reads it.
+    fn walked_heading(yaw: f32) -> f32 {
+        let walk = super::camera_relative_direction(0.0, 1.0, yaw);
+        eq_client_core::world_heading(walk.x.atan2(walk.z))
+    }
+
+    fn assert_walks_along(yaw: f32, heading: f32) {
+        let walked = walked_heading(yaw);
+        let error = (walked - heading).rem_euclid(512.0);
+        assert!(error.min(512.0 - error) < 0.01, "{heading} -> {walked}");
+    }
+
+    /// The player placed at `heading`, as the server's position places them.
+    fn placed_facing(heading: f32) -> bevy::prelude::Transform {
+        use super::*;
+        Transform::from_xyz(10.0, 2.0, -5.0).with_rotation(Quat::from_rotation_y(
+            eq_client_core::render_heading(heading),
+        ))
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "Exact equality verifies the pitch and zoom are left as chosen"
+    )]
+    fn the_camera_starts_behind_the_player_and_turns_behind_them_on_each_zone_entry() {
+        use super::*;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>()
+            .init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        let camera = |app: &mut App| {
+            let world = app.world_mut();
+            let mut cameras = world.query::<&OrbitCamera>();
+            let camera = cameras.single(world).unwrap();
+            (camera.yaw, camera.pitch, camera.radius)
+        };
+        // Entering the world: the first zone, then the camera, as `setup_scene`
+        // does them.
+        app.world_mut()
+            .run_system_once(|mut commands: Commands| {
+                spawn_camera(
+                    &mut commands,
+                    placed_facing(100.0),
+                    120.0,
+                    ProjectionStyle::Perspective,
+                );
+            })
+            .unwrap();
+        let (yaw, pitch, radius) = camera(&mut app);
+        assert_walks_along(yaw, 100.0);
+        assert_eq!((pitch, radius), (CHASE_PITCH, 120.0));
+        assert!((CHASE_PITCH - (-20.0_f32).to_radians()).abs() < f32::EPSILON);
+        // The player has turned the camera and zoomed; a zone entry facing 400
+        // turns it behind them again and keeps the rest.
+        app.world_mut()
+            .run_system_once(|mut cameras: Query<&mut OrbitCamera>| {
+                let mut camera = cameras.single_mut().unwrap();
+                camera.pitch = -0.9;
+                camera.radius = 60.0;
+            })
+            .unwrap();
+        app.world_mut()
+            .run_system_once(|mut commands: Commands, mut scene: zone::Scene| {
+                let zone = eq_client_assets::ZoneAsset {
+                    regions: eq_client_assets::regions::ZoneRegions::default(),
+                    short_name: "test".to_owned(),
+                    primitives: Vec::new(),
+                    textures: Vec::new(),
+                    models: Vec::new(),
+                    objects: Vec::new(),
+                    collision: Vec::new(),
+                };
+                scene.enter(
+                    &mut commands,
+                    zone::Entry {
+                        zone,
+                        character: None,
+                        placed: placed_facing(400.0),
+                        body: PlayerBody {
+                            feet_offset: 3.0,
+                            height: 6.0,
+                            size: 6.0,
+                        },
+                    }
+                    .prepare(false),
+                    true,
+                    &mut eq_client_assets::regions::ZoneRegions::default(),
+                );
+            })
+            .unwrap();
+        app.update();
+        let (yaw, pitch, radius) = camera(&mut app);
+        assert_walks_along(yaw, 400.0);
+        assert_eq!((pitch, radius), (-0.9, 60.0));
+        // A server correction mid-zone moves the player, never the camera's turn.
+        app.world_mut()
+            .run_system_once(|mut commands: Commands, mut scene: zone::Scene| {
+                scene.place(&mut commands, placed_facing(256.0), None);
+            })
+            .unwrap();
+        app.update();
+        assert_eq!(camera(&mut app), (yaw, -0.9, 60.0));
+    }
+
+    #[test]
+    fn a_long_frame_never_eases_the_camera_past_the_way_clear() {
+        use super::*;
+        assert!((eased_distance(30.0, 12.0, 1.0 / 60.0) - 12.0).abs() < f32::EPSILON);
+        for seconds in [0.0, 1.0 / 60.0, 0.1, 0.3, 5.0, 1.0e6] {
+            let next = eased_distance(10.0, 40.0, seconds);
+            assert!((10.0..=40.0).contains(&next), "{seconds}: {next}");
+        }
+        // About 95% of the way out in 0.3 s.
+        let three_tenths = eased_distance(10.0, 40.0, 0.3);
+        assert!((38.0..40.0).contains(&three_tenths), "{three_tenths}");
+    }
+
     #[test]
     #[allow(
         clippy::float_cmp,
@@ -1570,6 +2220,7 @@ mod tests {
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()
             .init_resource::<options::OptionsState>()
+            .init_resource::<Time>()
             .insert_resource(online::OnlineState::new(false))
             .add_systems(Update, (windows::pointer::wheel, orbit_camera).chain());
         let mut window = Window {
@@ -1609,6 +2260,7 @@ mod tests {
                     yaw: 0.0,
                     pitch: -1.0,
                     radius: 100.0,
+                    pulled: None,
                 },
                 Transform::default(),
             ))
@@ -1718,6 +2370,7 @@ mod tests {
             radius: 10.0,
             yaw: 0.0,
             pitch: 0.0,
+            pulled: None,
         });
         let player = app
             .world_mut()
@@ -1726,6 +2379,7 @@ mod tests {
                 PlayerBody {
                     feet_offset: 0.0,
                     height: 6.0,
+                    size: 6.0,
                 },
                 Transform::from_xyz(0.0, 10.0, 0.0),
             ))
