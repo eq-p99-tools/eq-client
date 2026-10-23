@@ -74,12 +74,11 @@ pub(super) fn reconcile(
         } else {
             let shape = match library.shape(&key, directory) {
                 Asset::Ready(shape) => shape,
-                Asset::Pending => continue,
                 Asset::Missing if item => match library.shape(DEFAULT_ITEM_MODEL, directory) {
                     Asset::Ready(shape) => shape,
                     Asset::Pending | Asset::Missing => continue,
                 },
-                Asset::Missing => continue,
+                Asset::Pending | Asset::Missing => continue,
             };
             (shape.primitives.clone(), shape.bounds)
         };
