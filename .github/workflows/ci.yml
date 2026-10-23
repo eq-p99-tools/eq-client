@@ -5,6 +5,15 @@ name: CI
 # Temporary while development is heavy: the full suite returns to pull requests later.
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platforms to validate
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - windows
 
 permissions:
   contents: read
@@ -20,9 +29,15 @@ env:
 
 jobs:
   rust:
+    if: inputs.platform != 'windows'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The audio backend links ALSA even when tests do not open a device.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y pkg-config libasound2-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -31,6 +46,7 @@ jobs:
       - run: cargo test --workspace --locked
 
   windows:
+    if: inputs.platform != 'linux'
     name: Native Windows tests
     runs-on: windows-latest
     steps:
