@@ -33,9 +33,10 @@ use eq_client_assets::{
     sidl::{Align, Anchor, Anchors, ButtonLook, Element, Gauge, Label, Library, Piece, Screen},
     ui::Area,
 };
+#[cfg(test)]
+use eq_client_core::hotbar::Binding;
 use eq_client_core::{
     buffs::EffectWindow,
-    hotbar::Binding,
     inventory::InventorySlot,
     money::{Coin, CoinPlace},
 };
