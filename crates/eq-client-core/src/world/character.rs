@@ -26,6 +26,14 @@ impl ClientWorld {
                     .and_then(|skills| skills.get(usize::try_from(skill_id).ok()?))
                     .copied();
                 player.apply_skill(skill_id, value);
+                let after = player
+                    .skills
+                    .as_ref()
+                    .and_then(|skills| skills.get(usize::try_from(skill_id).ok()?))
+                    .copied();
+                if before != after {
+                    self.skills_revision = self.skills_revision.wrapping_add(1);
+                }
                 if before.is_some_and(|before| value > before) {
                     changes.notices.push(super::Notice::SkillUp {
                         skill: skill_id,
@@ -59,11 +67,20 @@ impl ClientWorld {
             return;
         }
         match update {
-            TrainingUpdate::Offered(offer) => self.zone.training = Some(offer.clone()),
+            TrainingUpdate::Offered(offer) => {
+                if self.zone.training.as_ref() != Some(offer) {
+                    self.zone.training = Some(offer.clone());
+                    self.training_revision = self.training_revision.wrapping_add(1);
+                }
+            }
             TrainingUpdate::Trained { skill, value, .. } => {
                 self.skill_news(*skill, *value, changes);
             }
-            TrainingUpdate::Ended => self.zone.training = None,
+            TrainingUpdate::Ended => {
+                if self.zone.training.take().is_some() {
+                    self.training_revision = self.training_revision.wrapping_add(1);
+                }
+            }
         }
         changes.trade = true;
     }

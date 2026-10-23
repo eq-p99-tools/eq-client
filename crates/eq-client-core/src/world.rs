@@ -163,6 +163,10 @@ pub struct ClientWorld {
     motion_count: u64,
     /// Counts the session's spellbook replies, so that two alike still differ.
     book_action_revision: u64,
+    /// Revisions of independently projected lists, retained across restarts.
+    skills_revision: u64,
+    training_revision: u64,
+    merchant_revision: u64,
 
     // The admission: from entering a zone until the next admission.
     session_id: Option<u64>,
@@ -311,6 +315,9 @@ impl ClientWorld {
             revision: self.revision,
             motion_count: self.motion_count,
             book_action_revision: self.book_action_revision,
+            skills_revision: self.skills_revision.wrapping_add(1),
+            training_revision: self.training_revision.wrapping_add(1),
+            merchant_revision: self.merchant_revision.wrapping_add(1),
             ..Self::default()
         };
     }
@@ -380,7 +387,9 @@ impl ClientWorld {
 
     /// The player is done trading.
     pub fn close_shop(&mut self) {
-        self.zone.trade.merchant = None;
+        if self.zone.trade.merchant.take().is_some() {
+            self.merchant_revision = self.merchant_revision.wrapping_add(1);
+        }
     }
 
     /// The player asked a character to trade, holding something to hand
@@ -1013,6 +1022,10 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        // Reset invalidates projections even when it retains part of the old world.
+        self.skills_revision = self.skills_revision.wrapping_add(1);
+        self.training_revision = self.training_revision.wrapping_add(1);
+        self.merchant_revision = self.merchant_revision.wrapping_add(1);
         // Whatever the reason, the player can no longer act on their target
         // or move until the session says so again, and only a death leaves
         // camping under way.
