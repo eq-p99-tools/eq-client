@@ -409,7 +409,8 @@ mod tests {
             assert_eq!(sky_minute(clock, Some(71), None), Some(18 * 60));
             assert_eq!(sky_minute(clock, None, None), None);
         }
-        // The Mac client's dawn runs 3:00 to 9:00 and its dusk 15:00 to 21:00.
+        // Both clients' dawn runs 3:00 to 9:00 and dusk 15:00 to 21:00.
+        assert_eq!(day_night(TITANIUM), day_night(EQMAC));
         let mac = day_night(EQMAC);
         assert!(mac.daylight(2 * 60 + 59).abs() < f32::EPSILON);
         assert!((mac.daylight(6 * 60) - 0.5).abs() < f32::EPSILON);
@@ -417,7 +418,6 @@ mod tests {
         assert!((mac.daylight(18 * 60) - 0.5).abs() < f32::EPSILON);
         assert!(mac.daylight(21 * 60).abs() < f32::EPSILON);
         assert!((mac.night_exposure - PROVISIONAL_DAY_NIGHT.night_exposure).abs() < f32::EPSILON);
-        assert_eq!(day_night(TITANIUM), PROVISIONAL_DAY_NIGHT);
     }
 
     fn at(hour: u8) -> GameTime {
