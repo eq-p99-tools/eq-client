@@ -462,6 +462,7 @@ pub(super) fn input(
                         ClientCommand::Sell {
                             session_id,
                             merchant_id,
+                            own_id,
                             slot,
                             quantity,
                             created: now,
