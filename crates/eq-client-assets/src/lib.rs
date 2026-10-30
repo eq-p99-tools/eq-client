@@ -1,6 +1,7 @@
 #![doc = "Owned, renderer-independent zone assets loaded from a local EQ installation."]
 
 pub mod characters;
+pub mod clock;
 pub mod items;
 pub mod maps;
 pub mod regions;

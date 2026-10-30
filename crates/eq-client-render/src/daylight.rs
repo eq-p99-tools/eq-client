@@ -3,16 +3,19 @@
 //! light stays as it is. Every zone's fog closes in from its header's
 //! distances, in its color. Zones and models carry their own lighting and
 //! draw unlit, so the night darkens the whole picture, as a camera's
-//! exposure would.
+//! exposure would. The hour the sky follows, when dawn and dusk come and
+//! which zones keep one hour are the installed client's
+//! ([`eq_client_assets::clock::ClientClock`]).
 use super::OrbitCamera;
 use bevy::{
     pbr::{DistanceFog, FogFalloff},
     prelude::*,
     render::view::ColorGrading,
 };
+use eq_client_assets::clock::ClientClock;
 use eq_client_core::{
     clock::{GameTime, ZoneSky},
-    daylight::PROVISIONAL_DAY_NIGHT,
+    daylight::{DayNight, PROVISIONAL_DAY_NIGHT},
 };
 
 /// The light the time of day sets: the sun by day, the moon by night.
@@ -56,14 +59,40 @@ pub(super) struct Lighting {
     pub fog: Option<([f32; 3], f32, f32)>,
 }
 
-/// How a zone is lit at a time, by the provisional look of day and night; a
-/// zone without a sky keeps the day's light, and a time not yet given
-/// counts as noon.
-pub(super) fn lighting(sky: &ZoneSky, time: Option<GameTime>) -> Lighting {
-    let look = PROVISIONAL_DAY_NIGHT;
+/// The look of day and night for the installed client: the provisional
+/// look, with the client's own dawn and dusk where they are known.
+pub(super) fn day_night(clock: ClientClock) -> DayNight {
+    clock
+        .twilight
+        .map_or(PROVISIONAL_DAY_NIGHT, |twilight| DayNight {
+            dawn: twilight.dawn,
+            dusk: twilight.dusk,
+            ..PROVISIONAL_DAY_NIGHT
+        })
+}
+
+/// The minute after 12 AM that a zone's sky follows: the hour the zone
+/// keeps, if the client keeps one for it, or else the time as the client's
+/// sky takes it; None while the time is not yet given.
+pub(super) fn sky_minute(
+    clock: ClientClock,
+    zone: Option<u16>,
+    time: Option<GameTime>,
+) -> Option<u16> {
+    zone.and_then(|zone| clock.sky_hour(zone))
+        .map(|hour| u16::from(hour) * 60)
+        .or_else(|| {
+            time.map(|time| u16::from(clock.sky_hour_of(time.hour)) * 60 + u16::from(time.minute))
+        })
+}
+
+/// How a zone is lit at a minute after the sky hour's 12 AM, by a look of day and
+/// night; a zone without a sky keeps the day's light, and a time not yet
+/// given counts as noon.
+pub(super) fn lighting(sky: &ZoneSky, minute: Option<u16>, look: &DayNight) -> Lighting {
     let outdoors = sky.sky != 0;
-    let (light, dusk) = match time {
-        Some(time) if outdoors => (look.daylight(time), look.twilight(time)),
+    let (light, dusk) = match minute {
+        Some(minute) if outdoors => (look.daylight(minute), look.twilight(minute)),
         _ => (1.0, 0.0),
     };
     let sky_color = if outdoors {
@@ -158,6 +187,7 @@ pub(super) fn update(
     mut suns: Query<&mut DirectionalLight, With<Sun>>,
     mut cameras: Cameras,
     mut lit: Local<bool>,
+    settings: Res<crate::ViewerSettings>,
 ) {
     let world = online.world();
     // Offline, or before the zone has said, the scene stays as it was lit.
@@ -187,7 +217,13 @@ pub(super) fn update(
         return;
     };
     *lit = true;
-    let mut lit = lighting(&sky, world.game_time(std::time::Instant::now()));
+    let clock = settings.0.installed_client.clock();
+    let minute = sky_minute(
+        clock,
+        eq_client_core::zones::number(world.zone()),
+        world.game_time(std::time::Instant::now()),
+    );
+    let mut lit = lighting(&sky, minute, &day_night(clock));
     lit.fog = closed_in(
         lit.fog,
         options.options.clip_distance(world.far_clip()),
@@ -248,6 +284,7 @@ mod tests {
             .init_resource::<crate::options::OptionsState>()
             .insert_resource(launch_ambient())
             .init_resource::<ClearColor>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
             .add_systems(Update, update);
         let sun = app
             .world_mut()
@@ -351,6 +388,38 @@ mod tests {
         }
     }
 
+    /// A minute after the sky hour's 12 AM, on the hour.
+    #[allow(clippy::unnecessary_wraps)] // Stands for a time that is given.
+    fn shown(hour: u16) -> Option<u16> {
+        Some(hour * 60)
+    }
+
+    #[test]
+    fn the_sky_follows_the_wire_hour_and_keeps_the_zones_hours() {
+        use eq_client_assets::clock::{EQMAC, TITANIUM};
+        // Wire hour 13, the calendar's 12: both skies are at 1 PM.
+        let time = Some(GameTime {
+            minute: 30,
+            ..at(12)
+        });
+        for clock in [EQMAC, TITANIUM] {
+            assert_eq!(sky_minute(clock, Some(1), time), Some(13 * 60 + 30));
+            // Zone 71 (`airplane`) keeps 6 PM, given a time or not.
+            assert_eq!(sky_minute(clock, Some(71), time), Some(18 * 60));
+            assert_eq!(sky_minute(clock, Some(71), None), Some(18 * 60));
+            assert_eq!(sky_minute(clock, None, None), None);
+        }
+        // Both clients' dawn runs 3:00 to 9:00 and dusk 15:00 to 21:00.
+        assert_eq!(day_night(TITANIUM), day_night(EQMAC));
+        let mac = day_night(EQMAC);
+        assert!(mac.daylight(2 * 60 + 59).abs() < f32::EPSILON);
+        assert!((mac.daylight(6 * 60) - 0.5).abs() < f32::EPSILON);
+        assert!((mac.daylight(9 * 60) - 1.0).abs() < f32::EPSILON);
+        assert!((mac.daylight(18 * 60) - 0.5).abs() < f32::EPSILON);
+        assert!(mac.daylight(21 * 60).abs() < f32::EPSILON);
+        assert!((mac.night_exposure - PROVISIONAL_DAY_NIGHT.night_exposure).abs() < f32::EPSILON);
+    }
+
     fn at(hour: u8) -> GameTime {
         GameTime {
             hour,
@@ -364,8 +433,8 @@ mod tests {
     #[test]
     fn noon_is_bright_midnight_dark_and_dungeons_keep_their_light() {
         let outside = zone(1, [120, 140, 160]);
-        let noon = lighting(&outside, Some(at(12)));
-        let midnight = lighting(&outside, Some(at(0)));
+        let noon = lighting(&outside, shown(12), &PROVISIONAL_DAY_NIGHT);
+        let midnight = lighting(&outside, shown(0), &PROVISIONAL_DAY_NIGHT);
         assert!((noon.sun.0 - DAY_SUN).abs() < f32::EPSILON);
         assert!(noon.exposure.abs() < f32::EPSILON);
         assert!((midnight.exposure - PROVISIONAL_DAY_NIGHT.night_exposure).abs() < f32::EPSILON);
@@ -385,16 +454,22 @@ mod tests {
                 .all(|(fog, sky)| (fog - sky).abs() < 1e-6)
         );
         // No time yet counts as noon; below ground, every hour is the same.
-        assert_eq!(lighting(&outside, None), noon);
+        assert_eq!(lighting(&outside, None, &PROVISIONAL_DAY_NIGHT), noon);
         let below = zone(0, [0, 0, 0]);
         assert_eq!(
-            lighting(&below, Some(at(0))),
-            lighting(&below, Some(at(12)))
+            lighting(&below, shown(0), &PROVISIONAL_DAY_NIGHT),
+            lighting(&below, shown(12), &PROVISIONAL_DAY_NIGHT)
         );
-        assert_eq!(lighting(&below, Some(at(0))).sky, [0.0; 3]);
+        assert_eq!(
+            lighting(&below, shown(0), &PROVISIONAL_DAY_NIGHT).sky,
+            [0.0; 3]
+        );
         // No fog distances, no fog.
         let mut clear = outside;
         clear.fog[0].far = 0.0;
-        assert_eq!(lighting(&clear, Some(at(12))).fog, None);
+        assert_eq!(
+            lighting(&clear, shown(12), &PROVISIONAL_DAY_NIGHT).fog,
+            None
+        );
     }
 }

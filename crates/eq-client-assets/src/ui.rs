@@ -323,6 +323,16 @@ impl InstalledClient {
         }
     }
 
+    /// How this client tells the time, from the program (checklist items
+    /// 1.2, 6.115 and 6.155).
+    #[must_use]
+    pub const fn clock(self) -> crate::clock::ClientClock {
+        match self {
+            Self::Titanium => crate::clock::TITANIUM,
+            Self::EqMac => crate::clock::EQMAC,
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
