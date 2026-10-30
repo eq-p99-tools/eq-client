@@ -181,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn the_mac_client_names_the_wire_hour_and_the_plane_of_time_is_timeless() {
+    fn the_mac_client_names_the_wire_hour_and_two_zones_are_timeless() {
         let messages = Messages::parse(
             "EQST0002
 0 3
@@ -221,7 +221,7 @@ mod tests {
             lines[0],
             Said::official("Norrath Tuesday, February 3, 3200 - 12 PM")
         );
-        // In the Plane of Time both clients say their line alone.
+        // In zone 219 (`potimea`) both clients say their line alone.
         testing::news(
             &mut state,
             [WorldEvent::Entered {

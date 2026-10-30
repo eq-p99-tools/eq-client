@@ -32,7 +32,7 @@ pub struct ClientClock {
     pub weekdays: bool,
 }
 
-/// When dawn and dusk begin and end, in minutes after the 12 AM shown.
+/// When dawn and dusk begin and end, in minutes after the sky hour's 12 AM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Twilight {
     /// Dawn, from the last of the night to the full day.
@@ -41,13 +41,13 @@ pub struct Twilight {
     pub dusk: (u16, u16),
 }
 
-/// The zones whose sky keeps one hour, the same in both clients: the Estate
-/// of Unrest (63) and the Plane of Hate (76) keep 6:00, the Plane of Sky (71)
-/// 18:00 and the Dragon Necropolis (123) 10:00.
+/// The zones whose sky keeps one hour, the same in both clients (from the
+/// programs): 63 (`unrest`) and 76 (`hateplane`) keep 6:00, 71 (`airplane`)
+/// 18:00 and 123 (`necropolis`) 10:00.
 const FIXED_SKY_HOURS: &[(u16, u8)] = &[(63, 6), (71, 18), (76, 6), (123, 10)];
 
-/// The Plane of Time (219 and 223), where both clients answer `/time` with
-/// string 4036.
+/// Zones 219 (`potimea`) and 223 (`potimeb`), where both clients answer
+/// `/time` with string 4036 (from the programs).
 const TIMELESS_ZONES: &[(u16, u32)] = &[(219, 4036), (223, 4036)];
 
 /// Both clients' skies change at the wire's hours 3, 9, 15 and 21, over the
@@ -77,7 +77,7 @@ pub const TITANIUM: ClientClock = ClientClock {
 
 /// The Mac client. Its `/time` and its sky both take the wire's hour as
 /// sent, one past the calendar's, with 24 as 12 AM. It answers `/time` in
-/// the Plane of Time with string 4036 alone; that no Earth line follows is
+/// zones 219 and 223 with string 4036 alone; that no Earth line follows is
 /// this client's reading of the program. Its days take ordinal endings; it
 /// names weekdays too, but the program's names are not read, so this client
 /// leaves them out.

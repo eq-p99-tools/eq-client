@@ -6,7 +6,7 @@
 /// night and the twilight change the picture and the sky.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DayNight {
-    /// When dawn begins and ends, in minutes after the 12 AM shown.
+    /// When dawn begins and ends, in minutes after the sky hour's 12 AM.
     pub dawn: (u16, u16),
     /// When dusk begins and ends.
     pub dusk: (u16, u16),
@@ -46,8 +46,8 @@ pub const PROVISIONAL_DAY_NIGHT: DayNight = DayNight {
 };
 
 impl DayNight {
-    /// How much daylight there is at a minute after the 12 AM the client
-    /// shows, from 0 at night to 1 by day.
+    /// How much daylight there is at a minute after the sky hour's 12 AM,
+    /// from 0 at night to 1 by day.
     #[must_use]
     pub fn daylight(&self, minute: u16) -> f32 {
         let ramp = |(start, end): (u16, u16)| f32::from(minute - start) / f32::from(end - start);
@@ -59,8 +59,8 @@ impl DayNight {
         }
     }
 
-    /// How far into dawn or dusk a minute after the 12 AM shown is, from 0
-    /// outside them to 1 at their middle, when the sky is most red.
+    /// How far into dawn or dusk a minute after the sky hour's 12 AM is,
+    /// from 0 outside them to 1 at their middle, when the sky is most red.
     #[must_use]
     pub fn twilight(&self, minute: u16) -> f32 {
         let light = self.daylight(minute);

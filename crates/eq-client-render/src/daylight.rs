@@ -86,7 +86,7 @@ pub(super) fn sky_minute(
         })
 }
 
-/// How a zone is lit at a minute after the 12 AM shown, by a look of day and
+/// How a zone is lit at a minute after the sky hour's 12 AM, by a look of day and
 /// night; a zone without a sky keeps the day's light, and a time not yet
 /// given counts as noon.
 pub(super) fn lighting(sky: &ZoneSky, minute: Option<u16>, look: &DayNight) -> Lighting {
@@ -388,7 +388,7 @@ mod tests {
         }
     }
 
-    /// A minute after the 12 AM shown, on the hour.
+    /// A minute after the sky hour's 12 AM, on the hour.
     #[allow(clippy::unnecessary_wraps)] // Stands for a time that is given.
     fn shown(hour: u16) -> Option<u16> {
         Some(hour * 60)
@@ -404,7 +404,7 @@ mod tests {
         });
         for clock in [EQMAC, TITANIUM] {
             assert_eq!(sky_minute(clock, Some(1), time), Some(13 * 60 + 30));
-            // The Plane of Sky keeps 6 PM, given a time or not.
+            // Zone 71 (`airplane`) keeps 6 PM, given a time or not.
             assert_eq!(sky_minute(clock, Some(71), time), Some(18 * 60));
             assert_eq!(sky_minute(clock, Some(71), None), Some(18 * 60));
             assert_eq!(sky_minute(clock, None, None), None);
