@@ -2,6 +2,7 @@
 //! each tile's polygons on its own, and the tiles are joined where their
 //! border edges meet.
 
+use super::holes::{Merged, merge_holes};
 use super::{Link, Polygon, Settings};
 use crate::movement::liquids::submerged_in;
 use crate::movement::{CollisionWorld, Liquids};
@@ -22,6 +23,12 @@ pub struct BuildReport {
     pub tiles_with_polygons: usize,
     /// Tiles rerecast refused; each leaves a hole in the mesh.
     pub refused: Vec<RefusedTile>,
+    /// Holes in regions, round solids standing in them, joined to their
+    /// regions' outlines before the polygons are cut.
+    pub merged_holes: usize,
+    /// Holes no bridge to their outline was found for; a tile with one is
+    /// refused.
+    pub failed_hole_merges: usize,
     /// Triangles left out of at least one tile for lying wholly under the
     /// tallest heightfield rerecast can hold below the rest of the tile.
     /// The walker still collides with them; only the mesh leaves them out.
@@ -78,8 +85,9 @@ struct Tiled {
     tile: (i32, i32),
 }
 
-/// A tile's polygons, or the step that refused it and why.
-pub(super) type TileResult = Result<PolygonNavmesh, (&'static str, String)>;
+/// A tile's polygons and how its holes merged, or the step that refused it
+/// and why.
+pub(super) type TileResult = Result<(PolygonNavmesh, Merged), (&'static str, String)>;
 /// An edge's two ends.
 type Edge = (Vec3, Vec3);
 /// A tile and one of its four sides.
@@ -135,6 +143,7 @@ pub(super) fn polygons_with(
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let tile_cells = (settings.tile / cs).round().max(8.0) as u16;
     let tile = f32::from(tile_cells) * cs;
+    let low = on_world_grid(low, tile);
     let border = walkable_radius(settings) + 3;
     let pad = f32::from(border) * cs;
     #[allow(clippy::cast_possible_truncation)]
@@ -205,10 +214,12 @@ pub(super) fn polygons_with(
     for (((tx, tz), _), result) in jobs.iter().zip(built) {
         // A tile left unbuilt means the build was cancelled.
         match result? {
-            Ok(mesh) => {
+            Ok((mesh, merged)) => {
                 if mesh.polygon_count() > 0 {
                     report.tiles_with_polygons += 1;
                 }
+                report.merged_holes += merged.holes;
+                report.failed_hole_merges += merged.failed;
                 append_tile(&mut tiled, &mesh, (*tx, *tz));
             }
             Err((step, reason)) => report.refused.push(RefusedTile {
@@ -222,6 +233,16 @@ pub(super) fn polygons_with(
     let polygons = join_tiles(tiled, settings.cell_height * 4.0 + settings.climb);
     report.elapsed = started.elapsed();
     Some((polygons, report))
+}
+
+/// `low` moved down across to the world's grid of `tile`-wide tiles, so a
+/// tile's box depends on where it is, not on how far the zone's solids reach.
+fn on_world_grid(low: Vec3, tile: f32) -> Vec3 {
+    Vec3::new(
+        (low.x / tile).floor() * tile,
+        low.y,
+        (low.z / tile).floor() * tile,
+    )
 }
 
 /// Each triangle's index under every tile its bounds, widened by `pad`,
@@ -277,7 +298,7 @@ fn tile_heights<'a>(
         .fold((f32::MAX, f32::MIN), |(low, high), p| {
             (low.min(p[1]), high.max(p[1]))
         });
-    let top = highest + settings.height + 1.0;
+    let top = highest + settings.height + settings.lift + 1.0;
     // Spans count cells in 16 bits; two short of the most keeps a span
     // started at the top inside them after rounding.
     let tallest = f32::from(u16::MAX - 2) * ch;
@@ -318,9 +339,30 @@ pub(super) fn build_tile(
     settings: &Settings,
     world: Option<&CollisionWorld>,
 ) -> TileResult {
-    fn refused<E: std::fmt::Display>(step: &'static str) -> impl Fn(E) -> (&'static str, String) {
-        move |error| (step, error.to_string())
-    }
+    let mut contours = tile_contours(triangles, indices, min, max, border, settings, world)?;
+    let merged = merge_holes(&mut contours);
+    contours
+        .into_polygon_mesh(6)
+        .map(|mesh| (mesh, merged))
+        .map_err(refused("polygons"))
+}
+
+/// The step that refused a tile, with rerecast's error.
+fn refused<E: std::fmt::Display>(step: &'static str) -> impl Fn(E) -> (&'static str, String) {
+    move |error| (step, error.to_string())
+}
+
+/// A tile's regions' outlines, as rerecast traces them, before their holes
+/// are merged.
+pub(super) fn tile_contours(
+    triangles: &[[[f32; 3]; 3]],
+    indices: &[u32],
+    min: Vec3,
+    max: Vec3,
+    border: u16,
+    settings: &Settings,
+    world: Option<&CollisionWorld>,
+) -> Result<rerecast::ContourSet, (&'static str, String)> {
     let (cs, ch) = (settings.cell_size, settings.cell_height);
     let mut trimesh = TriMesh::default();
     for &i in indices {
@@ -346,7 +388,7 @@ pub(super) fn build_tile(
     .map_err(refused("heightfield"))?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (walkable_height, walkable_climb) = (
-        (settings.height / ch).ceil() as u16,
+        ((settings.height + settings.lift) / ch).ceil() as u16,
         (settings.climb / ch).floor() as u16,
     );
     let radius = walkable_radius(settings);
@@ -373,8 +415,7 @@ pub(super) fn build_tile(
     compact
         .build_regions(border, 8 * 8, 20 * 20)
         .map_err(refused("regions"))?;
-    let contours = compact.build_contours(1.3, radius * 8, rerecast::BuildContoursFlags::default());
-    contours.into_polygon_mesh(6).map_err(refused("polygons"))
+    Ok(compact.build_contours(1.3, radius * 8, rerecast::BuildContoursFlags::default()))
 }
 
 /// Marks not walkable each walkable span where a walker `height` tall,
@@ -421,12 +462,12 @@ fn tag_sizes(
     // A span's headroom is kept in a byte of cell heights; open sky and any
     // gap above the byte read as its top.
     let cap = f32::from(u8::MAX) * ch;
-    if settings.sizes[2] >= cap {
+    if settings.sizes[2] + settings.lift >= cap {
         return Err((
             "sizes",
             format!(
-                "the tallest size {} is over the headroom cap {cap}",
-                settings.sizes[2]
+                "the tallest size {} with the lift {} is over the headroom cap {cap}",
+                settings.sizes[2], settings.lift
             ),
         ));
     }
@@ -439,7 +480,7 @@ fn tag_sizes(
         let fits = settings
             .sizes
             .iter()
-            .filter(|&&size| headroom >= size)
+            .filter(|&&size| headroom >= size + settings.lift)
             .count() as u8;
         // The build's own height filter leaves only spans the shortest fits.
         *area = AreaType(fits.max(1));

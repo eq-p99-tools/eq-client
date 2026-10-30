@@ -11,6 +11,7 @@
 mod build;
 pub mod cache;
 mod drops;
+mod holes;
 mod navigator;
 mod route;
 
@@ -39,6 +40,11 @@ pub struct Settings {
     /// first: each polygon admits the sizes its headroom fits. The first is
     /// `height`.
     pub sizes: [f32; 3],
+    /// How far over its feet the walker's collision capsule floats
+    /// (movement.rs's `LIFT`, not the navigator's ground reach of the same
+    /// name): the build asks each size for its height plus this much
+    /// headroom, as the capsule's top stands that high.
+    pub lift: f32,
     /// The highest step the walker climbs.
     pub climb: f32,
     /// The lowest floor normal's up component the walker stands on.
@@ -71,6 +77,7 @@ impl Settings {
             radius: super::BODY_REACH,
             height,
             sizes: [height; 3],
+            lift: super::LIFT,
             climb: super::MAX_GROUNDED_STEP,
             // The collision's own floor limit.
             floor_normal_y: 0.7,
