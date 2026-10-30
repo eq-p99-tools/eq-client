@@ -217,6 +217,70 @@ impl BuffTracker {
     }
 }
 
+/// The invisibility state the player's buffs give, as the `EQMac` program
+/// numbers it: 1 invisible (effect 12), 2 versus animals (29), 3 versus
+/// undead (28), 0 none. Which wins where buffs give more than one is this
+/// client's reading (TAKP Batch 1 R1 did not read the recompute's order).
+fn invisibility_state<'a>(spells: impl IntoIterator<Item = &'a [u32]>) -> u32 {
+    let mut state = 0;
+    for effects in spells {
+        for (effect, value) in [(12, 1), (29, 2), (28, 3)] {
+            if effects.contains(&effect) && (state == 0 || value < state) {
+                state = value;
+            }
+        }
+    }
+    state
+}
+
+/// The steps of the `EQMac` program's drop of the player's invisibility
+/// before a cast, a song or an item's click (from the program, TAKP Batch 1
+/// R1; recording checklist item 6.163): for each spell effect in `order`,
+/// each buff whose spell carries it, lowest slot first, is faded; where
+/// that changes the invisibility its buffs give, the new state goes first.
+/// `effects` gives a spell's effect ids, where the installed client's spell
+/// data has them; a buff without them is left alone. The program's second
+/// pass, for an invisibility no buff explains, is not taken: the client
+/// knows the player's invisibility only from these buffs.
+#[must_use]
+pub fn invisibility_drop(
+    slots: &BTreeMap<u32, Buff>,
+    order: &[u32],
+    effects: impl Fn(u32) -> Option<Vec<u32>>,
+) -> Vec<crate::InvisibilityStep> {
+    use crate::InvisibilityStep;
+    let mut remaining: BTreeMap<u32, (u32, Vec<u32>)> = slots
+        .iter()
+        .filter_map(|(slot, buff)| Some((*slot, (buff.spell_id, effects(buff.spell_id)?))))
+        .collect();
+    let mut state = invisibility_state(remaining.values().map(|(_, ids)| ids.as_slice()));
+    let mut steps = Vec::new();
+    for effect in order {
+        while let Some(slot) = remaining
+            .iter()
+            .find(|(_, (_, ids))| ids.contains(effect))
+            .map(|(slot, _)| *slot)
+        {
+            let Some((spell_id, ids)) = remaining.remove(&slot) else {
+                break;
+            };
+            if ids.iter().any(|id| matches!(id, 12 | 28 | 29)) {
+                let now = invisibility_state(remaining.values().map(|(_, ids)| ids.as_slice()));
+                if now != state {
+                    state = now;
+                    steps.push(InvisibilityStep::State(now));
+                }
+            }
+            // The wire carries a 16-bit spell; a larger one is no buff the
+            // servers sent.
+            if let Ok(spell_id) = u16::try_from(spell_id) {
+                steps.push(InvisibilityStep::Fade { slot, spell_id });
+            }
+        }
+    }
+    steps
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +313,47 @@ mod tests {
 
     fn now() -> Instant {
         Instant::now()
+    }
+
+    #[test]
+    fn invisibility_drops_in_the_programs_order_with_each_state_change_first() {
+        use crate::InvisibilityStep::{Fade, State};
+        // Slot 0 a versus-undead buff, slot 2 an invisibility buff, slot 4
+        // effect 94 alone, slot 6 an unrelated buff, slot 8 a spell the
+        // installed data lacks.
+        let slots = BTreeMap::from([
+            (0, buff(28)),
+            (2, buff(12)),
+            (4, buff(94)),
+            (6, buff(5)),
+            (8, buff(999)),
+        ]);
+        let effects = |spell| (spell != 999).then(|| vec![spell, 254]);
+        assert_eq!(
+            invisibility_drop(&slots, &[94, 12, 28, 29], effects),
+            [
+                Fade {
+                    slot: 4,
+                    spell_id: 94
+                },
+                // Invisible until the 12 goes; then versus undead.
+                State(3),
+                Fade {
+                    slot: 2,
+                    spell_id: 12
+                },
+                State(0),
+                Fade {
+                    slot: 0,
+                    spell_id: 28
+                },
+            ]
+        );
+        // Nothing to drop, nothing sent.
+        assert_eq!(
+            invisibility_drop(&BTreeMap::from([(6, buff(5))]), &[94, 12, 28, 29], effects),
+            []
+        );
     }
 
     fn buff(spell_id: u32) -> Buff {

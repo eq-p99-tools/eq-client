@@ -355,6 +355,21 @@ impl InstalledClient {
         }
     }
 
+    /// The spell effects whose buffs this client takes off the player
+    /// before a cast, a song or an item's click, in the order it looks for
+    /// them, from the program; None where it drops nothing or that is
+    /// unread. The Mac-era client looks for effect 94, then invisibility
+    /// (12), invisibility versus undead (28) and versus animals (29) (TAKP
+    /// Batch 1 R1, recording checklist item 6.163); the Titanium client's
+    /// cast sends nothing before it (sitting 8).
+    #[must_use]
+    pub const fn invisibility_drop(self) -> Option<&'static [u32]> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(&[94, 12, 28, 29]),
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {

@@ -35,6 +35,9 @@ pub(super) struct InventoryState {
     actions: interaction::Actions,
     /// Refusals of the player's actions, on their way to the chat.
     refused: Vec<String>,
+    /// What the player's actions said besides, such as a buff's fade, on
+    /// their way to the chat.
+    said: Vec<eq_client_core::chat::ChatLine>,
     /// Moves the offline preview settled itself, on their way to the world.
     demo_news: Vec<InventoryUpdate>,
 }
@@ -112,8 +115,9 @@ impl InventoryState {
         sender: &crate::outbox::Outbox,
         target: Option<u16>,
         casting: bool,
+        before: impl FnOnce() -> Vec<eq_client_core::chat::ChatLine>,
     ) {
-        self.use_slot(slot, online, sender, target, casting);
+        self.use_slot(slot, online, sender, target, casting, before);
     }
     /// Closes personal banking as soon as admission, life, or banker proximity changes.
     fn refresh_bank_access(&mut self, online: &super::online::OnlineState) {
@@ -297,8 +301,11 @@ pub(super) fn say_refusals(
     mut state: ResMut<InventoryState>,
     mut chat: ResMut<super::chat::ChatState>,
 ) {
-    if state.refused.is_empty() {
+    if state.refused.is_empty() && state.said.is_empty() {
         return;
+    }
+    for line in std::mem::take(&mut state.said) {
+        chat.history.push(line);
     }
     for refusal in std::mem::take(&mut state.refused) {
         chat.refuse(refusal);
@@ -316,6 +323,10 @@ pub(super) fn input(
         ResMut<super::windows::Shown>,
         Res<crate::skinned::Skinned>,
         ResMut<crate::trade::TradeState>,
+    ),
+    (spells, settings): (
+        Res<crate::spellbook::SpellNames>,
+        Res<crate::ViewerSettings>,
     ),
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
     (slots, clicks): (
@@ -393,15 +404,7 @@ pub(super) fn input(
                 .any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
             {
                 if keys.focused() {
-                    let casting = online.world().casting();
-                    let casting = casting.cast.is_some() || casting.pending.is_some();
-                    state.use_slot(
-                        slot.0,
-                        &online,
-                        &sender,
-                        online.world().target().selected,
-                        casting,
-                    );
+                    use_clicked(&mut state, slot.0, (&online, &sender), &spells, &settings);
                 }
             } else {
                 right_click(slot.0, &online, &sender, &mut shown, &skinned, &mut items);
@@ -432,6 +435,33 @@ pub(super) fn input(
             state.click_slot(*slot, false, &online, &sender);
         }
     }
+}
+
+/// Uses the item in a slot, as Alt+right-click does, on the target.
+fn use_clicked(
+    state: &mut InventoryState,
+    slot: InventorySlot,
+    (online, sender): (&super::online::OnlineState, &crate::outbox::Outbox),
+    spells: &crate::spellbook::SpellNames,
+    settings: &crate::ViewerSettings,
+) {
+    let casting = online.world().casting();
+    let casting = casting.cast.is_some() || casting.pending.is_some();
+    state.use_slot(
+        slot,
+        online,
+        sender,
+        online.world().target().selected,
+        casting,
+        || {
+            super::invisibility::drop_before_cast(
+                online.world(),
+                sender,
+                spells,
+                settings.0.installed_client,
+            )
+        },
+    );
 }
 
 /// Right-clicking a carried item: with the skin's bag windows, a bag opens

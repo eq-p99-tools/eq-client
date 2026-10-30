@@ -67,6 +67,8 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         .init_resource::<crate::hud::HudState>()
         .init_resource::<crate::inventory::InventoryState>()
         .init_resource::<crate::options::OptionsState>()
+        .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<crate::ViewerSettings>()
         .insert_resource(online)
         .insert_resource(crate::outbox::Outbox::new(Some(tx)))
         .add_systems(Update, (update, item_actions).chain());

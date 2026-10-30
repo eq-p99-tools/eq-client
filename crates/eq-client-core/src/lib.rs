@@ -64,7 +64,7 @@ pub use eq_network_game::zoning::ZoneLineDestination;
 pub use eq_network_game::zoning::ZoneOffer;
 pub use eq_network_game::zoning::ZoneRejection;
 
-pub use eq_network_game::buffs::{Buff, BuffUpdate, SpellEffect};
+pub use eq_network_game::buffs::{Buff, BuffUpdate, InvisibilityStep, SpellEffect};
 pub use eq_network_game::world::{
     BaseAttributes, CampStatus, Capability, Coins, ItemHitPoints, PlayerState,
     Position as WorldPosition, PostureState, SpawnKind, SpawnState, WorldEvent,

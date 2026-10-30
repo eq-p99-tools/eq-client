@@ -52,6 +52,7 @@ mod group;
 mod hud;
 mod interact;
 mod inventory;
+mod invisibility;
 mod item_models;
 mod items;
 mod keys;

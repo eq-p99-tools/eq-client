@@ -78,6 +78,7 @@ fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
         .init_resource::<HudState>()
         .init_resource::<hotbar::Bindings>()
         .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<crate::ViewerSettings>()
         .init_resource::<messages::Messages>()
         .init_resource::<action_bar::ActionRequests>()
         .insert_resource(hand)
@@ -228,6 +229,7 @@ fn bar_app(tx: std::sync::mpsc::SyncSender<ClientCommand>) -> App {
         .init_resource::<ChatState>()
         .init_resource::<hotbar::Bindings>()
         .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<crate::ViewerSettings>()
         .init_resource::<messages::Messages>()
         .init_resource::<crate::spellbook::BookHand>()
         .add_systems(Update, (actions, crate::outbox::show).chain());
@@ -383,6 +385,7 @@ fn current_resources_do_not_claim_an_unknown_maximum_or_percentage() {
     app.init_resource::<HudState>()
         .insert_resource(state)
         .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<crate::ViewerSettings>()
         .init_resource::<messages::Messages>()
         .add_systems(Update, update);
     let mana = app
@@ -589,6 +592,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         .init_resource::<HudState>()
         .init_resource::<hotbar::Bindings>()
         .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<crate::ViewerSettings>()
         .init_resource::<messages::Messages>()
         .init_resource::<crate::spellbook::BookHand>()
         .add_systems(Update, actions);
@@ -754,6 +758,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &sender,
         &request(1, 12),
         (&messages, &crate::keys::KeyMap::default()),
+        Vec::new,
     );
     assert!(chat.newest().contains("Gem 2 is empty"));
     let said = chat.history.lines(eq_client_core::chat::ChatTab::All).len();
@@ -765,6 +770,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &sender,
         &request(0, 99),
         (&messages, &crate::keys::KeyMap::default()),
+        Vec::new,
     );
     // A request sent says nothing, and never claims a cast the server has
     // not answered.
@@ -781,6 +787,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &sender,
         &request(0, 99),
         (&messages, &crate::keys::KeyMap::default()),
+        Vec::new,
     );
     // The outbox refuses a full queue and says why itself.
     assert_eq!(sender.take_refused(), [crate::outbox::Refusal::Busy]);
@@ -797,6 +804,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         &sender,
         &request(0, 99),
         (&messages, &crate::keys::KeyMap::default()),
+        Vec::new,
     );
     assert_eq!(sender.take_refused(), [crate::outbox::Refusal::Ended]);
 }

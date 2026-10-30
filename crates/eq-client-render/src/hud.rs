@@ -426,7 +426,11 @@ pub(super) fn actions(
     clicks: hotbar::Clicks<SpellGem>,
     bar_clicks: hotbar::Clicks<hotbar::Slot>,
     bindings: Res<hotbar::Bindings>,
-    definitions: (Res<super::spellbook::SpellNames>, Res<messages::Messages>),
+    definitions: (
+        Res<super::spellbook::SpellNames>,
+        Res<messages::Messages>,
+        Res<crate::ViewerSettings>,
+    ),
     (mut hand, mut requests): (
         ResMut<super::spellbook::BookHand>,
         Option<ResMut<action_bar::ActionRequests>>,
@@ -444,7 +448,7 @@ pub(super) fn actions(
     if let Some(gem) = clicked
         && let Some(held) = hand.held.take()
     {
-        let (names, messages) = &definitions;
+        let (names, messages, _) = &definitions;
         let refusal = super::spellbook::memorize_held(
             held,
             gem,
@@ -469,7 +473,7 @@ pub(super) fn actions(
         _ => None,
     });
     if let Some(gem) = gem {
-        let (names, messages) = definitions;
+        let (names, messages, settings) = definitions;
         let mana_cost = online
             .world()
             .gem(usize::from(gem))
@@ -486,6 +490,14 @@ pub(super) fn actions(
                 mana_cost,
             },
             (&messages, &keys.map),
+            || {
+                super::invisibility::drop_before_cast(
+                    online.world(),
+                    &outbox,
+                    &names,
+                    settings.0.installed_client,
+                )
+            },
         );
     }
     if let Some(hotbar::Action::Ability(ability)) = bar_action {

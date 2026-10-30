@@ -157,6 +157,11 @@ impl SpellNames {
         self.spell(id)?.effect
     }
 
+    /// What the client says when the spell fades from the player.
+    pub(super) fn fades(&self, id: u32) -> Option<&str> {
+        self.spell(id)?.fades.as_deref()
+    }
+
     /// Unmodified installation mana cost.
     pub(super) fn mana(&self, id: u32) -> Option<u32> {
         self.spell(id)?.mana
