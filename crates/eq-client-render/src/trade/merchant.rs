@@ -2,7 +2,7 @@
 //! wares in its list, and the item chosen to buy or to sell, with its
 //! picture, name and price, which its Buy and Sell buttons act on.
 use super::{Action, Chosen, TradeState};
-use crate::theme::{self, Size};
+use crate::theme;
 use bevy::prelude::*;
 use eq_client_core::{
     inventory::{InventoryItem, InventorySlot},
@@ -19,6 +19,14 @@ const ROW_HEIGHT: f32 = 20.0;
 pub(crate) struct MerchantRows {
     columns: Vec<f32>,
     drawn: Option<Vec<Row>>,
+    /// Inputs last projected; None also covers a newly created window.
+    checked: Option<Inputs>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Inputs {
+    stock: u64,
+    chosen: Option<Chosen>,
 }
 
 impl MerchantRows {
@@ -26,6 +34,7 @@ impl MerchantRows {
         Self {
             columns,
             drawn: None,
+            checked: None,
         }
     }
 }
@@ -86,8 +95,20 @@ pub(crate) fn fill(
     mut art: crate::sheets::Art,
     mut lists: Query<(Entity, &mut MerchantRows, Option<&Children>)>,
 ) {
+    let input = Inputs {
+        stock: online.world().merchant_revision(),
+        chosen: trade.chosen(),
+    };
+    // No list, or every existing list is current: no row allocation or sorting.
+    if lists.iter().all(|(_, list, _)| list.checked == Some(input)) {
+        return;
+    }
     let wanted = rows(online.world(), trade.chosen());
     for (entity, mut list, children) in &mut lists {
+        if list.checked == Some(input) {
+            continue;
+        }
+        list.checked = Some(input);
         if list.drawn.as_ref() == Some(&wanted) {
             continue;
         }
@@ -154,19 +175,7 @@ pub(crate) fn fill(
                 silver.to_string(),
                 copper.to_string(),
             ];
-            for (words, width) in cells.into_iter().zip(widths) {
-                commands.spawn((
-                    theme::text(words, Size::Small, theme::INK_BRIGHT),
-                    TextLayout::new(Justify::Left, LineBreak::NoWrap),
-                    Node {
-                        width: px(*width),
-                        flex_shrink: 0.0,
-                        overflow: Overflow::clip(),
-                        ..default()
-                    },
-                    ChildOf(line),
-                ));
-            }
+            crate::list_cells::text(&mut commands, line, cells, widths.copied());
         }
         list.drawn = Some(wanted.clone());
     }
@@ -274,5 +283,75 @@ mod tests {
     fn a_price_splits_into_its_coins() {
         assert_eq!(coins(12_345), [12, 3, 4, 5]);
         assert_eq!(coins(7), [0, 0, 0, 7]);
+    }
+
+    #[test]
+    fn merchant_rows_follow_stock_selection_and_local_closure() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_core::{
+            WorldEvent,
+            merchant::{MerchantItem, MerchantUpdate},
+        };
+        let mut app = crate::testing::app();
+        app.add_systems(Update, fill);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let item = crate::preview::items().remove(0);
+        testing::news(
+            &mut online,
+            [
+                WorldEvent::Merchant(MerchantUpdate::Opened {
+                    merchant_id: 8,
+                    accepted: true,
+                    rate: 1.0,
+                }),
+                WorldEvent::Merchant(MerchantUpdate::Item(Box::new(MerchantItem {
+                    slot: 3,
+                    item,
+                    price: 10,
+                    quantity: 2,
+                }))),
+            ],
+        );
+        app.insert_resource(online);
+        app.world_mut()
+            .resource_mut::<TradeState>()
+            .preview("Corpse", "Merchant");
+        let list = app.world_mut().spawn(MerchantRows::new(vec![50.0; 7])).id();
+        app.update();
+        let first = app.world().get::<Children>(list).unwrap()[0];
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Coins(eq_client_core::Coins::default())],
+        );
+        app.update();
+        assert_eq!(app.world().get::<Children>(list).unwrap()[0], first);
+        app.world_mut()
+            .resource_mut::<TradeState>()
+            .merchant
+            .as_mut()
+            .unwrap()
+            .chosen = Some(Chosen::Ware(3));
+        app.update();
+        let selected = app.world().get::<Children>(list).unwrap()[0];
+        assert_eq!(
+            app.world().get::<BackgroundColor>(selected).unwrap().0,
+            theme::BUTTON
+        );
+        let recreated = app.world_mut().spawn(MerchantRows::new(vec![50.0; 7])).id();
+        app.update();
+        assert_eq!(
+            app.world().get::<MerchantRows>(list).unwrap().drawn,
+            app.world().get::<MerchantRows>(recreated).unwrap().drawn
+        );
+        app.world_mut().resource_mut::<OnlineState>().close_shop();
+        app.update();
+        for list in [list, recreated] {
+            assert!(
+                app.world()
+                    .get::<Children>(list)
+                    .is_none_or(Children::is_empty)
+            );
+        }
     }
 }

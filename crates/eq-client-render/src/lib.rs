@@ -3,7 +3,31 @@
 use std::path::PathBuf;
 use theme::Size;
 
+mod camera;
+mod gpu_assets;
+mod scene_collision;
+mod systems;
+
+use camera::{
+    OrbitCamera, behind, camera_relative_direction, orbit_camera, spawn_camera, start_behind,
+};
+use gpu_assets::{create_material, create_render_primitives, create_texture_images};
+pub use scene_collision::zone_collision;
+use scene_collision::{TerrainSurface, collision_triangles, collision_world, object_transform};
+pub(crate) use systems::Stage;
+use systems::{init_presentation, install_overlays, schedule};
+
+#[cfg(test)]
+use bevy::input::mouse::MouseMotion;
+#[cfg(test)]
+use camera::{CHASE_PITCH, HEAD_LINE, eased_distance, orbit_transform, unobstructed_orbit};
+#[cfg(test)]
+use gpu_assets::{bevy_texture_coordinates, create_image, generate_mip_chain};
+#[cfg(test)]
+use scene_collision::{ZoneLiquids, build_collision, triangle_height_at};
+
 mod abilities;
+mod asset_loads;
 mod attention;
 mod background;
 mod book_delete;
@@ -30,6 +54,7 @@ mod inventory;
 mod item_models;
 mod items;
 mod keys;
+mod list_cells;
 mod loading;
 mod login;
 mod logs;
@@ -77,16 +102,11 @@ mod zone;
 mod zone_navmesh;
 
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::input::mouse::MouseMotion;
-use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Captured, Screenshot, save_to_disk};
+use eq_client_assets::ZoneAsset;
 use eq_client_assets::characters::CharacterAsset;
-use eq_client_assets::{BlendOpacity, MaterialMode, ZoneAsset, ZonePrimitive};
 use eq_client_core::{WorldPosition, render_position, world_position};
-use image::{RgbaImage, imageops::FilterType};
 
 /// The projection used by the top-down camera.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -218,9 +238,6 @@ struct SceneInfo {
 }
 
 #[derive(Resource)]
-struct TerrainSurface(Vec<[Vec3; 3]>);
-
-#[derive(Resource)]
 struct Collision(Option<eq_client_core::movement::CollisionWorld>);
 
 #[derive(Component)]
@@ -250,17 +267,6 @@ struct SceneEntity;
 
 #[derive(Component)]
 struct HudText;
-
-#[derive(Component)]
-struct OrbitCamera {
-    focus: Vec3,
-    radius: f32,
-    yaw: f32,
-    pitch: f32,
-    /// The distance shown while a roof or wall holds the camera short of
-    /// `radius`; None once it is back out at the chosen zoom.
-    pulled: Option<f32>,
-}
 
 /// Opens a window and renders a loaded zone until the user closes it.
 pub fn run(
@@ -375,62 +381,6 @@ pub fn run(
     exit_status(&app.run())
 }
 
-/// Starts the presentation state (HUD, windows, chat, targeting, inventory,
-/// trade, combat and motion) empty: every resource the windows keep, in one
-/// list that the tests' app starts from too.
-fn init_presentation(app: &mut App) {
-    app.init_resource::<spell_effects::SpellParticles>()
-        .init_resource::<sounds::Sounds>()
-        .init_resource::<doors::Hinges>()
-        .init_resource::<options::OptionsState>()
-        .init_resource::<logs::ChatLog>()
-        .init_resource::<hud::HudState>()
-        .init_resource::<hud::action_bar::ActionRequests>()
-        .init_resource::<combat::CombatState>()
-        .init_resource::<trade::TradeState>()
-        .init_resource::<escape::Escape>()
-        .init_resource::<windows::pointer::Wheel>()
-        .init_resource::<skin::UiSkin>()
-        .init_resource::<hud::hotbar::Bindings>()
-        .init_resource::<hud::hotbar::carry::Presses>()
-        .init_resource::<hud::hotbar::carry::Carry>()
-        .init_resource::<spellbook::BookView>()
-        .init_resource::<spellbook::BookSelection>()
-        .init_resource::<spellbook::BookHand>()
-        .init_resource::<sheets::Sheets>()
-        .init_resource::<skinned::Screens>()
-        .init_resource::<skinned::CursorLook>()
-        .init_resource::<skinned::Skinned>()
-        .init_resource::<skinned::Tabs>()
-        .init_resource::<skinned::looks::Looks>()
-        .init_resource::<skinned::KeyFilter>()
-        .init_resource::<chat::ChatState>()
-        .init_resource::<chat::ChatLook>()
-        .init_resource::<profile_files::Profile>()
-        .init_resource::<notices::Lines>()
-        .init_resource::<items::ItemState>()
-        .init_resource::<inventory::InventoryState>()
-        .init_resource::<motion::Controls>()
-        .init_resource::<entities::NearbyEntities>()
-        .init_resource::<names::NameTags>()
-        .init_resource::<item_models::ItemLibrary>()
-        .init_resource::<outfit::Wardrobe>()
-        .init_resource::<select_preview::Preview>()
-        .init_resource::<windows::DragState>()
-        .init_resource::<windows::Layouts>()
-        .init_resource::<windows::Shown>()
-        .init_resource::<windows::Stack>()
-        .init_resource::<keys::KeyMap>()
-        .init_resource::<keys::Typing>()
-        .init_resource::<training::Chosen>()
-        .init_resource::<raid::RaidChoice>()
-        .init_resource::<confirm::Asked>()
-        .init_resource::<reading::Page>()
-        .init_resource::<map::MapView>()
-        .init_resource::<login::FrontEnd>()
-        .init_resource::<login::LoginLook>();
-}
-
 /// What the tests of the windows start from.
 #[cfg(test)]
 pub(crate) mod testing {
@@ -525,289 +475,6 @@ fn install_script(
                 script::pointer::read_arrow.before(script::pointer::draw),
             );
     }
-}
-
-/// Puts every frame's work in its stage, and orders within a stage the few
-/// systems that depend on one another.
-#[allow(
-    clippy::too_many_lines,
-    reason = "one declarative listing of every system in its stage"
-)]
-fn schedule(app: &mut App) {
-    app.configure_sets(
-        Update,
-        (
-            Stage::Receive,
-            Stage::Scene,
-            Stage::Typing,
-            Stage::Route,
-            Stage::Input,
-            Stage::Present,
-        )
-            .chain(),
-    )
-    .add_systems(
-        Update,
-        (
-            (
-                online::receive,
-                online::report_bleed_out,
-                login::watch,
-                online::tick,
-                daylight::update,
-                spell_effects::load,
-                sounds::load,
-            )
-                .chain()
-                .in_set(Stage::Receive),
-            (
-                entities::reconcile,
-                entities::interpolate,
-                character::lie,
-                doors::reconcile,
-                ground::reconcile,
-                select_preview::show,
-                select_preview::turn,
-            )
-                .chain()
-                .in_set(Stage::Scene),
-            (
-                login::claim,
-                windows::pointer::wheel,
-                // A scrollbar's press scrolls its box as the wheel does.
-                skinned::scrollbar::scroll,
-                navigation::update,
-                chat::input,
-                skinned::type_amount,
-            )
-                .chain()
-                .in_set(Stage::Typing),
-            (escape::route, hud::hotbar::carry::route).in_set(Stage::Route),
-        ),
-    )
-    .add_systems(
-        Update,
-        (
-            items::link_input,
-            items::input,
-            inventory::input,
-            coins::input,
-            inventory::colors::input,
-            interact::input,
-            target::input,
-            (
-                who::zone_list,
-                whereabouts::answers,
-                pet::window,
-                group::window,
-                raid::window,
-            ),
-            combat::input,
-            trade::input,
-            (
-                give::buttons,
-                give::inspect_theirs,
-                training::buttons,
-                confirm::buttons,
-                reading::buttons,
-                tradeskills::buttons,
-                map::buttons,
-                raid::buttons,
-            ),
-            (abilities::input, skinned::slash),
-            hud::actions,
-            (hud::hotbar::update, hud::hotbar::persist).chain(),
-            hud::hotbar::item_actions,
-            (
-                // A book the player stands up from closes before it draws.
-                spellbook::seat,
-                (
-                    spellbook::update,
-                    spellbook::book_clicks,
-                    spellbook::say_book_lines,
-                ),
-            )
-                .chain(),
-            (
-                // Which login screens show decides which take the presses.
-                (
-                    login::read_look,
-                    (login::form, login::worlds, login::light),
-                    navmesh_prebuild::run_batch(),
-                )
-                    .chain(),
-                (
-                    character_select::update,
-                    character_select::names,
-                    login::quit,
-                ),
-            ),
-            windows::input,
-            move_player,
-            motion::input,
-        )
-            .chain()
-            .in_set(Stage::Input),
-    )
-    .add_systems(
-        Update,
-        (
-            (
-                inventory::update,
-                inventory::feedback,
-                inventory::scroll,
-                (skinned::cursor_look, inventory::cursor::update).chain(),
-                (chat::follow_options, chat::look, chat::refresh).chain(),
-                items::update,
-                items::scroll,
-                target::update,
-                combat::target_color,
-                trade::present,
-                trade::scroll,
-                (login::login_screen, login::worlds_screen, login::scroll).chain(),
-                skinned::scroll_lists,
-                motion::interpolate,
-                orbit_camera,
-                update_hud,
-                // Opens the give, quantity and training windows before their
-                // frames are drawn.
-                (
-                    give::window,
-                    skinned::quantity,
-                    training::window,
-                    confirm::window,
-                    reading::window,
-                    tradeskills::world_window,
-                    map::load,
-                ),
-            )
-                .chain(),
-            (
-                resources::update,
-                hud::update,
-                hud::spell_details,
-                hud::key_help,
-                target::key_help,
-                hud::hotbar::item_artwork,
-                (hud::hotbar::presentation, hud::hotbar::fit_words).chain(),
-                spellbook::scribe_presentation,
-                buffs::update,
-                (buffs::hover, buffs::skinned_details, buffs::short_window),
-                (
-                    spell_icons::update,
-                    logs::write,
-                    (
-                        options::toggle,
-                        options::persist,
-                        options::choose,
-                        options::tell_session,
-                    )
-                        .chain(),
-                ),
-                (outbox::show, inventory::say_refusals),
-                (hud::action_bar::cast_window, hud::action_bar::update),
-                skinned::frames,
-                (
-                    skinned::apply,
-                    skinned::place_own,
-                    skinned::looks::load,
-                    skinned::looks::dress,
-                )
-                    .chain(),
-                skinned::show,
-                skinned::buttons,
-                (
-                    skinned::contents,
-                    skinned::theirs,
-                    skinned::loot,
-                    (
-                        trade::fill_wares,
-                        trade::picture,
-                        items::icon,
-                        spellbook::book_present,
-                    ),
-                    skinned::tabs,
-                    abilities::present,
-                    (
-                        skinned::slide,
-                        skinned::drop_downs,
-                        skinned::light_choices,
-                        skinned::show_sliders,
-                        skinned::show_amount,
-                        skinned::show_choices,
-                        skinned::fill_lists,
-                        training::fill,
-                        skills::fill,
-                        raid::fill,
-                        confirm::show,
-                        reading::show,
-                        tradeskills::show,
-                        map::draw,
-                        skinned::scrollbar::place,
-                        skinned::rewind,
-                    ),
-                ),
-                skinned::close,
-            )
-                .chain(),
-            (
-                hud::hotbar::needs,
-                abilities::needs,
-                outbox::veil,
-                outbox::grey_out,
-                tooltip::end_scripted_presses,
-                tooltip::show,
-                select_preview::veil,
-                outfit::dress,
-                character::animate,
-                spell_effects::update,
-                sounds::update,
-                target::marker::update,
-                (names::request, names::update).chain(),
-                schedule_screenshot,
-                exit_after_screenshot,
-            )
-                .chain(),
-        )
-            .chain()
-            .in_set(Stage::Present),
-    );
-}
-
-/// The order of every frame's work. A system joins the stage for what it
-/// does instead of naming the systems it must follow; within a stage, the
-/// listing above orders the few that depend on one another.
-#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Stage {
-    /// The session's news reaches the world, and the world's clocks run.
-    Receive,
-    /// The world reaches the scene: spawns, doors and items on the ground.
-    Scene,
-    /// The chat takes the keyboard first, and the wheel goes to one surface.
-    Typing,
-    /// Escape and the window stack decide what a press belongs to, and so
-    /// does a hotkey on the cursor or a hold that picks one up.
-    Route,
-    /// Keys and clicks become requests and moves.
-    Input,
-    /// Windows, the HUD, the camera and the models show the world; refusals
-    /// show once every input has had its say.
-    Present,
-}
-
-/// Registers the startup work of the overlays and the windows' shared systems.
-fn install_overlays(app: &mut App) {
-    app.add_systems(Startup, tooltip::spawn);
-    windows::register_layout(app);
-    paperdoll::register(app);
-    app.add_systems(
-        Update,
-        profile_files::follow
-            .after(Stage::Receive)
-            .before(Stage::Scene),
-    );
-    skin::register(app);
-    app.add_systems(PostUpdate, chat::scroll.after(bevy::ui::UiSystems::Layout));
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
@@ -1032,58 +699,6 @@ fn spawn_lighting(commands: &mut Commands, ambient_light: &mut GlobalAmbientLigh
     *ambient_light = daylight::launch_ambient();
 }
 
-/// The chase view's pitch as it first opens: a little above the player,
-/// looking down past them. Inferred, item 6.240.
-const CHASE_PITCH: f32 = -20.0_f32.to_radians();
-
-/// The orbit yaw that puts the camera behind whatever faces the render yaw
-/// `facing`, looking along it, so W walks that way: the camera sits opposite
-/// the direction it looks.
-fn behind(facing: f32) -> f32 {
-    facing + std::f32::consts::PI
-}
-
-/// Turns the camera to start behind a placed player, looking the way they
-/// face, keeping the pitch and zoom the player chose.
-fn start_behind(camera: &mut OrbitCamera, placed: &Transform) {
-    camera.yaw = behind(placed.rotation.to_euler(EulerRot::YXZ).0);
-}
-
-fn spawn_camera(
-    commands: &mut Commands,
-    placed: Transform,
-    radius: f32,
-    projection_style: ProjectionStyle,
-) {
-    let mut orbit = OrbitCamera {
-        focus: placed.translation,
-        radius,
-        yaw: 0.0,
-        pitch: CHASE_PITCH,
-        pulled: None,
-    };
-    // The first zone is entered before this camera exists, so it starts
-    // behind the player here; later entries turn it in `Scene::enter`.
-    start_behind(&mut orbit, &placed);
-    let mut projection = match projection_style {
-        ProjectionStyle::Perspective => Projection::Perspective(PerspectiveProjection {
-            near: 1.0,
-            ..default()
-        }),
-        ProjectionStyle::Orthographic => {
-            Projection::Orthographic(OrthographicProjection::default_3d())
-        }
-    };
-    fit_projection(&mut projection, radius, None);
-    commands.spawn((
-        Camera3d::default(),
-        projection,
-        orbit_transform(&orbit),
-        orbit,
-        sounds::listener(),
-    ));
-}
-
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 fn schedule_screenshot(
     mut commands: Commands,
@@ -1135,312 +750,6 @@ fn exit_after_screenshot(
         info!("The screenshot is taken, so the client is ending");
         app_exit.write(AppExit::Success);
     }
-}
-
-struct TextureImages {
-    opaque: Handle<Image>,
-    masked: Handle<Image>,
-}
-
-fn create_texture_images(
-    textures: Vec<eq_client_assets::ZoneTexture>,
-    images: &mut Assets<Image>,
-) -> Vec<TextureImages> {
-    textures
-        .into_iter()
-        .map(|texture| {
-            let mut masked_pixels = texture.rgba8.clone();
-            let color_key = texture.color_key.unwrap_or([0, 0, 0]);
-            for pixel in masked_pixels.as_chunks_mut::<4>().0 {
-                if pixel[..3] == color_key {
-                    pixel[3] = 0;
-                }
-            }
-            TextureImages {
-                opaque: images.add(create_image(texture.width, texture.height, texture.rgba8)),
-                masked: images.add(create_image(texture.width, texture.height, masked_pixels)),
-            }
-        })
-        .collect()
-}
-
-fn create_image(width: u32, height: u32, pixels: Vec<u8>) -> Image {
-    let (pixels, mip_level_count) = generate_mip_chain(width, height, pixels);
-    let base_level_len = width as usize * height as usize * 4;
-    let mut image = Image::new(
-        Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        pixels[..base_level_len].to_vec(),
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.data = Some(pixels);
-    image.texture_descriptor.mip_level_count = mip_level_count;
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        ..ImageSamplerDescriptor::linear()
-    });
-    image
-}
-
-fn generate_mip_chain(width: u32, height: u32, pixels: Vec<u8>) -> (Vec<u8>, u32) {
-    let mut level = RgbaImage::from_raw(width, height, pixels)
-        .expect("decoded RGBA texture dimensions match its pixel buffer");
-    let mut chain = level.as_raw().clone();
-    let mut level_count = 1;
-    while level.width() > 1 || level.height() > 1 {
-        let next_width = (level.width() / 2).max(1);
-        let next_height = (level.height() / 2).max(1);
-        level = image::imageops::resize(&level, next_width, next_height, FilterType::Triangle);
-        chain.extend_from_slice(level.as_raw());
-        level_count += 1;
-    }
-    (chain, level_count)
-}
-
-/// Builds a model's or zone's draw calls. `usage` says where the meshes' data
-/// lives: zones draw only, while models hung under a spawn keep theirs in
-/// the main world too, where clicks are picked against them.
-fn create_render_primitives(
-    primitives: Vec<ZonePrimitive>,
-    texture_images: &[TextureImages],
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    unlit: bool,
-    usage: RenderAssetUsages,
-) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
-    primitives
-        .into_iter()
-        .filter(|primitive| !primitive.indices.is_empty() && !primitive.positions.is_empty())
-        .map(|primitive| {
-            let texture = primitive
-                .texture
-                .and_then(|index| texture_images.get(index));
-            let material = create_material(primitive.material_mode, texture, materials, unlit);
-            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usage);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, primitive.positions);
-            if !primitive.normals.is_empty() {
-                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, primitive.normals);
-            }
-            if !primitive.texture_coordinates.is_empty() {
-                mesh.insert_attribute(
-                    Mesh::ATTRIBUTE_UV_0,
-                    bevy_texture_coordinates(primitive.texture_coordinates),
-                );
-            }
-            mesh.insert_indices(Indices::U32(primitive.indices));
-            (meshes.add(mesh), material)
-        })
-        .collect()
-}
-
-/// Converts classic WLD's downward-growing V axis to Bevy's texture orientation.
-fn bevy_texture_coordinates(coordinates: Vec<[f32; 2]>) -> Vec<[f32; 2]> {
-    coordinates.into_iter().map(|[u, v]| [u, -v]).collect()
-}
-
-fn create_material(
-    mode: MaterialMode,
-    texture: Option<&TextureImages>,
-    materials: &mut Assets<StandardMaterial>,
-    unlit: bool,
-) -> Handle<StandardMaterial> {
-    let (image, color, alpha_mode) = match mode {
-        MaterialMode::Opaque => (
-            texture.map(|images| images.opaque.clone()),
-            Color::WHITE,
-            AlphaMode::Opaque,
-        ),
-        MaterialMode::Masked => (
-            texture.map(|images| images.masked.clone()),
-            Color::WHITE,
-            AlphaMode::Mask(0.5),
-        ),
-        MaterialMode::Blended(opacity) => {
-            let alpha = match opacity {
-                BlendOpacity::Quarter => 0.25,
-                BlendOpacity::Half => 0.5,
-                BlendOpacity::ThreeQuarters => 0.75,
-            };
-            (
-                texture.map(|images| images.opaque.clone()),
-                Color::srgba(1.0, 1.0, 1.0, alpha),
-                AlphaMode::Blend,
-            )
-        }
-        MaterialMode::Additive => (
-            texture.map(|images| images.masked.clone()),
-            Color::WHITE,
-            AlphaMode::Add,
-        ),
-    };
-    materials.add(StandardMaterial {
-        base_color: color,
-        base_color_texture: image,
-        alpha_mode,
-        unlit,
-        perceptual_roughness: 0.95,
-        double_sided: true,
-        cull_mode: None,
-        ..default()
-    })
-}
-
-/// Where a zone object sits; the assets crate already placed it in the
-/// renderer's frame.
-fn object_transform(object: &eq_client_assets::ZoneObject) -> Transform {
-    Transform {
-        translation: Vec3::from_array(object.translation),
-        rotation: Quat::from_array(object.rotation),
-        scale: Vec3::from_array(object.scale),
-    }
-}
-
-/// The zone's water and lava as its regions mark them, which every walk keeps
-/// out of.
-struct ZoneLiquids(eq_client_assets::regions::ZoneRegions);
-
-impl eq_client_core::movement::Liquids for ZoneLiquids {
-    fn liquid_at(&self, point: Vec3) -> Option<eq_client_core::movement::Liquid> {
-        self.0.liquid_at(point.to_array()).map(movement_liquid)
-    }
-
-    fn passes_through(
-        &self,
-        from: Vec3,
-        to: Vec3,
-        liquid: eq_client_core::movement::Liquid,
-    ) -> bool {
-        use eq_client_assets::regions::Liquid;
-        let liquid = match liquid {
-            eq_client_core::movement::Liquid::Water => Liquid::Water,
-            eq_client_core::movement::Liquid::Lava => Liquid::Lava,
-        };
-        self.0
-            .passes_through(from.to_array(), to.to_array(), liquid)
-    }
-
-    fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn eq_client_core::movement::Liquids>> {
-        let regions = self.0.within(low.to_array(), high.to_array())?;
-        Some(Box::new(Self(regions)))
-    }
-}
-
-/// A liquid the zone's regions mark, as movement knows it.
-fn movement_liquid(liquid: eq_client_assets::regions::Liquid) -> eq_client_core::movement::Liquid {
-    use eq_client_assets::regions::Liquid;
-    match liquid {
-        Liquid::Water => eq_client_core::movement::Liquid::Water,
-        Liquid::Lava => eq_client_core::movement::Liquid::Lava,
-    }
-}
-
-/// Includes solid terrain and transformed object geometry, including hidden boundaries,
-/// and the zone's water and lava.
-/// A zone's solid geometry as movement and the camera meet it: its own
-/// collision with its placed objects', and its water and lava; None where
-/// it has none that can be built. For tools that weigh a zone's shape, such
-/// as the character select spot proposer.
-#[must_use]
-pub fn zone_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
-    build_collision(zone)
-}
-
-fn build_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::CollisionWorld> {
-    collision_world(zone, collision_triangles(zone))
-}
-
-/// The zone's collision triangles with every placed object's: the solids the
-/// walker meets, doors aside.
-fn collision_triangles(zone: &ZoneAsset) -> Vec<[[f32; 3]; 3]> {
-    let mut triangles = zone.collision.clone();
-    for object in &zone.objects {
-        let Some(model) = zone.models.get(object.model) else {
-            continue;
-        };
-        let transform = object_transform(object).to_matrix();
-        triangles.extend(model.collision.iter().map(|triangle| {
-            triangle.map(|p| transform.transform_point3(Vec3::from_array(p)).to_array())
-        }));
-    }
-    triangles
-}
-
-fn collision_world(
-    zone: &ZoneAsset,
-    triangles: Vec<[[f32; 3]; 3]>,
-) -> Option<eq_client_core::movement::CollisionWorld> {
-    match eq_client_core::movement::CollisionWorld::new(triangles) {
-        Ok(world) if zone.regions.liquid_region_count() == 0 => Some(world),
-        Ok(world) => Some(world.with_liquids(ZoneLiquids(zone.regions.clone()))),
-        Err(error) => {
-            warn!("Collision unavailable: {error}");
-            None
-        }
-    }
-}
-
-impl TerrainSurface {
-    fn from_primitives(primitives: &[ZonePrimitive]) -> Self {
-        let triangles = primitives
-            .iter()
-            .flat_map(|primitive| {
-                primitive
-                    .indices
-                    .as_chunks::<3>()
-                    .0
-                    .iter()
-                    .filter_map(|indices| {
-                        Some([
-                            Vec3::from_array(*primitive.positions.get(indices[0] as usize)?),
-                            Vec3::from_array(*primitive.positions.get(indices[1] as usize)?),
-                            Vec3::from_array(*primitive.positions.get(indices[2] as usize)?),
-                        ])
-                    })
-            })
-            .collect();
-        Self(triangles)
-    }
-
-    fn height_below(&self, x: f32, z: f32, ceiling: f32) -> Option<f32> {
-        self.0
-            .iter()
-            .filter_map(|triangle| triangle_height_at(*triangle, x, z))
-            .filter(|height| *height <= ceiling)
-            .max_by(f32::total_cmp)
-    }
-
-    fn height_at(&self, x: f32, z: f32) -> Option<f32> {
-        self.0
-            .iter()
-            .filter_map(|triangle| triangle_height_at(*triangle, x, z))
-            .max_by(f32::total_cmp)
-    }
-}
-
-fn triangle_height_at(triangle: [Vec3; 3], position_x: f32, position_z: f32) -> Option<f32> {
-    let [vertex_a, vertex_b, vertex_c] = triangle;
-    let denominator = (vertex_b.z - vertex_c.z) * (vertex_a.x - vertex_c.x)
-        + (vertex_c.x - vertex_b.x) * (vertex_a.z - vertex_c.z);
-    if denominator.abs() < 0.001 {
-        return None;
-    }
-    let first = ((vertex_b.z - vertex_c.z) * (position_x - vertex_c.x)
-        + (vertex_c.x - vertex_b.x) * (position_z - vertex_c.z))
-        / denominator;
-    let second = ((vertex_c.z - vertex_a.z) * (position_x - vertex_c.x)
-        + (vertex_a.x - vertex_c.x) * (position_z - vertex_c.z))
-        / denominator;
-    let third = 1.0 - first - second;
-    if first < -0.001 || second < -0.001 || third < -0.001 {
-        return None;
-    }
-    Some(first * vertex_a.y + second * vertex_b.y + third * vertex_c.y)
 }
 
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Bevy system parameters are value wrappers.
@@ -1510,12 +819,6 @@ fn move_player(
         );
     }
     camera.focus = player.translation;
-}
-
-fn camera_relative_direction(horizontal: f32, vertical: f32, yaw: f32) -> Vec3 {
-    let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
-    let right = Vec3::new(-forward.z, 0.0, forward.x);
-    (right * horizontal + forward * vertical).normalize_or_zero()
 }
 
 /// Shows the status line and what the player can use here, and the
@@ -1617,207 +920,6 @@ fn movement_help(
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" | ")
-}
-
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
-fn orbit_camera(
-    collision: Option<Res<Collision>>,
-    time: Res<Time>,
-    chat: Res<chat::ChatState>,
-    items: Res<items::ItemState>,
-    inventory: Res<inventory::InventoryState>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mut motion: MessageReader<MouseMotion>,
-    (wheel, options): (Res<windows::pointer::Wheel>, Res<options::OptionsState>),
-    online: Res<online::OnlineState>,
-    mut cameras: Query<(&mut OrbitCamera, &mut Transform, Option<&mut Projection>)>,
-    bodies: Query<&PlayerBody, With<Player>>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    ui: windows::pointer::PointerUi,
-) {
-    let head = bodies.single().map_or(0.0, |body| body.height * HEAD_LINE);
-    let accepts_input = windows.single().is_ok_and(|window| {
-        window.focused
-            && !window
-                .physical_cursor_position()
-                .is_some_and(|cursor| ui.contains(cursor))
-    });
-    let drag = if accepts_input
-        && !chat.hovered
-        && !items.hovered
-        && !inventory.hovered
-        && mouse_buttons.pressed(MouseButton::Right)
-    {
-        motion.read().map(|event| event.delta).sum::<Vec2>()
-    } else {
-        motion.clear();
-        Vec2::ZERO
-    };
-    // A turn over a window scrolls the window, never the camera too; with
-    // the wheel's zoom turned off, it does nothing here.
-    let scroll = if !accepts_input
-        || !options.options.wheel_zoom
-        || wheel.surface.is_some()
-        || chat.hovered
-        || items.hovered
-        || inventory.hovered
-    {
-        0.0
-    } else {
-        wheel.lines
-    };
-
-    let rise = if options.options.invert_y { -1.0 } else { 1.0 };
-    let clip = options.options.clip_distance(online.world().far_clip());
-    for (mut camera, mut transform, projection) in &mut cameras {
-        let turn = options.options.turn_per_pixel();
-        camera.yaw -= drag.x * turn;
-        camera.pitch = (camera.pitch - drag.y * turn * rise).clamp(-1.45, -0.15);
-        let radius = (camera.radius * (-scroll * 0.12).exp()).clamp(20.0, 20_000.0);
-        camera.radius = radius;
-        if let Some(mut projection) = projection
-            && !fitted(&projection, radius, clip)
-        {
-            fit_projection(&mut projection, radius, clip);
-        }
-        *transform = unobstructed_orbit(
-            &mut camera,
-            collision.as_ref().and_then(|world| world.0.as_ref()),
-            head,
-            time.delta_secs(),
-        );
-    }
-}
-
-/// How far the view reaches: the clip distance past the player the camera
-/// orbits, or, where the zone gives no clip, ten times the orbit distance,
-/// so zooming out never pushes the scene past the far plane.
-fn far_plane(radius: f32, clip: Option<f32>) -> f32 {
-    clip.map_or(radius * 10.0, |clip| clip + radius)
-}
-
-/// Whether the view already reaches as far as it should; an orthographic
-/// view, which looks down on the whole scene, follows only the orbit.
-fn fitted(projection: &Projection, radius: f32, clip: Option<f32>) -> bool {
-    match projection {
-        Projection::Perspective(perspective) => {
-            perspective.far.to_bits() == far_plane(radius, clip).to_bits()
-        }
-        Projection::Orthographic(orthographic) => {
-            orthographic.scale.to_bits() == (radius / 400.0).to_bits()
-        }
-        Projection::Custom(_) => true,
-    }
-}
-
-/// Keeps the view's depth, and an orthographic view's scale, in step with the
-/// orbit distance and the clip distance.
-fn fit_projection(projection: &mut Projection, radius: f32, clip: Option<f32>) {
-    match projection {
-        Projection::Perspective(perspective) => perspective.far = far_plane(radius, clip),
-        Projection::Orthographic(orthographic) => {
-            let far = far_plane(radius, None);
-            orthographic.scale = radius / 400.0;
-            orthographic.near = -far;
-            orthographic.far = far;
-        }
-        Projection::Custom(_) => (),
-    }
-}
-
-fn orbit_transform(camera: &OrbitCamera) -> Transform {
-    let rotation = Quat::from_euler(EulerRot::YXZ, camera.yaw, camera.pitch, 0.0);
-    let position = camera.focus + rotation * Vec3::new(0.0, 0.0, camera.radius);
-    Transform::from_translation(position).looking_at(camera.focus, Vec3::Y)
-}
-
-/// Keeps the camera on the player's side of roofs and walls without changing
-/// the chosen zoom: it pulls in at once to just short of whatever stands
-/// between it and the player, then eases back out as the way clears, never
-/// past the chosen radius. Both the line from the focus (the body's middle)
-/// and the line from near the top of the head, `head` above it, must reach
-/// the camera clear, so a wall top never hides the head while the waist is in
-/// view. Display only; inferred, item 6.233.
-fn unobstructed_orbit(
-    camera: &mut OrbitCamera,
-    collision: Option<&eq_client_core::movement::CollisionWorld>,
-    head: f32,
-    seconds: f32,
-) -> Transform {
-    let mut pose = orbit_transform(camera);
-    let offset = pose.translation - camera.focus;
-    let distance = offset.length();
-    if distance <= 0.001 {
-        camera.pulled = None;
-        return pose;
-    }
-    let direction = offset / distance;
-    let allowed = collision.map_or(distance, |world| {
-        let along_focus = world
-            .ray_distance(camera.focus, direction, distance)
-            .map_or(distance, |hit| (hit - 0.5).max(0.01));
-        clear_of_head(world, camera.focus, Vec3::Y * head, direction, along_focus)
-    });
-    camera.pulled = camera
-        .pulled
-        .map(|shown| eased_distance(shown, allowed, seconds))
-        .or((allowed < distance).then_some(allowed))
-        .filter(|shown| distance - shown > PULLED_DONE);
-    if let Some(shown) = camera.pulled {
-        pose.translation = camera.focus + direction * shown;
-    }
-    pose
-}
-
-/// Where the head line starts, as a share of the body's height above its
-/// middle: near the top of the head.
-const HEAD_LINE: f32 = 0.4;
-
-/// How many times the head line is cast before the distance it gives stands.
-const HEAD_CASTS: usize = 3;
-
-/// The distance along the orbit, at most `along_focus`, at which the line from
-/// the head (`rise` above the focus) to the camera is clear: each hit pulls the
-/// camera in by the share of the line that was clear, then the line is cast
-/// again, a bounded number of times.
-fn clear_of_head(
-    world: &eq_client_core::movement::CollisionWorld,
-    focus: Vec3,
-    rise: Vec3,
-    direction: Vec3,
-    along_focus: f32,
-) -> f32 {
-    let head = focus + rise;
-    let mut distance = along_focus;
-    for _ in 0..HEAD_CASTS {
-        let line = focus + direction * distance - head;
-        let length = line.length();
-        if length <= 0.001 {
-            break;
-        }
-        let Some(hit) = world.ray_distance(head, line / length, length) else {
-            break;
-        };
-        distance = (distance * (hit - 0.5).max(0.0) / length).max(0.01);
-    }
-    distance
-}
-
-/// How close to the chosen radius an easing camera counts as back out.
-const PULLED_DONE: f32 = 0.05;
-
-/// The camera's eased-out time constant: about 95% of the way back in 0.3 s.
-const PULL_OUT_SECONDS: f32 = 0.1;
-
-/// The shown distance one frame on: in at once to `allowed`, so geometry
-/// never sits between the camera and the player; out toward it eased, so
-/// it never passes `allowed` however long the frame.
-fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
-    if allowed <= shown {
-        allowed
-    } else {
-        shown + (allowed - shown) * (1.0 - (-seconds.max(0.0) / PULL_OUT_SECONDS).exp())
-    }
 }
 
 #[cfg(test)]

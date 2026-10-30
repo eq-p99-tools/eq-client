@@ -3697,3 +3697,105 @@ fn new_titles_and_game_masters_notices_change_nothing_yet() {
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
 }
+
+#[test]
+fn list_revisions_track_their_own_inputs_and_survive_restart() {
+    use crate::training::{TrainingOffer, TrainingUpdate};
+    let mut world = admitted();
+    world.player.as_mut().unwrap().skills = Some(vec![0; 100]);
+    let revisions = |world: &ClientWorld| {
+        (
+            world.skills_revision(),
+            world.training_revision(),
+            world.merchant_revision(),
+        )
+    };
+    let before = revisions(&world);
+    game(&mut world, WorldEvent::Coins(Coins::default()));
+    game(&mut world, WorldEvent::PracticePoints(3));
+    world.select_target(Some(42));
+    world.tick(Instant::now(), &NoSpells);
+    assert_eq!(revisions(&world), before);
+
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 1,
+        },
+    );
+    let after_skill = revisions(&world);
+    assert!(after_skill.0 > before.0);
+    assert_eq!((after_skill.1, after_skill.2), (before.1, before.2));
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 1,
+        },
+    );
+    assert_eq!(revisions(&world), after_skill);
+
+    let offer = WorldEvent::Training(TrainingUpdate::Offered(TrainingOffer {
+        trainer: 42,
+        caps: vec![200; 100],
+    }));
+    game(&mut world, offer.clone());
+    let after_offer = revisions(&world);
+    assert!(after_offer.1 > after_skill.1);
+    assert_eq!(
+        (after_offer.0, after_offer.2),
+        (after_skill.0, after_skill.2)
+    );
+    game(&mut world, offer);
+    assert_eq!(revisions(&world), after_offer);
+    game(&mut world, WorldEvent::Training(TrainingUpdate::Ended));
+    assert!(world.training_revision() > after_offer.1);
+
+    let before_restart = revisions(&world);
+    world.restart();
+    let restarted = revisions(&world);
+    assert!(
+        restarted.0 > before_restart.0
+            && restarted.1 > before_restart.1
+            && restarted.2 > before_restart.2
+    );
+    game(&mut world, entered(2));
+    assert!(world.skills_revision() > restarted.0);
+}
+
+#[test]
+fn merchant_revisions_include_stock_removal_and_local_closure() {
+    use crate::merchant::{MerchantItem, MerchantUpdate};
+    let mut world = admitted();
+    let before = world.merchant_revision();
+    game(&mut world, shop_opened(8));
+    let opened = world.merchant_revision();
+    assert!(opened > before);
+    game(
+        &mut world,
+        WorldEvent::Merchant(MerchantUpdate::Item(Box::new(MerchantItem {
+            slot: 3,
+            price: 10,
+            quantity: 0,
+            item: chest(),
+        }))),
+    );
+    let stocked = world.merchant_revision();
+    assert!(stocked > opened);
+    game(&mut world, WorldEvent::Coins(Coins::default()));
+    assert_eq!(world.merchant_revision(), stocked);
+    game(
+        &mut world,
+        WorldEvent::Merchant(MerchantUpdate::Removed { slot: 3 }),
+    );
+    let removed = world.merchant_revision();
+    assert!(removed > stocked);
+    world.close_shop();
+    let closed = world.merchant_revision();
+    assert!(closed > removed);
+    world.close_shop();
+    assert_eq!(world.merchant_revision(), closed);
+    game(&mut world, WorldEvent::Camp(CampStatus::Camped));
+    assert!(world.merchant_revision() > closed);
+}

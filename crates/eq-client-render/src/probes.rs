@@ -1670,6 +1670,7 @@ fn inspect_mesh_routes() {
         &folder,
         &zone_name,
         &triangles,
+        (!triangles_world).then_some(&world),
         &Settings::walker(height),
         &mesh,
     );
@@ -2125,7 +2126,14 @@ fn inspect_mesh_sizes() {
     let cache_bytes = |mesh: &NavMesh, settings: &Settings| {
         let folder =
             std::env::temp_dir().join(format!("eq-probe-navmesh-sizes-{}", std::process::id()));
-        let bytes = navmesh::cache::store(&folder, &zone_name, &triangles, settings, mesh);
+        let bytes = navmesh::cache::store(
+            &folder,
+            &zone_name,
+            &triangles,
+            Some(&world),
+            settings,
+            mesh,
+        );
         let _ = std::fs::remove_dir_all(&folder);
         bytes.map_or_else(
             |error| format!("unknown ({error})"),

@@ -110,6 +110,11 @@ pub trait Worker: Send + Sync {
     /// Why the session ended, in the player's words, once it has; None when
     /// it was asked to, or ended without a reason.
     fn reason(&self) -> Option<String>;
+
+    /// Whether the session closed its updates itself as it ended, whether
+    /// or not its last word fit in the queue; false for one that vanished,
+    /// such as on a panic.
+    fn closed(&self) -> bool;
 }
 
 /// The screen the player is at.
@@ -268,6 +273,14 @@ impl FrontEnd {
     /// Whether the run has a login screen.
     pub(crate) const fn has_login(&self) -> bool {
         self.logins.is_some()
+    }
+
+    /// Whether the running session closed its updates itself (see
+    /// [`Worker::closed`]); false with none running.
+    pub(crate) fn session_closed(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|running| running.worker.closed())
     }
 
     /// Whether a session runs.
@@ -672,6 +685,7 @@ pub(crate) mod testing {
     pub(crate) struct Thread {
         pub(crate) stopped: Arc<AtomicBool>,
         pub(crate) reason: Arc<Mutex<Option<String>>>,
+        pub(crate) closed: Arc<AtomicBool>,
     }
 
     impl Worker for Thread {
@@ -685,6 +699,10 @@ pub(crate) mod testing {
 
         fn reason(&self) -> Option<String> {
             self.reason.lock().unwrap().clone()
+        }
+
+        fn closed(&self) -> bool {
+            self.closed.load(Ordering::SeqCst)
         }
     }
 

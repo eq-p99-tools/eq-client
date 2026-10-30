@@ -11,6 +11,26 @@ use crate::{
 use std::collections::BTreeMap;
 
 impl ClientWorld {
+    /// Changes when the player's skills or their admission are replaced.
+    /// Unrelated movement, chat and resource updates leave it unchanged.
+    #[must_use]
+    pub const fn skills_revision(&self) -> u64 {
+        self.skills_revision
+    }
+
+    /// Changes when training offers open, change or end, or the world resets.
+    /// Skill values are tracked separately by [`Self::skills_revision`].
+    #[must_use]
+    pub const fn training_revision(&self) -> u64 {
+        self.training_revision
+    }
+
+    /// Changes when merchant stock opens, changes or closes, or the world resets.
+    #[must_use]
+    pub const fn merchant_revision(&self) -> u64 {
+        self.merchant_revision
+    }
+
     /// Whether the session has admitted the player and is connected.
     #[must_use]
     pub const fn connected(&self) -> bool {
