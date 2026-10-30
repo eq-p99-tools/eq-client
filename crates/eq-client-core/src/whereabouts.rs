@@ -29,16 +29,65 @@ pub fn location(position: WorldPosition) -> [String; 3] {
     [position.y, position.x, position.z].map(|value| format!("{value:.2}"))
 }
 
+/// The weekdays' names, Sunday first; the Titanium client names day 1 of a
+/// month Sunday, and every seventh day after it (from the program).
+const WEEKDAYS: [&str; 7] = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+
+/// How a client generation writes the date in `/time`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DateStyle {
+    /// Whether the day of the month takes an ordinal ending.
+    pub ordinal_day: bool,
+    /// Whether the weekday comes first.
+    pub weekday: bool,
+}
+
 /// A time in Norrath as `/time` names it: the month, the day, the year and
-/// the hour on a twelve-hour clock.
+/// the hour on a twelve-hour clock. The hour is the one the client shows,
+/// from 0 for 12 AM, which a client generation names from the calendar's in
+/// its own way, as it writes the date in its own style.
 #[must_use]
-pub fn norrath(time: GameTime) -> String {
+pub fn norrath(time: GameTime, shown_hour: u8, style: DateStyle) -> String {
     let month = MONTHS
         .get(usize::from(time.month.saturating_sub(1)))
         .copied()
         .unwrap_or_default();
-    let (hour, half) = twelve_hour(time.hour);
-    format!("{month} {}, {} - {hour} {half}", time.day, time.year)
+    let (hour, half) = twelve_hour(shown_hour);
+    let ending = if style.ordinal_day {
+        ordinal(time.day)
+    } else {
+        ""
+    };
+    let weekday = if style.weekday {
+        let index = usize::from(time.day.saturating_sub(1)) % WEEKDAYS.len();
+        format!("{}, ", WEEKDAYS[index])
+    } else {
+        String::new()
+    };
+    format!(
+        "{weekday}{month} {}{ending}, {} - {hour} {half}",
+        time.day, time.year
+    )
+}
+
+/// The ending a day of the month takes: 1 and 21 "st", 2 and 22 "nd", 3 and
+/// 23 "rd", any other "th", as the Mac client gives it (from the program,
+/// checklist item 6.155).
+const fn ordinal(day: u8) -> &'static str {
+    match day {
+        1 | 21 => "st",
+        2 | 22 => "nd",
+        3 | 23 => "rd",
+        _ => "th",
+    }
 }
 
 /// A time on Earth as `/time` names it: the weekday, the date and the time
@@ -81,10 +130,40 @@ mod tests {
             month: 2,
             year: 3200,
         };
-        assert_eq!(norrath(at(0)), "February 3, 3200 - 12 AM");
-        assert_eq!(norrath(at(6)), "February 3, 3200 - 6 AM");
-        assert_eq!(norrath(at(12)), "February 3, 3200 - 12 PM");
-        assert_eq!(norrath(at(23)), "February 3, 3200 - 11 PM");
+        let named = |hour| norrath(at(hour), hour, DateStyle::default());
+        assert_eq!(named(0), "February 3, 3200 - 12 AM");
+        assert_eq!(named(6), "February 3, 3200 - 6 AM");
+        assert_eq!(named(12), "February 3, 3200 - 12 PM");
+        assert_eq!(named(23), "February 3, 3200 - 11 PM");
+        // The hour is the one shown, whatever the calendar's.
+        assert_eq!(
+            norrath(at(12), 13, DateStyle::default()),
+            "February 3, 3200 - 1 PM"
+        );
+        // Ordinal endings, where the client gives them.
+        let ordinals = DateStyle {
+            ordinal_day: true,
+            weekday: false,
+        };
+        let day = |day| norrath(GameTime { day, ..at(0) }, 0, ordinals);
+        assert_eq!(day(1), "February 1st, 3200 - 12 AM");
+        assert_eq!(day(2), "February 2nd, 3200 - 12 AM");
+        assert_eq!(day(3), "February 3rd, 3200 - 12 AM");
+        assert_eq!(day(11), "February 11th, 3200 - 12 AM");
+        assert_eq!(day(21), "February 21st, 3200 - 12 AM");
+        assert_eq!(day(22), "February 22nd, 3200 - 12 AM");
+        assert_eq!(day(23), "February 23rd, 3200 - 12 AM");
+        assert_eq!(day(28), "February 28th, 3200 - 12 AM");
+        // Weekdays, where the client gives them: day 1 is a Sunday.
+        let weekdays = DateStyle {
+            ordinal_day: false,
+            weekday: true,
+        };
+        let weekday = |day| norrath(GameTime { day, ..at(0) }, 0, weekdays);
+        assert_eq!(weekday(1), "Sunday, February 1, 3200 - 12 AM");
+        assert_eq!(weekday(7), "Saturday, February 7, 3200 - 12 AM");
+        assert_eq!(weekday(8), "Sunday, February 8, 3200 - 12 AM");
+        assert_eq!(weekday(28), "Saturday, February 28, 3200 - 12 AM");
         let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 3)
             .unwrap()
             .and_hms_opt(12, 34, 5)

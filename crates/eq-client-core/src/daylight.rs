@@ -1,12 +1,12 @@
 //! How light it is in Norrath at a time of day, and how day and night look.
-//! Every number here is provisional: see [`PROVISIONAL_DAY_NIGHT`].
-use crate::clock::GameTime;
+//! Every number here is provisional: see [`PROVISIONAL_DAY_NIGHT`]. A
+//! client generation may say when its own dawn and dusk come.
 
 /// How Norrath's day and night look: when dawn and dusk come, and how the
 /// night and the twilight change the picture and the sky.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DayNight {
-    /// When dawn begins and ends, in minutes after midnight.
+    /// When dawn begins and ends, in minutes after the 12 AM shown.
     pub dawn: (u16, u16),
     /// When dusk begins and ends.
     pub dusk: (u16, u16),
@@ -46,10 +46,10 @@ pub const PROVISIONAL_DAY_NIGHT: DayNight = DayNight {
 };
 
 impl DayNight {
-    /// How much daylight there is, from 0 at night to 1 by day.
+    /// How much daylight there is at a minute after the 12 AM the client
+    /// shows, from 0 at night to 1 by day.
     #[must_use]
-    pub fn daylight(&self, time: GameTime) -> f32 {
-        let minute = u16::from(time.hour) * 60 + u16::from(time.minute);
+    pub fn daylight(&self, minute: u16) -> f32 {
         let ramp = |(start, end): (u16, u16)| f32::from(minute - start) / f32::from(end - start);
         match minute {
             _ if minute < self.dawn.0 || minute >= self.dusk.1 => 0.0,
@@ -59,11 +59,11 @@ impl DayNight {
         }
     }
 
-    /// How far into dawn or dusk the time is, from 0 outside them to 1 at
-    /// their middle, when the sky is most red.
+    /// How far into dawn or dusk a minute after the 12 AM shown is, from 0
+    /// outside them to 1 at their middle, when the sky is most red.
     #[must_use]
-    pub fn twilight(&self, time: GameTime) -> f32 {
-        let light = self.daylight(time);
+    pub fn twilight(&self, minute: u16) -> f32 {
+        let light = self.daylight(minute);
         if light <= 0.0 || light >= 1.0 {
             0.0
         } else {
@@ -76,14 +76,8 @@ impl DayNight {
 mod tests {
     use super::*;
 
-    fn at(hour: u8, minute: u8) -> GameTime {
-        GameTime {
-            hour,
-            minute,
-            day: 1,
-            month: 1,
-            year: 3100,
-        }
+    fn at(hour: u16, minute: u16) -> u16 {
+        hour * 60 + minute
     }
 
     #[test]
