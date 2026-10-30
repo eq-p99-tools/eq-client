@@ -12,8 +12,11 @@ use eq_client_assets::{MaterialMode, ZoneObject, ZonePrimitive};
 use std::collections::BTreeMap;
 
 /// The side of a batch's square cell on the ground, in world units. A
-/// placement joins the cell its origin stands in.
-pub(super) const CELL: f32 = 256.0;
+/// placement joins the cell its origin stands in. Measured on Emerald Jungle,
+/// whose 24,505 placements drew as 116,483 entities: cells of 128, 256 and 512
+/// make 60,687, 28,369 and 10,035, and 512 is the smallest of those near the
+/// zone's entity count before its posed objects were placed.
+pub(super) const CELL: f32 = 512.0;
 
 /// One merged mesh: model `model`'s primitive `primitive`, for every placement
 /// of that model in one cell, in world coordinates.
@@ -118,6 +121,11 @@ impl Placement {
     /// transform turns each triangle's winding, which is reversed back so it
     /// stays counter-clockwise around its normals.
     fn append(&self, source: &ZonePrimitive, into: &mut ZonePrimitive) {
+        debug_assert_eq!(
+            source.indices.len() % 3,
+            0,
+            "a triangle list's indices come in threes"
+        );
         let base = u32::try_from(into.positions.len()).expect("a batch's vertices fit u32 indices");
         into.positions.extend(
             source
