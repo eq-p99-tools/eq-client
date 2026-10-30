@@ -6,6 +6,7 @@ use theme::Size;
 mod camera;
 mod gpu_assets;
 mod scene_collision;
+mod static_batch;
 mod systems;
 
 use camera::{
@@ -594,12 +595,18 @@ fn spawn_static_zone(
     }
 
     let mut door_models = doors::Models::default();
+    let mut drawn_models = Vec::with_capacity(zone.models.len());
     let models: Vec<_> = zone
         .models
         .into_iter()
         .map(|model| {
+            let drawn: Vec<_> = model
+                .primitives
+                .into_iter()
+                .filter(gpu_assets::drawn)
+                .collect();
             let primitives = create_render_primitives(
-                model.primitives,
+                drawn.clone(),
                 &texture_images,
                 meshes,
                 materials,
@@ -613,23 +620,42 @@ fn spawn_static_zone(
                     collision: model.collision,
                 },
             );
+            drawn_models.push(drawn);
             primitives
         })
         .collect();
     commands.insert_resource(door_models);
-    for object in zone.objects {
-        let Some(model) = models.get(object.model) else {
-            continue;
-        };
-        let transform = object_transform(&object);
-        commands
-            .spawn((SceneEntity, transform, Visibility::Inherited))
-            .with_children(|parent| {
-                for (mesh, material) in model {
-                    parent.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone())));
-                }
-            });
-    }
+    let batched = static_batch::batch(&drawn_models, &zone.objects, static_batch::CELL);
+    commands.spawn_batch(
+        batched
+            .batches
+            .into_iter()
+            .map(|batch| {
+                let material = models[batch.model][batch.primitive].1.clone();
+                let mesh = meshes.add(gpu_assets::create_mesh(
+                    batch.geometry,
+                    RenderAssetUsages::RENDER_WORLD,
+                ));
+                (SceneEntity, Mesh3d(mesh), MeshMaterial3d(material))
+            })
+            .collect::<Vec<_>>(),
+    );
+    commands.spawn_batch(
+        batched
+            .apart
+            .into_iter()
+            .map(|(object, primitive)| {
+                let object = &zone.objects[object];
+                let (mesh, material) = models[object.model][primitive].clone();
+                (
+                    SceneEntity,
+                    object_transform(object),
+                    Mesh3d(mesh),
+                    MeshMaterial3d(material),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
 }
 
 fn spawn_player_and_hud(

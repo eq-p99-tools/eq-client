@@ -85,27 +85,38 @@ pub(super) fn create_render_primitives(
 ) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
     primitives
         .into_iter()
-        .filter(|primitive| !primitive.indices.is_empty() && !primitive.positions.is_empty())
+        .filter(drawn)
         .map(|primitive| {
             let texture = primitive
                 .texture
                 .and_then(|index| texture_images.get(index));
             let material = create_material(primitive.material_mode, texture, materials, unlit);
-            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usage);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, primitive.positions);
-            if !primitive.normals.is_empty() {
-                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, primitive.normals);
-            }
-            if !primitive.texture_coordinates.is_empty() {
-                mesh.insert_attribute(
-                    Mesh::ATTRIBUTE_UV_0,
-                    bevy_texture_coordinates(primitive.texture_coordinates),
-                );
-            }
-            mesh.insert_indices(Indices::U32(primitive.indices));
-            (meshes.add(mesh), material)
+            (meshes.add(create_mesh(primitive, usage)), material)
         })
         .collect()
+}
+
+/// A primitive's geometry as a Bevy mesh; its texture and material are the
+/// caller's.
+pub(super) fn create_mesh(primitive: ZonePrimitive, usage: RenderAssetUsages) -> Mesh {
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usage);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, primitive.positions);
+    if !primitive.normals.is_empty() {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, primitive.normals);
+    }
+    if !primitive.texture_coordinates.is_empty() {
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_UV_0,
+            bevy_texture_coordinates(primitive.texture_coordinates),
+        );
+    }
+    mesh.insert_indices(Indices::U32(primitive.indices));
+    mesh
+}
+
+/// Whether a primitive has any geometry to draw.
+pub(super) fn drawn(primitive: &ZonePrimitive) -> bool {
+    !primitive.indices.is_empty() && !primitive.positions.is_empty()
 }
 
 /// Converts classic WLD's downward-growing V axis to Bevy's texture orientation.
