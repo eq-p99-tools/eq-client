@@ -14,7 +14,11 @@ use eq_network::{
 use std::{
     env,
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -107,6 +111,8 @@ pub struct SessionWorker {
     worker: Option<JoinHandle<()>>,
     /// Why the session ended, once it has, in the player's words.
     reason: Arc<Mutex<Option<String>>>,
+    /// Whether the thread closed its updates itself as it ended.
+    closed: Arc<AtomicBool>,
 }
 
 impl SessionWorker {
@@ -133,6 +139,8 @@ impl SessionWorker {
         }
         let reason = Arc::new(Mutex::new(None));
         let ended = reason.clone();
+        let closed = Arc::new(AtomicBool::new(false));
+        let closing = closed.clone();
         let (sender, receiver) = mpsc::sync_channel(1024);
         let (commands, command_queue) = mpsc::sync_channel(32);
         let configuration = commands.clone();
@@ -204,7 +212,9 @@ impl SessionWorker {
                 {
                     *reason = Some(player_words(&error));
                 }
-                end_updates(sender);
+                end_updates(sender, &closing);
+            } else {
+                closing.store(true, Ordering::Release);
             }
         });
         Ok(eq_client_render::Session {
@@ -214,6 +224,7 @@ impl SessionWorker {
                 cancel,
                 worker: Some(worker),
                 reason,
+                closed,
             }),
         })
     }
@@ -230,6 +241,10 @@ impl eq_client_render::Worker for SessionWorker {
 
     fn reason(&self) -> Option<String> {
         self.reason.lock().ok()?.clone()
+    }
+
+    fn closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
     }
 }
 
@@ -319,7 +334,10 @@ impl Drop for SessionWorker {
 /// Sends the terminal status when there is room, then closes the event stream.
 /// A full queue drains in order before the receiver observes disconnection and
 /// ends the session. Joining the worker must never depend on that drain.
-fn end_updates(sender: mpsc::SyncSender<WorldUpdate>) {
+/// `closed` is set first, so a viewer that finds the stream closed knows the
+/// worker ended it, and reads why from the worker's reason.
+fn end_updates(sender: mpsc::SyncSender<WorldUpdate>, closed: &AtomicBool) {
+    closed.store(true, Ordering::Release);
     let _ = sender.try_send(WorldUpdate::Connection(Link::Ended));
     drop(sender);
 }
@@ -335,8 +353,10 @@ mod tests {
             .send(WorldUpdate::Connection(Link::LoggingIn))
             .unwrap();
         let (finished, completion) = mpsc::channel();
+        let closed = Arc::new(AtomicBool::new(false));
+        let closing = closed.clone();
         let worker = thread::spawn(move || {
-            end_updates(sender);
+            end_updates(sender, &closing);
             finished.send(()).unwrap();
         });
         // The receiver stays alive and full while the actual terminal path runs.
@@ -349,8 +369,16 @@ mod tests {
         let owner = SessionWorker {
             cancel: CancellationToken::default(),
             worker: Some(worker),
-            reason: Arc::new(Mutex::new(None)),
+            reason: Arc::new(Mutex::new(Some("The zone server stopped answering".into()))),
+            closed,
         };
+        // The viewer finds the stream closed with no end said: the worker
+        // closed it, and its own words say why.
+        assert!(eq_client_render::Worker::closed(&owner));
+        assert_eq!(
+            eq_client_render::Worker::reason(&owner).as_deref(),
+            Some("The zone server stopped answering")
+        );
         drop(owner);
         assert!(matches!(
             receiver.try_recv(),
@@ -365,7 +393,9 @@ mod tests {
     #[test]
     fn terminal_status_is_delivered_when_the_queue_has_room() {
         let (sender, receiver) = mpsc::sync_channel(1);
-        end_updates(sender);
+        let closed = AtomicBool::new(false);
+        end_updates(sender, &closed);
+        assert!(closed.load(Ordering::Acquire));
         assert!(matches!(
             receiver.try_recv(),
             Ok(WorldUpdate::Connection(Link::Ended))
@@ -380,7 +410,7 @@ mod tests {
     fn terminal_status_does_not_require_a_receiver() {
         let (sender, receiver) = mpsc::sync_channel(1);
         drop(receiver);
-        end_updates(sender);
+        end_updates(sender, &AtomicBool::new(false));
     }
 
     #[test]
