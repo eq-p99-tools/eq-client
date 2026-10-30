@@ -333,6 +333,28 @@ impl InstalledClient {
         }
     }
 
+    /// How this client's player falls and what a landing costs, from the
+    /// program; None until read for this client (Titanium: recording
+    /// checklist items 1.5, 6.147 and 6.167).
+    #[must_use]
+    pub const fn falls(self) -> Option<crate::falls::ClientFalls> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(crate::falls::EQMAC),
+        }
+    }
+
+    /// The least time between two jumps, from the program; None until read
+    /// for this client. The Titanium client refuses a jump within 500 ms of
+    /// the last (recording checklist item 1.3).
+    #[must_use]
+    pub const fn jump_spacing(self) -> Option<std::time::Duration> {
+        match self {
+            Self::Titanium => Some(std::time::Duration::from_millis(500)),
+            Self::EqMac => None,
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {

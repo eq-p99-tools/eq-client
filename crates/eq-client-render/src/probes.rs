@@ -362,6 +362,7 @@ fn inspect_admission_support() {
                 gravity: 32.0,
                 terminal_speed: 40.0,
                 jump_speed: 10.0,
+                air_factor: 1.0,
             },
             eq_client_core::movement::MotionStep {
                 horizontal: if frame < 40 {
@@ -463,7 +464,7 @@ fn inspect_stuck() {
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_MODEL, EQ_PROBE_FEET and EQ_PROBE_GOAL"]
 fn inspect_walk() {
-    use eq_client_core::movement::{AirborneController, Route, RouteStep};
+    use eq_client_core::movement::{AirborneController, PROVISIONAL_PHYSICS, Route, RouteStep};
     let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
     let zone =
         eq_client_assets::load_zone(&install, &std::env::var("EQ_PROBE_ZONE").unwrap()).unwrap();
@@ -485,8 +486,16 @@ fn inspect_walk() {
             RouteStep::Searching => (),
             RouteStep::Toward(next) => {
                 let to = Vec3::new(next.x - feet.x, 0.0, next.z - feet.z).normalize_or_zero();
-                let moved =
-                    motion::fall_step(&mut airborne, &world, feet, to * 3.1, 0.15, height, false);
+                let moved = motion::fall_step(
+                    &mut airborne,
+                    &world,
+                    PROVISIONAL_PHYSICS,
+                    feet,
+                    to * 3.1,
+                    0.15,
+                    height,
+                    false,
+                );
                 println!(
                     "sample={sample} toward={next:?} feet={moved:?} moved={}",
                     moved.distance(feet)

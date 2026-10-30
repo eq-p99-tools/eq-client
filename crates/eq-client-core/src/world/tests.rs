@@ -3799,3 +3799,39 @@ fn merchant_revisions_include_stock_removal_and_local_closure() {
     game(&mut world, WorldEvent::Camp(CampStatus::Camped));
     assert!(world.merchant_revision() > closed);
 }
+
+#[test]
+fn carried_weight_counts_what_the_player_wears_carries_and_holds_and_their_coins() {
+    use crate::inventory::InventorySlot;
+    let mut world = admitted();
+    assert!(world.carried_weight().abs() < f32::EPSILON);
+    let at = |slot, weight_tenths, stack_count| {
+        let mut item = chest();
+        item.slot = InventorySlot(slot);
+        item.details.weight_tenths = weight_tenths;
+        item.stack_count = stack_count;
+        item
+    };
+    game(
+        &mut world,
+        inventory(vec![
+            // Worn, 1.0.
+            chest(),
+            // In a pack slot, a stack of five at 0.5.
+            at(23, 5, Some(5)),
+            // In a carried bag, 2.0, in full.
+            at(260, 20, None),
+            // On the cursor, 0.3.
+            at(30, 3, None),
+            // In the bank: not carried.
+            at(2000, 500, None),
+        ]),
+    );
+    // 40 coins weigh 1.
+    game(&mut world, WorldEvent::Coins(coins(10, 10, 10, 10)));
+    assert!(
+        (world.carried_weight() - 6.8).abs() < 0.001,
+        "{}",
+        world.carried_weight()
+    );
+}

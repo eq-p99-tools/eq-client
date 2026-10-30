@@ -823,6 +823,7 @@ fn move_player(
         gravity: 32.0,
         terminal_speed: 40.0,
         jump_speed: 10.0,
+        air_factor: 1.0,
     };
     player.translation = airborne.step(
         world,

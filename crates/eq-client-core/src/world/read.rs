@@ -439,6 +439,46 @@ impl ClientWorld {
         self.wallet.purse.as_ref()
     }
 
+    /// What the player carries, in the weight units the programs count a
+    /// fall's cost in (TAKP Batch 1 R3, recording checklist item 6.161):
+    /// a tenth of each item's weight and a fortieth of each coin. The
+    /// program lessens a bag's contents by the bag's reduction, which the
+    /// item data the sessions decode lacks, so they count in full; a stack
+    /// counts each of its units; and worn items, the carried packs and
+    /// bags, the cursor and the coins in the purse and on the cursor count
+    /// (this client's reading).
+    #[must_use]
+    pub fn carried_weight(&self) -> f32 {
+        let items: u64 = self
+            .inventory
+            .items()
+            .iter()
+            .filter(|(slot, _)| {
+                slot.is_equipment()
+                    || slot.is_carried()
+                    || **slot == crate::inventory::InventorySlot::CURSOR
+                    || slot.is_in_cursor_bag()
+            })
+            .map(|(_, item)| {
+                u64::from(item.details.weight_tenths)
+                    * u64::from(item.stack_count.unwrap_or(1).max(1))
+            })
+            .sum();
+        let coins: u64 = [self.wallet.purse.unwrap_or_default(), self.wallet.cursor]
+            .iter()
+            .map(|coins| {
+                [coins.platinum, coins.gold, coins.silver, coins.copper]
+                    .into_iter()
+                    .map(u64::from)
+                    .sum::<u64>()
+            })
+            .sum();
+        // Weights past 2^24 tenths lose only fractions of a unit.
+        #[allow(clippy::cast_precision_loss)]
+        let weight = items as f32 / 10.0 + coins as f32 * 0.025;
+        weight
+    }
+
     /// The player's own casting and gem timers.
     #[must_use]
     pub const fn casting(&self) -> &Casting {
