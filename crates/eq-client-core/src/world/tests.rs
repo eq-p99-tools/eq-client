@@ -1631,18 +1631,19 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     let used = |session_id| WorldEvent::AbilityUsed {
         session_id,
         ability: Ability::Kick,
-        ready_in: Duration::from_secs(4),
+        // Titanium's Kick (eq-network's `Ability::reuse`).
+        ready_in: Duration::from_secs(8),
     };
     assert!(game(&mut world, used(2)).ignored, "another admission's");
     world.apply(&WorldUpdate::Game(used(1)), now, &NoSpells);
     // Strikes share the timer; other abilities keep their own.
     assert_eq!(
         world.ability_wait(Ability::Bash, now + Duration::from_secs(1)),
-        Some(Duration::from_secs(3))
+        Some(Duration::from_secs(7))
     );
     assert_eq!(world.ability_wait(Ability::Hide, now), None);
     assert_eq!(
-        world.ability_wait(Ability::Kick, now + Duration::from_secs(4)),
+        world.ability_wait(Ability::Kick, now + Duration::from_secs(8)),
         None
     );
     // Sense Heading says where the player faces: 128 is west.
