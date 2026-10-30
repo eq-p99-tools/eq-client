@@ -22,6 +22,14 @@ eqstr id, with this client's own words only as the fallback.
 
 ## Ordered work and asynchronous outcomes
 
+The renderer keeps its resource registration and frame graph in `systems`,
+camera input and occlusion in `camera`, GPU conversion in `gpu_assets`, and
+zone geometry/region adapters in `scene_collision`. Skin action bindings live
+in `skinned::bindings`, recursive container construction in `skinned::tree`,
+and world-to-label and gauge updates in
+`skinned::presentation`. The crate root composes startup and the shared scene.
+These modules keep their helpers internal rather than expanding the public API.
+
 The frame stages run receive, scene, typing, routing, gameplay input, then
 presentation. Text entry must consume keys before gameplay acts on them; scene
 reconciliation must see the reduced world. Existing chains also order focus and

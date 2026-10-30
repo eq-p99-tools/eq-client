@@ -24,6 +24,13 @@ pub enum Liquid {
 
 /// The zone's liquids, by point in the renderer's frame.
 pub trait Liquids: Send + Sync {
+    /// Stable identity of all data and lookup rules that affect these liquids.
+    /// Returning None disables persistent navigation caching for this provider.
+    /// Implementations must change the identity whenever their answers change.
+    fn cache_fingerprint(&self) -> Option<u64> {
+        None
+    }
+
     /// What fills the zone at a point, if anything.
     fn liquid_at(&self, point: Vec3) -> Option<Liquid>;
 

@@ -1,9 +1,10 @@
 //! The installed item models on the GPU, shared by everything that draws an
 //! item: items on the ground and items held in hand.
+use crate::asset_loads::{Asset, Loads};
 use bevy::prelude::*;
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// A drawable item model.
 pub(super) struct Shape {
@@ -15,11 +16,12 @@ pub(super) struct Shape {
 }
 
 /// The installed item models, opened when the first one is needed, and the
-/// shapes already built, which outlive zones.
+/// shapes built during this admission. Archive access can outlive zones.
 #[derive(Resource, Default)]
 pub(super) struct ItemLibrary {
-    models: Option<eq_client_assets::items::ItemModels>,
-    opened: bool,
+    source: Arc<Mutex<Source>>,
+    directory: Option<PathBuf>,
+    loads: Loads<String, eq_client_assets::items::ItemModel>,
     shapes: HashMap<String, Option<Arc<Shape>>>,
 }
 
@@ -37,42 +39,85 @@ pub(super) type Gpu<'a, 'b, 'c> = (
     &'c mut Assets<StandardMaterial>,
 );
 
-impl ItemLibrary {
-    /// A model's shape, such as `IT63`, built on first use; None when not installed.
-    pub(super) fn shape(
+/// Archive ownership is shared only by background jobs; the frame never locks it.
+#[derive(Default)]
+struct Source {
+    models: Option<eq_client_assets::items::ItemModels>,
+    attempted: Option<u64>,
+}
+
+impl Source {
+    fn load(
         &mut self,
+        directory: &Path,
         key: &str,
-        directory: Option<&Path>,
-        gpu: Gpu,
-    ) -> Option<Arc<Shape>> {
+        generation: u64,
+    ) -> Option<eq_client_assets::items::ItemModel> {
+        if self.models.is_none() && self.attempted != Some(generation) {
+            self.attempted = Some(generation);
+            self.models = eq_client_assets::items::ItemModels::open(directory)
+                .inspect_err(|error| warn!("Item models unavailable: {error}"))
+                .ok();
+        }
+        self.models
+            .as_mut()?
+            .model(key)
+            .inspect_err(|error| warn!("Item model {key} unavailable: {error}"))
+            .ok()
+            .flatten()
+    }
+}
+
+impl ItemLibrary {
+    /// Releases cached shapes and obsolete reads; active entities retain handles.
+    pub(super) fn clear_shapes(&mut self) {
+        self.shapes.clear();
+        self.loads.clear();
+    }
+
+    /// Looks up a shape or requests its decode without doing archive work here.
+    pub(super) fn shape(&mut self, key: &str, directory: Option<&Path>) -> Asset<Arc<Shape>> {
+        if self.directory.as_deref() != directory {
+            self.clear_shapes();
+            self.source = Arc::default();
+            self.directory = directory.map(Path::to_owned);
+        }
         if let Some(shape) = self.shapes.get(key) {
-            return shape.clone();
+            return shape.clone().map_or(Asset::Missing, Asset::Ready);
         }
-        if !self.opened {
-            self.opened = true;
-            self.models = directory.and_then(|directory| {
-                eq_client_assets::items::ItemModels::open(directory)
-                    .inspect_err(|error| warn!("Item models unavailable: {error}"))
-                    .ok()
-            });
-        }
-        let model = self.models.as_mut().and_then(|models| {
-            models
-                .model(key)
-                .inspect_err(|error| warn!("Item model {key} unavailable: {error}"))
-                .ok()
-                .flatten()
+        let Some(directory) = self.directory.clone() else {
+            self.shapes.insert(key.to_owned(), None);
+            return Asset::Missing;
+        };
+        let source = Arc::clone(&self.source);
+        let name = key.to_owned();
+        let generation = self.loads.generation();
+        self.loads.request(name.clone(), move || {
+            source
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .load(&directory, &name, generation)
         });
-        let shape = model.map(|model| Arc::new(build(model, gpu)));
-        self.shapes.insert(key.to_owned(), shape.clone());
-        shape
+        Asset::Pending
     }
 
     /// Adds an already built shape, for tests.
     #[cfg(test)]
     pub(super) fn insert(&mut self, key: &str, shape: Shape) {
-        self.opened = true;
         self.shapes.insert(key.to_owned(), Some(Arc::new(shape)));
+    }
+}
+
+/// Installs at most one decoded item each frame, before ground and held items.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+pub(super) fn poll(
+    mut library: ResMut<ItemLibrary>,
+    (mut images, mut meshes, mut materials): GpuAssets,
+) {
+    if let Some((key, model)) = library.loads.poll() {
+        let shape =
+            model.map(|model| Arc::new(build(model, (&mut images, &mut meshes, &mut materials))));
+        library.shapes.insert(key, shape);
     }
 }
 
@@ -110,6 +155,28 @@ pub(super) fn bounds<'a>(points: impl Iterator<Item = &'a [f32; 3]>) -> Option<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaving_releases_cached_shapes_but_not_active_owners() {
+        let mut library = ItemLibrary::default();
+        library.insert(
+            "IT1",
+            Shape {
+                primitives: Vec::new(),
+                bounds: None,
+                flat: false,
+            },
+        );
+        let active = library.shapes["IT1"].as_ref().unwrap().clone();
+        let lifetime = Arc::downgrade(&active);
+        let source = Arc::clone(&library.source);
+        library.clear_shapes();
+        assert!(library.shapes.is_empty());
+        assert!(Arc::ptr_eq(&source, &library.source));
+        assert!(lifetime.upgrade().is_some());
+        drop(active);
+        assert!(lifetime.upgrade().is_none());
+    }
     use bevy::asset::RenderAssetUsages;
     use eq_client_assets::{MaterialMode, ZonePrimitive, items::ItemModel};
 

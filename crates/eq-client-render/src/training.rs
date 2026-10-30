@@ -7,7 +7,7 @@
 use crate::{
     online::OnlineState,
     outbox::Outbox,
-    theme::{self, Size},
+    theme,
     windows::{Shown, WindowId},
 };
 use bevy::prelude::*;
@@ -49,6 +49,15 @@ pub(crate) struct SkillRows {
     columns: Vec<f32>,
     /// The rows last drawn, to redraw only when one changes.
     drawn: Option<Vec<Row>>,
+    /// Inputs last projected; None also covers a newly created window.
+    checked: Option<Inputs>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Inputs {
+    skills: u64,
+    training: u64,
+    chosen: Option<u32>,
 }
 
 impl SkillRows {
@@ -56,6 +65,7 @@ impl SkillRows {
         Self {
             columns,
             drawn: None,
+            checked: None,
         }
     }
 }
@@ -210,8 +220,21 @@ pub(crate) fn fill(
     chosen: Res<Chosen>,
     mut lists: Query<(Entity, &mut SkillRows, Option<&Children>)>,
 ) {
+    let input = Inputs {
+        skills: online.world().skills_revision(),
+        training: online.world().training_revision(),
+        chosen: chosen.0,
+    };
+    // No list, or every existing list is current: no row allocation or sorting.
+    if lists.iter().all(|(_, list, _)| list.checked == Some(input)) {
+        return;
+    }
     let wanted = rows(online.world(), chosen.0);
     for (entity, mut list, children) in &mut lists {
+        if list.checked == Some(input) {
+            continue;
+        }
+        list.checked = Some(input);
         if list.drawn.as_ref() == Some(&wanted) {
             continue;
         }
@@ -251,19 +274,7 @@ pub(crate) fn fill(
                     ChildOf(entity),
                 ))
                 .id();
-            for (words, width) in cells.into_iter().zip(&list.columns) {
-                commands.spawn((
-                    theme::text(words, Size::Small, theme::INK_BRIGHT),
-                    TextLayout::new(Justify::Left, LineBreak::NoWrap),
-                    Node {
-                        width: px(*width),
-                        flex_shrink: 0.0,
-                        overflow: Overflow::clip(),
-                        ..default()
-                    },
-                    ChildOf(line),
-                ));
-            }
+            crate::list_cells::text(&mut commands, line, cells, list.columns.iter().copied());
         }
         list.drawn = Some(wanted.clone());
     }
@@ -368,5 +379,65 @@ mod tests {
         assert_eq!(rows[0].cost, Coins::default());
         assert!(is_guildmaster(Some(20)) && !is_guildmaster(Some(41)));
         assert!(!is_guildmaster(None));
+    }
+
+    #[test]
+    fn training_rows_follow_selection_skills_and_ended_offers() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, fill);
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.skills = Some(vec![0; 100]);
+        testing::admit(&mut online, 1, player);
+        let mut caps = vec![0; 100];
+        caps[30] = 200;
+        testing::news(
+            &mut online,
+            [WorldEvent::Training(TrainingUpdate::Offered(
+                TrainingOffer { trainer: 42, caps },
+            ))],
+        );
+        app.insert_resource(online);
+        let list = app.world_mut().spawn(SkillRows::new(vec![50.0; 7])).id();
+        app.update();
+        let first = app.world().get::<Children>(list).unwrap()[0];
+        app.update();
+        assert_eq!(app.world().get::<Children>(list).unwrap()[0], first);
+        app.world_mut().resource_mut::<Chosen>().0 = Some(30);
+        app.update();
+        let selected = app.world().get::<Children>(list).unwrap()[0];
+        assert_eq!(
+            app.world().get::<BackgroundColor>(selected).unwrap().0,
+            theme::BUTTON
+        );
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Training(TrainingUpdate::Trained {
+                skill: 30,
+                value: 3,
+                cost: 0,
+            })],
+        );
+        app.update();
+        let row = &app
+            .world()
+            .get::<SkillRows>(list)
+            .unwrap()
+            .drawn
+            .as_ref()
+            .unwrap()[0];
+        assert_eq!(row.value, 3);
+        assert_eq!(row.cost, in_coins(practice_cost(3)));
+        assert!(row.chosen);
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Training(TrainingUpdate::Ended)],
+        );
+        app.update();
+        assert!(
+            app.world()
+                .get::<Children>(list)
+                .is_none_or(Children::is_empty)
+        );
     }
 }

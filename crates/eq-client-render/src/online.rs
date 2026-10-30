@@ -396,13 +396,20 @@ pub(super) fn report_bleed_out(mut state: ResMut<OnlineState>, outbox: Res<super
     }
 }
 
+/// Whether news that stopped without an end came from a session that
+/// vanished, rather than one that closed it itself, whose last word did not
+/// fit in the queue and whose own reason says why it ended.
+fn vanished(front: Option<&super::login::FrontEnd>) -> bool {
+    !front.is_some_and(super::login::FrontEnd::session_closed)
+}
+
 /// Applies the session's news to the world and shows what it changed. The
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn receive(
     mut commands: Commands,
-    updates: Res<Updates>,
+    (updates, front): (Res<Updates>, Option<Res<super::login::FrontEnd>>),
     definitions: (
         Res<ViewerSettings>,
         Option<Res<super::spellbook::SpellNames>>,
@@ -441,7 +448,7 @@ pub(super) fn receive(
     // held news has applied, so it is said once.
     let lost = (ended && !state.world.ended() && state.held.is_empty())
         .then_some(WorldUpdate::Connection(eq_client_core::world::Link::Ended));
-    if lost.is_some() {
+    if lost.is_some() && vanished(front.as_deref()) {
         warn!("The session stopped without saying why");
     }
     let waiting = loading.is_some_and(|loading| loading.waiting());
@@ -904,6 +911,33 @@ mod tests {
     use super::*;
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
     use eq_client_core::PlayerState;
+
+    #[test]
+    fn news_closed_by_its_own_session_is_not_taken_for_a_vanished_one() {
+        use super::super::login::{FrontEnd, Session, testing};
+        use std::sync::atomic::Ordering;
+        let thread = testing::Thread::default();
+        let (_news, updates) = std::sync::mpsc::sync_channel(1);
+        let (commands, _queue) = std::sync::mpsc::sync_channel(1);
+        let (front, ..) = FrontEnd::launched(
+            Box::new(testing::Fake {
+                servers: vec![testing::server("Example", "someone")],
+                heard: std::sync::Arc::default(),
+            }),
+            Some(Session {
+                updates,
+                commands,
+                worker: Box::new(thread.clone()),
+            }),
+        );
+        // A worker that ended without closing its news, as on a panic.
+        assert!(vanished(Some(&front)));
+        // One whose last word did not fit in a full queue closed it itself.
+        thread.closed.store(true, Ordering::SeqCst);
+        assert!(!vanished(Some(&front)));
+        // Without a front end there is no session to ask.
+        assert!(vanished(None));
+    }
 
     #[test]
     fn the_session_hears_of_a_bleed_out_the_world_finds_once() {

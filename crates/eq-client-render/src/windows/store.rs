@@ -3,26 +3,23 @@
 //! settings directory; a shared file covers the screens before a character
 //! enters and seeds characters that have none yet.
 use super::layout::{Layouts, Saved};
+use crate::profile_files::{CharacterProfile, Store as Files};
 use bevy::prelude::*;
-use std::{collections::BTreeMap, fmt::Write as _, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt::Write as _,
+    time::{Duration, Instant},
+};
 
 /// Changed placements are written at most this often, and never mid-drag.
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
 const HEADER: &str = "# eq-client window layouts v1";
 const SHARED: &str = "windows.txt";
 
-/// The world and character whose placements are in use; None before one enters.
-type Profile = Option<(String, String)>;
-
-/// What the persisting system knows between frames.
+/// Placement-specific scheduling around the shared profile persistence state.
 #[derive(Default)]
 pub(super) struct Store {
-    /// Whether the directory is known and a profile's placements were loaded.
-    loaded: bool,
-    directory: Option<PathBuf>,
-    profile: Profile,
-    /// The text last read or written for this profile, to skip unchanged writes.
-    written: String,
+    files: Files,
     since_check: Duration,
 }
 
@@ -41,28 +38,26 @@ pub(super) fn persist(
     mut store: Local<Store>,
 ) {
     let exiting = exits.read().count() > 0;
-    if !store.loaded || profile.is_changed() {
-        if store.loaded {
+    if drag.active.is_none() {
+        store.files.retry(Instant::now());
+    }
+    if !store.files.loaded || profile.is_changed() {
+        if store.files.loaded {
             save(&mut store, &layouts);
         } else {
-            store.directory.clone_from(&settings.0.settings_directory);
-            store.loaded = true;
+            store.files.open(settings.0.settings_directory.as_ref());
         }
-        store.profile = profile.key();
-        let own = store.directory.as_ref().and_then(|directory| {
-            std::fs::read_to_string(directory.join(file_name(store.profile.as_ref()))).ok()
-        });
+        store.files.profile = profile.key();
+        let own = store.files.read(&file_name(store.files.profile.as_ref()));
         let seeded = own.is_none();
-        if let Some(directory) = &store.directory {
-            let text = own
-                .or_else(|| std::fs::read_to_string(directory.join(SHARED)).ok())
-                .unwrap_or_default();
+        if store.files.directory.is_some() {
+            let text = own.or_else(|| store.files.read(SHARED)).unwrap_or_default();
             layouts.0 = decode(&text);
         }
         // A character this client has not placed windows for yet starts where
         // the official client last put them.
         if seeded
-            && let Some((world, character)) = &store.profile
+            && let Some(CharacterProfile { world, character }) = &store.files.profile
             && let Some(official) = settings.0.official_settings()
             && let Ok(window) = windows.single()
         {
@@ -72,7 +67,7 @@ pub(super) fn persist(
                 Vec2::new(window.width(), window.height()),
             );
         }
-        store.written = encode(&layouts.0);
+        store.files.loaded_text(encode(&layouts.0));
         store.since_check = Duration::ZERO;
         return;
     }
@@ -142,29 +137,12 @@ fn seed(
 
 /// Writes the placements to the profile's file when they changed since last time.
 fn save(store: &mut Store, layouts: &Layouts) {
-    let Some(directory) = &store.directory else {
-        return;
-    };
-    let text = encode(&layouts.0);
-    if text == store.written {
-        return;
-    }
-    let path = directory.join(file_name(store.profile.as_ref()));
-    match crate::profile_files::write(directory, &path, &text) {
-        Ok(()) => store.written = text,
-        Err(error) => {
-            warn!(
-                "Could not save window layouts to {}: {error}",
-                path.display()
-            );
-            // Stop retrying every second; the next change tries again.
-            store.written = text;
-        }
-    }
+    let name = file_name(store.files.profile.as_ref());
+    store.files.save(name, encode(&layouts.0), Instant::now());
 }
 
 /// The shared file, or the profile's own.
-fn file_name(profile: Option<&(String, String)>) -> String {
+fn file_name(profile: Option<&CharacterProfile>) -> String {
     crate::profile_files::name("windows", SHARED, profile)
 }
 
@@ -411,9 +389,15 @@ mod tests {
     #[test]
     fn each_character_on_each_world_has_its_own_file() {
         assert_eq!(file_name(None), SHARED);
-        let profile = ("P1999Green".to_owned(), "Example".to_owned());
+        let profile = CharacterProfile {
+            world: "P1999Green".into(),
+            character: "Example".into(),
+        };
         assert_eq!(file_name(Some(&profile)), "windows-P1999Green-Example.txt");
-        let odd = ("a/b".to_owned(), "..".to_owned());
+        let odd = CharacterProfile {
+            world: "a/b".into(),
+            character: "..".into(),
+        };
         assert_eq!(file_name(Some(&odd)), "windows-a_b-__.txt");
     }
 
