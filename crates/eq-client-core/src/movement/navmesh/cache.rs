@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The rerecast version the mesh is built with, as pinned in Cargo.toml.
 const RERECAST: &str = "0.4.0";
 /// This format's version; raised whenever the bytes or the build change.
-const FORMAT: u32 = 7;
+const FORMAT: u32 = 8;
 const MAGIC: &[u8; 4] = b"EQNM";
 
 /// Where a mesh came from.
