@@ -536,12 +536,13 @@ impl ClientWorld {
             // one answers, an invitation goes unanswered. Newly earned titles
             // wait for a window to choose one from, and what a game master did
             // to a player, or the petitions in the queue, for a front end that
-            // shows them.
+            // shows them. The server's regeneration tick waits for its own.
             WorldEvent::Rules(_)
             | WorldEvent::Expansions(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::Weather(_)
+            | WorldEvent::ServerTick(_)
             | WorldEvent::Stun(_)
             | WorldEvent::Charm(_)
             | WorldEvent::Controlled(_)
