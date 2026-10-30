@@ -602,10 +602,10 @@ pub(super) fn drive(
                 };
                 // Only an object walk has chosen an object.
                 let body = bodies.single().ok().copied();
-                let ends = body.and_then(|body| walk_ends(&online, body, script.approached));
                 let world = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
+                let ends = body.and_then(|body| walk_ends(&online, body, script.approached, world));
                 let (Some((feet, goal)), Some(world), Some(body)) = (ends, world, body) else {
                     script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
                     return;
@@ -1293,7 +1293,10 @@ pub(super) fn drive(
             }
             let creating = std::time::Instant::now();
             let route = bodies.single().ok().and_then(|body| {
-                let (feet, goal) = walk_ends(&online, *body, script.approached)?;
+                let floors = collision
+                    .as_ref()
+                    .and_then(|collision| collision.0.as_ref());
+                let (feet, goal) = walk_ends(&online, *body, script.approached, floors)?;
                 // Ledges are routes only where the session simulates falls.
                 let route = eq_client_core::movement::Route::new(feet, goal, *range, body.height)
                     .with_drops(observed.4.airborne.is_some())
@@ -2247,28 +2250,56 @@ fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
 }
 
 /// The player's feet at its accepted position and the goal's position, in
-/// render coordinates: the world object `object` names, or else the target.
+/// render coordinates: the world object `object` names, or else the
+/// target's soles, as [`spawn_goal`] finds them on `floors`.
 fn walk_ends(
     online: &super::online::OnlineState,
     body: super::PlayerBody,
     object: Option<u32>,
+    floors: Option<&eq_client_core::movement::CollisionWorld>,
 ) -> Option<(Vec3, Vec3)> {
     let world = online.world();
     let player = world.player()?;
-    let goal = match object {
-        Some(drop_id) => world.objects().entries().get(&drop_id)?.position,
-        None => {
-            world
-                .target()
-                .selected
-                .and_then(|id| world.spawn(id))?
-                .state
-                .position
-        }
+    let goal = if let Some(drop_id) = object {
+        Vec3::from_array(eq_client_core::render_position(
+            world.objects().entries().get(&drop_id)?.position,
+        ))
+    } else {
+        let target = &world
+            .target()
+            .selected
+            .and_then(|id| world.spawn(id))?
+            .state;
+        spawn_goal(
+            floors,
+            Vec3::from_array(eq_client_core::render_position(target.position)),
+            target.race,
+            target.size,
+        )
     };
     let origin = Vec3::from_array(eq_client_core::render_position(player.position));
-    let goal = Vec3::from_array(eq_client_core::render_position(goal));
     Some((origin - Vec3::Y * body.feet_offset, goal))
+}
+
+/// Where a walk to a spawn reported at `reported` (its body's middle, in
+/// render coordinates) aims: its soles, where the client draws a standing
+/// one, by [`eq_client_core::drawn_feet_offset`] and then onto the floor of
+/// `floors` by [`eq_client_core::grounded_soles`]. Inferred, as those are:
+/// item 6.231.
+fn spawn_goal(
+    floors: Option<&eq_client_core::movement::CollisionWorld>,
+    reported: Vec3,
+    race: u32,
+    size: f32,
+) -> Vec3 {
+    let soles = reported - Vec3::Y * eq_client_core::drawn_feet_offset(race, size);
+    floors.map_or(soles, |floors| {
+        Vec3::new(
+            soles.x,
+            eq_client_core::grounded_soles(floors, soles, race, size),
+            soles.z,
+        )
+    })
 }
 
 /// The zone's nearest world container of a tradeskill kind to the player.
@@ -2439,6 +2470,115 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A flat floor at height 0, 40 across, as a collision world and its
+    /// triangles.
+    fn flat_floor() -> (eq_client_core::movement::CollisionWorld, Vec<[[f32; 3]; 3]>) {
+        let (a, b, c, d) = (
+            [-20.0, 0.0, -20.0],
+            [-20.0, 0.0, 20.0],
+            [20.0, 0.0, 20.0],
+            [20.0, 0.0, -20.0],
+        );
+        let triangles = vec![[a, b, c], [a, c, d]];
+        let world =
+            eq_client_core::movement::CollisionWorld::new(triangles.iter().copied()).unwrap();
+        (world, triangles)
+    }
+
+    #[test]
+    fn a_walk_to_a_target_aims_at_its_soles_on_the_floor_not_its_middle() {
+        use eq_client_core::movement::navmesh::{NavMesh, Settings};
+        use eq_client_core::movement::{Route, RouteStep};
+        let (world, triangles) = flat_floor();
+        // A human of size 6, reported at its middle: 0.625 x 6 over its
+        // soles; and one the server reports a little high.
+        let offset = eq_client_core::drawn_feet_offset(1, 6.0);
+        for over in [0.0, 0.3] {
+            let reported = Vec3::new(5.0, offset + over, 2.0);
+            let goal = spawn_goal(Some(&world), reported, 1, 6.0);
+            assert!(goal.y.abs() < 1e-3, "{over}: {goal}");
+            assert_eq!((goal.x, goal.z), (5.0, 2.0));
+        }
+        // The mesh finds floor under the soles and none within its reach of
+        // the middle.
+        let reported = Vec3::new(5.0, offset, 2.0);
+        let goal = spawn_goal(Some(&world), reported, 1, 6.0);
+        let (mesh, _) = NavMesh::build(
+            &triangles,
+            &Settings::walker(6.0),
+            2,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(mesh.locate(goal).is_some());
+        assert!(mesh.locate(reported).is_none());
+        // Feet on that floor within reach across have arrived at it.
+        let feet = Vec3::new(5.5, 0.0, 2.0);
+        let mut route = Route::new(feet, goal, 1.0, 6.0);
+        assert_eq!(
+            route.next(&world, feet, goal, 100, Duration::ZERO),
+            RouteStep::Arrived
+        );
+    }
+
+    #[test]
+    fn with_no_floors_a_target_s_goal_is_its_drawn_soles() {
+        let reported = Vec3::new(1.0, 10.0, -3.0);
+        let goal = spawn_goal(None, reported, 1, 6.0);
+        let lowered = reported.y - eq_client_core::drawn_feet_offset(1, 6.0);
+        assert!((goal.y - lowered).abs() < 1e-6);
+        assert_eq!((goal.x, goal.z), (1.0, -3.0));
+    }
+
+    #[test]
+    fn a_walk_aims_at_a_target_s_soles_and_at_an_object_s_base() {
+        use eq_client_core::{WorldEvent, world_position};
+        let (world, _) = flat_floor();
+        let mut online = super::super::online::OnlineState::new(true);
+        super::super::online::testing::admit(
+            &mut online,
+            1,
+            super::super::online::testing::player(1),
+        );
+        let offset = eq_client_core::drawn_feet_offset(1, 6.0);
+        let mut npc = super::super::online::testing::pet(9, 0);
+        npc.pet_owner = None;
+        npc.race = 1;
+        npc.size = 6.0;
+        npc.position = world_position([4.0, offset, 1.0], 0.0);
+        super::super::online::testing::news(&mut online, [WorldEvent::Spawns(vec![npc])]);
+        online.select_target(Some(9));
+        let body = super::super::PlayerBody {
+            feet_offset: 3.0,
+            height: 6.0,
+            size: 6.0,
+        };
+        let (_, goal) = walk_ends(&online, body, None, Some(&world)).unwrap();
+        assert!(goal.y.abs() < 1e-3, "{goal}");
+        assert!(
+            (goal.x - 4.0).abs() < 1e-3 && (goal.z - 1.0).abs() < 1e-3,
+            "{goal}"
+        );
+        // An object's position is its base: the walk aims there unchanged.
+        let base = world_position([-6.0, 0.4, 3.0], 0.0);
+        super::super::online::testing::news(
+            &mut online,
+            [WorldEvent::Objects(
+                eq_client_core::ground::ObjectUpdate::Spawn(eq_client_core::ground::GroundObject {
+                    drop_id: 40,
+                    model: "IT63_ACTORDEF".into(),
+                    position: base,
+                    object_type: 15,
+                }),
+            )],
+        );
+        let (_, goal) = walk_ends(&online, body, Some(40), Some(&world)).unwrap();
+        assert_eq!(
+            goal,
+            Vec3::from_array(eq_client_core::render_position(base))
+        );
+    }
 
     #[test]
     fn a_create_step_waits_for_the_worlds_answer_and_fails_on_a_refusal() {
