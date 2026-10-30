@@ -45,8 +45,7 @@ pub(crate) fn persist(
     if store.loaded {
         save(&mut store, &bindings);
     } else {
-        store.directory.clone_from(&settings.0.settings_directory);
-        store.loaded = true;
+        store.open(settings.0.settings_directory.as_ref());
     }
     store.profile = profile.key();
     let Some(CharacterProfile { world, character }) = store.profile.clone() else {

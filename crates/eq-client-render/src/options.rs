@@ -85,11 +85,7 @@ pub(crate) fn persist(
     if state.store.loaded {
         save(&mut state);
     } else {
-        state
-            .store
-            .directory
-            .clone_from(&settings.0.settings_directory);
-        state.store.loaded = true;
+        state.store.open(settings.0.settings_directory.as_ref());
     }
     let state = &mut *state;
     state.store.profile = profile.key();

@@ -45,11 +45,7 @@ pub(super) fn persist(
         if store.files.loaded {
             save(&mut store, &layouts);
         } else {
-            store
-                .files
-                .directory
-                .clone_from(&settings.0.settings_directory);
-            store.files.loaded = true;
+            store.files.open(settings.0.settings_directory.as_ref());
         }
         store.files.profile = profile.key();
         let own = store.files.read(&file_name(store.files.profile.as_ref()));

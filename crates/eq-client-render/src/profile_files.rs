@@ -94,12 +94,31 @@ pub(crate) struct Store {
 
 struct Pending {
     text: String,
+    /// When the next write may be tried.
     retry: Instant,
+    /// The wait after the last failed write; None before one fails.
+    delay: Option<Duration>,
 }
 
+/// The wait after a file's first failed write, doubling with each further
+/// failure up to [`MAX_RETRY`].
 const RETRY: Duration = Duration::from_secs(1);
+const MAX_RETRY: Duration = Duration::from_secs(60);
+/// How old a staging file must be before it counts as left by a crash rather
+/// than one another running client is still writing.
+const STALE_STAGING: Duration = Duration::from_secs(60);
 
 impl Store {
+    /// Takes the settings directory once, the first time the store loads,
+    /// and removes the staging files a crash left there.
+    pub(crate) fn open(&mut self, directory: Option<&PathBuf>) {
+        self.directory = directory.cloned();
+        self.loaded = true;
+        if let Some(directory) = &self.directory {
+            remove_stale_staging(directory, std::time::SystemTime::now());
+        }
+    }
+
     /// Reads unsaved state before disk, including after returning to a profile.
     pub(crate) fn read(&self, name: &str) -> Option<String> {
         self.pending
@@ -120,12 +139,17 @@ impl Store {
         }
         self.observed.clone_from(&text);
         // Editing a dirty file keeps its backoff instead of retrying every frame.
-        let retry = self.pending.get(&name).map_or(now, |pending| pending.retry);
-        self.pending.insert(name, Pending { text, retry });
+        let (retry, delay) = self
+            .pending
+            .get(&name)
+            .map_or((now, None), |pending| (pending.retry, pending.delay));
+        self.pending.insert(name, Pending { text, retry, delay });
         self.retry(now);
     }
 
-    /// Retries all dirty profiles at most once a second per file.
+    /// Retries each dirty file once its wait is over. The wait starts at a
+    /// second and doubles with each failure, up to a minute; a run of
+    /// failures warns once as it starts and says so once it ends.
     pub(crate) fn retry(&mut self, now: Instant) {
         let Some(directory) = &self.directory else {
             return;
@@ -136,15 +160,70 @@ impl Store {
             }
             let path = directory.join(name);
             match write(directory, &path, &pending.text) {
-                Ok(()) => false,
+                Ok(()) => {
+                    if pending.delay.is_some() {
+                        info!("Saved settings to {} after failing", path.display());
+                    }
+                    false
+                }
                 Err(error) => {
-                    warn!("Could not save settings to {}: {error}", path.display());
-                    pending.retry = now + RETRY;
+                    let delay = match pending.delay {
+                        None => {
+                            warn!(
+                                "Could not save settings to {}, retrying: {error}",
+                                path.display()
+                            );
+                            RETRY
+                        }
+                        Some(delay) => (delay * 2).min(MAX_RETRY),
+                    };
+                    pending.delay = Some(delay);
+                    pending.retry = now + delay;
                     true
                 }
             }
         });
     }
+}
+
+/// Removes the staging files [`write`] names `<stem>.<digits>.<digits>.tmp`
+/// that are older than [`STALE_STAGING`]: a crash between creating one and
+/// renaming it leaves it behind. Younger ones may be another running
+/// client's, so they stay; other files are never touched.
+fn remove_stale_staging(directory: &Path, now: std::time::SystemTime) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !is_staging(name) {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > STALE_STAGING);
+        if old && let Err(error) = std::fs::remove_file(entry.path()) {
+            warn!("Could not remove {}: {error}", entry.path().display());
+        }
+    }
+}
+
+/// Whether `name` is a staging file's, `<stem>.<digits>.<digits>.tmp`.
+fn is_staging(name: &str) -> bool {
+    let mut parts = name.rsplitn(4, '.');
+    let digits = |part: Option<&str>| {
+        part.is_some_and(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    };
+    parts.next() == Some("tmp")
+        && digits(parts.next())
+        && digits(parts.next())
+        && parts.next().is_some_and(|stem| !stem.is_empty())
 }
 
 /// Atomically replaces a file using an exclusively created staging file, so
@@ -253,6 +332,87 @@ mod tests {
             "latest"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failing_file_waits_twice_as_long_each_time_up_to_a_minute() {
+        let root = folder();
+        let directory = root.join("settings");
+        std::fs::write(&directory, "blocked").unwrap();
+        let mut store = Store {
+            directory: Some(directory.clone()),
+            ..Default::default()
+        };
+        let start = Instant::now();
+        store.save("options.txt".into(), "text".into(), start);
+        let mut now = start;
+        let mut waits = Vec::new();
+        for _ in 0..8 {
+            let retry = store.pending["options.txt"].retry;
+            let wait = retry.duration_since(now);
+            waits.push(wait);
+            // Nothing is tried before the wait is over.
+            store.retry(now + wait / 2);
+            now = retry;
+            assert_eq!(store.pending["options.txt"].retry, now);
+            store.retry(now);
+        }
+        assert_eq!(waits, [1, 2, 4, 8, 16, 32, 60, 60].map(Duration::from_secs));
+        std::fs::remove_file(&directory).unwrap();
+        store.retry(store.pending["options.txt"].retry);
+        assert!(store.pending.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(directory.join("options.txt")).unwrap(),
+            "text"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn opening_removes_only_old_staging_files() {
+        let directory = folder();
+        let old = std::time::SystemTime::now() - STALE_STAGING * 2;
+        let planted = |name: &str, modified: std::time::SystemTime| {
+            let path = directory.join(name);
+            std::fs::write(&path, "x").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+            path
+        };
+        let crashed = planted("options-W-C.4242.7.tmp", old);
+        let running = planted("options-W-C.4243.0.tmp", std::time::SystemTime::now());
+        let settings = planted("options-W-C.txt", old);
+        let other = planted("notes.1.tmp", old);
+        let mut store = Store::default();
+        store.open(Some(&directory));
+        assert!(store.loaded);
+        assert!(!crashed.exists());
+        assert!(running.exists());
+        assert!(settings.exists());
+        assert!(other.exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn staging_names_are_a_stem_two_numbers_and_tmp() {
+        assert!(is_staging("options-W-C.4242.7.tmp"));
+        // As write names them.
+        let staged = Path::new("windows.txt").with_extension("12.3.tmp");
+        assert!(is_staging(staged.to_str().unwrap()));
+        for name in [
+            "options.tmp",
+            "a.1.tmp",
+            ".1.2.tmp",
+            "a.1.x.tmp",
+            "a.1.2.txt",
+            "a..2.tmp",
+        ] {
+            assert!(!is_staging(name), "{name}");
+        }
     }
 
     #[test]
