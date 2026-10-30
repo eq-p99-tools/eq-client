@@ -2143,3 +2143,80 @@ mod sizes {
         let _ = std::fs::remove_dir_all(&folder);
     }
 }
+
+mod headroom {
+    //! The build and the walker's capsule asked about one ceiling: both
+    //! sides here, so a change to either breaks these.
+
+    use super::{block, floor, settings};
+    use crate::movement::navmesh::{NavMesh, Settings};
+    use crate::movement::{CollisionWorld, LIFT};
+    use glam::Vec3;
+    use std::sync::atomic::AtomicBool;
+
+    const HEIGHT: f32 = 6.0;
+
+    #[test]
+    fn the_build_asks_the_capsule_s_own_lift() {
+        assert_eq!(settings().lift, LIFT);
+    }
+
+    /// A floor with a slab across it from x -4 to 4, its underside `low`
+    /// over the floor.
+    fn under_slab(low: f32) -> Vec<[[f32; 3]; 3]> {
+        let mut triangles = floor(0.0, -20.0, 20.0);
+        triangles.extend(block([-4.0, low, -20.0], [4.0, low + 1.0, 20.0]));
+        // Facing down.
+        triangles.push([[-4.0, low, -20.0], [4.0, low, -20.0], [4.0, low, 20.0]]);
+        triangles.push([[-4.0, low, -20.0], [4.0, low, 20.0], [-4.0, low, 20.0]]);
+        triangles
+    }
+
+    /// How far across the walker gets from x -10 toward x 10 at z 0.
+    fn walked(triangles: &[[[f32; 3]; 3]], height: f32) -> f32 {
+        let world = CollisionWorld::new(triangles.iter().copied()).unwrap();
+        let mut feet = Vec3::new(-10.0, 0.0, 0.0);
+        for _ in 0..40 {
+            feet = world.step(feet, Vec3::new(0.5, 0.0, 0.0), height);
+        }
+        feet.x
+    }
+
+    fn floored(triangles: &[[[f32; 3]; 3]], settings: &Settings) -> bool {
+        let (mesh, _) = NavMesh::build(triangles, settings, 2, &AtomicBool::new(false)).unwrap();
+        mesh.locate(Vec3::new(0.0, 0.0, 0.0)).is_some()
+    }
+
+    #[test]
+    fn a_ceiling_under_the_capsule_s_top_has_no_floor_and_stops_the_walker() {
+        let triangles = under_slab(HEIGHT + LIFT / 2.0);
+        assert!(!floored(&triangles, &settings()));
+        assert!(walked(&triangles, HEIGHT) < -4.0);
+    }
+
+    #[test]
+    fn a_ceiling_just_over_the_capsule_s_top_keeps_its_floor_and_lets_the_walker_by() {
+        let triangles = under_slab(HEIGHT + LIFT + 0.15);
+        assert!(floored(&triangles, &settings()));
+        assert!(walked(&triangles, HEIGHT) > 9.0);
+    }
+
+    #[test]
+    fn each_size_asks_for_its_height_and_the_lift() {
+        let sized = Settings {
+            cell_size: 0.25,
+            tile: 16.0,
+            ..Settings::sized([4.0, HEIGHT, 9.0])
+        };
+        let triangles = under_slab(HEIGHT + LIFT / 2.0);
+        let meshes = NavMesh::build(&triangles, &sized, 2, &AtomicBool::new(false))
+            .unwrap()
+            .0
+            .split(sized.sizes);
+        let under = Vec3::new(0.0, 0.0, 0.0);
+        assert!(meshes.for_height(4.0).unwrap().locate(under).is_some());
+        assert!(meshes.for_height(HEIGHT).unwrap().locate(under).is_none());
+        assert!(walked(&triangles, 4.0) > 9.0);
+        assert!(walked(&triangles, HEIGHT) < -4.0);
+    }
+}

@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The rerecast version the mesh is built with, as pinned in Cargo.toml.
 const RERECAST: &str = "0.4.0";
 /// This format's version; raised whenever the bytes or the build change.
-const FORMAT: u32 = 8;
+const FORMAT: u32 = 9;
 const MAGIC: &[u8; 4] = b"EQNM";
 
 /// Where a mesh came from.
@@ -268,7 +268,7 @@ pub fn store(
 }
 
 /// The fields of `settings` that change a build.
-fn settings_values(settings: &Settings) -> [f32; 10] {
+fn settings_values(settings: &Settings) -> [f32; 11] {
     [
         settings.cell_size,
         settings.cell_height,
@@ -278,6 +278,7 @@ fn settings_values(settings: &Settings) -> [f32; 10] {
         settings.sizes[0],
         settings.sizes[1],
         settings.sizes[2],
+        settings.lift,
         settings.climb,
         settings.floor_normal_y,
     ]
