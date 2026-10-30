@@ -15,7 +15,9 @@ pub const STEP_SECONDS: f32 = 0.05;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClientFalls {
     /// Downward acceleration, in units a second squared: the program adds
-    /// 0.4 units a step to the fall speed each step.
+    /// 0.4 units a step to the fall speed each step. That is its default:
+    /// the zone's header (`OP_NewZone` +420) sets it, which is not yet
+    /// decoded, so every zone takes the default (unsure, 6.161).
     pub gravity: f32,
     /// The fastest fall, in units a second: where the air's slowing meets
     /// gravity at one frame a step.
