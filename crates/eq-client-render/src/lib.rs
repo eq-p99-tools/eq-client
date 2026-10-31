@@ -87,6 +87,7 @@ mod skills;
 mod skin;
 mod skinned;
 mod sounds;
+mod speed;
 mod spell_effects;
 mod spell_icons;
 mod spellbook;

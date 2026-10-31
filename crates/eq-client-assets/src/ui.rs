@@ -399,6 +399,21 @@ impl InstalledClient {
         }
     }
 
+    /// The speed modifier this client's host reports for a player a buff
+    /// slows (a movement-speed effect, 3, with a value below 0); None
+    /// until its program's rule is read. The Mac-era program's own sum of
+    /// its buffs' modifiers is unread, so its host reports the slower
+    /// bound: -1000, the least the program lets the player move at before
+    /// it roots them, which holds every speed to the slowest (provisional,
+    /// TAKP sitting 2 M1). A player no buff slows reports 0.
+    #[must_use]
+    pub const fn slowed_speed_modifier(self) -> Option<f32> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(-1000.0),
+        }
+    }
+
     /// How this client asks the player about a translocate cast on them,
     /// from the program; None until read for this client, whose offers then
     /// go unanswered as before. The Mac-era client's is TAKP Batch 1 R8
