@@ -163,11 +163,13 @@ pub const EQMAC: ClientFalls = ClientFalls {
 /// a landing counts past 2.5 units a step, then T = the character's +0x48
 /// field / 100 + (speed − 2.5) − 1.5, 20,000 from T = 9, else
 /// trunc(10·T²), less Safe Fall's S + S × P / 100. Read but not yet known,
-/// so left out: which zones zero the damage (its table was not read), P
-/// (probably spell effect 228's total; not decoded, so it counts as 0), the
-/// character flag that zeroes damage under 200, and any line the client says
-/// (none in the damage routine; not traced further). That +0x48 is the
-/// carried weight the Mac-era rule names is inferred (6.303).
+/// so left out, each costing the player more than the program would, never
+/// less: which zones zero the damage (its table was not read, 6.304), P
+/// (probably spell effect 228's total; not decoded, so it counts as 0,
+/// 6.305), the character flag that zeroes damage under 200 (6.306), and any
+/// line the client says (none in the damage routine; not traced further).
+/// That +0x48 is the carried weight the Mac-era rule names is inferred
+/// (6.303).
 pub const TITANIUM: ClientFalls = ClientFalls {
     harmless_zones: &[],
     safe_fall_rank_share: 0.0,

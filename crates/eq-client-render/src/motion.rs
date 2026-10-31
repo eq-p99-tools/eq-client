@@ -46,9 +46,8 @@ pub(super) struct Controls {
     /// When the latest jump started; it outlasts a reset, so a new
     /// admission cannot hurry the next.
     last_jump: Option<Instant>,
-    /// When a jump from standing still stands up and goes, on a client
-    /// that crouches before it.
-    crouched_jump: Option<Instant>,
+    /// A jump from standing still crouching first, on a client that does.
+    crouch: Option<Crouch>,
     /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
     unreported: Option<FallCost>,
@@ -63,6 +62,16 @@ pub(super) struct Controls {
     pub last_answer: Option<Instant>,
     /// Why the latest frame sent no sample; None when it sent one.
     pub held: Option<Held>,
+}
+
+/// How far a jump from standing still has come on a client that crouches
+/// before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Crouch {
+    /// Crouched; it stands up and jumps at this time.
+    Until(Instant),
+    /// Stood up: the jump waiting for the next sample goes as it is.
+    Over,
 }
 
 /// Why a frame sent no movement sample.
@@ -102,7 +111,7 @@ impl Default for Controls {
             refused: None,
             jump: None,
             last_jump: None,
-            crouched_jump: None,
+            crouch: None,
             unreported: None,
             facing: None,
             recent: RecentMotion::default(),
@@ -289,6 +298,9 @@ impl Controls {
         self.visual = None;
         self.taps = TapBuffer::default();
         self.jump = None;
+        if self.crouch == Some(Crouch::Over) {
+            self.crouch = None;
+        }
         self.last_accepted = Instant::now();
     }
 
@@ -438,7 +450,7 @@ pub(super) fn input(
     // installed client allows.
     if keys.pressed(Act::Jump)
         && controls.airborne.is_some()
-        && controls.crouched_jump.is_none()
+        && controls.crouch.is_none()
         && online.world().can(Capability::Jumping)
     {
         if jump_too_soon(client, controls.last_jump, now) {
@@ -449,10 +461,16 @@ pub(super) fn input(
     }
     // A crouched jump stands up when its time comes, and goes with the next
     // sample.
-    if let Some(due) = controls.crouched_jump.filter(|due| now >= *due) {
-        controls.crouched_jump = None;
+    if let Some(Crouch::Until(due)) = controls.crouch.filter(|crouch| match crouch {
+        Crouch::Until(due) => now >= *due,
+        Crouch::Over => false,
+    }) {
+        controls.crouch = None;
         match post_posture(&outbox, online.world(), Posture::Standing) {
-            Ok(()) => controls.jump = Some(due),
+            Ok(()) => {
+                controls.jump = Some(due);
+                controls.crouch = Some(Crouch::Over);
+            }
             Err(reason) => {
                 controls.send_failed(reason);
                 controls.held = Some(Held::Refused);
@@ -560,10 +578,14 @@ pub(super) fn input(
     let span = controls.span(since_sent);
     let delta = direction * speed * span;
     let jump = controls.jump.take().is_some();
+    let crouched = controls.crouch == Some(Crouch::Over);
+    if crouched {
+        controls.crouch = None;
+    }
     // Where the installed client crouches before a jump from standing still,
     // that jump ducks now and goes once the crouch is over; backing up
-    // cancels it.
-    let jump = match client.standing_jump_crouch() {
+    // cancels it. The jump a finished crouch hands on goes as it is.
+    let jump = match client.standing_jump_crouch().filter(|_| !crouched) {
         Some(_) if jump && mode == MovementMode::Backward => {
             debug!("Jump cancelled: backing up");
             false
@@ -574,7 +596,7 @@ pub(super) fn input(
                 controls.held = Some(Held::Refused);
                 return;
             }
-            controls.crouched_jump = Some(now + crouch);
+            controls.crouch = Some(Crouch::Until(now + crouch));
             controls.held = Some(Held::NoSpeed);
             return;
         }
@@ -740,16 +762,27 @@ pub(super) fn fall_step(
     position
 }
 
+/// The fastest a jump may start here, in units a second: the session's
+/// movement guard takes at most [`MAX_GROUNDED_STEP`] of rise in a sample,
+/// and a sample's first 50 ms slice must fit in it or the sample stops
+/// before the jump ([`fall_step`]). Both programs jump at 44.55, which
+/// rises past it in that slice; until the guard takes a jump's rise, a
+/// jump starts at 40, a little lower than the program's, never higher.
+///
+/// [`MAX_GROUNDED_STEP`]: eq_client_core::movement::MAX_GROUNDED_STEP
+const GUARDED_JUMP_SPEED: f32 = eq_client_core::movement::MAX_GROUNDED_STEP / 0.05;
+
 /// How the installed client's player falls: its program's physics under
 /// the zone header's gravity once it comes, or the provisional ones until
-/// they are read for it.
+/// they are read for it. A jump starts no faster than the movement guard
+/// lets a sample rise ([`GUARDED_JUMP_SPEED`]).
 pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> VerticalPhysics {
     client.falls().map_or(PROVISIONAL_PHYSICS, |falls| {
         let gravity = zone_gravity.map_or(falls.gravity, |per_step| falls.zone_gravity(per_step));
         VerticalPhysics {
             gravity,
             terminal_speed: falls.terminal_under(gravity),
-            jump_speed: falls.jump_speed,
+            jump_speed: falls.jump_speed.min(GUARDED_JUMP_SPEED),
             air_factor: falls.air_factor,
         }
     })
@@ -1286,7 +1319,9 @@ mod tests {
             "{}",
             titanium.gravity
         );
-        assert!((titanium.jump_speed - 44.55).abs() < 0.001);
+        // The program's 44.55 is held to what the movement guard lets the
+        // first slice rise.
+        assert!((titanium.jump_speed - 40.0).abs() < 0.001);
         assert_eq!(
             physics(InstalledClient::Titanium, Some(0.4)),
             physics(InstalledClient::EqMac, Some(0.4))
@@ -1318,6 +1353,84 @@ mod tests {
         // The Mac-era client waits 1.5 s.
         assert!(jump_too_soon(InstalledClient::EqMac, ago(1499), now));
         assert!(!jump_too_soon(InstalledClient::EqMac, ago(1500), now));
+    }
+
+    /// The app of [`app`] for this installed client, the player standing
+    /// still on its floor where the session takes jumps, holding Jump.
+    fn standing_jump(client: InstalledClient) -> (App, mpsc::Receiver<ClientCommand>) {
+        let (mut app, _) = app();
+        let (sender, receiver) = mpsc::sync_channel(16);
+        app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = client;
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        let mut state = app.world_mut().resource_mut::<online::OnlineState>();
+        let player = state.world().player().unwrap().clone();
+        crate::online::testing::news(
+            &mut state,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities: eq_client_core::Capability::ALL.to_vec(),
+                choices: Vec::new(),
+                session_id: 11,
+                zone: "qeytoqrg".into(),
+                player: Box::new(player),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        crate::online::testing::connect(&mut state, true);
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::Space);
+        (app, receiver)
+    }
+
+    /// The stances the commands asked for, and whether a jump went.
+    fn stances_and_jump(receiver: &mpsc::Receiver<ClientCommand>) -> (Vec<Posture>, bool) {
+        let sent: Vec<ClientCommand> = receiver.try_iter().collect();
+        let stances = sent
+            .iter()
+            .filter_map(|command| match command {
+                ClientCommand::SetPosture { posture, .. } => Some(*posture),
+                _ => None,
+            })
+            .collect();
+        let jumped = sent
+            .iter()
+            .any(|command| matches!(command, ClientCommand::Jump { .. }));
+        (stances, jumped)
+    }
+
+    #[test]
+    fn a_mac_era_jump_from_standing_still_crouches_once_then_goes() {
+        let (mut app, receiver) = standing_jump(InstalledClient::EqMac);
+        app.update();
+        assert_eq!(stances_and_jump(&receiver), (vec![Posture::Ducking], false));
+        // Jump held through the crouch asks nothing more.
+        app.update();
+        assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+        // Once the crouch is over: stand, and the sample carries the jump.
+        let earlier = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        app.world_mut().resource_mut::<Controls>().crouch = Some(Crouch::Until(earlier));
+        app.update();
+        assert_eq!(stances_and_jump(&receiver), (vec![Posture::Standing], true));
+        let controls = app.world().resource::<Controls>();
+        assert!(controls.airborne.as_ref().unwrap().velocity() > 0.0);
+        assert_eq!(controls.crouch, None);
+    }
+
+    #[test]
+    fn a_titanium_jump_from_standing_still_goes_at_once() {
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        app.update();
+        assert_eq!(stances_and_jump(&receiver), (Vec::new(), true));
+        let controls = app.world().resource::<Controls>();
+        assert!(controls.airborne.as_ref().unwrap().velocity() > 0.0);
+        assert_eq!(controls.crouch, None);
     }
 
     #[test]
