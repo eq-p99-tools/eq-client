@@ -240,6 +240,32 @@ pub fn texture_sheet(
     Ok(pixels)
 }
 
+/// How a client generation's `/target Name` picks a spawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetByName {
+    /// The nearest drawn spawn whose name starts with the text (Titanium:
+    /// unread, as today).
+    Nearest,
+    /// The TAKP program's rule (TAKP read of 10-30, T6): any known spawn,
+    /// at any range, whose name (digits and '#' dropped, '_' read as a
+    /// space) starts with the text, ignoring case; the shortest full name
+    /// wins, and a tie goes to the first in its spawn list, which here is
+    /// the lowest spawn ID (inferred, checklist 6.313).
+    Shortest,
+}
+
+/// Where a give or trade window the player asked for puts the cursor's
+/// item as it opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GiveAtOpen {
+    /// The first free trade slot (Titanium: unread, as today).
+    FirstFree,
+    /// The TAKP program's rule (N4 section 2, read): onto a stack of the
+    /// same item in the player's trade slots first, else the first free
+    /// slot; with none free it says 12319 in colour 10.
+    StackFirst,
+}
+
 /// Which official client an installation holds. Its own settings files
 /// (`eqclient.ini`, `UI_<character>_<world>.ini` and `<character>_<world>.ini`)
 /// are read only by the rules of the generation they were checked against.
@@ -470,6 +496,24 @@ impl InstalledClient {
         match self {
             Self::Titanium => None,
             Self::EqMac => Some(std::time::Duration::from_millis(500)),
+        }
+    }
+
+    /// Where an opening give or trade window puts the cursor's item.
+    #[must_use]
+    pub const fn give_at_open(self) -> GiveAtOpen {
+        match self {
+            Self::Titanium => GiveAtOpen::FirstFree,
+            Self::EqMac => GiveAtOpen::StackFirst,
+        }
+    }
+
+    /// How a typed `/target Name` picks among the spawns it matches.
+    #[must_use]
+    pub const fn target_by_name(self) -> TargetByName {
+        match self {
+            Self::Titanium => TargetByName::Nearest,
+            Self::EqMac => TargetByName::Shortest,
         }
     }
 

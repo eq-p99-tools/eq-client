@@ -19,6 +19,9 @@ use std::collections::{BTreeMap, HashSet};
 pub(crate) struct Said {
     pub words: eq_client_core::chat::RichText,
     pub source: Source,
+    /// The message type the official client gives this line, by which the
+    /// chat colours it, where a read names one for the line itself.
+    pub message_type: Option<u32>,
 }
 
 impl Said {
@@ -27,6 +30,7 @@ impl Said {
         Self {
             words: text.into().into(),
             source: Source::Official,
+            message_type: None,
         }
     }
 
@@ -35,7 +39,14 @@ impl Said {
         Self {
             words: text.into().into(),
             source: Source::Client,
+            message_type: None,
         }
+    }
+
+    /// The same words, in the colour of message type `kind`.
+    pub(crate) const fn typed(mut self, kind: u32) -> Self {
+        self.message_type = Some(kind);
+        self
     }
 }
 
@@ -54,10 +65,14 @@ impl From<&str> for Said {
 
 /// A locally produced line in the System channel.
 pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
-    let Said { words, source } = said.into();
+    let Said {
+        words,
+        source,
+        message_type,
+    } = said.into();
     ChatLine {
         channel: ChannelName::System,
-        message_type: None,
+        message_type,
         sender: None,
         target: None,
         message: Message {

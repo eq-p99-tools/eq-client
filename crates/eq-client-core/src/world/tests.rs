@@ -1587,6 +1587,32 @@ fn another_players_trade_shows_their_side_and_both_clicks_until_anything_goes_in
     game(&mut world, exchange(ExchangeUpdate::Accepted { by: 9 }));
     game(&mut world, coins(gold(1), gold(2)));
     assert_eq!(clicks(&world), (false, true));
+    // A record this client cannot read leaves the slot taken but unread;
+    // a readable one replaces it, and taking it out empties the slot. Each
+    // undoes both clicks, as the server's own reset does.
+    let settle = |world: &mut ClientWorld, update| {
+        game(world, exchange(ExchangeUpdate::Accepted { by: 9 }));
+        world.give();
+        game(world, exchange(update));
+        assert_eq!(clicks(world), (false, false));
+    };
+    settle(&mut world, ExchangeUpdate::Unread { index: 2, kind: 7 });
+    let open = world.exchange().unwrap();
+    assert!(!open.theirs.contains_key(&2) && open.unread.contains(&2));
+    settle(
+        &mut world,
+        ExchangeUpdate::Offered {
+            index: 2,
+            item: Box::new(chest()),
+        },
+    );
+    let open = world.exchange().unwrap();
+    assert!(open.theirs.contains_key(&2) && open.unread.is_empty());
+    settle(&mut world, ExchangeUpdate::Unread { index: 2, kind: 7 });
+    settle(&mut world, ExchangeUpdate::Withdrawn { index: 2 });
+    let open = world.exchange().unwrap();
+    assert!(open.theirs.is_empty() && open.unread.is_empty());
+    settle(&mut world, ExchangeUpdate::AcceptsReset);
     // The other player closing the window ends it.
     game(&mut world, exchange(ExchangeUpdate::Cancelled { by: 1 }));
     assert!(world.exchange().is_none() && world.offered_coins().is_none());
@@ -1791,7 +1817,13 @@ fn the_give_window_opens_on_the_npcs_answer_and_closes_on_the_servers_word() {
     assert!(world.exchange().is_none());
     // A busy partner, the player's own closing and death all end it.
     world.offer_trade(8);
-    let changes = game(&mut world, exchange(ExchangeUpdate::Busy { by: 8 }));
+    let changes = game(
+        &mut world,
+        exchange(ExchangeUpdate::Busy {
+            by: 8,
+            reason: None,
+        }),
+    );
     assert_eq!(
         changes.notices,
         [Notice::GiveRefused("They are busy".into())]
@@ -1896,7 +1928,13 @@ fn camping_progress_follows_the_session_and_only_death_leaves_it() {
             logging_out: true
         })
     );
-    camp(&mut world, CampStatus::Abandoned, start);
+    camp(
+        &mut world,
+        CampStatus::Abandoned {
+            by: crate::CampEnd::Standing,
+        },
+        start,
+    );
     assert_eq!(world.camp(), None);
     camp(&mut world, CampStatus::Preparing, start);
     game(
@@ -2624,6 +2662,23 @@ fn a_world_container_opens_only_when_asked_and_closes_with_the_player() {
     );
     assert_eq!(world.container().map(|view| view.drop_id), Some(40));
     world.close_container();
+    assert!(world.container().is_none());
+    // The session closes one the player walked away from; another's closing
+    // leaves it open.
+    world.ask_container(40);
+    game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Container(view(true))),
+    );
+    game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Closed { drop_id: 41 }),
+    );
+    assert!(world.container().is_some());
+    game(
+        &mut world,
+        WorldEvent::Objects(ObjectUpdate::Closed { drop_id: 40 }),
+    );
     assert!(world.container().is_none());
     // Zoning forgets an open container.
     world.ask_container(40);

@@ -302,13 +302,14 @@ impl super::ClientWorld {
     pub(super) fn door_used(
         &self,
         (session_id, door_id): (u64, u8),
-        error: Option<&String>,
+        (error, string_id): (Option<&String>, Option<u32>),
         changes: &mut super::Changes,
     ) {
         if self.accepts_reply(session_id) {
             changes.notices.push(Notice::Door {
                 door_id,
                 error: error.cloned(),
+                string_id,
             });
         } else {
             changes.ignored = true;
@@ -317,13 +318,25 @@ impl super::ClientWorld {
 
     /// The server's word on the zone's objects: a container the player asked
     /// for opens, or is in use by someone else; one opened unasked the
-    /// session closes again, and it never shows.
+    /// session closes again, and it never shows. One the session closed
+    /// because the player went out of reach closes its window.
     pub(super) fn objects_news(
         &mut self,
         update: &crate::ground::ObjectUpdate,
         changes: &mut super::Changes,
     ) {
         self.zone.objects.apply(update);
+        if let crate::ground::ObjectUpdate::Closed { drop_id } = update {
+            if self
+                .zone
+                .container
+                .as_ref()
+                .is_some_and(|view| view.drop_id == *drop_id)
+            {
+                self.zone.container = None;
+            }
+            return;
+        }
         let own = self.player.as_ref().map(|player| player.spawn_id);
         if let crate::ground::ObjectUpdate::Container(view) = update
             && own.is_some_and(|own| u32::from(own) == view.player_id)

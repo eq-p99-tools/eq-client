@@ -175,6 +175,20 @@ impl TradeState {
     }
 }
 
+/// How far the installed generation's program reaches a merchant, where
+/// it is read: TAKP's 3-D 20 (eq-network's reach table); Titanium's is
+/// unread (6.312), and the server alone decides.
+const fn merchant_reach(
+    client: eq_client_assets::ui::InstalledClient,
+) -> Option<eq_client_core::reach::Reach> {
+    use eq_client_assets::ui::InstalledClient;
+    use eq_client_core::reach;
+    match client {
+        InstalledClient::Titanium => reach::TITANIUM.merchants,
+        InstalledClient::EqMac => reach::EQMAC.merchants,
+    }
+}
+
 /// The open corpse's `(place, item id)` and the merchant's rate and
 /// `(slot, item id, price)` lists, for script reports.
 pub(super) fn summary(world: &ClientWorld) -> String {
@@ -368,19 +382,43 @@ pub(super) fn input(
                 && !invisible
                 && class.is_none_or(|class| class == MERCHANT_CLASS)
         }) {
-            // Only the server's answer opens the window. A merchant out of
-            // its range gets no answer and nothing opens; whether the
-            // official client says anything then is inferred (item 6.236).
-            send(
-                online.world(),
-                ClientCommand::Shop {
-                    session_id,
-                    merchant_id,
-                    own_id,
-                    open: true,
-                    created: now,
-                },
-            );
+            let out_of_reach = merchant_reach(settings.0.installed_client).is_some_and(|reach| {
+                online
+                    .world()
+                    .player()
+                    .zip(online.world().spawn(merchant_id))
+                    .is_some_and(|(player, merchant)| {
+                        !reach.admits(player.position, merchant.state.position)
+                    })
+            });
+            if out_of_reach {
+                // Out of the generation's reach the program considers the
+                // merchant instead of asking to trade (TAKP read T6).
+                send(
+                    online.world(),
+                    ClientCommand::Consider {
+                        session_id,
+                        own_id,
+                        target_id: merchant_id,
+                        created: now,
+                    },
+                );
+            } else {
+                // Only the server's answer opens the window. Where the reach
+                // is unread, a merchant out of the server's range gets no
+                // answer and nothing opens; whether the official client says
+                // anything then is inferred (item 6.236).
+                send(
+                    online.world(),
+                    ClientCommand::Shop {
+                        session_id,
+                        merchant_id,
+                        own_id,
+                        open: true,
+                        created: now,
+                    },
+                );
+            }
         } else if let Some(trainer) = guildmaster {
             // A guildmaster's answer opens the Training window.
             send(
@@ -1381,6 +1419,70 @@ mod tests {
         assert!(matches!(
             receiver.try_recv(),
             Ok(ClientCommand::Shop { open: false, .. })
+        ));
+    }
+
+    #[test]
+    fn a_takp_merchant_out_of_reach_is_considered_instead() {
+        use eq_client_assets::ui::InstalledClient;
+        let ask = |client, x: f32| {
+            let mut online = super::super::online::OnlineState::new(true);
+            crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+            let mut merchant = crate::online::testing::pet(8, 7);
+            merchant.pet_owner = None;
+            merchant.class = Some(MERCHANT_CLASS);
+            merchant.name = "Example_Trader00".into();
+            merchant.position = online
+                .world()
+                .player()
+                .map(|player| player.position)
+                .unwrap_or_default();
+            merchant.position.x += x;
+            crate::online::testing::spawn_entry(&mut online, 8, merchant);
+            online.select_target(Some(8));
+            let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+            let mut settings = crate::ViewerSettings::default();
+            settings.0.installed_client = client;
+            let mut app = App::new();
+            app.init_resource::<windows::Shown>();
+            crate::keys::testing::install(&mut app);
+            app.insert_resource(online)
+                .init_resource::<TradeState>()
+                .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+                .init_resource::<crate::notices::Lines>()
+                .init_resource::<super::super::chat::ChatState>()
+                .insert_resource(settings)
+                .init_resource::<crate::hud::messages::Messages>()
+                .init_resource::<super::super::escape::Escape>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .add_systems(Update, input);
+            app.world_mut().spawn((
+                Window {
+                    focused: true,
+                    ..default()
+                },
+                bevy::window::PrimaryWindow,
+            ));
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::KeyU);
+            app.update();
+            receiver.try_recv().ok()
+        };
+        // TAKP reaches a merchant at 20 in 3-D: within, it asks to trade;
+        // beyond, it considers the merchant.
+        assert!(matches!(
+            ask(InstalledClient::EqMac, 20.0),
+            Some(ClientCommand::Shop { open: true, .. })
+        ));
+        assert!(matches!(
+            ask(InstalledClient::EqMac, 21.0),
+            Some(ClientCommand::Consider { target_id: 8, .. })
+        ));
+        // Titanium's reach is unread: it asks, and the server decides.
+        assert!(matches!(
+            ask(InstalledClient::Titanium, 21.0),
+            Some(ClientCommand::Shop { open: true, .. })
         ));
     }
 

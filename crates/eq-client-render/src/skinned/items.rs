@@ -455,19 +455,21 @@ pub(crate) fn theirs(
     mut commands: Commands,
     online: Res<crate::online::OnlineState>,
     mut art: Art,
-    (mut last, added): (
-        Local<Option<Vec<(u8, u32, Option<u32>)>>>,
-        Query<(), Added<TheirSlot>>,
-    ),
+    (mut last, added): (Local<Option<TheirsShown>>, Query<(), Added<TheirSlot>>),
     slots: Query<(Entity, &TheirSlot, &Node, Option<&Children>)>,
     old: Query<(), With<Content>>,
 ) {
-    let theirs = online.world().exchange().map(|exchange| &exchange.theirs);
-    let shown: Vec<_> = theirs
-        .into_iter()
-        .flatten()
-        .map(|(index, item)| (*index, item.details.id, item.stack_count))
-        .collect();
+    let exchange = online.world().exchange();
+    let theirs = exchange.map(|exchange| &exchange.theirs);
+    let unread = exchange.map(|exchange| &exchange.unread);
+    let shown: TheirsShown = (
+        theirs
+            .into_iter()
+            .flatten()
+            .map(|(index, item)| (*index, item.details.id, item.stack_count))
+            .collect(),
+        unread.into_iter().flatten().copied().collect(),
+    );
     if last.as_ref() == Some(&shown) && added.is_empty() {
         return;
     }
@@ -478,6 +480,10 @@ pub(crate) fn theirs(
                 commands.entity(*child).despawn();
             }
         }
+        if unread.is_some_and(|unread| unread.contains(&slot.0)) {
+            draw_unread(&mut commands, cell, node);
+            continue;
+        }
         draw(
             &mut commands,
             &mut art,
@@ -486,6 +492,30 @@ pub(crate) fn theirs(
             theirs.and_then(|theirs| theirs.get(&slot.0)),
         );
     }
+}
+
+/// What the other player's slots last showed: each item's slot, ID and
+/// stack, and the slots holding an item this client could not read.
+type TheirsShown = (Vec<(u8, u32, Option<u32>)>, Vec<u8>);
+
+/// Shows a slot the other player filled with an item whose record this
+/// client could not read: taken, but with nothing to show of it.
+fn draw_unread(commands: &mut Commands, cell: Entity, node: &Node) {
+    commands
+        .entity(cell)
+        .insert(crate::tooltip::Tooltip("Unreadable item".into()));
+    let (width, height) = match (node.width, node.height) {
+        (Val::Px(width), Val::Px(height)) => (width, height),
+        _ => (40.0, 40.0),
+    };
+    commands.entity(cell).with_children(|cell| {
+        cell.spawn((
+            Content,
+            theme::text("?", Size::Label, theme::INK_BRIGHT),
+            TextLayout::new(Justify::Center, LineBreak::NoWrap),
+            at(4.0, 4.0, width - 8.0, height - 8.0),
+        ));
+    });
 }
 
 /// What a world container's window calls it: the name the server sends,

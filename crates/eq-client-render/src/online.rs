@@ -314,9 +314,10 @@ impl Panels<'_> {
         for (place, said) in super::notices::wording(notice, messages) {
             match place {
                 Place::Chat => {
-                    // The line takes the colour of the type the server gave it.
+                    // The line takes the colour of the type the server gave
+                    // it, else the one its own words take.
                     let mut line = super::chat::system_line(said);
-                    line.message_type = notice.message_type();
+                    line.message_type = notice.message_type().or(line.message_type);
                     chat.history.push(line);
                 }
                 Place::Status => self.lines.status.set(said.words.text),

@@ -478,7 +478,9 @@ mod tests {
         testing::news(
             &mut online,
             [eq_client_core::WorldEvent::Camp(
-                eq_client_core::CampStatus::Abandoned,
+                eq_client_core::CampStatus::Abandoned {
+                    by: eq_client_core::CampEnd::Moving,
+                },
             )],
         );
         assert_eq!(shown(&online, &requests), None);

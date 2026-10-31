@@ -9,12 +9,14 @@
 //! the window (its Cancel button or Escape) takes everything back. The
 //! session decides what may be asked and moved; this module keeps the
 //! window with the world's exchange.
+use crate::inventory::Handed;
 use crate::{
     online::OnlineState,
     outbox::Outbox,
     windows::{Shown, WindowId},
 };
 use bevy::prelude::*;
+use eq_client_assets::ui::GiveAtOpen;
 use eq_client_core::{
     ClientCommand, SpawnKind,
     exchange::Partner,
@@ -105,16 +107,23 @@ fn cancel(online: &mut OnlineState, outbox: &Outbox) {
 }
 
 /// Keeps the give or trade window with the exchange: it opens when the other
-/// side answers, taking what is on the cursor (an item into its first slot,
-/// or coins) when the player asked, and closes when the server ends the
-/// exchange. A window the player closes cancels it.
+/// side answers, taking what is on the cursor when the player asked (coins
+/// to the trade's coins, an item where the installed generation puts it:
+/// [`GiveAtOpen`], a merge's remainder once the merge settles), and closes
+/// when the server ends the exchange. A window the player closes cancels
+/// it.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn window(
     mut online: ResMut<OnlineState>,
     outbox: Res<Outbox>,
     mut shown: ResMut<Shown>,
     mut inventory: ResMut<crate::inventory::InventoryState>,
-    mut opened: Local<Option<(u16, WindowId)>>,
+    (mut opened, mut merging): (Local<Option<(u16, WindowId)>>, Local<bool>),
+    (settings, messages, mut chat): (
+        Res<crate::ViewerSettings>,
+        Res<crate::hud::messages::Messages>,
+        ResMut<crate::chat::ChatState>,
+    ),
 ) {
     let open = online
         .world()
@@ -143,19 +152,43 @@ pub(crate) fn window(
                 };
                 crate::coins::send(transfer, &online, &outbox);
             } else {
-                inventory.hand_over_cursor(&online, &outbox);
+                let rule = settings.0.installed_client.give_at_open();
+                let handed = inventory.hand_over_cursor(&online, &outbox, rule);
+                *merging = handed == Handed::Stacked;
+                if handed == Handed::NoRoom && rule == GiveAtOpen::StackFirst {
+                    no_room(&messages, &mut chat);
+                }
             }
         }
         (Some(_), Some((_, id))) if !shown.is_open(id) => {
             cancel(&mut online, &outbox);
             *opened = None;
+            *merging = false;
         }
         (None, Some((_, id))) => {
             shown.close(id);
             *opened = None;
+            *merging = false;
+        }
+        // Once a merge settles, what it left on the cursor goes on: onto
+        // the next stack with room, then into the first empty slot (N4 2).
+        (Some(_), Some(_)) if *merging && inventory.settled() => {
+            let handed = inventory.hand_over_cursor(&online, &outbox, GiveAtOpen::StackFirst);
+            *merging = handed == Handed::Stacked;
+            if handed == Handed::NoRoom {
+                no_room(&messages, &mut chat);
+            }
         }
         _ => (),
     }
+}
+
+/// The program's line when no trade slot can take the cursor's item, in its
+/// colour (N4 section 2).
+fn no_room(messages: &crate::hud::messages::Messages, chat: &mut crate::chat::ChatState) {
+    chat.history.push(crate::chat::system_line(
+        messages.said(12319, &[]).typed(10),
+    ));
 }
 
 /// Shows what an item the other player put in is, on a right click, as the
@@ -397,6 +430,181 @@ mod tests {
         app.update();
         assert!(!app.world().resource::<Shown>().is_open(WindowId::Trade));
         assert!(rx.try_recv().is_err());
+    }
+
+    /// Opens the NPC's give window on `client` with `items` in the
+    /// inventory and `gold` on the cursor; what the opening sends.
+    fn open_with(
+        client: eq_client_assets::ui::InstalledClient,
+        items: Vec<eq_client_core::inventory::InventoryItem>,
+        gold: u32,
+    ) -> (App, Option<ClientCommand>, mpsc::Receiver<ClientCommand>) {
+        let (mut app, rx) = app();
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = client;
+        testing::inventory(&mut online(&mut app), InventoryUpdate::Snapshot(items));
+        let cursor = eq_client_core::Coins {
+            gold,
+            ..eq_client_core::Coins::default()
+        };
+        testing::news(
+            &mut online(&mut app),
+            [WorldEvent::CoinsElsewhere {
+                cursor,
+                bank: eq_client_core::Coins::default(),
+                given: eq_client_core::Coins::default(),
+                offered: eq_client_core::Coins::default(),
+            }],
+        );
+        online(&mut app).offer_trade(NPC);
+        testing::news(
+            &mut online(&mut app),
+            [WorldEvent::Exchange(ExchangeUpdate::Opened {
+                with: u32::from(NPC),
+            })],
+        );
+        app.update();
+        let sent = rx.try_recv().ok();
+        (app, sent, rx)
+    }
+
+    #[test]
+    fn takp_puts_the_cursor_item_on_a_matching_stack_first_and_says_when_full() {
+        use eq_client_assets::ui::InstalledClient;
+        let stack = |slot, count| {
+            let mut item = crate::preview::items()
+                .into_iter()
+                .find(|item| item.slot == InventorySlot(13))
+                .unwrap();
+            item.slot = InventorySlot(slot);
+            item.stack_count = Some(count);
+            item.rules.stack_size = 20;
+            item
+        };
+        let moved = |sent: Option<ClientCommand>| match sent {
+            Some(ClientCommand::MoveInventory(request)) => Some((request.from, request.to)),
+            _ => None,
+        };
+        // Onto the same item's stack in the second trade slot, past the
+        // free first one; Titanium keeps today's first free slot.
+        let items = vec![stack(InventorySlot::CURSOR.0, 2), stack(3001, 5)];
+        let (_, sent, _) = open_with(InstalledClient::EqMac, items.clone(), 0);
+        assert_eq!(
+            moved(sent),
+            Some((InventorySlot::CURSOR, InventorySlot(3001)))
+        );
+        let (_, sent, _) = open_with(InstalledClient::Titanium, items, 0);
+        assert_eq!(
+            moved(sent),
+            Some((InventorySlot::CURSOR, InventorySlot(3000)))
+        );
+        // A full stack is passed over for the first free slot.
+        let items = vec![stack(InventorySlot::CURSOR.0, 2), stack(3000, 20)];
+        let (_, sent, _) = open_with(InstalledClient::EqMac, items, 0);
+        assert_eq!(
+            moved(sent),
+            Some((InventorySlot::CURSOR, InventorySlot(3001)))
+        );
+        // An NPC's four slots all taken: nothing moves, and the line says so
+        // in colour 10.
+        let mut items: Vec<_> = (3000..3004).map(|slot| stack(slot, 20)).collect();
+        items.push(stack(InventorySlot::CURSOR.0, 2));
+        let (app, sent, _) = open_with(InstalledClient::EqMac, items, 0);
+        assert!(sent.is_none());
+        let line = app
+            .world()
+            .resource::<crate::chat::ChatState>()
+            .history
+            .lines(eq_client_core::chat::ChatTab::All)
+            .last()
+            .map(|(_, line)| (*line).clone())
+            .unwrap();
+        assert_eq!(line.message_type, Some(10));
+        assert!(line.message.text.contains("12319"), "{}", line.message.text);
+    }
+
+    #[test]
+    fn what_a_takp_merge_leaves_on_the_cursor_goes_to_the_first_free_slot() {
+        let stack = |slot, count| {
+            let mut item = crate::preview::items()
+                .into_iter()
+                .find(|item| item.slot == InventorySlot(13))
+                .unwrap();
+            item.slot = InventorySlot(slot);
+            item.stack_count = Some(count);
+            item.rules.stack_size = 20;
+            item
+        };
+        // 15 on the cursor onto a stack of 10 out of 20: the stack fills.
+        let (mut app, sent, rx) = open_with(
+            eq_client_assets::ui::InstalledClient::EqMac,
+            vec![stack(InventorySlot::CURSOR.0, 15), stack(3000, 10)],
+            0,
+        );
+        let Some(ClientCommand::MoveInventory(merge)) = sent else {
+            panic!("the merge goes first: {sent:?}");
+        };
+        assert_eq!(
+            (merge.from, merge.to, merge.quantity),
+            (
+                InventorySlot::CURSOR,
+                InventorySlot(3000),
+                MoveQuantity::Count(std::num::NonZeroU32::new(10).unwrap())
+            )
+        );
+        // Nothing more goes until the merge settles.
+        app.update();
+        assert!(rx.try_recv().is_err());
+        testing::inventory(
+            &mut online(&mut app),
+            InventoryUpdate::Snapshot(vec![stack(InventorySlot::CURSOR.0, 5), stack(3000, 20)]),
+        );
+        app.world_mut().resource_scope(
+            |world, mut state: Mut<crate::inventory::InventoryState>| {
+                let online = world.resource::<OnlineState>();
+                state.action_result(1, merge.revision, None, online.world().inventory());
+            },
+        );
+        app.update();
+        let Ok(ClientCommand::MoveInventory(rest)) = rx.try_recv() else {
+            panic!("the rest goes on");
+        };
+        assert_eq!(
+            (rest.from, rest.to, rest.quantity),
+            (
+                InventorySlot::CURSOR,
+                InventorySlot(3001),
+                MoveQuantity::Whole
+            )
+        );
+        // And once that settles, nothing else is sent.
+        app.world_mut().resource_scope(
+            |world, mut state: Mut<crate::inventory::InventoryState>| {
+                let online = world.resource::<OnlineState>();
+                state.action_result(1, rest.revision, None, online.world().inventory());
+            },
+        );
+        app.update();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn coins_on_the_cursor_go_to_the_trade_as_the_window_opens() {
+        let (_, sent, _) = open_with(eq_client_assets::ui::InstalledClient::EqMac, Vec::new(), 3);
+        let Some(ClientCommand::MoveCoins { transfer, .. }) = sent else {
+            panic!("the cursor's coins move in: {sent:?}");
+        };
+        assert_eq!(
+            (transfer.from, transfer.to, transfer.coin, transfer.amount),
+            (
+                eq_client_core::money::CoinPlace::Cursor,
+                eq_client_core::money::CoinPlace::Trade,
+                eq_client_core::money::Coin::Gold,
+                3
+            )
+        );
     }
 
     #[test]

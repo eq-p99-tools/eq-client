@@ -54,6 +54,7 @@ pub use eq_network_game::movement::{
 };
 pub use eq_network_game::pets;
 pub use eq_network_game::raid;
+pub use eq_network_game::reach;
 pub use eq_network_game::resurrection;
 pub use eq_network_game::servers;
 pub use eq_network_game::socials;
@@ -70,7 +71,7 @@ pub use eq_network_game::zoning::ZoneRejection;
 
 pub use eq_network_game::buffs::{Buff, BuffUpdate, InvisibilityStep, SpellEffect};
 pub use eq_network_game::world::{
-    BaseAttributes, CampStatus, Capability, Coins, ItemHitPoints, PlayerState,
+    BaseAttributes, CampEnd, CampStatus, Capability, Coins, ItemHitPoints, PlayerState,
     Position as WorldPosition, PostureState, SpawnKind, SpawnState, WorldEvent,
 };
 

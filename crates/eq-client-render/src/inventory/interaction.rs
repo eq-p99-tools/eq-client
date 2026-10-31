@@ -23,6 +23,19 @@ pub(super) struct Actions {
     pub coins: Option<CoinTransfer>,
 }
 
+/// What handing the cursor's item to an opening give window did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Handed {
+    /// Nothing was on the cursor.
+    Nothing,
+    /// It went onto a stack, which may leave the rest on the cursor.
+    Stacked,
+    /// It went into an empty slot, or the move was refused and said why.
+    Placed,
+    /// No slot could take it.
+    NoRoom,
+}
+
 /// What a quantity picker takes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Picked {
@@ -402,22 +415,58 @@ impl InventoryState {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Hands the item on the cursor to the open give window: into its first
-    /// empty slot, as the official client does when the window opens.
-    pub(crate) fn hand_over_cursor(&mut self, online: &OnlineState, sender: &Outbox) {
+    /// Whether no item move waits for the session's answer.
+    pub(crate) const fn settled(&self) -> bool {
+        self.actions.pending.is_none()
+    }
+
+    /// Hands the item on the cursor to the open give window, by the
+    /// installed generation's `rule`: under
+    /// [`eq_client_assets::ui::GiveAtOpen::StackFirst`] onto a stack of the
+    /// same item with room left, else into the first empty slot.
+    pub(crate) fn hand_over_cursor(
+        &mut self,
+        online: &OnlineState,
+        sender: &Outbox,
+        rule: eq_client_assets::ui::GiveAtOpen,
+    ) -> Handed {
         let world = online.world();
         let slots = world
             .exchange()
             .map_or(0, eq_client_core::world::Exchange::trade_slots);
         let items = world.inventory().items();
-        if !items.contains_key(&InventorySlot::CURSOR) {
-            return;
-        }
-        let empty = (0..i32::from(slots))
-            .map(|index| InventorySlot(3000 + index))
-            .find(|slot| !items.contains_key(slot));
-        if let Some(slot) = empty {
+        let Some(held) = items.get(&InventorySlot::CURSOR) else {
+            return Handed::Nothing;
+        };
+        let trade = || (0..i32::from(slots)).map(|index| InventorySlot(3000 + index));
+        // A stack of the same item with room left takes it first.
+        let stack = (rule == eq_client_assets::ui::GiveAtOpen::StackFirst
+            && held.stack_count.is_some())
+        .then(|| {
+            trade().find(|slot| {
+                items.get(slot).is_some_and(|other| {
+                    other.details.id == held.details.id
+                        && other.stack_count.unwrap_or(0) < other.rules.stack_size
+                })
+            })
+        })
+        .flatten();
+        if let Some(slot) = stack {
             self.click_slot(slot, false, online, sender);
+            // A merge that left waits for its answer; what it leaves on the
+            // cursor goes on from there. One refused says why and stops.
+            return if self.settled() {
+                Handed::Placed
+            } else {
+                Handed::Stacked
+            };
+        }
+        match trade().find(|slot| !items.contains_key(slot)) {
+            Some(slot) => {
+                self.click_slot(slot, false, online, sender);
+                Handed::Placed
+            }
+            None => Handed::NoRoom,
         }
     }
 
