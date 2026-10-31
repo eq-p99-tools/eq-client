@@ -359,6 +359,20 @@ impl InstalledClient {
         matches!(self, Self::Titanium)
     }
 
+    /// The file in the installation that holds this client's string table,
+    /// the words servers refer to by number. The Mac-era client's is
+    /// `eqstr_en.txt`, as the TAKP folder carries (inferred from the
+    /// installation; which file the program opens is unread, checklist
+    /// 6.315). A Mac-era folder that also carries `eqstr_us.txt` still reads
+    /// its own.
+    #[must_use]
+    pub const fn string_file(self) -> &'static str {
+        match self {
+            Self::Titanium => "eqstr_us.txt",
+            Self::EqMac => "eqstr_en.txt",
+        }
+    }
+
     /// The face this client writes its windows in, by its file among
     /// Windows' fonts; None until it is checked for this client. The
     /// Mac-era client's face is unchecked, and its installation carries no
