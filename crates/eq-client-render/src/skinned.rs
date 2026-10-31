@@ -22,6 +22,7 @@ use bindings::{GroupButton, RaidButton, effect_label, selector_button};
 mod controls;
 mod fit;
 mod frame;
+pub(crate) mod gem;
 mod items;
 pub(crate) mod looks;
 pub(crate) mod scrollbar;
@@ -779,12 +780,27 @@ fn spell_gem(
             node,
         ))
         .with_children(|gem_node| {
-            if let Some(piece) = &gem.background {
-                picture(gem_node, art, piece, at(0.0, 0.0, area.width, area.height));
-            }
-            // The skin's gem icons where it has them, at its offset or
-            // centred; else the square icon, as before.
-            if let Some(gems) = gem.icons.clone().filter(|gems| !gems.sheets.is_empty()) {
+            let whole = at(0.0, 0.0, area.width, area.height);
+            let mut piece = |gem_node: &mut ChildSpawnerCommands, part: Option<&Piece>, which| {
+                if let Some(image) = part.and_then(|part| art.cut(part)) {
+                    gem_node.spawn((image, whole.clone(), which));
+                }
+            };
+            piece(gem_node, gem.background.as_ref(), gem::GemPiece::Background);
+            // The spell's square icon at the skin's icon offset, else where
+            // it always sat; and where the skin has gem icons, the spell's
+            // cell, at the offset or centred, for a client whose spells name
+            // one, in place of the square icon.
+            let icon = (area.height - 6.0).max(8.0);
+            let place = gem.icon_offset.unwrap_or(super::spell_icons::INSET);
+            let gems = gem.icons.clone().filter(|gems| !gems.sheets.is_empty());
+            gem_node.spawn(super::spell_icons::gem_square_artwork(
+                usize::from(index),
+                place,
+                icon,
+                gems.is_some(),
+            ));
+            if let Some(gems) = gems {
                 #[allow(clippy::cast_precision_loss, reason = "cells are small")]
                 let place = gem.icon_offset.unwrap_or((
                     (area.width - gems.cell_width as f32) / 2.0,
@@ -795,16 +811,9 @@ fn spell_gem(
                     gems,
                     place,
                 ));
-            } else {
-                let icon = (area.height - 6.0).max(8.0);
-                gem_node.spawn(super::spell_icons::artwork(
-                    super::spell_icons::Source::Gem(usize::from(index)),
-                    icon,
-                ));
             }
-            if let Some(piece) = &gem.holder {
-                picture(gem_node, art, piece, at(0.0, 0.0, area.width, area.height));
-            }
+            piece(gem_node, gem.highlight.as_ref(), gem::GemPiece::Highlight);
+            piece(gem_node, gem.holder.as_ref(), gem::GemPiece::Holder);
         });
 }
 

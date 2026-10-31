@@ -603,6 +603,13 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
         WorldEvent::Posture { spawn_id, posture } if world.is_player(*spawn_id) => {
             debug!(?posture, "Own posture update");
         }
+        WorldEvent::Spell(eq_client_core::SpellUpdate::Began {
+            caster_id,
+            spell_id,
+            duration_ms,
+        }) if world.is_player(*caster_id) => {
+            debug!(spell_id, duration_ms, "Own cast began");
+        }
         WorldEvent::Spell(eq_client_core::SpellUpdate::Interrupted {
             caster_id,
             message_id,

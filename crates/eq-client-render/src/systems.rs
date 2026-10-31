@@ -238,7 +238,7 @@ pub(super) fn schedule(app: &mut App) {
                 buffs::update,
                 (buffs::hover, buffs::skinned_details, buffs::short_window),
                 (
-                    spell_icons::update,
+                    (spell_icons::update, skinned::gem::pieces),
                     logs::write,
                     (
                         options::toggle,

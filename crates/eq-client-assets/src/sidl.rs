@@ -43,7 +43,9 @@ pub struct IconGrid {
 
 impl IconGrid {
     /// The cell numbered `index`, counting from 0 across the first sheet's
-    /// whole cells, then the next sheet's; None past the last.
+    /// whole cells, then the next sheet's; None past the last. The
+    /// numbering is inferred from the skin files until the program's cell
+    /// lookup is read (recording checklist item 6.287).
     #[must_use]
     pub fn cell(&self, index: u32) -> Option<Piece> {
         let mut index = index;

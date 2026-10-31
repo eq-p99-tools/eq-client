@@ -332,7 +332,7 @@ pub fn run(
     };
     app.insert_resource(front);
     app.insert_resource(login::LoginStrings::load(config.eq_directory.as_deref()));
-    app.insert_resource(spellbook::SpellNames::load(config.eq_directory.as_deref()));
+    app.insert_resource(spellbook::SpellNames::load(&config));
     app.insert_resource(hud::messages::Messages::load(
         config.eq_directory.as_deref(),
     ));
