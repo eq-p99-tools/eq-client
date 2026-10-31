@@ -106,7 +106,12 @@ pub(super) fn load(settings: Res<super::ViewerSettings>, mut particles: ResMut<S
                     warn!("spell particles are off: {error}");
                     None
                 }
-                None => None,
+                // A client whose effect files are not yet known draws none;
+                // say so, so the gap shows.
+                None => {
+                    warn!("spell particles are off: this client's effect files are not known yet");
+                    None
+                }
             });
         particles.directory = Some(directory);
     }
