@@ -4,9 +4,10 @@
 //! grants no movement there before the first report.
 //!
 //! The program's sum of its buffs' modifiers is unread, so the report is
-//! the slower bound (provisional): 0 where no buff carries a movement-speed
-//! effect (3) below 0, raised speeds left out, and the installed client's
-//! slowed value where one does
+//! the slower bound: 0 where no buff carries a movement-speed effect (3)
+//! below 0, raised speeds left out, and the installed client's slowed value
+//! where one does. Both are provisional: they stand in for the host's
+//! modifier until the +0xbc writer formula is read (Decompile)
 //! ([`eq_client_assets::ui::InstalledClient::slowed_speed_modifier`]). A
 //! buff whose spell the installed data lacks counts as none.
 use crate::{online::OnlineState, outbox::Outbox};

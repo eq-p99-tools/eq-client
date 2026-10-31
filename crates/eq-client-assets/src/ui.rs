@@ -404,8 +404,10 @@ impl InstalledClient {
     /// until its program's rule is read. The Mac-era program's own sum of
     /// its buffs' modifiers is unread, so its host reports the slower
     /// bound: -1000, the least the program lets the player move at before
-    /// it roots them, which holds every speed to the slowest (provisional,
-    /// TAKP sitting 2 M1). A player no buff slows reports 0.
+    /// it roots them, which holds every speed to the slowest (TAKP sitting
+    /// 2 M1). A player no buff slows reports 0, a raised speed included.
+    /// Both are provisional: they stand in for the host's modifier until
+    /// the +0xbc writer formula is read (Decompile).
     #[must_use]
     pub const fn slowed_speed_modifier(self) -> Option<f32> {
         match self {
