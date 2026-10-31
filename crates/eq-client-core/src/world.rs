@@ -699,7 +699,8 @@ impl ClientWorld {
                 session_id,
                 door_id,
                 error,
-            } => self.door_used((*session_id, *door_id), error.as_ref(), news),
+                string_id,
+            } => self.door_used((*session_id, *door_id), (error.as_ref(), *string_id), news),
             WorldEvent::Objects(update) => self.objects_news(update, news),
             WorldEvent::ObjectAction {
                 session_id, error, ..

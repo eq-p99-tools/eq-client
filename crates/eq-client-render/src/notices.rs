@@ -330,10 +330,13 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             chat(super::ground::refusal(reason).into())
         }
         // A click sent says nothing, as in the official client; a refused
-        // one says why.
-        Notice::Door { error, .. } => error
-            .as_deref()
-            .map_or_else(Vec::new, |error| chat(error.into())),
+        // one says why, in the program's words where the session names
+        // them (1462 out of reach).
+        Notice::Door {
+            error, string_id, ..
+        } => error.as_deref().map_or_else(Vec::new, |error| {
+            chat(official(*string_id, &[], error, messages))
+        }),
         // The player stays in the zone, so the status line no longer says
         // they are zoning.
         Notice::TransferRefused(reason) => [
@@ -480,6 +483,7 @@ fn roll_lines(roll: &eq_client_core::socials::Roll, messages: Option<&Messages>)
 /// and no longer, and 13233 and 13234 for roleplaying and no longer; this
 /// client's words without them. That the official client says these, and
 /// not the copies of the anonymous lines at 12034 and 12035, is inferred.
+/// The roleplaying lines take message type 273's colour (sitting s9l, read).
 fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
     let (id, fallback) = match notice {
         ListingNotice::Away(true) => (13199, "You are away from the keyboard now."),
@@ -489,26 +493,41 @@ fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
         ListingNotice::Roleplaying(true) => (13233, "You are in character now."),
         ListingNotice::Roleplaying(false) => (13234, "You are out of character again."),
     };
-    official(Some(id), &[], fallback, messages)
+    let line = official(Some(id), &[], fallback, messages);
+    match notice {
+        ListingNotice::Roleplaying(_) => line.typed(273),
+        _ => line,
+    }
 }
 
 /// A camp's lines, in the installed client's strings for them (Titanium
 /// sittings 9p and 9q, read): 12293 and 12682 as it starts, 12684 with the
 /// seconds left at 25, 20, 15, 10 and 5, and 12290 when it is abandoned.
-/// That 12293 comes before 12682 is inferred (6.302). The program says
-/// 12683 instead when standing or a stun ends it; the session doesn't yet
-/// say which ended it, so every abandoned camp says 12290 as today.
+/// That 12293 comes before 12682 is inferred (6.302); 12682 takes message
+/// type 270's colour (T18 part one, read). Standing ends it
+/// with 12683 and moving with 12290 (sitting 9p, read); the line for
+/// ducking, a door, a pick-up or death is unread, and says 12290 as before
+/// (6.309). A stun's 12683 comes with the stun in 3b-2.
 fn camp_lines(camp: &CampStatus, messages: Option<&Messages>) -> Vec<Said> {
     let said = |id, arguments: &[String]| messages.map(|messages| messages.said(id, arguments));
     match camp {
-        CampStatus::Preparing => [said(12293, &[]), said(12682, &[])]
-            .into_iter()
-            .flatten()
-            .collect(),
+        CampStatus::Preparing => [
+            said(12293, &[]),
+            said(12682, &[]).map(|line| line.typed(270)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
         CampStatus::Countdown { seconds_left } => said(12684, &[seconds_left.to_string()])
             .into_iter()
             .collect(),
-        CampStatus::Abandoned => said(12290, &[]).into_iter().collect(),
+        CampStatus::Abandoned { by } => {
+            let id = match by {
+                eq_client_core::CampEnd::Standing => 12683,
+                eq_client_core::CampEnd::Moving | eq_client_core::CampEnd::Other => 12290,
+            };
+            said(id, &[]).into_iter().collect()
+        }
         CampStatus::LoggingOut => vec!["Logging out...".into()],
         CampStatus::Camped => Vec::new(),
         CampStatus::Rejected(reason) => vec![reason.as_str().into()],
@@ -1058,7 +1077,7 @@ mod tests {
         );
         assert_eq!(
             said(ListingNotice::Roleplaying(false)),
-            [(Place::Chat, Said::official("In."))]
+            [(Place::Chat, Said::official("In.").typed(273))]
         );
         // A string the installation lacks reads in this client's words.
         assert_eq!(
@@ -1204,12 +1223,25 @@ mod tests {
                 &Notice::Door {
                     door_id: 4,
                     error: error.map(str::to_owned),
+                    string_id: None,
                 },
                 None,
             )
         };
         assert_eq!(door(None), []);
         assert_eq!(door(Some("Locked")), [(Place::Chat, "Locked".into())]);
+        // Out of reach, the session names the program's string 1462.
+        let messages = Messages::parse("EQST0002\n0 1\n1462 Too far.\n");
+        let far = Notice::Door {
+            door_id: 4,
+            error: Some("Out of reach".into()),
+            string_id: Some(1462),
+        };
+        assert_eq!(
+            wording(&far, Some(&messages)),
+            [(Place::Chat, Said::official("Too far."))]
+        );
+        assert_eq!(wording(&far, None), [(Place::Chat, "Out of reach".into())]);
         let transfer = wording(
             &Notice::TransferRefused(eq_client_core::ZoneRejection::Cancelled),
             None,
@@ -1241,20 +1273,35 @@ mod tests {
 
     #[test]
     fn a_camp_says_its_start_and_each_five_seconds_left() {
-        let messages =
-            Messages::parse("EQST0002\n0 1\n12293 Camping.\n12682 Sit still.\n12684 %1 left.\n");
+        use eq_client_core::CampEnd;
+        let messages = Messages::parse(
+            "EQST0002\n0 1\n12290 Abandoned.\n12293 Camping.\n12682 Sit still.\n12683 Stood.\n12684 %1 left.\n",
+        );
         let said = |camp| wording(&Notice::Camp(camp), Some(&messages));
         assert_eq!(
             said(CampStatus::Preparing),
             [
                 (Place::Chat, Said::official("Camping.")),
-                (Place::Chat, Said::official("Sit still."))
+                (Place::Chat, Said::official("Sit still.").typed(270))
             ]
         );
         assert_eq!(
             said(CampStatus::Countdown { seconds_left: 25 }),
             [(Place::Chat, Said::official("25 left."))]
         );
+        // Standing ends it in its own words; moving and the rest in 12290.
+        assert_eq!(
+            said(CampStatus::Abandoned {
+                by: CampEnd::Standing
+            }),
+            [(Place::Chat, Said::official("Stood."))]
+        );
+        for by in [CampEnd::Moving, CampEnd::Other] {
+            assert_eq!(
+                said(CampStatus::Abandoned { by }),
+                [(Place::Chat, Said::official("Abandoned."))]
+            );
+        }
     }
 
     #[test]

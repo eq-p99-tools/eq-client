@@ -86,6 +86,7 @@ impl Messages {
             Said {
                 words,
                 source: Source::Official,
+                message_type: None,
             }
         } else {
             let mut words = RichText::from(format!("Server message {id}"));
@@ -98,6 +99,7 @@ impl Messages {
             Said {
                 words,
                 source: Source::Client,
+                message_type: None,
             }
         }
     }

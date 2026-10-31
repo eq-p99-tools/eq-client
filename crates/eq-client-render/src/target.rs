@@ -5,6 +5,7 @@ use super::{entities::NearbyEntities, online::OnlineState};
 use crate::theme::{self, Size};
 use crate::{keys::Act, outbox::Outbox};
 use bevy::{prelude::*, window::PrimaryWindow};
+use eq_client_assets::ui::TargetByName;
 use eq_client_core::{ClientCommand, SpawnKind, targeting::cycle};
 
 #[derive(Component)]
@@ -146,7 +147,10 @@ pub(super) fn input(
     }
     let accepts_input = keys.escape_free();
     if let Some(name) = requested {
-        match named(&ids, &online, &name) {
+        let rule = settings.as_ref().map_or(TargetByName::Nearest, |s| {
+            s.0.installed_client.target_by_name()
+        });
+        match named(rule, &ids, &online, &name) {
             Some(id) => proposal = Some(Some(id)),
             None => chat.refuse(format!("No nearby target named {name}")),
         }
@@ -252,10 +256,19 @@ fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<
         .collect()
 }
 
-/// The nearest visible spawn whose shown name, or full server name such as
-/// `a_whiskered_bat002` (as EQ's `/target` also accepts), starts with `query`,
-/// ignoring case; underscores in the query already read as spaces.
-fn named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
+/// The spawn `/target <query>` picks, by the installed generation's rule;
+/// underscores in the query already read as spaces.
+fn named(rule: TargetByName, ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
+    match rule {
+        TargetByName::Nearest => nearest_named(ids, online, query),
+        TargetByName::Shortest => shortest_named(online, query),
+    }
+}
+
+/// Titanium: the nearest drawn visible spawn whose shown name, or full
+/// server name such as `a_whiskered_bat002` (as `/target` also accepts),
+/// starts with `query`, ignoring case.
+fn nearest_named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
     let query = query.to_lowercase();
     let origin = online
         .world()
@@ -275,6 +288,40 @@ fn named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
             })
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id)
+}
+
+/// A name as the TAKP program compares it: digits and '#' dropped, '_' read
+/// as a space, and case ignored (TAKP read T6).
+fn cleaned(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_ascii_digit() && *c != '#')
+        .map(|c| {
+            if c == '_' {
+                ' '
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// `EQMac` (TAKP read T6): any known visible spawn at any range whose cleaned
+/// name starts with the cleaned text; the shortest name wins, and a tie goes
+/// to the lowest spawn ID (inferred, checklist 6.313).
+fn shortest_named(online: &OnlineState, query: &str) -> Option<u16> {
+    let query = cleaned(query);
+    online
+        .world()
+        .spawns()
+        .iter()
+        .filter(|(_, spawn)| !spawn.state.invisible)
+        .filter_map(|(id, spawn)| {
+            let name = cleaned(&spawn.state.name);
+            name.starts_with(&query).then_some((*id, name.len()))
+        })
+        // `min_by_key` keeps the first of equals, and the map runs by ID.
+        .min_by_key(|(_, length)| *length)
         .map(|(id, _)| id)
 }
 
@@ -405,10 +452,76 @@ mod tests {
                 },
             );
         }
-        assert!(named(&[2, 3], &online, "a whiskered bat").is_some());
+        assert!(named(TargetByName::Nearest, &[2, 3], &online, "a whiskered bat").is_some());
         // `/target a_whiskered_bat005` arrives with its underscores read as spaces.
-        assert_eq!(named(&[2, 3], &online, "a whiskered bat005"), Some(3));
-        assert_eq!(named(&[2, 3], &online, "a whiskered bat009"), None);
+        assert_eq!(
+            named(
+                TargetByName::Nearest,
+                &[2, 3],
+                &online,
+                "a whiskered bat005"
+            ),
+            Some(3)
+        );
+        assert_eq!(
+            named(
+                TargetByName::Nearest,
+                &[2, 3],
+                &online,
+                "a whiskered bat009"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn takp_targets_the_shortest_cleaned_name_at_any_range() {
+        let mut online = OnlineState::new(false);
+        for (id, name, invisible) in [
+            (2, "a_bat_wing001", false),
+            (3, "a_bat002", false),
+            (4, "a_bat003", false),
+            (5, "a_ba#004", true),
+        ] {
+            crate::online::testing::spawn_entry(
+                &mut online,
+                id,
+                SpawnState {
+                    class: None,
+                    spawn_id: id,
+                    name: name.into(),
+                    kind: SpawnKind::Npc,
+                    race: 1,
+                    gender: 0,
+                    position: WorldPosition {
+                        x: f32::from(id) * 1000.0,
+                        ..WorldPosition::default()
+                    },
+                    velocity: [0.0; 3],
+                    walk_speed: 0.0,
+                    run_speed: 0.0,
+                    size: 0.0,
+                    invisible,
+                    appearance: eq_client_core::outfit::Appearance::default(),
+                    level: 0,
+                    listing: eq_client_core::listing::Listing::default(),
+                    name_parts: eq_client_core::names::NameParts::default(),
+                    pet_owner: None,
+                    hp_percent: None,
+                },
+            );
+        }
+        // None of them is drawn; the rule looks at every known spawn.
+        let pick = |query| named(TargetByName::Shortest, &[], &online, query);
+        // Two names tie at the shortest; the lower spawn ID wins, and the
+        // invisible, shorter one is passed over.
+        assert_eq!(pick("A BA"), Some(3));
+        assert_eq!(pick("a bat wing"), Some(2));
+        // Digits in the text are dropped as they are from the names.
+        assert_eq!(pick("a bat003"), Some(3));
+        assert_eq!(pick("a cat"), None);
+        // Titanium's rule only looks at drawn spawns.
+        assert_eq!(named(TargetByName::Nearest, &[], &online, "a bat"), None);
     }
 
     #[test]

@@ -722,9 +722,11 @@ fn unsupported(world: &eq_client_core::movement::CollisionWorld, feet: Vec3) -> 
 /// Walks like a grounded step but keeps going past ledges and falls under gravity,
 /// in the 50 ms slices the airborne controller integrates; `jump` starts a jump
 /// in the first slice when the character stands on the ground. Each slice may
-/// climb, so the sample stops before its total rise passes the one riser the
-/// server's movement guard accepts; a larger climb takes several accepted samples
-/// instead of one that would be refused and retried forever.
+/// climb, so the sample stops before its total rise passes what the session's
+/// movement guard accepts: one riser, and while a jump rises, as far as the
+/// jump's speed less gravity carries it in the sample (the guard's own rule
+/// after the session's jump notice). A larger climb takes several accepted
+/// samples instead of one that would be refused and retried forever.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fall_step(
     airborne: &mut eq_client_core::movement::AirborneController,
@@ -740,6 +742,8 @@ pub(super) fn fall_step(
     let slices = (span / 0.05).ceil().clamp(1.0, 5.0) as u8;
     let slice = f32::from(slices);
     let mut position = feet;
+    let start = airborne.velocity().max(0.0);
+    let mut rising = start;
     for index in 0..slices {
         let mut trial = airborne.clone();
         let next = trial.step(
@@ -753,7 +757,14 @@ pub(super) fn fall_step(
                 height,
             },
         );
-        if next.y - feet.y > eq_client_core::movement::MAX_GROUNDED_STEP {
+        // A jump that started in this slice rises from its own speed.
+        if index == 0 && trial.velocity() > start {
+            rising = physics.jump_speed.max(start);
+        }
+        let elapsed = span / slice * f32::from(index + 1);
+        let allowed = eq_client_core::movement::MAX_GROUNDED_STEP
+            + jump_rise(rising, physics.gravity, elapsed);
+        if next.y - feet.y > allowed {
             break;
         }
         *airborne = trial;
@@ -762,27 +773,29 @@ pub(super) fn fall_step(
     position
 }
 
-/// The fastest a jump may start here, in units a second: the session's
-/// movement guard takes at most [`MAX_GROUNDED_STEP`] of rise in a sample,
-/// and a sample's first 50 ms slice must fit in it or the sample stops
-/// before the jump ([`fall_step`]). Both programs jump at 44.55, which
-/// rises past it in that slice; until the guard takes a jump's rise, a
-/// jump starts at 40, a little lower than the program's, never higher.
-///
-/// [`MAX_GROUNDED_STEP`]: eq_client_core::movement::MAX_GROUNDED_STEP
-const GUARDED_JUMP_SPEED: f32 = eq_client_core::movement::MAX_GROUNDED_STEP / 0.05;
+/// How far a body rising at `speed` climbs in `seconds` under `gravity`,
+/// and no farther than the top: the rise the session's movement guard
+/// grants after a jump notice. The controller's air factor only slows the
+/// rise, so the body climbs no farther than this.
+fn jump_rise(speed: f32, gravity: f32, seconds: f32) -> f32 {
+    let seconds = if gravity > 0.0 {
+        seconds.min(speed / gravity)
+    } else {
+        seconds
+    };
+    (speed * seconds - gravity * seconds * seconds / 2.0).max(0.0)
+}
 
 /// How the installed client's player falls: its program's physics under
 /// the zone header's gravity once it comes, or the provisional ones until
-/// they are read for it. A jump starts no faster than the movement guard
-/// lets a sample rise ([`GUARDED_JUMP_SPEED`]).
+/// they are read for it.
 pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> VerticalPhysics {
     client.falls().map_or(PROVISIONAL_PHYSICS, |falls| {
         let gravity = zone_gravity.map_or(falls.gravity, |per_step| falls.zone_gravity(per_step));
         VerticalPhysics {
             gravity,
             terminal_speed: falls.terminal_under(gravity),
-            jump_speed: falls.jump_speed.min(GUARDED_JUMP_SPEED),
+            jump_speed: falls.jump_speed,
             air_factor: falls.air_factor,
         }
     })
@@ -1210,6 +1223,52 @@ mod tests {
     }
 
     #[test]
+    fn a_titanium_jump_rises_at_its_own_speed_within_the_guards_allowance() {
+        use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
+        let world = CollisionWorld::new([
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ])
+        .unwrap();
+        let titanium = physics(InstalledClient::Titanium, Some(1.0));
+        let mut airborne = AirborneController::default();
+        let rising = super::fall_step(
+            &mut airborne,
+            &world,
+            titanium,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            0.15,
+            6.0,
+            true,
+        );
+        // At 44.55 u/s under 400 u/s², three 50 ms slices climb well past a
+        // riser, and no farther than the guard grants after the notice.
+        let granted = MAX_GROUNDED_STEP + super::jump_rise(44.55, titanium.gravity, 0.15);
+        assert!(rising.y > MAX_GROUNDED_STEP, "{rising:?}");
+        assert!(rising.y <= granted, "{rising:?} over {granted}");
+        // The whole climb went: the sample was not cut short.
+        let mut free = AirborneController::default();
+        let mut feet = Vec3::ZERO;
+        for index in 0..3 {
+            feet = free.step(
+                &world,
+                feet,
+                titanium,
+                eq_client_core::movement::MotionStep {
+                    horizontal: Vec3::ZERO,
+                    jump: index == 0,
+                    seconds: 0.05,
+                    height: 6.0,
+                },
+            );
+        }
+        assert!((rising.y - feet.y).abs() < 0.001, "{rising:?} {feet:?}");
+        // The rise stops at the top of the arc.
+        assert!((super::jump_rise(44.55, 400.0, 1.0) - 44.55 * 44.55 / 800.0).abs() < 0.001);
+    }
+
+    #[test]
     fn motion_reset_discards_pending_visual_transition() {
         let mut controls = super::Controls::default();
         controls.display_sample(
@@ -1319,9 +1378,8 @@ mod tests {
             "{}",
             titanium.gravity
         );
-        // The program's 44.55 is held to what the movement guard lets the
-        // first slice rise.
-        assert!((titanium.jump_speed - 40.0).abs() < 0.001);
+        // The program's own 44.55: the movement guard takes a jump's rise.
+        assert!((titanium.jump_speed - 44.55).abs() < 0.001);
         assert_eq!(
             physics(InstalledClient::Titanium, Some(0.4)),
             physics(InstalledClient::EqMac, Some(0.4))

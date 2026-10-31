@@ -7,7 +7,7 @@ use crate::{
     loot::{LootResponse, LootUpdate},
     merchant::{MerchantItem, MerchantUpdate},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A corpse the player is looting.
 #[derive(Clone, Debug, PartialEq)]
@@ -106,6 +106,9 @@ pub struct Exchange {
     pub partner_accepted: bool,
     /// What the other player put in, by their trade slot (0 to 7).
     pub theirs: BTreeMap<u8, InventoryItem>,
+    /// Their trade slots holding an item in a record layout the session
+    /// doesn't read yet: taken, with what fills them unknown.
+    pub unread: BTreeSet<u8>,
 }
 
 impl Exchange {
@@ -121,6 +124,7 @@ impl Exchange {
             given: false,
             partner_accepted: false,
             theirs: BTreeMap::new(),
+            unread: BTreeSet::new(),
         }
     }
 
@@ -243,16 +247,30 @@ impl Trade {
                 exchange.open = true;
             }
             ExchangeUpdate::Offered { index, item } => {
+                exchange.unread.remove(index);
                 exchange.theirs.insert(*index, (**item).clone());
                 exchange.undo_clicks();
             }
-            // The coins themselves are the session's to count.
-            ExchangeUpdate::Coins { .. } => exchange.undo_clicks(),
+            ExchangeUpdate::Unread { index, .. } => {
+                exchange.theirs.remove(index);
+                exchange.unread.insert(*index);
+                exchange.undo_clicks();
+            }
+            ExchangeUpdate::Withdrawn { index } => {
+                exchange.theirs.remove(index);
+                exchange.unread.remove(index);
+                exchange.undo_clicks();
+            }
+            // The server undid both sides' clicks, or their coins changed,
+            // which the session counts itself.
+            ExchangeUpdate::AcceptsReset | ExchangeUpdate::Coins { .. } => exchange.undo_clicks(),
             ExchangeUpdate::Accepted { by } if u32::from(exchange.with) == *by => {
                 exchange.partner_accepted = true;
             }
             ExchangeUpdate::Finished | ExchangeUpdate::Cancelled { .. } => self.exchange = None,
-            ExchangeUpdate::Busy { by } if u32::from(exchange.with) == *by => self.exchange = None,
+            ExchangeUpdate::Busy { by, .. } if u32::from(exchange.with) == *by => {
+                self.exchange = None;
+            }
             _ => return false,
         }
         true

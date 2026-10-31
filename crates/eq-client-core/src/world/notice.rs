@@ -105,6 +105,9 @@ pub enum Notice {
         door_id: u8,
         /// Why it was refused.
         error: Option<String>,
+        /// The program's string for the refusal, where the session names
+        /// one: 1462 for a door out of reach.
+        string_id: Option<u32>,
     },
     /// A zone transfer was refused.
     TransferRefused(ZoneRejection),
