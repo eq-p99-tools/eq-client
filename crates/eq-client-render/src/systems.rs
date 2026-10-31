@@ -7,7 +7,7 @@ use crate::{
     navmesh_prebuild, notices, online, options, orbit_camera, outbox, outfit, paperdoll, pet,
     profile_files, raid, reading, resources, schedule_screenshot, select_preview, sheets, skills,
     skin, skinned, sounds, spell_effects, spell_icons, spellbook, target, tooltip, trade,
-    tradeskills, training, update_hud, whereabouts, who, windows,
+    tradeskills, training, translocate, update_hud, whereabouts, who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -219,7 +219,7 @@ pub(super) fn schedule(app: &mut App) {
                     give::window,
                     skinned::quantity,
                     training::window,
-                    confirm::window,
+                    (translocate::decline_unasked, confirm::window).chain(),
                     reading::window,
                     tradeskills::world_window,
                     map::load,

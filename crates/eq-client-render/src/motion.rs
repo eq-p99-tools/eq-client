@@ -5,11 +5,15 @@ use super::{
     online,
 };
 use bevy::prelude::*;
-use eq_client_assets::regions::ZoneLine;
+use eq_client_assets::{
+    falls::{FallCost, FallLanding},
+    regions::ZoneLine,
+    ui::InstalledClient,
+};
 use eq_client_core::{
     Capability, ClientCommand, MovementMode, MovementRequest,
     hazards::Hazard,
-    movement::AirborneController,
+    movement::{AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics},
     qol::{Fix, Settings},
     world::ClientWorld,
     world_position,
@@ -39,9 +43,12 @@ pub(super) struct Controls {
     pub refused: Option<String>,
     /// When a jump was pressed since the last sample; only where falls are simulated.
     pub jump: Option<Instant>,
-    /// The damage of a landing the session's queue had no room to tell; it
+    /// When the latest jump started; it outlasts a reset, so a new
+    /// admission cannot hurry the next.
+    last_jump: Option<Instant>,
+    /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
-    unreported: Option<u32>,
+    unreported: Option<FallCost>,
     /// Where the player faces while the heading sent still turns toward it;
     /// None once the two match.
     facing: Option<f32>,
@@ -91,6 +98,7 @@ impl Default for Controls {
             airborne: None,
             refused: None,
             jump: None,
+            last_jump: None,
             unreported: None,
             facing: None,
             recent: RecentMotion::default(),
@@ -264,6 +272,7 @@ impl Controls {
             speed,
             last_sent: self.last_sent,
             last_answer: self.last_answer,
+            last_jump: self.last_jump,
             ..Self::default()
         };
     }
@@ -397,7 +406,13 @@ pub(super) fn input(
     mut controls: ResMut<Controls>,
     players: Query<&PlayerBody, With<Player>>,
     cameras: Query<&OrbitCamera>,
+    (settings, messages, mut chat): (
+        Res<crate::ViewerSettings>,
+        Res<crate::hud::messages::Messages>,
+        ResMut<crate::chat::ChatState>,
+    ),
 ) {
+    let client = settings.0.installed_client;
     if !online.enabled || !online.world().connected() || online.world().death().is_some() {
         controls.reset(None);
         controls.held = Some(Held::Withdrawn);
@@ -411,11 +426,20 @@ pub(super) fn input(
     if keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
-    // Held until the next sample; jumps rise and fall like falls, so only then.
-    if keys.pressed(Act::Jump) && controls.airborne.is_some() {
-        controls.jump = Some(Instant::now());
-    }
     let now = Instant::now();
+    // Held until the next sample; jumps rise and fall like falls, so only
+    // where the session takes both, and no sooner after the last than the
+    // installed client allows.
+    if keys.pressed(Act::Jump)
+        && controls.airborne.is_some()
+        && online.world().can(Capability::Jumping)
+    {
+        if jump_too_soon(client, controls.last_jump, now) {
+            debug!("Jump refused: too soon after the last");
+        } else {
+            controls.jump = Some(now);
+        }
+    }
     let map = &*keys.map;
     let keyboard = navigation.sample(&keys.input);
     controls
@@ -435,8 +459,8 @@ pub(super) fn input(
     }
     // A landing's damage goes before the next sample; a queue with no room
     // for it has none for the sample either.
-    if let Some(amount) = controls.unreported.take() {
-        controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, amount);
+    if let Some(cost) = controls.unreported.take() {
+        controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
         if controls.unreported.is_some() {
             controls.pause_prediction();
             controls.held = Some(Held::Gate);
@@ -511,7 +535,16 @@ pub(super) fn input(
     let (landing, mode, jumped) = match controls.airborne.as_mut() {
         Some(airborne) => {
             let rising = airborne.velocity() > 0.0;
-            let landing = fall_step(airborne, world, feet, delta, span, body.height, jump);
+            let landing = fall_step(
+                airborne,
+                world,
+                physics(client, online.world().zone_gravity()),
+                feet,
+                delta,
+                span,
+                body.height,
+                jump,
+            );
             let falling = airborne.velocity() < 0.0
                 || feet.y - landing.y > eq_client_core::movement::MAX_GROUNDED_STEP;
             let jumped = !rising && airborne.velocity() > 0.0;
@@ -534,6 +567,9 @@ pub(super) fn input(
         controls.send_failed(reason);
         controls.held = Some(Held::Refused);
         return;
+    }
+    if jumped {
+        controls.last_jump = Some(now);
     }
     let position = landing + Vec3::Y * body.feet_offset;
     let position = stop_at_zone_line(&online.regions, origin, position);
@@ -574,13 +610,22 @@ pub(super) fn input(
         .as_mut()
         .and_then(AirborneController::take_landing)
     {
-        let amount = world.landing_damage(
+        let cost = landing_cost(
+            client,
+            world,
             position - Vec3::Y * body.feet_offset,
             fall,
-            safe_fall(online.world()),
+            online.world(),
         );
-        debug!(fall_distance = fall.fall_distance, amount, "Landing");
-        controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, amount);
+        debug!(
+            fall_distance = fall.fall_distance,
+            impact_speed = fall.impact_speed,
+            damage = cost.damage,
+            safe_fall = cost.safe_fall,
+            "Landing"
+        );
+        say_fall(client, cost, online.world(), &messages, &mut chat);
+        controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
     }
     controls.moving = position.distance_squared(origin) > 0.000_001
         || (heading - current_heading).abs() > f32::EPSILON;
@@ -596,9 +641,11 @@ pub(super) fn input(
 /// climb, so the sample stops before its total rise passes the one riser the
 /// server's movement guard accepts; a larger climb takes several accepted samples
 /// instead of one that would be refused and retried forever.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn fall_step(
     airborne: &mut eq_client_core::movement::AirborneController,
     world: &eq_client_core::movement::CollisionWorld,
+    physics: VerticalPhysics,
     feet: Vec3,
     delta: Vec3,
     span: f32,
@@ -614,7 +661,7 @@ pub(super) fn fall_step(
         let next = trial.step(
             world,
             position,
-            eq_client_core::movement::PROVISIONAL_PHYSICS,
+            physics,
             eq_client_core::movement::MotionStep {
                 horizontal: delta / slice,
                 jump: jump && index == 0,
@@ -631,19 +678,106 @@ pub(super) fn fall_step(
     position
 }
 
-/// Tells the server the damage a landing did to the player, where the
-/// session reports the world's damage and the player takes it
-/// ([`Fix::TakeEnvironmentalDamage`]). A landing that does none sends
-/// nothing. Gives the damage back when the session's queue has no room for
-/// it, to tell again before the next sample.
+/// How the installed client's player falls: its program's physics under
+/// the zone header's gravity once it comes, or the provisional ones until
+/// they are read for it.
+pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> VerticalPhysics {
+    client.falls().map_or(PROVISIONAL_PHYSICS, |falls| {
+        let gravity = zone_gravity.map_or(falls.gravity, |per_step| falls.zone_gravity(per_step));
+        VerticalPhysics {
+            gravity,
+            terminal_speed: falls.terminal_under(gravity),
+            jump_speed: falls.jump_speed,
+            air_factor: falls.air_factor,
+        }
+    })
+}
+
+/// Whether a jump now comes sooner after the last than the installed
+/// client allows.
+fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -> bool {
+    client
+        .jump_spacing()
+        .zip(last)
+        .is_some_and(|(spacing, last)| now.saturating_duration_since(last) < spacing)
+}
+
+/// What a landing with the feet here costs the player: nothing in water or
+/// lava (`EQEmu` ignores a fall reported there, `Client::Handle_OP_EnvDamage`,
+/// and the Mac-era program's liquids slow a fall to nothing), else the
+/// installed client's rule. Until a client's rule is read, its fall costs the
+/// inferred [`CollisionWorld::landing_damage`], and Safe Fall is announced,
+/// as both programs announce it, wherever the player has the skill and the
+/// fall did damage for it to lessen (Titanium: recording checklist item
+/// 6.148). The rank of the ability that raises Safe Fall is not in what the
+/// sessions decode, so it counts as none (unsure).
+fn landing_cost(
+    client: InstalledClient,
+    collision: &CollisionWorld,
+    feet: Vec3,
+    landing: Landing,
+    world: &ClientWorld,
+) -> FallCost {
+    if collision.in_liquid(feet) {
+        return FallCost::default();
+    }
+    let skill = safe_fall(world);
+    match client.falls() {
+        Some(falls) => falls.landing_cost(FallLanding {
+            impact_speed: landing.impact_speed,
+            carried_weight: world.carried_weight(),
+            safe_fall: skill,
+            safe_fall_ranks: 0,
+            zone: eq_client_core::zones::number(world.zone()).unwrap_or(0),
+        }),
+        None => FallCost {
+            damage: collision.landing_damage(feet, landing, skill),
+            safe_fall: skill > 0 && collision.landing_damage(feet, landing, 0) > 0,
+        },
+    }
+}
+
+/// Says in the chat what a landing that hurt did, in the installed client's
+/// lines where its program's are read: the damage, then, on a fall the
+/// player lives through, the second line.
+fn say_fall(
+    client: InstalledClient,
+    cost: FallCost,
+    world: &ClientWorld,
+    messages: &crate::hud::messages::Messages,
+    chat: &mut crate::chat::ChatState,
+) {
+    let Some(falls) = client.falls().filter(|_| cost.damage > 0) else {
+        return;
+    };
+    if let Some(line) = falls.damage_line {
+        chat.history.push(crate::chat::system_line(
+            messages.said(line, &[cost.damage.to_string()]),
+        ));
+    }
+    let survived = world
+        .hit_points()
+        .is_some_and(|(current, _)| i64::from(current) - i64::from(cost.damage) > -10);
+    if let Some(line) = falls.survived_line.filter(|_| survived) {
+        chat.history
+            .push(crate::chat::system_line(messages.said(line, &[])));
+    }
+}
+
+/// Tells the server what a landing cost the player, where the session
+/// reports the world's damage and the player takes it
+/// ([`Fix::TakeEnvironmentalDamage`]): Safe Fall's use first, where it was
+/// used, then the damage. A landing that cost nothing sends nothing. Gives
+/// the cost back when the session's queue has no room for it, to tell again
+/// before the next sample.
 fn report_fall(
     outbox: &crate::outbox::Outbox,
     world: &ClientWorld,
     qol: &Settings,
-    amount: u32,
-) -> Option<u32> {
+    cost: FallCost,
+) -> Option<FallCost> {
     let stamp = outbox.peek(world)?;
-    let wanted = amount > 0
+    let wanted = (cost.damage > 0 || cost.safe_fall)
         && qol.on(Fix::TakeEnvironmentalDamage)
         && world.can(Capability::EnvironmentalDamage);
     let told = wanted
@@ -652,11 +786,17 @@ fn report_fall(
             ClientCommand::EnvironmentalDamage {
                 session_id: stamp.session_id,
                 hazard: Hazard::Falling,
-                amount,
+                amount: cost.damage,
+                safe_fall: cost.safe_fall,
             },
         );
-    debug!(amount, told, "Fall damage");
-    (wanted && !told).then_some(amount)
+    debug!(
+        damage = cost.damage,
+        safe_fall = cost.safe_fall,
+        told,
+        "Fall damage"
+    );
+    (wanted && !told).then_some(cost)
 }
 
 /// The Safe Fall the player has learned; none where the profile says nothing
@@ -881,6 +1021,7 @@ mod tests {
         let end = super::fall_step(
             &mut airborne,
             &world,
+            PROVISIONAL_PHYSICS,
             start,
             Vec3::X * 3.0,
             0.25,
@@ -889,7 +1030,16 @@ mod tests {
         );
         assert!(end.x > start.x, "{end:?}");
         assert!(end.y - start.y <= MAX_GROUNDED_STEP, "{end:?}");
-        let next = super::fall_step(&mut airborne, &world, end, Vec3::X * 3.0, 0.25, 6.0, false);
+        let next = super::fall_step(
+            &mut airborne,
+            &world,
+            PROVISIONAL_PHYSICS,
+            end,
+            Vec3::X * 3.0,
+            0.25,
+            6.0,
+            false,
+        );
         assert!(
             next.y > end.y && next.y - end.y <= MAX_GROUNDED_STEP,
             "{next:?}"
@@ -908,6 +1058,7 @@ mod tests {
         let still = super::fall_step(
             &mut airborne,
             &world,
+            PROVISIONAL_PHYSICS,
             Vec3::ZERO,
             Vec3::ZERO,
             0.15,
@@ -915,13 +1066,31 @@ mod tests {
             false,
         );
         assert!(still.y.abs() < 0.001 && airborne.velocity() == 0.0);
-        let rising = super::fall_step(&mut airborne, &world, still, Vec3::X, 0.15, 6.0, true);
+        let rising = super::fall_step(
+            &mut airborne,
+            &world,
+            PROVISIONAL_PHYSICS,
+            still,
+            Vec3::X,
+            0.15,
+            6.0,
+            true,
+        );
         assert!(rising.y > 0.5 && rising.x > 0.9, "{rising:?}");
         assert!(airborne.velocity() > 0.0);
         // Released keys: the arc continues and lands back on the ground.
         let mut feet = rising;
         for _ in 0..10 {
-            feet = super::fall_step(&mut airborne, &world, feet, Vec3::ZERO, 0.15, 6.0, false);
+            feet = super::fall_step(
+                &mut airborne,
+                &world,
+                PROVISIONAL_PHYSICS,
+                feet,
+                Vec3::ZERO,
+                0.15,
+                6.0,
+                false,
+            );
         }
         assert!(
             feet.y.abs() < 0.001 && airborne.velocity() == 0.0,
@@ -1028,6 +1197,72 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    #[allow(clippy::float_cmp, reason = "The constants are copied, not computed")]
+    fn each_client_falls_by_its_own_physics_and_spaces_its_jumps_its_own_way() {
+        let titanium = physics(InstalledClient::Titanium, Some(1.0));
+        assert_eq!(titanium.gravity, PROVISIONAL_PHYSICS.gravity);
+        assert_eq!(titanium.terminal_speed, PROVISIONAL_PHYSICS.terminal_speed);
+        let mac = physics(InstalledClient::EqMac, None);
+        assert!((mac.gravity - 160.0).abs() < 0.001, "{}", mac.gravity);
+        // The session's motion guard lets the program's fastest fall through.
+        assert!(
+            (mac.terminal_speed - eq_client_core::movement::EQMAC_FALL_SPEED).abs() < 0.01,
+            "{}",
+            mac.terminal_speed
+        );
+        // The zone header's gravity, a step at a time; none pulls nothing.
+        let heavy = physics(InstalledClient::EqMac, Some(0.8));
+        assert!((heavy.gravity - 320.0).abs() < 0.01, "{}", heavy.gravity);
+        assert!((heavy.terminal_speed - mac.terminal_speed).abs() < 0.01);
+        let light = physics(InstalledClient::EqMac, Some(0.2));
+        assert!(
+            (light.terminal_speed - 396.0).abs() < 0.01,
+            "{}",
+            light.terminal_speed
+        );
+        assert!(physics(InstalledClient::EqMac, Some(0.0)).gravity.abs() < f32::EPSILON);
+        let now = Instant::now();
+        let ago = |ms| now.checked_sub(Duration::from_millis(ms));
+        assert!(jump_too_soon(InstalledClient::Titanium, ago(499), now));
+        assert!(!jump_too_soon(InstalledClient::Titanium, ago(500), now));
+        assert!(!jump_too_soon(InstalledClient::Titanium, None, now));
+        // Unread for the Mac-era client.
+        assert!(!jump_too_soon(InstalledClient::EqMac, ago(10), now));
+    }
+
+    #[test]
+    fn a_landing_costs_what_the_installed_clients_rule_says() {
+        let floor = CollisionWorld::new([
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ])
+        .unwrap();
+        let world = ClientWorld::default();
+        // 100 units down, landing at 6 units a step.
+        let landing = Landing {
+            fall_distance: 100.0,
+            impact_speed: 120.0,
+        };
+        let cost = |client| landing_cost(client, &floor, Vec3::ZERO, landing, &world);
+        // Titanium keeps the inferred rule until its program's is read.
+        assert_eq!(
+            cost(InstalledClient::Titanium),
+            FallCost {
+                damage: 160,
+                safe_fall: false
+            }
+        );
+        // The Mac-era program's: T = 6 - 2.5 - 1.5 = 2, so 40.
+        assert_eq!(
+            cost(InstalledClient::EqMac),
+            FallCost {
+                damage: 40,
+                safe_fall: false
+            }
+        );
+    }
 
     #[test]
     fn recent_motion_tells_asked_moved_and_net_over_the_last_second() {
@@ -1164,6 +1399,8 @@ mod tests {
         keys.press(KeyCode::KeyW);
         app.insert_resource(state)
             .init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::hud::messages::Messages>()
+            .init_resource::<crate::ViewerSettings>()
             .init_resource::<crate::navigation::NavigationKeys>()
             .init_resource::<crate::options::OptionsState>()
             .insert_resource(Collision(Some(floor)))
@@ -1730,11 +1967,12 @@ mod tests {
     #[test]
     fn a_landing_reports_its_damage_after_the_sample_that_lands() {
         let all = eq_client_core::Capability::ALL.to_vec();
-        for (safe_fall, amount) in [
-            (None, 160),
-            (Some(0), 160),
-            (Some(200), 32),
-            (Some(254), 160),
+        // Safe Fall is announced where the player has it.
+        for (safe_fall, amount, used) in [
+            (None, 160, false),
+            (Some(0), 160, false),
+            (Some(200), 32, true),
+            (Some(254), 160, false),
         ] {
             let (mut app, receiver) = landing(safe_fall, all.clone());
             assert_eq!(
@@ -1743,6 +1981,7 @@ mod tests {
                     session_id: 11,
                     hazard: Hazard::Falling,
                     amount,
+                    safe_fall: used,
                 }),
                 "{safe_fall:?}"
             );
@@ -1771,7 +2010,13 @@ mod tests {
         app.update();
         ready(&mut app);
         app.update();
-        assert_eq!(app.world().resource::<Controls>().unreported, Some(160));
+        assert_eq!(
+            app.world().resource::<Controls>().unreported,
+            Some(FallCost {
+                damage: 160,
+                safe_fall: false
+            })
+        );
         assert!(matches!(full.try_recv(), Ok(ClientCommand::Move(_))));
         assert!(full.try_recv().is_err());
         // With room again, it goes before the next sample, once.
@@ -1788,6 +2033,7 @@ mod tests {
                 session_id: 11,
                 hazard: Hazard::Falling,
                 amount: 160,
+                safe_fall: false,
             })
         );
         assert!(matches!(receiver.try_recv(), Ok(ClientCommand::Move(_))));

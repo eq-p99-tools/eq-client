@@ -132,6 +132,14 @@ impl ClientWorld {
         crate::zones::long_name(&self.zone_name).unwrap_or(&self.zone_name)
     }
 
+    /// How strongly the zone pulls the player down, as its header gives it
+    /// (`OP_NewZone` +420): the fall speed added each 50 ms step. None until
+    /// this admission's header comes.
+    #[must_use]
+    pub const fn zone_gravity(&self) -> Option<f32> {
+        self.zone_gravity
+    }
+
     /// The zone's far clip distance, when the server gave one.
     #[must_use]
     pub const fn far_clip(&self) -> Option<f32> {
@@ -190,6 +198,14 @@ impl ClientWorld {
             .spawns
             .values()
             .find(|spawn| spawn.state.pet_owner == Some(owner))
+    }
+
+    /// The translocate offered and not yet answered, and when it came.
+    #[must_use]
+    pub fn translocate(
+        &self,
+    ) -> Option<(&crate::confirmations::TranslocateOffer, std::time::Instant)> {
+        self.translocate.as_ref().map(|(offer, at)| (offer, *at))
     }
 
     /// The resurrection offered and not yet answered.
@@ -437,6 +453,46 @@ impl ClientWorld {
     #[must_use]
     pub const fn coins(&self) -> Option<&Coins> {
         self.wallet.purse.as_ref()
+    }
+
+    /// What the player carries, in the weight units the programs count a
+    /// fall's cost in (TAKP Batch 1 R3, recording checklist item 6.161):
+    /// a tenth of each item's weight and a fortieth of each coin. The
+    /// program lessens a bag's contents by the bag's reduction, which the
+    /// item data the sessions decode lacks, so they count in full; a stack
+    /// counts each of its units; and worn items, the carried packs and
+    /// bags, the cursor and the coins in the purse and on the cursor count
+    /// (this client's reading).
+    #[must_use]
+    pub fn carried_weight(&self) -> f32 {
+        let items: u64 = self
+            .inventory
+            .items()
+            .iter()
+            .filter(|(slot, _)| {
+                slot.is_equipment()
+                    || slot.is_carried()
+                    || **slot == crate::inventory::InventorySlot::CURSOR
+                    || slot.is_in_cursor_bag()
+            })
+            .map(|(_, item)| {
+                u64::from(item.details.weight_tenths)
+                    * u64::from(item.stack_count.unwrap_or(1).max(1))
+            })
+            .sum();
+        let coins: u64 = [self.wallet.purse.unwrap_or_default(), self.wallet.cursor]
+            .iter()
+            .map(|coins| {
+                [coins.platinum, coins.gold, coins.silver, coins.copper]
+                    .into_iter()
+                    .map(u64::from)
+                    .sum::<u64>()
+            })
+            .sum();
+        // Weights past 2^24 tenths lose only fractions of a unit.
+        #[allow(clippy::cast_precision_loss)]
+        let weight = items as f32 / 10.0 + coins as f32 * 0.025;
+        weight
     }
 
     /// The player's own casting and gem timers.

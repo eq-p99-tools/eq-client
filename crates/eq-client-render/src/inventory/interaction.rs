@@ -69,6 +69,7 @@ impl InventoryState {
         sender: &Outbox,
         target: Option<u16>,
         casting: bool,
+        before: impl FnOnce() -> Vec<eq_client_core::chat::ChatLine>,
     ) {
         self.actions.auto_store = false;
         self.actions.split = None;
@@ -122,6 +123,9 @@ impl InventoryState {
                     .spawn(target_id)
                     .map(|spawn| &spawn.state)
                     .is_some_and(|spawn| !spawn.invisible);
+            // The Mac-era program drops invisibility before the item's own
+            // checks, as for a gem's cast.
+            self.said.extend(before());
             inventory.prepare_item_cast(&request, player.level, available)?;
             let request_id = request.request_id;
             sender.send(online.world(), ClientCommand::UseItem(request))?;
@@ -695,11 +699,18 @@ mod tests {
         let own_id = online.world().player().unwrap().spawn_id;
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
         let sender = crate::outbox::Outbox::new(Some(sender));
-        state.use_slot(InventorySlot(13), online, &sender, None, true);
+        state.use_slot(InventorySlot(13), online, &sender, None, true, Vec::new);
         assert!(receiver.try_recv().is_err());
-        state.use_slot(InventorySlot(13), online, &sender, Some(65500), false);
+        state.use_slot(
+            InventorySlot(13),
+            online,
+            &sender,
+            Some(65500),
+            false,
+            Vec::new,
+        );
         assert!(receiver.try_recv().is_err());
-        state.use_slot(InventorySlot(13), online, &sender, None, false);
+        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
         let ClientCommand::UseItem(request) = receiver.try_recv().unwrap() else {
             panic!("expected item use")
         };
@@ -708,19 +719,19 @@ mod tests {
         assert_eq!(request.revision, before.revision());
         assert_eq!(request.target_id, own_id);
         assert_eq!(online.world().inventory(), &before);
-        state.use_slot(InventorySlot(13), online, &sender, None, false);
+        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
         assert!(receiver.try_recv().is_err());
         // Elapsing the rate limit cannot replace a request awaiting worker feedback.
         state.actions.last_use = Instant::now().checked_sub(std::time::Duration::from_secs(2));
-        state.use_slot(InventorySlot(13), online, &sender, None, false);
+        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
         assert!(receiver.try_recv().is_err());
         assert_eq!(state.actions.pending_use, Some((9, request.request_id)));
         state.item_use_result(8, request.request_id, None);
         state.item_use_result(9, request.request_id + 1, None);
-        state.use_slot(InventorySlot(13), online, &sender, None, false);
+        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
         assert!(receiver.try_recv().is_err());
         state.item_use_result(9, request.request_id, Some("Synthetic rejection".into()));
-        state.use_slot(InventorySlot(13), online, &sender, None, false);
+        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
         let ClientCommand::UseItem(next) = receiver.try_recv().unwrap() else {
             panic!("expected a fresh manual item-use request")
         };
@@ -732,10 +743,11 @@ mod tests {
             &crate::outbox::Outbox::new(None),
             None,
             false,
+            Vec::new,
         );
         assert!(state.actions.last_use.is_none());
         testing::connect(online, false);
-        state.use_slot(InventorySlot(13), online, &sender, None, false);
+        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
         assert!(receiver.try_recv().is_err());
         assert_eq!(online.world().inventory(), &before);
     }

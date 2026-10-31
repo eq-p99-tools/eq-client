@@ -1631,18 +1631,19 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     let used = |session_id| WorldEvent::AbilityUsed {
         session_id,
         ability: Ability::Kick,
-        ready_in: Duration::from_secs(4),
+        // Titanium's Kick (eq-network's `Ability::reuse`).
+        ready_in: Duration::from_secs(8),
     };
     assert!(game(&mut world, used(2)).ignored, "another admission's");
     world.apply(&WorldUpdate::Game(used(1)), now, &NoSpells);
     // Strikes share the timer; other abilities keep their own.
     assert_eq!(
         world.ability_wait(Ability::Bash, now + Duration::from_secs(1)),
-        Some(Duration::from_secs(3))
+        Some(Duration::from_secs(7))
     );
     assert_eq!(world.ability_wait(Ability::Hide, now), None);
     assert_eq!(
-        world.ability_wait(Ability::Kick, now + Duration::from_secs(4)),
+        world.ability_wait(Ability::Kick, now + Duration::from_secs(8)),
         None
     );
     // Sense Heading says where the player faces: 128 is west.
@@ -2318,10 +2319,12 @@ fn a_zone_header_sent_again_changes_the_sky_fog_and_far_clip() {
     }
     game(&mut world, admission);
     assert_eq!(world.far_clip(), Some(1400.0));
+    assert_eq!(world.zone_gravity(), None);
     let (sky, description) = header(1, 800.0, 1400.0);
     game(&mut world, WorldEvent::Sky(sky));
     game(&mut world, WorldEvent::ZoneDescription(description));
     assert_eq!((world.sky(), world.far_clip()), (Some(sky), Some(1400.0)));
+    assert_eq!(world.zone_gravity(), Some(0.4));
     // A game master's change sends the header again mid-zone: every field it
     // carries takes effect, the clip as well as the sky and fog.
     let (sky, description) = header(0, 500.0, 600.0);
@@ -3798,4 +3801,40 @@ fn merchant_revisions_include_stock_removal_and_local_closure() {
     assert_eq!(world.merchant_revision(), closed);
     game(&mut world, WorldEvent::Camp(CampStatus::Camped));
     assert!(world.merchant_revision() > closed);
+}
+
+#[test]
+fn carried_weight_counts_what_the_player_wears_carries_and_holds_and_their_coins() {
+    use crate::inventory::InventorySlot;
+    let mut world = admitted();
+    assert!(world.carried_weight().abs() < f32::EPSILON);
+    let at = |slot, weight_tenths, stack_count| {
+        let mut item = chest();
+        item.slot = InventorySlot(slot);
+        item.details.weight_tenths = weight_tenths;
+        item.stack_count = stack_count;
+        item
+    };
+    game(
+        &mut world,
+        inventory(vec![
+            // Worn, 1.0.
+            chest(),
+            // In a pack slot, a stack of five at 0.5.
+            at(23, 5, Some(5)),
+            // In a carried bag, 2.0, in full.
+            at(260, 20, None),
+            // On the cursor, 0.3.
+            at(30, 3, None),
+            // In the bank: not carried.
+            at(2000, 500, None),
+        ]),
+    );
+    // 40 coins weigh 1.
+    game(&mut world, WorldEvent::Coins(coins(10, 10, 10, 10)));
+    assert!(
+        (world.carried_weight() - 6.8).abs() < 0.001,
+        "{}",
+        world.carried_weight()
+    );
 }

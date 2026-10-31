@@ -65,6 +65,9 @@ pub(super) fn check(
 /// Checks the request and sends it without predicting its result. A refusal
 /// is said in the chat; a request sent says nothing, as the cast bar shows
 /// the cast once the server takes it, and the outbox says its own refusals.
+/// A cast from a gem that holds a spell first runs `before`, which may
+/// send what the installed client sends before its own checks (the
+/// Mac-era program's invisibility drop) and gives back the lines to say.
 pub(super) fn spell(
     chat: &mut crate::chat::ChatState,
     world: &eq_client_core::world::ClientWorld,
@@ -72,6 +75,7 @@ pub(super) fn spell(
     outbox: &crate::outbox::Outbox,
     request: &Request,
     wording: (&super::messages::Messages, &crate::keys::KeyMap),
+    before: impl FnOnce() -> Vec<eq_client_core::chat::ChatLine>,
 ) {
     let now = Instant::now();
     let Request {
@@ -80,6 +84,18 @@ pub(super) fn spell(
         forgetting,
         ..
     } = *request;
+    if !forgetting
+        && player
+            .memorized_spells
+            .get(usize::from(gem))
+            .copied()
+            .flatten()
+            .is_some()
+    {
+        for line in before() {
+            chat.history.push(line);
+        }
+    }
     match check(world, player, request, wording, now) {
         Err(refusal) => chat.refuse(refusal),
         Ok(spell_id) => {

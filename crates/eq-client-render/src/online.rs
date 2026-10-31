@@ -114,6 +114,11 @@ impl OnlineState {
         self.world.answer_resurrection();
     }
 
+    /// The translocate offered was answered.
+    pub(super) fn answer_translocate(&mut self) {
+        self.world.answer_translocate();
+    }
+
     /// The player closed the book or note they were reading.
     pub(super) fn close_reading(&mut self) {
         self.world.close_reading();

@@ -33,6 +33,7 @@ pub use eq_network_game::clock;
 pub use eq_network_game::combat;
 pub use eq_network_game::command::GameCommand as ClientCommand;
 pub use eq_network_game::command::Posture;
+pub use eq_network_game::confirmations;
 pub use eq_network_game::corpses;
 pub use eq_network_game::creation;
 pub use eq_network_game::effects;
@@ -64,7 +65,7 @@ pub use eq_network_game::zoning::ZoneLineDestination;
 pub use eq_network_game::zoning::ZoneOffer;
 pub use eq_network_game::zoning::ZoneRejection;
 
-pub use eq_network_game::buffs::{Buff, BuffUpdate, SpellEffect};
+pub use eq_network_game::buffs::{Buff, BuffUpdate, InvisibilityStep, SpellEffect};
 pub use eq_network_game::world::{
     BaseAttributes, CampStatus, Capability, Coins, ItemHitPoints, PlayerState,
     Position as WorldPosition, PostureState, SpawnKind, SpawnState, WorldEvent,

@@ -2,8 +2,10 @@
 
 pub mod characters;
 pub mod clock;
+pub mod falls;
 pub mod items;
 pub mod maps;
+pub mod merchants;
 pub mod regions;
 pub mod sidl;
 mod skeleton;

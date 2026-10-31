@@ -5,12 +5,19 @@ use glam::Vec3;
 /// Explicit local tuning, separate from network motion calibration.
 #[derive(Clone, Copy)]
 pub struct VerticalPhysics {
-    /// Downward acceleration in world units per second squared.
+    /// Downward acceleration in world units per second squared; a zone may
+    /// have none.
     pub gravity: f32,
     /// Maximum downward speed in world units per second.
     pub terminal_speed: f32,
     /// Initial upward speed for a grounded jump.
     pub jump_speed: f32,
+    /// The share of the vertical speed kept after each 50 ms slice, rising
+    /// or falling; 1 keeps all of it. It is taken off the speed a slice
+    /// ends with; the distance within the slice is integrated without it,
+    /// which at 50 ms slices moves the feet at most 0.4 units further
+    /// a slice, at the fastest fall.
+    pub air_factor: f32,
 }
 
 /// Provisional tuning shared by the offline preview, online falls and path search.
@@ -20,6 +27,7 @@ pub const PROVISIONAL_PHYSICS: VerticalPhysics = VerticalPhysics {
     gravity: 32.0,
     terminal_speed: super::MAX_FALL_SPEED,
     jump_speed: 10.0,
+    air_factor: 1.0,
 };
 
 /// One bounded local simulation step, using renderer Y-up coordinates.
@@ -130,9 +138,11 @@ impl AirborneController {
             || input.height < 1.0
             || !input.seconds.is_finite()
             || input.seconds <= 0.0
-            || ![physics.gravity, physics.terminal_speed, physics.jump_speed]
+            || ![physics.terminal_speed, physics.jump_speed]
                 .iter()
                 .all(|v| v.is_finite() && *v > 0.0)
+            || !(physics.gravity.is_finite() && physics.gravity >= 0.0)
+            || !(physics.air_factor > 0.0 && physics.air_factor <= 1.0)
         {
             return feet;
         }
@@ -162,7 +172,8 @@ impl AirborneController {
         self.peak = Some(self.peak.unwrap_or(feet.y).max(position.y));
         let initial = self.velocity.max(-physics.terminal_speed);
         let accelerating = ((initial + physics.terminal_speed) / physics.gravity).clamp(0.0, dt);
-        let end = (initial - physics.gravity * dt).max(-physics.terminal_speed);
+        let end = (initial - physics.gravity * dt).max(-physics.terminal_speed)
+            * physics.air_factor.powf(dt / 0.05);
         let distance = initial * accelerating
             - 0.5 * physics.gravity * accelerating * accelerating
             - physics.terminal_speed * (dt - accelerating);
@@ -289,6 +300,7 @@ mod tests {
                 gravity: 32.0,
                 terminal_speed: 40.0,
                 jump_speed: 10.0,
+                air_factor: 1.0,
             },
             MotionStep {
                 horizontal: Vec3::ZERO,
@@ -418,6 +430,34 @@ mod tests {
     }
 
     #[test]
+    fn the_air_slows_each_step_by_its_factor() {
+        let world = CollisionWorld::new(floor(-1000.0)).unwrap();
+        let step = |air_factor| {
+            let mut state = AirborneController::default();
+            let physics = VerticalPhysics {
+                air_factor,
+                ..PROVISIONAL_PHYSICS
+            };
+            let input = MotionStep {
+                horizontal: Vec3::ZERO,
+                jump: false,
+                seconds: 0.05,
+                height: 6.0,
+            };
+            let feet = state.step(&world, Vec3::ZERO, physics, input);
+            state.step(&world, feet, physics, input);
+            state.velocity()
+        };
+        // Two steps of 1.6 units a second each, all of it kept or 0.99 of
+        // it after each step.
+        assert!((step(1.0) + 3.2).abs() < 1e-4, "{}", step(1.0));
+        let slowed = (-1.6 * 0.99 - 1.6) * 0.99;
+        assert!((step(0.99) - slowed).abs() < 1e-4, "{}", step(0.99));
+        // A factor that would add speed or stop it dead is refused.
+        assert!(step(1.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
     #[allow(
         clippy::float_cmp,
         reason = "Exact equality verifies unchanged or explicitly assigned state"
@@ -428,6 +468,7 @@ mod tests {
             gravity: 32.0,
             terminal_speed: 40.0,
             jump_speed: 10.0,
+            air_factor: 1.0,
         };
         let input = MotionStep {
             horizontal: Vec3::X * 0.6,

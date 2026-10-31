@@ -53,7 +53,8 @@ struct Row {
 }
 
 /// The merchant's wares, in the order of their list slots.
-fn rows(world: &ClientWorld, chosen: Option<Chosen>) -> Vec<Row> {
+fn rows(world: &ClientWorld, trade: &TradeState) -> Vec<Row> {
+    let chosen = trade.chosen();
     world
         .merchant()
         .map(|merchant| {
@@ -65,7 +66,7 @@ fn rows(world: &ClientWorld, chosen: Option<Chosen>) -> Vec<Row> {
                     icon: ware.item.details.icon,
                     name: ware.item.details.name.clone(),
                     quantity: ware.quantity,
-                    price: ware.price,
+                    price: trade.ware_price(world, ware.price),
                     chosen: chosen == Some(Chosen::Ware(ware.slot)),
                 })
                 .collect()
@@ -103,7 +104,7 @@ pub(crate) fn fill(
     if lists.iter().all(|(_, list, _)| list.checked == Some(input)) {
         return;
     }
-    let wanted = rows(online.world(), trade.chosen());
+    let wanted = rows(online.world(), &trade);
     for (entity, mut list, children) in &mut lists {
         if list.checked == Some(input) {
             continue;
@@ -182,8 +183,8 @@ pub(crate) fn fill(
 }
 
 /// The item chosen in the skin's merchant window, and the price the
-/// merchant asks for it when it is one of its wares; what the merchant pays
-/// for a carried item is not known yet.
+/// merchant asks for it when it is one of its wares, or what it pays for one
+/// of a carried item where that is known.
 pub(crate) fn chosen<'a>(
     trade: &TradeState,
     world: &'a ClientWorld,
@@ -193,21 +194,13 @@ pub(crate) fn chosen<'a>(
             .merchant()?
             .stock
             .get(&slot)
-            .map(|ware| (&ware.item, Some(ware.price))),
+            .map(|ware| (&ware.item, Some(trade.ware_price(world, ware.price)))),
         Chosen::Carried(slot) => world
             .inventory()
             .items()
             .get(&InventorySlot(slot))
-            .map(|item| (item, offer(world, item))),
+            .map(|item| (item, trade.sale_price(world, item))),
     }
-}
-
-/// What the merchant pays for a carried item, where the session offers
-/// merchants' offers; None, which leaves the label blank, elsewhere.
-fn offer(world: &ClientWorld, item: &InventoryItem) -> Option<u32> {
-    crate::outbox::offered(world, eq_client_core::Capability::MerchantOffers)
-        .then(|| world.merchant()?.offer(item))
-        .flatten()
 }
 
 /// The skin's box for the chosen item's picture, with where in it the

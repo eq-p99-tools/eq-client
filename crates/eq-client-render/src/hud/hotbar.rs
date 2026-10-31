@@ -600,6 +600,10 @@ pub(crate) fn item_actions(
     sender: Res<crate::outbox::Outbox>,
     mut chat: ResMut<crate::chat::ChatState>,
     mut inventory: ResMut<crate::inventory::InventoryState>,
+    (spells, settings): (
+        Res<crate::spellbook::SpellNames>,
+        Res<crate::ViewerSettings>,
+    ),
 ) {
     if !keys.focused() {
         return;
@@ -617,6 +621,14 @@ pub(crate) fn item_actions(
             &sender,
             online.world().target().selected,
             online.world().casting().cast.is_some() || online.world().casting().pending.is_some(),
+            || {
+                crate::invisibility::drop_before_cast(
+                    online.world(),
+                    &sender,
+                    &spells,
+                    settings.0.installed_client,
+                )
+            },
         );
     }
 }

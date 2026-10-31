@@ -178,7 +178,8 @@ impl CollisionWorld {
     }
 
     /// Whether feet here are in water or lava.
-    pub(super) fn in_liquid(&self, feet: Vec3) -> bool {
+    #[must_use]
+    pub fn in_liquid(&self, feet: Vec3) -> bool {
         self.liquids
             .as_ref()
             .is_some_and(|liquids| liquids.liquid_at(feet + Vec3::Y * SOLES).is_some())

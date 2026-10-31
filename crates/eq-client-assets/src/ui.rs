@@ -333,6 +333,90 @@ impl InstalledClient {
         }
     }
 
+    /// How this client's player falls and what a landing costs, from the
+    /// program; None until read for this client (Titanium: recording
+    /// checklist items 1.5, 6.147 and 6.167).
+    #[must_use]
+    pub const fn falls(self) -> Option<crate::falls::ClientFalls> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(crate::falls::EQMAC),
+        }
+    }
+
+    /// The least time between two jumps, from the program; None until read
+    /// for this client. The Titanium client refuses a jump within 500 ms of
+    /// the last (recording checklist item 1.3).
+    #[must_use]
+    pub const fn jump_spacing(self) -> Option<std::time::Duration> {
+        match self {
+            Self::Titanium => Some(std::time::Duration::from_millis(500)),
+            Self::EqMac => None,
+        }
+    }
+
+    /// The spell effects whose buffs this client takes off the player
+    /// before a cast, a song or an item's click, in the order it looks for
+    /// them, from the program; None where it drops nothing or that is
+    /// unread. The Mac-era client looks for effect 94, then invisibility
+    /// (12), invisibility versus undead (28) and versus animals (29) (TAKP
+    /// Batch 1 R1, recording checklist item 6.163); the Titanium client's
+    /// cast sends nothing before it (sitting 8).
+    #[must_use]
+    pub const fn invisibility_drop(self) -> Option<&'static [u32]> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(&[94, 12, 28, 29]),
+        }
+    }
+
+    /// How this client's attack key turns auto attack on and off, from the
+    /// program; None until read for this client (Titanium: sittings 6 and
+    /// 7). The Mac-era client's is TAKP Batch 1 R2 (recording checklist
+    /// item 6.157).
+    #[must_use]
+    pub const fn attack_toggle(self) -> Option<AttackToggle> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(AttackToggle {
+                frozen: 12368,
+                not_standing: 12369,
+                on: 12370,
+                off: 12371,
+                line_type: 13,
+            }),
+        }
+    }
+
+    /// How this client prices what its merchant window shows, from the
+    /// program; None until read for this client (Titanium: sitting 8's
+    /// T18).
+    #[must_use]
+    pub const fn merchant_prices(self) -> Option<crate::merchants::MerchantPrices> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(crate::merchants::EQMAC),
+        }
+    }
+
+    /// How this client asks the player about a translocate cast on them,
+    /// from the program; None until read for this client, whose offers then
+    /// go unanswered as before. The Mac-era client's is TAKP Batch 1 R8
+    /// (recording checklist item 6.253).
+    #[must_use]
+    pub const fn translocate_offer(self) -> Option<TranslocateQuestion> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(TranslocateQuestion {
+                named: 10017,
+                to_bind: 10016,
+                bind_spells: &[1334, 1422, 3243],
+                declined: Some(10018),
+                expires_ms: 3_600_000,
+            }),
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
@@ -340,6 +424,44 @@ impl InstalledClient {
             Self::EqMac => Box::new(Unchecked),
         }
     }
+}
+
+/// How a client's attack key works: it needs no target and never turns
+/// the player, refuses to turn auto attack on for a player who is not
+/// standing, without standing them up, turns it off instead when it is on,
+/// and turns it off by itself when the player stops standing. Its lines
+/// are by their ids in the client's string table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttackToggle {
+    /// The refusal for a player the server froze in place.
+    pub frozen: u32,
+    /// The refusal for any other player not standing, such as one sitting.
+    pub not_standing: u32,
+    /// The line when auto attack turns on.
+    pub on: u32,
+    /// The line when it turns off, by the key or by itself.
+    pub off: u32,
+    /// The chat line type the on and off lines take their colour from.
+    pub line_type: u32,
+}
+
+/// How an installed client asks the player about a translocate: in its
+/// confirmation dialog, answered No by itself when the offer waits too long
+/// or when that dialog already asks something else as the offer comes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TranslocateQuestion {
+    /// The question for most spells, with the caster's name and the long
+    /// name of the zone it takes the player to.
+    pub named: u32,
+    /// The question for the spells that send the player to their bind point.
+    pub to_bind: u32,
+    /// The spells, by id, asked about with [`TranslocateQuestion::to_bind`].
+    pub bind_spells: &'static [u32],
+    /// The line the client says after the player's No, if any.
+    pub declined: Option<u32>,
+    /// How long the offer waits for an answer before the client says No by
+    /// itself, in milliseconds (the program's clock unit is unsure, 6.253).
+    pub expires_ms: u64,
 }
 
 /// The picture an installed client covers the screen with while it loads a

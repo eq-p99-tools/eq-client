@@ -29,6 +29,8 @@ pub struct Definition {
     pub effect: Option<u32>,
     /// The spell's numeric mechanics.
     pub mechanics: Option<Mechanics>,
+    /// Field 8: what the client says when the spell fades from the player.
+    pub fades: Option<String>,
 }
 
 /// How long a cast holds the caster and the spell.
@@ -88,6 +90,11 @@ impl Definitions {
                 casting_animation: fields.get(120).and_then(|field| field.parse().ok()),
                 effect: number(145),
                 mechanics: Mechanics::from_fields(&fields),
+                fades: fields
+                    .get(8)
+                    .map(|text| text.trim())
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_owned),
             };
             spells.insert(id, definition);
         }
@@ -110,6 +117,7 @@ mod tests {
         let mut fields = vec![""; 183];
         fields[0] = "42";
         fields[1] = " Synthetic spell ";
+        fields[8] = " The synthetic spell fades. ";
         fields[9] = "-5";
         fields[13] = "1500";
         fields[14] = "2250";
@@ -121,6 +129,7 @@ mod tests {
         let spells = Definitions::parse(&format!("{}\nnot a spell\n", fields.join("^")));
         let spell = spells.get(42).expect("parsed");
         assert_eq!(spell.name.as_deref(), Some("Synthetic spell"));
+        assert_eq!(spell.fades.as_deref(), Some("The synthetic spell fades."));
         assert_eq!(spell.icon, Some(7));
         assert_eq!(spell.mana, Some(10));
         assert_eq!(spell.cast_ms, Some(1500));

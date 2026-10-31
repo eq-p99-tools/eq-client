@@ -25,6 +25,9 @@ pub(super) struct TradeState {
     loot: Option<LootWindow>,
     merchant: Option<MerchantWindow>,
     revision: u64,
+    /// How the installed client prices its merchant window, where its
+    /// program's rules are read.
+    prices: Option<eq_client_assets::merchants::MerchantPrices>,
 }
 
 struct LootWindow {
@@ -75,6 +78,41 @@ impl TradeState {
         window.chosen = Some(Chosen::Carried(slot));
         self.changed();
         true
+    }
+
+    /// What a ware of the open merchant's costs, as the window shows it:
+    /// the installed client's price for one at the merchant's rate where its
+    /// rule is read (the Mac-era servers list prices before the rate), else
+    /// the price the server listed.
+    pub(crate) fn ware_price(&self, world: &ClientWorld, price: u32) -> u32 {
+        match (self.prices, world.merchant()) {
+            (Some(prices), Some(merchant)) => {
+                u32::try_from(prices.buy_total(price, merchant.rate, 1)).unwrap_or(u32::MAX)
+            }
+            _ => price,
+        }
+    }
+
+    /// What the open merchant pays for one of a carried item, as the window
+    /// shows it: the installed client's value where its rule is read, else
+    /// the server's own offer where the session offers it; None where
+    /// neither says.
+    pub(crate) fn sale_price(&self, world: &ClientWorld, item: &InventoryItem) -> Option<u32> {
+        match self.prices {
+            Some(prices) => {
+                let merchant = world.merchant()?;
+                let price = item.details.price.unwrap_or(0);
+                Some(u32::try_from(prices.sale_total(price, merchant.rate, 1)).unwrap_or(u32::MAX))
+            }
+            None => crate::outbox::offered(world, eq_client_core::Capability::MerchantOffers)
+                .then(|| world.merchant()?.offer(item))
+                .flatten(),
+        }
+    }
+
+    /// The installed client's merchant prices, where its rule is read.
+    pub(crate) const fn prices(&self) -> Option<eq_client_assets::merchants::MerchantPrices> {
+        self.prices
     }
 
     /// Something the windows show changed: draw them again.
@@ -240,7 +278,15 @@ pub(super) fn input(
     (mut chat, mut shown): (ResMut<super::chat::ChatState>, ResMut<windows::Shown>),
     buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
     escape: Res<super::escape::Escape>,
+    (settings, messages): (
+        Res<crate::ViewerSettings>,
+        Res<super::hud::messages::Messages>,
+    ),
 ) {
+    let prices = settings.0.installed_client.merchant_prices();
+    if trade.prices != prices {
+        trade.prices = prices;
+    }
     trade.follow(online.world());
     // Only a player in the world trades; the outbox stamps what they ask.
     let (Some(stamp), Some(own_id)) = (
@@ -417,6 +463,12 @@ pub(super) fn input(
                 }
             }
             Action::Buy(slot) => {
+                // The Mac-era client sends no buy the coins on the player
+                // don't cover, and says so.
+                if let Some(short) = short_of(&trade, online.world(), slot, 1) {
+                    chat.refuse(messages.said(short, &[]));
+                    continue;
+                }
                 if let Some(merchant_id) = merchant.filter(|_| trade.merchant.is_some()) {
                     send(
                         online.world(),
@@ -456,12 +508,20 @@ pub(super) fn input(
                     continue;
                 }
                 let quantity = item.stack_count.unwrap_or(1).max(1);
+                // The Mac-era client won't sell an item worth less than a
+                // copper a unit.
+                if let (Some(prices), Some(open)) = (trade.prices, online.world().merchant())
+                    && prices.sale_unit(item.details.price.unwrap_or(0), open.rate) < 1
+                {
+                    continue;
+                }
                 if let Some(merchant_id) = merchant.filter(|_| trade.merchant.is_some()) {
                     send(
                         online.world(),
                         ClientCommand::Sell {
                             session_id,
                             merchant_id,
+                            own_id,
                             slot,
                             quantity,
                             created: now,
@@ -619,7 +679,7 @@ pub(super) fn present(
             commands.entity(frame).insert(Panel(Rows::Merchant));
         }
     } else if let Some((window, stock)) = merchant {
-        let rows = merchant_rows(stock, inventory);
+        let rows = merchant_rows(&trade, online.world(), stock, inventory);
         let coins = online
             .world()
             .coins()
@@ -637,6 +697,8 @@ pub(super) fn present(
 /// The client's own merchant window's rows: a Buy row for each ware, then a
 /// Sell row for each carried item a merchant takes.
 fn merchant_rows(
+    trade: &TradeState,
+    world: &ClientWorld,
     stock: &eq_client_core::world::Merchant,
     inventory: &eq_client_core::inventory::Inventory,
 ) -> Vec<(Action, String)> {
@@ -646,7 +708,7 @@ fn merchant_rows(
             format!(
                 "Buy  {}  {}",
                 item_label(&entry.item),
-                coin_text(u64::from(entry.price))
+                coin_text(u64::from(trade.ware_price(world, entry.price)))
             ),
         )
     });
@@ -663,6 +725,18 @@ fn merchant_rows(
             )
         });
     wares.chain(sales).collect()
+}
+
+/// The refusal the installed client says for a buy of `quantity` of a ware
+/// the coins on the player don't cover, where its rule is read; None where
+/// they cover it, or nothing says.
+fn short_of(trade: &TradeState, world: &ClientWorld, slot: u32, quantity: u32) -> Option<u32> {
+    let prices = trade.prices?;
+    let merchant = world.merchant()?;
+    let ware = merchant.stock.get(&slot)?;
+    let coins = world.coins()?.total_copper();
+    (prices.buy_total(ware.price, merchant.rate, quantity) > coins)
+        .then_some(prices.short[usize::from(quantity > 1)])
 }
 
 /// Scrolls the loot or merchant list the wheel turns.
@@ -1118,6 +1192,8 @@ mod tests {
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<crate::ViewerSettings>()
+            .init_resource::<crate::hud::messages::Messages>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_systems(Update, input);
@@ -1149,6 +1225,61 @@ mod tests {
     }
 
     #[test]
+    fn the_mac_era_window_prices_at_the_merchants_rate_and_refuses_a_buy_the_purse_cant_cover() {
+        use eq_client_core::{WorldEvent, WorldUpdate, world::NoSpells};
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        let tell = |online: &mut super::super::online::OnlineState, event| {
+            online.tell(
+                &WorldUpdate::Game(event),
+                std::time::Instant::now(),
+                &NoSpells,
+            );
+        };
+        tell(
+            &mut online,
+            WorldEvent::Merchant(MerchantUpdate::Opened {
+                merchant_id: 8,
+                accepted: true,
+                rate: 1.25,
+            }),
+        );
+        let mut item = crate::preview::items().remove(0);
+        item.details.price = Some(10);
+        tell(
+            &mut online,
+            WorldEvent::Merchant(MerchantUpdate::Item(Box::new(MerchantItem {
+                slot: 3,
+                price: 10,
+                quantity: 0,
+                item: item.clone(),
+            }))),
+        );
+        tell(
+            &mut online,
+            WorldEvent::Coins(eq_client_core::Coins {
+                copper: 12,
+                ..eq_client_core::Coins::default()
+            }),
+        );
+        let world = online.world();
+        let titanium = TradeState::default();
+        let mac = TradeState {
+            prices: eq_client_assets::ui::InstalledClient::EqMac.merchant_prices(),
+            ..TradeState::default()
+        };
+        // Titanium shows the server's price; the Mac-era client the list
+        // price at the rate, 12.5 rounded to 13, and pays 8 a unit.
+        assert_eq!(titanium.ware_price(world, 10), 10);
+        assert_eq!(mac.ware_price(world, 10), 13);
+        assert_eq!(mac.sale_price(world, &item), Some(8));
+        // 12 copper doesn't cover 13: refused in the program's words.
+        assert_eq!(short_of(&mac, world, 3, 1), Some(12060));
+        assert_eq!(short_of(&mac, world, 3, 2), Some(12061));
+        assert_eq!(short_of(&titanium, world, 3, 1), None);
+    }
+
+    #[test]
     fn the_merchant_window_opens_on_the_servers_answer_not_the_key() {
         let mut online = super::super::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
@@ -1167,6 +1298,8 @@ mod tests {
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<crate::ViewerSettings>()
+            .init_resource::<crate::hud::messages::Messages>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_systems(Update, input);
@@ -1266,6 +1399,8 @@ mod tests {
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<crate::ViewerSettings>()
+            .init_resource::<crate::hud::messages::Messages>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_systems(Update, input);

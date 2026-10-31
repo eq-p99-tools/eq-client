@@ -177,6 +177,8 @@ pub struct ClientWorld {
     choices: Vec<crate::Capability>,
     zone_name: String,
     far_clip: Option<f32>,
+    /// The zone header's gravity, once this admission's header came.
+    zone_gravity: Option<f32>,
     /// The spell action flag that says a spell landed on its target, as the
     /// admission says for its server type; None records no landings.
     spell_landing_flag: Option<u8>,
@@ -191,6 +193,8 @@ pub struct ClientWorld {
     pending_transfer: Option<ZoneOffer>,
     /// The resurrection offered and not yet answered.
     resurrection: Option<crate::resurrection::ResurrectionOffer>,
+    /// The translocate offered and not yet answered, and when it came.
+    translocate: Option<(crate::confirmations::TranslocateOffer, Instant)>,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -367,6 +371,12 @@ impl ClientWorld {
         self.resurrection = None;
     }
 
+    /// The player, or the client for them, answered the translocate
+    /// offered; whatever comes of it arrives as news.
+    pub fn answer_translocate(&mut self) {
+        self.translocate = None;
+    }
+
     /// The player closed the book or note they were reading.
     pub fn close_reading(&mut self) {
         self.reading = None;
@@ -519,9 +529,9 @@ impl ClientWorld {
             // spins them, or shows their hiding's end. The target
             // the server sets and whom it targets, a quest's reward and ding
             // (the session puts a reward's coins in the purse), a sacrifice
-            // or translocate offer and a player becoming a corpse wait for
-            // their front ends too; until one answers, an offer goes
-            // unanswered, as it did unread. A quest's change to the stats, a
+            // offer and a player becoming a corpse wait for their front ends
+            // too; until one answers, an offer goes unanswered, as it did
+            // unread. A translocate refused is only the session's log. A quest's change to the stats, a
             // skill's button ready again, the reuse timers of disciplines and
             // of spells that share one, and the discipline begun or ended
             // are not shown yet either, nor the effects the server plays
@@ -555,7 +565,6 @@ impl ClientWorld {
             | WorldEvent::Ding
             | WorldEvent::SacrificeOffer(_)
             | WorldEvent::SacrificeRefused { .. }
-            | WorldEvent::TranslocateOffer(_)
             | WorldEvent::TranslocateRefused { .. }
             | WorldEvent::BecameCorpse { .. }
             | WorldEvent::StatsChanged(_)
@@ -923,6 +932,8 @@ impl ClientWorld {
             }
             // A resurrection to answer, and an answer the session would not send.
             WorldEvent::Resurrection(offer) => self.resurrection = Some(offer.clone()),
+            // A translocate to answer, where the installed client asks.
+            WorldEvent::TranslocateOffer(offer) => self.translocate = Some((offer.clone(), now)),
             WorldEvent::ResurrectionRefused { session_id, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.notices
@@ -1108,6 +1119,7 @@ impl ClientWorld {
         self.items = ItemCache::default();
         self.pending_transfer = None;
         self.resurrection = None;
+        self.translocate = None;
         self.reading = None;
         self.combining = None;
         self.group = None;

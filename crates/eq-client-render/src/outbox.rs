@@ -415,7 +415,7 @@ mod tests {
         };
         assert_eq!(
             outbox.post(&world, jump),
-            Err(Refusal::Unavailable(Capability::Falling))
+            Err(Refusal::Unavailable(Capability::Jumping))
         );
         assert_eq!(outbox.send(&world, say()), Ok(()));
         assert_eq!(received.try_recv().ok(), Some(say()));
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(
             outbox.take_refused(),
             [
-                Refusal::Unavailable(Capability::Falling),
+                Refusal::Unavailable(Capability::Jumping),
                 Refusal::Busy,
                 Refusal::Ended
             ]

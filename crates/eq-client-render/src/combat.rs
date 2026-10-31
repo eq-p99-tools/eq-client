@@ -4,7 +4,7 @@
 //! the current target and prints what the server reports.
 use bevy::prelude::*;
 use eq_client_core::{
-    ClientCommand, OutboundChat, SpawnKind,
+    ClientCommand, OutboundChat, PostureState, SpawnKind,
     combat::{ConColor, Consideration, Damage, DamageOutcome, SPELL_DAMAGE_KIND},
     entities::display_name,
 };
@@ -38,6 +38,7 @@ pub(super) fn input(
     messages: Res<Messages>,
     mut combat: ResMut<CombatState>,
     mut chat: ResMut<super::chat::ChatState>,
+    settings: Res<crate::ViewerSettings>,
     (attack_button, bar_clicks, bindings): (
         super::hud::hotbar::Clicks<super::skinned::AttackButton>,
         super::hud::hotbar::Clicks<super::hud::hotbar::Slot>,
@@ -45,10 +46,10 @@ pub(super) fn input(
     ),
 ) {
     use super::keys::Act;
-    let Some(player) = online.world().player() else {
+    let world = online.world();
+    let Some(player) = world.player() else {
         return;
     };
-    let world = online.world();
     let attack = |enabled| {
         move |stamp: crate::outbox::Stamp| ClientCommand::AutoAttack {
             session_id: stamp.session_id,
@@ -61,22 +62,30 @@ pub(super) fn input(
         .target()
         .selected
         .filter(|id| *id != player.spawn_id)
-        .and_then(|id| online.world().spawn(id).map(|spawn| (id, &spawn.state)));
+        .and_then(|id| world.spawn(id).map(|spawn| (id, &spawn.state)));
     let attackable = spawn.filter(|(_, spawn)| spawn.kind == SpawnKind::Npc && !spawn.invisible);
-    // The official client stops attacking when its target goes away.
-    if combat.auto_attack
-        && (!online.world().connected()
-            || online.world().death().is_some()
-            || attackable.map(|(id, _)| id) != combat.attack_target)
-    {
+    let toggle = settings.0.installed_client.attack_toggle();
+    let posture = world
+        .posture(player.spawn_id)
+        .filter(|posture| *posture != PostureState::Standing);
+    // The Titanium client stops attacking when its target goes away; the
+    // Mac-era client when the player stops standing.
+    let stopped = match toggle {
+        Some(_) => posture.is_some(),
+        None => attackable.map(|(id, _)| id) != combat.attack_target,
+    };
+    let live = world.connected() && world.death().is_none();
+    if combat.auto_attack && (!live || stopped) {
         combat.auto_attack = false;
         combat.attack_target = None;
-        if online.world().connected() && outbox.post(world, attack(false)).is_ok() {
-            chat.history
-                .push(super::chat::system_line(messages.said(1466, &[])));
+        if world.connected() && outbox.post(world, attack(false)).is_ok() {
+            chat.history.push(match toggle {
+                Some(toggle) => toggle_line(toggle, false, &messages),
+                None => super::chat::system_line(messages.said(1466, &[])),
+            });
         }
     }
-    if !online.world().connected() || online.world().death().is_some() || !keys.focused() {
+    if !live || !keys.focused() {
         return;
     }
     let mut feedback = |said: super::chat::Said| chat.refuse(said);
@@ -103,7 +112,23 @@ pub(super) fn input(
     }
     let bar_attack = super::hud::hotbar::requested(&keys, &bindings, &bar_clicks)
         == Some(super::hud::hotbar::Action::Attack);
-    if keys.pressed(Act::Attack) || attack_button.iter().next().is_some() || bar_attack {
+    let pressed = keys.pressed(Act::Attack) || attack_button.iter().next().is_some() || bar_attack;
+    if let Some(toggle) = toggle.filter(|_| pressed) {
+        let enable = !combat.auto_attack;
+        // Not standing, the key only turns auto attack off.
+        if enable && let Some(posture) = posture {
+            feedback(messages.said(refusal(toggle, posture), &[]));
+            return;
+        }
+        if outbox.post(world, attack(enable)).is_err() {
+            return;
+        }
+        combat.auto_attack = enable;
+        combat.attack_target = None;
+        chat.history.push(toggle_line(toggle, enable, &messages));
+        return;
+    }
+    if pressed {
         let enable = !combat.auto_attack;
         if enable && attackable.is_none() {
             feedback("Target a creature to attack it".into());
@@ -120,6 +145,29 @@ pub(super) fn input(
             messages.said(1466, &[])
         });
     }
+}
+
+/// The installed client's refusal to turn auto attack on for a player in
+/// this posture, which is not standing.
+const fn refusal(toggle: eq_client_assets::ui::AttackToggle, posture: PostureState) -> u32 {
+    if matches!(posture, PostureState::Frozen) {
+        toggle.frozen
+    } else {
+        toggle.not_standing
+    }
+}
+
+/// The line an installed client says as its key turns auto attack on or
+/// off, in its colour.
+fn toggle_line(
+    toggle: eq_client_assets::ui::AttackToggle,
+    enabled: bool,
+    messages: &Messages,
+) -> eq_client_core::chat::ChatLine {
+    let id = if enabled { toggle.on } else { toggle.off };
+    let mut line = super::chat::system_line(messages.said(id, &[]));
+    line.message_type = Some(toggle.line_type);
+    line
 }
 
 /// Colors the target name by the latest consider result.
@@ -351,8 +399,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_hotbutton_bound_to_melee_attack_turns_auto_attack_on_and_off() {
+    /// A player admitted with a creature targeted, the attack bound to the
+    /// third hotbutton, under this installed client.
+    fn attacking(
+        client: eq_client_assets::ui::InstalledClient,
+    ) -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
         use crate::{hud::hotbar, online::testing};
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
@@ -365,9 +416,12 @@ mod tests {
         online.select_target(Some(30));
         let mut bindings = hotbar::Bindings::default();
         bindings.0[2] = Some(hotbar::Action::Attack);
+        let mut settings = crate::ViewerSettings::default();
+        settings.0.installed_client = client;
         app.insert_resource(online)
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .insert_resource(bindings)
+            .insert_resource(settings)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<CombatState>()
@@ -380,25 +434,90 @@ mod tests {
             },
             bevy::window::PrimaryWindow,
         ));
-        let press = |app: &mut App| {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.reset_all();
-            keys.press(KeyCode::Digit3);
-            app.update();
+        (app, rx)
+    }
+
+    fn press(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::Digit3);
+        app.update();
+    }
+
+    /// The auto attack the frame sent, if it sent one, and nothing else.
+    fn sent(rx: &std::sync::mpsc::Receiver<ClientCommand>) -> Option<bool> {
+        let enabled = rx.try_recv().ok().map(|command| {
             let ClientCommand::AutoAttack {
                 session_id: 7,
                 enabled,
                 ..
-            } = rx.try_recv().unwrap()
+            } = command
             else {
-                panic!("the hotbutton sent something else");
+                panic!("the hotbutton sent something else: {command:?}");
             };
-            assert!(rx.try_recv().is_err());
             enabled
-        };
-        assert!(press(&mut app));
+        });
+        assert!(rx.try_recv().is_err());
+        enabled
+    }
+
+    fn newest(app: &App) -> (String, Option<u32>) {
+        let chat = app.world().resource::<super::super::chat::ChatState>();
+        let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
+        let (_, line) = lines.last().expect("a line");
+        (line.message.text.clone(), line.message_type)
+    }
+
+    #[test]
+    fn a_hotbutton_bound_to_melee_attack_turns_auto_attack_on_and_off() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        press(&mut app);
+        assert_eq!(sent(&rx), Some(true));
         assert!(app.world().resource::<CombatState>().auto_attack);
-        assert!(!press(&mut app));
+        press(&mut app);
+        assert_eq!(sent(&rx), Some(false));
         assert!(!app.world().resource::<CombatState>().auto_attack);
+    }
+
+    #[test]
+    fn the_mac_era_key_needs_no_target_but_a_standing_player_and_stops_when_they_sit() {
+        use crate::online::testing;
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::EqMac);
+        let posture = |app: &mut App, posture| {
+            testing::news(
+                &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                [eq_client_core::WorldEvent::Posture {
+                    spawn_id: 12,
+                    posture,
+                }],
+            );
+        };
+        // Without a target, on, in the program's words and colour.
+        app.world_mut()
+            .resource_mut::<crate::online::OnlineState>()
+            .select_target(None);
+        press(&mut app);
+        assert_eq!(sent(&rx), Some(true));
+        assert_eq!(newest(&app).1, Some(13));
+        // Sitting stops it by itself.
+        posture(&mut app, PostureState::Sitting);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        assert_eq!(sent(&rx), Some(false));
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        assert_eq!(newest(&app).1, Some(13));
+        // Sitting, the key refuses and does not stand the player up.
+        press(&mut app);
+        assert_eq!(sent(&rx), None);
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        assert_eq!(
+            app.world()
+                .resource::<crate::online::OnlineState>()
+                .world()
+                .posture(12),
+            Some(PostureState::Sitting)
+        );
     }
 }

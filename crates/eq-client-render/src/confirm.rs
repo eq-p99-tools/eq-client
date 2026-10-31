@@ -1,8 +1,9 @@
 //! The skin's confirmation dialog, asking one Yes-or-No question at a time:
-//! a resurrection the server offers first, since the server waits for its
-//! answer, then a question of the client's own before something that cannot
-//! be undone, as Ask Before Deleting Spells asks before a spell leaves the
-//! book. Whoever asked acts on the answer.
+//! a resurrection the server offers first, then a translocate where the
+//! installed client asks about one (`translocate`), since the server waits
+//! for their answers, then a question of the client's own before something
+//! that cannot be undone, as Ask Before Deleting Spells asks before a spell
+//! leaves the book. Whoever asked acts on the answer.
 use crate::{
     online::OnlineState,
     outbox::Outbox,
@@ -83,10 +84,26 @@ impl Asked {
     }
 }
 
+/// The translocate waiting for the player's answer, and the installed
+/// client's rules for asking it; None where the client asks about none.
+fn translocate(
+    online: &OnlineState,
+    settings: &crate::ViewerSettings,
+) -> Option<eq_client_assets::ui::TranslocateQuestion> {
+    online.world().translocate()?;
+    settings.0.installed_client.translocate_offer()
+}
+
 /// Keeps the confirmation dialog open while a question waits for an answer.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn window(online: Res<OnlineState>, asked: Res<Asked>, mut shown: ResMut<Shown>) {
-    let asking = online.world().resurrection().is_some() || asked.question.is_some();
+pub(crate) fn window(
+    (online, settings): (Res<OnlineState>, Res<crate::ViewerSettings>),
+    asked: Res<Asked>,
+    mut shown: ResMut<Shown>,
+) {
+    let asking = online.world().resurrection().is_some()
+        || translocate(&online, &settings).is_some()
+        || asked.question.is_some();
     if asking != shown.is_open(WindowId::Confirmation) {
         if asking {
             shown.open(WindowId::Confirmation);
@@ -96,12 +113,16 @@ pub(crate) fn window(online: Res<OnlineState>, asked: Res<Asked>, mut shown: Res
     }
 }
 
-/// Answers the question when Yes or No is pressed: a resurrection to the
-/// server, the client's own to whoever asked it.
+/// Answers the question when Yes or No is pressed: a resurrection or a
+/// translocate to the server, the client's own to whoever asked it.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
-    mut online: ResMut<OnlineState>,
-    outbox: Res<Outbox>,
+    (mut online, outbox): (ResMut<OnlineState>, Res<Outbox>),
+    (settings, messages, mut chat): (
+        Res<crate::ViewerSettings>,
+        Option<Res<crate::hud::messages::Messages>>,
+        ResMut<crate::chat::ChatState>,
+    ),
     mut asked: ResMut<Asked>,
     buttons: Query<(&Interaction, &AnswerButton), Changed<Interaction>>,
 ) {
@@ -114,6 +135,11 @@ pub(crate) fn buttons(
     };
     if online.world().resurrection().is_some() {
         super::resurrection::answer(&mut online, &outbox, yes);
+    } else if let Some(rules) = translocate(&online, &settings) {
+        let declined = rules.declined.zip(messages.as_deref());
+        if let Some(line) = super::translocate::answer(&mut online, &outbox, yes, declined) {
+            chat.history.push(line);
+        }
     } else if let Some(question) = asked.question.take() {
         asked.answer = Some((question, yes));
     }
@@ -122,7 +148,7 @@ pub(crate) fn buttons(
 /// Shows the dialog's question.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
-    (online, asked): (Res<OnlineState>, Res<Asked>),
+    (online, asked, settings): (Res<OnlineState>, Res<Asked>, Res<crate::ViewerSettings>),
     (messages, names): (
         Option<Res<crate::hud::messages::Messages>>,
         Res<crate::spellbook::SpellNames>,
@@ -134,6 +160,8 @@ pub(crate) fn show(
     }
     let wanted = if online.world().resurrection().is_some() {
         super::resurrection::question(online.world(), messages.as_deref())
+    } else if let Some(rules) = translocate(&online, &settings) {
+        super::translocate::question(online.world(), rules, messages.as_deref())
     } else {
         asked
             .question
@@ -155,6 +183,7 @@ mod tests {
     fn a_question_of_the_clients_own_waits_for_its_answer() {
         let mut app = crate::testing::app();
         app.init_resource::<Asked>()
+            .init_resource::<crate::chat::ChatState>()
             .add_systems(Update, (buttons, window, show).chain());
         let text = app.world_mut().spawn((QuestionText, Text::default())).id();
         let question = Question::DeleteSpell { slot: 3, spell: 0 };
