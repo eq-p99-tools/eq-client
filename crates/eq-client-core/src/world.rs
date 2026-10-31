@@ -584,7 +584,10 @@ impl ClientWorld {
             | WorldEvent::Duel(_)
             | WorldEvent::Guild(_)
             | WorldEvent::NewTitles
-            | WorldEvent::Gm(_) => (),
+            | WorldEvent::Gm(_)
+            // The machine's weekly account left for the world; nothing
+            // about the world changed.
+            | WorldEvent::SystemInfoReported { .. } => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision, now),

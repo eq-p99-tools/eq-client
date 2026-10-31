@@ -54,7 +54,7 @@ pub(super) struct Controls {
     facing: Option<f32>,
     /// What the samples sent lately asked of the controller and moved.
     pub recent: RecentMotion,
-    /// When the latest sample went out, and when the session last answered
+    /// The latest sample's request stamp, and when the session last answered
     /// one; both outlast a reset, so a walk that stops can say how long ago.
     pub last_sent: Option<Instant>,
     pub last_answer: Option<Instant>,
@@ -531,10 +531,11 @@ pub(super) fn input(
         controls.held = Some(Held::NoSpeed);
         return;
     }
-    // The clock runs from when the previous sample went out (which is never
-    // after its answer came), so each sample covers the time since the
-    // last one, its round trip included; a fresh start covers at most a
-    // tenth of a second.
+    // The clock runs from the previous sample's request stamp (which is
+    // never after its answer came), so each sample covers the time since
+    // the last one, its round trip included, and never more than the time
+    // between the two stamps; a fresh start covers at most a tenth of a
+    // second.
     let since_sent = controls.last_sent.map_or(elapsed, |sent| {
         now.saturating_duration_since(sent).max(elapsed)
     });
@@ -597,7 +598,9 @@ pub(super) fn input(
     let heading = turn_toward(current_heading, facing, TURN_RATE * span);
     trace_proposal(mode, delta, position - origin, heading, facing);
     let position_sent = world_position(position.to_array(), heading);
+    let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
+        created = stamp.created;
         ClientCommand::Move(MovementRequest {
             mode,
             session_id: stamp.session_id,
@@ -612,7 +615,9 @@ pub(super) fn input(
         return;
     }
     controls.recent.record(now, delta, position - origin);
-    controls.last_sent = Some(now);
+    // The host's movement session budgets each sample from the previous
+    // request's stamp to this one's, so the next span runs from the stamp.
+    controls.last_sent = Some(created);
     controls.held = None;
     // A landing's damage follows the sample that lands.
     if let Some(fall) = controls

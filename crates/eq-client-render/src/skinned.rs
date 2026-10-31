@@ -193,12 +193,15 @@ struct Context<'a> {
     tab_frame: Option<&'a eq_client_assets::sidl::FrameLook>,
 }
 
-/// The skin's windows as read, by skin and screen: read once, whatever
-/// rebuilds the frames they are drawn in.
+/// A skin as read from one installation's folder.
+type SkinKey = (std::path::PathBuf, String);
+
+/// The skin's windows as read, by installation folder, skin and screen:
+/// read once, whatever rebuilds the frames they are drawn in.
 #[derive(Resource, Default)]
 pub(crate) struct Screens {
-    libraries: HashMap<String, Option<Library>>,
-    screens: HashMap<(String, &'static str), Option<Screen>>,
+    libraries: HashMap<SkinKey, Option<Library>>,
+    screens: HashMap<(SkinKey, &'static str), Option<Screen>>,
 }
 
 impl Screens {
@@ -218,7 +221,7 @@ impl Screens {
     ) -> Option<&Screen> {
         let library = Self::library(&mut self.libraries, directory, skin);
         self.screens
-            .entry((skin.to_owned(), name))
+            .entry(((directory.to_owned(), skin.to_owned()), name))
             .or_insert_with(|| {
                 library?
                     .window(directory, skin, file, name)
@@ -235,12 +238,12 @@ impl Screens {
 
     /// The skin's animations and templates, read once.
     fn library<'a>(
-        libraries: &'a mut HashMap<String, Option<Library>>,
+        libraries: &'a mut HashMap<SkinKey, Option<Library>>,
         directory: &std::path::Path,
         skin: &str,
     ) -> Option<&'a Library> {
         libraries
-            .entry(skin.to_owned())
+            .entry((directory.to_owned(), skin.to_owned()))
             .or_insert_with(|| {
                 Library::read(directory, skin)
                     .inspect_err(|error| warn!("UI skin {skin} unreadable: {error}"))
@@ -3573,6 +3576,47 @@ mod tests {
         assert_eq!(hidden_off, "hiding");
         assert_eq!(hidden_on, eq_client_assets::ui::DEFAULT_SKIN);
         assert_eq!(default_on, eq_client_assets::ui::DEFAULT_SKIN);
+    }
+
+    #[test]
+    fn one_skin_name_in_two_installations_reads_two_libraries() {
+        let root = std::env::temp_dir().join(format!("skin-roots-{}", std::process::id()));
+        let install = |name: &str, cell: u32| {
+            let folder = root
+                .join(name)
+                .join("uifiles")
+                .join(eq_client_assets::ui::DEFAULT_SKIN);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join("EQUI_Animations.xml"),
+                format!(
+                    "<XML><Ui2DAnimation item=\"A_SpellGems\"><Grid>true</Grid>\
+                     <CellWidth>{cell}</CellWidth><CellHeight>{cell}</CellHeight>\
+                     <Frames><Texture>gemicons01.tga</Texture>\
+                     <Location><X>0</X><Y>0</Y></Location>\
+                     <Size><CX>{cell}</CX><CY>{cell}</CY></Size></Frames>\
+                     </Ui2DAnimation></XML>"
+                ),
+            )
+            .unwrap();
+            std::fs::write(folder.join("EQUI_Templates.xml"), "<XML></XML>").unwrap();
+            root.join(name)
+        };
+        let (titanium, mac) = (install("titanium", 36), install("mac", 24));
+        let mut screens = Screens::default();
+        let cell = |screens: &mut Screens, directory: &std::path::Path| {
+            Screens::library(
+                &mut screens.libraries,
+                directory,
+                eq_client_assets::ui::DEFAULT_SKIN,
+            )
+            .and_then(|library| library.named_piece("A_SpellGems"))
+            .map(|sheet| sheet.width)
+        };
+        let first = cell(&mut screens, &titanium);
+        let second = cell(&mut screens, &mac);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!((first, second), (Some(36), Some(24)));
     }
 
     #[test]
