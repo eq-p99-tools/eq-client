@@ -1025,11 +1025,15 @@ fn button(
             .disabled
             .as_ref()
             .or(button.look.normal.as_ref()),
+        // The item display's icon button draws the item's icon as its
+        // Normal piece, with nothing of the template under it (from the
+        // program, Titanium sitting 9e).
+        Does::ItemIcon => None,
         _ => button.look.normal.as_ref(),
     };
     // A button the skin draws only under the pointer, as the default
     // spellbook's close mark, starts unseen (`buttons`).
-    let unseen = look.is_none() && !matches!(does, Does::Nothing);
+    let unseen = look.is_none() && !matches!(does, Does::Nothing | Does::ItemIcon);
     let look = look.or_else(|| button.look.flyby.as_ref().filter(|_| unseen));
     let mut drawn = match look.and_then(|piece| art.cut(piece)) {
         Some(mut image) => {
@@ -1247,10 +1251,12 @@ fn behave(
             chosen_picture(drawn, button);
             &mut *drawn
         }
-        Does::ItemIcon => {
-            let (x, y, size) = decal_place(button);
-            drawn.insert(super::items::ItemIcon { x, y, size })
-        }
+        // The icon fills the whole button, as its Normal piece would.
+        Does::ItemIcon => drawn.insert(super::items::ItemIcon {
+            x: 0.0,
+            y: 0.0,
+            size: button.area.width.min(button.area.height),
+        }),
         Does::BookPlace(_)
         | Does::TurnsSpellbook(_)
         | Does::CharacterSlot(_)
@@ -3127,6 +3133,89 @@ mod tests {
             Some(Shows::BookPage(true))
         );
         assert_eq!(window_label(book, "SBW_SpellName16"), None);
+    }
+
+    #[test]
+    fn the_item_displays_icon_button_draws_no_template_under_the_icon() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element, Piece};
+        let whole = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        let screen = Screen {
+            name: "ItemDisplayWindow".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: whole,
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![(
+                "icon".into(),
+                Element::Button(Button {
+                    id: Some("IconButton".into()),
+                    area: whole,
+                    placed: true,
+                    anchors: None,
+                    look: ButtonLook {
+                        normal: Some(Piece {
+                            texture: "sample.tga".into(),
+                            x: 0,
+                            y: 0,
+                            width: 40,
+                            height: 40,
+                        }),
+                        ..ButtonLook::default()
+                    },
+                    checkbox: false,
+                    text: None,
+                    text_color: None,
+                    font: None,
+                    decal: None,
+                    decal_area: Some(Area {
+                        x: 4.0,
+                        y: 4.0,
+                        width: 32.0,
+                        height: 32.0,
+                    }),
+                    tooltip: None,
+                }),
+            )],
+            tab_frame: None,
+            transparent: false,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id: WindowId::Item,
+                        paperdoll: None,
+                        depth: 0,
+                        tab_frame: None,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            );
+        app.update();
+        let mut boxes = app
+            .world_mut()
+            .query::<(&crate::items::ItemIcon, Has<ImageNode>)>();
+        let drawn: Vec<_> = boxes
+            .iter(app.world())
+            .map(|(place, image)| (place.x, place.y, place.size, image))
+            .collect();
+        assert_eq!(drawn, [(0.0, 0.0, 40.0, false)]);
     }
 
     #[test]
