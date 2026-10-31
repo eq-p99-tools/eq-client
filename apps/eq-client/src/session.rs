@@ -1,9 +1,10 @@
 //! The sessions the graphical client runs, each on its own thread: what one
 //! logs in with, and the thread's ownership.
+mod machine;
 mod movement;
 
 use anyhow::Result;
-use eq_client_core::{MotionCalibration, WorldUpdate, food::AutoEat, world::Link};
+use eq_client_core::{MotionCalibration, WorldEvent, WorldUpdate, food::AutoEat, world::Link};
 use eq_network::{
     assets::Assets,
     client::{
@@ -159,6 +160,13 @@ impl SessionWorker {
                 client.run_with_commands(&worker_cancel, options, &command_queue, |event| {
                     let update = match event {
                         ClientEvent::World(event) => {
+                            // The machine's account went out: keep its
+                            // date the official way, in the installed
+                            // client's own ini, so the week's wait
+                            // survives this run ending.
+                            if let WorldEvent::SystemInfoReported { at } = &event {
+                                keep_report_date(protocol, &install, *at);
+                            }
                             if let Some(command) =
                                 movement.observe(&event, std::time::Instant::now())
                                 && let Err(error) = configuration.try_send(command)
@@ -295,6 +303,17 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
     config.port = login.port;
     config.local_only = options.local_only;
     config.auto_eat = options.auto_eat;
+    // A Titanium client entering a watched world tells it what machine the
+    // player entered it on, once a week: this machine's own account, dated
+    // by what the installed client's ini remembers of the last. Which
+    // worlds hear it is the server type's to say (`sends_system_info`).
+    if login.protocol.is_titanium() {
+        let remembered = crate::logins::installed_client(login.protocol)
+            .settings(&options.install)
+            .last_sysinfo_date()
+            .unwrap_or(0);
+        config.sysinfo = Some(machine::account(remembered));
+    }
     let hostname = env::var("COMPUTERNAME").or_else(|_| env::var("HOSTNAME"));
     let username = env::var("USERNAME").or_else(|_| env::var("USER"));
     Client::new(
@@ -304,6 +323,18 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
             identity_field(username.ok(), "PLAYER"),
         ),
     )
+}
+
+/// Keeps the date a world heard this machine's account, in the place the
+/// official program keeps its own: `LastSysInfoDate` in `[Defaults]` of the
+/// installed client's `eqclient.ini`, where the next week's wait reads it
+/// back from. The running session remembers the report itself, so a write
+/// that fails only leaves the next run to learn of it from the log.
+fn keep_report_date(protocol: ServerProtocol, install: &std::path::Path, at: u64) {
+    let settings = crate::logins::installed_client(protocol).settings(install);
+    if let Err(error) = settings.set_last_sysinfo_date(at) {
+        tracing::warn!("The machine's report date was not kept: {error}");
+    }
 }
 
 /// Up to 15 printable ASCII bytes of an identity field (the login identity is
