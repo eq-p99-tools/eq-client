@@ -873,9 +873,6 @@ fn update_hud(
         return;
     };
     let mut lines = vec![notices.status.text().to_owned()];
-    if online.enabled && online.in_world() && motion.speed.is_none() {
-        lines.push("Movement unavailable: start with --movement-calibration".into());
-    }
     let nearest = interact::nearest(&online);
     lines.push(match nearest {
         Some(interact::Use::Door(..)) => map.help(&[(keys::Act::Use, "use the door")]),
@@ -927,11 +924,10 @@ fn movement_help(
     let moving = !online.enabled || motion.speed.is_some();
     let mode = if !online.enabled {
         "Offline"
-    } else if motion.speed.is_none() && !online.in_world() {
-        // Zoning or dead: the session takes movement away until it is over.
-        "Movement paused"
     } else if motion.speed.is_none() {
-        "Movement disabled (start with --movement-calibration)"
+        // Zoning, dead or rooted: the session grants movement again once
+        // it is over.
+        "Movement paused"
     } else if motion.walking {
         "Walking"
     } else {

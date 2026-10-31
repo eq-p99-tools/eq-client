@@ -1,9 +1,7 @@
 //! The sessions the graphical client runs, each on its own thread: what one
 //! logs in with, and the thread's ownership.
-mod movement;
-
 use anyhow::Result;
-use eq_client_core::{MotionCalibration, WorldUpdate, food::AutoEat, world::Link};
+use eq_client_core::{WorldUpdate, food::AutoEat, world::Link};
 use eq_network::{
     assets::Assets,
     client::{
@@ -96,8 +94,6 @@ pub struct SessionOptions {
     pub install: PathBuf,
     /// Ends each session after this many seconds, its login included.
     pub seconds: Option<u64>,
-    /// Independently measured movement speeds.
-    pub calibration: Option<MotionCalibration>,
     /// Refuses servers outside this machine's network (a scripted test run).
     pub local_only: bool,
     /// What the session eats and drinks on its own.
@@ -143,10 +139,7 @@ impl SessionWorker {
         let closing = closed.clone();
         let (sender, receiver) = mpsc::sync_channel(1024);
         let (commands, command_queue) = mpsc::sync_channel(32);
-        let configuration = commands.clone();
-        let calibration = options.calibration;
         let worker = thread::spawn(move || {
-            let mut movement = movement::Continuity::new(calibration);
             let mut options = RunOptions::default();
             options.reconnect = false;
             let result = (|| {
@@ -158,18 +151,7 @@ impl SessionWorker {
                 };
                 client.run_with_commands(&worker_cancel, options, &command_queue, |event| {
                     let update = match event {
-                        ClientEvent::World(event) => {
-                            if let Some(command) =
-                                movement.observe(&event, std::time::Instant::now())
-                                && let Err(error) = configuration.try_send(command)
-                            {
-                                // Movement stays disabled; the session itself is fine.
-                                tracing::warn!(
-                                    "Movement calibration was not carried over: {error}"
-                                );
-                            }
-                            Some(WorldUpdate::Game(event))
-                        }
+                        ClientEvent::World(event) => Some(WorldUpdate::Game(event)),
                         ClientEvent::Status(status) => {
                             Some(WorldUpdate::Connection(link(status.state)))
                         }

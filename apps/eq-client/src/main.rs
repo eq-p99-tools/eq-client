@@ -156,10 +156,6 @@ struct Arguments {
     #[arg(long, env = "EQ_CHARACTER")]
     character: Option<String>,
 
-    /// JSON containing independently measured P99 movement calibration.
-    #[arg(long)]
-    movement_calibration: Option<PathBuf>,
-
     /// End each network session after this many seconds (including admission).
     #[arg(long)]
     session_seconds: Option<u64>,
@@ -416,10 +412,6 @@ fn main() {
         report(panic);
     }));
     let (mut arguments, typed_installation) = parse_arguments();
-    let calibration = arguments
-        .movement_calibration
-        .as_deref()
-        .map(load_calibration);
     // Validate every local input before the session logs in.
     let (script, script_follow) = script_input(&arguments);
     let mode = mode(&arguments, script.as_deref()).unwrap_or_else(|error| {
@@ -496,7 +488,7 @@ fn main() {
                 client: client.unwrap_or_default(),
             },
             settings_directory.clone(),
-            session_options(&arguments, &eq_directory, calibration, local),
+            session_options(&arguments, &eq_directory, local),
         ),
     };
     println!("Controls: WASD moves; right-drag orbits; the wheel zooms.");
@@ -540,13 +532,11 @@ fn online_source(
 fn session_options(
     arguments: &Arguments,
     install: &std::path::Path,
-    calibration: Option<eq_client_core::MotionCalibration>,
     local_only: bool,
 ) -> session::SessionOptions {
     session::SessionOptions {
         install: install.to_path_buf(),
         seconds: arguments.session_seconds,
-        calibration,
         local_only,
         auto_eat: if arguments.auto_eat_anything {
             eq_client_core::food::AutoEat::Anything
@@ -711,20 +701,6 @@ fn require_positive_distance(distance: f32) {
         eprintln!("error: --entity-distance must be a finite positive number");
         std::process::exit(2);
     }
-}
-
-/// Reads independently measured movement calibration, exiting when it is invalid.
-fn load_calibration(path: &std::path::Path) -> eq_client_core::MotionCalibration {
-    (|| {
-        let bytes = std::fs::read(path)?;
-        let calibration: eq_client_core::MotionCalibration = serde_json::from_slice(&bytes)?;
-        calibration.validate()?;
-        Ok::<_, anyhow::Error>(calibration)
-    })()
-    .unwrap_or_else(|error| {
-        eprintln!("Invalid movement calibration: {error}");
-        std::process::exit(2);
-    })
 }
 
 /// The validated script and, when following, where to keep reading it.
