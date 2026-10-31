@@ -466,7 +466,8 @@ pub(super) fn input(
                 // The Mac-era client sends no buy the coins on the player
                 // don't cover, and says so.
                 if let Some(short) = short_of(&trade, online.world(), slot, 1) {
-                    chat.refuse(messages.said(short, &[]));
+                    let names = short_names(&trade, online.world(), slot);
+                    chat.refuse(messages.said(short, &names));
                     continue;
                 }
                 if let Some(merchant_id) = merchant.filter(|_| trade.merchant.is_some()) {
@@ -737,6 +738,22 @@ fn short_of(trade: &TradeState, world: &ClientWorld, slot: u32, quantity: u32) -
     let coins = world.coins()?.total_copper();
     (prices.buy_total(ware.price, merchant.rate, quantity) > coins)
         .then_some(prices.short[usize::from(quantity > 1)])
+}
+
+/// What the refusal of a buy the coins don't cover names: the merchant
+/// (`%1`) and the ware (`%2`), as the string's placeholders take them.
+fn short_names(trade: &TradeState, world: &ClientWorld, slot: u32) -> [String; 2] {
+    let merchant = trade
+        .merchant
+        .as_ref()
+        .map(|window| window.name.clone())
+        .unwrap_or_default();
+    let ware = world
+        .merchant()
+        .and_then(|merchant| merchant.stock.get(&slot))
+        .map(|ware| ware.item.details.name.clone())
+        .unwrap_or_default();
+    [merchant, ware]
 }
 
 /// Scrolls the loot or merchant list the wheel turns.
@@ -1266,6 +1283,10 @@ mod tests {
         let titanium = TradeState::default();
         let mac = TradeState {
             prices: eq_client_assets::ui::InstalledClient::EqMac.merchant_prices(),
+            merchant: Some(MerchantWindow {
+                name: "Example Trader".into(),
+                chosen: None,
+            }),
             ..TradeState::default()
         };
         // Titanium shows the server's price; the Mac-era client the list
@@ -1277,6 +1298,11 @@ mod tests {
         assert_eq!(short_of(&mac, world, 3, 1), Some(12060));
         assert_eq!(short_of(&mac, world, 3, 2), Some(12061));
         assert_eq!(short_of(&titanium, world, 3, 1), None);
+        // The line names the merchant and the ware.
+        assert_eq!(
+            short_names(&mac, world, 3),
+            ["Example Trader".to_owned(), item.details.name.clone()]
+        );
     }
 
     #[test]

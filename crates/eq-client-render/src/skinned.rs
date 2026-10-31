@@ -1053,7 +1053,7 @@ fn button(
         }
         None => window.spawn(node),
     };
-    behave(&mut drawn, does, button, owner);
+    behave(&mut drawn, does, (button, area), owner);
     if let Some(id) = &button.id {
         drawn.insert(SkinId {
             window: owner,
@@ -1104,9 +1104,7 @@ fn button_area(button: &eq_client_assets::sidl::Button, does: Does, inside: &Are
         Some(slot) if !button.placed && button.anchors.is_none() => {
             stacked(button.area, slot, inside)
         }
-        _ => button.anchors.map_or(button.area, |anchors| {
-            anchors.within(inside.width, inside.height)
-        }),
+        _ => button.area_in(inside.width, inside.height),
     }
 }
 
@@ -1148,7 +1146,7 @@ fn paired(does: Does, owner: WindowId) -> Option<Shows> {
 fn behave(
     drawn: &mut EntityCommands,
     does: Does,
-    button: &eq_client_assets::sidl::Button,
+    (button, area): (&eq_client_assets::sidl::Button, Area),
     owner: WindowId,
 ) {
     use eq_client_core::Capability;
@@ -1257,14 +1255,14 @@ fn behave(
             &mut *drawn
         }
         Does::Chosen => {
-            chosen_picture(drawn, button);
+            chosen_picture(drawn, button, area);
             &mut *drawn
         }
         // The icon fills the whole button, as its Normal piece would.
         Does::ItemIcon => drawn.insert(super::items::ItemIcon {
             x: 0.0,
             y: 0.0,
-            size: button.area.width.min(button.area.height),
+            size: area.width.min(area.height),
         }),
         Does::BookPlace(_)
         | Does::TurnsSpellbook(_)
@@ -1328,8 +1326,8 @@ fn trades(drawn: &mut EntityCommands, action: crate::trade::Action, skin: SkinBu
 
 /// The merchant window's box for the chosen item, its picture where the
 /// skin's sample sits; hovering it names the item.
-fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::Button) {
-    let (x, y, size) = decal_place(button);
+fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::Button, area: Area) {
+    let (x, y, size) = decal_place(button, area);
     drawn.insert((
         crate::trade::ChosenPicture { x, y, size },
         Interaction::default(),
@@ -1341,7 +1339,7 @@ fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::B
 /// height; its left and top, and its size.
 fn buff_icon_place(button: &eq_client_assets::sidl::Button, area: Area) -> ((f32, f32), f32) {
     if button.decal_area.is_some() {
-        let (x, y, size) = decal_place(button);
+        let (x, y, size) = decal_place(button, area);
         ((x, y), size)
     } else {
         (super::spell_icons::INSET, area.height.min(area.width) - 4.0)
@@ -1349,13 +1347,14 @@ fn buff_icon_place(button: &eq_client_assets::sidl::Button, area: Area) -> ((f32
 }
 
 /// Where a button's picture of an item goes: where the skin puts its
-/// sample picture, or else just inside the button; its left, top and size.
-fn decal_place(button: &eq_client_assets::sidl::Button) -> (f32, f32, f32) {
+/// sample picture, or else just inside the button as laid out (`area`);
+/// its left, top and size.
+fn decal_place(button: &eq_client_assets::sidl::Button, area: Area) -> (f32, f32, f32) {
     let place = button.decal_area.unwrap_or(Area {
         x: 1.0,
         y: 1.0,
-        width: button.area.width - 2.0,
-        height: button.area.height - 2.0,
+        width: area.width - 2.0,
+        height: area.height - 2.0,
     });
     (place.x, place.y, place.width.min(place.height))
 }
@@ -1398,7 +1397,7 @@ fn caption(
         Does::Ability(place) => {
             inner.spawn((super::abilities::AbilityLabel(place), words("")));
         }
-        Does::HotButton(index) => hotbar::contents(inner, index, Some(decal_place(button))),
+        Does::HotButton(index) => hotbar::contents(inner, index, Some(decal_place(button, area))),
         Does::PetBuff(slot) => {
             let (place, size) = buff_icon_place(button, area);
             inner.spawn(super::spell_icons::artwork_at(
@@ -1410,7 +1409,7 @@ fn caption(
         // The spell's picture, where the skin puts its sample, and the
         // mark that shows a right click chose it (`spellbook::present`).
         Does::BookPlace(place) => {
-            let (x, y, size) = decal_place(button);
+            let (x, y, size) = decal_place(button, area);
             inner.spawn(super::spell_icons::artwork_at(
                 super::spell_icons::Source::BookPlace(place),
                 (x, y),
@@ -3144,15 +3143,15 @@ mod tests {
         assert_eq!(window_label(book, "SBW_SpellName16"), None);
     }
 
-    #[test]
-    fn the_item_displays_icon_button_draws_no_template_under_the_icon() {
+    /// The item display's icon boxes drawn for an icon button at `area`
+    /// with these `anchors`, in a window of `whole`'s size: each box's
+    /// place and size, and whether a template piece was drawn under it.
+    fn item_icon_boxes(
+        whole: Area,
+        area: Area,
+        anchors: Option<eq_client_assets::sidl::Anchors>,
+    ) -> Vec<(f32, f32, f32, bool)> {
         use eq_client_assets::sidl::{Button, ButtonLook, Element, Piece};
-        let whole = Area {
-            x: 0.0,
-            y: 0.0,
-            width: 40.0,
-            height: 40.0,
-        };
         let screen = Screen {
             name: "ItemDisplayWindow".into(),
             title: None,
@@ -3167,9 +3166,9 @@ mod tests {
                 "icon".into(),
                 Element::Button(Button {
                     id: Some("IconButton".into()),
-                    area: whole,
-                    placed: true,
-                    anchors: None,
+                    area,
+                    placed: anchors.is_none(),
+                    anchors,
                     look: ButtonLook {
                         normal: Some(Piece {
                             texture: "sample.tga".into(),
@@ -3220,11 +3219,53 @@ mod tests {
         let mut boxes = app
             .world_mut()
             .query::<(&crate::items::ItemIcon, Has<ImageNode>)>();
-        let drawn: Vec<_> = boxes
+        boxes
             .iter(app.world())
             .map(|(place, image)| (place.x, place.y, place.size, image))
-            .collect();
-        assert_eq!(drawn, [(0.0, 0.0, 40.0, false)]);
+            .collect()
+    }
+
+    #[test]
+    fn the_item_displays_icon_button_draws_no_template_under_the_icon() {
+        let whole = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        assert_eq!(
+            item_icon_boxes(whole, whole, None),
+            [(0.0, 0.0, 40.0, false)]
+        );
+    }
+
+    #[test]
+    fn an_icon_button_sized_only_by_its_anchors_holds_the_whole_icon() {
+        use eq_client_assets::sidl::{Anchor, Anchors};
+        // The Mac-era skin's button: no size of its own, 44 by 44 between
+        // anchors kept to the window's right edge and top.
+        let window = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 300.0,
+            height: 200.0,
+        };
+        let none = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+        let anchors = Anchors {
+            left: Anchor::End(70.0),
+            top: Anchor::Start(12.0),
+            right: Anchor::End(26.0),
+            bottom: Anchor::Start(56.0),
+        };
+        assert_eq!(
+            item_icon_boxes(window, none, Some(anchors)),
+            [(0.0, 0.0, 44.0, false)]
+        );
     }
 
     #[test]
