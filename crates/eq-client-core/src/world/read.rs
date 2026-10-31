@@ -132,6 +132,14 @@ impl ClientWorld {
         crate::zones::long_name(&self.zone_name).unwrap_or(&self.zone_name)
     }
 
+    /// How strongly the zone pulls the player down, as its header gives it
+    /// (`OP_NewZone` +420): the fall speed added each 50 ms step. None until
+    /// this admission's header comes.
+    #[must_use]
+    pub const fn zone_gravity(&self) -> Option<f32> {
+        self.zone_gravity
+    }
+
     /// The zone's far clip distance, when the server gave one.
     #[must_use]
     pub const fn far_clip(&self) -> Option<f32> {

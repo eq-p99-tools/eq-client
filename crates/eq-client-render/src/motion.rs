@@ -538,7 +538,7 @@ pub(super) fn input(
             let landing = fall_step(
                 airborne,
                 world,
-                physics(client),
+                physics(client, online.world().zone_gravity()),
                 feet,
                 delta,
                 span,
@@ -678,17 +678,19 @@ pub(super) fn fall_step(
     position
 }
 
-/// How the installed client's player falls: its program's physics, or the
-/// provisional ones until they are read for it.
-pub(super) fn physics(client: InstalledClient) -> VerticalPhysics {
-    client
-        .falls()
-        .map_or(PROVISIONAL_PHYSICS, |falls| VerticalPhysics {
-            gravity: falls.gravity,
-            terminal_speed: falls.terminal_speed,
+/// How the installed client's player falls: its program's physics under
+/// the zone header's gravity once it comes, or the provisional ones until
+/// they are read for it.
+pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> VerticalPhysics {
+    client.falls().map_or(PROVISIONAL_PHYSICS, |falls| {
+        let gravity = zone_gravity.map_or(falls.gravity, |per_step| falls.zone_gravity(per_step));
+        VerticalPhysics {
+            gravity,
+            terminal_speed: falls.terminal_under(gravity),
             jump_speed: falls.jump_speed,
             air_factor: falls.air_factor,
-        })
+        }
+    })
 }
 
 /// Whether a jump now comes sooner after the last than the installed
@@ -1199,10 +1201,10 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp, reason = "The constants are copied, not computed")]
     fn each_client_falls_by_its_own_physics_and_spaces_its_jumps_its_own_way() {
-        let titanium = physics(InstalledClient::Titanium);
+        let titanium = physics(InstalledClient::Titanium, Some(1.0));
         assert_eq!(titanium.gravity, PROVISIONAL_PHYSICS.gravity);
         assert_eq!(titanium.terminal_speed, PROVISIONAL_PHYSICS.terminal_speed);
-        let mac = physics(InstalledClient::EqMac);
+        let mac = physics(InstalledClient::EqMac, None);
         assert!((mac.gravity - 160.0).abs() < 0.001, "{}", mac.gravity);
         // The session's motion guard lets the program's fastest fall through.
         assert!(
@@ -1210,6 +1212,17 @@ mod tests {
             "{}",
             mac.terminal_speed
         );
+        // The zone header's gravity, a step at a time; none pulls nothing.
+        let heavy = physics(InstalledClient::EqMac, Some(0.8));
+        assert!((heavy.gravity - 320.0).abs() < 0.01, "{}", heavy.gravity);
+        assert!((heavy.terminal_speed - mac.terminal_speed).abs() < 0.01);
+        let light = physics(InstalledClient::EqMac, Some(0.2));
+        assert!(
+            (light.terminal_speed - 396.0).abs() < 0.01,
+            "{}",
+            light.terminal_speed
+        );
+        assert!(physics(InstalledClient::EqMac, Some(0.0)).gravity.abs() < f32::EPSILON);
         let now = Instant::now();
         let ago = |ms| now.checked_sub(Duration::from_millis(ms));
         assert!(jump_too_soon(InstalledClient::Titanium, ago(499), now));

@@ -177,6 +177,8 @@ pub struct ClientWorld {
     choices: Vec<crate::Capability>,
     zone_name: String,
     far_clip: Option<f32>,
+    /// The zone header's gravity, once this admission's header came.
+    zone_gravity: Option<f32>,
     /// The spell action flag that says a spell landed on its target, as the
     /// admission says for its server type; None records no landings.
     spell_landing_flag: Option<u8>,

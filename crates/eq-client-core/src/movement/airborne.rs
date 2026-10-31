@@ -5,7 +5,8 @@ use glam::Vec3;
 /// Explicit local tuning, separate from network motion calibration.
 #[derive(Clone, Copy)]
 pub struct VerticalPhysics {
-    /// Downward acceleration in world units per second squared.
+    /// Downward acceleration in world units per second squared; a zone may
+    /// have none.
     pub gravity: f32,
     /// Maximum downward speed in world units per second.
     pub terminal_speed: f32,
@@ -137,9 +138,10 @@ impl AirborneController {
             || input.height < 1.0
             || !input.seconds.is_finite()
             || input.seconds <= 0.0
-            || ![physics.gravity, physics.terminal_speed, physics.jump_speed]
+            || ![physics.terminal_speed, physics.jump_speed]
                 .iter()
                 .all(|v| v.is_finite() && *v > 0.0)
+            || !(physics.gravity.is_finite() && physics.gravity >= 0.0)
             || !(physics.air_factor > 0.0 && physics.air_factor <= 1.0)
         {
             return feet;

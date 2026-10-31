@@ -88,6 +88,7 @@ impl ClientWorld {
     /// A zone header, at entry or sent again mid-zone, sets the far clip to
     /// its maximum clip when it gives one.
     pub(super) fn described(&mut self, description: &ZoneDescription) {
+        self.zone_gravity = Some(description.gravity);
         let clip = description.max_clip;
         if clip.is_finite() && clip > 0.0 {
             self.far_clip = Some(clip);
@@ -112,6 +113,7 @@ impl ClientWorld {
             .notices
             .push(Notice::Arrived(self.zone_long_name().to_owned()));
         self.far_clip = far_clip;
+        self.zone_gravity = None;
         self.spell_landing_flag = spell_landing_flag;
         self.vitals = Vitals {
             mana: Some(player.mana),

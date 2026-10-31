@@ -14,13 +14,15 @@ pub const STEP_SECONDS: f32 = 0.05;
 /// How a client generation falls, and what its landings cost.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClientFalls {
-    /// Downward acceleration, in units a second squared: the program adds
-    /// 0.4 units a step to the fall speed each step. That is its default:
-    /// the zone's header (`OP_NewZone` +420) sets it, which is not yet
-    /// decoded, so every zone takes the default (unsure, 6.161).
+    /// Downward acceleration, in units a second squared, until the zone's
+    /// header says: the program adds the header's gravity (`OP_NewZone`
+    /// +420) to the fall speed each step (TAKP sitting 2, M1; the Titanium
+    /// program reads the same field, sitting 8g), and 0.4 a step is the
+    /// default before a header comes.
     pub gravity: f32,
     /// The fastest fall, in units a second: where the air's slowing meets
-    /// gravity at one frame a step.
+    /// the default gravity at one frame a step. The program has no cap of
+    /// its own; the session's motion guard holds falls to this.
     pub terminal_speed: f32,
     /// The upward speed a jump starts with, in units a second.
     pub jump_speed: f32,
@@ -74,6 +76,31 @@ const DEADLY_FALL: u32 = 20_000;
 const DEADLY_T: f32 = 9.0;
 
 impl ClientFalls {
+    /// Gravity in units a second squared for a zone header's gravity, the
+    /// fall speed it adds each step; a header of 0 pulls nothing.
+    #[must_use]
+    pub fn zone_gravity(&self, per_step: f32) -> f32 {
+        if per_step.is_finite() && per_step >= 0.0 {
+            per_step / (STEP_SECONDS * STEP_SECONDS)
+        } else {
+            self.gravity
+        }
+    }
+
+    /// The fastest fall under this gravity, in units a second, where the
+    /// air's slowing meets it at one frame a step, held to
+    /// [`ClientFalls::terminal_speed`].
+    #[must_use]
+    pub fn terminal_under(&self, gravity: f32) -> f32 {
+        let per_step = gravity * STEP_SECONDS * STEP_SECONDS;
+        let terminal = per_step * self.air_factor / (1.0 - self.air_factor) / STEP_SECONDS;
+        if terminal.is_finite() && terminal > 0.0 {
+            terminal.min(self.terminal_speed)
+        } else {
+            self.terminal_speed
+        }
+    }
+
     /// What a landing costs: with the speed past the gate in units a step,
     /// T = carried weight / 100 + (speed − 2.5) − 1.5. None at T ≤ 0, a
     /// flat 20,000 at T ≥ 9, else trunc(10·T²) less Safe Fall's skill
