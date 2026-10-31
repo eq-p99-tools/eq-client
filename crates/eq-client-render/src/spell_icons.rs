@@ -20,6 +20,9 @@ pub(super) struct Artwork {
     source: Source,
     shown: Option<u32>,
     initialized: bool,
+    /// The skin's gem icons, which a gem shows in place of the square icon
+    /// where the skin has them and the spell names its cell.
+    gems: Option<eq_client_assets::sidl::IconGrid>,
 }
 
 /// Where artwork sits in its button when nothing else places it.
@@ -37,6 +40,7 @@ pub(super) fn artwork_at(source: Source, (left, top): (f32, f32), size: f32) -> 
             source,
             shown: None,
             initialized: false,
+            gems: None,
         },
         ImageNode::default(),
         Node {
@@ -45,6 +49,34 @@ pub(super) fn artwork_at(source: Source, (left, top): (f32, f32), size: f32) -> 
             top: px(top),
             width: px(size),
             height: px(size),
+            ..default()
+        },
+        bevy::ui::FocusPolicy::Pass,
+    )
+}
+
+/// A gem's spell as the skin's gem icons draw it, one cell's size, at this
+/// place in the gem.
+pub(super) fn gem_artwork(
+    index: usize,
+    gems: eq_client_assets::sidl::IconGrid,
+    (left, top): (f32, f32),
+) -> impl Bundle {
+    let (width, height) = (gems.cell_width, gems.cell_height);
+    (
+        Artwork {
+            source: Source::Gem(index),
+            shown: None,
+            initialized: false,
+            gems: Some(gems),
+        },
+        ImageNode::default(),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(left),
+            top: px(top),
+            width: px(width),
+            height: px(height),
             ..default()
         },
         bevy::ui::FocusPolicy::Pass,
@@ -103,6 +135,17 @@ pub(super) fn update(
         artwork.initialized = true;
         artwork.shown = spell;
         node.display = Display::None;
+        // A gem shows the spell's gem icon where the skin has them; the
+        // square icon where the skin or the spell data lacks it.
+        let gem = artwork.gems.as_ref().and_then(|gems| {
+            let cell = gems.cell(names.gem_icon(spell?)?)?;
+            art.cut(&cell)
+        });
+        if let Some(piece) = gem {
+            *image = piece;
+            node.display = Display::Flex;
+            continue;
+        }
         let Some(icon) = spell.and_then(|spell| names.icon(spell)) else {
             continue;
         };

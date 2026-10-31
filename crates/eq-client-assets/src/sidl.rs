@@ -25,6 +25,53 @@ pub struct Piece {
     pub height: u32,
 }
 
+/// A skin animation laid out as a grid of cells over its frames' sheets
+/// (`<Grid>true</Grid>`), as the gem icons (`A_SpellGems`) are: each frame
+/// is one sheet, in order, cut into cells of one size.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IconGrid {
+    /// The sheets, as their frames place them.
+    pub sheets: Vec<Piece>,
+    /// A cell's width.
+    pub cell_width: u32,
+    /// A cell's height.
+    pub cell_height: u32,
+    /// Whether cells count down each column first (`<Vertical>`); the stock
+    /// skins' count across each row first.
+    pub vertical: bool,
+}
+
+impl IconGrid {
+    /// The cell numbered `index`, counting from 0 across the first sheet's
+    /// whole cells, then the next sheet's; None past the last.
+    #[must_use]
+    pub fn cell(&self, index: u32) -> Option<Piece> {
+        let mut index = index;
+        for sheet in &self.sheets {
+            let across = sheet.width.checked_div(self.cell_width)?;
+            let down = sheet.height.checked_div(self.cell_height)?;
+            let cells = across * down;
+            if index >= cells {
+                index -= cells;
+                continue;
+            }
+            let (column, row) = if self.vertical {
+                (index / down, index % down)
+            } else {
+                (index % across, index / across)
+            };
+            return Some(Piece {
+                texture: sheet.texture.clone(),
+                x: sheet.x + column * self.cell_width,
+                y: sheet.y + row * self.cell_height,
+                width: self.cell_width,
+                height: self.cell_height,
+            });
+        }
+        None
+    }
+}
+
 /// A window's frame: the eight border pieces around it, from the top left.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Border {
@@ -360,6 +407,11 @@ pub struct SpellGem {
     pub background: Option<Piece>,
     /// Over the gem while it is under the pointer.
     pub highlight: Option<Piece>,
+    /// Where the spell's gem icon sits in the gem (`SpellIconOffset`), if
+    /// the skin says.
+    pub icon_offset: Option<(f32, f32)>,
+    /// The skin's gem icons (`A_SpellGems`), if it has them.
+    pub icons: Option<IconGrid>,
 }
 
 /// How a slider is drawn: its track between two end caps, and its thumb
@@ -593,6 +645,7 @@ pub struct Screen {
 #[derive(Clone, Debug, Default)]
 pub struct Library {
     pieces: HashMap<String, Piece>,
+    grids: HashMap<String, IconGrid>,
     templates: HashMap<String, WindowTemplate>,
     sliders: HashMap<String, SliderLook>,
     buttons: HashMap<String, ButtonLook>,
@@ -760,6 +813,25 @@ impl Library {
                 && let Some(piece) = child(node, "Frames").and_then(frame)
             {
                 self.pieces.insert(name.to_owned(), piece);
+                if flag(node, "Grid")
+                    && let Some(cell_width) = number(node, "CellWidth").filter(|cx| *cx > 0)
+                    && let Some(cell_height) = number(node, "CellHeight").filter(|cy| *cy > 0)
+                {
+                    let sheets = node
+                        .children()
+                        .filter(|frames| frames.has_tag_name("Frames"))
+                        .filter_map(frame)
+                        .collect();
+                    self.grids.insert(
+                        name.to_owned(),
+                        IconGrid {
+                            sheets,
+                            cell_width,
+                            cell_height,
+                            vertical: flag(node, "Vertical"),
+                        },
+                    );
+                }
             }
         }
     }
@@ -855,6 +927,22 @@ impl Library {
 
     /// What a screen or page lists as its pieces, in drawing order. A piece
     /// may name its kind first, as `Page:IW_InvPage` does.
+    /// A spell gem, with the skin's gem icons (`A_SpellGems`).
+    fn spell_gem(&self, node: roxmltree::Node<'_, '_>, area: Area) -> SpellGem {
+        let look = child(node, "SpellGemDrawTemplate");
+        let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
+        SpellGem {
+            id: text_of(node, "ScreenID").map(str::to_owned),
+            area,
+            holder: part("Holder"),
+            background: part("Background"),
+            highlight: part("Highlight"),
+            icon_offset: child(node, "SpellIconOffset")
+                .and_then(|at| Some((number(at, "X")?, number(at, "Y")?))),
+            icons: self.grids.get("A_SpellGems").cloned(),
+        }
+    }
+
     fn pieces(
         &self,
         node: roxmltree::Node<'_, '_>,
@@ -1142,17 +1230,7 @@ impl Library {
                 },
                 scrollbar: self.scrollbar(node),
             })),
-            "SpellGem" => {
-                let look = child(node, "SpellGemDrawTemplate");
-                let part = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
-                Element::SpellGem(SpellGem {
-                    id: text_of(node, "ScreenID").map(str::to_owned),
-                    area: at(),
-                    holder: part("Holder"),
-                    background: part("Background"),
-                    highlight: part("Highlight"),
-                })
-            }
+            "SpellGem" => Element::SpellGem(self.spell_gem(node, at())),
             "StaticAnimation" => match self.piece(text_of(node, "Animation")) {
                 Some(piece) => {
                     let mut area = at();
@@ -1702,6 +1780,42 @@ mod tests {
             (area.width, area.height, piece.texture.as_str()),
             (116.0, 30.0, "box.tga")
         );
+    }
+
+    #[test]
+    fn a_grid_animation_numbers_its_cells_across_each_sheet_in_turn() {
+        // Two sheets of 256 by 256 in 36 by 28 cells: 7 across, 9 down.
+        let animations = r#"<XML>
+            <Ui2DAnimation item="A_SpellGems"><Cycle>false</Cycle><Grid>true</Grid>
+                <Vertical>false</Vertical><CellHeight>28</CellHeight><CellWidth>36</CellWidth>
+                <Frames><Texture>one.tga</Texture><Location><X>0</X><Y>0</Y></Location>
+                    <Size><CX>256</CX><CY>256</CY></Size></Frames>
+                <Frames><Texture>two.tga</Texture><Location><X>0</X><Y>0</Y></Location>
+                    <Size><CX>256</CX><CY>256</CY></Size></Frames>
+            </Ui2DAnimation></XML>"#;
+        let window = r#"<XML>
+            <SpellGem item="Gem0"><ScreenID>CSPW_Spell0</ScreenID>
+                <Location><X>3</X><Y>10</Y></Location><Size><CX>36</CX><CY>28</CY></Size>
+                <SpellIconOffset><X>2</X><Y>1</Y></SpellIconOffset>
+            </SpellGem>
+            <Screen item="Gems"><Pieces>Gem0</Pieces></Screen></XML>"#;
+        let library = Library::parse(animations, "<XML/>").unwrap();
+        let screen = library.screen(window, "Gems").unwrap();
+        let Element::SpellGem(gem) = &screen.pieces[0].1 else {
+            panic!("a gem")
+        };
+        assert_eq!(gem.icon_offset, Some((2.0, 1.0)));
+        let grid = gem.icons.as_ref().unwrap();
+        let place = |index| {
+            grid.cell(index)
+                .map(|cell| (cell.texture, cell.x, cell.y, cell.width, cell.height))
+        };
+        assert_eq!(place(0), Some(("one.tga".into(), 0, 0, 36, 28)));
+        assert_eq!(place(1), Some(("one.tga".into(), 36, 0, 36, 28)));
+        assert_eq!(place(7), Some(("one.tga".into(), 0, 28, 36, 28)));
+        assert_eq!(place(62), Some(("one.tga".into(), 216, 224, 36, 28)));
+        assert_eq!(place(63), Some(("two.tga".into(), 0, 0, 36, 28)));
+        assert_eq!(place(126), None);
     }
 
     #[test]

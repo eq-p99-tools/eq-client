@@ -782,11 +782,26 @@ fn spell_gem(
             if let Some(piece) = &gem.background {
                 picture(gem_node, art, piece, at(0.0, 0.0, area.width, area.height));
             }
-            let icon = (area.height - 6.0).max(8.0);
-            gem_node.spawn(super::spell_icons::artwork(
-                super::spell_icons::Source::Gem(usize::from(index)),
-                icon,
-            ));
+            // The skin's gem icons where it has them, at its offset or
+            // centred; else the square icon, as before.
+            if let Some(gems) = gem.icons.clone().filter(|gems| !gems.sheets.is_empty()) {
+                #[allow(clippy::cast_precision_loss, reason = "cells are small")]
+                let place = gem.icon_offset.unwrap_or((
+                    (area.width - gems.cell_width as f32) / 2.0,
+                    (area.height - gems.cell_height as f32) / 2.0,
+                ));
+                gem_node.spawn(super::spell_icons::gem_artwork(
+                    usize::from(index),
+                    gems,
+                    place,
+                ));
+            } else {
+                let icon = (area.height - 6.0).max(8.0);
+                gem_node.spawn(super::spell_icons::artwork(
+                    super::spell_icons::Source::Gem(usize::from(index)),
+                    icon,
+                ));
+            }
             if let Some(piece) = &gem.holder {
                 picture(gem_node, art, piece, at(0.0, 0.0, area.width, area.height));
             }

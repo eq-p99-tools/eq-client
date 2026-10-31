@@ -171,6 +171,11 @@ impl SpellNames {
         self.spell(id)?.icon
     }
 
+    /// The spell's cell in the skin's gem icons.
+    pub(super) fn gem_icon(&self, id: u32) -> Option<u32> {
+        self.spell(id)?.gem_icon
+    }
+
     /// The motion a spell's caster plays while casting, as the servers'
     /// animation number, from the installed spell data.
     pub(super) fn casting_animation(&self, id: u32) -> Option<u16> {
