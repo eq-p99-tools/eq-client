@@ -257,6 +257,18 @@ pub struct Button {
     pub tooltip: Option<String>,
 }
 
+impl Button {
+    /// Where the button sits inside a container of this size: where its
+    /// anchors put it, or else where the skin places it. A stretching
+    /// button may have no `Size` at all, its anchors alone giving its
+    /// rectangle (the Mac-era skin's item display icon button).
+    #[must_use]
+    pub fn area_in(&self, width: f32, height: f32) -> Area {
+        self.anchors
+            .map_or(self.area, |anchors| anchors.within(width, height))
+    }
+}
+
 /// A slot that holds an item: one of the player's, or of a container.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InvSlot {
@@ -1696,6 +1708,36 @@ mod tests {
             (area.x, area.y, area.width, area.height),
             (1.0, 2.0, 101.0, 12.0)
         );
+    }
+
+    #[test]
+    fn a_button_with_only_anchors_takes_its_rectangle_from_them() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        // Sized by its anchors alone, from the window's right edge and top,
+        // as the Mac-era skin's item display icon button is.
+        let window = r#"<XML>
+            <Button item="Icon"><ScreenID>IconButton</ScreenID><AutoStretch>true</AutoStretch>
+                <LeftAnchorOffset>70</LeftAnchorOffset><LeftAnchorToLeft>false</LeftAnchorToLeft>
+                <RightAnchorOffset>26</RightAnchorOffset><RightAnchorToLeft>false</RightAnchorToLeft>
+                <TopAnchorOffset>12</TopAnchorOffset>
+                <BottomAnchorOffset>56</BottomAnchorOffset><BottomAnchorToTop>true</BottomAnchorToTop>
+            </Button>
+            <Button item="Sized"><ScreenID>Other</ScreenID>
+                <Location><X>4</X><Y>5</Y></Location><Size><CX>40</CX><CY>30</CY></Size>
+            </Button>
+            <Screen item="Item"><Size><CX>300</CX><CY>200</CY></Size><Pieces>Icon</Pieces><Pieces>Sized</Pieces></Screen>
+        </XML>"#;
+        let screen = library.screen(window, "Item").unwrap();
+        let area = |index: usize| {
+            let Element::Button(button) = &screen.pieces[index].1 else {
+                panic!("a button");
+            };
+            let area = button.area_in(300.0, 200.0);
+            (area.x, area.y, area.width, area.height)
+        };
+        assert_eq!(area(0), (230.0, 12.0, 44.0, 44.0));
+        // A button the skin sizes keeps its place and size.
+        assert_eq!(area(1), (4.0, 5.0, 40.0, 30.0));
     }
 
     #[test]

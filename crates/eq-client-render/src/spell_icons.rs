@@ -157,6 +157,9 @@ pub(super) fn update(
         artwork.initialized = true;
         artwork.shown = spell;
         node.display = Display::None;
+        if let (Source::Gem(index), Some(spell)) = (&artwork.source, spell) {
+            report_gem(*index, spell, &names, artwork.gems.as_ref());
+        }
         // A gem shows the spell's gem icon where the skin has them; the
         // square icon where the skin or the spell data lacks it.
         let gem = artwork.gems.as_ref().and_then(|gems| {
@@ -182,6 +185,29 @@ pub(super) fn update(
             node.display = Display::Flex;
         }
     }
+}
+
+/// One debug line for what a gem's spell resolves to: its tint field and
+/// colour, and its icon field and the skin cell that field picks.
+fn report_gem(
+    index: usize,
+    spell: u32,
+    names: &super::spellbook::SpellNames,
+    gems: Option<&eq_client_assets::sidl::IconGrid>,
+) {
+    let field = names.gem_tint_field(spell);
+    let tint = names.gem_tint(spell);
+    let icon = names.gem_icon(spell);
+    let cell = gems.zip(icon).and_then(|(gems, icon)| gems.cell(icon));
+    debug!(
+        "Gem {} holds spell {spell}: tint field {field:?} -> {}, icon field {icon:?} -> {}",
+        index + 1,
+        tint.map_or_else(|| "none".to_owned(), |tint| format!("{tint:#010x}")),
+        cell.map_or_else(
+            || "no cell".to_owned(),
+            |cell| format!("{} at ({}, {})", cell.texture, cell.x, cell.y)
+        ),
+    );
 }
 
 #[cfg(test)]

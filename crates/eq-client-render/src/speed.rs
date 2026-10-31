@@ -24,16 +24,18 @@ const MOST_WEIGHT: f32 = 32_766.0;
 /// signed total (TAKP speeds read, writer 0x4caaba; that the total is the
 /// buffs' effect 3 was read at 0x4c6b6d's entry only, so it is labelled).
 /// A buff that roots (effect 99) makes it the root marker, -1000 (inferred
-/// from the 0x4cb30d path, recording checklist item 6.288). `effects` gives
-/// a spell's effects as (id, base value); a buff whose spell the installed
+/// from the 0x4cb30d path, recording checklist item 6.288). `spells` are
+/// the player's buffs' spells, slotted or not
+/// ([`eq_client_core::buffs::BuffTracker::spells`]); `effects` gives a
+/// spell's effects as (id, base value); a buff whose spell the installed
 /// data lacks counts as none.
 pub(crate) fn movement_rate(
-    slots: Option<&std::collections::BTreeMap<u32, eq_client_core::Buff>>,
+    spells: impl IntoIterator<Item = u32>,
     effects: impl Fn(u32) -> Option<Vec<(u32, i32)>>,
 ) -> i16 {
     let mut total = 0i64;
-    for buff in slots.into_iter().flatten().map(|(_, buff)| buff) {
-        for (id, base) in effects(buff.spell_id).unwrap_or_default() {
+    for spell in spells {
+        for (id, base) in effects(spell).unwrap_or_default() {
             match id {
                 ROOT => return ROOTED,
                 MOVEMENT_SPEED => total += i64::from(base),
@@ -57,18 +59,17 @@ pub(crate) fn carried_weight(world: &eq_client_core::world::ClientWorld) -> u16 
 /// plus the strength effect's (4) base values over the player's buffs, so a
 /// debuff lowers it, from 0. Unsure STR: the program's total also adds worn
 /// items, and its level and ability terms are unread; leaving them out
-/// never puts it above the program's, so it errs slow. `effects` is as
-/// [`movement_rate`]'s.
+/// never puts it above the program's, so it errs slow. `spells` and
+/// `effects` are as [`movement_rate`]'s.
 pub(crate) fn capacity(
     player: &eq_client_core::PlayerState,
-    slots: Option<&std::collections::BTreeMap<u32, eq_client_core::Buff>>,
+    spells: impl IntoIterator<Item = u32>,
     effects: impl Fn(u32) -> Option<Vec<(u32, i32)>>,
 ) -> Option<u32> {
     let base = i64::from(player.base_attributes?.strength);
-    let buffs: i64 = slots
+    let buffs: i64 = spells
         .into_iter()
-        .flatten()
-        .flat_map(|(_, buff)| effects(buff.spell_id).unwrap_or_default())
+        .flat_map(|spell| effects(spell).unwrap_or_default())
         .filter(|(id, _)| *id == STRENGTH)
         .map(|(_, base)| i64::from(base))
         .sum();
@@ -108,11 +109,11 @@ pub(crate) fn report(
                 .collect()
         })
     };
-    let slots = world.buffs().slots();
+    let buffs = world.buffs();
     let inputs = Inputs {
-        rate: movement_rate(slots, effects),
+        rate: movement_rate(buffs.spells(), effects),
         weight: carried_weight(world),
-        capacity: capacity(player, slots, effects).unwrap_or(0),
+        capacity: capacity(player, buffs.spells(), effects).unwrap_or(0),
     };
     if *sent == Some((session, inputs)) {
         return;
@@ -170,30 +171,71 @@ mod tests {
 
     #[test]
     fn the_rate_sums_the_buffs_speed_effects_and_a_root_marks_it() {
-        assert_eq!(movement_rate(None, effects), 0);
-        assert_eq!(movement_rate(Some(&buffs(&[1, 3, 4])), effects), 40);
-        assert_eq!(movement_rate(Some(&buffs(&[1, 2])), effects), 5);
-        assert_eq!(movement_rate(Some(&buffs(&[1, 5])), effects), -1000);
+        assert_eq!(movement_rate([], effects), 0);
+        assert_eq!(movement_rate([1, 3, 4], effects), 40);
+        assert_eq!(movement_rate([1, 2], effects), 5);
+        assert_eq!(movement_rate([1, 5], effects), -1000);
         // Held to 16 bits.
         let fast = |_| Some(vec![(MOVEMENT_SPEED, 40_000)]);
-        assert_eq!(movement_rate(Some(&buffs(&[1])), fast), i16::MAX);
+        assert_eq!(movement_rate([1], fast), i16::MAX);
+    }
+
+    #[test]
+    fn a_buff_that_landed_with_no_slot_counts_until_it_fades() {
+        use eq_client_core::buffs::BuffTracker;
+        let now = std::time::Instant::now();
+        // Spell 1 is in a slot; the snare (2) landed with no slot given.
+        let mut held = BuffTracker::default();
+        held.replace_snapshot(buffs(&[1]), 15, now);
+        held.observe_effect(
+            eq_client_core::SpellEffect {
+                spell_id: 2,
+                caster_level: 1,
+                effect_flag: 4,
+                instrument_modifier: 10,
+                target_id: 7,
+                caster_id: 7,
+                spell_level: 1,
+                push: None,
+            },
+            now,
+        );
+        assert_eq!(movement_rate(held.spells(), effects), 5);
+        let mut player = testing::player(7);
+        player.base_attributes = Some(eq_client_core::BaseAttributes {
+            strength: 80,
+            ..eq_client_core::BaseAttributes::default()
+        });
+        assert_eq!(capacity(&player, held.spells(), effects), Some(65));
+        // Its fade, by spell alone as TAKP sends it, restores both.
+        held.apply(
+            eq_client_core::BuffUpdate {
+                entity_id: 7,
+                slot: 99,
+                spell_id: 2,
+                buff: None,
+            },
+            now,
+        );
+        assert_eq!(movement_rate(held.spells(), effects), 40);
+        assert_eq!(capacity(&player, held.spells(), effects), Some(90));
     }
 
     #[test]
     fn capacity_is_the_profiles_strength_and_the_buffs() {
         let mut player = testing::player(7);
-        assert_eq!(capacity(&player, None, effects), None);
+        assert_eq!(capacity(&player, [], effects), None);
         player.base_attributes = Some(eq_client_core::BaseAttributes {
             strength: 80,
             ..eq_client_core::BaseAttributes::default()
         });
-        assert_eq!(capacity(&player, None, effects), Some(80));
-        assert_eq!(capacity(&player, Some(&buffs(&[1, 2])), effects), Some(65));
+        assert_eq!(capacity(&player, [], effects), Some(80));
+        assert_eq!(capacity(&player, [1, 2], effects), Some(65));
         player.base_attributes = Some(eq_client_core::BaseAttributes {
             strength: 10,
             ..eq_client_core::BaseAttributes::default()
         });
-        assert_eq!(capacity(&player, Some(&buffs(&[2])), effects), Some(0));
+        assert_eq!(capacity(&player, [2], effects), Some(0));
     }
 
     #[test]

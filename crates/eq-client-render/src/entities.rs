@@ -394,6 +394,7 @@ pub(super) fn interpolate(
             spawn.carried(now)
         };
         let mut target = Vec3::from_array(render_position(carried));
+        let forward = spawn.forward;
         let spawn = &spawn.state;
         // A drawn model stands on the floor under it, whichever rule put its
         // z, and keeps to the floor as it is carried on.
@@ -417,9 +418,9 @@ pub(super) fn interpolate(
             }
         }
         if first {
-            report_drawn(entity.id, spawn);
+            report_drawn(entity.id, (spawn, forward));
         } else if fresh {
-            report_snap(entity.id, spawn, transform.translation, target);
+            report_snap(entity.id, (spawn, forward), transform.translation, target);
         }
         if first || transform.translation.distance_squared(target) > 100.0 * 100.0 {
             transform.translation = target;
@@ -434,15 +435,21 @@ pub(super) fn interpolate(
 }
 
 /// A debug line for each new report of a drawn spawn: where the server put
-/// it, how it moves, and how far it was drawn from where the report puts it
+/// it, how it moves (its velocity, and the forward input the Mac-era client
+/// carries it by), and how far it was drawn from where the report puts it
 /// (the snap) as the report came. Off unless the log filter asks for this
 /// module at debug level; it changes nothing drawn.
-fn report_snap(id: u16, spawn: &eq_client_core::SpawnState, drawn: Vec3, target: Vec3) {
+fn report_snap(
+    id: u16,
+    (spawn, forward): (&eq_client_core::SpawnState, f32),
+    drawn: Vec3,
+    target: Vec3,
+) {
     let p = spawn.position;
     let [vx, vy, vz] = spawn.velocity;
     debug!(
         "spawn {id} report ({:.1}, {:.1}, {:.1}) heading {:.1} velocity ({vx:.1}, {vy:.1}, {vz:.1}) \
-         snap {:.2} (horizontal {:.2}, vertical {:+.2})",
+         forward {forward:.2} snap {:.2} (horizontal {:.2}, vertical {:+.2})",
         p.x,
         p.y,
         p.z,
@@ -456,11 +463,12 @@ fn report_snap(id: u16, spawn: &eq_client_core::SpawnState, drawn: Vec3, target:
 /// A debug line as a spawn is first drawn, a corpse after its death
 /// included: its kind, where it is reported and how it moves on from there.
 /// Off unless the log filter asks for this module at debug level.
-fn report_drawn(id: u16, spawn: &eq_client_core::SpawnState) {
+fn report_drawn(id: u16, (spawn, forward): (&eq_client_core::SpawnState, f32)) {
     let p = spawn.position;
     let [vx, vy, vz] = spawn.velocity;
     debug!(
-        "spawn {id} drawn as {:?} at report ({:.1}, {:.1}, {:.1}) velocity ({vx:.1}, {vy:.1}, {vz:.1})",
+        "spawn {id} drawn as {:?} at report ({:.1}, {:.1}, {:.1}) velocity ({vx:.1}, {vy:.1}, {vz:.1}) \
+         forward {forward:.2}",
         spawn.kind, p.x, p.y, p.z,
     );
 }

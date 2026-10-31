@@ -54,7 +54,7 @@ pub(super) struct Controls {
     facing: Option<f32>,
     /// What the samples sent lately asked of the controller and moved.
     pub recent: RecentMotion,
-    /// When the latest sample went out, and when the session last answered
+    /// The latest sample's request stamp, and when the session last answered
     /// one; both outlast a reset, so a walk that stops can say how long ago.
     pub last_sent: Option<Instant>,
     pub last_answer: Option<Instant>,
@@ -297,8 +297,10 @@ impl Controls {
             self.reset(None);
         }
     }
-    /// Continuous motion covers the whole cycle, including the proposal round trip;
-    /// a fresh start covers at most 0.1 s so an idle gap never becomes a jump.
+    /// Continuous motion covers the time since the previous sample went
+    /// out, its round trip included, up to the longest sample the session
+    /// admits; a fresh start covers at most 0.1 s so an idle gap never
+    /// becomes a jump.
     fn span(&self, elapsed: Duration) -> f32 {
         elapsed
             .as_secs_f32()
@@ -509,11 +511,15 @@ pub(super) fn input(
         turn,
         preserve_facing,
     } = intent;
-    // A jump or fall keeps going after the keys are released.
+    let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
+    let feet = origin - Vec3::Y * body.feet_offset;
+    // A jump or fall keeps going after the keys are released, and a player
+    // who may fall starts to where no ground is under them, as the server
+    // can leave them after a move it makes (a `#goto` into the air).
     let airborne = controls
         .airborne
         .as_ref()
-        .is_some_and(|airborne| airborne.velocity() != 0.0);
+        .is_some_and(|airborne| airborne.velocity() != 0.0 || unsupported(world, feet));
     // So does a heading sent that still turns toward the facing.
     if direction == Vec3::ZERO
         && turn == 0.0
@@ -525,10 +531,15 @@ pub(super) fn input(
         controls.held = Some(Held::NoSpeed);
         return;
     }
-    let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
-    let feet = origin - Vec3::Y * body.feet_offset;
-    // Clock starts at receipt of the last locally accepted sample, not render delta.
-    let span = controls.span(elapsed);
+    // The clock runs from the previous sample's request stamp (which is
+    // never after its answer came), so each sample covers the time since
+    // the last one, its round trip included, and never more than the time
+    // between the two stamps; a fresh start covers at most a tenth of a
+    // second.
+    let since_sent = controls.last_sent.map_or(elapsed, |sent| {
+        now.saturating_duration_since(sent).max(elapsed)
+    });
+    let span = controls.span(since_sent);
     let delta = direction * speed * span;
     let jump = controls.jump.take().is_some();
     let previous_airborne = controls.airborne.clone();
@@ -587,7 +598,9 @@ pub(super) fn input(
     let heading = turn_toward(current_heading, facing, TURN_RATE * span);
     trace_proposal(mode, delta, position - origin, heading, facing);
     let position_sent = world_position(position.to_array(), heading);
+    let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
+        created = stamp.created;
         ClientCommand::Move(MovementRequest {
             mode,
             session_id: stamp.session_id,
@@ -602,7 +615,9 @@ pub(super) fn input(
         return;
     }
     controls.recent.record(now, delta, position - origin);
-    controls.last_sent = Some(now);
+    // The host's movement session budgets each sample from the previous
+    // request's stamp to this one's, so the next span runs from the stamp.
+    controls.last_sent = Some(created);
     controls.held = None;
     // A landing's damage follows the sample that lands.
     if let Some(fall) = controls
@@ -633,6 +648,15 @@ pub(super) fn input(
     controls.facing = (arc(heading, facing).abs() > 0.01).then_some(facing);
     controls.waiting = true;
     controls.queued_at = now;
+}
+
+/// Whether no ground is under the feet within the step the server's
+/// movement guard takes as grounded: the player there falls.
+fn unsupported(world: &eq_client_core::movement::CollisionWorld, feet: Vec3) -> bool {
+    world.support(feet).is_none()
+        && world
+            .ground(feet, 0.01, eq_client_core::movement::MAX_GROUNDED_STEP)
+            .is_none()
 }
 
 /// Walks like a grounded step but keeps going past ledges and falls under gravity,
@@ -1789,6 +1813,93 @@ mod tests {
         };
         // Delay does not accumulate distance to catch up.
         assert!((resumed.position.x - request.position.x).abs() < 0.0001);
+    }
+
+    #[test]
+    fn a_held_key_covers_the_grant_with_each_round_trip_included() {
+        // Each answer comes 40 ms after its sample, and the next sample goes
+        // when the 100 ms gate after it opens: 140 ms a cycle, which each
+        // sample covers whole, so a held key moves at the grant.
+        let (mut app, receiver) = app();
+        let cycle = Duration::from_millis(140);
+        let (mut held, mut moved, mut last_x) = (0.0_f32, 0.0_f32, 0.0_f32);
+        // The time the test itself takes between cycles, which the samples
+        // cover too.
+        let mut extra = 0.0_f32;
+        let mut set_at = Instant::now();
+        while held < 1.0 {
+            app.update();
+            if moved > 0.0 {
+                extra += set_at.elapsed().as_secs_f32();
+            }
+            let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+                panic!("expected movement")
+            };
+            // A fresh start covers a tenth of a second; then whole cycles.
+            held += if moved == 0.0 {
+                0.1
+            } else {
+                cycle.as_secs_f32()
+            };
+            moved += (request.position.x - last_x).abs();
+            last_x = request.position.x;
+            accept(&mut app, &request);
+            set_at = Instant::now();
+            app.world_mut().resource_mut::<Controls>().last_sent = set_at.checked_sub(cycle);
+        }
+        let granted = 6.0 * held;
+        assert!(
+            (moved - granted).abs() <= granted * 0.01,
+            "moved {moved} in {held} s"
+        );
+        // Never more than the grant over the time that passed.
+        assert!(
+            moved <= 6.0 * (held + extra) + 0.0001,
+            "moved {moved} in {held} s and {extra} s more"
+        );
+    }
+
+    #[test]
+    fn a_player_left_in_the_air_falls_with_no_key_held() {
+        // The server put the player 50 units over the floor, as a #goto can.
+        let (mut app, receiver) = app();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        let mut state = app.world_mut().resource_mut::<online::OnlineState>();
+        let mut player = state.world().player().unwrap().clone();
+        player.position = world_position([0.0, 53.0, 0.0], 0.0);
+        crate::online::testing::news(
+            &mut state,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities: eq_client_core::Capability::ALL.to_vec(),
+                choices: Vec::new(),
+                session_id: 11,
+                zone: "qeytoqrg".into(),
+                player: Box::new(player),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        crate::online::testing::connect(&mut state, true);
+        app.update();
+        let Ok(ClientCommand::Move(request)) = receiver.try_recv() else {
+            panic!("the player should start to fall")
+        };
+        assert_eq!(request.mode, MovementMode::Fall);
+        assert!(request.position.z < 53.0, "{request:?}");
+    }
+
+    #[test]
+    fn a_player_on_the_floor_with_no_key_held_sends_nothing() {
+        let (mut app, receiver) = app();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        app.update();
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

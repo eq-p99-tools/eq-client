@@ -22,6 +22,9 @@ pub struct Definition {
     /// the spell (Titanium field 98, Mac-era field 86, and field 18 for one
     /// colour). See [`gem_tint`].
     pub gem_tint: Option<u32>,
+    /// The tint field's value as read, before [`gem_tint`] resolves it,
+    /// for the gem debug line.
+    pub gem_tint_field: Option<u32>,
     /// Field 19: the unmodified mana cost.
     pub mana: Option<u32>,
     /// Field 13: the unmodified cast time, in milliseconds.
@@ -127,6 +130,7 @@ impl Definitions {
                 gem_tint: layout
                     .gem_tint
                     .and_then(|(column, cases)| gem_tint(cases, number(column)?, number(18))),
+                gem_tint_field: layout.gem_tint.and_then(|(column, _)| number(column)),
                 mana: number(19),
                 cast_ms: number(13),
                 range: fields
