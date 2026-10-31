@@ -370,6 +370,24 @@ impl InstalledClient {
         }
     }
 
+    /// How this client's attack key turns auto attack on and off, from the
+    /// program; None until read for this client (Titanium: sittings 6 and
+    /// 7). The Mac-era client's is TAKP Batch 1 R2 (recording checklist
+    /// item 6.157).
+    #[must_use]
+    pub const fn attack_toggle(self) -> Option<AttackToggle> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(AttackToggle {
+                frozen: 12368,
+                not_standing: 12369,
+                on: 12370,
+                off: 12371,
+                line_type: 13,
+            }),
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
@@ -377,6 +395,25 @@ impl InstalledClient {
             Self::EqMac => Box::new(Unchecked),
         }
     }
+}
+
+/// How a client's attack key works: it needs no target and never turns
+/// the player, refuses to turn auto attack on for a player who is not
+/// standing, without standing them up, turns it off instead when it is on,
+/// and turns it off by itself when the player stops standing. Its lines
+/// are by their ids in the client's string table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttackToggle {
+    /// The refusal for a player the server froze in place.
+    pub frozen: u32,
+    /// The refusal for any other player not standing, such as one sitting.
+    pub not_standing: u32,
+    /// The line when auto attack turns on.
+    pub on: u32,
+    /// The line when it turns off, by the key or by itself.
+    pub off: u32,
+    /// The chat line type the on and off lines take their colour from.
+    pub line_type: u32,
 }
 
 /// The picture an installed client covers the screen with while it loads a
