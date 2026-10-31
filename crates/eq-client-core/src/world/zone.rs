@@ -68,6 +68,7 @@ impl Zone {
                     posture: None,
                     revision: *revision,
                     reported: now,
+                    forward: 0.0,
                 },
             );
         }
@@ -122,12 +123,20 @@ impl Zone {
     pub(super) fn moved(
         &mut self,
         id: u16,
-        (position, velocity): (WorldPosition, [f32; 3]),
+        (position, velocity, forward): (WorldPosition, [f32; 3], f32),
         now: Instant,
     ) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
             spawn.state.position = position;
             spawn.state.velocity = still_if_corpse(spawn.state.kind, velocity);
+            spawn.forward = if matches!(
+                spawn.state.kind,
+                SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse
+            ) {
+                0.0
+            } else {
+                forward
+            };
             spawn.reported = now;
         }
     }
@@ -261,11 +270,12 @@ impl super::ClientWorld {
     pub(super) fn position(
         &mut self,
         spawn_id: u16,
-        (position, velocity): (WorldPosition, [f32; 3]),
+        (position, velocity, forward): (WorldPosition, [f32; 3], f32),
         now: Instant,
         changes: &mut super::Changes,
     ) {
-        self.zone.moved(spawn_id, (position, velocity), now);
+        self.zone
+            .moved(spawn_id, (position, velocity, forward), now);
         if let Some(player) = self
             .player
             .as_mut()

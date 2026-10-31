@@ -853,6 +853,7 @@ pub(crate) mod testing {
                 spawn_id,
                 position,
                 velocity: [0.0; 3],
+                forward: 0.0,
             }],
         );
     }
