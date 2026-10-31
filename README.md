@@ -246,6 +246,15 @@ worker. `--session-seconds 150` bounds a test; `--screenshot frame.png
 --screenshot-after 120` captures a frame after two minutes of admitted online time.
 Allow the usual server logout timeout before another client uses the character.
 
+A world of a server type that has been watched taking them — P99 today —
+hears this machine's weekly account a few seconds after the player enters
+it on it: the processor, display adapter, memory and screen sizes as this
+machine reports itself, the same record the official client takes from its
+own system calls. The date of the last account is kept with the installed
+client, as `LastSysInfoDate` in its `eqclient.ini`, so the week's wait
+survives restarts; the next report is due a week less a second after it.
+Other server types are silent until each has been watched too.
+
 Online sessions are stationary by default. The opt-in P99 movement path is described
 below. With `--online`, `EQ_PROTOCOL` selects `p99` (default) or `quarm`, or a
 stock server for local testing: `eqemu` (Titanium) or `takp` (a TAKP server,
