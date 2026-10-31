@@ -254,6 +254,18 @@ pub enum TargetByName {
     Shortest,
 }
 
+/// Where a give or trade window the player asked for puts the cursor's
+/// item as it opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GiveAtOpen {
+    /// The first free trade slot (Titanium: unread, as today).
+    FirstFree,
+    /// The TAKP program's rule (N4 section 2, read): onto a stack of the
+    /// same item in the player's trade slots first, else the first free
+    /// slot; with none free it says 12319 in colour 10.
+    StackFirst,
+}
+
 /// Which official client an installation holds. Its own settings files
 /// (`eqclient.ini`, `UI_<character>_<world>.ini` and `<character>_<world>.ini`)
 /// are read only by the rules of the generation they were checked against.
@@ -484,6 +496,15 @@ impl InstalledClient {
         match self {
             Self::Titanium => None,
             Self::EqMac => Some(std::time::Duration::from_millis(500)),
+        }
+    }
+
+    /// Where an opening give or trade window puts the cursor's item.
+    #[must_use]
+    pub const fn give_at_open(self) -> GiveAtOpen {
+        match self {
+            Self::Titanium => GiveAtOpen::FirstFree,
+            Self::EqMac => GiveAtOpen::StackFirst,
         }
     }
 

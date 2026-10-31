@@ -404,21 +404,40 @@ impl InventoryState {
 
     /// Hands the item on the cursor to the open give window: into its first
     /// empty slot, as the official client does when the window opens.
-    pub(crate) fn hand_over_cursor(&mut self, online: &OnlineState, sender: &Outbox) {
+    ///
+    /// Returns false when an item on the cursor found no slot to go to.
+    pub(crate) fn hand_over_cursor(
+        &mut self,
+        online: &OnlineState,
+        sender: &Outbox,
+        rule: eq_client_assets::ui::GiveAtOpen,
+    ) -> bool {
         let world = online.world();
         let slots = world
             .exchange()
             .map_or(0, eq_client_core::world::Exchange::trade_slots);
         let items = world.inventory().items();
-        if !items.contains_key(&InventorySlot::CURSOR) {
-            return;
-        }
-        let empty = (0..i32::from(slots))
-            .map(|index| InventorySlot(3000 + index))
-            .find(|slot| !items.contains_key(slot));
-        if let Some(slot) = empty {
+        let Some(held) = items.get(&InventorySlot::CURSOR) else {
+            return true;
+        };
+        let trade = || (0..i32::from(slots)).map(|index| InventorySlot(3000 + index));
+        // A stack of the same item with room left takes it first.
+        let stack = (rule == eq_client_assets::ui::GiveAtOpen::StackFirst
+            && held.stack_count.is_some())
+        .then(|| {
+            trade().find(|slot| {
+                items.get(slot).is_some_and(|other| {
+                    other.details.id == held.details.id
+                        && other.stack_count.unwrap_or(0) < other.rules.stack_size
+                })
+            })
+        })
+        .flatten();
+        let target = stack.or_else(|| trade().find(|slot| !items.contains_key(slot)));
+        if let Some(slot) = target {
             self.click_slot(slot, false, online, sender);
         }
+        target.is_some()
     }
 
     fn actor(&self, online: &OnlineState) -> anyhow::Result<InventoryActor> {
