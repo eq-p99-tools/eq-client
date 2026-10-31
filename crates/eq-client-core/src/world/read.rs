@@ -200,6 +200,14 @@ impl ClientWorld {
             .find(|spawn| spawn.state.pet_owner == Some(owner))
     }
 
+    /// The translocate offered and not yet answered, and when it came.
+    #[must_use]
+    pub fn translocate(
+        &self,
+    ) -> Option<(&crate::confirmations::TranslocateOffer, std::time::Instant)> {
+        self.translocate.as_ref().map(|(offer, at)| (offer, *at))
+    }
+
     /// The resurrection offered and not yet answered.
     #[must_use]
     pub fn resurrection(&self) -> Option<&crate::resurrection::ResurrectionOffer> {

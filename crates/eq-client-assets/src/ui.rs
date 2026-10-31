@@ -399,6 +399,24 @@ impl InstalledClient {
         }
     }
 
+    /// How this client asks the player about a translocate cast on them,
+    /// from the program; None until read for this client, whose offers then
+    /// go unanswered as before. The Mac-era client's is TAKP Batch 1 R8
+    /// (recording checklist item 6.253).
+    #[must_use]
+    pub const fn translocate_offer(self) -> Option<TranslocateQuestion> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(TranslocateQuestion {
+                named: 10017,
+                to_bind: 10016,
+                bind_spells: &[1334, 1422, 3243],
+                declined: Some(10018),
+                expires_ms: 3_600_000,
+            }),
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
@@ -425,6 +443,25 @@ pub struct AttackToggle {
     pub off: u32,
     /// The chat line type the on and off lines take their colour from.
     pub line_type: u32,
+}
+
+/// How an installed client asks the player about a translocate: in its
+/// confirmation dialog, answered No by itself when the offer waits too long
+/// or when that dialog already asks something else as the offer comes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TranslocateQuestion {
+    /// The question for most spells, with the caster's name and the long
+    /// name of the zone it takes the player to.
+    pub named: u32,
+    /// The question for the spells that send the player to their bind point.
+    pub to_bind: u32,
+    /// The spells, by id, asked about with [`TranslocateQuestion::to_bind`].
+    pub bind_spells: &'static [u32],
+    /// The line the client says after the player's No, if any.
+    pub declined: Option<u32>,
+    /// How long the offer waits for an answer before the client says No by
+    /// itself, in milliseconds (the program's clock unit is unsure, 6.253).
+    pub expires_ms: u64,
 }
 
 /// The picture an installed client covers the screen with while it loads a

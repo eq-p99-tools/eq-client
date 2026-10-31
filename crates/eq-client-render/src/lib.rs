@@ -96,6 +96,7 @@ mod tooltip;
 mod trade;
 mod tradeskills;
 mod training;
+mod translocate;
 mod whereabouts;
 mod who;
 mod window_size;
