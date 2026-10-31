@@ -15,7 +15,8 @@ pub struct Definition {
     /// Field 57: the cell in the skin's gem icons (`A_SpellGems`), which
     /// the gems show where the book and hot buttons show
     /// [`Definition::icon`] (from the emulators' field notes, `memicon`;
-    /// the program's gem drawing is unread).
+    /// the program's gem drawing is unread: inferred, recording checklist
+    /// item 6.287).
     pub gem_icon: Option<u32>,
     /// Field 19: the unmodified mana cost.
     pub mana: Option<u32>,

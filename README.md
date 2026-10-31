@@ -313,69 +313,33 @@ and received auction messages. The offline visual test rendered a moving human,
 wolf, and orc. Live NPC movement, a 200-entity performance load, combat, and zoning
 have not yet been verified.
 
-### P99 movement calibration
+### Movement speeds
 
-The viewer accepts `--online --movement-calibration /path/to/private-calibration.json`.
-The JSON object requires three fields:
+Movement needs no flag or file. The session works out the player's speeds from
+the client generation's own rule, as its program reads them, and grants
+movement once the host reports what the speeds depend on that only it sees.
+The host reports these on admission and whenever they change. Until a
+generation's rule is read, its player cannot move, and the debug overlay says
+"Movement paused".
 
-| Field | Meaning |
-| --- | --- |
-| `units_per_second` | Measured horizontal speed in EQ coordinate units per second. |
-| `velocity_scale` | Multiplier converting coordinate units per second to packet velocity units. |
-| `animation` | Moving animation value in the packet's signed 10-bit field; accepted values are 1 through 511. |
-
-An optional `backward` object accepts the same three fields, with a positive speed
-and velocity scale but an animation from -512 through -1. These must be measured
-separately for backward movement; forward calibration is never substituted.
-Existing files without `backward` still work, with backing up disabled.
-
-An optional `walk` object accepts the same three fields with a positive animation
-(1 through 511) and a speed no greater than the forward calibration. It must be
-measured separately. Insert toggles forward walking when this grant is available;
-the on-screen movement label shows Walk or Run. Backing up retains its independent
-calibration. Chat entry and unfocused input cannot toggle walking. Files without
-`walk` retain the existing forward mode. Mode switches do not grant extra time or
-distance; corrections and new admissions reset the toggle.
-
-An optional `strafe` object supplies separately measured speed, velocity scale and
-nonzero signed 10-bit animation for pure sideways motion in both directions.
-Left/Right Arrow strafe relative to the character while preserving facing; Q/E
-still turn. Without that grant, sideways input cannot borrow forward speed.
-Opposite sideways keys cancel. Forward/back arrows take priority over sideways
-arrows; diagonal strafing is not implemented until its packet behavior is verified.
-The walk toggle does not alter this independent sideways calibration.
-
-There are no built-in calibration values. Parsing validates numeric ranges, not
-whether the values match P99. Establish the official client's packet fields,
-effective walking rate, cadence, and behavior under roots/stuns, buffs, and
-encumbrance before a live walk. Spawn base speeds and NPC movement formulas do
-not establish the player's current rate; the offline demo speed is not used online.
-
-A supplied calibration enables the initial P99 admission. WASD uses
-camera-relative direction and terrain collision, with at most one pending proposal
-and a 100 ms displacement budget. After the worker accepts a position, the player
-model and camera interpolate toward it over 100 ms, independently of the movement
-simulation. This adds visual latency but avoids displaying each sample as a jump;
-it never extrapolates beyond the accepted position. Collision and outgoing movement
-use the simulation position, not the displayed position. Worker acceptance is not
-a server acknowledgment. Server corrections snap immediately and clear interpolation,
-as do death, disconnect, and transfer resets. This smoothing has offline test
-coverage; its live presentation remains unverified.
+WASD uses camera-relative direction and terrain collision, with at most one
+pending proposal and a 100 ms displacement budget. After the worker accepts a
+position, the player model and camera interpolate toward it over 100 ms,
+independently of the movement simulation. This adds visual latency but avoids
+displaying each sample as a jump; it never extrapolates beyond the accepted
+position. Collision and outgoing movement use the simulation position, not the
+displayed position. Worker acceptance is not a server acknowledgment. Server
+corrections snap immediately and clear interpolation, as do death, disconnect,
+and transfer resets.
 Expired input produces a zero-velocity stop, followed by stationary heartbeats.
 Up Arrow moves along the character's facing; Down Arrow backs up without turning
-the character, if backward calibration was supplied. Q/E can turn during either
-motion. Both modes use the same collision and input-expiry checks, with separate
-speed limits and wire animation/velocity values. These controls still require live
-validation; diagonal strafing and online airborne movement remain incomplete.
-Server corrections, death, and transfer offers clear calibration and queued input.
-A normal zone handoff can reapply that explicitly supplied calibration with a fresh
-destination session ID and timestamp. This requires an active source movement grant
-and unchanged advertised race, size, walk speed and run speed. Corrections, death,
-bind transfers, denied transfers and changed metadata prevent automatic resumption.
-Matching metadata is not proof that buffs, roots, encumbrance or effective speed
-are unchanged; those movement effects still need implementation and validation.
-The option is rejected for Quarm.
-Q/E turn a calibrated P99 character in place. Facing changes follow the shortest
+the character. Insert toggles walking. Left/Right Arrow strafe relative to the
+character while preserving facing, and only while neither forward nor back is
+held. Q/E can turn during any motion. Each mode has its own speed limit and wire
+animation and velocity values, from the session's grant. Server corrections,
+death, and transfer offers take the grant away; the session grants it again for
+the same admission, and for each new one.
+Q/E turn the character in place. Facing changes follow the shortest
 arc, capped at 240 heading units per second, and packets include the signed
 turn-rate field. This conversion is inferred from steady stationary turns in the
 official-client capture and still needs live verification. Turn expiry sends a
@@ -952,7 +916,7 @@ window is focused (except offline, or on a local `EQEmu` or TAKP server), stop i
 and the whole run, inject clicks only while the real pointer is outside the
 window, never send chat, and save screenshots beside the script file.
 
-The P99 lifecycle decodes own-character death, pauses old-zone actions, acknowledges server-directed zoning/bind offers, and returns through world with the zoning flag before admitting the destination session. The new admission supplies the zone, position and character resources; Freeport is not hard-coded. Packet-layout and presentation tests cover these paths, but live death/respawn, calibrated movement, and client-generated boundary transfers remain unverified. Movement bounds are optional; timing, stale-session and speed validation remain required.
+The P99 lifecycle decodes own-character death, pauses old-zone actions, acknowledges server-directed zoning/bind offers, and returns through world with the zoning flag before admitting the destination session. The new admission supplies the zone, position and character resources; Freeport is not hard-coded. Packet-layout and presentation tests cover these paths, but live death/respawn, granted movement, and client-generated boundary transfers remain unverified. Movement bounds are optional; timing, stale-session and speed validation remain required.
 
 Zone-line detection uses the installed WLD's BSP regions. Numbered boundaries resolve
 through the current server-provided destination table; older absolute boundaries
@@ -974,7 +938,7 @@ This is not live validation of the new client. Non-bind server relocation offers
 to the current zone and instance now update position without requesting a world
 handoff, following EQEmu's `ZonePC` behavior. Bind/respawn offers retain the transfer
 path. Relocations and zone-cancel rewinds update the movement controller, stored
-player position and fallback heartbeat together; motion calibration is revoked.
+player position and fallback heartbeat together; the movement grant is taken away until the session grants it again.
 Client-initiated same-zone teleporter detection and live validation remain pending.
 Door spawn definitions and move
 notifications now decode into typed zone-local state, including actions received
@@ -1017,8 +981,7 @@ be used, and one that opens for a click is closed again. Pickups work live on a
 local `EQEmu` server; every ground object in the P99 recordings decodes, but
 picking up on P99 has not been tried.
 Destination admission starts
-stationary until a fresh calibration grant; normal handoffs can carry the supplied
-calibration under the continuity checks described above.
+stationary until the session grants movement there.
 
 ## Inventory
 
