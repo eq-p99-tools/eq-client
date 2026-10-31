@@ -1368,7 +1368,7 @@ fn caption(
         Does::Ability(place) => {
             inner.spawn((super::abilities::AbilityLabel(place), words("")));
         }
-        Does::HotButton(index) => hotbar::contents(inner, index),
+        Does::HotButton(index) => hotbar::contents(inner, index, Some(decal_place(button))),
         Does::PetBuff(slot) => {
             let (place, size) = buff_icon_place(button, area);
             inner.spawn(super::spell_icons::artwork_at(
@@ -2496,6 +2496,79 @@ mod tests {
         drawn.sort();
         wanted.sort();
         assert_eq!(drawn, wanted);
+    }
+
+    #[test]
+    fn a_hot_buttons_pictures_fill_where_the_skin_puts_its_decal() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element};
+        // As the stock skins' HB_Button1: 40 by 40, its decal the same.
+        let whole = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        let screen = Screen {
+            name: "HotButtonWnd".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: whole,
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![(
+                "slot".into(),
+                Element::Button(Button {
+                    id: Some("HB_Button1".into()),
+                    area: whole,
+                    placed: true,
+                    anchors: None,
+                    look: ButtonLook::default(),
+                    checkbox: false,
+                    text: None,
+                    text_color: None,
+                    font: None,
+                    decal: None,
+                    decal_area: Some(whole),
+                    tooltip: None,
+                }),
+            )],
+            tab_frame: None,
+            transparent: false,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id: WindowId::Actions,
+                        paperdoll: None,
+                        depth: 0,
+                        tab_frame: None,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            );
+        app.update();
+        // The spell's icon and the item's picture, each the decal's size at
+        // its place.
+        let mut pictures = app
+            .world_mut()
+            .query_filtered::<&Node, (With<ImageNode>, With<bevy::ui::FocusPolicy>)>();
+        let placed: Vec<_> = pictures
+            .iter(app.world())
+            .filter(|node| node.position_type == PositionType::Absolute)
+            .map(|node| (node.left, node.top, node.width, node.height))
+            .collect();
+        assert_eq!(placed, [(px(0), px(0), px(40), px(40)); 2]);
     }
 
     #[test]
