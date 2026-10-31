@@ -46,10 +46,10 @@ pub(super) fn input(
     ),
 ) {
     use super::keys::Act;
-    let Some(player) = online.world().player() else {
+    let world = online.world();
+    let Some(player) = world.player() else {
         return;
     };
-    let world = online.world();
     let attack = |enabled| {
         move |stamp: crate::outbox::Stamp| ClientCommand::AutoAttack {
             session_id: stamp.session_id,
@@ -62,7 +62,7 @@ pub(super) fn input(
         .target()
         .selected
         .filter(|id| *id != player.spawn_id)
-        .and_then(|id| online.world().spawn(id).map(|spawn| (id, &spawn.state)));
+        .and_then(|id| world.spawn(id).map(|spawn| (id, &spawn.state)));
     let attackable = spawn.filter(|(_, spawn)| spawn.kind == SpawnKind::Npc && !spawn.invisible);
     let toggle = settings.0.installed_client.attack_toggle();
     let posture = world
@@ -74,19 +74,18 @@ pub(super) fn input(
         Some(_) => posture.is_some(),
         None => attackable.map(|(id, _)| id) != combat.attack_target,
     };
-    if combat.auto_attack
-        && (!online.world().connected() || online.world().death().is_some() || stopped)
-    {
+    let live = world.connected() && world.death().is_none();
+    if combat.auto_attack && (!live || stopped) {
         combat.auto_attack = false;
         combat.attack_target = None;
-        if online.world().connected() && outbox.post(world, attack(false)).is_ok() {
+        if world.connected() && outbox.post(world, attack(false)).is_ok() {
             chat.history.push(match toggle {
                 Some(toggle) => toggle_line(toggle, false, &messages),
                 None => super::chat::system_line(messages.said(1466, &[])),
             });
         }
     }
-    if !online.world().connected() || online.world().death().is_some() || !keys.focused() {
+    if !live || !keys.focused() {
         return;
     }
     let mut feedback = |said: super::chat::Said| chat.refuse(said);
@@ -118,12 +117,7 @@ pub(super) fn input(
         let enable = !combat.auto_attack;
         // Not standing, the key only turns auto attack off.
         if enable && let Some(posture) = posture {
-            let refusal = if posture == PostureState::Frozen {
-                toggle.frozen
-            } else {
-                toggle.not_standing
-            };
-            feedback(messages.said(refusal, &[]));
+            feedback(messages.said(refusal(toggle, posture), &[]));
             return;
         }
         if outbox.post(world, attack(enable)).is_err() {
@@ -150,6 +144,16 @@ pub(super) fn input(
         } else {
             messages.said(1466, &[])
         });
+    }
+}
+
+/// The installed client's refusal to turn auto attack on for a player in
+/// this posture, which is not standing.
+const fn refusal(toggle: eq_client_assets::ui::AttackToggle, posture: PostureState) -> u32 {
+    if matches!(posture, PostureState::Frozen) {
+        toggle.frozen
+    } else {
+        toggle.not_standing
     }
 }
 
