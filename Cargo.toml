@@ -50,6 +50,7 @@ rerecast = { version = "=0.4.0", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "dds", "ico", "jpeg", "png", "tga"] }
 libeq = { git = "https://github.com/eq-p99-tools/libeq", rev = "e0e5a4e65c170272035a8beb65bda048f7a60a01" }
 roxmltree = "0.21.1"
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 rodio = { version = "0.22", default-features = false, features = ["hound"] }
 thiserror = "2"
 tracing = "0.1"

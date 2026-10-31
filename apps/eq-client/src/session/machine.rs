@@ -1,186 +1,245 @@
-//! What this machine says about itself, for the weekly account a Titanium
-//! world is owed when a player enters it on this machine.
+//! This machine's weekly account for a Titanium world that is owed one
+//! (eq-network's `sysinfo`), as the official client gives it on Windows.
 //!
-//! The official client asks its graphics engine and its Windows calls for
-//! every word of that account. This client asks the system it runs on for
-//! the same facts — the account is the player's own machine either way, and
-//! a world stores what it is told. Where the system will not say something,
-//! the field keeps the zero or the empty that a failed official read leaves
-//! behind in the record; nothing here is invented. The reads name Linux
-//! paths (`/proc`, `/sys`): on a host without them the account reports an
-//! unreadable machine, and the report still goes out with what it has.
+//! The session asks for it from its own thread, only when a report is due:
+//! the processor and memory are read then, and the display and adapter come
+//! from the snapshot the window keeps ([`DisplaySnapshot`]), so nothing here
+//! calls the windowing or graphics libraries. The record is meant to look
+//! like a standard Windows client's on every platform (Adam, 2026-10-31):
+//! fields that describe the official program rather than the machine are
+//! sent as the official client sent them, each labelled below, and the
+//! fields Linux cannot give the Windows way are marked TODO.
+use eq_client_assets::ui::InstalledClient;
+use eq_client_core::{
+    Machine, SysInfo,
+    machine::{Display, DisplaySnapshot},
+};
+use std::path::PathBuf;
 
-use eq_client_core::SysInfo;
+#[cfg(windows)]
+mod platform {
+    //! Windows: the monitor as Windows names it to this process.
 
-/// The account for a world entered now, the last one having gone out at
-/// `reported_at` — whole seconds since the epoch, 0 for none ever, as the
-/// installed client's own `LastSysInfoDate` says.
-#[must_use]
-pub fn account(reported_at: u64) -> SysInfo {
-    let (physical_mb, virtual_mb) = memory_totals(&read("/proc/meminfo"));
-    let (width, height, refresh) = display_mode();
-    SysInfo {
-        cpu: cpu_brand(&read("/proc/cpuinfo")),
-        gpu: adapter_name(),
-        physical_mb,
-        virtual_mb,
-        // Every machine the report was watched from said 32; nothing on a
-        // Linux host here contradicts it, and no cheaper read says
-        // otherwise. Inferred.
-        color_depth: 32,
-        desktop_width: width,
-        desktop_height: height,
-        // The game is drawn on the desktop's mode until this client can
-        // ask a window of its own what size it got. Inferred.
-        screen_width: width,
-        screen_height: height,
-        refresh_hz: refresh,
-        reported_at,
+    /// The monitor's device name as Windows names it (`\\.\DISPLAY1`),
+    /// which winit reports as the monitor's name.
+    pub(super) fn device_name(display: &super::Display) -> String {
+        display
+            .monitor_name
+            .clone()
+            .unwrap_or_else(|| super::display_name(display.monitor))
     }
 }
 
-/// A system file, or nothing at all when the host has none to give.
-fn read<P: AsRef<std::path::Path>>(path: P) -> String {
-    std::fs::read_to_string(path).unwrap_or_default()
+#[cfg(not(windows))]
+mod platform {
+    //! Other systems, which name monitors their own way: the name Windows
+    //! would give, built.
+
+    /// The monitor's device name, built the way Windows names it
+    /// (`\\.\DISPLAY<n>`, n counting monitors from 1, left to right), since
+    /// this system names monitors differently (a Windows look by Adam's
+    /// choice, 2026-10-31). TODO: make it match what a standard Windows
+    /// client sends on the same layout; Windows numbers its displays in its
+    /// own order, which need not be left to right.
+    pub(super) fn device_name(display: &super::Display) -> String {
+        super::display_name(display.monitor)
+    }
 }
 
-/// The processor's brand, from `/proc/cpuinfo`'s first `model name` line;
-/// empty when the host has no such line.
-fn cpu_brand(cpuinfo: &str) -> String {
-    cpuinfo
-        .lines()
-        .filter_map(|line| line.trim().split_once(':'))
-        .find(|(field, _)| field.trim().eq_ignore_ascii_case("model name"))
-        .map_or_else(String::new, |(_, brand)| brand.trim().to_owned())
+/// The official 32-bit client's Direct3D 9 figure for available texture
+/// memory, as it sent it on 2026-10-31 (`0x3f60_0000`, about 1 GB, well
+/// under the card's own). It describes that program's Direct3D 9 process,
+/// not the machine, and this client cannot measure it: a constant on every
+/// platform (recording checklist item 6.292).
+const TEXTURE_MEMORY: u32 = 0x3f60_0000;
+
+/// The three format checks (A4R4G4B4, DXT1, DXT3), the official engine's
+/// Direct3D 9 capability answers, which every adapter of the last twenty
+/// years gives; not a fact this client measures (6.293).
+const FORMATS: [u8; 3] = [1, 1, 1];
+
+/// The colour depth, 32 in every record watched (both captures).
+const COLOR_DEPTH: u32 = 32;
+
+/// The memory the official client reports at most: it sent 1,024 MB
+/// physical and 2,048 MB virtual on a machine with many times that, so the record is
+/// capped, and the real totals would stand out (one capture; the cap is
+/// inferred, recording checklist item 6.291).
+const MEMORY_CAP_MB: (u32, u32) = (1024, 2048);
+
+/// The host's machine, for the session's weekly report.
+#[derive(Debug)]
+pub struct HostMachine {
+    /// The installed client, whose own files hold the official stamp.
+    client: InstalledClient,
+    install: PathBuf,
+    /// This client's settings directory, where its own stamp is kept.
+    settings: Option<PathBuf>,
+    display: DisplaySnapshot,
 }
 
-/// The memory totals the official record carries: `dwTotalPhys`, and the
-/// commit it adds to it. `/proc/meminfo` keeps both in kilobytes; the
-/// record rounds each up to whole megabytes, as the official program does.
-fn memory_totals(meminfo: &str) -> (u32, u32) {
-    let kilobytes = |name: &str| {
-        meminfo
-            .lines()
-            .filter_map(|line| line.split_once(':'))
-            .find(|(field, _)| field.trim().eq_ignore_ascii_case(name))
-            .and_then(|(_, value)| value.split_whitespace().next()?.parse::<u64>().ok())
+impl HostMachine {
+    /// The machine for a session of `client`'s generation on `install`,
+    /// keeping its stamp in `settings`, with the window's `display`.
+    pub const fn new(
+        client: InstalledClient,
+        install: PathBuf,
+        settings: Option<PathBuf>,
+        display: DisplaySnapshot,
+    ) -> Self {
+        Self {
+            client,
+            install,
+            settings,
+            display,
+        }
+    }
+}
+
+impl Machine for HostMachine {
+    /// This client's own stamp where it has one, else the installed
+    /// client's (`eqclient.ini`, then `defaults.ini`), else none.
+    fn last_reported(&self) -> u64 {
+        self.settings
+            .as_deref()
+            .and_then(eq_client_assets::ui::own_last_sysinfo_date)
+            .or_else(|| self.client.settings(&self.install).last_sysinfo_date())
             .unwrap_or(0)
-    };
-    let physical = kilobytes("MemTotal");
-    let commit = physical.saturating_add(kilobytes("SwapTotal"));
-    (ceil_megabytes(physical), ceil_megabytes(commit))
+    }
+
+    fn measure(&self) -> SysInfo {
+        let (cpu, total_mb) = processor_and_memory();
+        account(&cpu, total_mb, &self.display.get(), platform::device_name)
+    }
 }
 
-/// Kilobytes rounded up to whole megabytes, the official record's rounding,
-/// held inside the 32 bits the record gives it.
+/// The record for a machine with this processor brand, total memory and
+/// display, naming its monitor with `device`.
+fn account(
+    cpu: &str,
+    total_mb: u32,
+    display: &Display,
+    device: impl Fn(&Display) -> String,
+) -> SysInfo {
+    let (desktop_width, desktop_height, refresh_hz) = display.desktop;
+    let (screen_width, screen_height) = display.screen;
+    SysInfo {
+        cpu: cpu.to_owned(),
+        physical_mb: total_mb.min(MEMORY_CAP_MB.0),
+        virtual_mb: total_mb.min(MEMORY_CAP_MB.1),
+        color_depth: COLOR_DEPTH,
+        desktop_width,
+        desktop_height,
+        screen_width,
+        screen_height,
+        refresh_hz,
+        texture_memory: TEXTURE_MEMORY,
+        formats: FORMATS,
+        // The renderer's adapter name, cut to its field by the record. On
+        // Windows it is the driver's own string, as the official client's;
+        // TODO: other systems' drivers may word the same card differently
+        // (Mesa adds its own details), which a standard Windows client
+        // would not send.
+        adapter: display.adapter.clone(),
+        device: device(display),
+    }
+}
+
+/// `\\.\DISPLAY<n>` for the monitor at `index`, counting from 1.
+fn display_name(index: usize) -> String {
+    format!(r"\\.\DISPLAY{}", index.saturating_add(1))
+}
+
+/// The processor's brand and the total physical memory in megabytes,
+/// rounded up, as the system reports them (on Windows, `cpuid`'s brand and
+/// `GlobalMemoryStatusEx`'s total, the official client's own sources); an
+/// empty brand and none where the system will not say.
+fn processor_and_memory() -> (String, u32) {
+    let Ok(mut system) = sysinfo::System::new() else {
+        return (String::new(), 0);
+    };
+    system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
+    system.refresh_cpu_list(sysinfo::CpuRefreshKind::nothing());
+    let brand = system
+        .cpus()
+        .first()
+        .map(|cpu| cpu.brand().trim().to_owned())
+        .unwrap_or_default();
+    (brand, ceil_megabytes(system.total_memory() / 1024))
+}
+
+/// Kilobytes rounded up to whole megabytes, held inside 32 bits.
 fn ceil_megabytes(kilobytes: u64) -> u32 {
     let megabytes = kilobytes.saturating_add(1023) / 1024;
     u32::try_from(megabytes).unwrap_or(u32::MAX)
-}
-
-/// The desktop's current mode: its width and height, and its refresh when
-/// the mode names one. `/sys/class/drm/<connector>/modes` lists a
-/// connector's modes with the one it shows now first; the first connector
-/// that answers wins, as the one screen the player looks at. Zeros, as a
-/// failed official read leaves them, when no connector will say.
-fn display_mode() -> (u32, u32, u32) {
-    for entry in drm_entries() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        // Connector folders are `card<N>-<connector>`; the bare cards name
-        // no screen.
-        if !name.starts_with("card") || !name.contains('-') {
-            continue;
-        }
-        for line in read(entry.path().join("modes")).lines() {
-            if let Some(mode) = parse_mode(line) {
-                return mode;
-            }
-        }
-    }
-    (0, 0, 0)
-}
-
-/// One mode line, `WIDTHxHEIGHT` or `WIDTHxHEIGHT@hertz` (the hertz may be
-/// fractional; the record keeps whole ones); None when the line is neither.
-fn parse_mode(line: &str) -> Option<(u32, u32, u32)> {
-    let line = line.trim();
-    let (size, rate) = line.split_once('@').unwrap_or((line, ""));
-    let (width, height) = size.split_once('x')?;
-    let refresh = rate
-        .split('.')
-        .next()
-        .and_then(|whole| whole.parse().ok())
-        .unwrap_or(0);
-    Some((width.parse().ok()?, height.parse().ok()?, refresh))
-}
-
-/// The display adapter's own name, where the firmware bothers to label it:
-/// `PCI_LABEL` in a card's `device/uevent`. Empty when no card will say —
-/// the official client's engine would have had nothing to report either,
-/// and an empty name is the record's own answer.
-fn adapter_name() -> String {
-    for entry in drm_entries() {
-        if !entry.file_name().to_string_lossy().starts_with("card") {
-            continue;
-        }
-        let uevent = read(entry.path().join("device/uevent"));
-        for line in uevent.lines() {
-            if let Some(label) = line.trim().strip_prefix("PCI_LABEL=") {
-                let label = label.trim();
-                if !label.is_empty() {
-                    return label.to_owned();
-                }
-            }
-        }
-    }
-    String::new()
-}
-
-/// The entries of `/sys/class/drm`, or none when the host has no such
-/// place.
-fn drm_entries() -> impl Iterator<Item = std::fs::DirEntry> {
-    std::fs::read_dir("/sys/class/drm")
-        .into_iter()
-        .flatten()
-        .filter_map(std::result::Result::ok)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_processor_line_names_the_processor_and_nothing_else_does() {
-        assert_eq!(
-            cpu_brand(
-                "processor\t: 0\nmodel name\t: Test Processor 9000\nvendor_id\t: TestMaker\n"
-            ),
-            "Test Processor 9000"
-        );
-        // A host that says nothing about its processor gets an empty
-        // brand, as a failed official read leaves one.
-        assert_eq!(cpu_brand("vendor_id\t: TestMaker\n"), "");
-        assert_eq!(cpu_brand(""), "");
+    fn display() -> Display {
+        Display {
+            desktop: (1920, 1080, 60),
+            screen: (1280, 720),
+            monitor: 1,
+            monitor_name: None,
+            adapter: "Test Adapter".into(),
+        }
     }
 
     #[test]
-    fn memory_is_told_in_whole_megabytes_rounded_up() {
-        // Exact multiples say exactly themselves; one kilobyte over a
-        // multiple is rounded up, and the commit carries the swap with it.
-        assert_eq!(
-            memory_totals("MemTotal: 2097153 kB\nSwapTotal: 1048576 kB\n"),
-            (2049, 3073)
-        );
-        assert_eq!(memory_totals("MemTotal: 1048576 kB\n"), (1024, 1024));
-        assert_eq!(memory_totals(""), (0, 0));
+    fn the_record_looks_like_a_windows_clients_with_this_machines_measures() {
+        let record = account("Test CPU", 65_536, &display(), |display| {
+            display_name(display.monitor)
+        });
+        assert_eq!(record.cpu, "Test CPU");
+        // Memory is capped as the official record caps it.
+        assert_eq!((record.physical_mb, record.virtual_mb), (1024, 2048));
+        assert_eq!(record.color_depth, 32);
+        assert_eq!((record.desktop_width, record.desktop_height), (1920, 1080));
+        assert_eq!((record.screen_width, record.screen_height), (1280, 720));
+        assert_eq!(record.refresh_hz, 60);
+        assert_eq!(record.texture_memory, 0x3f60_0000);
+        assert_eq!(record.formats, [1, 1, 1]);
+        assert_eq!(record.adapter, "Test Adapter");
+        assert_eq!(record.device, r"\\.\DISPLAY2");
+        // A small machine reports its own totals, under the caps.
+        let small = account("", 1500, &display(), |_| String::new());
+        assert_eq!((small.physical_mb, small.virtual_mb), (1024, 1500));
     }
 
     #[test]
-    fn a_mode_gives_its_size_and_whole_hertz_when_it_names_them() {
-        assert_eq!(parse_mode("2560x1600"), Some((2560, 1600, 0)));
-        assert_eq!(parse_mode("1920x1080@60"), Some((1920, 1080, 60)));
-        assert_eq!(parse_mode("800x600@59.95"), Some((800, 600, 59)));
-        assert_eq!(parse_mode("preferred"), None);
-        assert_eq!(parse_mode("x"), None);
+    fn memory_is_whole_megabytes_rounded_up() {
+        assert_eq!(ceil_megabytes(2_097_153), 2049);
+        assert_eq!(ceil_megabytes(1_048_576), 1024);
+        assert_eq!(ceil_megabytes(0), 0);
+        assert_eq!(ceil_megabytes(u64::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn our_own_stamp_wins_over_the_installed_clients() {
+        let root = std::env::temp_dir().join(format!("eq-machine-{}", std::process::id()));
+        let (install, ours) = (root.join("install"), root.join("settings"));
+        std::fs::create_dir_all(&install).expect("install");
+        let machine = |settings: Option<PathBuf>| {
+            HostMachine::new(
+                InstalledClient::Titanium,
+                install.clone(),
+                settings,
+                DisplaySnapshot::default(),
+            )
+        };
+        assert_eq!(machine(Some(ours.clone())).last_reported(), 0);
+        std::fs::write(
+            install.join("eqclient.ini"),
+            "[Defaults]\nLastSysInfoDate=5\n",
+        )
+        .expect("ini");
+        assert_eq!(machine(Some(ours.clone())).last_reported(), 5);
+        eq_client_assets::ui::keep_last_sysinfo_date(&ours, 9).expect("ours");
+        assert_eq!(machine(Some(ours)).last_reported(), 9);
+        assert_eq!(machine(None).last_reported(), 5);
+        std::fs::remove_dir_all(&root).expect("cleaned");
     }
 }

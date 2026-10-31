@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSource};
 use eq_client_assets::{ZoneAsset, ui::InstalledClient};
-use eq_client_core::WorldPosition;
+use eq_client_core::{WorldPosition, machine::DisplaySnapshot};
 use eq_client_render::{
     Preview, ProjectionStyle, Source, ValidationAction, ViewerConfig, script::Step,
 };
@@ -478,6 +478,9 @@ fn main() {
         character_select: arguments.demo_character_select,
         trade: arguments.demo_trade,
     };
+    // The window's display, kept by the viewer for the session's weekly
+    // machine report, which is made off the window's thread.
+    let display = DisplaySnapshot::default();
     let source = match start {
         None => Source::Offline(preview),
         Some(start) => online_source(
@@ -488,7 +491,12 @@ fn main() {
                 client: client.unwrap_or_default(),
             },
             settings_directory.clone(),
-            session_options(&arguments, &eq_directory, local),
+            session_options(
+                &arguments,
+                (&eq_directory, settings_directory.as_deref()),
+                local,
+                display.clone(),
+            ),
         ),
     };
     println!("Controls: WASD moves; right-drag orbits; the wheel zooms.");
@@ -497,7 +505,7 @@ fn main() {
         client,
         (eq_directory, settings_directory),
         (script, script_follow),
-        local,
+        (local, display),
     );
     let exit = eq_client_render::run(zone, character, config, source);
     tracing::info!("The client ends with status {exit}");
@@ -528,14 +536,19 @@ fn online_source(
     }
 }
 
-/// What every session of the run shares, whichever preset it logs in on.
+/// What every session of the run shares, whichever preset it logs in on:
+/// among it, the installation and this client's settings directory, and the
+/// window's `display` as the machine's weekly report gives it.
 fn session_options(
     arguments: &Arguments,
-    install: &std::path::Path,
+    (install, settings): (&Path, Option<&Path>),
     local_only: bool,
+    display: DisplaySnapshot,
 ) -> session::SessionOptions {
     session::SessionOptions {
         install: install.to_path_buf(),
+        settings: settings.map(Path::to_path_buf),
+        display,
         seconds: arguments.session_seconds,
         local_only,
         auto_eat: if arguments.auto_eat_anything {
@@ -618,7 +631,7 @@ fn viewer_config(
     client: Option<InstalledClient>,
     (eq_directory, settings_directory): (PathBuf, Option<PathBuf>),
     (script, script_follow): ScriptInput,
-    local: bool,
+    (local, display): (bool, DisplaySnapshot),
 ) -> ViewerConfig {
     ViewerConfig {
         estimate_titanium_resources: client == Some(InstalledClient::Titanium),
@@ -674,6 +687,7 @@ fn viewer_config(
         window_size: arguments.window_size,
         debug_overlay: arguments.debug_overlay,
         navmesh: arguments.navmesh,
+        display,
     }
 }
 

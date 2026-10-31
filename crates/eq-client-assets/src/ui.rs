@@ -529,27 +529,14 @@ impl LoadingScreen {
 /// default, so a client generation's files stay unread until a reader for
 /// them has been checked against that client.
 pub trait OfficialSettings {
-    /// The account the world last heard of the machine it was entered
-    /// on, in whole seconds since the epoch: `LastSysInfoDate` in
-    /// `[Defaults]` of `eqclient.ini`, which the official program keeps
-    /// so its weekly report waits out its week between runs. None when
-    /// the installed client has never made one.
+    /// The time the official program last told a world about the machine
+    /// it was entered on, in whole seconds since the epoch: its
+    /// `LastSysInfoDate` in `[Defaults]`, which it keeps so its weekly
+    /// report waits out its week between runs. None when the installed
+    /// client has never made one. This client never writes it there; see
+    /// [`own_last_sysinfo_date`].
     fn last_sysinfo_date(&self) -> Option<u64> {
         None
-    }
-
-    /// Tells the installation, as the official program tells itself, that
-    /// the world just heard of the machine: writes `LastSysInfoDate` in
-    /// `[Defaults]` of `eqclient.ini` and leaves every other line be.
-    /// The one setting this client writes back; an unreadable or missing
-    /// file is taken as empty, since that is what a first report finds.
-    ///
-    /// # Errors
-    /// Returns the file's error when the settings file exists but cannot
-    /// be read or written.
-    fn set_last_sysinfo_date(&self, at: u64) -> std::io::Result<()> {
-        let _ = at;
-        Ok(())
     }
 
     /// The options in `eqclient.ini`.
@@ -624,42 +611,14 @@ impl OfficialSettings for Titanium<'_> {
             .unwrap_or_default()
     }
 
-    /// `LastSysInfoDate` in `[Defaults]` of `eqclient.ini`: the second the
-    /// official program last told a world about the machine it was
-    /// entered on. None when the file, the section, the key or a sane
-    /// number is missing.
+    /// `LastSysInfoDate` in `[Defaults]` of `eqclient.ini`, else of
+    /// `defaults.ini`: the second the official program last told a world
+    /// about the machine it was entered on. None when the files, the
+    /// section, the key or a sane number are missing.
     fn last_sysinfo_date(&self) -> Option<u64> {
-        std::fs::read(self.0.join("eqclient.ini"))
-            .ok()
-            .and_then(|bytes| {
-                ini_value(
-                    &String::from_utf8_lossy(&bytes),
-                    "Defaults",
-                    "LastSysInfoDate",
-                )
-            })
-            .and_then(|date| date.trim().parse().ok())
-    }
-
-    /// Writes the same key the official program writes when its report
-    /// leaves, so the week's wait survives this client's own runs. A
-    /// missing file reads as empty, which is what a first report finds on
-    /// an install the official client has never reported from.
-    ///
-    /// # Errors
-    /// Returns the file's error when the ini exists but cannot be read or
-    /// written.
-    fn set_last_sysinfo_date(&self, at: u64) -> std::io::Result<()> {
-        let file = self.0.join("eqclient.ini");
-        let text = match std::fs::read(&file) {
-            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(error) => return Err(error),
-        };
-        std::fs::write(
-            &file,
-            set_ini_value(&text, "Defaults", "LastSysInfoDate", &at.to_string()),
-        )
+        ["eqclient.ini", "defaults.ini"]
+            .into_iter()
+            .find_map(|file| sysinfo_date(&self.0.join(file)))
     }
 
     /// `UISkin` in the `[Main]` section of `UI_<character>_<world>.ini`, where
@@ -1208,6 +1167,50 @@ fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
     None
 }
 
+/// `LastSysInfoDate` in `[Defaults]` of the ini file at `path`.
+fn sysinfo_date(path: &Path) -> Option<u64> {
+    let bytes = std::fs::read(path).ok()?;
+    ini_value(
+        &String::from_utf8_lossy(&bytes),
+        "Defaults",
+        "LastSysInfoDate",
+    )?
+    .trim()
+    .parse()
+    .ok()
+}
+
+/// The time this client last told a world about the machine, kept in its
+/// own settings directory as the official program keeps its own: in an
+/// `eqclient.ini` there, `[Defaults] LastSysInfoDate`. The installed
+/// client's files are never written; this copy wins over them on the next
+/// read.
+#[must_use]
+pub fn own_last_sysinfo_date(settings_directory: &Path) -> Option<u64> {
+    sysinfo_date(&settings_directory.join("eqclient.ini"))
+}
+
+/// Keeps `at` as the time this client last told a world about the machine,
+/// in its own settings directory's `eqclient.ini`, changing no other line
+/// there. A missing file is made.
+///
+/// # Errors
+/// Returns the file's error when it exists but cannot be read, or cannot
+/// be written.
+pub fn keep_last_sysinfo_date(settings_directory: &Path, at: u64) -> std::io::Result<()> {
+    let file = settings_directory.join("eqclient.ini");
+    let text = match std::fs::read(&file) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    std::fs::create_dir_all(settings_directory)?;
+    std::fs::write(
+        &file,
+        set_ini_value(&text, "Defaults", "LastSysInfoDate", &at.to_string()),
+    )
+}
+
 /// Returns `text` with `section`'s `key` set to `value`, changing nothing
 /// else: a key already in the section keeps its place, a new one joins the
 /// section's end, and a missing section is added at the file's end. Section
@@ -1356,36 +1359,41 @@ Log=maybe
     }
 
     #[test]
-    fn the_installed_ini_keeps_the_date_of_the_last_machine_account() {
-        let install = std::env::temp_dir().join(format!("eq-ui-sysinfo-{}", std::process::id()));
+    fn the_machine_report_date_is_read_from_the_install_and_kept_in_our_own_folder() {
+        let root = std::env::temp_dir().join(format!("eq-ui-sysinfo-{}", std::process::id()));
+        let (install, ours) = (root.join("install"), root.join("settings"));
         std::fs::create_dir_all(&install).expect("temporary install");
         let settings = InstalledClient::Titanium.settings(&install);
-        let ini = install.join("eqclient.ini");
-        // An install whose ini has no such key has never told of a machine.
-        std::fs::write(&ini, "[Defaults]\nLog=TRUE\n").expect("ini");
+        // An install that never reported says nothing; defaults.ini answers
+        // where eqclient.ini has no such key, and eqclient.ini wins.
+        std::fs::write(install.join("eqclient.ini"), "[Defaults]\nLog=TRUE\n").expect("ini");
         assert_eq!(settings.last_sysinfo_date(), None);
-        // The report's date is kept where the official program keeps it,
-        // and the lines around it stay as they were.
-        settings
-            .set_last_sysinfo_date(1_700_000_000)
-            .expect("stamp");
-        assert_eq!(settings.last_sysinfo_date(), Some(1_700_000_000));
-        let text = std::fs::read_to_string(&ini).expect("ini");
-        assert!(text.contains("Log=TRUE"), "{text}");
-        // The next report's date replaces the first, not doubles it.
-        settings
-            .set_last_sysinfo_date(1_700_000_604)
-            .expect("stamp");
-        assert_eq!(settings.last_sysinfo_date(), Some(1_700_000_604));
-        let text = std::fs::read_to_string(&ini).expect("ini");
+        std::fs::write(
+            install.join("defaults.ini"),
+            "[Defaults]\nLastSysInfoDate=7\n",
+        )
+        .expect("defaults");
+        assert_eq!(settings.last_sysinfo_date(), Some(7));
+        std::fs::write(
+            install.join("eqclient.ini"),
+            "[Defaults]\nLog=TRUE\nLastSysInfoDate=9\n",
+        )
+        .expect("ini");
+        assert_eq!(settings.last_sysinfo_date(), Some(9));
+        // Ours is kept in our own folder, made where missing, and replaced
+        // in place; the installed files are left exactly as they were.
+        let official = std::fs::read(install.join("eqclient.ini")).expect("ini");
+        assert_eq!(own_last_sysinfo_date(&ours), None);
+        keep_last_sysinfo_date(&ours, 1_700_000_000).expect("stamp");
+        keep_last_sysinfo_date(&ours, 1_700_000_604).expect("stamp");
+        assert_eq!(own_last_sysinfo_date(&ours), Some(1_700_000_604));
+        let text = std::fs::read_to_string(ours.join("eqclient.ini")).expect("ours");
         assert_eq!(text.matches("LastSysInfoDate").count(), 1);
-        // A first report on an install with no ini at all finds it empty,
-        // as the official program does, and makes it.
-        std::fs::remove_file(&ini).expect("ini gone");
-        assert_eq!(settings.last_sysinfo_date(), None);
-        settings.set_last_sysinfo_date(5).expect("ini made");
-        assert_eq!(settings.last_sysinfo_date(), Some(5));
-        std::fs::remove_dir_all(&install).expect("cleaned");
+        assert_eq!(
+            std::fs::read(install.join("eqclient.ini")).expect("ini"),
+            official
+        );
+        std::fs::remove_dir_all(&root).expect("cleaned");
     }
 
     #[test]

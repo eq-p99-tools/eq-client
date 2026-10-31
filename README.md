@@ -247,12 +247,16 @@ worker. `--session-seconds 150` bounds a test; `--screenshot frame.png
 Allow the usual server logout timeout before another client uses the character.
 
 A world of a server type that has been watched taking them — P99 today —
-hears this machine's weekly account a few seconds after the player enters
-it on it: the processor, display adapter, memory and screen sizes as this
-machine reports itself, the same record the official client takes from its
-own system calls. The date of the last account is kept with the installed
-client, as `LastSysInfoDate` in its `eqclient.ini`, so the week's wait
-survives restarts; the next report is due a week less a second after it.
+hears this machine's weekly account just before the player enters it: the
+processor, display adapter, memory (capped as the official client caps it)
+and screen sizes, in the record a standard Windows client sends. On other
+systems the record still looks like a Windows client's; the fields those
+systems name differently are marked TODO in the client's machine module.
+The date of the last account is read from this client's settings directory,
+then the installed client's `eqclient.ini` and `defaults.ini`, and kept
+only in this client's settings directory (as `LastSysInfoDate` in its own
+`eqclient.ini`), so the week's wait survives restarts without writing to
+the installation; the next report is due a week less a second after it.
 Other server types are silent until each has been watched too.
 
 Online sessions are stationary by default. The opt-in P99 movement path is described
