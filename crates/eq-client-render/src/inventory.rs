@@ -4,7 +4,7 @@ pub(super) mod cursor;
 mod interaction;
 mod layout;
 
-pub(crate) use interaction::SplitAction;
+pub(crate) use interaction::{Handed, SplitAction};
 
 use crate::theme::{self, Size};
 use bevy::prelude::*;
