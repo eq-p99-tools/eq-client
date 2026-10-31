@@ -59,6 +59,22 @@ pub(super) fn relist(change: ListingChange, level: &mut u8, listing: &mut Listin
     }
 }
 
+/// What the player hears when their anonymity changes. Both programs keep
+/// it as two bits that `/anonymous` and `/roleplay` set apart: `/roleplay`
+/// never touches the anonymous bit, so a change of that bit is
+/// `/anonymous`'s line, and otherwise the roleplaying bit's (Titanium
+/// sitting 9l: 13233 when the value is over 1, else 13234).
+fn anonymity_notice(before: Anonymity, after: Anonymity) -> Option<ListingNotice> {
+    let roleplaying = |anonymity: Anonymity| anonymity.wire() & 2 != 0;
+    if before.anonymous() != after.anonymous() {
+        Some(ListingNotice::Anonymous(after.anonymous()))
+    } else if roleplaying(before) != roleplaying(after) {
+        Some(ListingNotice::Roleplaying(roleplaying(after)))
+    } else {
+        None
+    }
+}
+
 impl ClientWorld {
     /// The session changed how `/who` lists the player, as they asked: the
     /// player's listing follows, and the player hears of it.
@@ -79,15 +95,7 @@ impl ClientWorld {
         relist(change, &mut player.level, &mut player.listing);
         let notice = match change {
             ListingChange::Away(away) => Some(ListingNotice::Away(away)),
-            ListingChange::Anonymity(after) => match (before, after) {
-                (_, Anonymity::Anonymous) => Some(ListingNotice::Anonymous(true)),
-                (_, Anonymity::Roleplaying) => Some(ListingNotice::Roleplaying(true)),
-                (Anonymity::Anonymous, Anonymity::Open) => Some(ListingNotice::Anonymous(false)),
-                (Anonymity::Roleplaying, Anonymity::Open) => {
-                    Some(ListingNotice::Roleplaying(false))
-                }
-                (Anonymity::Open, Anonymity::Open) => None,
-            },
+            ListingChange::Anonymity(after) => anonymity_notice(before, after),
             _ => None,
         };
         news.notices.extend(notice.map(Notice::Listing));

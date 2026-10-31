@@ -252,6 +252,18 @@ pub enum InstalledClient {
     EqMac,
 }
 
+/// What an installation's own files say about which official client it
+/// holds ([`InstalledClient::detect`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Detected {
+    /// Only one generation's marker files are there.
+    Clear(InstalledClient),
+    /// Marker files of both generations are there.
+    Ambiguous,
+    /// Neither generation's marker files are there.
+    Unclassified,
+}
+
 /// How a program draws a spell gem: the holder only while the gem is
 /// empty; with a spell, the background tinted with the spell's gem colour
 /// (untinted while pressed), the spell's icon, then the highlight. The
@@ -266,6 +278,52 @@ pub struct GemDraw {
 }
 
 impl InstalledClient {
+    /// The top-level files only this client's installation has, by name in
+    /// lower case, and the extension of files only it has: the Mac-era
+    /// client's own program files; Titanium's spell file and its newer
+    /// model archives. Inferred from a listing of one installation of each
+    /// (recording checklist item 6.295): the two share `spells_en.txt`,
+    /// `eqstr_en.txt` and `eqhost.txt`, which mark neither.
+    const fn markers(self) -> (&'static [&'static str], Option<&'static str>) {
+        match self {
+            Self::Titanium => (&["spells_us.txt"], Some("eqg")),
+            Self::EqMac => (&["eqmac.exe", "eqgame.dll"], None),
+        }
+    }
+
+    /// Which official client the installation in `eq_directory` holds, from
+    /// its own top-level files: clear when only one generation's markers are
+    /// there, ambiguous with both, unclassified with neither or when the
+    /// folder can't be listed.
+    #[must_use]
+    pub fn detect(eq_directory: &Path) -> Detected {
+        let Ok(entries) = std::fs::read_dir(eq_directory) else {
+            return Detected::Unclassified;
+        };
+        let names: Vec<String> = entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .map(|entry| entry.file_name().to_string_lossy().to_lowercase())
+            .collect();
+        let marked = |client: Self| {
+            let (files, extension) = client.markers();
+            names.iter().any(|name| {
+                files.contains(&name.as_str())
+                    || extension.is_some_and(|extension| {
+                        Path::new(name)
+                            .extension()
+                            .is_some_and(|found| found == extension)
+                    })
+            })
+        };
+        match (marked(Self::Titanium), marked(Self::EqMac)) {
+            (true, false) => Detected::Clear(Self::Titanium),
+            (false, true) => Detected::Clear(Self::EqMac),
+            (true, true) => Detected::Ambiguous,
+            (false, false) => Detected::Unclassified,
+        }
+    }
+
     /// How this client's program draws a spell gem's skin pieces, where
     /// that is read (the Titanium and TAKP gem window reads of 10-31; the
     /// Titanium draw is at 0x558a50). Both generations draw them alike; a
@@ -368,24 +426,36 @@ impl InstalledClient {
     }
 
     /// How this client's player falls and what a landing costs, from the
-    /// program; None until read for this client (Titanium: recording
-    /// checklist items 1.5, 6.147 and 6.167).
+    /// program; None for a client whose rules are not read.
     #[must_use]
     pub const fn falls(self) -> Option<crate::falls::ClientFalls> {
         match self {
-            Self::Titanium => None,
+            Self::Titanium => Some(crate::falls::TITANIUM),
             Self::EqMac => Some(crate::falls::EQMAC),
         }
     }
 
-    /// The least time between two jumps, from the program; None until read
-    /// for this client. The Titanium client refuses a jump within 500 ms of
-    /// the last (recording checklist item 1.3).
+    /// The least time between two jumps, from the program. The Titanium
+    /// client refuses a jump within 500 ms of the last (recording checklist
+    /// item 1.3); the Mac-era one within 1,500 ms (TAKP sitting 2, read).
     #[must_use]
     pub const fn jump_spacing(self) -> Option<std::time::Duration> {
         match self {
             Self::Titanium => Some(std::time::Duration::from_millis(500)),
-            Self::EqMac => None,
+            Self::EqMac => Some(std::time::Duration::from_millis(1500)),
+        }
+    }
+
+    /// How long a jump from standing still crouches first, from the program:
+    /// the Mac-era client ducks, then after 500 ms stands and jumps if still
+    /// on the ground, and cancels a jump while backing up (TAKP sitting 2,
+    /// read). None where a standing jump goes at once (Titanium: unread, so
+    /// as today).
+    #[must_use]
+    pub const fn standing_jump_crouch(self) -> Option<std::time::Duration> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(std::time::Duration::from_millis(500)),
         }
     }
 
@@ -1259,6 +1329,48 @@ fn set_ini_value(text: &str, section: &str, key: &str, value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_installation_is_marked_by_files_only_its_generation_has() {
+        let root = std::env::temp_dir().join(format!("install-markers-{}", std::process::id()));
+        let folder = |name: &str, files: &[&str]| {
+            let folder = root.join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            for file in files {
+                std::fs::write(folder.join(file), b"").unwrap();
+            }
+            folder
+        };
+        let shared = ["eqgame.exe", "spells_en.txt", "eqstr_en.txt", "eqhost.txt"];
+        let titanium = folder(
+            "titanium",
+            &[&shared[..], &["Spells_US.txt", "zone.EQG"]].concat(),
+        );
+        let mac = folder("mac", &[&shared[..], &["eqmac.exe", "eqgame.dll"]].concat());
+        let both = folder(
+            "both",
+            &[&shared[..], &["spells_us.txt", "eqmac.exe"]].concat(),
+        );
+        let neither = folder("neither", &shared);
+        let detected = [
+            InstalledClient::detect(&titanium),
+            InstalledClient::detect(&mac),
+            InstalledClient::detect(&both),
+            InstalledClient::detect(&neither),
+            InstalledClient::detect(&root.join("missing")),
+        ];
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            detected,
+            [
+                Detected::Clear(InstalledClient::Titanium),
+                Detected::Clear(InstalledClient::EqMac),
+                Detected::Ambiguous,
+                Detected::Unclassified,
+                Detected::Unclassified,
+            ]
+        );
+    }
+
     use super::*;
 
     #[test]

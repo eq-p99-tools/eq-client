@@ -25,9 +25,10 @@ pub enum Toggle {
     /// Draws a ring at the target's feet (the Display page's Show 3D Target
     /// Ring).
     TargetRing,
-    /// Shows the player's own helm (the Display page's Show My Helm). As on
-    /// P99, it changes only how the player sees themselves: other players'
-    /// helms always show, and the server hears nothing of it.
+    /// Shows the player's own helm (the Display page's Show My Helm). Where
+    /// the session sends it on (`EQEmu`, from the Titanium program) the server
+    /// hears each change; elsewhere, as on P99, it changes only how the
+    /// player sees themselves. Other players' helms always show.
     ShowHelm,
     /// Draws players' names over their heads (the Display page's Show PC
     /// Names).

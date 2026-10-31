@@ -11,7 +11,7 @@ use eq_client_assets::{
     ui::InstalledClient,
 };
 use eq_client_core::{
-    Capability, ClientCommand, MovementMode, MovementRequest,
+    Capability, ClientCommand, MovementMode, MovementRequest, Posture,
     hazards::Hazard,
     movement::{AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics},
     qol::{Fix, Settings},
@@ -46,6 +46,9 @@ pub(super) struct Controls {
     /// When the latest jump started; it outlasts a reset, so a new
     /// admission cannot hurry the next.
     last_jump: Option<Instant>,
+    /// When a jump from standing still stands up and goes, on a client
+    /// that crouches before it.
+    crouched_jump: Option<Instant>,
     /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
     unreported: Option<FallCost>,
@@ -99,6 +102,7 @@ impl Default for Controls {
             refused: None,
             jump: None,
             last_jump: None,
+            crouched_jump: None,
             unreported: None,
             facing: None,
             recent: RecentMotion::default(),
@@ -434,12 +438,26 @@ pub(super) fn input(
     // installed client allows.
     if keys.pressed(Act::Jump)
         && controls.airborne.is_some()
+        && controls.crouched_jump.is_none()
         && online.world().can(Capability::Jumping)
     {
         if jump_too_soon(client, controls.last_jump, now) {
             debug!("Jump refused: too soon after the last");
         } else {
             controls.jump = Some(now);
+        }
+    }
+    // A crouched jump stands up when its time comes, and goes with the next
+    // sample.
+    if let Some(due) = controls.crouched_jump.filter(|due| now >= *due) {
+        controls.crouched_jump = None;
+        match post_posture(&outbox, online.world(), Posture::Standing) {
+            Ok(()) => controls.jump = Some(due),
+            Err(reason) => {
+                controls.send_failed(reason);
+                controls.held = Some(Held::Refused);
+                return;
+            }
         }
     }
     let map = &*keys.map;
@@ -542,6 +560,26 @@ pub(super) fn input(
     let span = controls.span(since_sent);
     let delta = direction * speed * span;
     let jump = controls.jump.take().is_some();
+    // Where the installed client crouches before a jump from standing still,
+    // that jump ducks now and goes once the crouch is over; backing up
+    // cancels it.
+    let jump = match client.standing_jump_crouch() {
+        Some(_) if jump && mode == MovementMode::Backward => {
+            debug!("Jump cancelled: backing up");
+            false
+        }
+        Some(crouch) if jump && direction == Vec3::ZERO && !airborne => {
+            if let Err(reason) = post_posture(&outbox, online.world(), Posture::Ducking) {
+                controls.send_failed(reason);
+                controls.held = Some(Held::Refused);
+                return;
+            }
+            controls.crouched_jump = Some(now + crouch);
+            controls.held = Some(Held::NoSpeed);
+            return;
+        }
+        _ => jump,
+    };
     let previous_airborne = controls.airborne.clone();
     let (landing, mode, jumped) = match controls.airborne.as_mut() {
         Some(airborne) => {
@@ -714,6 +752,22 @@ pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> Ver
             jump_speed: falls.jump_speed,
             air_factor: falls.air_factor,
         }
+    })
+}
+
+/// Asks the session to change the player's stance.
+fn post_posture(
+    outbox: &crate::outbox::Outbox,
+    world: &ClientWorld,
+    posture: Posture,
+) -> Result<(), crate::outbox::Refusal> {
+    let spawn_id = world.player().map(|player| player.spawn_id);
+    let spawn_id = spawn_id.ok_or(crate::outbox::Refusal::NotAdmitted)?;
+    outbox.post(world, |stamp| ClientCommand::SetPosture {
+        session_id: stamp.session_id,
+        spawn_id,
+        posture,
+        created: stamp.created,
     })
 }
 
@@ -1225,9 +1279,18 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp, reason = "The constants are copied, not computed")]
     fn each_client_falls_by_its_own_physics_and_spaces_its_jumps_its_own_way() {
+        // Titanium reads the same header field with the same step and air.
         let titanium = physics(InstalledClient::Titanium, Some(1.0));
-        assert_eq!(titanium.gravity, PROVISIONAL_PHYSICS.gravity);
-        assert_eq!(titanium.terminal_speed, PROVISIONAL_PHYSICS.terminal_speed);
+        assert!(
+            (titanium.gravity - 400.0).abs() < 0.01,
+            "{}",
+            titanium.gravity
+        );
+        assert!((titanium.jump_speed - 44.55).abs() < 0.001);
+        assert_eq!(
+            physics(InstalledClient::Titanium, Some(0.4)),
+            physics(InstalledClient::EqMac, Some(0.4))
+        );
         let mac = physics(InstalledClient::EqMac, None);
         assert!((mac.gravity - 160.0).abs() < 0.001, "{}", mac.gravity);
         // The session's motion guard lets the program's fastest fall through.
@@ -1252,8 +1315,9 @@ mod tests {
         assert!(jump_too_soon(InstalledClient::Titanium, ago(499), now));
         assert!(!jump_too_soon(InstalledClient::Titanium, ago(500), now));
         assert!(!jump_too_soon(InstalledClient::Titanium, None, now));
-        // Unread for the Mac-era client.
-        assert!(!jump_too_soon(InstalledClient::EqMac, ago(10), now));
+        // The Mac-era client waits 1.5 s.
+        assert!(jump_too_soon(InstalledClient::EqMac, ago(1499), now));
+        assert!(!jump_too_soon(InstalledClient::EqMac, ago(1500), now));
     }
 
     #[test]
@@ -1270,15 +1334,14 @@ mod tests {
             impact_speed: 120.0,
         };
         let cost = |client| landing_cost(client, &floor, Vec3::ZERO, landing, &world);
-        // Titanium keeps the inferred rule until its program's is read.
+        // Both programs': T = 6 - 2.5 - 1.5 = 2, so 40.
         assert_eq!(
             cost(InstalledClient::Titanium),
             FallCost {
-                damage: 160,
+                damage: 40,
                 safe_fall: false
             }
         );
-        // The Mac-era program's: T = 6 - 2.5 - 1.5 = 2, so 40.
         assert_eq!(
             cost(InstalledClient::EqMac),
             FallCost {
@@ -2009,7 +2072,7 @@ mod tests {
         safe_fall: Option<u32>,
         capabilities: Vec<eq_client_core::Capability>,
     ) -> (App, mpsc::Receiver<ClientCommand>) {
-        use eq_client_core::movement::{CollisionWorld, MotionStep, PROVISIONAL_PHYSICS};
+        use eq_client_core::movement::{CollisionWorld, MotionStep};
         let floor = CollisionWorld::new([
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
             [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
@@ -2022,7 +2085,7 @@ mod tests {
             let below = next.step(
                 &floor,
                 feet,
-                PROVISIONAL_PHYSICS,
+                physics(InstalledClient::Titanium, None),
                 MotionStep {
                     horizontal: Vec3::ZERO,
                     jump: false,
@@ -2080,10 +2143,12 @@ mod tests {
         let all = eq_client_core::Capability::ALL.to_vec();
         // Safe Fall is announced where the player has it.
         for (safe_fall, amount, used) in [
-            (None, 160, false),
-            (Some(0), 160, false),
-            (Some(200), 32, true),
-            (Some(254), 160, false),
+            // About 8.25 units a step at touchdown: trunc(10 × 4.25²).
+            (None, 181, false),
+            (Some(0), 181, false),
+            // The skill takes off all of it, and is still announced.
+            (Some(200), 0, true),
+            (Some(254), 181, false),
         ] {
             let (mut app, receiver) = landing(safe_fall, all.clone());
             assert_eq!(
@@ -2124,7 +2189,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Controls>().unreported,
             Some(FallCost {
-                damage: 160,
+                damage: 181,
                 safe_fall: false
             })
         );
@@ -2143,7 +2208,7 @@ mod tests {
             Some(ClientCommand::EnvironmentalDamage {
                 session_id: 11,
                 hazard: Hazard::Falling,
-                amount: 160,
+                amount: 181,
                 safe_fall: false,
             })
         );

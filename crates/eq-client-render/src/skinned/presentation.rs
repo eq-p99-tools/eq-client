@@ -77,6 +77,7 @@ pub(crate) fn show(
     mut boxes: Query<(&Shows, &mut Visibility)>,
 ) {
     let world = online.world();
+    let load = crate::speed::load(world, &names);
     for (shows, mut visibility) in &mut boxes {
         let Some(shown) = shown_now(*shows, world, &combat, &trade) else {
             continue;
@@ -102,7 +103,7 @@ pub(crate) fn show(
                     .map_or_else(String::new, |spell| names.label(spell)),
                 None,
             ),
-            Shows::Label(kind) => (label_text(world, hud.resource_estimate, kind), None),
+            Shows::Label(kind) => (label_text(world, hud.resource_estimate, load, kind), None),
             Shows::BuffName(window, index) => (
                 world
                     .buffs()
@@ -365,6 +366,7 @@ pub(super) fn target_name(world: &eq_client_core::world::ClientWorld) -> String 
 pub(super) fn label_text(
     world: &eq_client_core::world::ClientWorld,
     estimate: Option<(u32, u32)>,
+    load: Option<(u16, Option<u32>)>,
     kind: u32,
 ) -> String {
     let percent = |fraction: Option<f32>| {
@@ -402,6 +404,11 @@ pub(super) fn label_text(
         9 => attribute(|attributes| attributes.wisdom),
         10 => attribute(|attributes| attributes.intelligence),
         11 => attribute(|attributes| attributes.charisma),
+        // What the player carries, cut toward zero, and can carry, as the
+        // speed inputs the session is told count them; shown bare, as the
+        // official format for them is not yet found (inferred, 6.296).
+        24 => number(load.map(|(weight, _)| u32::from(weight))),
+        25 => number(load.and_then(|(_, capacity)| capacity)),
         17 => number(world.hit_points().map(|(current, _)| current)),
         18 => number(world.hit_points().map(|(_, maximum)| maximum)),
         19 => percent(fraction(world, estimate, 1)),

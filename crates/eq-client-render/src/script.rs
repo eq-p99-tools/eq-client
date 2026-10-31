@@ -347,6 +347,7 @@ type Observed<'w> = (
     Option<Res<'w, crate::loading::Loading>>,
     Option<Res<'w, super::doors::Hinges>>,
     Option<Res<'w, super::zone_navmesh::ZoneNavMesh>>,
+    Option<Res<'w, crate::spellbook::SpellNames>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
@@ -2385,7 +2386,9 @@ fn arrived(step: &Step, online: &super::online::OnlineState, covered: bool) -> b
     let world = online.world();
     let in_zone = world.connected() && world.player().is_some() && !covered;
     match step {
-        Step::WaitSelect => online.selection.is_some(),
+        // The character list once the player is out of the world: a camp
+        // waits for its logout, not the list left from before.
+        Step::WaitSelect => online.selection.is_some() && world.player().is_none(),
         Step::WaitZone(zone) => in_zone && world.zone() == *zone,
         _ => in_zone,
     }

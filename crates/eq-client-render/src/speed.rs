@@ -76,6 +76,30 @@ pub(crate) fn capacity(
     Some(u32::try_from((base + buffs).max(0)).unwrap_or(u32::MAX))
 }
 
+/// A spell's effects as the speed inputs count them: each id with its base.
+fn buff_effects(spells: &crate::spellbook::SpellNames, spell: u32) -> Option<Vec<(u32, i32)>> {
+    spells.mechanics(spell).map(|mechanics| {
+        mechanics
+            .effects
+            .iter()
+            .map(|effect| (effect.id, effect.base))
+            .collect()
+    })
+}
+
+/// What the player carries and can carry, as the speed inputs count them
+/// ([`carried_weight`] and [`capacity`]); None before the player is in.
+pub(crate) fn load(
+    world: &eq_client_core::world::ClientWorld,
+    spells: &crate::spellbook::SpellNames,
+) -> Option<(u16, Option<u32>)> {
+    let player = world.player()?;
+    let capacity = capacity(player, world.buffs().spells(), |spell| {
+        buff_effects(spells, spell)
+    });
+    Some((carried_weight(world), capacity))
+}
+
 /// What the speeds depend on that only the host sees: the movement rate,
 /// what the player carries and what they can carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,20 +124,12 @@ pub(crate) fn report(
         *sent = None;
         return;
     };
-    let effects = |spell| {
-        spells.mechanics(spell).map(|mechanics| {
-            mechanics
-                .effects
-                .iter()
-                .map(|effect| (effect.id, effect.base))
-                .collect()
-        })
-    };
     let buffs = world.buffs();
     let inputs = Inputs {
-        rate: movement_rate(buffs.spells(), effects),
+        rate: movement_rate(buffs.spells(), |spell| buff_effects(&spells, spell)),
         weight: carried_weight(world),
-        capacity: capacity(player, buffs.spells(), effects).unwrap_or(0),
+        capacity: capacity(player, buffs.spells(), |spell| buff_effects(&spells, spell))
+            .unwrap_or(0),
     };
     if *sent == Some((session, inputs)) {
         return;

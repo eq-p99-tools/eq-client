@@ -2848,6 +2848,22 @@ fn the_players_own_listing_changes_and_says_which() {
         (Anonymity::Open, ListingNotice::Anonymous(false)),
         (Anonymity::Roleplaying, ListingNotice::Roleplaying(true)),
         (Anonymity::Open, ListingNotice::Roleplaying(false)),
+        // `/roleplay` from anonymous keeps the anonymous bit and says the
+        // roleplaying line both ways; `/anonymous` from roleplaying writes
+        // 1 and says the anonymous line.
+        (Anonymity::Anonymous, ListingNotice::Anonymous(true)),
+        (
+            Anonymity::AnonymousRoleplaying,
+            ListingNotice::Roleplaying(true),
+        ),
+        (Anonymity::Anonymous, ListingNotice::Roleplaying(false)),
+        (
+            Anonymity::AnonymousRoleplaying,
+            ListingNotice::Roleplaying(true),
+        ),
+        (Anonymity::Open, ListingNotice::Anonymous(false)),
+        (Anonymity::Roleplaying, ListingNotice::Roleplaying(true)),
+        (Anonymity::Anonymous, ListingNotice::Anonymous(true)),
     ] {
         assert_eq!(
             set(&mut world, 1, ListingChange::Anonymity(anonymity)).notices,

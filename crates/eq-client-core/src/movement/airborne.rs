@@ -3,7 +3,7 @@ use super::{CollisionWorld, Support};
 use glam::Vec3;
 
 /// Explicit local tuning, separate from network motion calibration.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VerticalPhysics {
     /// Downward acceleration in world units per second squared; a zone may
     /// have none.

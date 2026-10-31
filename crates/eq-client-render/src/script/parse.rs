@@ -13,7 +13,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 31] = [
+const GM_COMMANDS: [&str; 33] = [
     // GM mode on or off: off, the server lets the player go hungry. On, the
     // book and gem commands below act on a player target instead of the GM.
     "gm",
@@ -50,6 +50,12 @@ const GM_COMMANDS: [&str; 31] = [
     "wc",
     // The targeted NPC says a line, as its quest dialogue would.
     "npcsay",
+    // The targeted NPC casts a spell on its target, to bring about a
+    // spell's effect on the player as it would come from an NPC.
+    "npccast",
+    // Which of the server's log categories it writes, so a run can read
+    // what the server made of what it sent.
+    "logs",
     // Readies another test character: every spell they can use up to a
     // level scribed in their book, every skill at its most for their
     // level, and an item onto their cursor, as summonitem puts one on the

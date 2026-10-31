@@ -19,6 +19,8 @@ pub(crate) struct OptionsState {
     store: Store,
     /// The admission and auto-eat options last accepted by the command queue.
     told: Option<(u64, AutoEat)>,
+    /// The admission and Show My Helm as the session last knew it.
+    helm: Option<(u64, bool)>,
 }
 
 impl Default for OptionsState {
@@ -35,6 +37,7 @@ impl OptionsState {
             defaults,
             store: Store::default(),
             told: None,
+            helm: None,
         }
     }
 
@@ -130,6 +133,7 @@ pub(crate) fn tell_session(
     let Some(session_id) = outbox.peek(online.world()).map(|stamp| stamp.session_id) else {
         return;
     };
+    tell_helm(&online, &outbox, &mut state, session_id);
     let auto_eat = state.options.auto_eat();
     if state.told == Some((session_id, auto_eat)) {
         return;
@@ -140,6 +144,34 @@ pub(crate) fn tell_session(
     };
     if outbox.tell(online.world(), command) {
         state.told = Some((session_id, auto_eat));
+    }
+}
+
+/// Tells the session each change of Show My Helm while the player is in a
+/// zone, where it sends the option on (the Titanium program sends it on
+/// every change, sitting 8f). An admission starts from the option as it
+/// is, as the server keeps it in the profile; a session that doesn't send
+/// it changes only how the player sees themselves.
+fn tell_helm(
+    online: &crate::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+    state: &mut ResMut<OptionsState>,
+    session_id: u64,
+) {
+    let show = state.on(Toggle::ShowHelm);
+    let told = match state.helm {
+        Some((seen, before)) if seen == session_id && before != show => {
+            !crate::outbox::offered(online.world(), eq_client_core::Capability::ShowingHelm)
+                || outbox.tell(
+                    online.world(),
+                    eq_client_core::ClientCommand::ShowHelm { session_id, show },
+                )
+        }
+        Some((seen, _)) if seen == session_id => false,
+        _ => true,
+    };
+    if told {
+        state.bypass_change_detection().helm = Some((session_id, show));
     }
 }
 
@@ -211,6 +243,47 @@ mod tests {
         app.update();
         assert!(!app.world().resource::<OptionsState>().options.wheel_zoom);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn show_my_helm_is_told_on_each_change_where_the_session_sends_it() {
+        use eq_client_core::{Capability, ClientCommand};
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        let mut app = crate::testing::app();
+        app.insert_resource(OptionsState::new(Options::default()))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, (toggle, tell_session).chain());
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::connect(&mut online, true);
+        app.insert_resource(online);
+        let helm = |receiver: &std::sync::mpsc::Receiver<ClientCommand>| {
+            receiver
+                .try_iter()
+                .filter(|command| matches!(command, ClientCommand::ShowHelm { .. }))
+                .collect::<Vec<_>>()
+        };
+        // An admission starts from the option as it is.
+        app.update();
+        assert_eq!(helm(&receiver), []);
+        let shown = app.world().resource::<OptionsState>().on(Toggle::ShowHelm);
+        app.world_mut()
+            .spawn((Interaction::Pressed, OptionCheckbox(Toggle::ShowHelm)));
+        app.update();
+        assert_eq!(
+            helm(&receiver),
+            [ClientCommand::ShowHelm {
+                session_id: 1,
+                show: !shown
+            }]
+        );
+        // Told once.
+        app.update();
+        assert_eq!(helm(&receiver), []);
+        assert!(crate::outbox::offered(
+            app.world().resource::<OnlineState>().world(),
+            Capability::ShowingHelm
+        ));
     }
 
     #[test]
