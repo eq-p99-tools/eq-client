@@ -290,14 +290,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::Heading(point) => messages
             .map(|messages| heading(*point, messages))
             .map_or_else(Vec::new, chat),
-        Notice::Camp(camp) => match camp {
-            CampStatus::Preparing => messages.map(|messages| messages.said(12293, &[])),
-            CampStatus::Abandoned => messages.map(|messages| messages.said(12290, &[])),
-            CampStatus::LoggingOut => Some("Logging out...".into()),
-            CampStatus::Camped => None,
-            CampStatus::Rejected(reason) => Some(reason.as_str().into()),
-        }
-        .map_or_else(Vec::new, chat),
+        Notice::Camp(camp) => in_chat(camp_lines(camp, messages)),
         Notice::LootCoins(coins) => chat(loot_coins(*coins, messages)),
         Notice::LootRefused(response) => chat(loot_line(*response, messages)),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
@@ -497,6 +490,29 @@ fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
         ListingNotice::Roleplaying(false) => (13234, "You are out of character again."),
     };
     official(Some(id), &[], fallback, messages)
+}
+
+/// A camp's lines, in the installed client's strings for them (Titanium
+/// sittings 9p and 9q, read): 12293 and 12682 as it starts, 12684 with the
+/// seconds left at 25, 20, 15, 10 and 5, and 12290 when it is abandoned.
+/// That 12293 comes before 12682 is inferred (6.302). The program says
+/// 12683 instead when standing or a stun ends it; the session doesn't yet
+/// say which ended it, so every abandoned camp says 12290 as today.
+fn camp_lines(camp: &CampStatus, messages: Option<&Messages>) -> Vec<Said> {
+    let said = |id, arguments: &[String]| messages.map(|messages| messages.said(id, arguments));
+    match camp {
+        CampStatus::Preparing => [said(12293, &[]), said(12682, &[])]
+            .into_iter()
+            .flatten()
+            .collect(),
+        CampStatus::Countdown { seconds_left } => said(12684, &[seconds_left.to_string()])
+            .into_iter()
+            .collect(),
+        CampStatus::Abandoned => said(12290, &[]).into_iter().collect(),
+        CampStatus::LoggingOut => vec!["Logging out...".into()],
+        CampStatus::Camped => Vec::new(),
+        CampStatus::Rejected(reason) => vec![reason.as_str().into()],
+    }
 }
 
 /// News of the player's group, in the installed client's strings for it:
@@ -1221,6 +1237,24 @@ mod tests {
             [(Place::Chat, "Server message 12293".into())]
         );
         assert_eq!(wording(&Notice::Camp(CampStatus::Camped), None), []);
+    }
+
+    #[test]
+    fn a_camp_says_its_start_and_each_five_seconds_left() {
+        let messages =
+            Messages::parse("EQST0002\n0 1\n12293 Camping.\n12682 Sit still.\n12684 %1 left.\n");
+        let said = |camp| wording(&Notice::Camp(camp), Some(&messages));
+        assert_eq!(
+            said(CampStatus::Preparing),
+            [
+                (Place::Chat, Said::official("Camping.")),
+                (Place::Chat, Said::official("Sit still."))
+            ]
+        );
+        assert_eq!(
+            said(CampStatus::Countdown { seconds_left: 25 }),
+            [(Place::Chat, Said::official("25 left."))]
+        );
     }
 
     #[test]

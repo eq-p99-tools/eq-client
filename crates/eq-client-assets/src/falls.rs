@@ -4,7 +4,8 @@
 //! yet read has none, and keeps the provisional fall and inferred damage.
 //!
 //! The Mac-era rules are from the TAKP client's executable, read statically
-//! on 10-30 (TAKP Batch 1 R3, recording checklist item 6.161), except where
+//! on 10-30 (TAKP Batch 1 R3, recording checklist item 6.161), and the
+//! Titanium ones from its program (sittings 6, 8g, 8h and 8i), except where
 //! a rule says it is this client's reading or not yet known.
 
 /// The length of the program's movement step, in seconds: it counts
@@ -156,6 +157,27 @@ pub const EQMAC: ClientFalls = ClientFalls {
     survived_line: Some(12118),
 };
 
+/// The Titanium client's falls (from the program): the same gravity field,
+/// 50 ms step, 0.99 air factor and 1.65 × 1.35 jump as the Mac-era client
+/// (sittings 8g, 8h and 8i), and the same landing rule (sitting 6, T2):
+/// a landing counts past 2.5 units a step, then T = the character's +0x48
+/// field / 100 + (speed − 2.5) − 1.5, 20,000 from T = 9, else
+/// trunc(10·T²), less Safe Fall's S + S × P / 100. Read but not yet known,
+/// so left out, each costing the player more than the program would, never
+/// less: which zones zero the damage (its table was not read, 6.304), P
+/// (probably spell effect 228's total; not decoded, so it counts as 0,
+/// 6.305), the character flag that zeroes damage under 200 (6.306), and any
+/// line the client says (none in the damage routine; not traced further).
+/// That +0x48 is the carried weight the Mac-era rule names is inferred
+/// (6.303).
+pub const TITANIUM: ClientFalls = ClientFalls {
+    harmless_zones: &[],
+    safe_fall_rank_share: 0.0,
+    damage_line: None,
+    survived_line: None,
+    ..EQMAC
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +242,26 @@ mod tests {
             ..landing(6.0, 0.0, 20)
         };
         assert_eq!(EQMAC.landing_cost(ranked).damage, 14);
+    }
+
+    #[test]
+    fn titanium_falls_like_the_mac_era_client_and_says_nothing() {
+        for speed in [2.5, 4.0, 5.0, 12.5, 13.0] {
+            assert_eq!(
+                TITANIUM.landing_cost(landing(speed, 0.0, 0)),
+                EQMAC.landing_cost(landing(speed, 0.0, 0)),
+                "{speed}"
+            );
+        }
+        // No zone table is read for it, so zone 151 hurts like any other.
+        let anywhere = FallLanding {
+            zone: 151,
+            ..landing(6.0, 0.0, 0)
+        };
+        assert_eq!(TITANIUM.landing_cost(anywhere).damage, 40);
+        assert_eq!((TITANIUM.damage_line, TITANIUM.survived_line), (None, None));
+        assert!((TITANIUM.jump_speed - 44.55).abs() < 0.001);
+        assert!((TITANIUM.gravity - 160.0).abs() < 0.001);
     }
 
     #[test]

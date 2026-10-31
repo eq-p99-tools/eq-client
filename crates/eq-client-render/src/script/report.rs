@@ -18,7 +18,7 @@ pub(super) fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
 pub(super) fn state(
     label: &str,
     online: &crate::online::OnlineState,
-    (hud, ..): &Observed,
+    (hud, .., spells): &Observed,
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
@@ -107,6 +107,7 @@ pub(super) fn state(
         containers = ?containers(online),
         combining = ?online.world().combining(),
         purse = ?online.world().coins(),
+        load = ?carried(online, spells.as_deref()),
         cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
         bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
         gear = ?online.world().player().map(|player| player.appearance.materials),
@@ -120,6 +121,14 @@ pub(super) fn state(
         raid_invitation = ?online.world().raid_invitation(),
         "Script report"
     );
+}
+
+/// What the player carries and can carry, as the speed inputs count them.
+fn carried(
+    online: &crate::online::OnlineState,
+    spells: Option<&crate::spellbook::SpellNames>,
+) -> Option<(u16, Option<u32>)> {
+    crate::speed::load(online.world(), spells?)
 }
 
 /// The player's raid: its leader, whether it is locked, and each member with

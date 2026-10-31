@@ -6,7 +6,7 @@ use crate::{
     presets::{Endpoint, Preset, Presets},
     session::{Login, SessionOptions, SessionWorker},
 };
-use eq_client_assets::ui::InstalledClient;
+use eq_client_assets::ui::{Detected, InstalledClient};
 use eq_client_render::{Availability, Connection, LoginServer, Logins};
 use std::{
     ffi::OsString,
@@ -33,14 +33,49 @@ pub fn installed_client(protocol: eq_network::client::ServerProtocol) -> Install
 }
 
 /// The official client the installation in `directory` holds, for a run at
-/// the login screen: that of the presets naming it, the launch's own first.
-/// One no preset names is taken to be Titanium's, as the standard
-/// installation is and as an offline run takes any, so a preset of the
-/// other client never logs in on it until the preset names its own.
+/// the login screen: the one its own files mark ([`InstalledClient::detect`]),
+/// else that of the presets naming it, the launch's own first. One neither
+/// marks is taken to be Titanium's, as the standard installation is and as
+/// an offline run takes any, so a preset of the other client never logs in
+/// on it until the preset names its own.
 pub fn client_at(presets: &Presets, launch: usize, directory: &Path) -> InstalledClient {
+    if let Detected::Clear(client) = InstalledClient::detect(directory) {
+        return client;
+    }
     holder(presets, launch, directory).map_or(InstalledClient::Titanium, |preset| {
         installed_client(preset.protocol)
     })
+}
+
+/// Whether a server needing `needed` may play from the installation in
+/// `directory`: refused when the folder's own files clearly mark the other
+/// client, since every file would be read by the wrong rules; a warning
+/// when they mark both or neither, and the run reads it as `needed`'s.
+///
+/// # Errors
+/// The refusal's line, naming the folder and both clients.
+pub fn installation_check(
+    directory: &Path,
+    needed: InstalledClient,
+) -> Result<Option<String>, String> {
+    let folder = directory.display();
+    let needs = client_name(needed);
+    match InstalledClient::detect(directory) {
+        Detected::Clear(found) if found != needed => Err(format!(
+            "{folder} holds the {} installation, but this server needs the {needs}'s: \
+             point the preset's installation (or --eq-dir) at the {needs} folder",
+            client_name(found)
+        )),
+        Detected::Clear(_) => Ok(None),
+        Detected::Ambiguous => Ok(Some(format!(
+            "{folder} has files of both the Titanium and the TAKP client; \
+             reading it as the {needs}'s"
+        ))),
+        Detected::Unclassified => Ok(Some(format!(
+            "{folder} has none of the files that mark a Titanium or TAKP client \
+             installation; reading it as the {needs}'s"
+        ))),
+    }
 }
 
 /// The preset that names the installation in `directory`: the launch's own,
@@ -165,6 +200,14 @@ impl Launcher {
         let same_client = client == here.client;
         match &preset.installation {
             Some(directory) if same_client && *directory == here.directory => Availability::Here,
+            // The preset names this run's own folder, whose files mark the
+            // other client: opening it again would read the same files.
+            Some(directory) if *directory == here.directory => {
+                match installation_check(directory, client) {
+                    Err(reason) => Availability::Unavailable(reason),
+                    Ok(_) => Availability::Reopens(directory.display().to_string()),
+                }
+            }
             Some(directory) => Availability::Reopens(directory.display().to_string()),
             None if same_client => Availability::Here,
             None => {

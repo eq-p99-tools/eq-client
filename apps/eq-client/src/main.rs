@@ -403,6 +403,21 @@ fn eq_directory(
 
 /// Startup problems print to stderr before the viewer exists; once it
 /// runs, the session logs through `tracing` like the viewer.
+/// Stops a session whose installation is clearly another client
+/// generation's than its server needs, since it would read the wrong files;
+/// one it can't tell gets a warning and runs. A viewer with no server only
+/// warns.
+fn check_installation(eq_directory: &Path, client: InstalledClient, mode: Mode) {
+    match logins::installation_check(eq_directory, client) {
+        Err(reason) if mode == Mode::Online => {
+            eprintln!("error: {reason}");
+            std::process::exit(2);
+        }
+        Err(warning) | Ok(Some(warning)) => eprintln!("warning: {warning}"),
+        Ok(None) => (),
+    }
+}
+
 fn main() {
     // A panic reaches the log, and with it the log file, as well as the
     // standard error stream.
@@ -696,18 +711,21 @@ fn viewer_config(
 /// launch's preset at once, so its run holds that preset's, as before
 /// presets; at the login screen, it is the one the presets name there (see
 /// [`logins::client_at`]). Offline, none: the installation is read as
-/// Titanium's, as the default `--eq-dir` is.
+/// Titanium's, as the default `--eq-dir` is. Checked against the
+/// installation's own files first ([`check_installation`]).
 fn run_client(
     presets: &presets::Presets,
     launch: usize,
     mode: Mode,
     directory: &Path,
 ) -> InstalledClient {
-    if mode == Mode::Online {
+    let client = if mode == Mode::Online {
         logins::installed_client(presets.list[launch].protocol)
     } else {
         logins::client_at(presets, launch, directory)
-    }
+    };
+    check_installation(directory, client, mode);
+    client
 }
 
 fn require_positive_distance(distance: f32) {

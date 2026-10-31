@@ -354,7 +354,10 @@ mod tests {
     #[test]
     fn with_the_skin_showing_casts_only_the_books_changes_and_a_camp_stay() {
         let names = crate::spellbook::SpellNames::default();
-        let messages = super::super::messages::Messages::load(None);
+        let messages = super::super::messages::Messages::load(
+            None,
+            eq_client_assets::ui::InstalledClient::Titanium,
+        );
         let qol = eq_client_core::qol::Settings::default();
         let now = Instant::now();
         let mut online = OnlineState::new(true);
@@ -397,7 +400,10 @@ mod tests {
     #[test]
     fn casting_wins_then_book_changes_then_camping() {
         let names = crate::spellbook::SpellNames::default();
-        let messages = super::super::messages::Messages::load(None);
+        let messages = super::super::messages::Messages::load(
+            None,
+            eq_client_assets::ui::InstalledClient::Titanium,
+        );
         let qol = eq_client_core::qol::Settings::default();
         let now = Instant::now();
         let mut online = OnlineState::new(true);

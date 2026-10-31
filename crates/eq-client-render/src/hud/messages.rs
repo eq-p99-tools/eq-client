@@ -9,11 +9,15 @@ use std::path::Path;
 pub(crate) struct Messages(StringTable);
 
 impl Messages {
-    /// Missing or incompatible local files leave numeric server reasons available.
-    pub(crate) fn load(directory: Option<&Path>) -> Self {
+    /// The installed `client`'s table; missing or incompatible local files
+    /// leave numeric server reasons available.
+    pub(crate) fn load(
+        directory: Option<&Path>,
+        client: eq_client_assets::ui::InstalledClient,
+    ) -> Self {
         Self(
             directory
-                .and_then(|directory| StringTable::read(directory).ok())
+                .and_then(|directory| StringTable::read(directory, client).ok())
                 .unwrap_or_default(),
         )
     }
@@ -221,7 +225,7 @@ mod tests {
             );
         }
         assert_eq!(
-            Messages::load(None).interruption(73),
+            Messages::load(None, eq_client_assets::ui::InstalledClient::Titanium).interruption(73),
             Said::own("Casting interrupted (server reason 73)")
         );
         assert_eq!(table.format(99, &[]), "Server message 99");

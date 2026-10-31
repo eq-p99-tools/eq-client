@@ -3,10 +3,7 @@
 
 pub use eq_network_game::names::{NameParts, TitleChange};
 
-use crate::{
-    SpawnKind,
-    listing::{Anonymity, Listing},
-};
+use crate::{SpawnKind, listing::Listing};
 
 /// The official client's answer to a `/shownames` it cannot read
 /// (`eqstr_us.txt`), which a front end shows where the installation has it.
@@ -125,7 +122,7 @@ pub fn label(
     .map(|(_, word)| word)
     .collect::<Vec<_>>()
     .join(" ");
-    match guild.filter(|_| level >= ShowNames::Guild && listing.anonymity != Anonymity::Anonymous) {
+    match guild.filter(|_| level >= ShowNames::Guild && !listing.anonymity.anonymous()) {
         Some(guild) => format!("{line}\n<{guild}>"),
         None => line,
     }
@@ -134,6 +131,7 @@ pub fn label(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::listing::Anonymity;
 
     #[test]
     fn show_names_reads_its_words_and_says_the_official_lines() {
@@ -182,9 +180,11 @@ mod tests {
             tag(ShowNames::Everything),
             "Lord Examplar Exemplum of Veeshan\n<Example Guild>"
         );
-        // An anonymous player hides the guild; one roleplaying shows it.
+        // An anonymous player hides the guild, roleplaying or not; one only
+        // roleplaying shows it.
         for (anonymity, guild) in [
             (Anonymity::Anonymous, false),
+            (Anonymity::AnonymousRoleplaying, false),
             (Anonymity::Roleplaying, true),
         ] {
             let listing = Listing {

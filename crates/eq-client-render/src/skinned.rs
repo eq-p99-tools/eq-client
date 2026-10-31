@@ -3833,18 +3833,23 @@ mod tests {
         let world = state.world();
         assert_eq!(gauge_text(world, 1).0, "Example");
         assert_eq!(fraction(world, None, 1), Some(0.4));
-        assert_eq!(label_text(world, None, 19), "40");
+        assert_eq!(label_text(world, None, None, 19), "40");
         // Mana and stamina need their maxima, here estimated.
-        assert_eq!(label_text(world, Some((100, 100)), 20), "50");
-        assert_eq!(label_text(world, Some((100, 100)), 21), "25");
-        assert_eq!(label_text(world, None, 20), "");
+        assert_eq!(label_text(world, Some((100, 100)), None, 20), "50");
+        assert_eq!(label_text(world, Some((100, 100)), None, 21), "25");
+        assert_eq!(label_text(world, None, None, 20), "");
+        // What the player carries and can carry, as the speed inputs count
+        // them; capacity is unknown before the profile.
+        assert_eq!(label_text(world, None, Some((123, Some(150))), 24), "123");
+        assert_eq!(label_text(world, None, Some((123, Some(150))), 25), "150");
+        assert_eq!(label_text(world, None, Some((123, None)), 25), "");
         // Numbers the client does not know yet show nothing.
-        assert_eq!(label_text(world, None, 99), "");
+        assert_eq!(label_text(world, None, None, 99), "");
         assert_eq!(fraction(world, None, 16), None);
         // With no target, the target's gauge is empty, and so is the
         // label for its name.
         assert_eq!(gauge_text(world, 6).0, "");
-        assert_eq!(label_text(world, None, 28), "");
+        assert_eq!(label_text(world, None, None, 28), "");
         assert_eq!(fraction(world, None, 6), None);
         // A creature targeted: its name as players see it, in the label and
         // the gauge alike.
@@ -3853,11 +3858,11 @@ mod tests {
         creature.pet_owner = None;
         testing::spawn_entry(&mut state, 9, creature);
         state.select_target(Some(9));
-        assert_eq!(label_text(state.world(), None, 28), "a gnoll");
+        assert_eq!(label_text(state.world(), None, None, 28), "a gnoll");
         assert_eq!(gauge_text(state.world(), 6).0, "a gnoll");
         // The player targeting themselves.
         state.select_target(Some(7));
-        assert_eq!(label_text(state.world(), None, 28), "Example");
+        assert_eq!(label_text(state.world(), None, None, 28), "Example");
         assert_eq!(gauge_text(state.world(), 6).0, "Example");
     }
 
@@ -4095,9 +4100,9 @@ mod tests {
         assert_eq!(gauge_text(world, 13).0, "");
         assert_eq!(fraction(world, None, 11), Some(0.6));
         assert_eq!(fraction(world, None, 12), None);
-        assert_eq!(label_text(world, None, 30), "Friend");
-        assert_eq!(label_text(world, None, 35), "60");
-        assert_eq!(label_text(world, None, 36), "");
+        assert_eq!(label_text(world, None, None, 30), "Friend");
+        assert_eq!(label_text(world, None, None, 35), "60");
+        assert_eq!(label_text(world, None, None, 36), "");
         // The first member's pet shows under them.
         assert_eq!(fraction(world, None, 17), Some(1.0));
         assert_eq!(fraction(world, None, 18), None);

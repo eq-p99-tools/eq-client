@@ -1,5 +1,6 @@
-//! The installed client's string table, `eqstr_us.txt`: the words servers
-//! refer to by number, with their argument placeholders.
+//! The installed client's string table (`eqstr_us.txt` for Titanium; each
+//! generation's file is [`crate::ui::InstalledClient::string_file`]): the
+//! words servers refer to by number, with their argument placeholders.
 use std::{collections::BTreeMap, io, path::Path};
 
 /// Strings by id.
@@ -25,13 +26,13 @@ pub struct FormattedString {
 }
 
 impl StringTable {
-    /// Reads `eqstr_us.txt` from the installation.
+    /// Reads the installed `client`'s string table from the installation.
     ///
     /// # Errors
     ///
     /// Fails if the file cannot be read.
-    pub fn read(eq_directory: &Path) -> io::Result<Self> {
-        Self::read_file(&eq_directory.join("eqstr_us.txt"))
+    pub fn read(eq_directory: &Path, client: crate::ui::InstalledClient) -> io::Result<Self> {
+        Self::read_file(&eq_directory.join(client.string_file()))
     }
 
     /// Reads the login screen's own table, `eqlsstr_us.txt`, whose strings
@@ -183,6 +184,33 @@ impl StringTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_generation_reads_its_own_string_file() {
+        use crate::ui::InstalledClient;
+        let folder = std::env::temp_dir().join(format!("eq-client-strings-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        // A Mac-era folder carrying both files still reads its own.
+        std::fs::write(folder.join("eqstr_en.txt"), "EQST0002\n0 1\n1 Mac words\n").unwrap();
+        std::fs::write(
+            folder.join("eqstr_us.txt"),
+            "EQST0002\n0 1\n1 Titanium words\n",
+        )
+        .unwrap();
+        let read = |client| StringTable::read(&folder, client).unwrap();
+        assert_eq!(
+            read(InstalledClient::EqMac).argument_free(1),
+            Some("Mac words")
+        );
+        assert_eq!(
+            read(InstalledClient::Titanium).argument_free(1),
+            Some("Titanium words")
+        );
+        // Without its own file, a generation reads nothing, not the other's.
+        std::fs::remove_file(folder.join("eqstr_en.txt")).unwrap();
+        assert!(StringTable::read(&folder, InstalledClient::EqMac).is_err());
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
 
     #[test]
     fn spans_follow_unicode_repeated_and_nested_arguments() {

@@ -149,7 +149,11 @@ fn zone_line(player: &ZonePlayer, messages: &Messages) -> Said {
         .map(|guild| format!("<{guild}>"))
         .unwrap_or_default();
     let (line, arguments) = match listing.anonymity {
-        Anonymity::Anonymous => (ANONYMOUS, vec![flag, name, tag]),
+        // Both bits list as anonymous: the anonymous bit hides more, and
+        // which line the program picks for both is inferred (6.301).
+        Anonymity::Anonymous | Anonymity::AnonymousRoleplaying => {
+            (ANONYMOUS, vec![flag, name, tag])
+        }
         Anonymity::Roleplaying => (ROLEPLAYING, vec![flag, name, guild, tag]),
         Anonymity::Open => {
             let level = u32::from(player.level);
