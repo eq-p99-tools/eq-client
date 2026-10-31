@@ -58,6 +58,7 @@ pub use eq_network_game::socials;
 pub use eq_network_game::spells::BookActionStatus;
 pub use eq_network_game::spells::SpellBook;
 pub use eq_network_game::spells::SpellUpdate;
+pub use eq_network_game::sysinfo::SysInfo;
 pub use eq_network_game::tradeskills;
 pub use eq_network_game::training;
 pub use eq_network_game::zones;
