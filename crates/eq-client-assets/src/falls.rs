@@ -113,14 +113,14 @@ impl ClientFalls {
     }
 }
 
-/// The Mac-era client's falls (from the program, 6.161). The jump's
-/// starting speed is unread: this client's provisional jump (10 units a
-/// second under 32) is scaled to rise as high under this gravity (1.3).
+/// The Mac-era client's falls (from the program, 6.161). A jump adds
+/// 1.65 × 1.35 = 2.2275 units a step to the rising speed (TAKP sitting 2,
+/// section M1; recording checklist item 1.3).
 pub const EQMAC: ClientFalls = ClientFalls {
     gravity: 0.4 / (STEP_SECONDS * STEP_SECONDS),
     // 0.4 × 0.99 / (1 − 0.99) units a step.
     terminal_speed: 39.6 / STEP_SECONDS,
-    jump_speed: 22.360_68,
+    jump_speed: 1.65 * 1.35 / STEP_SECONDS,
     air_factor: 0.99,
     gate: 2.5,
     harmless_zones: &[151],
@@ -209,8 +209,11 @@ mod tests {
         let step = EQMAC.terminal_speed * STEP_SECONDS;
         let next = (step + EQMAC.gravity * STEP_SECONDS * STEP_SECONDS) * EQMAC.air_factor;
         assert!((next - step).abs() < 0.001, "{next}");
-        // The jump rises as high as the provisional one: 10² / (2 × 32).
-        let apex = EQMAC.jump_speed * EQMAC.jump_speed / (2.0 * EQMAC.gravity);
-        assert!((apex - 1.5625).abs() < 0.001, "{apex}");
+        // A jump starts at 44.55 units a second.
+        assert!(
+            (EQMAC.jump_speed - 44.55).abs() < 0.001,
+            "{}",
+            EQMAC.jump_speed
+        );
     }
 }

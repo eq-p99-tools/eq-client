@@ -12,7 +12,10 @@ pub struct VerticalPhysics {
     /// Initial upward speed for a grounded jump.
     pub jump_speed: f32,
     /// The share of the vertical speed kept after each 50 ms slice, rising
-    /// or falling; 1 keeps all of it.
+    /// or falling; 1 keeps all of it. It is taken off the speed a slice
+    /// ends with; the distance within the slice is integrated without it,
+    /// which at 50 ms slices moves the feet at most 0.4 units further
+    /// a slice, at the fastest fall.
     pub air_factor: f32,
 }
 
