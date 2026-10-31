@@ -22,6 +22,7 @@ use bindings::{GroupButton, RaidButton, effect_label, selector_button};
 mod controls;
 mod fit;
 mod frame;
+pub(crate) mod gem;
 mod items;
 pub(crate) mod looks;
 pub(crate) mod scrollbar;
@@ -192,12 +193,15 @@ struct Context<'a> {
     tab_frame: Option<&'a eq_client_assets::sidl::FrameLook>,
 }
 
-/// The skin's windows as read, by skin and screen: read once, whatever
-/// rebuilds the frames they are drawn in.
+/// A skin as read from one installation's folder.
+type SkinKey = (std::path::PathBuf, String);
+
+/// The skin's windows as read, by installation folder, skin and screen:
+/// read once, whatever rebuilds the frames they are drawn in.
 #[derive(Resource, Default)]
 pub(crate) struct Screens {
-    libraries: HashMap<String, Option<Library>>,
-    screens: HashMap<(String, &'static str), Option<Screen>>,
+    libraries: HashMap<SkinKey, Option<Library>>,
+    screens: HashMap<(SkinKey, &'static str), Option<Screen>>,
 }
 
 impl Screens {
@@ -217,7 +221,7 @@ impl Screens {
     ) -> Option<&Screen> {
         let library = Self::library(&mut self.libraries, directory, skin);
         self.screens
-            .entry((skin.to_owned(), name))
+            .entry(((directory.to_owned(), skin.to_owned()), name))
             .or_insert_with(|| {
                 library?
                     .window(directory, skin, file, name)
@@ -234,12 +238,12 @@ impl Screens {
 
     /// The skin's animations and templates, read once.
     fn library<'a>(
-        libraries: &'a mut HashMap<String, Option<Library>>,
+        libraries: &'a mut HashMap<SkinKey, Option<Library>>,
         directory: &std::path::Path,
         skin: &str,
     ) -> Option<&'a Library> {
         libraries
-            .entry(skin.to_owned())
+            .entry((directory.to_owned(), skin.to_owned()))
             .or_insert_with(|| {
                 Library::read(directory, skin)
                     .inspect_err(|error| warn!("UI skin {skin} unreadable: {error}"))
@@ -779,17 +783,40 @@ fn spell_gem(
             node,
         ))
         .with_children(|gem_node| {
-            if let Some(piece) = &gem.background {
-                picture(gem_node, art, piece, at(0.0, 0.0, area.width, area.height));
-            }
+            let whole = at(0.0, 0.0, area.width, area.height);
+            let mut piece = |gem_node: &mut ChildSpawnerCommands, part: Option<&Piece>, which| {
+                if let Some(image) = part.and_then(|part| art.cut(part)) {
+                    gem_node.spawn((image, whole.clone(), which));
+                }
+            };
+            piece(gem_node, gem.background.as_ref(), gem::GemPiece::Background);
+            // The spell's square icon at the skin's icon offset, else where
+            // it always sat; and where the skin has gem icons, the spell's
+            // cell, at the offset or centred, for a client whose spells name
+            // one, in place of the square icon.
             let icon = (area.height - 6.0).max(8.0);
-            gem_node.spawn(super::spell_icons::artwork(
-                super::spell_icons::Source::Gem(usize::from(index)),
+            let place = gem.icon_offset.unwrap_or(super::spell_icons::INSET);
+            let gems = gem.icons.clone().filter(|gems| !gems.sheets.is_empty());
+            gem_node.spawn(super::spell_icons::gem_square_artwork(
+                usize::from(index),
+                place,
                 icon,
+                gems.is_some(),
             ));
-            if let Some(piece) = &gem.holder {
-                picture(gem_node, art, piece, at(0.0, 0.0, area.width, area.height));
+            if let Some(gems) = gems {
+                #[allow(clippy::cast_precision_loss, reason = "cells are small")]
+                let place = gem.icon_offset.unwrap_or((
+                    (area.width - gems.cell_width as f32) / 2.0,
+                    (area.height - gems.cell_height as f32) / 2.0,
+                ));
+                gem_node.spawn(super::spell_icons::gem_artwork(
+                    usize::from(index),
+                    gems,
+                    place,
+                ));
             }
+            piece(gem_node, gem.highlight.as_ref(), gem::GemPiece::Highlight);
+            piece(gem_node, gem.holder.as_ref(), gem::GemPiece::Holder);
         });
 }
 
@@ -1010,11 +1037,15 @@ fn button(
             .disabled
             .as_ref()
             .or(button.look.normal.as_ref()),
+        // The item display's icon button draws the item's icon as its
+        // Normal piece, with nothing of the template under it (from the
+        // program, Titanium sitting 9e).
+        Does::ItemIcon => None,
         _ => button.look.normal.as_ref(),
     };
     // A button the skin draws only under the pointer, as the default
     // spellbook's close mark, starts unseen (`buttons`).
-    let unseen = look.is_none() && !matches!(does, Does::Nothing);
+    let unseen = look.is_none() && !matches!(does, Does::Nothing | Does::ItemIcon);
     let look = look.or_else(|| button.look.flyby.as_ref().filter(|_| unseen));
     let mut drawn = match look.and_then(|piece| art.cut(piece)) {
         Some(mut image) => {
@@ -1025,7 +1056,7 @@ fn button(
         }
         None => window.spawn(node),
     };
-    behave(&mut drawn, does, button, owner);
+    behave(&mut drawn, does, (button, area), owner);
     if let Some(id) = &button.id {
         drawn.insert(SkinId {
             window: owner,
@@ -1076,9 +1107,7 @@ fn button_area(button: &eq_client_assets::sidl::Button, does: Does, inside: &Are
         Some(slot) if !button.placed && button.anchors.is_none() => {
             stacked(button.area, slot, inside)
         }
-        _ => button.anchors.map_or(button.area, |anchors| {
-            anchors.within(inside.width, inside.height)
-        }),
+        _ => button.area_in(inside.width, inside.height),
     }
 }
 
@@ -1120,7 +1149,7 @@ fn paired(does: Does, owner: WindowId) -> Option<Shows> {
 fn behave(
     drawn: &mut EntityCommands,
     does: Does,
-    button: &eq_client_assets::sidl::Button,
+    (button, area): (&eq_client_assets::sidl::Button, Area),
     owner: WindowId,
 ) {
     use eq_client_core::Capability;
@@ -1229,13 +1258,15 @@ fn behave(
             &mut *drawn
         }
         Does::Chosen => {
-            chosen_picture(drawn, button);
+            chosen_picture(drawn, button, area);
             &mut *drawn
         }
-        Does::ItemIcon => {
-            let (x, y, size) = decal_place(button);
-            drawn.insert(super::items::ItemIcon { x, y, size })
-        }
+        // The icon fills the whole button, as its Normal piece would.
+        Does::ItemIcon => drawn.insert(super::items::ItemIcon {
+            x: 0.0,
+            y: 0.0,
+            size: area.width.min(area.height),
+        }),
         Does::BookPlace(_)
         | Does::TurnsSpellbook(_)
         | Does::CharacterSlot(_)
@@ -1298,8 +1329,8 @@ fn trades(drawn: &mut EntityCommands, action: crate::trade::Action, skin: SkinBu
 
 /// The merchant window's box for the chosen item, its picture where the
 /// skin's sample sits; hovering it names the item.
-fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::Button) {
-    let (x, y, size) = decal_place(button);
+fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::Button, area: Area) {
+    let (x, y, size) = decal_place(button, area);
     drawn.insert((
         crate::trade::ChosenPicture { x, y, size },
         Interaction::default(),
@@ -1311,7 +1342,7 @@ fn chosen_picture(drawn: &mut EntityCommands, button: &eq_client_assets::sidl::B
 /// height; its left and top, and its size.
 fn buff_icon_place(button: &eq_client_assets::sidl::Button, area: Area) -> ((f32, f32), f32) {
     if button.decal_area.is_some() {
-        let (x, y, size) = decal_place(button);
+        let (x, y, size) = decal_place(button, area);
         ((x, y), size)
     } else {
         (super::spell_icons::INSET, area.height.min(area.width) - 4.0)
@@ -1319,13 +1350,14 @@ fn buff_icon_place(button: &eq_client_assets::sidl::Button, area: Area) -> ((f32
 }
 
 /// Where a button's picture of an item goes: where the skin puts its
-/// sample picture, or else just inside the button; its left, top and size.
-fn decal_place(button: &eq_client_assets::sidl::Button) -> (f32, f32, f32) {
+/// sample picture, or else just inside the button as laid out (`area`);
+/// its left, top and size.
+fn decal_place(button: &eq_client_assets::sidl::Button, area: Area) -> (f32, f32, f32) {
     let place = button.decal_area.unwrap_or(Area {
         x: 1.0,
         y: 1.0,
-        width: button.area.width - 2.0,
-        height: button.area.height - 2.0,
+        width: area.width - 2.0,
+        height: area.height - 2.0,
     });
     (place.x, place.y, place.width.min(place.height))
 }
@@ -1368,7 +1400,7 @@ fn caption(
         Does::Ability(place) => {
             inner.spawn((super::abilities::AbilityLabel(place), words("")));
         }
-        Does::HotButton(index) => hotbar::contents(inner, index),
+        Does::HotButton(index) => hotbar::contents(inner, index, Some(decal_place(button, area))),
         Does::PetBuff(slot) => {
             let (place, size) = buff_icon_place(button, area);
             inner.spawn(super::spell_icons::artwork_at(
@@ -1380,7 +1412,7 @@ fn caption(
         // The spell's picture, where the skin puts its sample, and the
         // mark that shows a right click chose it (`spellbook::present`).
         Does::BookPlace(place) => {
-            let (x, y, size) = decal_place(button);
+            let (x, y, size) = decal_place(button, area);
             inner.spawn(super::spell_icons::artwork_at(
                 super::spell_icons::Source::BookPlace(place),
                 (x, y),
@@ -2499,6 +2531,79 @@ mod tests {
     }
 
     #[test]
+    fn a_hot_buttons_pictures_fill_where_the_skin_puts_its_decal() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element};
+        // As the stock skins' HB_Button1: 40 by 40, its decal the same.
+        let whole = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        let screen = Screen {
+            name: "HotButtonWnd".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: whole,
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![(
+                "slot".into(),
+                Element::Button(Button {
+                    id: Some("HB_Button1".into()),
+                    area: whole,
+                    placed: true,
+                    anchors: None,
+                    look: ButtonLook::default(),
+                    checkbox: false,
+                    text: None,
+                    text_color: None,
+                    font: None,
+                    decal: None,
+                    decal_area: Some(whole),
+                    tooltip: None,
+                }),
+            )],
+            tab_frame: None,
+            transparent: false,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id: WindowId::Actions,
+                        paperdoll: None,
+                        depth: 0,
+                        tab_frame: None,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            );
+        app.update();
+        // The spell's icon and the item's picture, each the decal's size at
+        // its place.
+        let mut pictures = app
+            .world_mut()
+            .query_filtered::<&Node, (With<ImageNode>, With<bevy::ui::FocusPolicy>)>();
+        let placed: Vec<_> = pictures
+            .iter(app.world())
+            .filter(|node| node.position_type == PositionType::Absolute)
+            .map(|node| (node.left, node.top, node.width, node.height))
+            .collect();
+        assert_eq!(placed, [(px(0), px(0), px(40), px(40)); 2]);
+    }
+
+    #[test]
     fn a_button_the_client_does_not_have_yet_says_so_on_hover() {
         use crate::outbox::Needs;
         use eq_client_assets::sidl::{Button, ButtonLook, Element};
@@ -3041,6 +3146,131 @@ mod tests {
         assert_eq!(window_label(book, "SBW_SpellName16"), None);
     }
 
+    /// The item display's icon boxes drawn for an icon button at `area`
+    /// with these `anchors`, in a window of `whole`'s size: each box's
+    /// place and size, and whether a template piece was drawn under it.
+    fn item_icon_boxes(
+        whole: Area,
+        area: Area,
+        anchors: Option<eq_client_assets::sidl::Anchors>,
+    ) -> Vec<(f32, f32, f32, bool)> {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element, Piece};
+        let screen = Screen {
+            name: "ItemDisplayWindow".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: whole,
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![(
+                "icon".into(),
+                Element::Button(Button {
+                    id: Some("IconButton".into()),
+                    area,
+                    placed: anchors.is_none(),
+                    anchors,
+                    look: ButtonLook {
+                        normal: Some(Piece {
+                            texture: "sample.tga".into(),
+                            x: 0,
+                            y: 0,
+                            width: 40,
+                            height: 40,
+                        }),
+                        ..ButtonLook::default()
+                    },
+                    checkbox: false,
+                    text: None,
+                    text_color: None,
+                    font: None,
+                    decal: None,
+                    decal_area: Some(Area {
+                        x: 4.0,
+                        y: 4.0,
+                        width: 32.0,
+                        height: 32.0,
+                    }),
+                    tooltip: None,
+                }),
+            )],
+            tab_frame: None,
+            transparent: false,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id: WindowId::Item,
+                        paperdoll: None,
+                        depth: 0,
+                        tab_frame: None,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            );
+        app.update();
+        let mut boxes = app
+            .world_mut()
+            .query::<(&crate::items::ItemIcon, Has<ImageNode>)>();
+        boxes
+            .iter(app.world())
+            .map(|(place, image)| (place.x, place.y, place.size, image))
+            .collect()
+    }
+
+    #[test]
+    fn the_item_displays_icon_button_draws_no_template_under_the_icon() {
+        let whole = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        assert_eq!(
+            item_icon_boxes(whole, whole, None),
+            [(0.0, 0.0, 40.0, false)]
+        );
+    }
+
+    #[test]
+    fn an_icon_button_sized_only_by_its_anchors_holds_the_whole_icon() {
+        use eq_client_assets::sidl::{Anchor, Anchors};
+        // The Mac-era skin's button: no size of its own, 44 by 44 between
+        // anchors kept to the window's right edge and top.
+        let window = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 300.0,
+            height: 200.0,
+        };
+        let none = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+        let anchors = Anchors {
+            left: Anchor::End(70.0),
+            top: Anchor::Start(12.0),
+            right: Anchor::End(26.0),
+            bottom: Anchor::Start(56.0),
+        };
+        assert_eq!(
+            item_icon_boxes(window, none, Some(anchors)),
+            [(0.0, 0.0, 44.0, false)]
+        );
+    }
+
     #[test]
     fn the_item_displays_icon_box_shows_the_items_picture() {
         assert!(matches!(
@@ -3346,6 +3576,47 @@ mod tests {
         assert_eq!(hidden_off, "hiding");
         assert_eq!(hidden_on, eq_client_assets::ui::DEFAULT_SKIN);
         assert_eq!(default_on, eq_client_assets::ui::DEFAULT_SKIN);
+    }
+
+    #[test]
+    fn one_skin_name_in_two_installations_reads_two_libraries() {
+        let root = std::env::temp_dir().join(format!("skin-roots-{}", std::process::id()));
+        let install = |name: &str, cell: u32| {
+            let folder = root
+                .join(name)
+                .join("uifiles")
+                .join(eq_client_assets::ui::DEFAULT_SKIN);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join("EQUI_Animations.xml"),
+                format!(
+                    "<XML><Ui2DAnimation item=\"A_SpellGems\"><Grid>true</Grid>\
+                     <CellWidth>{cell}</CellWidth><CellHeight>{cell}</CellHeight>\
+                     <Frames><Texture>gemicons01.tga</Texture>\
+                     <Location><X>0</X><Y>0</Y></Location>\
+                     <Size><CX>{cell}</CX><CY>{cell}</CY></Size></Frames>\
+                     </Ui2DAnimation></XML>"
+                ),
+            )
+            .unwrap();
+            std::fs::write(folder.join("EQUI_Templates.xml"), "<XML></XML>").unwrap();
+            root.join(name)
+        };
+        let (titanium, mac) = (install("titanium", 36), install("mac", 24));
+        let mut screens = Screens::default();
+        let cell = |screens: &mut Screens, directory: &std::path::Path| {
+            Screens::library(
+                &mut screens.libraries,
+                directory,
+                eq_client_assets::ui::DEFAULT_SKIN,
+            )
+            .and_then(|library| library.named_piece("A_SpellGems"))
+            .map(|sheet| sheet.width)
+        };
+        let first = cell(&mut screens, &titanium);
+        let second = cell(&mut screens, &mac);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!((first, second), (Some(36), Some(24)));
     }
 
     #[test]

@@ -20,6 +20,12 @@ pub(super) struct Artwork {
     source: Source,
     shown: Option<u32>,
     initialized: bool,
+    /// The skin's gem icons, which a gem shows in place of the square icon
+    /// where the skin has them and the spell names its cell.
+    gems: Option<eq_client_assets::sidl::IconGrid>,
+    /// Whether a gem-icon artwork beside this square icon shows the spell
+    /// instead, where the spell names its cell.
+    beside_gems: bool,
 }
 
 /// Where artwork sits in its button when nothing else places it.
@@ -31,12 +37,18 @@ pub(super) fn artwork(source: Source, size: f32) -> impl Bundle {
 }
 
 /// Artwork at this place in the button that owns it.
-pub(super) fn artwork_at(source: Source, (left, top): (f32, f32), size: f32) -> impl Bundle {
+pub(super) fn artwork_at(
+    source: Source,
+    (left, top): (f32, f32),
+    size: f32,
+) -> (Artwork, ImageNode, Node, bevy::ui::FocusPolicy) {
     (
         Artwork {
             source,
             shown: None,
             initialized: false,
+            gems: None,
+            beside_gems: false,
         },
         ImageNode::default(),
         Node {
@@ -45,6 +57,48 @@ pub(super) fn artwork_at(source: Source, (left, top): (f32, f32), size: f32) -> 
             top: px(top),
             width: px(size),
             height: px(size),
+            ..default()
+        },
+        bevy::ui::FocusPolicy::Pass,
+    )
+}
+
+/// A gem's square icon, at this place and size in the gem; `beside_gems`
+/// where a gem-icon artwork shows the spells that name their cell.
+pub(super) fn gem_square_artwork(
+    index: usize,
+    place: (f32, f32),
+    size: f32,
+    beside_gems: bool,
+) -> impl Bundle {
+    let (mut artwork, image, node, focus) = artwork_at(Source::Gem(index), place, size);
+    artwork.beside_gems = beside_gems;
+    (artwork, image, node, focus)
+}
+
+/// A gem's spell as the skin's gem icons draw it, one cell's size, at this
+/// place in the gem.
+pub(super) fn gem_artwork(
+    index: usize,
+    gems: eq_client_assets::sidl::IconGrid,
+    (left, top): (f32, f32),
+) -> impl Bundle {
+    let (width, height) = (gems.cell_width, gems.cell_height);
+    (
+        Artwork {
+            source: Source::Gem(index),
+            shown: None,
+            initialized: false,
+            gems: Some(gems),
+            beside_gems: false,
+        },
+        ImageNode::default(),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(left),
+            top: px(top),
+            width: px(width),
+            height: px(height),
             ..default()
         },
         bevy::ui::FocusPolicy::Pass,
@@ -103,6 +157,25 @@ pub(super) fn update(
         artwork.initialized = true;
         artwork.shown = spell;
         node.display = Display::None;
+        if let (Source::Gem(index), Some(spell)) = (&artwork.source, spell) {
+            report_gem(*index, spell, &names, artwork.gems.as_ref());
+        }
+        // A gem shows the spell's gem icon where the skin has them; the
+        // square icon where the skin or the spell data lacks it.
+        let gem = artwork.gems.as_ref().and_then(|gems| {
+            let cell = gems.cell(names.gem_icon(spell?)?)?;
+            art.cut(&cell)
+        });
+        if let Some(piece) = gem {
+            *image = piece;
+            node.display = Display::Flex;
+            continue;
+        }
+        if artwork.gems.is_some()
+            || (artwork.beside_gems && spell.and_then(|spell| names.gem_icon(spell)).is_some())
+        {
+            continue;
+        }
         let Some(icon) = spell.and_then(|spell| names.icon(spell)) else {
             continue;
         };
@@ -112,6 +185,29 @@ pub(super) fn update(
             node.display = Display::Flex;
         }
     }
+}
+
+/// One debug line for what a gem's spell resolves to: its tint field and
+/// colour, and its icon field and the skin cell that field picks.
+fn report_gem(
+    index: usize,
+    spell: u32,
+    names: &super::spellbook::SpellNames,
+    gems: Option<&eq_client_assets::sidl::IconGrid>,
+) {
+    let field = names.gem_tint_field(spell);
+    let tint = names.gem_tint(spell);
+    let icon = names.gem_icon(spell);
+    let cell = gems.zip(icon).and_then(|(gems, icon)| gems.cell(icon));
+    debug!(
+        "Gem {} holds spell {spell}: tint field {field:?} -> {}, icon field {icon:?} -> {}",
+        index + 1,
+        tint.map_or_else(|| "none".to_owned(), |tint| format!("{tint:#010x}")),
+        cell.map_or_else(
+            || "no cell".to_owned(),
+            |cell| format!("{} at ({}, {})", cell.texture, cell.x, cell.y)
+        ),
+    );
 }
 
 #[cfg(test)]

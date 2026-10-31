@@ -6,7 +6,7 @@ use crate::{
     item_models, items, keys, login, logs, map, motion, move_player, names, navigation,
     navmesh_prebuild, notices, online, options, orbit_camera, outbox, outfit, paperdoll, pet,
     profile_files, raid, reading, resources, schedule_screenshot, select_preview, sheets, skills,
-    skin, skinned, sounds, spell_effects, spell_icons, spellbook, target, tooltip, trade,
+    skin, skinned, sounds, speed, spell_effects, spell_icons, spellbook, target, tooltip, trade,
     tradeskills, training, translocate, update_hud, whereabouts, who, windows,
 };
 use bevy::prelude::*;
@@ -147,7 +147,7 @@ pub(super) fn schedule(app: &mut App) {
                 raid::window,
             ),
             combat::input,
-            trade::input,
+            (trade::input, speed::report).chain(),
             (
                 give::buttons,
                 give::inspect_theirs,
@@ -238,7 +238,7 @@ pub(super) fn schedule(app: &mut App) {
                 buffs::update,
                 (buffs::hover, buffs::skinned_details, buffs::short_window),
                 (
-                    spell_icons::update,
+                    (spell_icons::update, skinned::gem::pieces),
                     logs::write,
                     (
                         options::toggle,

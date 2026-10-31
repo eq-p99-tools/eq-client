@@ -252,7 +252,41 @@ pub enum InstalledClient {
     EqMac,
 }
 
+/// How a program draws a spell gem: the holder only while the gem is
+/// empty; with a spell, the background tinted with the spell's gem colour
+/// (untinted while pressed), the spell's icon, then the highlight. The
+/// pieces' order is the skin parser's (holder, background, highlight). The
+/// darker shades and the icon's fade while a gem refreshes are not drawn
+/// yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GemDraw {
+    /// Added to the tint, as ARGB, while the pointer is over the gem, with
+    /// no clamp, as read (no colour in the table carries).
+    pub hover: u32,
+}
+
 impl InstalledClient {
+    /// How this client's program draws a spell gem's skin pieces, where
+    /// that is read (the Titanium and TAKP gem window reads of 10-31; the
+    /// Titanium draw is at 0x558a50). Both generations draw them alike; a
+    /// gem's icon and tint come from each one's spell file
+    /// ([`crate::spells::Layout`]).
+    #[must_use]
+    pub const fn gem_draw(self) -> Option<GemDraw> {
+        match self {
+            Self::Titanium | Self::EqMac => Some(GemDraw { hover: 0x0020_2020 }),
+        }
+    }
+
+    /// Where this client's spell file is and how its lines are laid out.
+    #[must_use]
+    pub const fn spell_file(self) -> crate::spells::Layout {
+        match self {
+            Self::Titanium => crate::spells::Layout::TITANIUM,
+            Self::EqMac => crate::spells::Layout::EQMAC,
+        }
+    }
+
     /// Whether this client has the short effects window, for songs and
     /// other short buffs; unchecked for the Mac-era client.
     #[must_use]

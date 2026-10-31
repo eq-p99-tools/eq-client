@@ -380,6 +380,7 @@ fn entities(
         spawn_id: 1,
         position: origin,
         velocity: [0.0; 3],
+        forward: 0.0,
     });
     for (id, race, offset, size) in [(2u16, 1, 0.0, 0.0), (3, 42, 2.1, 2.5), (4, 54, 4.2, 6.0)] {
         let phase = time.elapsed_secs() % 18.0;
@@ -407,6 +408,7 @@ fn entities(
                 spawn_id: id,
                 position: p,
                 velocity: [0.0; 3],
+                forward: 0.0,
             }
         });
         if id == 2 {

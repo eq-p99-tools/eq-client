@@ -156,7 +156,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
                     Pickable(Source::Slot(index)),
                     crate::outbox::Needs::Nothing,
                 ))
-                .with_children(|button| contents(button, index));
+                .with_children(|button| contents(button, index, None));
         }
     }
     let hint = super::label(commands, frame, "", Size::Caption, theme::INK);
@@ -170,16 +170,24 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
     ));
 }
 
-/// What a slot's button shows of what it holds: the spell's icon, the
-/// item's picture and a caption in the corner, or the words of a kind with
-/// no picture centred in the button, in the client's own window and in the
-/// skin's Hot Button window alike.
-pub(crate) fn contents(button: &mut ChildSpawnerCommands, index: usize) {
-    button.spawn(crate::spell_icons::artwork(
-        crate::spell_icons::Source::Action(index),
-        30.0,
-    ));
-    button.spawn(item_art::artwork(index));
+/// What a slot's button shows of what it holds: the spell's icon or the
+/// item's picture, a caption in the corner, or the words of a kind with no
+/// picture centred in the button. In the skin's Hot Button window a picture
+/// goes where the skin puts the button's own (`place`: its left, top and
+/// size); in the client's own window, 30 pixels just inside the button.
+pub(crate) fn contents(
+    button: &mut ChildSpawnerCommands,
+    index: usize,
+    place: Option<(f32, f32, f32)>,
+) {
+    let spell = crate::spell_icons::Source::Action(index);
+    if let Some((left, top, size)) = place {
+        button.spawn(crate::spell_icons::artwork_at(spell, (left, top), size));
+        button.spawn(item_art::artwork(index, (left, top, size)));
+    } else {
+        button.spawn(crate::spell_icons::artwork(spell, 30.0));
+        button.spawn(item_art::artwork(index, (4.0, 4.0, 30.0)));
+    }
     button.spawn((
         Caption(index),
         theme::text("", Size::Caption, theme::INK),

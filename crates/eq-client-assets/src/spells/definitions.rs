@@ -1,7 +1,7 @@
-//! Every spell's local definition from the user's `spells_us.txt`: its name,
+//! Every spell's local definition from the user's spell file: its name,
 //! icon, base costs and timing, and its mechanics. These are the installed
 //! client's base values, not what a server adjusts them to.
-use super::Mechanics;
+use super::{Layout, Mechanics};
 use std::{collections::BTreeMap, io, path::Path};
 
 /// One spell as the installed client defines it. Fields that are missing or
@@ -10,8 +10,21 @@ use std::{collections::BTreeMap, io, path::Path};
 pub struct Definition {
     /// The spell's name, if the line has one.
     pub name: Option<String>,
-    /// Field 144: the cell in the default UI's spell icon sheets.
+    /// The cell in the default UI's spell icon sheets (Titanium field 144;
+    /// unread on the Mac-era client).
     pub icon: Option<u32>,
+    /// The cell in the skin's gem icons (`A_SpellGems`) that a gem shows
+    /// in place of [`Definition::icon`], on a client whose program draws
+    /// its gems from a column of their own: the Mac-era client's field 131.
+    /// Titanium's gems draw the book icon, so it has none.
+    pub gem_icon: Option<u32>,
+    /// The colour, as ARGB, that tints a gem's background while it holds
+    /// the spell (Titanium field 98, Mac-era field 86, and field 18 for one
+    /// colour). See [`gem_tint`].
+    pub gem_tint: Option<u32>,
+    /// The tint field's value as read, before [`gem_tint`] resolves it,
+    /// for the gem debug line.
+    pub gem_tint_field: Option<u32>,
     /// Field 19: the unmodified mana cost.
     pub mana: Option<u32>,
     /// Field 13: the unmodified cast time, in milliseconds.
@@ -20,11 +33,11 @@ pub struct Definition {
     pub range: Option<f32>,
     /// Fields 14 and 15: recovery and same-spell reuse, in milliseconds.
     pub timing: Option<Timing>,
-    /// Field 120: the motion the caster plays while casting, as the
+    /// Field 120 (unread on the Mac-era client): the motion the caster plays while casting, as the
     /// servers' animation number, such as 42 to 44 for the three casting
     /// gestures.
     pub casting_animation: Option<u16>,
-    /// Field 145: the particle effect the installed client draws for the
+    /// Field 145 (unread on the Mac-era client): the particle effect the installed client draws for the
     /// spell, by its record in the client's effect file.
     pub effect: Option<u32>,
     /// The spell's numeric mechanics.
@@ -42,25 +55,63 @@ pub struct Timing {
     pub recast_ms: u32,
 }
 
+/// Which of the gem colours each value of Titanium's field 98 picks, as
+/// its program maps it (the 44-entry table at 0x44d103).
+pub(super) const TITANIUM_GEM_TINTS: &[u8] = &[
+    0, 0, 1, 2, 1, 0, 3, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 1, 1, 1, 0, 4, 1, 4, 1,
+    5, 5, 0, 5, 5, 5, 0, 5, 2, 2, 1, 0,
+];
+
+/// Which of the gem colours each value of the Mac-era client's field 86
+/// picks, as its program maps it (the 42-entry table at 0x41911d, the same
+/// at all three gem sites). It differs from Titanium's at 34 and 38.
+pub(super) const EQMAC_GEM_TINTS: &[u8] = &[
+    0, 0, 1, 2, 1, 0, 3, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 1, 1, 1, 0, 4, 1, 4, 1,
+    5, 5, 5, 5, 5, 5, 5, 5, 2, 2,
+];
+
+/// The colour, as ARGB, that tints a gem's background for a spell whose
+/// tint field is `index`: the case `cases` picks, where the fifth case
+/// depends on whether field 18 is under 3000 (unavailable leaves the colour
+/// unknown). A value past the table gives opaque black, as read; how the
+/// piece draw treats that colour is untraced.
+#[must_use]
+pub fn gem_tint(cases: &[u8], index: u32, field_18: Option<u32>) -> Option<u32> {
+    let case = usize::try_from(index)
+        .ok()
+        .and_then(|index| cases.get(index))
+        .copied()
+        .unwrap_or(5);
+    Some(match case {
+        0 => 0xffde_2121,
+        1 => 0xff52_42de,
+        2 => 0xff9c_31de,
+        3 => 0xffce_de29,
+        4 if field_18? < 3000 => 0xff42_de63,
+        4 => 0xffde_7b21,
+        _ => 0xff00_0000,
+    })
+}
+
 /// The installed client's spells, by id.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Definitions(BTreeMap<u32, Definition>);
 
 impl Definitions {
-    /// Reads `spells_us.txt` from the installation.
+    /// Reads the installation's spell file, laid out as `layout`.
     ///
     /// # Errors
     ///
     /// Fails if the file cannot be read.
-    pub fn read(eq_directory: &Path) -> io::Result<Self> {
-        let bytes = std::fs::read(eq_directory.join("spells_us.txt"))?;
-        Ok(Self::parse(&String::from_utf8_lossy(&bytes)))
+    pub fn read(eq_directory: &Path, layout: &Layout) -> io::Result<Self> {
+        let bytes = std::fs::read(eq_directory.join(layout.file))?;
+        Ok(Self::parse(&String::from_utf8_lossy(&bytes), layout))
     }
 
     /// Parses the file's `^`-separated lines; a line keeps its valid fields
     /// even when others are unavailable or malformed.
     #[must_use]
-    pub fn parse(text: &str) -> Self {
+    pub fn parse(text: &str, layout: &Layout) -> Self {
         let mut spells = BTreeMap::new();
         for line in text.lines() {
             let fields: Vec<_> = line.split('^').take(183).collect();
@@ -74,7 +125,12 @@ impl Definitions {
                     .map(|name| name.trim())
                     .filter(|name| !name.is_empty())
                     .map(str::to_owned),
-                icon: number(144),
+                icon: layout.icon.and_then(number),
+                gem_icon: layout.gem_icon.and_then(number),
+                gem_tint: layout
+                    .gem_tint
+                    .and_then(|(column, cases)| gem_tint(cases, number(column)?, number(18))),
+                gem_tint_field: layout.gem_tint.and_then(|(column, _)| number(column)),
                 mana: number(19),
                 cast_ms: number(13),
                 range: fields
@@ -87,9 +143,12 @@ impl Definitions {
                         recovery_ms,
                         recast_ms,
                     }),
-                casting_animation: fields.get(120).and_then(|field| field.parse().ok()),
-                effect: number(145),
-                mechanics: Mechanics::from_fields(&fields),
+                casting_animation: layout
+                    .casting_animation
+                    .and_then(|column| fields.get(column))
+                    .and_then(|field| field.parse().ok()),
+                effect: layout.effect.and_then(number),
+                mechanics: Mechanics::read(&fields, layout),
                 fades: fields
                     .get(8)
                     .map(|text| text.trim())
@@ -126,7 +185,10 @@ mod tests {
         fields[120] = "44";
         fields[144] = "7";
         fields[145] = "86";
-        let spells = Definitions::parse(&format!("{}\nnot a spell\n", fields.join("^")));
+        let spells = Definitions::parse(
+            &format!("{}\nnot a spell\n", fields.join("^")),
+            &Layout::TITANIUM,
+        );
         let spell = spells.get(42).expect("parsed");
         assert_eq!(spell.name.as_deref(), Some("Synthetic spell"));
         assert_eq!(spell.fades.as_deref(), Some("The synthetic spell fades."));
@@ -141,6 +203,80 @@ mod tests {
     }
 
     #[test]
+    fn a_gems_tint_follows_the_programs_table() {
+        assert_eq!(gem_tint(TITANIUM_GEM_TINTS, 0, None), Some(0xffde_2121));
+        assert_eq!(gem_tint(TITANIUM_GEM_TINTS, 2, None), Some(0xff52_42de));
+        assert_eq!(gem_tint(TITANIUM_GEM_TINTS, 40, None), Some(0xff9c_31de));
+        assert_eq!(gem_tint(TITANIUM_GEM_TINTS, 6, None), Some(0xffce_de29));
+        assert_eq!(
+            gem_tint(TITANIUM_GEM_TINTS, 8, Some(2999)),
+            Some(0xff42_de63)
+        );
+        assert_eq!(
+            gem_tint(TITANIUM_GEM_TINTS, 8, Some(3000)),
+            Some(0xffde_7b21)
+        );
+        assert_eq!(gem_tint(TITANIUM_GEM_TINTS, 8, None), None);
+        assert_eq!(gem_tint(TITANIUM_GEM_TINTS, 33, None), Some(0xff00_0000));
+        assert_eq!(gem_tint(TITANIUM_GEM_TINTS, 44, None), Some(0xff00_0000));
+        assert_eq!(gem_tint(TITANIUM_GEM_TINTS, 34, None), Some(0xffde_2121));
+        assert_eq!(gem_tint(EQMAC_GEM_TINTS, 34, None), Some(0xff00_0000));
+        assert_eq!(gem_tint(EQMAC_GEM_TINTS, 41, None), Some(0xff9c_31de));
+        assert_eq!(gem_tint(EQMAC_GEM_TINTS, 42, None), Some(0xff00_0000));
+        let mut fields = vec!["0"; 183];
+        fields[0] = "5";
+        fields[98] = "21";
+        fields[18] = "100";
+        let spells = Definitions::parse(&fields.join("^"), &Layout::TITANIUM);
+        assert_eq!(spells.get(5).unwrap().gem_tint, Some(0xff42_de63));
+        fields[86] = "34";
+        let mac = Definitions::parse(&fields.join("^"), &Layout::EQMAC);
+        assert_eq!(mac.get(5).unwrap().gem_tint, Some(0xff00_0000));
+    }
+
+    #[test]
+    fn a_mac_era_line_reads_its_own_columns_and_leaves_the_unread_out() {
+        let mut fields = vec!["0"; 147];
+        fields[0] = "242";
+        fields[1] = "Synthetic snare";
+        fields[13] = "1500";
+        fields[19] = "25";
+        fields[21] = "-40";
+        fields[33] = "-55";
+        fields[44] = "2501";
+        fields[45] = "2054";
+        fields[131] = "17";
+        fields[59] = "102";
+        fields[74] = "10";
+        fields[75] = "3";
+        fields[76..86].fill("254");
+        let spells = Definitions::parse(&fields.join("^"), &Layout::EQMAC);
+        let spell = spells.get(242).expect("parsed");
+        assert_eq!(spell.name.as_deref(), Some("Synthetic snare"));
+        assert_eq!((spell.cast_ms, spell.mana), (Some(1500), Some(25)));
+        assert_eq!(spell.gem_icon, Some(17));
+        assert_eq!(spell.icon, None);
+        assert_eq!(spell.casting_animation, None);
+        assert_eq!(spell.effect, None);
+        let mechanics = spell.mechanics.as_ref().expect("mechanics");
+        let snare = mechanics.effects[1];
+        assert_eq!(
+            (
+                snare.id,
+                snare.base,
+                snare.limit,
+                snare.maximum,
+                snare.formula
+            ),
+            (3, -40, 0, -55, 102)
+        );
+        assert_eq!(mechanics.effects[0].id, 10);
+        assert_eq!(mechanics.alternate_duration, None);
+        let titanium = Definitions::parse(&fields.join("^"), &Layout::TITANIUM);
+        assert_eq!(titanium.get(242).and_then(|spell| spell.gem_icon), None);
+    }
+
+    #[test]
     fn the_casting_animation_is_field_120_and_stays_unknown_when_malformed() {
         let mut fields = vec!["0"; 183];
         fields[0] = "7";
@@ -148,7 +284,7 @@ mod tests {
         fields[120] = "42";
         fields[121] = "44";
         let parse = |fields: &[&str]| {
-            Definitions::parse(&fields.join("^"))
+            Definitions::parse(&fields.join("^"), &Layout::TITANIUM)
                 .get(7)
                 .expect("parsed")
                 .casting_animation

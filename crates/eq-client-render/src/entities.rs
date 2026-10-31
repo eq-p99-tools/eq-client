@@ -66,6 +66,33 @@ pub(super) struct RemoteEntity {
     /// How far under the reported position a drawn model's soles hang, in
     /// world units; None for a marker, which stays where the server says.
     feet: Option<f32>,
+    /// Where the Mac-era client has carried it since that report, frame by
+    /// frame, as its program steps a spawn
+    /// ([`eq_client_core::movement::carry`]); None on Titanium, whose
+    /// spawns move on at their reported velocity.
+    carried: Option<eq_client_core::movement::Carried>,
+}
+
+impl RemoteEntity {
+    /// A spawn not yet placed, whose model's soles hang `feet` under its
+    /// reported position (None for a marker).
+    const fn new(id: u16, feet: Option<f32>) -> Self {
+        Self {
+            id,
+            seen: None,
+            soles: None,
+            feet,
+            carried: None,
+        }
+    }
+}
+
+/// The wire generation an installed client speaks.
+const fn dialect(client: eq_client_assets::ui::InstalledClient) -> eq_client_core::GameDialect {
+    match client {
+        eq_client_assets::ui::InstalledClient::Titanium => eq_client_core::GameDialect::Titanium,
+        eq_client_assets::ui::InstalledClient::EqMac => eq_client_core::GameDialect::EqMac,
+    }
 }
 
 /// The stores a drawn spawn's meshes and materials go in; its model's
@@ -233,12 +260,7 @@ fn draw(
     let position = Vec3::from_array(render_position(spawn.position));
     let entity = commands
         .spawn((
-            RemoteEntity {
-                id,
-                seen: None,
-                soles: None,
-                feet: None,
-            },
+            RemoteEntity::new(id, None),
             Name::new(spawn.name.clone()),
             Transform::from_translation(position).with_rotation(Quat::from_rotation_y(
                 eq_client_core::render_heading(spawn.position.heading),
@@ -261,12 +283,7 @@ fn draw(
         let feet = eq_client_core::drawn_feet_offset(spawn.race, spawn.size);
         character::spawn_prepared(commands, entity, &asset, feet / scale);
         commands.entity(entity).insert((
-            RemoteEntity {
-                id,
-                seen: None,
-                soles: None,
-                feet: Some(feet),
-            },
+            RemoteEntity::new(id, Some(feet)),
             Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
                     spawn.position.heading,
@@ -323,7 +340,7 @@ fn draw(
 /// ([`eq_client_core::corpse_tilt`]), for [`character::lie`] to lay it by.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn interpolate(
-    state: Res<OnlineState>,
+    (state, settings): (Res<OnlineState>, Res<crate::ViewerSettings>),
     time: Res<Time>,
     collision: Option<Res<super::Collision>>,
     mut entities: Query<(
@@ -337,6 +354,7 @@ pub(super) fn interpolate(
         .and_then(|collision| collision.0.as_ref());
     let weight = 1.0 - (-time.delta_secs().min(0.1) / 0.1).exp();
     let now = std::time::Instant::now();
+    let dialect = dialect(settings.0.installed_client);
     for (mut entity, mut transform, corpse) in &mut entities {
         let Some(spawn) = state.world().spawn(entity.id) else {
             continue;
@@ -348,8 +366,35 @@ pub(super) fn interpolate(
         if fresh {
             entity.seen = Some(spawn.reported);
             entity.soles = None;
+            entity.carried = None;
         }
-        let mut target = Vec3::from_array(render_position(spawn.carried(now)));
+        // The Mac-era client steps a spawn on from each report, frame by
+        // frame, as its program does; Titanium's moves on at its velocity.
+        let carried = if dialect == eq_client_core::GameDialect::EqMac {
+            let carried = entity.carried.get_or_insert_with(|| {
+                let mut carried = eq_client_core::movement::Carried::reported(
+                    dialect,
+                    spawn.state.race,
+                    spawn.state.position,
+                    spawn.state.velocity,
+                    spawn.forward,
+                );
+                eq_client_core::movement::carry(
+                    dialect,
+                    &mut carried,
+                    now.saturating_duration_since(spawn.reported),
+                );
+                carried
+            });
+            if !fresh {
+                eq_client_core::movement::carry(dialect, carried, time.delta());
+            }
+            carried.position
+        } else {
+            spawn.carried(now)
+        };
+        let mut target = Vec3::from_array(render_position(carried));
+        let forward = spawn.forward;
         let spawn = &spawn.state;
         // A drawn model stands on the floor under it, whichever rule put its
         // z, and keeps to the floor as it is carried on.
@@ -373,9 +418,9 @@ pub(super) fn interpolate(
             }
         }
         if first {
-            report_drawn(entity.id, spawn);
+            report_drawn(entity.id, (spawn, forward));
         } else if fresh {
-            report_snap(entity.id, spawn, transform.translation, target);
+            report_snap(entity.id, (spawn, forward), transform.translation, target);
         }
         if first || transform.translation.distance_squared(target) > 100.0 * 100.0 {
             transform.translation = target;
@@ -390,15 +435,21 @@ pub(super) fn interpolate(
 }
 
 /// A debug line for each new report of a drawn spawn: where the server put
-/// it, how it moves, and how far it was drawn from where the report puts it
+/// it, how it moves (its velocity, and the forward input the Mac-era client
+/// carries it by), and how far it was drawn from where the report puts it
 /// (the snap) as the report came. Off unless the log filter asks for this
 /// module at debug level; it changes nothing drawn.
-fn report_snap(id: u16, spawn: &eq_client_core::SpawnState, drawn: Vec3, target: Vec3) {
+fn report_snap(
+    id: u16,
+    (spawn, forward): (&eq_client_core::SpawnState, f32),
+    drawn: Vec3,
+    target: Vec3,
+) {
     let p = spawn.position;
     let [vx, vy, vz] = spawn.velocity;
     debug!(
         "spawn {id} report ({:.1}, {:.1}, {:.1}) heading {:.1} velocity ({vx:.1}, {vy:.1}, {vz:.1}) \
-         snap {:.2} (horizontal {:.2}, vertical {:+.2})",
+         forward {forward:.2} snap {:.2} (horizontal {:.2}, vertical {:+.2})",
         p.x,
         p.y,
         p.z,
@@ -412,11 +463,12 @@ fn report_snap(id: u16, spawn: &eq_client_core::SpawnState, drawn: Vec3, target:
 /// A debug line as a spawn is first drawn, a corpse after its death
 /// included: its kind, where it is reported and how it moves on from there.
 /// Off unless the log filter asks for this module at debug level.
-fn report_drawn(id: u16, spawn: &eq_client_core::SpawnState) {
+fn report_drawn(id: u16, (spawn, forward): (&eq_client_core::SpawnState, f32)) {
     let p = spawn.position;
     let [vx, vy, vz] = spawn.velocity;
     debug!(
-        "spawn {id} drawn as {:?} at report ({:.1}, {:.1}, {:.1}) velocity ({vx:.1}, {vy:.1}, {vz:.1})",
+        "spawn {id} drawn as {:?} at report ({:.1}, {:.1}, {:.1}) velocity ({vx:.1}, {vy:.1}, {vz:.1}) \
+         forward {forward:.2}",
         spawn.kind, p.x, p.y, p.z,
     );
 }
@@ -481,18 +533,14 @@ mod tests {
         character::testing::stores(app.world_mut());
         app.insert_resource(online)
             .insert_resource(super::super::Collision(Some(floor)))
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
             .init_resource::<crate::options::OptionsState>()
             .init_resource::<Time>()
             .add_systems(Update, (interpolate, character::lie).chain());
         let prepared = character::testing::prepared(app.world_mut());
         let root = character::testing::drawn(app.world_mut(), &prepared);
         app.world_mut().entity_mut(root).insert((
-            RemoteEntity {
-                id: 5,
-                seen: None,
-                soles: None,
-                feet: Some(feet),
-            },
+            RemoteEntity::new(5, Some(feet)),
             character::Corpse {
                 fell: None,
                 length: prepared.lying(),
@@ -556,25 +604,19 @@ mod tests {
                 spawn_id: 5,
                 position: WorldPosition::default(),
                 velocity: [4.0, 0.0, 0.0],
+                forward: 0.0,
             }],
             reported,
         );
         let mut app = App::new();
         app.insert_resource(online)
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
             .init_resource::<Time>()
             .add_systems(Update, interpolate);
         let drawn = |app: &mut App| {
             let entity = app
                 .world_mut()
-                .spawn((
-                    RemoteEntity {
-                        id: 5,
-                        seen: None,
-                        soles: None,
-                        feet: None,
-                    },
-                    Transform::default(),
-                ))
+                .spawn((RemoteEntity::new(5, None), Transform::default()))
                 .id();
             app.update();
             let at = app.world().get::<Transform>(entity).unwrap().translation;

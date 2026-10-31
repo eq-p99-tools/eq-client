@@ -1,11 +1,83 @@
-//! Numeric spell mechanics from the user's patched `spells_us.txt`.
-//! Field positions follow the `SPDat` layout; these are local base values, not server state.
+//! Numeric spell mechanics from the user's installed spell file
+//! (`spells_us.txt` on Titanium, `spells_en.txt` on the Mac-era client).
+//! Field positions follow each generation's [`Layout`]; these are local base
+//! values, not server state.
 mod definitions;
 pub mod effects;
 mod magnitude;
 pub mod resources;
 
 pub use definitions::{Definition, Definitions, Timing};
+
+/// Where a client generation's spell file keeps the fields this client
+/// reads: the file's name in the installation and the first column of each
+/// block, counted from 0. A field a generation's layout leaves out is
+/// unavailable for every spell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Layout {
+    /// The file's name in the installation.
+    pub file: &'static str,
+    base: usize,
+    limit: Option<usize>,
+    maximum: usize,
+    formula: usize,
+    effects: usize,
+    icon: Option<usize>,
+    gem_icon: Option<usize>,
+    gem_tint: Option<(usize, &'static [u8])>,
+    casting_animation: Option<usize>,
+    effect: Option<usize>,
+    alternate_duration: Option<usize>,
+}
+
+impl Layout {
+    /// Titanium's `spells_us.txt`, the `SPDat` layout (203 columns in its
+    /// program's parser, 0x44dbf0). Its program draws a gem's icon from the
+    /// book icon column (144), so it has no gem icon column of its own
+    /// (column 57 is read by no gem or book draw), and tints the gem by
+    /// column 98 (spell-file column report of 10-31, 03:25Z).
+    pub const TITANIUM: Self = Self {
+        file: "spells_us.txt",
+        base: 20,
+        limit: Some(32),
+        maximum: 44,
+        formula: 70,
+        effects: 86,
+        icon: Some(144),
+        gem_icon: None,
+        gem_tint: Some((98, definitions::TITANIUM_GEM_TINTS)),
+        casting_animation: Some(120),
+        effect: Some(145),
+        alternate_duration: Some(181),
+    };
+
+    /// The Mac-era client's `spells_en.txt` (147 fields a row, a few rows
+    /// of 139; its program's parser, 0x4d6b40, reads 141 and ignores the
+    /// rest). It keeps no limit block. Seen in use in the program
+    /// (spell-file column report of 10-31, 03:25Z): the name (1), the fade
+    /// text (8), the bases (20-31), maximums (32-43), formulas (58-69) and
+    /// effect ids (74-85), the gem tint (86, with 18 as AE duration) and the
+    /// gem's cell in the skin's gem icons (131). The book icon's column is
+    /// not found yet, and the casting gesture, particle effect (132, not
+    /// used yet) and alternate duration are unavailable. Range (9), cast,
+    /// recovery and recast times (13-15), duration (16, 17) and mana (19)
+    /// are `EQEmu`'s names by position: the program reads their width and
+    /// type, not their meaning (recording checklist item 6.289).
+    pub const EQMAC: Self = Self {
+        file: "spells_en.txt",
+        base: 20,
+        limit: None,
+        maximum: 32,
+        formula: 58,
+        effects: 74,
+        icon: None,
+        gem_icon: Some(131),
+        gem_tint: Some((86, definitions::EQMAC_GEM_TINTS)),
+        casting_animation: None,
+        effect: None,
+        alternate_duration: None,
+    };
+}
 
 /// One effect slot, preserving unsupported effect and formula numbers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,26 +140,39 @@ impl Mechanics {
                 .is_some_and(|alternate| alternate.formula == 0 && alternate.duration == 0)
     }
 
-    /// Parses a complete numeric projection; missing/malformed fields remain unavailable.
+    /// Parses a complete numeric projection from a Titanium line; see
+    /// [`Mechanics::read`].
     #[must_use]
     pub fn from_fields(fields: &[&str]) -> Option<Self> {
+        Self::read(fields, &Layout::TITANIUM)
+    }
+
+    /// Parses a complete numeric projection from a line laid out as
+    /// `layout`; missing/malformed fields remain unavailable, and a limit
+    /// the layout has no block for is 0.
+    #[must_use]
+    pub fn read(fields: &[&str], layout: &Layout) -> Option<Self> {
         let signed = |index: usize| fields.get(index)?.parse::<i32>().ok();
         let unsigned = |index: usize| fields.get(index)?.parse::<u32>().ok();
         let mut effects = Vec::with_capacity(12);
         for slot in 0..12 {
             effects.push(Effect {
-                id: unsigned(86 + slot)?,
-                base: signed(20 + slot)?,
-                limit: signed(32 + slot)?,
-                maximum: signed(44 + slot)?,
-                formula: unsigned(70 + slot)?,
+                id: unsigned(layout.effects + slot)?,
+                base: signed(layout.base + slot)?,
+                limit: match layout.limit {
+                    Some(limit) => signed(limit + slot)?,
+                    None => 0,
+                },
+                maximum: signed(layout.maximum + slot)?,
+                formula: unsigned(layout.formula + slot)?,
             });
         }
         Some(Self {
             duration_formula: unsigned(16)?,
             duration_cap: unsigned(17)?,
-            alternate_duration: unsigned(181)
-                .zip(unsigned(182))
+            alternate_duration: layout
+                .alternate_duration
+                .and_then(|column| unsigned(column).zip(unsigned(column + 1)))
                 .map(|(formula, duration)| AlternateDuration { formula, duration }),
             effects: effects.try_into().ok()?,
         })

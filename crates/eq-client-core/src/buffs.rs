@@ -147,6 +147,18 @@ impl BuffTracker {
         self.slots.as_ref()
     }
 
+    /// The spells of every buff the player holds: those in the server's
+    /// slots, then those that landed with no slot given. What a buff does
+    /// to the player (its speed, its strength) is read through this, so a
+    /// buff counts whether or not the server said where it went.
+    pub fn spells(&self) -> impl Iterator<Item = u32> + '_ {
+        self.slots
+            .iter()
+            .flat_map(BTreeMap::values)
+            .map(|buff| buff.spell_id)
+            .chain(self.effects.keys().map(|spell| u32::from(*spell)))
+    }
+
     /// Returns observed effects whose server slot and duration are not supplied.
     #[must_use]
     pub fn effects(&self) -> &BTreeMap<u16, SpellEffect> {

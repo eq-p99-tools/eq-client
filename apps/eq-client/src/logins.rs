@@ -416,7 +416,6 @@ mod tests {
             SessionOptions {
                 install: installation_directory(),
                 seconds: None,
-                calibration: None,
                 local_only: false,
                 auto_eat: eq_client_core::food::AutoEat::default(),
             },

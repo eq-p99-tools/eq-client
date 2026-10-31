@@ -17,7 +17,12 @@ pub(super) struct CloseItem;
 #[derive(Component)]
 pub(crate) struct ItemTitle;
 /// The skin's item display's box for the item's picture, with where in it
-/// the picture goes.
+/// the picture goes: over the whole button, as the program draws the item's
+/// icon as the button's Normal piece, with no template background under it
+/// and no decal (from the program, Titanium sitting 9e). In the program the
+/// template's Pressed, Flyby or Disabled piece would show in its state if
+/// the template fills it; ours draws none of them (to check against the
+/// skin's `IDW_IconButton` template in the 2a look).
 #[derive(Component, Clone, Copy, Debug)]
 pub(crate) struct ItemIcon {
     pub(crate) x: f32,

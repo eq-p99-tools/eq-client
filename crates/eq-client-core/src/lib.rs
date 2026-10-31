@@ -24,6 +24,7 @@ pub mod targeting;
 pub mod whereabouts;
 pub mod who;
 pub mod world;
+pub use eq_network_game::GameDialect;
 pub use eq_network_game::abilities;
 pub use eq_network_game::bind_wound;
 pub use eq_network_game::books;

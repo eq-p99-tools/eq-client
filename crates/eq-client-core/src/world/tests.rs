@@ -490,6 +490,7 @@ fn the_server_placing_the_player_says_where() {
             spawn_id: 9,
             position: there,
             velocity: [0.0; 3],
+            forward: 0.0,
         },
     );
     assert_eq!(changes.placed, Some(there));
@@ -501,6 +502,7 @@ fn the_server_placing_the_player_says_where() {
             spawn_id: 5,
             position: there,
             velocity: [1.0, 0.0, 0.0],
+            forward: 0.0,
         },
     );
     assert_eq!(changes.placed, None);
@@ -1655,6 +1657,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
             spawn_id: 9,
             position: facing,
             velocity: [0.0; 3],
+            forward: 0.0,
         },
     );
     let changes = game(
@@ -3531,6 +3534,7 @@ fn a_spawn_that_dies_moving_lies_where_it_was_carried_and_moves_no_more() {
             spawn_id: 5,
             position: WorldPosition::default(),
             velocity: [4.0, 0.0, 0.0],
+            forward: 0.0,
         },
         reported,
     );
@@ -3569,6 +3573,7 @@ fn a_spawn_that_dies_moving_lies_where_it_was_carried_and_moves_no_more() {
             spawn_id: 5,
             position: dragged,
             velocity: [4.0, 0.0, 0.0],
+            forward: 0.0,
         },
         died,
     );

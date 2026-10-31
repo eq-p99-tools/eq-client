@@ -7,16 +7,17 @@ pub(crate) struct Artwork {
     shown: Option<u32>,
 }
 
-pub(super) fn artwork(slot: usize) -> impl Bundle {
+/// An item's picture at this place in its button: its left, top and size.
+pub(super) fn artwork(slot: usize, (left, top, size): (f32, f32, f32)) -> impl Bundle {
     (
         Artwork { slot, shown: None },
         ImageNode::default(),
         Node {
             position_type: PositionType::Absolute,
-            left: px(4),
-            top: px(4),
-            width: px(30),
-            height: px(30),
+            left: px(left),
+            top: px(top),
+            width: px(size),
+            height: px(size),
             display: Display::None,
             ..default()
         },

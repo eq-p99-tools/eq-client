@@ -25,7 +25,9 @@ enum Support {
     Airborne,
 }
 
-pub use eq_network_game::movement::{EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP};
+pub use eq_network_game::movement::{
+    Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, carry,
+};
 use glam::Vec3;
 use parry3d::{
     math::{Pose, Vector},

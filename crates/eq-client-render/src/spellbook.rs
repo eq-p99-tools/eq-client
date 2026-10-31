@@ -116,10 +116,13 @@ pub(super) struct SpellNames(eq_client_assets::spells::Definitions);
 
 impl SpellNames {
     /// Loads labels and timing from the user's installation; assets are never bundled.
-    pub fn load(directory: Option<&std::path::Path>) -> Self {
+    pub fn load(config: &crate::ViewerConfig) -> Self {
+        let layout = config.installed_client.spell_file();
         Self(
-            directory
-                .and_then(|path| eq_client_assets::spells::Definitions::read(path).ok())
+            config
+                .eq_directory
+                .as_deref()
+                .and_then(|path| eq_client_assets::spells::Definitions::read(path, &layout).ok())
                 .unwrap_or_default(),
         )
     }
@@ -127,7 +130,10 @@ impl SpellNames {
     /// Spells from the text of a spell file.
     #[cfg(test)]
     pub(super) fn parse(text: &str) -> Self {
-        Self(eq_client_assets::spells::Definitions::parse(text))
+        Self(eq_client_assets::spells::Definitions::parse(
+            text,
+            &eq_client_assets::spells::Layout::TITANIUM,
+        ))
     }
 
     fn spell(&self, id: u32) -> Option<&eq_client_assets::spells::Definition> {
@@ -169,6 +175,23 @@ impl SpellNames {
 
     pub(super) fn icon(&self, id: u32) -> Option<u32> {
         self.spell(id)?.icon
+    }
+
+    /// The spell's cell in the skin's gem icons.
+    pub(super) fn gem_icon(&self, id: u32) -> Option<u32> {
+        self.spell(id)?.gem_icon
+    }
+
+    /// The colour, as ARGB, that tints a gem's background while it holds
+    /// the spell, where the installed data gives one.
+    pub(super) fn gem_tint(&self, id: u32) -> Option<u32> {
+        self.spell(id)?.gem_tint
+    }
+
+    /// The tint field's value as the spell file gives it, before it
+    /// resolves to a colour.
+    pub(super) fn gem_tint_field(&self, id: u32) -> Option<u32> {
+        self.spell(id)?.gem_tint_field
     }
 
     /// The motion a spell's caster plays while casting, as the servers'

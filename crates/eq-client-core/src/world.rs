@@ -98,6 +98,9 @@ pub struct Spawn {
     /// When the server last said where the spawn is, from which the client
     /// carries it on.
     pub reported: Instant,
+    /// Its forward input at that report, which the Mac-era client adds
+    /// along its heading each tick; 0 where the generation sends none.
+    pub forward: f32,
 }
 
 impl Spawn {
@@ -581,7 +584,10 @@ impl ClientWorld {
             | WorldEvent::Duel(_)
             | WorldEvent::Guild(_)
             | WorldEvent::NewTitles
-            | WorldEvent::Gm(_) => (),
+            | WorldEvent::Gm(_)
+            // The machine's weekly account left for the world; nothing
+            // about the world changed.
+            | WorldEvent::SystemInfoReported { .. } => (),
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision, now),
@@ -654,6 +660,23 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // The client's line as the player goes over what they can carry
+            // or comes back under it, once each way.
+            WorldEvent::Encumbrance {
+                session_id,
+                string_id,
+                ..
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ServerString {
+                        id: *string_id,
+                        arguments: Vec::new(),
+                        message_type: None,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::GuildNames(names) => self.guild_names = names.iter().cloned().collect(),
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
             WorldEvent::Posture { spawn_id, posture } => {
@@ -667,7 +690,8 @@ impl ClientWorld {
                 spawn_id,
                 position,
                 velocity,
-            } => self.position(*spawn_id, (*position, *velocity), now, news),
+                forward,
+            } => self.position(*spawn_id, (*position, *velocity, *forward), now, news),
             WorldEvent::WearChange(change) => self.wear(change),
             WorldEvent::Doors(update) => self.zone.doors.apply(update, now),
             WorldEvent::DoorAction {
