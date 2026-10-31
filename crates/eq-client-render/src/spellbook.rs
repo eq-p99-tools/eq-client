@@ -188,6 +188,12 @@ impl SpellNames {
         self.spell(id)?.gem_tint
     }
 
+    /// The tint field's value as the spell file gives it, before it
+    /// resolves to a colour.
+    pub(super) fn gem_tint_field(&self, id: u32) -> Option<u32> {
+        self.spell(id)?.gem_tint_field
+    }
+
     /// The motion a spell's caster plays while casting, as the servers'
     /// animation number, from the installed spell data.
     pub(super) fn casting_animation(&self, id: u32) -> Option<u16> {
