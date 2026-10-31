@@ -60,10 +60,11 @@ pub(super) fn fill_to(node: &mut Mut<Node>, step: Option<&Step>, fraction: f32) 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
     online: Res<crate::online::OnlineState>,
-    (hud, inventory, names): (
+    (hud, inventory, names, messages): (
         Res<crate::hud::HudState>,
         Res<crate::inventory::InventoryState>,
         Res<crate::spellbook::SpellNames>,
+        Res<crate::hud::messages::Messages>,
     ),
     (combat, trade, book, requests): (
         Res<crate::combat::CombatState>,
@@ -120,7 +121,7 @@ pub(crate) fn show(
             Shows::Banker => (inventory.banker().to_owned(), None),
             Shows::PracticePoints => (crate::training::practice_points(world), None),
             Shows::Corpse | Shows::Merchant | Shows::ChosenName | Shows::ChosenPrice => {
-                (trading_text(*shows, &trade, world), None)
+                (trading_text(*shows, &trade, world, &messages), None)
             }
             Shows::BookName(place) => (
                 book.spell(world.spell_book(), place)
@@ -190,12 +191,15 @@ pub(super) fn raid_text(shows: Shows, world: &eq_client_core::world::ClientWorld
     }
 }
 
-/// What a loot or merchant window's label says. What the merchant pays for
-/// a carried item is not known yet, so its price shows only for a ware.
+/// What a loot or merchant window's label says. A price is in the installed
+/// client's lines where its merchant rule is read, else in this client's
+/// own; what the merchant pays for a carried item shows only where it is
+/// known.
 pub(super) fn trading_text(
     shows: Shows,
     trade: &crate::trade::TradeState,
     world: &eq_client_core::world::ClientWorld,
+    messages: &crate::hud::messages::Messages,
 ) -> String {
     let chosen = || crate::trade::chosen(trade, world);
     match shows {
@@ -204,13 +208,47 @@ pub(super) fn trading_text(
         Shows::ChosenName => {
             chosen().map_or_else(String::new, |(item, _)| item.details.name.clone())
         }
-        Shows::ChosenPrice => chosen()
-            .and_then(|(_, price)| price)
-            .map_or_else(String::new, |price| {
-                crate::trade::coin_text(u64::from(price))
-            }),
+        Shows::ChosenPrice => match (trade.prices(), trade.chosen(), chosen()) {
+            (Some(prices), Some(kind), Some((_, Some(price)))) => price_text(
+                prices,
+                matches!(kind, crate::trade::Chosen::Ware(_)),
+                price,
+                messages,
+            ),
+            (_, _, chosen) => chosen
+                .and_then(|(_, price)| price)
+                .map_or_else(String::new, |price| {
+                    crate::trade::coin_text(u64::from(price))
+                }),
+        },
         _ => String::new(),
     }
+}
+
+/// A price in the installed client's lines: each coin that isn't zero, from
+/// platinum down, or the line for no price (a ware) or no value (a carried
+/// item). The parts are joined with a space (this client's reading).
+fn price_text(
+    prices: eq_client_assets::merchants::MerchantPrices,
+    ware: bool,
+    copper: u32,
+    messages: &crate::hud::messages::Messages,
+) -> String {
+    if copper == 0 {
+        let none = if ware {
+            prices.no_price
+        } else {
+            prices.no_value
+        };
+        return messages.said(none, &[]).words.text;
+    }
+    eq_client_assets::merchants::MerchantPrices::split(u64::from(copper))
+        .into_iter()
+        .zip(prices.coins)
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, line)| messages.said(line, &[count.to_string()]).words.text)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// How full a gauge is drawn: as `fraction` says, or the spellbook's

@@ -388,6 +388,17 @@ impl InstalledClient {
         }
     }
 
+    /// How this client prices what its merchant window shows, from the
+    /// program; None until read for this client (Titanium: sitting 8's
+    /// T18).
+    #[must_use]
+    pub const fn merchant_prices(self) -> Option<crate::merchants::MerchantPrices> {
+        match self {
+            Self::Titanium => None,
+            Self::EqMac => Some(crate::merchants::EQMAC),
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
