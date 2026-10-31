@@ -181,15 +181,12 @@ pub(crate) fn contents(
     place: Option<(f32, f32, f32)>,
 ) {
     let spell = crate::spell_icons::Source::Action(index);
-    match place {
-        Some((left, top, size)) => {
-            button.spawn(crate::spell_icons::artwork_at(spell, (left, top), size));
-            button.spawn(item_art::artwork(index, (left, top, size)));
-        }
-        None => {
-            button.spawn(crate::spell_icons::artwork(spell, 30.0));
-            button.spawn(item_art::artwork(index, (4.0, 4.0, 30.0)));
-        }
+    if let Some((left, top, size)) = place {
+        button.spawn(crate::spell_icons::artwork_at(spell, (left, top), size));
+        button.spawn(item_art::artwork(index, (left, top, size)));
+    } else {
+        button.spawn(crate::spell_icons::artwork(spell, 30.0));
+        button.spawn(item_art::artwork(index, (4.0, 4.0, 30.0)));
     }
     button.spawn((
         Caption(index),
