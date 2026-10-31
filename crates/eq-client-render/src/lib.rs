@@ -41,6 +41,7 @@ mod combat;
 mod confirm;
 mod daylight;
 mod device_pixels;
+mod display_report;
 mod doors;
 mod entities;
 mod escape;
@@ -209,6 +210,9 @@ pub struct ViewerConfig {
     /// Build each zone's navigation mesh at entry, for probes, scripts and
     /// looks; never a player setting. Nothing plans over it yet.
     pub navmesh: bool,
+    /// Where the window keeps what it knows of the display and adapter,
+    /// for the sessions' machine report.
+    pub display: eq_client_core::machine::DisplaySnapshot,
 }
 
 impl ViewerConfig {
@@ -272,22 +276,13 @@ struct SceneEntity;
 #[derive(Component)]
 struct HudText;
 
-/// Opens a window and renders a loaded zone until the user closes it.
-pub fn run(
-    zone: ZoneAsset,
-    character: Option<CharacterAsset>,
-    config: ViewerConfig,
-    source: Source,
-) -> i32 {
-    let screenshot = config.screenshot.clone();
-    let steps = config.script.clone();
-    let arrow = !config.hide_script_pointer;
-    let follow = config.script_follow.clone();
-    let local_session = config.local_session;
-    let installed_client = config.installed_client;
-    let mut option_defaults = config.option_defaults;
-    // The official client's own settings, for characters with no choice of
-    // their own here; the client's defaults where it says nothing.
+/// Seeds `option_defaults` from the official client's own settings, for characters
+/// with no choice of their own here; the client's defaults stay where it
+/// says nothing.
+fn seed_official_options(
+    config: &ViewerConfig,
+    option_defaults: &mut eq_client_core::options::Options,
+) {
     if let Some(settings) = config.official_settings() {
         use eq_client_core::options::Toggle;
         let official = settings.options();
@@ -307,8 +302,25 @@ pub fn run(
         {
             option_defaults.show_names = level;
         }
-        seed_levels(&mut option_defaults, &official);
+        seed_levels(option_defaults, &official);
     }
+}
+
+/// Opens a window and renders a loaded zone until the user closes it.
+pub fn run(
+    zone: ZoneAsset,
+    character: Option<CharacterAsset>,
+    config: ViewerConfig,
+    source: Source,
+) -> i32 {
+    let screenshot = config.screenshot.clone();
+    let steps = config.script.clone();
+    let arrow = !config.hide_script_pointer;
+    let follow = config.script_follow.clone();
+    let local_session = config.local_session;
+    let installed_client = config.installed_client;
+    let mut option_defaults = config.option_defaults;
+    seed_official_options(&config, &mut option_defaults);
     if let Some(cap) = config.max_fps {
         option_defaults.max_fps = cap;
     }
@@ -366,6 +378,7 @@ pub fn run(
     navigation::install(&mut app);
     zone_navmesh::install(&mut app);
     frame_limit::install(&mut app);
+    app.add_systems(Last, display_report::update);
     attention::install(&mut app);
     if let Some(size) = window_size {
         window_size::install(&mut app, size);

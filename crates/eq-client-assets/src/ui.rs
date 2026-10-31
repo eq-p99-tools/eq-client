@@ -529,6 +529,16 @@ impl LoadingScreen {
 /// default, so a client generation's files stay unread until a reader for
 /// them has been checked against that client.
 pub trait OfficialSettings {
+    /// The time the official program last told a world about the machine
+    /// it was entered on, in whole seconds since the epoch: its
+    /// `LastSysInfoDate` in `[Defaults]`, which it keeps so its weekly
+    /// report waits out its week between runs. None when the installed
+    /// client has never made one. This client never writes it there; see
+    /// [`own_last_sysinfo_date`].
+    fn last_sysinfo_date(&self) -> Option<u64> {
+        None
+    }
+
     /// The options in `eqclient.ini`.
     fn options(&self) -> OfficialOptions {
         OfficialOptions::default()
@@ -599,6 +609,16 @@ impl OfficialSettings for Titanium<'_> {
         std::fs::read(self.0.join("eqclient.ini"))
             .map(|bytes| options_from_ini(&String::from_utf8_lossy(&bytes)))
             .unwrap_or_default()
+    }
+
+    /// `LastSysInfoDate` in `[Defaults]` of `eqclient.ini`, else of
+    /// `defaults.ini`: the second the official program last told a world
+    /// about the machine it was entered on. None when the files, the
+    /// section, the key or a sane number are missing.
+    fn last_sysinfo_date(&self) -> Option<u64> {
+        ["eqclient.ini", "defaults.ini"]
+            .into_iter()
+            .find_map(|file| sysinfo_date(&self.0.join(file)))
     }
 
     /// `UISkin` in the `[Main]` section of `UI_<character>_<world>.ini`, where
@@ -1147,6 +1167,96 @@ fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
     None
 }
 
+/// `LastSysInfoDate` in `[Defaults]` of the ini file at `path`.
+fn sysinfo_date(path: &Path) -> Option<u64> {
+    let bytes = std::fs::read(path).ok()?;
+    ini_value(
+        &String::from_utf8_lossy(&bytes),
+        "Defaults",
+        "LastSysInfoDate",
+    )?
+    .trim()
+    .parse()
+    .ok()
+}
+
+/// The time this client last told a world about the machine, kept in its
+/// own settings directory as the official program keeps its own: in an
+/// `eqclient.ini` there, `[Defaults] LastSysInfoDate`. The installed
+/// client's files are never written; this copy wins over them on the next
+/// read.
+#[must_use]
+pub fn own_last_sysinfo_date(settings_directory: &Path) -> Option<u64> {
+    sysinfo_date(&settings_directory.join("eqclient.ini"))
+}
+
+/// Keeps `at` as the time this client last told a world about the machine,
+/// in its own settings directory's `eqclient.ini`, changing no other line
+/// there. A missing file is made.
+///
+/// # Errors
+/// Returns the file's error when it exists but cannot be read, or cannot
+/// be written.
+pub fn keep_last_sysinfo_date(settings_directory: &Path, at: u64) -> std::io::Result<()> {
+    let file = settings_directory.join("eqclient.ini");
+    let text = match std::fs::read(&file) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    std::fs::create_dir_all(settings_directory)?;
+    std::fs::write(
+        &file,
+        set_ini_value(&text, "Defaults", "LastSysInfoDate", &at.to_string()),
+    )
+}
+
+/// Returns `text` with `section`'s `key` set to `value`, changing nothing
+/// else: a key already in the section keeps its place, a new one joins the
+/// section's end, and a missing section is added at the file's end. Section
+/// and key names are matched as [`ini_value`] matches them, by ignoring
+/// case.
+fn set_ini_value(text: &str, section: &str, key: &str, value: &str) -> String {
+    fn name_of(line: &str) -> Option<&str> {
+        line.trim()
+            .strip_prefix('[')?
+            .strip_suffix(']')
+            .map(str::trim)
+    }
+    let is_key = |line: &&str| {
+        line.trim()
+            .split_once('=')
+            .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case(key))
+    };
+    let mut lines: Vec<&str> = text.lines().collect();
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    let mut body: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
+    if let Some(header) = body
+        .iter()
+        .position(|line| name_of(line).is_some_and(|name| name.eq_ignore_ascii_case(section)))
+    {
+        let end = lines[header + 1..]
+            .iter()
+            .position(|line| name_of(line).is_some())
+            .map_or(lines.len(), |at| header + 1 + at);
+        if let Some(at) = lines[header + 1..end].iter().position(is_key) {
+            body[header + 1 + at] = format!("{key}={value}");
+        } else {
+            body.insert(end, format!("{key}={value}"));
+        }
+    } else {
+        body.push(format!("[{section}]"));
+        body.push(format!("{key}={value}"));
+    }
+    let mut text = body.join("\n");
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1217,6 +1327,73 @@ Log=maybe
 "),
             None
         );
+    }
+
+    #[test]
+    fn an_ini_key_is_set_in_its_section_and_nothing_else_moves() {
+        let set = |text| set_ini_value(text, "Defaults", "LastSysInfoDate", "1700000000");
+        // A key the section already holds keeps its place and its line's
+        // turn; the section keeps its other keys.
+        assert_eq!(
+            set("[Defaults]\nLog=1\nLastSysInfoDate=99\n[Other]\nLog=2\n"),
+            "[Defaults]\nLog=1\nLastSysInfoDate=1700000000\n[Other]\nLog=2\n"
+        );
+        // A section without the key gains it at the section's end, before
+        // whatever section comes next.
+        assert_eq!(
+            set("[Defaults]\nLog=1\n[Other]\nLog=2\n"),
+            "[Defaults]\nLog=1\nLastSysInfoDate=1700000000\n[Other]\nLog=2\n"
+        );
+        // A missing section is added at the text's end, and a missing file
+        // begins with just the section and its key.
+        assert_eq!(
+            set("[Other]\nLog=2\n"),
+            "[Other]\nLog=2\n[Defaults]\nLastSysInfoDate=1700000000\n"
+        );
+        assert_eq!(set(""), "[Defaults]\nLastSysInfoDate=1700000000\n");
+        // Section and key are matched as `ini_value` matches them.
+        assert_eq!(
+            set("[defaults]\nlastsysinfodate=99\n"),
+            "[defaults]\nLastSysInfoDate=1700000000\n"
+        );
+    }
+
+    #[test]
+    fn the_machine_report_date_is_read_from_the_install_and_kept_in_our_own_folder() {
+        let root = std::env::temp_dir().join(format!("eq-ui-sysinfo-{}", std::process::id()));
+        let (install, ours) = (root.join("install"), root.join("settings"));
+        std::fs::create_dir_all(&install).expect("temporary install");
+        let settings = InstalledClient::Titanium.settings(&install);
+        // An install that never reported says nothing; defaults.ini answers
+        // where eqclient.ini has no such key, and eqclient.ini wins.
+        std::fs::write(install.join("eqclient.ini"), "[Defaults]\nLog=TRUE\n").expect("ini");
+        assert_eq!(settings.last_sysinfo_date(), None);
+        std::fs::write(
+            install.join("defaults.ini"),
+            "[Defaults]\nLastSysInfoDate=7\n",
+        )
+        .expect("defaults");
+        assert_eq!(settings.last_sysinfo_date(), Some(7));
+        std::fs::write(
+            install.join("eqclient.ini"),
+            "[Defaults]\nLog=TRUE\nLastSysInfoDate=9\n",
+        )
+        .expect("ini");
+        assert_eq!(settings.last_sysinfo_date(), Some(9));
+        // Ours is kept in our own folder, made where missing, and replaced
+        // in place; the installed files are left exactly as they were.
+        let official = std::fs::read(install.join("eqclient.ini")).expect("ini");
+        assert_eq!(own_last_sysinfo_date(&ours), None);
+        keep_last_sysinfo_date(&ours, 1_700_000_000).expect("stamp");
+        keep_last_sysinfo_date(&ours, 1_700_000_604).expect("stamp");
+        assert_eq!(own_last_sysinfo_date(&ours), Some(1_700_000_604));
+        let text = std::fs::read_to_string(ours.join("eqclient.ini")).expect("ours");
+        assert_eq!(text.matches("LastSysInfoDate").count(), 1);
+        assert_eq!(
+            std::fs::read(install.join("eqclient.ini")).expect("ini"),
+            official
+        );
+        std::fs::remove_dir_all(&root).expect("cleaned");
     }
 
     #[test]

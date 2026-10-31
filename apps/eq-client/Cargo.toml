@@ -15,6 +15,7 @@ clap.workspace = true
 eq-client-assets.workspace = true
 eq-client-core.workspace = true
 eq-client-render.workspace = true
+sysinfo.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
 

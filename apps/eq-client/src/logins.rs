@@ -415,6 +415,8 @@ mod tests {
             installation,
             SessionOptions {
                 install: installation_directory(),
+                settings: None,
+                display: eq_client_core::machine::DisplaySnapshot::default(),
                 seconds: None,
                 local_only: false,
                 auto_eat: eq_client_core::food::AutoEat::default(),

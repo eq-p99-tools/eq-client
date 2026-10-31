@@ -585,8 +585,9 @@ impl ClientWorld {
             | WorldEvent::Guild(_)
             | WorldEvent::NewTitles
             | WorldEvent::Gm(_)
-            // The machine's weekly account left for the world; nothing
-            // about the world changed.
+            // The machine's weekly account left for the world; the session
+            // host keeps the date it went (the installed client's own
+            // `LastSysInfoDate` stamp). Nothing about the world changed.
             | WorldEvent::SystemInfoReported { .. } => (),
 
             // The zone and what is in it.
