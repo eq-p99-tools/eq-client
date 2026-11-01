@@ -80,7 +80,7 @@ pub(crate) fn update(
     mut drawn: ResMut<NameTags>,
     player: Query<Entity, With<crate::Player>>,
     roots: Query<(&Transform, &Overhead)>,
-    cameras: Query<(&Camera, &Transform), With<crate::OrbitCamera>>,
+    cameras: Query<(&Camera, &Transform, Option<&Projection>), With<crate::OrbitCamera>>,
     mut tags: Query<(&mut Node, &mut Text, &mut TextColor, &mut Visibility), With<NameTag>>,
 ) {
     let world = online.world();
@@ -136,11 +136,15 @@ pub(crate) fn update(
         .and_then(|collision| collision.0.as_ref());
     for (root, (words, drawn_in)) in wanted {
         // Where the head's top shows, in the UI's pixels from the window's
-        // left and bottom edges; none behind the camera or behind a wall.
-        let place = camera.and_then(|(camera, view)| {
+        // left and bottom edges; none behind the camera, past its far plane
+        // (where the model is left out too) or behind a wall. How far the
+        // program draws names is unread (recording checklist 6.342).
+        let place = camera.and_then(|(camera, view, projection)| {
             let (transform, Overhead(top)) = roots.get(root).ok()?;
             let above = transform.transform_point(Vec3::Y * *top) + Vec3::Y * ABOVE_HEAD;
-            if behind_geometry(geometry, view.translation, above) {
+            if projection.is_some_and(|projection| crate::camera::past_far(projection, view, above))
+                || behind_geometry(geometry, view.translation, above)
+            {
                 return None;
             }
             let at = camera
@@ -486,6 +490,27 @@ mod tests {
         app.update();
         let shown = visible(&mut app);
         assert!(shown.iter().all(|(_, shown)| *shown), "{shown:?}");
+        // With the far plane 25 deep, the gnoll 30 deep is past it, where
+        // its model is left out, and so is its name; the rest, 20 deep, show.
+        let camera = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::OrbitCamera>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .entity_mut(camera)
+            .insert(Projection::Perspective(PerspectiveProjection {
+                far: 25.0,
+                ..default()
+            }));
+        app.update();
+        let shown = visible(&mut app);
+        assert!(
+            shown
+                .iter()
+                .all(|(words, shown)| *shown == (words != "a gnoll")),
+            "{shown:?}"
+        );
     }
 
     #[test]
