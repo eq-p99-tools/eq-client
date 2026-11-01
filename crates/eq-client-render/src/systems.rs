@@ -150,7 +150,7 @@ pub(super) fn schedule(app: &mut App) {
                 group::window,
                 raid::window,
             ),
-            combat::input,
+            (combat::input, combat::idle_swings).chain(),
             (trade::input, speed::report).chain(),
             (
                 give::buttons,

@@ -611,20 +611,32 @@ impl InstalledClient {
     }
 
     /// How this client's attack key turns auto attack on and off, from the
-    /// program; None until read for this client (Titanium: sittings 6 and
-    /// 7). The Mac-era client's is TAKP Batch 1 R2 (recording checklist
-    /// item 6.157).
+    /// program: Titanium's from program read N5 of 11-01, the Mac-era
+    /// client's from TAKP Batch 1 R2 (recording checklist item 6.157), whose
+    /// self-target refusal and lines while on are unread (6.358).
     #[must_use]
-    pub const fn attack_toggle(self) -> Option<AttackToggle> {
+    pub const fn attack_toggle(self) -> AttackToggle {
+        let shared = AttackToggle {
+            frozen: 12368,
+            not_standing: 12369,
+            on: 12370,
+            off: 12371,
+            line_type: 13,
+            self_target: None,
+            idle: None,
+        };
         match self {
-            Self::Titanium => None,
-            Self::EqMac => Some(AttackToggle {
-                frozen: 12368,
-                not_standing: 12369,
-                on: 12370,
-                off: 12371,
-                line_type: 13,
-            }),
+            Self::Titanium => AttackToggle {
+                self_target: Some(12696),
+                idle: Some(IdleSwings {
+                    no_target: 12697,
+                    self_target: 12696,
+                    line_type: 303,
+                    bare_hand_tenths: 35,
+                }),
+                ..shared
+            },
+            Self::EqMac => shared,
         }
     }
 
@@ -683,6 +695,30 @@ pub struct AttackToggle {
     pub off: u32,
     /// The chat line type the on and off lines take their colour from.
     pub line_type: u32,
+    /// The refusal to turn it on with the player as their own target, where
+    /// the client refuses; None where unread.
+    pub self_target: Option<u32>,
+    /// What the client says while it is on with no one to swing at; None
+    /// where unread.
+    pub idle: Option<IdleSwings>,
+}
+
+/// What a client says while auto attack is on with no one to swing at: a
+/// line each time a weapon's swing comes due, on that weapon's delay, while
+/// auto attack stays on (Titanium: 0x47ed9c, from the swing routine
+/// 0x48297b; program read N5 of 11-01).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdleSwings {
+    /// The line with no target.
+    pub no_target: u32,
+    /// The line with the player as their own target.
+    pub self_target: u32,
+    /// The chat line type both take their colour from.
+    pub line_type: u32,
+    /// The primary hand's delay with no weapon in it, in tenths of a
+    /// second: unread, so `EQEmu`'s hand-to-hand delay for most classes
+    /// (recording checklist 6.356).
+    pub bare_hand_tenths: u32,
 }
 
 /// How an installed client asks the player about a translocate: in its
