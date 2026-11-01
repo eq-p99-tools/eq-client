@@ -62,6 +62,10 @@ pub(super) struct Controls {
     pub last_answer: Option<Instant>,
     /// Why the latest frame sent no sample; None when it sent one.
     pub held: Option<Held>,
+    /// The admission and the climb a step last told to the session
+    /// (`ClimbReach`), so it goes again at each admission and whenever the
+    /// body's climb changes.
+    climb_sent: Option<(u64, f32)>,
 }
 
 /// How far a jump from standing still has come on a client that crouches
@@ -118,6 +122,7 @@ impl Default for Controls {
             last_sent: None,
             last_answer: None,
             held: None,
+            climb_sent: None,
         }
     }
 }
@@ -547,6 +552,26 @@ pub(super) fn input(
         turn,
         preserve_facing,
     } = intent;
+    let physics = physics(client, online.world().zone_gravity(), body);
+    // The session's guard counts a grounded climb by the body's own reach a
+    // step, where the program's is read; it hears it at each admission and
+    // whenever it changes, before any sample that climbs by it.
+    if controls.airborne.is_some()
+        && client.falls().is_some()
+        && let Some(session) = online.world().session_id()
+        && controls.climb_sent != Some((session, physics.climb))
+    {
+        let per_step = physics.climb;
+        if let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::ClimbReach {
+            session_id: stamp.session_id,
+            per_step,
+        }) {
+            controls.send_failed(reason);
+            controls.held = Some(Held::Refused);
+            return;
+        }
+        controls.climb_sent = Some((session, per_step));
+    }
     let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
     let feet = origin - Vec3::Y * body.feet_offset;
     // A jump or fall keeps going after the keys are released, and a player
@@ -609,7 +634,8 @@ pub(super) fn input(
             let landing = fall_step(
                 airborne,
                 world,
-                physics(client, online.world().zone_gravity()),
+                physics,
+                client.falls().map(|_| physics.climb),
                 feet,
                 delta,
                 span,
@@ -720,18 +746,22 @@ fn unsupported(world: &eq_client_core::movement::CollisionWorld, feet: Vec3) -> 
 }
 
 /// Walks like a grounded step but keeps going past ledges and falls under gravity,
-/// in the 50 ms slices the airborne controller integrates; `jump` starts a jump
+/// in the 50 ms slices the airborne controller steps; `jump` starts a jump
 /// in the first slice when the character stands on the ground. Each slice may
 /// climb, so the sample stops before its total rise passes what the session's
-/// movement guard accepts: one riser, and while a jump rises, as far as the
-/// jump's speed less gravity carries it in the sample (the guard's own rule
-/// after the session's jump notice). A larger climb takes several accepted
+/// movement guard accepts: `climb` (the body's reach a step, which the session
+/// has heard) in each program step the sample has spanned, or one riser a
+/// sample where none is told, or one riser for a sample that ends falling
+/// (the guard's fall rule); and while a jump rises, as far as the jump's
+/// speed less gravity carries it in the sample (the guard's own rule after
+/// the session's jump notice). A larger climb takes several accepted
 /// samples instead of one that would be refused and retried forever.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fall_step(
     airborne: &mut eq_client_core::movement::AirborneController,
     world: &eq_client_core::movement::CollisionWorld,
     physics: VerticalPhysics,
+    climb: Option<f32>,
     feet: Vec3,
     delta: Vec3,
     span: f32,
@@ -762,8 +792,15 @@ pub(super) fn fall_step(
             rising = physics.jump_speed.max(start);
         }
         let elapsed = span / slice * f32::from(index + 1);
-        let allowed = eq_client_core::movement::MAX_GROUNDED_STEP
-            + jump_rise(rising, physics.gravity, elapsed);
+        let riser = eq_client_core::movement::MAX_GROUNDED_STEP;
+        let reach = match climb {
+            Some(per_step) if trial.velocity() >= 0.0 => eq_client_core::movement::climb_reach(
+                per_step,
+                eq_client_core::movement::program_steps(elapsed),
+            ),
+            _ => riser,
+        };
+        let allowed = reach + jump_rise(rising, physics.gravity, elapsed);
         if next.y - feet.y > allowed {
             break;
         }
@@ -791,10 +828,17 @@ fn jump_rise(speed: f32, gravity: f32, seconds: f32) -> f32 {
 /// they are read for it. A walking step keeps the feet on the floor only
 /// within the program's on-ground tolerance and falls past it, so a steep
 /// face goes down at the walk's own pace as a run of short falls, each
-/// landing by the program's rule (R-s). This client steps in 50 ms slices,
-/// the program one step per update, so how often those short falls land
-/// waits on the update-rate question for the owner.
-pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> VerticalPhysics {
+/// landing by the program's rule (R-s). It climbs onto a floor up to the
+/// body's reach a step: the program's floor sweep from the origin, which
+/// stands the body's feet offset above the feet (read for TAKP; for
+/// Titanium that the origin stands there is inferred, 6.347). This client
+/// steps once each 50 ms, the program one step per update, so how often
+/// those short falls land waits on the update-rate question for the owner.
+pub(super) fn physics(
+    client: InstalledClient,
+    zone_gravity: Option<f32>,
+    body: &PlayerBody,
+) -> VerticalPhysics {
     client.falls().map_or(PROVISIONAL_PHYSICS, |falls| {
         let gravity = zone_gravity.map_or(falls.gravity, |per_step| falls.zone_gravity(per_step));
         VerticalPhysics {
@@ -803,6 +847,8 @@ pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> Ver
             jump_speed: falls.jump_speed,
             air_factor: falls.air_factor,
             ground_tolerance: falls.ground_tolerance,
+            climb: falls.climb_per_step(body.feet_offset, body.size),
+            steers_in_air: false,
         }
     })
 }
@@ -1086,6 +1132,13 @@ fn arc(from: f32, to: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    /// A size 6 human, standing 3.75 above its feet.
+    const HUMAN: super::PlayerBody = super::PlayerBody {
+        feet_offset: 3.75,
+        height: 6.0,
+        size: 6.0,
+    };
     #[test]
     fn visual_motion_interpolates_without_extrapolation_and_preserves_scale() {
         let mut visual = super::VisualMotion {
@@ -1152,6 +1205,7 @@ mod tests {
             &mut airborne,
             &world,
             PROVISIONAL_PHYSICS,
+            None,
             start,
             Vec3::X * 3.0,
             0.25,
@@ -1164,6 +1218,7 @@ mod tests {
             &mut airborne,
             &world,
             PROVISIONAL_PHYSICS,
+            None,
             end,
             Vec3::X * 3.0,
             0.25,
@@ -1189,6 +1244,7 @@ mod tests {
             &mut airborne,
             &world,
             PROVISIONAL_PHYSICS,
+            None,
             Vec3::ZERO,
             Vec3::ZERO,
             0.15,
@@ -1200,6 +1256,7 @@ mod tests {
             &mut airborne,
             &world,
             PROVISIONAL_PHYSICS,
+            None,
             still,
             Vec3::X,
             0.15,
@@ -1215,6 +1272,7 @@ mod tests {
                 &mut airborne,
                 &world,
                 PROVISIONAL_PHYSICS,
+                None,
                 feet,
                 Vec3::ZERO,
                 0.15,
@@ -1236,20 +1294,22 @@ mod tests {
             [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
         ])
         .unwrap();
-        let titanium = physics(InstalledClient::Titanium, Some(1.0));
+        let titanium = physics(InstalledClient::Titanium, None, &HUMAN);
         let mut airborne = AirborneController::default();
         let rising = super::fall_step(
             &mut airborne,
             &world,
             titanium,
+            None,
             Vec3::ZERO,
             Vec3::ZERO,
             0.15,
             6.0,
             true,
         );
-        // At 44.55 u/s under 400 u/s², three 50 ms slices climb well past a
-        // riser, and no farther than the guard grants after the notice.
+        // At 44.55 u/s under 160 u/s², three 50 ms steps climb well past a
+        // riser (1.81 + 1.40 + 0.99), and no farther than the guard grants
+        // after the notice.
         let granted = MAX_GROUNDED_STEP + super::jump_rise(44.55, titanium.gravity, 0.15);
         assert!(rising.y > MAX_GROUNDED_STEP, "{rising:?}");
         assert!(rising.y <= granted, "{rising:?} over {granted}");
@@ -1378,7 +1438,7 @@ mod tests {
     #[allow(clippy::float_cmp, reason = "The constants are copied, not computed")]
     fn each_client_falls_by_its_own_physics_and_spaces_its_jumps_its_own_way() {
         // Titanium reads the same header field with the same step and air.
-        let titanium = physics(InstalledClient::Titanium, Some(1.0));
+        let titanium = physics(InstalledClient::Titanium, Some(1.0), &HUMAN);
         assert!(
             (titanium.gravity - 400.0).abs() < 0.01,
             "{}",
@@ -1386,11 +1446,24 @@ mod tests {
         );
         // The program's own 44.55: the movement guard takes a jump's rise.
         assert!((titanium.jump_speed - 44.55).abs() < 0.001);
-        assert_eq!(
-            physics(InstalledClient::Titanium, Some(0.4)),
-            physics(InstalledClient::EqMac, Some(0.4))
+        // The same but for the climb: the floor sweep starts at the origin
+        // on Titanium, 0.5 over it on the Mac-era client, radius size × 0.1
+        // against size / 4 (read 6.344).
+        let (ti, eqmac) = (
+            physics(InstalledClient::Titanium, Some(0.4), &HUMAN),
+            physics(InstalledClient::EqMac, Some(0.4), &HUMAN),
         );
-        let mac = physics(InstalledClient::EqMac, None);
+        assert_eq!(
+            VerticalPhysics { climb: 0.0, ..ti },
+            VerticalPhysics {
+                climb: 0.0,
+                ..eqmac
+            }
+        );
+        assert!((ti.climb - 3.15).abs() < 0.001, "{}", ti.climb);
+        assert!((eqmac.climb - 2.75).abs() < 0.001, "{}", eqmac.climb);
+        assert!(!ti.steers_in_air && !eqmac.steers_in_air);
+        let mac = physics(InstalledClient::EqMac, None, &HUMAN);
         assert!((mac.gravity - 160.0).abs() < 0.001, "{}", mac.gravity);
         // The session's motion guard lets the program's fastest fall through.
         assert!(
@@ -1399,16 +1472,21 @@ mod tests {
             mac.terminal_speed
         );
         // The zone header's gravity, a step at a time; none pulls nothing.
-        let heavy = physics(InstalledClient::EqMac, Some(0.8));
+        let heavy = physics(InstalledClient::EqMac, Some(0.8), &HUMAN);
         assert!((heavy.gravity - 320.0).abs() < 0.01, "{}", heavy.gravity);
         assert!((heavy.terminal_speed - mac.terminal_speed).abs() < 0.01);
-        let light = physics(InstalledClient::EqMac, Some(0.2));
+        let light = physics(InstalledClient::EqMac, Some(0.2), &HUMAN);
         assert!(
             (light.terminal_speed - 396.0).abs() < 0.01,
             "{}",
             light.terminal_speed
         );
-        assert!(physics(InstalledClient::EqMac, Some(0.0)).gravity.abs() < f32::EPSILON);
+        assert!(
+            physics(InstalledClient::EqMac, Some(0.0), &HUMAN)
+                .gravity
+                .abs()
+                < f32::EPSILON
+        );
         let now = Instant::now();
         let ago = |ms| now.checked_sub(Duration::from_millis(ms));
         assert!(jump_too_soon(InstalledClient::Titanium, ago(499), now));
@@ -1673,6 +1751,13 @@ mod tests {
             .insert_resource(Controls {
                 speed: Some(6.0),
                 last_accepted: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
+                // The session has heard this body's Titanium climb, 3 − 0.6
+                // a step, so the samples are the only commands these tests
+                // see ([`the_session_hears_the_bodys_climb_at_each_admission_and_change`]).
+                climb_sent: Some((
+                    11,
+                    eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
+                )),
                 ..Controls::default()
             })
             .add_systems(Update, input);
@@ -2132,6 +2217,32 @@ mod tests {
     }
 
     #[test]
+    fn the_session_hears_the_bodys_climb_at_each_admission_and_change() {
+        let (mut app, receiver) = app();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.airborne = Some(AirborneController::default());
+        controls.climb_sent = None;
+        app.update();
+        let climb = |feet: f32, size: f32| ClientCommand::ClimbReach {
+            session_id: 11,
+            per_step: eq_client_assets::falls::TITANIUM.climb_per_step(feet, size),
+        };
+        assert_eq!(receiver.try_recv().ok(), Some(climb(3.0, 6.0)));
+        // Once is enough while the body stays the same.
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        // A body that changes size climbs its own reach.
+        let mut bodies = app.world_mut().query::<&mut PlayerBody>();
+        let mut body = bodies.single_mut(app.world_mut()).unwrap();
+        (body.feet_offset, body.size) = (1.875, 3.0);
+        app.update();
+        assert_eq!(receiver.try_recv().ok(), Some(climb(1.875, 3.0)));
+    }
+
+    #[test]
     fn a_player_on_the_floor_with_no_key_held_sends_nothing() {
         let (mut app, receiver) = app();
         app.world_mut()
@@ -2262,7 +2373,7 @@ mod tests {
             let below = next.step(
                 &floor,
                 feet,
-                physics(InstalledClient::Titanium, None),
+                physics(InstalledClient::Titanium, None, &HUMAN),
                 MotionStep {
                     horizontal: Vec3::ZERO,
                     jump: false,
@@ -2320,12 +2431,13 @@ mod tests {
         let all = eq_client_core::Capability::ALL.to_vec();
         // Safe Fall is announced where the player has it.
         for (safe_fall, amount, used) in [
-            // About 8.25 units a step at touchdown: trunc(10 × 4.25²).
-            (None, 181, false),
-            (Some(0), 181, false),
+            // 7.855 units a step at touchdown, the read step's from 100
+            // units up: trunc(10 × 3.855²).
+            (None, 148, false),
+            (Some(0), 148, false),
             // The skill takes off all of it, and is still announced.
             (Some(200), 0, true),
-            (Some(254), 181, false),
+            (Some(254), 148, false),
         ] {
             let (mut app, receiver) = landing(safe_fall, all.clone());
             assert_eq!(
@@ -2366,7 +2478,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Controls>().unreported,
             Some(FallCost {
-                damage: 181,
+                damage: 148,
                 safe_fall: false
             })
         );
@@ -2385,7 +2497,7 @@ mod tests {
             Some(ClientCommand::EnvironmentalDamage {
                 session_id: 11,
                 hazard: Hazard::Falling,
-                amount: 181,
+                amount: 148,
                 safe_fall: false,
             })
         );

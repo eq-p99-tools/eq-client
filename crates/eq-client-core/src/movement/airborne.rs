@@ -12,11 +12,8 @@ pub struct VerticalPhysics {
     pub terminal_speed: f32,
     /// Initial upward speed for a grounded jump.
     pub jump_speed: f32,
-    /// The share of the vertical speed kept after each 50 ms slice, rising
-    /// or falling; 1 keeps all of it. It is taken off the speed a slice
-    /// ends with; the distance within the slice is integrated without it,
-    /// which at 50 ms slices moves the feet at most 0.4 units further
-    /// a slice, at the fastest fall.
+    /// The share of the speed kept after each 50 ms program step in the air,
+    /// vertical and horizontal alike; 1 keeps all of it.
     pub air_factor: f32,
     /// How far below the feet a floor may lie for a walking step to keep
     /// them on it, in world units; past it the step leaves the ground and
@@ -24,19 +21,35 @@ pub struct VerticalPhysics {
     /// moved by this step's vertical speed, are within 0.5 + 0.001 of the
     /// floor (R-s: Titanium 0x48a2f4, `EQMac` 0x50ba07).
     pub ground_tolerance: f32,
+    /// How far one step on the ground may lift the feet onto a floor ahead,
+    /// in world units: the player's own reach in the programs (the floor
+    /// sweep from the origin, read 6.344), a riser where unread.
+    pub climb: f32,
+    /// Whether the walk's input still moves the body in the air. Neither
+    /// program's does: off the ground a step adds no input and keeps the air
+    /// factor's share of the take-off speed (Titanium 0x4c0462-0x4c04ba,
+    /// TAKP R1). The provisional physics keep steering, which makes no
+    /// claim about either program.
+    pub steers_in_air: bool,
 }
 
 /// Provisional tuning shared by the offline preview, online falls and path search.
 /// Not measured EQ gravity or jump impulse; the terminal speed is the fastest
 /// descent the network accepts for a fall. A walk keeps the feet on a floor
-/// up to a riser below them, the grounded step's own rule.
+/// up to a riser below or above them, the grounded step's own rule.
 pub const PROVISIONAL_PHYSICS: VerticalPhysics = VerticalPhysics {
     gravity: 32.0,
     terminal_speed: super::MAX_FALL_SPEED,
     jump_speed: 10.0,
     air_factor: 1.0,
     ground_tolerance: super::MAX_GROUNDED_STEP,
+    climb: super::MAX_GROUNDED_STEP,
+    steers_in_air: true,
 };
+
+/// The length of the programs' movement step, in seconds: a fall's speed
+/// changes, and the feet move by it, once a step (R-s).
+const STEP: f32 = super::PROGRAM_STEP_SECONDS;
 
 /// One bounded local simulation step, using renderer Y-up coordinates.
 #[derive(Clone, Copy)]
@@ -81,10 +94,21 @@ fn supported(world: &CollisionWorld, feet: Vec3, height: f32) -> bool {
     world.support(feet).is_some() || buried_floor(world, feet, height).is_some()
 }
 
-/// Vertical velocity survives frames with no keyboard input.
+/// A body's motion as the programs step it, one 50 ms step at a time (R-s,
+/// both generations): on the ground the walk moves it; in the air each
+/// step takes the zone's gravity off its vertical speed, keeps the air
+/// factor's share of all its speed, and moves the feet by it, with no
+/// steering (Titanium 0x4c0462-0x4c04ba, TAKP R1: no input off the ground).
+/// A step that ends with the feet below a floor lands there, at that
+/// step's speed. Vertical velocity survives frames with no keyboard input.
 #[derive(Clone, Default)]
 pub struct AirborneController {
     velocity: f32,
+    /// The horizontal speed carried in the air, in world units a second:
+    /// the walk's at take-off, less the air's share each step.
+    drift: Vec3,
+    /// Seconds since the last step, under one step.
+    clock: f32,
     peak: Option<f32>,
     landing: Option<Landing>,
 }
@@ -101,6 +125,12 @@ impl AirborneController {
     #[must_use]
     pub const fn peak(&self) -> Option<f32> {
         self.peak
+    }
+
+    /// The horizontal speed carried in the air, in world units a second.
+    #[must_use]
+    pub const fn drift(&self) -> Vec3 {
+        self.drift
     }
 
     /// Resets momentum after a correction, teleport, or a new admission.
@@ -133,6 +163,14 @@ impl AirborneController {
 
     /// Advances horizontal collision and vertical flight, clipping against floors and ceilings.
     /// Invalid inputs preserve position and momentum; no network packets are generated.
+    ///
+    /// Each call adds its seconds to the step clock; the vertical motion
+    /// moves once for each whole step, so a call shorter than a step may
+    /// move only across. The programs' on-ground test is made where the
+    /// feet stand before the move: feet moved by the step's vertical speed
+    /// within the ground tolerance of a floor take no gravity that step
+    /// (0x48a2f4 / 0x50ba07).
+    #[allow(clippy::too_many_lines)]
     pub fn step(
         &mut self,
         world: &CollisionWorld,
@@ -152,10 +190,11 @@ impl AirborneController {
             || !(physics.gravity.is_finite() && physics.gravity >= 0.0)
             || !(physics.air_factor > 0.0 && physics.air_factor <= 1.0)
             || !(physics.ground_tolerance.is_finite() && physics.ground_tolerance >= 0.0)
+            || !(physics.climb.is_finite() && physics.climb >= 0.0)
         {
             return feet;
         }
-        let dt = input.seconds.min(0.05);
+        let dt = input.seconds.min(STEP);
         let feet = match buried_floor(world, feet, input.height) {
             Some(floor) if self.velocity <= 0.0 => Vec3::new(feet.x, floor, feet.z),
             _ => feet,
@@ -166,14 +205,41 @@ impl AirborneController {
             self.finish_landing(floor.unwrap_or(feet.y), -self.velocity);
             self.velocity = if input.jump { physics.jump_speed } else { 0.0 };
         }
+        // A body in the air whose feet this step's speed would carry to
+        // within the tolerance of a floor counts as on the ground: it takes
+        // no gravity, and the walk moves it.
+        let fall = -self.velocity * STEP;
+        let alighting = !grounded
+            && self.velocity <= 0.0
+            && world
+                .support_height(feet, 0.01, fall + physics.ground_tolerance)
+                .is_some_and(|floor| feet.y - fall <= floor + physics.ground_tolerance);
+        let on_ground = grounded || alighting;
+        let steps = (self.clock + dt + 1e-6) / STEP;
+        let stepped = steps >= 1.0;
+        self.clock = if stepped {
+            (self.clock + dt - STEP).max(0.0)
+        } else {
+            self.clock + dt
+        };
+        let horizontal = if on_ground || physics.steers_in_air {
+            self.drift = input.horizontal / dt;
+            input.horizontal
+        } else {
+            if stepped {
+                self.drift *= physics.air_factor;
+            }
+            self.drift * dt
+        };
         let support = if grounded && !input.jump {
             Support::Optional {
                 drop: physics.ground_tolerance,
+                climb: physics.climb,
             }
         } else {
             Support::Airborne
         };
-        let position = world.walk(feet, input.horizontal, input.height, support);
+        let position = world.walk(feet, horizontal, input.height, support);
         if self.velocity <= 0.0
             && let Some(floor) = world.support(position)
         {
@@ -181,18 +247,28 @@ impl AirborneController {
             return Vec3::new(position.x, floor, position.z);
         }
         self.peak = Some(self.peak.unwrap_or(feet.y).max(position.y));
-        let initial = self.velocity.max(-physics.terminal_speed);
-        let accelerating = ((initial + physics.terminal_speed) / physics.gravity).clamp(0.0, dt);
-        let end = (initial - physics.gravity * dt).max(-physics.terminal_speed)
-            * physics.air_factor.powf(dt / 0.05);
-        let distance = initial * accelerating
-            - 0.5 * physics.gravity * accelerating * accelerating
-            - physics.terminal_speed * (dt - accelerating);
+        if !stepped {
+            return position;
+        }
+        if !(on_ground && !input.jump) {
+            self.velocity = ((self.velocity - physics.gravity * STEP) * physics.air_factor)
+                .max(-physics.terminal_speed);
+        }
+        let speed = self.velocity;
+        let distance = speed * STEP;
         let mut target = position + Vec3::Y * distance;
         let mut landed = false;
+        // A step on the ground stands the feet on the floor it found; the
+        // programs' land a step later at the same speed, and a body at rest
+        // there would hover.
+        let reach = if alighting {
+            -distance + physics.ground_tolerance
+        } else {
+            -distance
+        };
         if distance <= 0.0
-            && let Some(floor) = world.support_height(position, 0.01, -distance + 0.05)
-            && target.y <= floor
+            && let Some(floor) = world.support_height(position, 0.01, reach + 0.05)
+            && (alighting || target.y <= floor)
         {
             target.y = floor;
             landed = true;
@@ -210,9 +286,7 @@ impl AirborneController {
             if held.is_some() {
                 self.hold();
             } else if landed {
-                self.finish_landing(target.y, -initial);
-            } else {
-                self.velocity = end;
+                self.finish_landing(target.y, -speed);
             }
             return position;
         }
@@ -224,16 +298,13 @@ impl AirborneController {
             Ok(None) => {
                 self.peak = self.peak.map(|peak| peak.max(target.y));
                 if landed {
-                    let impact = (initial * initial + 2.0 * physics.gravity * (-distance).max(0.0))
-                        .sqrt()
-                        .min(physics.terminal_speed);
-                    self.finish_landing(target.y, impact);
-                } else {
-                    self.velocity = end;
+                    // The program lands at the speed of the step that ended
+                    // below the floor (0x48b6c5 / 0x4b479e).
+                    self.finish_landing(target.y, -speed);
                 }
                 target
             }
-            Ok(Some(hit)) => self.blocked(world, position, distance, &hit, end, input.height),
+            Ok(Some(hit)) => self.blocked(world, position, distance, &hit, speed, input.height),
             Err(_) => position,
         }
     }
@@ -300,6 +371,16 @@ mod tests {
             [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
         ]
     }
+    /// The provisional physics' numbers, which [`tick`] steps by.
+    const TICK: VerticalPhysics = VerticalPhysics {
+        gravity: 32.0,
+        terminal_speed: 40.0,
+        jump_speed: 10.0,
+        air_factor: 1.0,
+        ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
+        climb: crate::movement::MAX_GROUNDED_STEP,
+        steers_in_air: true,
+    };
     fn tick(
         state: &mut AirborneController,
         world: &CollisionWorld,
@@ -309,13 +390,7 @@ mod tests {
         state.step(
             world,
             feet,
-            VerticalPhysics {
-                gravity: 32.0,
-                terminal_speed: 40.0,
-                jump_speed: 10.0,
-                air_factor: 1.0,
-                ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
-            },
+            TICK,
             MotionStep {
                 horizontal: Vec3::ZERO,
                 jump,
@@ -380,6 +455,8 @@ mod tests {
             jump_speed: 10.0,
             air_factor: 1.0,
             ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
+            climb: crate::movement::MAX_GROUNDED_STEP,
+            steers_in_air: true,
         };
         let mut state = AirborneController::default();
         let mut feet = Vec3::new(-1.0, 40.0, 0.0);
@@ -416,13 +493,16 @@ mod tests {
     }
 
     /// The Titanium program's falls (sittings 8g-8i; R-s): gravity 0.4 a
-    /// 50 ms step, the air's 0.99, and the on-ground tolerance 0.5 + 0.001.
+    /// 50 ms step, the air's 0.99, and the on-ground tolerance 0.5 + 0.001;
+    /// a size 6 human's climb, 3.75 − 0.6 a step (6.344).
     const PROGRAM: VerticalPhysics = VerticalPhysics {
         gravity: 160.0,
         terminal_speed: 792.0,
         jump_speed: 44.55,
         air_factor: 0.99,
         ground_tolerance: 0.501,
+        climb: 3.15,
+        steers_in_air: false,
     };
 
     /// A plateau at y `height` for x < 0, a face at `degrees` down to the
@@ -459,7 +539,7 @@ mod tests {
 
     /// Runs at 43 units a second off the plateau for `slices` 50 ms
     /// slices: where the feet end, each landing, and whether every slice
-    /// moved the whole way across.
+    /// kept close to the run's pace.
     fn run(world: &CollisionWorld, slices: usize) -> (Vec3, Vec<Landing>, bool) {
         let mut state = AirborneController::default();
         let top = world
@@ -480,7 +560,9 @@ mod tests {
                     height: 6.0,
                 },
             );
-            full &= (feet.x - before.x - 2.15).abs() < 0.01;
+            // In the air the take-off speed carries on, less the air's 1% a
+            // step, so a hop slows a little; it never stalls.
+            full &= feet.x - before.x > 2.15 * 0.85 && feet.x - before.x < 2.15 + 0.01;
             landings.extend(state.take_landing());
         }
         (feet, landings, full)
@@ -573,7 +655,14 @@ mod tests {
         assert_eq!(state.velocity(), 0.0);
         let landing = state.take_landing().unwrap();
         assert!((landing.fall_distance - 10.0).abs() < 0.001);
-        assert!((landing.impact_speed - (2.0_f32 * 32.0 * 10.0).sqrt()).abs() < 0.1);
+        // At the read step's speed, which the continuous fall's
+        // sqrt(2gh) is above.
+        let read = -read_fall(10.0, TICK) / STEP;
+        assert!(
+            (landing.impact_speed - read).abs() < 0.001,
+            "{landing:?} against {read}"
+        );
+        assert!(landing.impact_speed < (2.0_f32 * 32.0 * 10.0).sqrt());
         assert!(state.take_landing().is_none());
         tick(&mut state, &world, position, false);
         assert!(state.take_landing().is_none());
@@ -589,7 +678,9 @@ mod tests {
             position = tick(&mut state, &world, position, position.y > 0.1);
             max_height = max_height.max(position.y);
         }
-        assert!(max_height > 1.4 && max_height < 1.6);
+        // Stepped, 10 a second less 1.6 each 50 ms step: 0.42 + 0.34 + 0.26
+        // + 0.18 + 0.10 + 0.02 units, under the continuous v²/2g of 1.5625.
+        assert!((max_height - 1.32).abs() < 0.01, "{max_height}");
         assert!(position.y.abs() < 0.001);
         state.reset();
         assert!(state.take_landing().is_none());
@@ -667,6 +758,8 @@ mod tests {
             jump_speed: 10.0,
             air_factor: 1.0,
             ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
+            climb: crate::movement::MAX_GROUNDED_STEP,
+            steers_in_air: true,
         };
         let input = MotionStep {
             horizontal: Vec3::X * 0.6,
@@ -677,17 +770,18 @@ mod tests {
         let mut normal = AirborneController::default();
         let mut stalled = AirborneController::default();
         let start = Vec3::new(19.9, 0.0, 0.0);
-        let next = normal.step(&world, start, physics, input);
-        let late = stalled.step(
-            &world,
-            start,
-            physics,
-            MotionStep {
-                seconds: 5.0,
-                ..input
-            },
-        );
-        assert!(next.x > 20.4 && next.y < 0.0);
+        let stall = MotionStep {
+            seconds: 5.0,
+            ..input
+        };
+        // The step that walks off was on the ground where it started, so
+        // it takes no gravity (the programs' on-ground test); the next falls.
+        let off = normal.step(&world, start, physics, input);
+        assert!(off.x > 20.4 && off.y.abs() < f32::EPSILON, "{off:?}");
+        let next = normal.step(&world, off, physics, input);
+        let late = stalled.step(&world, start, physics, stall);
+        let late = stalled.step(&world, late, physics, stall);
+        assert!(next.x > 20.4 && next.y < 0.0, "{next:?}");
         assert!(next.distance(late) < 0.0001);
         assert!(normal.velocity() < 0.0);
         let momentum = normal.velocity();
@@ -718,5 +812,144 @@ mod tests {
         assert_eq!(normal.velocity(), -40.0);
         normal.reset();
         assert_eq!(normal.velocity(), 0.0);
+    }
+
+    /// The read step by hand (R-s): from standing at the top of a drop of
+    /// `height` onto a flat floor, a step whose feet, moved by its speed,
+    /// end within 0.5 + 0.001 of the floor is on the ground and takes no
+    /// gravity; any other takes 0.4 off the vertical speed a step and keeps
+    /// 0.99 of it; then the feet move by it, and the step that ends below
+    /// the floor lands, at that speed.
+    fn read_drop(height: f32) -> f32 {
+        read_fall(height, PROGRAM)
+    }
+
+    /// The same by `physics`, in units a step.
+    fn read_fall(height: f32, physics: VerticalPhysics) -> f32 {
+        let gravity = physics.gravity * STEP * STEP;
+        let (mut z, mut vz) = (0.0_f32, 0.0_f32);
+        loop {
+            if z + vz <= -height + physics.ground_tolerance {
+                return vz;
+            }
+            vz = (vz - gravity) * physics.air_factor;
+            z += vz;
+            if z < -height {
+                return vz;
+            }
+        }
+    }
+
+    #[test]
+    fn a_drop_lands_at_the_read_steps_speed_and_costs_what_it_does() {
+        for height in [50.0_f32, 100.0] {
+            let world = CollisionWorld::new([
+                [[-20.0, 0.0, -20.0], [0.0, 0.0, -20.0], [0.0, 0.0, 20.0]],
+                [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+                [
+                    [0.0, -height, -20.0],
+                    [80.0, -height, -20.0],
+                    [80.0, -height, 20.0],
+                ],
+                [
+                    [0.0, -height, -20.0],
+                    [80.0, -height, 20.0],
+                    [0.0, -height, 20.0],
+                ],
+            ])
+            .unwrap();
+            let mut state = AirborneController::default();
+            let mut feet = Vec3::new(-1.0, 0.0, 0.0);
+            let mut landing = None;
+            for _ in 0..200 {
+                feet = state.step(
+                    &world,
+                    feet,
+                    PROGRAM,
+                    MotionStep {
+                        horizontal: Vec3::X * 43.0 * 0.05,
+                        jump: false,
+                        seconds: 0.05,
+                        height: 6.0,
+                    },
+                );
+                if let Some(found) = state.take_landing() {
+                    landing = Some(found);
+                    break;
+                }
+            }
+            let landing = landing.expect("landed");
+            let ours = landing.impact_speed * STEP;
+            let read = -read_drop(height);
+            assert!(
+                (ours - read).abs() < 0.001,
+                "{height}: {ours} against {read}"
+            );
+            assert!((feet.y + height).abs() < 0.001, "{feet:?}");
+        }
+    }
+
+    #[test]
+    fn a_call_shorter_than_a_step_moves_only_across_and_the_step_comes_once_due() {
+        let world = CollisionWorld::new(floor(-100.0)).unwrap();
+        let mut state = AirborneController::default();
+        let input = |seconds| MotionStep {
+            horizontal: Vec3::ZERO,
+            jump: false,
+            seconds,
+            height: 6.0,
+        };
+        // In the air at rest: 30 ms is under a step, so nothing falls yet.
+        let feet = state.step(&world, Vec3::ZERO, PROGRAM, input(0.03));
+        assert!(
+            feet.y.abs() < f32::EPSILON && state.velocity() == 0.0,
+            "{feet:?}"
+        );
+        // 30 ms more completes the step: one step's fall, 0.396 units.
+        let feet = state.step(&world, feet, PROGRAM, input(0.03));
+        assert!((feet.y + 0.396).abs() < 0.001, "{feet:?}");
+        assert!((state.velocity() * STEP + 0.396).abs() < 0.001);
+    }
+
+    #[test]
+    fn in_the_air_the_take_off_speed_carries_on_and_input_no_longer_steers() {
+        let world = CollisionWorld::new(floor(0.0)).unwrap();
+        let mut state = AirborneController::default();
+        let mut feet = Vec3::new(-15.0, 0.0, 0.0);
+        let mut steps = 0_u8;
+        let mut air = Vec::new();
+        loop {
+            steps += 1;
+            // The run is along +x; after the take-off the keys turn to +z.
+            let direction = if steps == 1 { Vec3::X } else { Vec3::Z };
+            let before = feet;
+            feet = state.step(
+                &world,
+                feet,
+                PROGRAM,
+                MotionStep {
+                    horizontal: direction * 43.0 * 0.05,
+                    jump: steps == 1,
+                    seconds: 0.05,
+                    height: 6.0,
+                },
+            );
+            if state.velocity() == 0.0 {
+                break;
+            }
+            if steps > 1 {
+                air.push(feet - before);
+            }
+            assert!(steps < 100);
+        }
+        // Each step in the air keeps 0.99 of the last one's speed across,
+        // all of it along +x, and nothing moves it along +z.
+        assert!(air.len() > 5, "{air:?}");
+        let mut last = 2.15;
+        for moved in &air {
+            assert!(moved.z.abs() < f32::EPSILON, "{air:?}");
+            assert!((moved.x - last * 0.99).abs() < 0.001, "{air:?}");
+            last = moved.x;
+        }
     }
 }

@@ -364,6 +364,8 @@ fn inspect_admission_support() {
                 jump_speed: 10.0,
                 air_factor: 1.0,
                 ground_tolerance: eq_client_core::movement::MAX_GROUNDED_STEP,
+                climb: eq_client_core::movement::MAX_GROUNDED_STEP,
+                steers_in_air: true,
             },
             eq_client_core::movement::MotionStep {
                 horizontal: if frame < 40 {
@@ -491,6 +493,7 @@ fn inspect_walk() {
                     &mut airborne,
                     &world,
                     PROVISIONAL_PHYSICS,
+                    None,
                     feet,
                     to * 3.1,
                     0.15,
