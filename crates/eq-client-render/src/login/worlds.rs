@@ -86,8 +86,8 @@ pub(crate) fn worlds(
     lists: Query<&ScrollPosition, With<Rows>>,
     time: Res<Time<Real>>,
     mut clicked: Local<Option<(usize, Duration)>>,
-    mut previous: Local<String>,
-    mut built: Local<Option<u64>>,
+    (mut previous, mut built): (Local<String>, Local<Option<u64>>),
+    escape: Res<crate::escape::Escape>,
 ) {
     let visible = front.screen(&online) == Screen::Servers;
     let official = look.is_some_and(|look| look.official());
@@ -97,7 +97,7 @@ pub(crate) fn worlds(
             .servers()
             .is_some_and(|list| list.asked.is_some());
         let pressed: Vec<_> = buttons.iter().copied().collect();
-        if pressed.contains(&Action::Back) || keys.input.just_pressed(KeyCode::Escape) {
+        if pressed.contains(&Action::Back) || *escape == crate::escape::Escape::Back {
             front.end(None, &mut link);
         } else if !asked {
             let now = time.elapsed();
@@ -533,7 +533,7 @@ mod tests {
                 Update,
                 (super::super::form, super::super::watch, worlds).chain(),
             );
-        crate::clicks::testing::install(&mut app);
+        super::super::testing::front_end_input(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -563,6 +563,19 @@ mod tests {
     fn queue(heard: &Arc<Mutex<Heard>>) -> Vec<ClientCommand> {
         let heard = heard.lock().unwrap();
         std::iter::from_fn(|| heard.sessions[0].1.try_recv().ok()).collect()
+    }
+
+    #[test]
+    fn escape_at_the_list_goes_back_to_the_login_screen() {
+        let (mut app, heard) = listed();
+        press(&mut app, KeyCode::Escape);
+        let front = app.world().resource::<FrontEnd>();
+        assert!(!front.running());
+        assert_eq!(
+            front.screen(app.world().resource::<OnlineState>()),
+            Screen::Login
+        );
+        assert_eq!(queue(&heard), []);
     }
 
     #[test]

@@ -65,7 +65,7 @@ pub(crate) fn form(
     ),
     prebuild: Option<Res<NavmeshPrebuild>>,
     mut previous: Local<String>,
-    mut exit: MessageWriter<AppExit>,
+    (escape, mut exit): (Res<crate::escape::Escape>, MessageWriter<AppExit>),
 ) {
     let visible = front.has_login() && front.screen(&online) == Screen::Login;
     let official = look.is_some_and(|look| look.official());
@@ -78,7 +78,7 @@ pub(crate) fn form(
         }
         if front.running() {
             // A login under way: Escape or Cancel stops it.
-            if cancel || keys.input.just_pressed(KeyCode::Escape) {
+            if cancel || *escape == crate::escape::Escape::Back {
                 front.end(None, &mut link);
             }
         } else {
@@ -393,7 +393,7 @@ mod tests {
                 Update,
                 (super::super::claim, form, super::super::watch).chain(),
             );
-        crate::clicks::testing::install(&mut app);
+        super::super::testing::front_end_input(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -467,6 +467,28 @@ mod tests {
         type_text(&mut app, "more");
         assert_eq!(heard.lock().unwrap().connects.len(), 1);
         assert_eq!(app.world().resource::<FrontEnd>().password.as_str(), "");
+    }
+
+    #[test]
+    fn escape_stops_a_login_under_way_and_on_the_idle_screen_only_leaves_the_box() {
+        let (mut app, heard) = app(vec![server("Example", "remembered")]);
+        app.update();
+        // Idle, Escape leaves the password box and never quits.
+        press(&mut app, KeyCode::Escape);
+        assert_eq!(app.world().resource::<FrontEnd>().field, Field::None);
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+        // Logging in, Escape stops it and the login screen waits again.
+        app.world_mut().resource_mut::<FrontEnd>().request = Some(Request::Connect);
+        app.update();
+        assert!(app.world().resource::<FrontEnd>().running());
+        press(&mut app, KeyCode::Escape);
+        let front = app.world().resource::<FrontEnd>();
+        assert!(!front.running());
+        assert_eq!(front.account, "remembered");
+        assert!(super::super::Worker::finished(
+            &heard.lock().unwrap().sessions[0].2
+        ));
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
     }
 
     #[test]

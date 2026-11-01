@@ -99,6 +99,14 @@ why, in the installed client's words for it where the server gives a login
 string (`eqlsstr_us.txt`), and the list stays up for another choice. The
 world's character list comes next, as in the online gameplay preview below.
 
+Escape goes back one screen: from character select (once no window is left
+for it to close, and until Enter World is asked) and from the list of worlds
+to the login screen, with the account kept, and from a login under way to the
+login screen as it was. Character select goes back to the login screen, not
+the list of worlds, because the login server's session ends once a world is
+chosen and the password is never kept. On the login screen with nothing
+logging in, Escape only leaves the box being typed in; it never quits.
+
 Buttons act when the left button is let go over them, as in the official
 client: press one, move off it and let go, and nothing happens. That holds
 for every push button, check box, tab, close box and link, in the login

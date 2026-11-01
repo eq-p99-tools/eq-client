@@ -108,6 +108,15 @@ impl Selection {
     }
 }
 
+#[cfg(test)]
+impl Selection {
+    /// This list with Enter World asked for.
+    pub(crate) const fn asked_to_enter(mut self) -> Self {
+        self.submitted = true;
+        self
+    }
+}
+
 #[derive(Component)]
 pub(super) struct Root;
 #[derive(Component)]

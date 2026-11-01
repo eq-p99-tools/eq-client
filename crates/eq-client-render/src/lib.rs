@@ -420,6 +420,7 @@ pub(crate) mod testing {
             .init_resource::<ButtonInput<MouseButton>>()
             .insert_resource(online::OnlineState::new(false))
             .insert_resource(outbox::Outbox::new(None))
+            .init_resource::<login::FrontEnd>()
             .add_systems(PreUpdate, clicks::track);
         app.world_mut().spawn((
             Window {
