@@ -187,13 +187,15 @@ pub(super) fn orbit_camera(
     };
 
     let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
-    let limits = client.camera_limits();
+    let program = client.camera_limits();
+    let limits = program.on_leash(leash(&options.options));
     let rise = if options.options.invert_y { -1.0 } else { 1.0 };
     let clip = clip_distance(client, &options.options, online.world());
     for (mut camera, mut transform, projection) in &mut cameras {
         let turn = options.options.turn_per_pixel();
         camera.yaw -= drag.x * turn;
-        // The limits are the program's chase camera's. The top-down
+        // The limits are the program's chase camera's, with the distance on
+        // the player's leash. The top-down
         // orthographic view is not in the program, so it keeps this
         // client's own pitch and zoom ranges.
         if matches!(projection.as_deref(), Some(Projection::Orthographic(_))) {
@@ -207,6 +209,7 @@ pub(super) fn orbit_camera(
             );
         }
         let radius = camera.radius;
+        let clip = clip.map(|clip| clip + past_program(radius, program));
         if let Some(mut projection) = projection
             && !fitted(&projection, radius, clip)
         {
@@ -256,6 +259,29 @@ pub(super) fn chase(
     let (height, distance) = clamped;
     camera.radius = height.hypot(distance);
     camera.pitch = -height.atan2(distance);
+}
+
+/// How far behind the player the player lets the chase camera go: this
+/// client's long range unless they turned the quality-of-life setting off
+/// ([`eq_client_core::qol::Fix::LongChaseCamera`]), else the program's.
+pub(crate) fn leash(
+    options: &eq_client_core::options::Options,
+) -> eq_client_assets::camera::ChaseLeash {
+    if options.qol.on(eq_client_core::qol::Fix::LongChaseCamera) {
+        eq_client_assets::camera::ChaseLeash::Long
+    } else {
+        eq_client_assets::camera::ChaseLeash::Program
+    }
+}
+
+/// How much farther out than the program lets its chase camera go a camera
+/// `radius` from the player is, if at all. The far plane moves out by as
+/// much, so on the long leash the scene around the player draws as far as
+/// it would with the camera at the program's limit, and the player never
+/// drops past the far plane. Within the program's limit it is nothing, and
+/// the far plane is the program's.
+fn past_program(radius: f32, program: eq_client_assets::camera::CameraLimits) -> f32 {
+    (radius - program.chase_distance.1).max(0.0)
 }
 
 /// How far the scene is drawn, terrain, objects and spawns alike, by the
@@ -573,6 +599,43 @@ mod tests {
         // Close in, the same height looks nearly straight down.
         assert!((height(&camera) - 10.0).abs() < 1e-3);
         assert!(camera.pitch < -1.3);
+    }
+
+    #[test]
+    fn the_long_leash_lets_the_chase_camera_go_far_and_keeps_its_height() {
+        use eq_client_assets::camera::{ChaseLeash, TITANIUM};
+        let mut options = eq_client_core::options::Options::default();
+        // The long leash by default.
+        assert_eq!(leash(&options), ChaseLeash::Long);
+        let limits = TITANIUM.on_leash(leash(&options));
+        let mut camera = OrbitCamera {
+            focus: Vec3::ZERO,
+            radius: 100.0,
+            yaw: 0.0,
+            pitch: -0.2,
+            pulled: None,
+        };
+        let height = |camera: &OrbitCamera| camera.radius * (-camera.pitch).sin();
+        let distance = |camera: &OrbitCamera| camera.radius * camera.pitch.cos();
+        chase(&mut camera, limits, 10.0, 30.0);
+        assert!((distance(&camera) - 100.0 * 0.2_f32.cos() * 30.0).abs() < 0.1);
+        chase(&mut camera, limits, 0.0, 100.0);
+        assert!((distance(&camera) - 20_000.0).abs() < 0.1);
+        // The height keeps to the program's range.
+        chase(&mut camera, limits, 1000.0, 1.0);
+        assert!((height(&camera) - 30.0).abs() < 1e-2);
+        chase(&mut camera, limits, -1000.0, 1.0);
+        assert!(height(&camera).abs() < 1e-3);
+        // Out past the program's 200, the far plane moves out with it.
+        assert!((past_program(camera.radius, TITANIUM) - 19_800.0).abs() < 0.1);
+        assert!(past_program(150.0, TITANIUM).abs() < f32::EPSILON);
+        // Turned off, the program's limit.
+        options
+            .qol
+            .set(eq_client_core::qol::Fix::LongChaseCamera, false);
+        assert_eq!(leash(&options), ChaseLeash::Program);
+        chase(&mut camera, TITANIUM.on_leash(leash(&options)), 0.0, 1.0);
+        assert!((distance(&camera) - 200.0).abs() < 1e-3);
     }
 
     #[test]
