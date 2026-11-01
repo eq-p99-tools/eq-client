@@ -248,6 +248,63 @@ pub struct CarriedFall {
     pub gravity: f32,
     /// The share of the fall speed each call keeps, the vertical D: 0.99.
     pub kept: f32,
+    /// Where a spawn that falls under the zone is put back, once its zone's
+    /// header has come: None leaves it falling.
+    pub underworld: Option<UnderworldReturn>,
+}
+
+/// A zone's top and lowest heights, as its header gives them. The Titanium
+/// program copies the header into its zone block at 0x9239e0 (the classic
+/// model scale flag at +592 lands at 0x9239e0 + 0x250, read N1b), so the
+/// globals it tests a fall against, 0x923bd8 and 0x923bdc, are the header's
+/// +504 and +508, these two (inferred from the offsets).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZoneHeights {
+    /// The height the emulators' structs name `max_z`; the Titanium program
+    /// keeps it at 0x923bd8.
+    pub top: f32,
+    /// The height below which a body is under the world; the Titanium
+    /// program keeps it at 0x923bdc.
+    pub underworld: f32,
+}
+
+/// Where a carried spawn that falls with no floor under it is put back. The
+/// Titanium program finds no floor there (its floor finder gives -1e27), so
+/// the spawn falls every step and nothing lands it, as an NPC carried over a
+/// hole or off the collision's edge does, since only the player is refused
+/// those (R-t, 0x48bb4e); once its feet pass the zone's lowest height, the
+/// landing routine (0x48b6c5), for a spawn other than the player's, finds
+/// the zone's top surface at the spawn's spot, straight down from 32,000,
+/// and puts the spawn on it if that surface is more than 10 under the zone's
+/// top, else leaves it be (R-s Titanium addendum, section 5: 0x923bdc,
+/// 0x439f26, 0x923bd8, 0x478474). The program does so only in zones with a
+/// flag at 0x923b88 whose meaning is unread, here taken as set in every
+/// zone; `EQMac` is taken to do the same until read (checklist 6.362).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnderworldReturn {
+    /// The zone's lowest height: the zone header's underworld, which the
+    /// program's zone block keeps at 0x923bdc.
+    pub underworld: f32,
+    /// The zone's top surface must lie under this height for the spawn to be
+    /// put on it: the header's `max_z` (the program's 0x923bd8), less 10.
+    pub highest: f32,
+    /// The height the search for the top surface starts from: 32,000.
+    pub search_from: f32,
+}
+
+impl UnderworldReturn {
+    /// The height a spawn fallen under the zone at `spot` is put back at: the
+    /// first surface straight down from [`Self::search_from`], if it lies
+    /// under [`Self::highest`]. None leaves it be, as where no surface lies
+    /// under that spot at all (the program's search then gives -1e27, so a
+    /// spawn it puts there is lost from view either way).
+    #[must_use]
+    pub fn put_back(&self, world: &movement::CollisionWorld, spot: glam::Vec2) -> Option<f32> {
+        let from = glam::Vec3::new(spot.x, self.search_from, spot.y);
+        world
+            .ground(from, 0.0, 2.0 * self.search_from.abs())
+            .filter(|&top| top < self.highest)
+    }
 }
 
 /// Where a carried model's soles were drawn the frame before, since its
@@ -273,7 +330,8 @@ pub struct DrawnSoles {
 /// ([`z_offset`]), it stands on the floor nearest the height it was drawn
 /// at, its fall stopped. So it rises to the floor at once, comes down a slope or off a
 /// ledge under gravity, a little behind the floor going down, and with no
-/// floor under it falls until the next report. Read for Titanium (Decompile
+/// floor under it falls until the next report, or until it passes under the
+/// zone and is put back on its top surface ([`UnderworldReturn`]). Read for Titanium (Decompile
 /// R-z, 11-01: the gravity path 0x4850a0, the landing check 0x48b6c5 and
 /// the floor finder 0x48a0fc, which takes a face at any angle) and in part
 /// for `EQMac` (0x50ba07, 0x4b3a84, 0x4b479e). The reach up is read too:
@@ -321,17 +379,25 @@ pub fn carried_soles(
         let speed = (speed - fall.gravity * steps) * fall.kept;
         let below = (-speed * steps).max(0.0);
         let from = glam::Vec3::new(soles.x, height, soles.z);
-        return match world.nearest_ground(from, reach, below) {
-            Some(floor) => DrawnSoles {
+        if let Some(floor) = world.nearest_ground(from, reach, below) {
+            return DrawnSoles {
                 height: floor,
                 spot,
                 fall: Some(0.0),
-            },
-            None => DrawnSoles {
-                height: height - below,
-                spot,
-                fall: Some(speed),
-            },
+            };
+        }
+        let height = height - below;
+        // Whether the program's move (0x478474) also stops the fall is
+        // unread: the next step stands it on that surface either way.
+        let height = fall
+            .underworld
+            .filter(|underworld| height < underworld.underworld)
+            .and_then(|underworld| underworld.put_back(world, spot))
+            .unwrap_or(height);
+        return DrawnSoles {
+            height,
+            spot,
+            fall: Some(speed),
         };
     }
     match world.ground(soles, reach, reach) {
@@ -605,6 +671,7 @@ mod tests {
     const FALL: super::CarriedFall = super::CarriedFall {
         gravity: 0.4,
         kept: 0.99,
+        underworld: None,
     };
 
     /// The most a carried spawn on a ramp of `grade` is drawn over the floor,
@@ -864,6 +931,171 @@ mod tests {
         for _ in 0..20 {
             drawn = super::carried_soles(&world, Some(drawn), low, 3.75, FALL, 1.0 / 3.0);
         }
+        assert!(
+            drawn.height.abs() < 0.001 && drawn.fall == Some(0.0),
+            "{drawn:?}"
+        );
+    }
+
+    /// Spawn 119 of the 11-01 local `EQEmu` look, carried from a report
+    /// along its heading at its walk for one of its two long gaps, at 60
+    /// frames a second, over the floor Live's floor run found under its
+    /// carried spot (npc-motion/floor-run-eqemu-1316Z-119.txt): its height
+    /// at each twentieth of the gap, up to where the collision ends, between
+    /// the last twentieth with a floor and the first without. Past that edge
+    /// is a surface `above` the last floor, if any, in a zone whose top is
+    /// `top` and whose underworld is -500. Gives where its soles were drawn
+    /// at the gap's end, the lowest they were drawn, and that last floor.
+    fn spawn_119(gap: usize, above: Option<f32>, top: f32) -> (super::DrawnSoles, f32, f32) {
+        // From the report, at the report's height, to where the walk took it
+        // after the gap's seconds (EQ x, y, z).
+        let (x0, y0, z0, x1, y1, seconds) = [
+            (
+                -989.0_f32,
+                1213.1_f32,
+                15.2_f32,
+                -1415.7_f32,
+                1499.7_f32,
+                49.094_f32,
+            ),
+            (-1476.9, 1291.6, 2.4, -2108.0, 1295.5, 60.278),
+        ][gap];
+        let floors: &[f32] = [
+            &[
+                13.5, 12.3, 11.2, 11.1, 10.1, 9.1, 8.6, 9.0, 10.3, 12.3, 19.7, 33.5, 49.2, 62.7,
+                75.2, 85.4, 95.2,
+            ][..],
+            &[-4.3; 14][..],
+        ][gap];
+        #[allow(clippy::cast_precision_loss)]
+        let edge = (floors.len() as f32 - 0.6) / 20.0;
+        let feet = 3.75;
+        let render = |x: f32, y: f32, z: f32| {
+            super::render_position(super::WorldPosition {
+                x,
+                y,
+                z,
+                heading: 0.0,
+            })
+        };
+        let along = |share: f32| (x0 + (x1 - x0) * share, y0 + (y1 - y0) * share);
+        // A strip 40 wide along the path, from `from` to `to` of the way,
+        // rising from one height to another.
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let length = dx.hypot(dy);
+        let (nx, ny) = (-dy / length * 20.0, dx / length * 20.0);
+        let strip = |(from, low): (f32, f32), (to, high): (f32, f32)| {
+            let ((ax, ay), (bx, by)) = (along(from), along(to));
+            let (a, b, c, d) = (
+                render(ax + nx, ay + ny, low),
+                render(ax - nx, ay - ny, low),
+                render(bx - nx, by - ny, high),
+                render(bx + nx, by + ny, high),
+            );
+            [[a, b, c], [a, c, d]]
+        };
+        let last = floors[floors.len() - 1];
+        #[allow(clippy::cast_precision_loss)]
+        let mut points: Vec<(f32, f32)> = floors
+            .iter()
+            .enumerate()
+            .map(|(at, &height)| (at as f32 / 20.0, height))
+            .collect();
+        points[0].0 = -0.05;
+        points.push((edge, last));
+        let mut triangles: Vec<_> = points
+            .windows(2)
+            .flat_map(|pair| strip(pair[0], pair[1]))
+            .collect();
+        if let Some(above) = above {
+            triangles.extend(strip((edge, last + above), (1.05, last + above)));
+        }
+        let world = crate::movement::CollisionWorld::new(triangles).unwrap();
+        let fall = super::CarriedFall {
+            underworld: Some(super::UnderworldReturn {
+                underworld: -500.0,
+                highest: top - 10.0,
+                search_from: 32_000.0,
+            }),
+            ..FALL
+        };
+        let fps = 60.0;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let frames = (seconds * fps) as u32;
+        let soles_z = z0 - feet;
+        let mut drawn = None;
+        let mut lowest = f32::MAX;
+        for frame in 0..=frames {
+            #[allow(clippy::cast_precision_loss)]
+            let (x, y) = along(frame as f32 / fps / seconds);
+            let soles = glam::Vec3::from_array(render(x, y, soles_z));
+            let next = super::carried_soles(&world, drawn, soles, feet, fall, 20.0 / fps);
+            lowest = lowest.min(next.height);
+            drawn = Some(next);
+        }
+        (drawn.unwrap(), lowest, last)
+    }
+
+    #[test]
+    fn a_carried_spawn_fallen_under_the_zone_is_put_back_on_its_top_surface() {
+        // Spawn 119's gaps, with a surface 60 over the floor past the edge:
+        // it falls where its floor ends, comes to the zone's underworld well
+        // before the next report, and is put on that surface, which it then
+        // stands on.
+        for gap in [0, 1] {
+            let (drawn, lowest, last) = spawn_119(gap, Some(60.0), 10_000.0);
+            assert!(lowest < -490.0, "gap {gap}: lowest {lowest}");
+            assert!(
+                (drawn.height - (last + 60.0)).abs() < 0.01 && drawn.fall == Some(0.0),
+                "gap {gap}: {drawn:?}"
+            );
+            // Within 10 of the zone's top, that surface is too high: it is
+            // left be, falling on.
+            let (drawn, _, _) = spawn_119(gap, Some(60.0), last + 65.0);
+            assert!(
+                drawn.height < -500.0 && drawn.fall.is_some_and(|speed| speed < 0.0),
+                "gap {gap}: {drawn:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_carried_spawn_walked_off_the_world_falls_on() {
+        // Spawn 119 in the look: past the collision's edge there is no
+        // surface over or under its carried spot, so nothing puts it back.
+        // The program's search finds none either and puts it at -1e27, so
+        // it is lost from view on both clients (6.362).
+        for gap in [0, 1] {
+            let (drawn, lowest, _) = spawn_119(gap, None, 10_000.0);
+            assert!(
+                drawn.height < -500.0 && (drawn.height - lowest).abs() < 0.001,
+                "gap {gap}: {drawn:?}"
+            );
+        }
+        // Without a zone header, nothing puts back a spawn under the zone.
+        let world = ramp(0.0);
+        let falling = super::DrawnSoles {
+            height: -600.0,
+            spot: glam::Vec2::ZERO,
+            fall: Some(-8.0),
+        };
+        let soles = glam::Vec3::new(0.0, -600.0, 0.0);
+        let drawn = super::carried_soles(&world, Some(falling), soles, 3.75, FALL, 1.0);
+        assert!(drawn.height < -600.0, "{drawn:?}");
+        // With one, it is put on the floor over it.
+        let fall = super::CarriedFall {
+            underworld: Some(super::UnderworldReturn {
+                underworld: -500.0,
+                highest: 990.0,
+                search_from: 32_000.0,
+            }),
+            ..FALL
+        };
+        // Searched from 32,000, the height is good to a few thousandths;
+        // the next step's landing stands it on the floor.
+        let drawn = super::carried_soles(&world, Some(falling), soles, 3.75, fall, 1.0);
+        assert!(drawn.height.abs() < 0.01, "{drawn:?}");
+        let drawn = super::carried_soles(&world, Some(drawn), soles, 3.75, fall, 1.0);
         assert!(
             drawn.height.abs() < 0.001 && drawn.fall == Some(0.0),
             "{drawn:?}"

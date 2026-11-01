@@ -2453,6 +2453,13 @@ fn a_zone_header_sent_again_changes_the_sky_fog_and_far_clip() {
     game(&mut world, WorldEvent::ZoneDescription(description));
     assert_eq!((world.sky(), world.far_clip()), (Some(sky), Some(1400.0)));
     assert_eq!(world.zone_gravity(), Some(0.4));
+    assert_eq!(
+        world.zone_heights(),
+        Some(crate::ZoneHeights {
+            top: 0.0,
+            underworld: -1000.0
+        })
+    );
     assert_eq!(world.classic_model_scale_flag(), Some(1));
     assert_eq!(world.min_clip(), Some(50.0));
     // A game master's change sends the header again mid-zone: every field it

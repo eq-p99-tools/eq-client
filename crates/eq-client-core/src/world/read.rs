@@ -140,6 +140,14 @@ impl ClientWorld {
         self.zone_gravity
     }
 
+    /// The zone's top and lowest heights, as its header gives them (Titanium
+    /// `OP_NewZone` +504 and +508, `EQMac` +500 and +504). None until this
+    /// admission's header comes.
+    #[must_use]
+    pub const fn zone_heights(&self) -> Option<crate::ZoneHeights> {
+        self.zone_heights
+    }
+
     /// The Titanium zone header's classic model scale flag (`OP_NewZone`
     /// +592), as it came: while it is not zero, the Titanium program draws
     /// the classic character models at 1/1.3 of their usual scale. None
