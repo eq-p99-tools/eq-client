@@ -124,13 +124,9 @@ pub(crate) fn buttons(
         ResMut<crate::chat::ChatState>,
     ),
     mut asked: ResMut<Asked>,
-    buttons: Query<(&Interaction, &AnswerButton), Changed<Interaction>>,
+    buttons: crate::clicks::Clicks<AnswerButton>,
 ) {
-    let Some(yes) = buttons
-        .iter()
-        .find(|(interaction, _)| **interaction == Interaction::Pressed)
-        .map(|(_, answer)| answer.0)
-    else {
+    let Some(yes) = buttons.iter().next().map(|answer| answer.0) else {
         return;
     };
     if online.world().resurrection().is_some() {
@@ -207,9 +203,11 @@ mod tests {
         );
         // No answers it, and the dialog closes; the answer waits for the
         // asker, and only for its own question.
-        app.world_mut()
-            .spawn((Interaction::Pressed, AnswerButton(false)));
-        app.update();
+        let no = app
+            .world_mut()
+            .spawn((Interaction::None, AnswerButton(false)))
+            .id();
+        crate::clicks::testing::click(&mut app, no);
         assert!(!open(&app));
         let mut asked = app.world_mut().resource_mut::<Asked>();
         assert_eq!(asked.question(), None);

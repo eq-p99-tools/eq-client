@@ -177,7 +177,10 @@ pub(super) struct Status;
 pub(super) struct HoverLabel;
 #[derive(Component)]
 pub(super) struct TabButton(Tab);
+/// An item's place: a press on it picks the item up or puts the cursor's
+/// down as it begins, unless a hold picks up from it.
 #[derive(Component)]
+#[require(crate::clicks::OnPress)]
 pub(super) struct SlotButton(pub(super) InventorySlot);
 
 /// The equipment layout of the skin in use, read again when the skin changes.
@@ -328,13 +331,15 @@ pub(super) fn input(
         Res<crate::spellbook::SpellNames>,
         Res<crate::ViewerSettings>,
     ),
-    tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
+    tabs: crate::clicks::Clicks<TabButton>,
     (slots, clicks): (
         Query<(&Interaction, &SlotButton)>,
-        crate::hud::hotbar::Clicks<SlotButton>,
+        crate::clicks::Clicks<SlotButton>,
     ),
-    store: Query<&Interaction, (With<StoreCursor>, Changed<Interaction>)>,
-    split_buttons: Query<(&Interaction, &interaction::SplitAction), Changed<Interaction>>,
+    (store, split_buttons): (
+        crate::clicks::Clicks<StoreCursor>,
+        crate::clicks::Clicks<interaction::SplitAction>,
+    ),
     stack_counts: Query<(&Interaction, &SplitStack), Changed<Interaction>>,
     mut state: ResMut<InventoryState>,
     mut items: ResMut<super::items::ItemState>,
@@ -376,21 +381,16 @@ pub(super) fn input(
         }
         return;
     }
-    if store
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
+    if store.any() {
         state.actions.split = None;
         state.actions.auto_store = true;
     }
     state.store_cursor(&online, &sender);
-    for (interaction, action) in &split_buttons {
-        if *interaction == Interaction::Pressed {
-            state.split_action(*action, &online, &sender);
-        }
+    for action in split_buttons.iter() {
+        state.split_action(*action, &online, &sender);
     }
-    for (interaction, tab) in &tabs {
-        if *interaction == Interaction::Pressed && (tab.0 != Tab::Bank || state.bank_open) {
+    for tab in tabs.iter() {
+        if tab.0 != Tab::Bank || state.bank_open {
             state.tab = tab.0;
         }
     }
@@ -412,7 +412,7 @@ pub(super) fn input(
         }
     }
     // A slot a hold picks up from is clicked when its quick press is let go
-    // (`hud::hotbar::Clicks`).
+    // (`crate::clicks::Clicks`).
     if let Some(SlotButton(slot)) = clicks.iter().next() {
         if keys
             .input
@@ -913,17 +913,19 @@ mod tests {
         );
         for choose_more in [true, false] {
             let world = app.world_mut();
-            let mut buttons = world.query::<(&interaction::SplitAction, &mut Interaction)>();
-            for (action, mut interaction) in buttons.iter_mut(world) {
-                if matches!(
-                    (choose_more, action),
-                    (true, interaction::SplitAction::More)
-                        | (false, interaction::SplitAction::Confirm)
-                ) {
-                    *interaction = Interaction::Pressed;
-                }
-            }
-            app.update();
+            let button = world
+                .query::<(Entity, &interaction::SplitAction)>()
+                .iter(world)
+                .find(|(_, action)| {
+                    matches!(
+                        (choose_more, action),
+                        (true, interaction::SplitAction::More)
+                            | (false, interaction::SplitAction::Confirm)
+                    )
+                })
+                .map(|(button, _)| button)
+                .unwrap();
+            crate::clicks::testing::click(&mut app, button);
         }
         assert!(
             app.world()

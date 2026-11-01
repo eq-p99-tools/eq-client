@@ -83,6 +83,7 @@ fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
         .init_resource::<action_bar::ActionRequests>()
         .insert_resource(hand)
         .add_systems(Update, actions);
+    crate::clicks::testing::install(&mut app);
     app.world_mut().spawn((
         Window {
             focused: true,
@@ -91,8 +92,8 @@ fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
         bevy::window::PrimaryWindow,
     ));
     // The gem holds spell 73, which a click would cast.
-    app.world_mut().spawn((SpellGem(0), Interaction::Pressed));
-    app.update();
+    let gem = app.world_mut().spawn((SpellGem(0), Interaction::None)).id();
+    crate::clicks::testing::click(&mut app, gem);
     assert!(matches!(
         rx.try_recv().unwrap(),
         ClientCommand::MemorizeSpell {
@@ -596,6 +597,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         .init_resource::<messages::Messages>()
         .init_resource::<crate::spellbook::BookHand>()
         .add_systems(Update, actions);
+    crate::clicks::testing::install(&mut app);
     app.world_mut().spawn((
         Window {
             focused: true,
@@ -603,11 +605,8 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         },
         bevy::window::PrimaryWindow,
     ));
-    let gem = app
-        .world_mut()
-        .spawn((SpellGem(0), Interaction::Pressed))
-        .id();
-    app.update();
+    let gem = app.world_mut().spawn((SpellGem(0), Interaction::None)).id();
+    crate::clicks::testing::click(&mut app, gem);
     assert!(matches!(
         rx.try_recv().unwrap(),
         ClientCommand::CastSpell {
@@ -620,9 +619,9 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     ));
     let bar = app
         .world_mut()
-        .spawn((hotbar::Slot(0), Interaction::Pressed))
+        .spawn((hotbar::Slot(0), Interaction::None))
         .id();
-    app.update();
+    crate::clicks::testing::click(&mut app, bar);
     assert!(matches!(
         rx.try_recv().unwrap(),
         ClientCommand::CastSpell {
@@ -646,12 +645,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .reset_all();
-    let press = |app: &mut App| {
-        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
-        app.update();
-        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-        app.update();
-    };
+    let press = |app: &mut App| crate::clicks::testing::click(app, gem);
     let feedback = |app: &App| app.world().resource::<ChatState>().newest();
     // A submitted request blocks another click even before a server Begin notification.
     testing::pending_cast(&mut online(&mut app), Some(73));
@@ -707,13 +701,10 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     }
     press(&mut app);
     assert!(rx.try_recv().is_err());
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
-    app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::ShiftLeft);
-    *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-    app.update();
+    press(&mut app);
     assert!(matches!(
         rx.try_recv().unwrap(),
         ClientCommand::ForgetSpell {

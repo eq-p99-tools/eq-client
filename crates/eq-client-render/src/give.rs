@@ -220,12 +220,9 @@ pub(crate) fn inspect_theirs(
 pub(crate) fn buttons(
     mut online: ResMut<OnlineState>,
     outbox: Res<Outbox>,
-    buttons: Query<&Interaction, (Changed<Interaction>, With<GiveButton>)>,
+    buttons: crate::clicks::Clicks<GiveButton>,
 ) {
-    if !buttons
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
+    if !buttons.any() {
         return;
     }
     let open = online

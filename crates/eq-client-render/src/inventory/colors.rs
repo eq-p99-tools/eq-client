@@ -99,7 +99,7 @@ pub(super) fn controls(parent: &mut ChildSpawnerCommands, colors: &Colors, slot:
 pub(crate) fn input(
     mut state: ResMut<InventoryState>,
     shown: Res<crate::windows::Shown>,
-    actions: Query<(Ref<Interaction>, &Action)>,
+    actions: crate::clicks::Clicks<Action>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     if !shown.is_open(crate::windows::WindowId::Inventory)
@@ -107,14 +107,8 @@ pub(crate) fn input(
     {
         return;
     }
-    // Resolve a swatch before its parent toggle if both report a press.
-    let pressed: Vec<_> = actions
-        .iter()
-        .filter(|(interaction, _)| {
-            interaction.is_changed() && **interaction == Interaction::Pressed
-        })
-        .map(|(_, action)| action)
-        .collect();
+    // Resolve a swatch before its parent toggle if both report a click.
+    let pressed: Vec<_> = actions.iter().collect();
     let action = pressed
         .iter()
         .find(|action| matches!(action, Action::Set(..)))
@@ -144,6 +138,7 @@ mod tests {
         app.init_resource::<InventoryState>()
             .init_resource::<crate::windows::Shown>()
             .add_systems(Update, input);
+        crate::clicks::testing::install(&mut app);
         app.world_mut()
             .resource_mut::<crate::windows::Shown>()
             .open(crate::windows::WindowId::Inventory);
@@ -155,9 +150,11 @@ mod tests {
             PrimaryWindow,
         ));
         let slot = InventorySlot(22);
-        app.world_mut()
-            .spawn((Interaction::Pressed, Action::Toggle(slot)));
-        app.update();
+        let toggle = app
+            .world_mut()
+            .spawn((Interaction::None, Action::Toggle(slot)))
+            .id();
+        crate::clicks::testing::click(&mut app, toggle);
         let original_other = app
             .world()
             .resource::<InventoryState>()
@@ -167,9 +164,11 @@ mod tests {
             app.world().resource::<InventoryState>().colors.picker,
             Some(slot)
         );
-        app.world_mut()
-            .spawn((Interaction::Pressed, Action::Set(slot, 3)));
-        app.update();
+        let swatch = app
+            .world_mut()
+            .spawn((Interaction::None, Action::Set(slot, 3)))
+            .id();
+        crate::clicks::testing::click(&mut app, swatch);
         let state = app.world().resource::<InventoryState>();
         assert_eq!(state.colors.picker, None);
         assert_eq!(state.colors.tint(slot), Color::srgb(0.075, 0.16, 0.12));

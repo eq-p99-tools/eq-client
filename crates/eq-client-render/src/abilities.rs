@@ -82,7 +82,7 @@ pub(crate) fn needs(
 pub(crate) fn input(
     online: Res<OnlineState>,
     outbox: Res<Outbox>,
-    buttons: crate::hud::hotbar::Clicks<AbilityButton>,
+    buttons: crate::clicks::Clicks<AbilityButton>,
 ) {
     for button in buttons.iter() {
         if let Some(ability) = assigned(online.world(), *button) {

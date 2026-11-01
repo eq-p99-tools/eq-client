@@ -31,8 +31,9 @@ pub(crate) struct SkinSlot {
 pub(crate) struct TheirSlot(pub(crate) u8);
 
 /// A place in the loot window, from 0, which shows the corpse's item there;
-/// a click takes it.
+/// a click takes it as the press begins, as an item's place does.
 #[derive(Component, Clone, Copy)]
+#[require(crate::clicks::OnPress)]
 pub(crate) struct LootSlot(pub(crate) u16);
 
 /// The loot window's first place's number (`EQType`); the rest follow.
@@ -217,6 +218,9 @@ pub(super) fn figure(
     let mut figure = window.spawn((
         Button,
         crate::inventory::StoreCursor,
+        // The figure takes the cursor's item as the press begins, as a place
+        // does.
+        crate::clicks::OnPress,
         node,
         BackgroundColor(theme::WELL),
     ));
@@ -534,19 +538,17 @@ fn world_name(
         .map_or_else(String::new, |(id, messages)| messages.text(id, ""))
 }
 
-/// Closes a window when its Done button or close box is pressed, and a bag
+/// Closes a window when its Done button or close box is clicked, and a bag
 /// or the bank when Escape finds it in front; one something else opens, such
 /// as the pet window, is hidden instead.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn close(
     mut shown: ResMut<Shown>,
     escape: Res<crate::escape::Escape>,
-    buttons: Query<(&Interaction, &Closes), Changed<Interaction>>,
+    buttons: crate::clicks::Clicks<Closes>,
 ) {
-    for (interaction, Closes(window)) in &buttons {
-        if *interaction == Interaction::Pressed {
-            shown.dismiss(*window);
-        }
+    for Closes(window) in buttons.iter() {
+        shown.dismiss(*window);
     }
     // Closing the give or trade window cancels the exchange; see
     // `give::window`.

@@ -40,8 +40,8 @@ pub(super) fn input(
     mut chat: ResMut<super::chat::ChatState>,
     settings: Res<crate::ViewerSettings>,
     (attack_button, bar_clicks, bindings): (
-        super::hud::hotbar::Clicks<super::skinned::AttackButton>,
-        super::hud::hotbar::Clicks<super::hud::hotbar::Slot>,
+        crate::clicks::Clicks<super::skinned::AttackButton>,
+        crate::clicks::Clicks<super::hud::hotbar::Slot>,
         Res<super::hud::hotbar::Bindings>,
     ),
 ) {

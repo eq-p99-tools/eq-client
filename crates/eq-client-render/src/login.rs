@@ -560,23 +560,25 @@ pub(super) fn watch(mut front: ResMut<FrontEnd>, online: Res<OnlineState>, mut l
     front.end(Some(reason), &mut link);
 }
 
-/// Character select's Quit goes back to the login screen, the account kept,
-/// in a run that has one, as the owner chose; a run without one, such as an
-/// offline preview, leaves the game.
+/// Character select's Quit, or Escape there, goes back to the login screen,
+/// the account kept, in a run that has one, as the owner chose; Quit in a
+/// run without one, such as an offline preview, leaves the game. Going back
+/// to the list of worlds instead would take logging in again, as the login
+/// server's session ended when the world was chosen and the password is
+/// never kept.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn quit(
     mut front: ResMut<FrontEnd>,
     mut online: ResMut<OnlineState>,
     mut link: Link,
     keys: crate::keys::Keys,
-    buttons: Query<(Ref<Interaction>, &super::character_select::Action)>,
-    mut exit: MessageWriter<AppExit>,
+    buttons: crate::clicks::Clicks<super::character_select::Action>,
+    (escape, mut exit): (Res<super::escape::Escape>, MessageWriter<AppExit>),
 ) {
-    let pressed = buttons.iter().any(|(interaction, action)| {
-        interaction.is_changed()
-            && *interaction == Interaction::Pressed
-            && matches!(action, super::character_select::Action::Quit)
-    });
+    let pressed = buttons
+        .iter()
+        .any(|action| matches!(action, super::character_select::Action::Quit))
+        || *escape == super::escape::Escape::Back;
     if !pressed || !keys.focused() || front.screen(&online) != Screen::Characters {
         return;
     }
@@ -776,6 +778,17 @@ pub(crate) mod testing {
         }
     }
 
+    /// Gives a hand-built test app of the login screens what their presses
+    /// and Escape go through: the click rule and the Escape decision, which
+    /// runs before the systems the test adds.
+    pub(crate) fn front_end_input(app: &mut App) {
+        crate::clicks::testing::install(app);
+        app.init_resource::<crate::inventory::InventoryState>()
+            .init_resource::<crate::windows::Stack>()
+            .init_resource::<crate::escape::Escape>()
+            .add_systems(PreUpdate, crate::escape::route.after(crate::clicks::track));
+    }
+
     /// A login server offered here, with this account remembered.
     pub(crate) fn server(name: &str, account: &str) -> LoginServer {
         LoginServer {
@@ -793,8 +806,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex, atomic::Ordering};
 
-    /// An app at a world's character list, with character select's Quit
-    /// pressed.
+    /// An app at a world's character list, with character select's Quit.
     fn app(
         front: FrontEnd,
         updates: Option<Receiver<WorldUpdate>>,
@@ -811,6 +823,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .add_message::<AppExit>()
             .add_systems(Update, quit);
+        testing::front_end_input(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -819,8 +832,18 @@ mod tests {
             bevy::window::PrimaryWindow,
         ));
         app.world_mut()
-            .spawn((Interaction::Pressed, crate::character_select::Action::Quit));
+            .spawn((Interaction::None, crate::character_select::Action::Quit));
         app
+    }
+
+    /// Clicks character select's Quit.
+    fn click_quit(app: &mut App) {
+        let quit = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::character_select::Action>>()
+            .single(app.world())
+            .unwrap();
+        crate::clicks::testing::click(app, quit);
     }
 
     #[test]
@@ -843,7 +866,7 @@ mod tests {
         front.account = "typed".into();
         front.password = Zeroizing::new("secret".into());
         let mut app = app(front, updates, commands);
-        app.update();
+        click_quit(&mut app);
         // The session stops and the world hears nothing more from it.
         assert!(thread.stopped.load(Ordering::SeqCst));
         assert!(
@@ -867,10 +890,100 @@ mod tests {
         assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
     }
 
+    /// A run at a world's character list that came from the login screen,
+    /// with the account typed, and the session's thread.
+    fn launched_at_character_select() -> (App, Thread) {
+        let fake = Fake {
+            servers: vec![server("Example", "remembered")],
+            heard: Arc::new(Mutex::new(Heard::default())),
+        };
+        let thread = Thread::default();
+        let (_news, updates) = std::sync::mpsc::sync_channel(1);
+        let (commands, _queue) = std::sync::mpsc::sync_channel(1);
+        let (mut front, updates, commands) = FrontEnd::launched(
+            Box::new(fake),
+            Some(Session {
+                updates,
+                commands,
+                worker: Box::new(thread.clone()),
+            }),
+        );
+        front.account = "typed".into();
+        (app(front, updates, commands), thread)
+    }
+
+    /// Presses Escape for one frame.
+    fn escape(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+    }
+
+    #[test]
+    fn escape_at_character_select_goes_back_to_the_login_screen_as_quit_does() {
+        let (mut app, thread) = launched_at_character_select();
+        escape(&mut app);
+        assert!(thread.stopped.load(Ordering::SeqCst));
+        let front = app.world().resource::<FrontEnd>();
+        let online = app.world().resource::<OnlineState>();
+        assert_eq!(front.screen(online), Screen::Login);
+        assert_eq!(front.account, "typed");
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+        // On the login screen with nothing logging in, Escape never quits.
+        escape(&mut app);
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+    }
+
+    #[test]
+    fn escape_at_character_select_closes_a_window_first_and_waits_once_enter_world_is_asked() {
+        let (mut app, thread) = launched_at_character_select();
+        let window = app
+            .world_mut()
+            .spawn((
+                crate::windows::WindowId::Options,
+                Node::default(),
+                crate::windows::Frame::default(),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::windows::Stack>()
+            .raise(crate::windows::WindowId::Options);
+        escape(&mut app);
+        assert_eq!(
+            *app.world().resource::<crate::escape::Escape>(),
+            crate::escape::Escape::Close(crate::windows::WindowId::Options)
+        );
+        assert!(!thread.stopped.load(Ordering::SeqCst));
+        app.world_mut().despawn(window);
+        // Once Enter World is asked, Escape stays on the loading screen.
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        let asked = online.selection.take().unwrap().asked_to_enter();
+        online.selection = Some(asked);
+        escape(&mut app);
+        assert!(!thread.stopped.load(Ordering::SeqCst));
+        let front = app.world().resource::<FrontEnd>();
+        assert_eq!(
+            front.screen(app.world().resource::<OnlineState>()),
+            Screen::Characters
+        );
+    }
+
+    #[test]
+    fn escape_at_character_select_without_a_login_screen_does_nothing() {
+        let mut app = app(FrontEnd::default(), None, None);
+        escape(&mut app);
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+        assert!(app.world().resource::<OnlineState>().selection.is_some());
+    }
+
     #[test]
     fn quit_at_character_select_without_a_login_screen_leaves_the_game() {
         let mut app = app(FrontEnd::default(), None, None);
-        app.update();
+        click_quit(&mut app);
         assert_ne!(app.world().resource::<Messages<AppExit>>().len(), 0);
         assert!(app.world().resource::<OnlineState>().selection.is_some());
     }

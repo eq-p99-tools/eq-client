@@ -287,7 +287,7 @@ pub(super) fn input(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     handles: Query<(&Interaction, &DragHandle), Changed<Interaction>>,
-    minimizes: Query<(&Interaction, &Minimize), Changed<Interaction>>,
+    minimizes: crate::clicks::Clicks<Minimize>,
     children: Query<&Children>,
     title_bars: Query<(), With<TitleBar>>,
     mut frames: Query<(&mut Node, &ComputedNode, &UiGlobalTransform, &mut Frame)>,
@@ -303,10 +303,7 @@ pub(super) fn input(
         drag.active = None;
         return;
     }
-    for (interaction, Minimize(frame)) in &minimizes {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
+    for Minimize(frame) in minimizes.iter() {
         let Ok((mut node, _, _, mut state)) = frames.get_mut(*frame) else {
             continue;
         };
@@ -661,6 +658,7 @@ mod tests {
         app.init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<DragState>()
             .add_systems(Update, input);
+        crate::clicks::testing::install(&mut app);
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         let frame = app
             .world_mut()
@@ -692,13 +690,13 @@ mod tests {
             .id();
         let button = app
             .world_mut()
-            .spawn((Interaction::Pressed, Minimize(frame)))
+            .spawn((Interaction::None, Minimize(frame)))
             .id();
         app.world_mut()
             .entity_mut(frame)
             .add_children(&[title, body, hidden]);
 
-        app.update();
+        crate::clicks::testing::click(&mut app, button);
         assert_eq!(
             app.world().get::<Node>(body).unwrap().display,
             Display::None
@@ -707,12 +705,7 @@ mod tests {
         let node = app.world().get::<Node>(frame).unwrap();
         assert_eq!((node.height, node.min_height), (Val::Auto, Val::Auto));
 
-        app.world_mut().entity_mut(button).insert(Interaction::None);
-        app.update();
-        app.world_mut()
-            .entity_mut(button)
-            .insert(Interaction::Pressed);
-        app.update();
+        crate::clicks::testing::click(&mut app, button);
         assert_eq!(
             app.world().get::<Node>(body).unwrap().display,
             Display::Grid

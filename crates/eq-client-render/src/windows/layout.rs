@@ -298,6 +298,7 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<super::super::DragState>()
             .add_systems(Update, (super::super::input, remember).chain());
+        crate::clicks::testing::install(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -336,9 +337,11 @@ mod tests {
             Some((px(240), Val::Auto))
         );
         assert_eq!(app.world().resource::<Layouts>().0.len(), 1);
-        app.world_mut()
-            .spawn((Interaction::Pressed, super::super::Minimize(new)));
-        app.update();
+        let minimize = app
+            .world_mut()
+            .spawn((Interaction::None, super::super::Minimize(new)))
+            .id();
+        crate::clicks::testing::click(&mut app, minimize);
         assert_eq!(app.world().get::<Node>(new).unwrap().height, px(240));
         assert_eq!(
             app.world().get::<Node>(body).unwrap().display,

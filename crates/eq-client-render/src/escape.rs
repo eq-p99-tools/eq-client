@@ -1,8 +1,10 @@
 //! Who an Escape press belongs to. The official client peels one layer per
 //! press: an inventory action under way is cancelled first, then the
 //! frontmost open window that Escape closes, and only with nothing else open
-//! does Escape drop the target. Each of those reads this decision instead of
-//! the key, so one press never does two things.
+//! does Escape drop the target. Before the world, at the login screens and
+//! character select, the last layer goes back one screen instead (Adam
+//! 11-01, from the live client). Each of those reads this decision instead
+//! of the key, so one press never does two things.
 use super::windows::{Stack, WindowId};
 use bevy::prelude::*;
 
@@ -18,6 +20,13 @@ pub(crate) enum Escape {
     Close(WindowId),
     /// Drops the target.
     Target,
+    /// Goes back one screen before the world: from character select or the
+    /// login server's list of worlds to the login screen, or from a login
+    /// under way to the login screen as it was. It never leaves the game:
+    /// on the login screen with nothing logging in, Escape only leaves the
+    /// box being typed in. That the Mac-era client goes back the same way is
+    /// inferred (recording checklist 6.326).
+    Back,
 }
 
 /// The windows' frames, by window.
@@ -25,26 +34,49 @@ type Frames<'w, 's> =
     Query<'w, 's, (&'static WindowId, &'static Node), With<super::windows::Frame>>;
 
 /// Decides what this frame's Escape press does. An Escape that cancelled
-/// typing belongs to the chat.
+/// typing belongs to the chat. The login screens hold the keyboard for their
+/// boxes, so there Escape is theirs whatever the typing.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn route(
     keys: super::keys::Keys,
     inventory: Res<super::inventory::InventoryState>,
     (stack, frames): (Res<Stack>, Frames),
-    online: Res<super::online::OnlineState>,
+    (online, front): (Res<super::online::OnlineState>, Res<super::login::FrontEnd>),
     mut escape: ResMut<Escape>,
 ) {
-    let pressed = keys.input.just_pressed(KeyCode::Escape) && keys.escape_free();
-    *escape = if !pressed {
-        Escape::Unused
-    } else if inventory.action_under_way() {
-        Escape::Inventory
-    } else if let Some(id) = frontmost(&stack, &frames) {
-        Escape::Close(id)
-    } else if online.world().target().selected.is_some() {
-        Escape::Target
-    } else {
-        Escape::Unused
+    use super::login::Screen;
+    let screen = front.screen(&online);
+    let key = keys.input.just_pressed(KeyCode::Escape);
+    *escape = match screen {
+        _ if !key => Escape::Unused,
+        Screen::Login | Screen::Servers if !front.has_login() || !keys.window_focused() => {
+            Escape::Unused
+        }
+        // A login under way stops; with none, Escape leaves the box.
+        Screen::Login if front.running() => Escape::Back,
+        Screen::Login => Escape::Unused,
+        Screen::Servers => Escape::Back,
+        _ if !keys.escape_free() => Escape::Unused,
+        _ if inventory.action_under_way() => Escape::Inventory,
+        _ => match frontmost(&stack, &frames) {
+            Some(id) => Escape::Close(id),
+            // Character select goes back to the login screen, as its Quit
+            // does, until Enter World is asked; a run without a login screen,
+            // such as the offline preview, has nowhere to go back to.
+            None if screen == Screen::Characters => {
+                let entering = online
+                    .selection
+                    .as_ref()
+                    .is_some_and(crate::character_select::Selection::entering);
+                if front.has_login() && !entering {
+                    Escape::Back
+                } else {
+                    Escape::Unused
+                }
+            }
+            None if online.world().target().selected.is_some() => Escape::Target,
+            None => Escape::Unused,
+        },
     };
 }
 

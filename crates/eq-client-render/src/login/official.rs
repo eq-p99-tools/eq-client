@@ -766,7 +766,8 @@ fn text_box(
     };
     let mut drawn = parent.spawn(at(area.x, area.y, area.width, area.height));
     if let Some((action, ..)) = &filled {
-        drawn.insert((Button, *action));
+        // A box takes the typing as the press begins.
+        drawn.insert((Button, *action, crate::clicks::OnPress));
     }
     drawn.with_children(|frame| {
         let inner = chrome(
@@ -868,6 +869,8 @@ fn list(
                         let mut row = rows.spawn((
                             Button,
                             worlds::Action::World(index),
+                            // A row is chosen as the press begins.
+                            crate::clicks::OnPress,
                             Node {
                                 flex_shrink: 0.0,
                                 height: px(row_height),
@@ -1204,7 +1207,7 @@ mod tests {
             .expect("the screen shows the control")
     }
 
-    /// Presses the control with this action, as a click would.
+    /// Clicks the control with this action, as the player does.
     fn press<T: Component + PartialEq>(app: &mut App, action: &T) {
         let pressed = app
             .world_mut()
@@ -1213,8 +1216,7 @@ mod tests {
             .find(|(_, each)| *each == action)
             .map(|(entity, _)| entity)
             .expect("the screen shows the control");
-        *app.world_mut().get_mut::<Interaction>(pressed).unwrap() = Interaction::Pressed;
-        app.update();
+        crate::clicks::testing::click(app, pressed);
     }
 
     fn type_text(app: &mut App, text: &str) {

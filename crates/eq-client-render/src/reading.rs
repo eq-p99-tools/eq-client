@@ -93,13 +93,10 @@ pub(crate) fn window(
 pub(crate) fn buttons(
     online: Res<OnlineState>,
     mut page: ResMut<Page>,
-    buttons: Query<(&Interaction, &PageButton), Changed<Interaction>>,
+    buttons: crate::clicks::Clicks<PageButton>,
 ) {
     let count = pages(online.world()).len();
-    for (interaction, button) in &buttons {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
+    for button in buttons.iter() {
         if button.0 && page.0 + 2 < count {
             page.0 += 2;
         } else if !button.0 && page.0 >= 2 {

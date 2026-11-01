@@ -58,33 +58,27 @@ pub(crate) fn form(
     (mut front, mut online, mut link): (ResMut<FrontEnd>, ResMut<OnlineState>, Link),
     keys: crate::keys::Keys,
     mut typed: MessageReader<KeyboardInput>,
-    buttons: Query<(Ref<Interaction>, &Action)>,
+    buttons: crate::clicks::Clicks<Action>,
     (roots, look): (
         Query<Entity, With<Root>>,
         Option<Res<super::official::LoginLook>>,
     ),
     prebuild: Option<Res<NavmeshPrebuild>>,
     mut previous: Local<String>,
-    mut exit: MessageWriter<AppExit>,
+    (escape, mut exit): (Res<crate::escape::Escape>, MessageWriter<AppExit>),
 ) {
     let visible = front.has_login() && front.screen(&online) == Screen::Login;
     let official = look.is_some_and(|look| look.official());
     let typing: Vec<_> = typed.read().filter(|key| key.state.is_pressed()).collect();
     if visible && keys.window_focused() {
-        let pressed = buttons
-            .iter()
-            .filter(|(interaction, _)| {
-                interaction.is_changed() && **interaction == Interaction::Pressed
-            })
-            .map(|(_, action)| *action)
-            .collect::<Vec<_>>();
+        let pressed = buttons.iter().copied().collect::<Vec<_>>();
         let cancel = pressed.contains(&Action::Cancel);
         if pressed.contains(&Action::Quit) || (cancel && !front.running()) {
             exit.write(AppExit::Success);
         }
         if front.running() {
             // A login under way: Escape or Cancel stops it.
-            if cancel || keys.input.just_pressed(KeyCode::Escape) {
+            if cancel || *escape == crate::escape::Escape::Back {
                 front.end(None, &mut link);
             }
         } else {
@@ -322,6 +316,8 @@ fn field(
         .spawn((
             Button,
             action,
+            // A box takes the typing as the press begins.
+            crate::clicks::OnPress,
             Node {
                 padding: UiRect::axes(px(8), px(6)),
                 min_height: px(30),
@@ -397,6 +393,7 @@ mod tests {
                 Update,
                 (super::super::claim, form, super::super::watch).chain(),
             );
+        super::super::testing::front_end_input(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -470,6 +467,50 @@ mod tests {
         type_text(&mut app, "more");
         assert_eq!(heard.lock().unwrap().connects.len(), 1);
         assert_eq!(app.world().resource::<FrontEnd>().password.as_str(), "");
+    }
+
+    #[test]
+    fn escape_stops_a_login_under_way_and_on_the_idle_screen_only_leaves_the_box() {
+        let (mut app, heard) = app(vec![server("Example", "remembered")]);
+        app.update();
+        // Idle, Escape leaves the password box and never quits.
+        press(&mut app, KeyCode::Escape);
+        assert_eq!(app.world().resource::<FrontEnd>().field, Field::None);
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+        // Logging in, Escape stops it and the login screen waits again.
+        app.world_mut().resource_mut::<FrontEnd>().request = Some(Request::Connect);
+        app.update();
+        assert!(app.world().resource::<FrontEnd>().running());
+        press(&mut app, KeyCode::Escape);
+        let front = app.world().resource::<FrontEnd>();
+        assert!(!front.running());
+        assert_eq!(front.account, "remembered");
+        assert!(super::super::Worker::finished(
+            &heard.lock().unwrap().sessions[0].2
+        ));
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+    }
+
+    #[test]
+    fn connect_logs_in_when_let_go_over_it_and_not_when_let_go_off_it() {
+        use crate::clicks::testing::{click, press, release};
+        let (mut app, heard) = app(vec![server("Example", "remembered")]);
+        app.update();
+        let connect = app
+            .world_mut()
+            .query::<(Entity, &Action)>()
+            .iter(app.world())
+            .find(|(_, action)| **action == Action::Connect)
+            .map(|(connect, _)| connect)
+            .unwrap();
+        press(&mut app, Some(connect));
+        assert!(!app.world().resource::<FrontEnd>().running());
+        release(&mut app, None);
+        assert!(!app.world().resource::<FrontEnd>().running());
+        assert_eq!(heard.lock().unwrap().connects.len(), 0);
+        click(&mut app, connect);
+        assert!(app.world().resource::<FrontEnd>().running());
+        assert_eq!(heard.lock().unwrap().connects.len(), 1);
     }
 
     #[test]

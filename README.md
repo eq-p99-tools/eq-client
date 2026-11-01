@@ -99,6 +99,24 @@ why, in the installed client's words for it where the server gives a login
 string (`eqlsstr_us.txt`), and the list stays up for another choice. The
 world's character list comes next, as in the online gameplay preview below.
 
+Escape goes back one screen: from character select (once no window is left
+for it to close, and until Enter World is asked) and from the list of worlds
+to the login screen, with the account kept, and from a login under way to the
+login screen as it was. Character select goes back to the login screen, not
+the list of worlds, because the login server's session ends once a world is
+chosen and the password is never kept. On the login screen with nothing
+logging in, Escape only leaves the box being typed in; it never quits.
+
+Buttons act when the left button is let go over them, as in the official
+client: press one, move off it and let go, and nothing happens. That holds
+for every push button, check box, tab, close box and link, in the login
+screens and in the world. What takes hold of something acts as the press
+begins: a text box, a title bar, a scroll arrow, a slider, a list row that
+chooses (a world, a ware, a raid member, a skill), a drop-down, and an item's
+or coins' place, including putting down what is on the cursor. That those
+act at the press in the official client, and that the EQMac client follows
+the same rules, is inferred (recording checklist 6.325 and 6.326).
+
 The login servers are presets in `login-servers.txt` in the settings
 directory (`--settings-dir` or `EQ_CLIENT_SETTINGS_DIR`, by default
 `eq-client` in the per-user settings directory). A first run writes one
@@ -394,8 +412,8 @@ place, is simply replaced. A click anywhere else throws the hotkey away and does
 nothing else, which is how a hotbutton is emptied; anything else coming onto the
 cursor, or leaving the world, throws it away too. A control with something a
 hold can pick up acts when a quick click is let go over it, not when it is
-pressed; with Shift, Ctrl or Alt held, or with something on the cursor, a press
-acts at once as before. The hold time, that a click waits for its release, the
+pressed; with Shift, Ctrl or Alt held it clicks when let go, as every button
+does, and with something on the cursor a press acts at once, putting it down. The hold time, that a click waits for its release, the
 swap, the drop where a hold is let go, the click that throws a hotkey away, what
 the cursor shows and which items can go on the bar (those with a click effect)
 are inferred, not yet checked against the official client. Hover any of those

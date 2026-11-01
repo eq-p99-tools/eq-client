@@ -121,6 +121,8 @@ pub(crate) fn fill(
                 .spawn((
                     Button,
                     Action::Choose(row.slot),
+                    // A ware is chosen as the press begins, as a list row is.
+                    crate::clicks::OnPress,
                     crate::outbox::Needs::Capability(super::needs(Action::Choose(row.slot))),
                     Node {
                         height: px(ROW_HEIGHT),

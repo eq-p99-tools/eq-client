@@ -1,8 +1,8 @@
 //! Presentation resources and explicit frame-order contracts.
 //! Keep shared-input and deferred-entity ordering visible at this composition boundary.
 use crate::{
-    abilities, buffs, character, character_select, chat, coins, combat, confirm, daylight, doors,
-    entities, escape, exit_after_screenshot, give, ground, group, hud, interact, inventory,
+    abilities, buffs, character, character_select, chat, clicks, coins, combat, confirm, daylight,
+    doors, entities, escape, exit_after_screenshot, give, ground, group, hud, interact, inventory,
     item_models, items, keys, login, logs, map, motion, move_player, names, navigation,
     navmesh_prebuild, notices, online, options, orbit_camera, outbox, outfit, paperdoll, pet,
     profile_files, raid, reading, resources, schedule_screenshot, select_preview, sheets, skills,
@@ -28,6 +28,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<hud::hotbar::carry::Presses>()
+        .init_resource::<clicks::LeftButton>()
         .init_resource::<hud::hotbar::carry::Carry>()
         .init_resource::<spellbook::BookView>()
         .init_resource::<spellbook::BookSelection>()
@@ -344,6 +345,9 @@ pub(crate) enum Stage {
 /// Registers the startup work of the overlays and the windows' shared systems.
 pub(super) fn install_overlays(app: &mut App) {
     app.add_systems(Startup, tooltip::spawn);
+    // A click is read once Bevy has marked the controls the pointer is over,
+    // and a script's pointer has pressed or let go.
+    app.add_systems(PreUpdate, clicks::track.after(bevy::ui::UiSystems::Focus));
     windows::register_layout(app);
     paperdoll::register(app);
     app.add_systems(

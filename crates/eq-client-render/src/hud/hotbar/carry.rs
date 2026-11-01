@@ -13,13 +13,15 @@
 //!
 //! Each control says what a hold picks up from it where it is built, with
 //! [`Pickable`], and the systems that act on its clicks read them through
-//! [`Clicks`]. A quick click on such a control acts when the button is let
-//! go, so a hold never clicks too; a press with Shift, Ctrl or Alt, with
-//! something else on the cursor, or on a control with nothing to pick up
-//! acts at once, as before.
+//! [`crate::clicks::Clicks`]. A quick click on such a control acts when the
+//! button is let go, so a hold never clicks too. A press with something else
+//! on the cursor acts at once, putting it down, as on an item's place; a
+//! press with Shift, Ctrl or Alt, or on a control with nothing to pick up,
+//! clicks as every button does, when let go over it, or at once on a control
+//! that acts on the press ([`crate::clicks::OnPress`]).
 use super::{Action, Bindings};
 use crate::abilities::AbilityButton;
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::prelude::*;
 use eq_client_core::{inventory::InventorySlot, world::ClientWorld};
 use std::time::{Duration, Instant};
 
@@ -129,6 +131,11 @@ impl Presses {
     pub(crate) const fn taken(&self) -> bool {
         self.taken
     }
+
+    /// Whether the hold rule clicked this control this frame.
+    pub(crate) fn clicked(&self, control: Entity) -> bool {
+        self.clicked == Some(control)
+    }
 }
 
 #[cfg(test)]
@@ -228,8 +235,16 @@ impl Face {
 }
 
 /// The controls, with what a hold picks up from each that can.
-type Controls<'w, 's> =
-    Query<'w, 's, (Entity, &'static mut Interaction, Option<&'static Pickable>)>;
+type Controls<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut Interaction,
+        Option<&'static Pickable>,
+        Has<crate::clicks::OnPress>,
+    ),
+>;
 
 /// Decides what this frame's left button does with hotkeys: a hold picks one
 /// up, a press with one on the cursor puts it down on a hotbutton or throws
@@ -251,7 +266,11 @@ pub(crate) fn route(
         Res<crate::spellbook::BookHand>,
     ),
     mut bindings: ResMut<Bindings>,
-    (mut carry, mut presses): (ResMut<Carry>, ResMut<Presses>),
+    (mut carry, mut presses, mut button): (
+        ResMut<Carry>,
+        ResMut<Presses>,
+        ResMut<crate::clicks::LeftButton>,
+    ),
     mut controls: Controls,
 ) {
     let now = Instant::now();
@@ -270,36 +289,45 @@ pub(crate) fn route(
     if mouse.just_pressed(MouseButton::Left) {
         let under = controls
             .iter()
-            .filter(|(_, interaction, _)| **interaction == Interaction::Pressed)
-            .find_map(|(entity, _, pickable)| pickable.map(|pickable| (entity, pickable.0)));
+            .filter(|(_, interaction, ..)| **interaction == Interaction::Pressed)
+            .find_map(|(entity, _, pickable, on_press)| {
+                pickable.map(|pickable| (entity, pickable.0, on_press))
+            });
         presses.held = None;
         if let Some(hotkey) = carry.0 {
             presses.taken = true;
             // Put down on a hotbutton, what a hold there would pick up comes
             // onto the cursor.
             carry.0 = match under {
-                Some((_, Source::Slot(index))) => put_down(&mut bindings, world, index, hotkey),
+                Some((_, Source::Slot(index), _)) => put_down(&mut bindings, world, index, hotkey),
                 _ => None,
             };
             // What the press went to shows hovered, so no system takes the
-            // press as a click.
-            for (_, mut interaction, _) in &mut controls {
+            // press as a click, as it begins or as it is let go.
+            button.cancel();
+            for (_, mut interaction, ..) in &mut controls {
                 if *interaction == Interaction::Pressed {
                     *interaction = Interaction::Hovered;
                 }
             }
-        } else if let Some((entity, source)) = under {
+        } else if let Some((entity, source, on_press)) = under {
             let plain = !keys.input.any_pressed(MODIFIERS);
             if plain && !busy && source.binding(world, &bindings).is_some() {
+                button.claim(entity);
                 presses.held = Some(Held {
                     entity,
                     source,
                     since: now,
                     picked: false,
                 });
-            } else {
+            } else if on_press || busy {
+                // What is on the cursor goes down as the press begins, as on
+                // an item's place.
+                button.claim(entity);
                 presses.clicked = Some(entity);
             }
+            // Any other press clicks as it is let go over its control, as
+            // every button does ([`crate::clicks`]).
         }
     }
     let Some(mut held) = presses.held else {
@@ -324,7 +352,7 @@ pub(crate) fn route(
         // press clicks it; let go anywhere else, it clicks nothing.
         if controls
             .get(held.entity)
-            .is_ok_and(|(_, interaction, _)| *interaction != Interaction::None)
+            .is_ok_and(|(_, interaction, ..)| *interaction != Interaction::None)
         {
             presses.clicked = Some(held.entity);
         }
@@ -333,7 +361,7 @@ pub(crate) fn route(
         // it came from, it stays on the cursor.
         let over = controls
             .iter()
-            .find_map(|(_, interaction, pickable)| match pickable {
+            .find_map(|(_, interaction, pickable, _)| match pickable {
                 Some(Pickable(Source::Slot(index))) if *interaction != Interaction::None => {
                     Some(*index)
                 }
@@ -360,32 +388,13 @@ fn put_down(
     lifted
 }
 
-/// The controls of one kind clicked this frame: one a hold picks up from as
-/// [`route`] decides, any other as its press begins. Without the hold rule,
-/// every control clicks as its press begins.
-#[derive(SystemParam)]
-pub(crate) struct Clicks<'w, 's, T: Component> {
-    presses: Option<Res<'w, Presses>>,
-    controls: Query<'w, 's, (Entity, Ref<'static, Interaction>, &'static T, Has<Pickable>)>,
-}
-
-impl<T: Component> Clicks<'_, '_, T> {
-    /// The controls clicked this frame.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-        let presses = self.presses.as_deref();
-        self.controls
-            .iter()
-            .filter(move |(entity, interaction, _, pickable)| match presses {
-                Some(presses) if *pickable => presses.clicked == Some(*entity),
-                _ => interaction.is_changed() && **interaction == Interaction::Pressed,
-            })
-            .map(|(_, _, control, _)| control)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clicks::{
+        Clicks,
+        testing::{press, release},
+    };
     use crate::online::{OnlineState, testing};
 
     /// A control the tests press.
@@ -434,41 +443,6 @@ mod tests {
         control.id()
     }
 
-    /// Presses the left button on a control, or on nothing, as Bevy marks
-    /// it.
-    fn press(app: &mut App, on: Option<Entity>) {
-        if let Some(on) = on {
-            *app.world_mut().get_mut::<Interaction>(on).unwrap() = Interaction::Pressed;
-        }
-        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
-        mouse.press(MouseButton::Left);
-        app.update();
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .clear();
-    }
-
-    /// Lets the left button go over a control, or over nothing, which Bevy
-    /// then marks hovered.
-    fn release(app: &mut App, over: Option<Entity>) {
-        let world = app.world_mut();
-        let mut interactions = world.query::<&mut Interaction>();
-        for mut interaction in interactions.iter_mut(world) {
-            interaction.set_if_neq(Interaction::None);
-        }
-        if let Some(over) = over {
-            *world.get_mut::<Interaction>(over).unwrap() = Interaction::Hovered;
-        }
-        world
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .release(MouseButton::Left);
-        app.update();
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .clear();
-    }
-
-    /// Keeps the button down past the hold time.
     fn hold(app: &mut App) {
         app.world_mut().resource_mut::<Presses>().hold_past();
         app.update();
@@ -502,10 +476,12 @@ mod tests {
         assert_eq!(clicked(&app), [] as [u8; 0]);
         release(&mut app, Some(gem));
         assert_eq!(clicked(&app), [1]);
-        // A control a hold can't pick up from clicks as its press begins.
+        // A control a hold can't pick up from clicks as it is let go, as
+        // every button does.
         press(&mut app, Some(plain));
-        assert_eq!(clicked(&app), [1, 2]);
+        assert_eq!(clicked(&app), [1]);
         release(&mut app, Some(plain));
+        assert_eq!(clicked(&app), [1, 2]);
         assert_eq!(hotkey(&app), None);
         press(&mut app, Some(gem));
         app.update();
@@ -535,22 +511,27 @@ mod tests {
     }
 
     #[test]
-    fn a_press_that_could_not_pick_up_clicks_at_once() {
+    fn a_press_that_could_not_pick_up_clicks_when_let_go_or_puts_the_cursor_down_at_once() {
         let mut app = app();
         let empty = control(&mut app, 1, Some(Source::Gem(1)));
         let gem = control(&mut app, 2, Some(Source::Gem(0)));
-        // An empty gem has nothing to pick up.
+        // An empty gem has nothing to pick up: it clicks as a button does.
         press(&mut app, Some(empty));
-        assert_eq!(clicked(&app), [1]);
+        assert_eq!(clicked(&app), [] as [u8; 0]);
         release(&mut app, Some(empty));
         assert_eq!(clicked(&app), [1]);
-        // Shift-click forgets the gem's spell at once.
+        // Let go off it, it clicks nothing.
+        press(&mut app, Some(empty));
+        release(&mut app, None);
+        assert_eq!(clicked(&app), [1]);
+        // Shift-click forgets the gem's spell as it is let go.
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::ShiftLeft);
         press(&mut app, Some(gem));
-        assert_eq!(clicked(&app), [1, 2]);
+        assert_eq!(clicked(&app), [1]);
         release(&mut app, Some(gem));
+        assert_eq!(clicked(&app), [1, 2]);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .release(KeyCode::ShiftLeft);
@@ -617,11 +598,11 @@ mod tests {
     }
 
     #[test]
-    fn a_hold_on_a_hotbutton_whose_gem_is_empty_picks_up_nothing_and_clicks_at_once() {
+    fn a_hold_on_a_hotbutton_whose_gem_is_empty_picks_up_nothing_and_clicks_when_let_go() {
         let mut app = app();
         let fifth = control(&mut app, 5, Some(Source::Slot(4)));
         press(&mut app, Some(fifth));
-        assert_eq!(clicked(&app), [5]);
+        assert_eq!(clicked(&app), [] as [u8; 0]);
         hold(&mut app);
         assert_eq!(hotkey(&app), None);
         release(&mut app, Some(fifth));

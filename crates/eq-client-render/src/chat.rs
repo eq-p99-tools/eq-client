@@ -489,10 +489,12 @@ pub(super) fn input(
     windows: Query<&Window, With<PrimaryWindow>>,
     panels: Query<(Entity, &UiGlobalTransform, &ComputedNode), With<Panel>>,
     wheel: Res<super::windows::pointer::Wheel>,
-    tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
-    latest: Query<&Interaction, (With<Latest>, Changed<Interaction>)>,
+    (tabs, latest): (
+        crate::clicks::Clicks<TabButton>,
+        crate::clicks::Clicks<Latest>,
+    ),
     input_box: Query<&Interaction, (With<InputBox>, Changed<Interaction>)>,
-    send: Query<&Interaction, (With<Send>, Changed<Interaction>)>,
+    send: crate::clicks::Clicks<Send>,
     viewport: Query<&ComputedNode, With<Viewport>>,
 ) {
     typing.escape_consumed = false;
@@ -533,7 +535,7 @@ pub(super) fn input(
     if typing.counting {
         keyboard.clear();
     }
-    let mut submit = send.iter().any(|value| *value == Interaction::Pressed);
+    let mut submit = send.any();
     for event in keyboard.read() {
         if !event.state.is_pressed() {
             continue;
@@ -581,13 +583,11 @@ pub(super) fn input(
             submit_draft(&mut state, &mut typing, &mut online, &outbox);
         }
     }
-    for (interaction, TabButton(tab)) in &tabs {
-        if *interaction == Interaction::Pressed {
-            state.active = *tab;
-        }
+    for TabButton(tab) in tabs.iter() {
+        state.active = *tab;
     }
     let active = state.active;
-    if latest.iter().any(|v| *v == Interaction::Pressed) {
+    if latest.any() {
         state.views.entry(active).or_default().follow = true;
     }
     if wheel
@@ -2267,12 +2267,12 @@ mod tests {
             .add_message::<KeyboardInput>()
             .insert_resource(super::super::online::OnlineState::new(false))
             .insert_resource(crate::outbox::Outbox::new(None))
-            .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, (input, refresh).chain());
+        crate::clicks::testing::install(&mut app);
         app.world_mut().spawn(Content::default());
         let button = app
             .world_mut()
-            .spawn((TabButton(ChatTab::Guild), Interaction::Pressed))
+            .spawn((TabButton(ChatTab::Guild), Interaction::None))
             .id();
         for line in crate::preview::chat_lines() {
             app.world_mut()
@@ -2280,7 +2280,7 @@ mod tests {
                 .history
                 .push(line);
         }
-        app.update();
+        crate::clicks::testing::click(&mut app, button);
         assert_eq!(app.world().resource::<ChatState>().active, ChatTab::Guild);
         // Each line reads in its log's words: without the installed table,
         // in this client's words for who spoke and where.
@@ -2291,8 +2291,8 @@ mod tests {
         );
         app.world_mut()
             .entity_mut(button)
-            .insert((TabButton(ChatTab::Auction), Interaction::Pressed));
-        app.update();
+            .insert(TabButton(ChatTab::Auction));
+        crate::clicks::testing::click(&mut app, button);
         let messages = shown(&mut app);
         assert_eq!(
             messages,

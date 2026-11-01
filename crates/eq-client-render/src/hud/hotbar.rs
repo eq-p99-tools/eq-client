@@ -9,7 +9,8 @@ pub(crate) mod carry;
 mod item_art;
 #[cfg(test)]
 mod item_tests;
-pub(crate) use carry::{Clicks, Pickable, Source};
+pub(crate) use carry::{Pickable, Source};
+
 pub(crate) use eq_client_core::hotbar::Binding as Action;
 pub(crate) use item_art::update as item_artwork;
 
@@ -234,7 +235,7 @@ fn slot_pressed(keys: &crate::keys::Keys, act: fn(u8) -> crate::keys::Act) -> Op
 pub(crate) fn requested(
     keys: &crate::keys::Keys,
     bindings: &Bindings,
-    clicks: &Clicks<Slot>,
+    clicks: &crate::clicks::Clicks<Slot>,
 ) -> Option<Action> {
     let slot = clicks
         .iter()
@@ -600,7 +601,7 @@ pub(crate) fn needs(bindings: Res<Bindings>, mut slots: Query<(&Slot, &mut crate
 pub(crate) fn item_actions(
     keys: crate::keys::Keys,
     bindings: Res<Bindings>,
-    clicks: Clicks<Slot>,
+    clicks: crate::clicks::Clicks<Slot>,
     (online, options): (
         Res<crate::online::OnlineState>,
         Res<crate::options::OptionsState>,

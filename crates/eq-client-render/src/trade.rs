@@ -290,7 +290,7 @@ pub(super) fn input(
     outbox: Res<crate::outbox::Outbox>,
     mut trade: ResMut<TradeState>,
     (mut chat, mut shown): (ResMut<super::chat::ChatState>, ResMut<windows::Shown>),
-    buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
+    buttons: crate::clicks::Clicks<Action>,
     escape: Res<super::escape::Escape>,
     (settings, messages): (
         Res<crate::ViewerSettings>,
@@ -325,11 +325,7 @@ pub(super) fn input(
             eq_client_core::entities::display_name(&spawn.name),
         ))
     });
-    let mut clicked: Vec<Action> = buttons
-        .iter()
-        .filter(|(interaction, _)| **interaction == Interaction::Pressed)
-        .map(|(_, action)| *action)
-        .collect();
+    let mut clicked: Vec<Action> = buttons.iter().copied().collect();
     match *escape {
         super::escape::Escape::Close(windows::WindowId::Loot) => clicked.push(Action::EndLoot),
         super::escape::Escape::Close(windows::WindowId::Merchant) => {
@@ -1252,6 +1248,7 @@ mod tests {
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_systems(Update, input);
+        crate::clicks::testing::install(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -1259,9 +1256,11 @@ mod tests {
             },
             bevy::window::PrimaryWindow,
         ));
-        app.world_mut()
-            .spawn((Button, Action::EndLoot, Interaction::Pressed));
-        app.update();
+        let end = app
+            .world_mut()
+            .spawn((Button, Action::EndLoot, Interaction::None))
+            .id();
+        crate::clicks::testing::click(&mut app, end);
         assert!(app.world().resource::<TradeState>().loot.is_some());
     }
 
@@ -1532,6 +1531,7 @@ mod tests {
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_systems(Update, input);
+        crate::clicks::testing::install(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -1542,9 +1542,9 @@ mod tests {
         let press = |app: &mut App, action| {
             let button = app
                 .world_mut()
-                .spawn((Button, action, Interaction::Pressed))
+                .spawn((Button, action, Interaction::None))
                 .id();
-            app.update();
+            crate::clicks::testing::click(app, button);
             app.world_mut().despawn(button);
         };
         // Buy and Sell do nothing until something is chosen.
