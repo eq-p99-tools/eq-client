@@ -639,7 +639,7 @@ mod tests {
         ));
         app.update();
         let layers = root_layers(&mut app);
-        assert!(!layers.is_empty());
+        assert_ne!(layers, [] as [i32; 0]);
         assert!(!layers.contains(&crate::loading::LAYER), "{layers:?}");
         assert_ne!(
             app.world_mut().query::<&Action>().iter(app.world()).count(),
