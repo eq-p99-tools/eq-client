@@ -98,11 +98,10 @@ pub(super) fn input(
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<Outbox>,
-    (ui, escape, presses, look): (
+    (ui, escape, presses): (
         super::windows::pointer::PointerUi,
         Res<super::escape::Escape>,
         Res<super::hud::hotbar::carry::Presses>,
-        Option<Res<crate::camera::MouseLook>>,
     ),
 ) {
     let requested = chat.requested_target.take();
@@ -168,9 +167,6 @@ pub(super) fn input(
         && mouse.just_pressed(MouseButton::Left)
         // A click that put down or threw away a hotkey does nothing else.
         && !presses.taken()
-        // Nor does one made while the right button looks around: it runs
-        // (Adam's observation of the official client; inferred, 6.341).
-        && !look.is_some_and(|look| look.held)
         && !chat.hovered
         && let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single())
     {

@@ -433,10 +433,7 @@ pub(super) fn input(
         Res<crate::hud::messages::Messages>,
         ResMut<crate::chat::ChatState>,
     ),
-    (mouse, look): (
-        Res<ButtonInput<MouseButton>>,
-        Option<Res<crate::camera::MouseLook>>,
-    ),
+    look: Option<Res<crate::camera::MouseLook>>,
 ) {
     let client = settings.0.installed_client;
     if !online.enabled || !online.world().connected() || online.world().death().is_some() {
@@ -547,9 +544,7 @@ pub(super) fn input(
     let current_heading = accepted.position.heading;
     let shown = controls.facing.unwrap_or(current_heading);
     let sampled = controls.taps.take(&keyboard);
-    let looking_ahead = focused
-        && look.is_some_and(|look| look.held)
-        && mouse.pressed(MouseButton::Left);
+    let looking_ahead = focused && look.is_some_and(|look| look.held && look.left);
     let intent = controls.intent(&sampled, map, focused, (camera.yaw, shown), looking_ahead);
     let MotionInput {
         mode,
@@ -1869,7 +1864,6 @@ mod tests {
             .insert_resource(Collision(Some(floor)))
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .insert_resource(keys)
-            .init_resource::<ButtonInput<MouseButton>>()
             .insert_resource(Controls {
                 speed: Some(6.0),
                 last_accepted: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
@@ -2087,7 +2081,8 @@ mod tests {
     fn the_left_button_while_looking_around_runs_the_way_the_camera_faces() {
         // The camera looks along 384; with no key held, the left button
         // alone moves nothing, and held while the right button looks
-        // around it runs that way, as W does.
+        // around (the look takes it, `MouseLook::left`) it runs that way,
+        // as W does.
         for (looking, left, moves) in [
             (false, true, false),
             (true, false, false),
@@ -2097,12 +2092,10 @@ mod tests {
             app.world_mut()
                 .resource_mut::<ButtonInput<KeyCode>>()
                 .reset_all();
-            if left {
-                app.world_mut()
-                    .resource_mut::<ButtonInput<MouseButton>>()
-                    .press(MouseButton::Left);
-            }
-            app.insert_resource(crate::camera::MouseLook { held: looking });
+            app.insert_resource(crate::camera::MouseLook {
+                held: looking,
+                left: looking && left,
+            });
             app.update();
             let sent = receiver.try_recv().ok();
             assert_eq!(sent.is_some(), moves, "looking {looking}, left {left}");

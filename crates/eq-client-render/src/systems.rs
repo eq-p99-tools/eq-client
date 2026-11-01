@@ -349,6 +349,13 @@ pub(super) fn install_overlays(app: &mut App) {
     // A click is read once Bevy has marked the controls the pointer is over,
     // and a script's pointer has pressed or let go.
     app.add_systems(PreUpdate, clicks::track.after(bevy::ui::UiSystems::Focus));
+    // The right button's look takes the mouse before the windows see it.
+    app.add_systems(
+        PreUpdate,
+        crate::camera::look
+            .after(bevy::input::InputSystems)
+            .before(bevy::ui::UiSystems::Focus),
+    );
     windows::register_layout(app);
     paperdoll::register(app);
     app.add_systems(
