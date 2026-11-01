@@ -552,7 +552,7 @@ pub(super) fn input(
         turn,
         preserve_facing,
     } = intent;
-    let physics = physics(client, online.world().zone_gravity(), body);
+    let physics = climbing(physics(client, online.world().zone_gravity()), client, body);
     // The session's guard counts a grounded climb by the body's own reach a
     // step, where the program's is read; it hears it at each admission and
     // whenever it changes, before any sample that climbs by it.
@@ -828,17 +828,11 @@ fn jump_rise(speed: f32, gravity: f32, seconds: f32) -> f32 {
 /// they are read for it. A walking step keeps the feet on the floor only
 /// within the program's on-ground tolerance and falls past it, so a steep
 /// face goes down at the walk's own pace as a run of short falls, each
-/// landing by the program's rule (R-s). It climbs onto a floor up to the
-/// body's reach a step: the program's floor sweep from the origin, which
-/// stands the body's feet offset above the feet (read for TAKP; for
-/// Titanium that the origin stands there is inferred, 6.347). This client
-/// steps once each 50 ms, the program one step per update, so how often
-/// those short falls land waits on the update-rate question for the owner.
-pub(super) fn physics(
-    client: InstalledClient,
-    zone_gravity: Option<f32>,
-    body: &PlayerBody,
-) -> VerticalPhysics {
+/// landing by the program's rule (R-s). This client steps once each 50 ms,
+/// the program one step per update, so how often those short falls land
+/// waits on the update-rate question for the owner. A body climbs a riser
+/// a step until [`climbing`] gives it its own reach.
+pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> VerticalPhysics {
     client.falls().map_or(PROVISIONAL_PHYSICS, |falls| {
         let gravity = zone_gravity.map_or(falls.gravity, |per_step| falls.zone_gravity(per_step));
         VerticalPhysics {
@@ -847,9 +841,25 @@ pub(super) fn physics(
             jump_speed: falls.jump_speed,
             air_factor: falls.air_factor,
             ground_tolerance: falls.ground_tolerance,
-            climb: falls.climb_per_step(body.feet_offset, body.size),
+            climb: eq_client_core::movement::MAX_GROUNDED_STEP,
             steers_in_air: false,
         }
+    })
+}
+
+/// `physics` for the player's own body: a step climbs onto a floor up to
+/// its reach, the program's floor sweep from the origin, which stands the
+/// body's feet offset above the feet (read for TAKP; for Titanium that the
+/// origin stands there is inferred, 6.347). Unchanged where the
+/// generation's falls are unread.
+pub(super) fn climbing(
+    physics: VerticalPhysics,
+    client: InstalledClient,
+    body: &PlayerBody,
+) -> VerticalPhysics {
+    client.falls().map_or(physics, |falls| VerticalPhysics {
+        climb: falls.climb_per_step(body.feet_offset, body.size),
+        ..physics
     })
 }
 
@@ -1294,7 +1304,11 @@ mod tests {
             [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
         ])
         .unwrap();
-        let titanium = physics(InstalledClient::Titanium, None, &HUMAN);
+        let titanium = climbing(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &HUMAN,
+        );
         let mut airborne = AirborneController::default();
         let rising = super::fall_step(
             &mut airborne,
@@ -1438,7 +1452,11 @@ mod tests {
     #[allow(clippy::float_cmp, reason = "The constants are copied, not computed")]
     fn each_client_falls_by_its_own_physics_and_spaces_its_jumps_its_own_way() {
         // Titanium reads the same header field with the same step and air.
-        let titanium = physics(InstalledClient::Titanium, Some(1.0), &HUMAN);
+        let titanium = climbing(
+            physics(InstalledClient::Titanium, Some(1.0)),
+            InstalledClient::Titanium,
+            &HUMAN,
+        );
         assert!(
             (titanium.gravity - 400.0).abs() < 0.01,
             "{}",
@@ -1450,8 +1468,16 @@ mod tests {
         // on Titanium, 0.5 over it on the Mac-era client, radius size × 0.1
         // against size / 4 (read 6.344).
         let (ti, eqmac) = (
-            physics(InstalledClient::Titanium, Some(0.4), &HUMAN),
-            physics(InstalledClient::EqMac, Some(0.4), &HUMAN),
+            climbing(
+                physics(InstalledClient::Titanium, Some(0.4)),
+                InstalledClient::Titanium,
+                &HUMAN,
+            ),
+            climbing(
+                physics(InstalledClient::EqMac, Some(0.4)),
+                InstalledClient::EqMac,
+                &HUMAN,
+            ),
         );
         assert_eq!(
             VerticalPhysics { climb: 0.0, ..ti },
@@ -1463,7 +1489,11 @@ mod tests {
         assert!((ti.climb - 3.15).abs() < 0.001, "{}", ti.climb);
         assert!((eqmac.climb - 2.75).abs() < 0.001, "{}", eqmac.climb);
         assert!(!ti.steers_in_air && !eqmac.steers_in_air);
-        let mac = physics(InstalledClient::EqMac, None, &HUMAN);
+        let mac = climbing(
+            physics(InstalledClient::EqMac, None),
+            InstalledClient::EqMac,
+            &HUMAN,
+        );
         assert!((mac.gravity - 160.0).abs() < 0.001, "{}", mac.gravity);
         // The session's motion guard lets the program's fastest fall through.
         assert!(
@@ -1472,19 +1502,31 @@ mod tests {
             mac.terminal_speed
         );
         // The zone header's gravity, a step at a time; none pulls nothing.
-        let heavy = physics(InstalledClient::EqMac, Some(0.8), &HUMAN);
+        let heavy = climbing(
+            physics(InstalledClient::EqMac, Some(0.8)),
+            InstalledClient::EqMac,
+            &HUMAN,
+        );
         assert!((heavy.gravity - 320.0).abs() < 0.01, "{}", heavy.gravity);
         assert!((heavy.terminal_speed - mac.terminal_speed).abs() < 0.01);
-        let light = physics(InstalledClient::EqMac, Some(0.2), &HUMAN);
+        let light = climbing(
+            physics(InstalledClient::EqMac, Some(0.2)),
+            InstalledClient::EqMac,
+            &HUMAN,
+        );
         assert!(
             (light.terminal_speed - 396.0).abs() < 0.01,
             "{}",
             light.terminal_speed
         );
         assert!(
-            physics(InstalledClient::EqMac, Some(0.0), &HUMAN)
-                .gravity
-                .abs()
+            climbing(
+                physics(InstalledClient::EqMac, Some(0.0)),
+                InstalledClient::EqMac,
+                &HUMAN
+            )
+            .gravity
+            .abs()
                 < f32::EPSILON
         );
         let now = Instant::now();
@@ -2373,7 +2415,11 @@ mod tests {
             let below = next.step(
                 &floor,
                 feet,
-                physics(InstalledClient::Titanium, None, &HUMAN),
+                climbing(
+                    physics(InstalledClient::Titanium, None),
+                    InstalledClient::Titanium,
+                    &HUMAN,
+                ),
                 MotionStep {
                     horizontal: Vec3::ZERO,
                     jump: false,

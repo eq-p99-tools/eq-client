@@ -250,7 +250,7 @@ impl AirborneController {
         if !stepped {
             return position;
         }
-        if !(on_ground && !input.jump) {
+        if !on_ground || input.jump {
             self.velocity = ((self.velocity - physics.gravity * STEP) * physics.air_factor)
                 .max(-physics.terminal_speed);
         }
@@ -950,6 +950,75 @@ mod tests {
             assert!(moved.z.abs() < f32::EPSILON, "{air:?}");
             assert!((moved.x - last * 0.99).abs() < 0.001, "{air:?}");
             last = moved.x;
+        }
+    }
+
+    #[test]
+    fn a_run_down_a_55_degree_face_lands_each_hop_at_the_read_steps_speed() {
+        // The read step by hand on the floor this client stands on: the face
+        // under the footprint's uphill edge (SUPPORT_SPREAD across). A step on
+        // the ground (its feet, moved by its speed, within 0.501 of the floor
+        // where they stand) takes no gravity and moves across at the run's
+        // 2.15 a step; one in the air takes 0.4 off the vertical speed and
+        // keeps 0.99 of it and of the speed across; the step that ends below
+        // the floor lands at its speed.
+        let (height, degrees) = (200.0_f32, 55.0_f32);
+        let (world, foot) = face(height, degrees);
+        let slope = degrees.to_radians().tan();
+        let floor = |x: f32| {
+            let under = |x: f32| (height - x.clamp(0.0, foot) * slope).max(0.0);
+            under(x - crate::movement::SUPPORT_SPREAD)
+        };
+        let (mut x, mut z, mut vx, mut vz) = (-1.0_f32, height, 2.15_f32, 0.0_f32);
+        let mut read = Vec::new();
+        while x < foot - 5.0 {
+            if z + vz <= floor(x) + 0.501 {
+                vx = 2.15;
+            } else {
+                vz = (vz - 0.4) * 0.99;
+                vx *= 0.99;
+            }
+            x += vx;
+            z += vz;
+            if z < floor(x) {
+                read.push(-vz);
+                (z, vz) = (floor(x), 0.0);
+            }
+        }
+        let mut state = AirborneController::default();
+        let mut feet = Vec3::new(-1.0, height, 0.0);
+        let mut ours = Vec::new();
+        while feet.x < foot - 5.0 {
+            feet = state.step(
+                &world,
+                feet,
+                PROGRAM,
+                MotionStep {
+                    horizontal: Vec3::X * 2.15,
+                    jump: false,
+                    seconds: 0.05,
+                    height: 6.0,
+                },
+            );
+            ours.extend(
+                state
+                    .take_landing()
+                    .map(|landing| landing.impact_speed * STEP),
+            );
+        }
+        // Each hop that passes the 2.5 a step gate, hop for hop.
+        let hurt = |speeds: &[f32]| {
+            speeds
+                .iter()
+                .copied()
+                .filter(|v| *v > 2.5)
+                .collect::<Vec<_>>()
+        };
+        let (read, ours) = (hurt(&read), hurt(&ours));
+        assert!(read.len() >= 3, "{read:?}");
+        assert_eq!(read.len(), ours.len(), "{read:?} against {ours:?}");
+        for (read, ours) in read.iter().zip(&ours) {
+            assert!((read - ours).abs() < 0.01, "{read} against {ours}");
         }
     }
 }
