@@ -16,6 +16,29 @@ pub(super) struct OrbitCamera {
     pub(super) pulled: Option<f32>,
 }
 
+/// Whether the right button turns the camera: from a press that began over
+/// the world (not over a window) until the button is let go, wherever the
+/// pointer goes meanwhile, as in the official client (Adam, 11-01 P99
+/// sitting). A press that begins over a window stays that window's.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MouseLook {
+    /// The right button is held from a press over the world.
+    pub(crate) held: bool,
+}
+
+impl MouseLook {
+    /// Follows the right button for one frame: a fresh press starts a look
+    /// only where the world, not a window, is under the pointer (`free`);
+    /// letting go, or the window losing the focus, ends it.
+    pub(crate) fn follow(&mut self, buttons: &ButtonInput<MouseButton>, focused: bool, free: bool) {
+        if !focused || !buttons.pressed(MouseButton::Right) {
+            self.held = false;
+        } else if buttons.just_pressed(MouseButton::Right) {
+            self.held = free;
+        }
+    }
+}
+
 /// The chase view's pitch as it first opens: a little above the player,
 /// looking down past them. Inferred, item 6.240.
 pub(super) const CHASE_PITCH: f32 = -20.0_f32.to_radians();
@@ -81,7 +104,7 @@ pub(super) fn orbit_camera(
     chat: Res<chat::ChatState>,
     items: Res<items::ItemState>,
     inventory: Res<inventory::InventoryState>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    (mouse_buttons, mut look): (Res<ButtonInput<MouseButton>>, ResMut<MouseLook>),
     mut motion: MessageReader<MouseMotion>,
     (wheel, options): (Res<windows::pointer::Wheel>, Res<options::OptionsState>),
     online: Res<online::OnlineState>,
@@ -91,18 +114,18 @@ pub(super) fn orbit_camera(
     ui: windows::pointer::PointerUi,
 ) {
     let head = bodies.single().map_or(0.0, |body| body.height * HEAD_LINE);
-    let accepts_input = windows.single().is_ok_and(|window| {
-        window.focused
-            && !window
+    let focused = windows.single().is_ok_and(|window| window.focused);
+    let accepts_input = focused
+        && !windows.single().is_ok_and(|window| {
+            window
                 .physical_cursor_position()
                 .is_some_and(|cursor| ui.contains(cursor))
-    });
-    let drag = if accepts_input
-        && !chat.hovered
-        && !items.hovered
-        && !inventory.hovered
-        && mouse_buttons.pressed(MouseButton::Right)
-    {
+        });
+    let over_world = accepts_input && !chat.hovered && !items.hovered && !inventory.hovered;
+    // The drag is the look's: once begun over the world it goes on over the
+    // windows until the button is let go.
+    look.follow(&mouse_buttons, focused, over_world);
+    let drag = if look.held {
         motion.read().map(|event| event.delta).sum::<Vec2>()
     } else {
         motion.clear();
@@ -272,5 +295,60 @@ pub(super) fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
         allowed
     } else {
         shown + (allowed - shown) * (1.0 - (-seconds.max(0.0) / PULL_OUT_SECONDS).exp())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The right button held since an earlier frame: pressed, not fresh.
+    fn held() -> ButtonInput<MouseButton> {
+        let mut buttons = ButtonInput::default();
+        buttons.press(MouseButton::Right);
+        buttons.clear_just_pressed(MouseButton::Right);
+        buttons
+    }
+
+    #[test]
+    fn a_look_begun_over_the_world_lasts_over_windows_until_let_go() {
+        let mut look = MouseLook::default();
+        let mut buttons = ButtonInput::default();
+        buttons.press(MouseButton::Right);
+        look.follow(&buttons, true, true);
+        assert!(look.held);
+        // The pointer passes over a window while the button stays down.
+        look.follow(&held(), true, false);
+        assert!(look.held);
+        // Let go over the window: the look ends, and nothing starts again
+        // until a fresh press.
+        look.follow(&ButtonInput::default(), true, false);
+        assert!(!look.held);
+        look.follow(&held(), true, true);
+        assert!(!look.held);
+    }
+
+    #[test]
+    fn a_press_begun_over_a_window_stays_the_windows() {
+        let mut look = MouseLook::default();
+        let mut buttons = ButtonInput::default();
+        buttons.press(MouseButton::Right);
+        look.follow(&buttons, true, false);
+        assert!(!look.held);
+        // Dragged off the window onto the world, it still turns nothing.
+        look.follow(&held(), true, true);
+        assert!(!look.held);
+    }
+
+    #[test]
+    fn losing_the_focus_ends_the_look() {
+        let mut look = MouseLook::default();
+        let mut buttons = ButtonInput::default();
+        buttons.press(MouseButton::Right);
+        look.follow(&buttons, true, true);
+        look.follow(&held(), false, true);
+        assert!(!look.held);
+        look.follow(&held(), true, true);
+        assert!(!look.held);
     }
 }

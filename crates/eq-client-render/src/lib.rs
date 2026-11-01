@@ -1366,6 +1366,7 @@ mod tests {
             .init_resource::<items::ItemState>()
             .init_resource::<inventory::InventoryState>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<camera::MouseLook>()
             .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()

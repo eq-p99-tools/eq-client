@@ -47,6 +47,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<items::ItemState>()
         .init_resource::<inventory::InventoryState>()
         .init_resource::<motion::Controls>()
+        .init_resource::<crate::camera::MouseLook>()
         .init_resource::<entities::NearbyEntities>()
         .init_resource::<names::NameTags>()
         .init_resource::<item_models::ItemLibrary>()
