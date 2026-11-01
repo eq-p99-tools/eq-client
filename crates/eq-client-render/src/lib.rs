@@ -1360,6 +1360,72 @@ mod tests {
         clippy::float_cmp,
         reason = "Exact equality verifies unchanged or explicitly assigned state"
     )]
+    fn the_top_down_view_keeps_its_own_pitch_and_zoom() {
+        use super::*;
+        use bevy::input::mouse::MouseWheel;
+        let mut app = App::new();
+        app.init_resource::<chat::ChatState>()
+            .init_resource::<items::ItemState>()
+            .init_resource::<inventory::InventoryState>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<camera::MouseLook>()
+            .add_message::<MouseMotion>()
+            .add_message::<MouseWheel>()
+            .init_resource::<windows::pointer::Wheel>()
+            .init_resource::<options::OptionsState>()
+            .init_resource::<Time>()
+            .insert_resource(online::OnlineState::new(false))
+            .add_systems(
+                Update,
+                (camera::look, windows::pointer::wheel, orbit_camera).chain(),
+            );
+        let mut window = Window {
+            focused: true,
+            ..default()
+        };
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::new(50.0, 50.0)));
+        let window = app
+            .world_mut()
+            .spawn((window, bevy::window::PrimaryWindow))
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                OrbitCamera {
+                    focus: Vec3::ZERO,
+                    yaw: 0.0,
+                    pitch: -1.0,
+                    radius: 300.0,
+                    pulled: None,
+                },
+                Transform::default(),
+                Projection::Orthographic(OrthographicProjection::default_3d()),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        // Dragged far and wheeled out: it tilts to its steepest and
+        // backs off past the chase camera's 200 units.
+        for _ in 0..20 {
+            app.world_mut().write_message(MouseMotion {
+                delta: Vec2::new(0.0, 200.0),
+            });
+            app.world_mut().write_message(MouseWheel {
+                unit: bevy::input::mouse::MouseScrollUnit::Line,
+                phase: bevy::input::touch::TouchPhase::Moved,
+                x: 0.0,
+                y: -3.0,
+                window,
+            });
+            app.update();
+        }
+        let state = app.world().get::<OrbitCamera>(camera).unwrap();
+        assert!((state.pitch + 1.45).abs() < 1e-6, "{}", state.pitch);
+        assert!(state.radius > 1000.0, "{}", state.radius);
+    }
+
+    #[test]
     #[allow(
         clippy::too_many_lines,
         reason = "Keep the ordered integration scenario and its assertions together"

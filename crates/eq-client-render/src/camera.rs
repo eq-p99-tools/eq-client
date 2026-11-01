@@ -193,12 +193,19 @@ pub(super) fn orbit_camera(
     for (mut camera, mut transform, projection) in &mut cameras {
         let turn = options.options.turn_per_pixel();
         camera.yaw -= drag.x * turn;
-        chase(
-            &mut camera,
-            limits,
-            drag.y * turn * rise * HEIGHT_PER_RADIAN,
-            (-scroll * 0.12).exp(),
-        );
+        // The limits are the program's chase camera's. The top-down
+        // orthographic view is not in the program, so it keeps this
+        // client's own pitch and zoom ranges.
+        if matches!(projection.as_deref(), Some(Projection::Orthographic(_))) {
+            top_down(&mut camera, drag.y * turn * rise, (-scroll * 0.12).exp());
+        } else {
+            chase(
+                &mut camera,
+                limits,
+                drag.y * turn * rise * HEIGHT_PER_RADIAN,
+                (-scroll * 0.12).exp(),
+            );
+        }
         let radius = camera.radius;
         if let Some(mut projection) = projection
             && !fitted(&projection, radius, clip)
@@ -251,9 +258,6 @@ pub(super) fn chase(
     camera.pitch = -height.atan2(distance);
 }
 
-/// How far the view reaches: the clip distance past the player the camera
-/// orbits, or, where the zone gives no clip, ten times the orbit distance,
-/// so zooming out never pushes the scene past the far plane.
 /// How far the scene is drawn, terrain, objects and spawns alike, by the
 /// installed client's far plane rule with the player's clip plane setting;
 /// None while the zone has given no far clip.
@@ -268,6 +272,18 @@ pub(crate) fn clip_distance(
         .distance(options.clip_share(), (world.min_clip(), world.far_clip()))
 }
 
+/// Moves the top-down orthographic view, which only this client has: it
+/// tilts by `tilt` radians within its own pitch range and zooms by `zoom`
+/// within its own distances, as every camera did before the chase camera
+/// took the program's limits.
+pub(super) fn top_down(camera: &mut OrbitCamera, tilt: f32, zoom: f32) {
+    camera.pitch = (camera.pitch - tilt).clamp(-1.45, -0.15);
+    camera.radius = (camera.radius * zoom).clamp(20.0, 20_000.0);
+}
+
+/// How far the view reaches: the clip distance past the player the camera
+/// orbits, or, where the zone gives no clip, ten times the orbit distance,
+/// so zooming out never pushes the scene past the far plane.
 fn far_plane(radius: f32, clip: Option<f32>) -> f32 {
     clip.map_or(radius * 10.0, |clip| clip + radius)
 }
