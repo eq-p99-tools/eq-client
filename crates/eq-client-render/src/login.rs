@@ -708,6 +708,22 @@ pub(crate) mod testing {
         }
     }
 
+    /// A front end whose session has reached a character list once and
+    /// waits for the next, as after a camp.
+    pub(crate) fn past_login() -> FrontEnd {
+        FrontEnd {
+            session: Some(Running {
+                worker: Box::new(Thread::default()),
+                login: None,
+                chose: None,
+                listed: None,
+                past_login: true,
+                quick: false,
+            }),
+            ..FrontEnd::default()
+        }
+    }
+
     /// What a test's app heard from the front end.
     #[derive(Default)]
     pub(crate) struct Heard {

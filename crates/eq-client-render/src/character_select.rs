@@ -239,8 +239,12 @@ pub(super) fn update(
     }
     // Once Enter World is asked for, the loading screen covers the list
     // until the zone admits the character and the zone's own cover takes
-    // over, so the two read as one (inferred, 6.222).
-    if online.selection.as_ref().is_some_and(Selection::entering) {
+    // over, so the two read as one (inferred, 6.222). It also covers the
+    // screen while the world has sent no list, as after a camp, while a new
+    // world connection logs in and the server lists the characters again;
+    // the list kept from before is never shown, being one the server has not
+    // sent (inferred, 6.331).
+    if online.selection.as_ref().is_none_or(Selection::entering) {
         crate::loading::cover(&mut commands, &screen, Root, Display::Flex);
     } else {
         let line = character_line(online.selection.as_ref(), &messages);
@@ -567,6 +571,90 @@ mod tests {
         assert_eq!(character_line(None, &messages), None);
     }
 
+    /// An app drawing character select over this state and front end.
+    fn screen_app(
+        state: OnlineState,
+        front: crate::login::FrontEnd,
+        outbox: crate::outbox::Outbox,
+    ) -> App {
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.insert_resource(state)
+            .insert_resource(outbox)
+            .insert_resource(front)
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<super::super::navigation::NavigationKeys>()
+            .init_resource::<crate::windows::Shown>()
+            .init_resource::<crate::skinned::Skinned>()
+            .init_resource::<crate::loading::Screen>()
+            .init_resource::<crate::select_preview::Preview>()
+            .init_resource::<crate::hud::messages::Messages>()
+            .add_message::<AppExit>()
+            .add_systems(Update, update);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app
+    }
+
+    /// The layers character select's roots are drawn at.
+    fn root_layers(app: &mut App) -> Vec<i32> {
+        app.world_mut()
+            .query_filtered::<&GlobalZIndex, With<Root>>()
+            .iter(app.world())
+            .map(|layer| layer.0)
+            .collect()
+    }
+
+    #[test]
+    fn the_loading_screen_covers_character_select_until_the_server_lists_again() {
+        // Camped: the session is past the login and the world has sent no
+        // list yet.
+        let mut app = screen_app(
+            OnlineState::new(true),
+            crate::login::testing::past_login(),
+            crate::outbox::Outbox::new(None),
+        );
+        app.update();
+        assert_eq!(root_layers(&mut app), [crate::loading::LAYER]);
+        assert_eq!(
+            app.world_mut().query::<&Action>().iter(app.world()).count(),
+            0
+        );
+        // The server's list replaces the cover.
+        app.world_mut().resource_mut::<OnlineState>().selection = Some(Selection::new(
+            8,
+            vec![CharacterChoice {
+                slot: 0,
+                name: "Example".into(),
+                level: Some(2),
+                zone_id: None,
+                look: None,
+            }],
+        ));
+        app.update();
+        let layers = root_layers(&mut app);
+        assert!(!layers.is_empty());
+        assert!(!layers.contains(&crate::loading::LAYER), "{layers:?}");
+        assert_ne!(
+            app.world_mut().query::<&Action>().iter(app.world()).count(),
+            0
+        );
+        // A session that ends meanwhile leaves for the login screen, cover and
+        // all.
+        app.world_mut().resource_mut::<OnlineState>().selection = None;
+        app.update();
+        assert_eq!(root_layers(&mut app), [crate::loading::LAYER]);
+        app.insert_resource(crate::login::FrontEnd::default());
+        app.update();
+        assert_eq!(root_layers(&mut app), [] as [i32; 0]);
+    }
+
     #[test]
     fn keyboard_selection_queues_the_server_slot_and_disappears_after_admission() {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
@@ -581,28 +669,11 @@ mod tests {
                 look: None,
             }],
         ));
-        let mut app = App::new();
-        crate::keys::testing::install(&mut app);
-        app.insert_resource(state)
-            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
-            .init_resource::<crate::notices::Lines>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<super::super::navigation::NavigationKeys>()
-            .init_resource::<crate::windows::Shown>()
-            .init_resource::<crate::skinned::Skinned>()
-            .init_resource::<crate::login::FrontEnd>()
-            .init_resource::<crate::loading::Screen>()
-            .init_resource::<crate::select_preview::Preview>()
-            .init_resource::<crate::hud::messages::Messages>()
-            .add_message::<AppExit>()
-            .add_systems(Update, update);
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            PrimaryWindow,
-        ));
+        let mut app = screen_app(
+            state,
+            crate::login::FrontEnd::default(),
+            crate::outbox::Outbox::new(Some(tx)),
+        );
         app.update();
         assert!(rx.try_recv().is_err());
         app.world_mut()
@@ -626,13 +697,7 @@ mod tests {
         app.update();
         assert!(rx.try_recv().is_err());
         // Entering world, the loading screen covers the list.
-        let layers: Vec<i32> = app
-            .world_mut()
-            .query_filtered::<&GlobalZIndex, With<Root>>()
-            .iter(app.world())
-            .map(|layer| layer.0)
-            .collect();
-        assert_eq!(layers, [crate::loading::LAYER]);
+        assert_eq!(root_layers(&mut app), [crate::loading::LAYER]);
         crate::online::testing::admit(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             8,
