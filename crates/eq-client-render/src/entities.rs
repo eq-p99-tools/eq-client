@@ -374,6 +374,7 @@ pub(super) fn interpolate(
             let carried = entity.carried.get_or_insert_with(|| {
                 let mut carried = eq_client_core::movement::Carried::reported(
                     dialect,
+                    spawn.state.kind,
                     spawn.state.race,
                     spawn.state.position,
                     spawn.state.velocity,
