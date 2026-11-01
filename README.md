@@ -798,6 +798,14 @@ offer is greyed, with the reason on hover. The settings:
   corpse seen dying leans into the slope as it falls. Turned off, corpses lie
   level with their soles, as before. What the official client does is
   inferred.
+- **Long Chase Camera** (`long_chase_camera`, on): the mouse wheel zooms the
+  chase camera out as far as 20,000 units behind the player, where the
+  Titanium program stops it at 200 (and the Mac-era client is taken to stop
+  it there too). Its height over the player stays the program's, 0 to 30
+  units, either way. Past 200 units the far plane moves out with the camera,
+  so the scene around the player draws as far as with the camera at 200.
+  Turned off, the camera keeps to the program's 200, to compare. The
+  top-down view keeps its own range either way.
 
 Always on:
 
