@@ -4020,3 +4020,19 @@ fn carried_weight_counts_what_the_player_wears_carries_and_holds_and_their_coins
         world.carried_weight()
     );
 }
+
+#[test]
+fn the_worlds_pvp_ruleset_stays_through_zones_and_characters() {
+    let mut world = ClientWorld::default();
+    assert_eq!(world.pvp_rule(), 0);
+    game(
+        &mut world,
+        WorldEvent::Rules(eq_network_game::rules::WorldRules {
+            pvp: 4,
+            ..Default::default()
+        }),
+    );
+    assert_eq!(world.pvp_rule(), 4);
+    game(&mut world, entered(1));
+    assert_eq!(world.pvp_rule(), 4);
+}

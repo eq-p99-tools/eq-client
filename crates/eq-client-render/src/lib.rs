@@ -419,6 +419,7 @@ pub(crate) mod testing {
             .init_resource::<Assets<Image>>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<Time>()
             .insert_resource(online::OnlineState::new(false))
             .insert_resource(outbox::Outbox::new(None))
             .init_resource::<login::FrontEnd>()

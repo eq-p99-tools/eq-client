@@ -155,6 +155,13 @@ impl ClientWorld {
         self.far_clip
     }
 
+    /// The world's player-versus-player ruleset, by the server's number: 0
+    /// for none, and until the world's rules say.
+    #[must_use]
+    pub const fn pvp_rule(&self) -> u32 {
+        self.pvp_rule
+    }
+
     /// The zone header's minimum clip, the nearest its far plane comes;
     /// None until this admission's header comes.
     #[must_use]

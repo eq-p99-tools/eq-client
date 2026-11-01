@@ -588,6 +588,17 @@ impl InstalledClient {
         }
     }
 
+    /// The colours this client draws names over heads in, from the program
+    /// where read (Titanium, program read N4 of 11-01). The Mac-era
+    /// client's are not yet read (recording checklist 6.355).
+    #[must_use]
+    pub const fn name_colours(self) -> crate::names::NameColours {
+        match self {
+            Self::Titanium => crate::names::TITANIUM,
+            Self::EqMac => crate::names::EQMAC,
+        }
+    }
+
     /// How far this client's camera may move, from the program where read
     /// (Titanium, program read N2 of 11-01). The Mac-era client's are not
     /// yet read and take Titanium's (recording checklist 6.349).

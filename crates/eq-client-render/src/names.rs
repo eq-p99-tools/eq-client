@@ -4,12 +4,19 @@
 //! and draw under every window; one whose head leaves the view is clipped
 //! at the window's edge. A name whose place has zone geometry between it
 //! and the camera is hidden with the body behind it (inferred, item 6.234).
+//! Each is drawn in the installed client's colour for it
+//! ([`eq_client_assets::names::NameColours`]), the target's pulsing.
 use bevy::prelude::*;
 use eq_client_core::names::{ShowNames, is_pc, label};
 use std::collections::BTreeMap;
 
 /// How far above the head a name sits, in world units.
 const ABOVE_HEAD: f32 = 0.6;
+
+/// How many times a second the target's name steps through its pulse: the
+/// program steps it each time it draws the name, at a pace not read, so
+/// this one is this client's (recording checklist 6.354).
+const PULSE_STEPS_PER_SECOND: f32 = 10.0;
 
 /// How far short of a name's place geometry must stop to hide it, as the
 /// camera keeps off the walls it pulls in against: a place touching a
@@ -68,15 +75,18 @@ pub(crate) fn update(
         Res<crate::options::OptionsState>,
         Option<Res<UiScale>>,
     ),
+    (settings, time): (Option<Res<crate::ViewerSettings>>, Res<Time>),
     collision: Option<Res<crate::Collision>>,
     mut drawn: ResMut<NameTags>,
     player: Query<Entity, With<crate::Player>>,
     roots: Query<(&Transform, &Overhead)>,
     cameras: Query<(&Camera, &Transform), With<crate::OrbitCamera>>,
-    mut tags: Query<(&mut Node, &mut Text, &mut Visibility), With<NameTag>>,
+    mut tags: Query<(&mut Node, &mut Text, &mut TextColor, &mut Visibility), With<NameTag>>,
 ) {
     let world = online.world();
     let options = options.options;
+    let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
+    let painter = Painter::new(client, world, time.elapsed_secs());
     let shown = |kind| {
         if is_pc(kind) {
             options.pc_names && options.show_names != ShowNames::Off
@@ -94,7 +104,8 @@ pub(crate) fn update(
         && shown(me)
     {
         let said = words(&player.name, me, &player.name_parts, &player.listing);
-        wanted.insert(root, said);
+        let drawn = painter.paint(player.spawn_id, true, player.race, &player.listing);
+        wanted.insert(root, (said, drawn));
     }
     for (id, root) in &nearby.rendered {
         if let Some(spawn) = world
@@ -103,7 +114,9 @@ pub(crate) fn update(
             .filter(|spawn| shown(spawn.kind))
         {
             let said = words(&spawn.name, spawn.kind, &spawn.name_parts, &spawn.listing);
-            wanted.insert(*root, said);
+            let player = spawn.kind == eq_client_core::SpawnKind::Player;
+            let drawn = painter.paint(*id, player, spawn.race, &spawn.listing);
+            wanted.insert(*root, (said, drawn));
         }
     }
     drawn.0.retain(|root, tag| {
@@ -121,7 +134,7 @@ pub(crate) fn update(
     let geometry = collision
         .as_deref()
         .and_then(|collision| collision.0.as_ref());
-    for (root, words) in wanted {
+    for (root, (words, drawn_in)) in wanted {
         // Where the head's top shows, in the UI's pixels from the window's
         // left and bottom edges; none behind the camera or behind a wall.
         let place = camera.and_then(|(camera, view)| {
@@ -137,15 +150,18 @@ pub(crate) fn update(
             Some(Vec2::new(at.x, size.y - at.y) / factor)
         });
         let Some(&tag) = drawn.0.get(&root) else {
-            drawn.0.insert(root, spawn_tag(&mut commands, words));
+            drawn
+                .0
+                .insert(root, spawn_tag(&mut commands, words, drawn_in));
             continue;
         };
-        let Ok((mut node, mut text, mut visibility)) = tags.get_mut(tag) else {
+        let Ok((mut node, mut text, mut colour, mut visibility)) = tags.get_mut(tag) else {
             continue;
         };
         if text.0 != words {
             text.0 = words;
         }
+        colour.set_if_neq(TextColor(drawn_in));
         let Some(at) = place else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
@@ -158,6 +174,58 @@ pub(crate) fn update(
             node.bottom = bottom;
         }
         visibility.set_if_neq(Visibility::Inherited);
+    }
+}
+
+/// What colours the names this frame: the installed client's rule, the
+/// world's player-versus-player ruleset, and the target, whose name pulses.
+struct Painter {
+    colours: eq_client_assets::names::NameColours,
+    pvp_rule: u32,
+    target: Option<u16>,
+    /// Where the target's name is in its pulse, 0 to 10.
+    step: u8,
+}
+
+impl Painter {
+    fn new(
+        client: eq_client_assets::ui::InstalledClient,
+        world: &eq_client_core::world::ClientWorld,
+        seconds: f32,
+    ) -> Self {
+        // The target's name steps from white to its colour, over and over.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // 0 to 10.
+        let step = ((seconds * PULSE_STEPS_PER_SECOND) % 11.0) as u8;
+        Self {
+            colours: client.name_colours(),
+            pvp_rule: world.pvp_rule(),
+            target: world.target().selected,
+            step,
+        }
+    }
+
+    /// The colour of spawn `id`'s name: a player or not, of this race and
+    /// listing.
+    fn paint(
+        &self,
+        id: u16,
+        player: bool,
+        race: u32,
+        listing: &eq_client_core::listing::Listing,
+    ) -> Color {
+        let named = eq_client_assets::names::Named {
+            player,
+            race,
+            roleplaying: listing.anonymity.wire() & 2 != 0,
+            pvp_rule: self.pvp_rule,
+        };
+        let colour = self.colours.colour(named);
+        let [r, g, b] = if self.target == Some(id) {
+            self.colours.target(colour, self.step)
+        } else {
+            colour
+        };
+        Color::srgb_u8(r, g, b)
     }
 }
 
@@ -179,13 +247,13 @@ fn behind_geometry(
 }
 
 /// A name that shows once it is placed.
-fn spawn_tag(commands: &mut Commands, words: String) -> Entity {
+fn spawn_tag(commands: &mut Commands, words: String, colour: Color) -> Entity {
     commands
         .spawn((
             NameTag,
             Text::new(words),
             crate::theme::font(crate::theme::Size::Label),
-            TextColor(Color::WHITE),
+            TextColor(colour),
             TextShadow {
                 offset: Vec2::splat(1.0),
                 color: Color::BLACK,
@@ -324,6 +392,35 @@ mod tests {
             shown(&mut app),
             [everyone[0], everyone[1], everyone[2], everyone[4]]
         );
+    }
+
+    #[test]
+    fn names_take_the_installed_clients_colours() {
+        let mut app = app();
+        let colour = |app: &mut App, words: &str| {
+            app.world_mut()
+                .query_filtered::<(&Text, &TextColor), With<NameTag>>()
+                .iter(app.world())
+                .find(|(text, _)| text.0.starts_with(words))
+                .map(|(_, colour)| colour.0)
+                .unwrap()
+        };
+        // Titanium's: players blue, their corpses and creatures teal.
+        assert_eq!(colour(&mut app, "Examplar\n"), Color::srgb_u8(61, 107, 220));
+        assert_eq!(colour(&mut app, "Examplar's"), Color::srgb_u8(23, 184, 173));
+        assert_eq!(colour(&mut app, "a gnoll"), Color::srgb_u8(23, 184, 173));
+        // A roleplaying player turns purple.
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Listing {
+                spawn_id: 2,
+                change: eq_client_core::listing::ListingChange::Anonymity(
+                    eq_client_core::listing::Anonymity::Roleplaying,
+                ),
+            }],
+        );
+        app.update();
+        assert_eq!(colour(&mut app, "Examplar\n"), Color::srgb_u8(133, 72, 156));
     }
 
     #[test]
