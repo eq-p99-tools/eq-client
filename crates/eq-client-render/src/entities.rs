@@ -66,10 +66,9 @@ pub(super) struct RemoteEntity {
     /// How far under the reported position a drawn model's soles hang, in
     /// world units; None for a marker, which stays where the server says.
     feet: Option<f32>,
-    /// Where the Mac-era client has carried it since that report, frame by
-    /// frame, as its program steps a spawn
-    /// ([`eq_client_core::movement::carry`]); None on Titanium, whose
-    /// spawns move on at their reported velocity.
+    /// Where the client generation has carried it since that report, frame
+    /// by frame, as its program steps a spawn
+    /// ([`eq_client_core::movement::carry`]).
     carried: Option<eq_client_core::movement::Carried>,
 }
 
@@ -88,7 +87,9 @@ impl RemoteEntity {
 }
 
 /// The wire generation an installed client speaks.
-const fn dialect(client: eq_client_assets::ui::InstalledClient) -> eq_client_core::GameDialect {
+pub(crate) const fn dialect(
+    client: eq_client_assets::ui::InstalledClient,
+) -> eq_client_core::GameDialect {
     match client {
         eq_client_assets::ui::InstalledClient::Titanium => eq_client_core::GameDialect::Titanium,
         eq_client_assets::ui::InstalledClient::EqMac => eq_client_core::GameDialect::EqMac,
@@ -334,8 +335,9 @@ fn draw(
     true
 }
 
-/// Interpolates between received locations without extrapolating beyond
-/// the server. A drawn corpse finds how it leans to lie along the floor
+/// Draws each spawn where the installed client's program carries it on from
+/// its latest report ([`eq_client_core::movement::carry`]), easing the
+/// model toward that point. A drawn corpse finds how it leans to lie along the floor
 /// under it as it is first drawn and when a report moves it
 /// ([`eq_client_core::corpse_tilt`]), for [`character::lie`] to lay it by.
 #[allow(clippy::needless_pass_by_value)]
@@ -359,8 +361,8 @@ pub(super) fn interpolate(
         let Some(spawn) = state.world().spawn(entity.id) else {
             continue;
         };
-        // A spawn moves on from its latest report at its reported velocity,
-        // from when the report came, however late it is drawn.
+        // A spawn moves on from its latest report, from when the report
+        // came, however late it is drawn.
         let first = entity.seen.is_none();
         let fresh = entity.seen != Some(spawn.reported);
         if fresh {
@@ -368,35 +370,22 @@ pub(super) fn interpolate(
             entity.soles = None;
             entity.carried = None;
         }
-        // The Mac-era client steps a spawn on from each report, frame by
-        // frame, as its program does; Titanium's moves on at its velocity.
-        let carried = if dialect == eq_client_core::GameDialect::EqMac {
-            let carried = entity.carried.get_or_insert_with(|| {
-                let mut carried = eq_client_core::movement::Carried::reported(
-                    dialect,
-                    spawn.state.kind,
-                    spawn.state.race,
-                    spawn.state.position,
-                    spawn.state.velocity,
-                    spawn.forward,
-                );
-                eq_client_core::movement::carry(
-                    dialect,
-                    &mut carried,
-                    now.saturating_duration_since(spawn.reported),
-                );
-                carried
-            });
-            if !fresh {
-                eq_client_core::movement::carry(dialect, carried, time.delta());
-            }
-            carried.position
-        } else {
-            spawn.carried(now)
-        };
-        let mut target = Vec3::from_array(render_position(carried));
-        let forward = spawn.forward;
+        // Each generation's client steps a spawn on from each report, frame
+        // by frame, as its program does.
+        // One drawn late is caught up as if it had been drawn all along.
+        let carried = entity.carried.get_or_insert_with(|| {
+            eq_client_core::entities::carried_since(
+                dialect,
+                &spawn.state,
+                now.saturating_duration_since(spawn.reported),
+            )
+        });
+        if !fresh {
+            eq_client_core::movement::carry(dialect, carried, time.delta());
+        }
+        let mut target = Vec3::from_array(render_position(carried.position));
         let spawn = &spawn.state;
+        let forward = spawn.forward;
         // A drawn model stands on the floor under it, whichever rule put its
         // z, and keeps to the floor as it is carried on.
         if let (Some(feet), Some(world)) = (entity.feet, world) {
@@ -603,9 +592,12 @@ mod tests {
             &mut online,
             [WorldEvent::Position {
                 spawn_id: 5,
-                position: WorldPosition::default(),
+                position: WorldPosition {
+                    heading: 128.0,
+                    ..WorldPosition::default()
+                },
                 velocity: [4.0, 0.0, 0.0],
-                forward: 0.0,
+                forward: 0.5,
             }],
             reported,
         );
@@ -623,10 +615,11 @@ mod tests {
             let at = app.world().get::<Transform>(entity).unwrap().translation;
             (entity, eq_client_core::world_position(at.to_array(), 0.0))
         };
-        // Drawn two seconds after its report, it is drawn two seconds along,
-        // not back where the report put it.
+        // Drawn two seconds after its report, it is drawn two seconds along
+        // at the program's pace, 11.64 a second for an input of 0.5, not
+        // back where the report put it.
         let (walking, at) = drawn(&mut app);
-        assert!(at.x > 7.9 && at.x < 8.5, "{at:?}");
+        assert!(at.x > 22.0 && at.x < 24.5, "{at:?}");
         app.world_mut().despawn(walking);
         // It dies; the corpse is drawn anew where the walker had got to,
         // and lies there.
@@ -641,7 +634,7 @@ mod tests {
             })],
         );
         let (corpse, fell) = drawn(&mut app);
-        assert!(fell.x > 7.9 && fell.x < 8.5, "{fell:?}");
+        assert!(fell.x > 22.0 && fell.x < 24.5, "{fell:?}");
         std::thread::sleep(Duration::from_millis(50));
         app.update();
         let lies = app.world().get::<Transform>(corpse).unwrap().translation;

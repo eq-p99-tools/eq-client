@@ -414,6 +414,17 @@ fn vanished(front: Option<&super::login::FrontEnd>) -> bool {
     !front.is_some_and(super::login::FrontEnd::session_closed)
 }
 
+/// Tells the world which generation's program carries spawns on between
+/// reports: the installed client's.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn carry_as(settings: Res<ViewerSettings>, mut state: ResMut<OnlineState>) {
+    if settings.is_changed() || state.is_added() {
+        state
+            .world
+            .carry_as(super::entities::dialect(settings.0.installed_client));
+    }
+}
+
 /// Applies the session's news to the world and shows what it changed. The
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
@@ -758,6 +769,7 @@ pub(crate) mod testing {
             gender: 2,
             position: WorldPosition::default(),
             velocity: [0.0; 3],
+            forward: 0.0,
             walk_speed: 0.0,
             run_speed: 0.0,
             size: 0.0,
@@ -1168,6 +1180,7 @@ mod tests {
             gender: 0,
             position: eq_client_core::WorldPosition::default(),
             velocity: [0.0; 3],
+            forward: 0.0,
             walk_speed: 0.0,
             run_speed: 0.0,
             size: 0.0,

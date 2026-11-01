@@ -442,6 +442,7 @@ fn synthetic(id: u16, race: u32, size: f32, position: WorldPosition) -> eq_clien
         gender: 0,
         position,
         velocity: [0.0; 3],
+        forward: 0.0,
         walk_speed: 0.0,
         run_speed: 0.0,
         size,

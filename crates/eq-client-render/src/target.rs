@@ -439,6 +439,7 @@ mod tests {
                     gender: 0,
                     position: WorldPosition::default(),
                     velocity: [0.0; 3],
+                    forward: 0.0,
                     walk_speed: 0.0,
                     run_speed: 0.0,
                     size: 0.0,
@@ -498,6 +499,7 @@ mod tests {
                         ..WorldPosition::default()
                     },
                     velocity: [0.0; 3],
+                    forward: 0.0,
                     walk_speed: 0.0,
                     run_speed: 0.0,
                     size: 0.0,
@@ -550,6 +552,7 @@ mod tests {
                             ..WorldPosition::default()
                         },
                         velocity: [0.0; 3],
+                        forward: 0.0,
                         walk_speed: 0.0,
                         run_speed: 0.0,
                         size: 0.0,
@@ -598,6 +601,7 @@ mod tests {
                             heading: 0.0,
                         },
                         velocity: [0.0; 3],
+                        forward: 0.0,
                         walk_speed: 0.0,
                         run_speed: 0.0,
                         size: 0.0,

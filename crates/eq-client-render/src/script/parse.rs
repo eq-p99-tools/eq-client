@@ -133,7 +133,7 @@ pub enum Step {
     Approach(f32, Duration),
     /// Chases the current target as a player's hands would: every frame it
     /// faces where the target is drawn now (its last reported position
-    /// carried forward at its reported velocity) and holds W while the target
+    /// carried on as the generation's program carries it) and holds W while the target
     /// is beyond the distance, standing within it. It ends only when the
     /// target dies or leaves the zone, or when the time runs out, never
     /// merely on reaching the target; auto-attack is the script's to turn on
