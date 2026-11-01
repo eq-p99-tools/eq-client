@@ -26,7 +26,7 @@ enum Support {
 }
 
 pub use eq_network_game::movement::{
-    Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, carry,
+    Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, ZBetween, between_reports, carry,
 };
 use glam::Vec3;
 use parry3d::{
@@ -249,35 +249,40 @@ impl CollisionWorld {
             .min_by(f32::total_cmp)
     }
 
-    /// Finds nearby ground, never a roof above the permitted step height.
+    /// Finds nearby ground, never a roof above the permitted step height: the
+    /// first surface straight down from `step_up` above `position`, down to
+    /// `drop` below it, at any angle. Both generations' programs find a floor
+    /// so and discard the surface's normal, and their on-ground test compares
+    /// heights only (Titanium 0x48a0fc and 0x48a2f4, `EQMac` 0x4b3a84 and
+    /// 0x50ba07; read, Decompile R-s, 11-01), so a face too steep to have
+    /// been floor before is floor at its height. They sweep a sphere down
+    /// where this casts a ray (checklist 6.336).
     pub fn ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
         // Both window edges are inclusive: the ray starts a hair above the top one,
         // since a ray starting on a surface can miss it, and runs a hair past the
         // bottom one, since mesh traversal can discard an endpoint contact.
         const EDGE: f32 = 0.000_1;
         let origin = Vector::from_array((position + Vec3::Y * (step_up + EDGE)).to_array());
-        let hit = self
+        let time = self
             .meshes()
             .filter_map(|mesh| {
-                mesh.cast_local_ray_and_get_normal(
+                mesh.cast_local_ray(
                     &Ray::new(origin, -Vector::Y),
                     step_up + drop + 2.0 * EDGE,
                     false,
                 )
             })
-            .min_by(|a, b| a.time_of_impact.total_cmp(&b.time_of_impact))?;
-        if hit.normal.y.abs() < 0.7 {
-            return None;
-        }
-        let floor = origin.y - hit.time_of_impact;
+            .min_by(f32::total_cmp)?;
+        let floor = origin.y - time;
         (floor >= position.y - drop - EDGE && floor <= position.y + step_up + EDGE)
             .then(|| floor.clamp(position.y - drop, position.y + step_up))
     }
 
     /// Finds the floor nearest `position`'s height between `step_up` above
-    /// it and `drop` below, never a wall. Where floors are stacked in that
-    /// window, as a bridge over the ground, the one closest to `position`
-    /// wins, not simply the highest.
+    /// it and `drop` below, each surface straight down at any angle, as
+    /// [`Self::ground`] takes one. Where floors are stacked in that window,
+    /// as a bridge over the ground, the one closest to `position` wins, not
+    /// simply the highest.
     pub fn nearest_ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
         // The window's edges are inclusive, as in `ground`; each next ray
         // starts a hair under the surface the last one met.
@@ -291,29 +296,22 @@ impl CollisionWorld {
                 break;
             }
             let origin = Vector::from_array(Vec3::new(position.x, from, position.z).to_array());
-            let Some(hit) = self
+            let Some(time) = self
                 .meshes()
                 .filter_map(|mesh| {
-                    mesh.cast_local_ray_and_get_normal(
-                        &Ray::new(origin, -Vector::Y),
-                        from - bottom + EDGE,
-                        false,
-                    )
+                    mesh.cast_local_ray(&Ray::new(origin, -Vector::Y), from - bottom + EDGE, false)
                 })
-                .min_by(|a, b| a.time_of_impact.total_cmp(&b.time_of_impact))
+                .min_by(f32::total_cmp)
             else {
                 break;
             };
-            let met = from - hit.time_of_impact;
+            let met = from - time;
             if met < bottom {
                 break;
             }
-            if hit.normal.y.abs() >= 0.7 {
-                let floor = met.clamp(position.y - drop, position.y + step_up);
-                if nearest.is_none_or(|best| (floor - position.y).abs() < (best - position.y).abs())
-                {
-                    nearest = Some(floor);
-                }
+            let floor = met.clamp(position.y - drop, position.y + step_up);
+            if nearest.is_none_or(|best| (floor - position.y).abs() < (best - position.y).abs()) {
+                nearest = Some(floor);
             }
             from = met - EDGE;
         }
@@ -774,6 +772,31 @@ mod tests {
         for _ in 0..10 {
             position = world.step(position, Vec3::new(1.0, 0.0, 1.0), 6.0);
             assert!(position.x < 0.1 && position.z < 0.1, "{position:?}");
+        }
+    }
+
+    #[test]
+    fn a_face_at_any_angle_under_the_feet_is_floor_at_its_height() {
+        // Faces of 30, 55 and 80 degrees, rising along +x from x 0: each is
+        // floor straight under the feet, as both programs' floor finders
+        // take it, discarding the normal (Decompile R-s, 11-01).
+        for degrees in [30.0_f32, 55.0, 80.0] {
+            let rise = degrees.to_radians().tan() * 10.0;
+            let world = CollisionWorld::new([
+                [[0.0, 0.0, -20.0], [10.0, rise, -20.0], [10.0, rise, 20.0]],
+                [[0.0, 0.0, -20.0], [10.0, rise, 20.0], [0.0, 0.0, 20.0]],
+            ])
+            .unwrap();
+            let at = Vec3::new(5.0, rise * 0.5, 0.0);
+            for floor in [
+                world.ground(at, 0.1, 0.1),
+                world.nearest_ground(at, 0.1, 0.1),
+            ] {
+                assert!(
+                    floor.is_some_and(|y| (y - at.y).abs() < 0.001),
+                    "{degrees}: {floor:?}"
+                );
+            }
         }
     }
 
