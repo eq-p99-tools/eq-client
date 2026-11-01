@@ -53,6 +53,9 @@ pub struct ClientFalls {
     pub sweep_start: f32,
     /// The floor sweep's sphere radius, as a share of the spawn's size.
     pub sweep_radius: f32,
+    /// The landing rule counts the carried weight in whole units, cut
+    /// toward zero, as an integer field holds it; else as the weight is.
+    pub whole_weight: bool,
 }
 
 /// What a landing costs, before the server's own reductions.
@@ -130,7 +133,8 @@ impl ClientFalls {
     }
 
     /// What a landing costs: with the speed past the gate in units a step,
-    /// T = carried weight / 100 + (speed − 2.5) − 1.5. None at T ≤ 0, a
+    /// T = carried weight / 100 + (speed − 2.5) − 1.5, the weight whole
+    /// where [`Self::whole_weight`] says so. None at T ≤ 0, a
     /// flat 20,000 at T ≥ 9, else trunc(10·T²) less Safe Fall's skill
     /// (raised for each rank of AA 122), at least 0. Safe Fall is used on
     /// every landing it applies to that the skill is above 0 for.
@@ -140,7 +144,13 @@ impl ClientFalls {
         if !speed.is_finite() || speed <= self.gate || self.harmless_zones.contains(&landing.zone) {
             return FallCost::default();
         }
-        let t = landing.carried_weight.max(0.0) / 100.0 + (speed - 2.5) - 1.5;
+        let weight = landing.carried_weight.max(0.0);
+        let weight = if self.whole_weight {
+            weight.trunc()
+        } else {
+            weight
+        };
+        let t = weight / 100.0 + (speed - 2.5) - 1.5;
         if t >= DEADLY_T {
             return FallCost {
                 damage: DEADLY_FALL,
@@ -189,6 +199,8 @@ pub const EQMAC: ClientFalls = ClientFalls {
     // scale (0x51f79b; read 6.344).
     sweep_start: 0.5,
     sweep_radius: 0.25,
+    // W is the weight routine's float (R3, 0x4bbb78).
+    whole_weight: false,
 };
 
 /// The Titanium client's falls (from the program): the same gravity field,
@@ -217,6 +229,10 @@ pub const TITANIUM: ClientFalls = ClientFalls {
     survived_line: None,
     sweep_start: 0.0,
     sweep_radius: 0.1,
+    // The rule loads +0x48 as an integer (int(+0x48) × 0.01, R-s Safe Fall
+    // read); that it holds the carried weight cut toward zero is inferred
+    // with the field itself (6.303).
+    whole_weight: true,
     ..EQMAC
 };
 
@@ -252,6 +268,10 @@ mod tests {
                 safe_fall: false
             }
         );
+        // Titanium counts whole units of weight, the Mac-era client all of
+        // it: at 7.8 a step, T = 0.17 or 0.179 + 3.8, so 157 or 158.
+        assert_eq!(TITANIUM.landing_cost(landing(7.8, 17.9, 0)).damage, 157);
+        assert_eq!(EQMAC.landing_cost(landing(7.8, 17.9, 0)).damage, 158);
         // At or under the gate is no fall, however much is carried.
         assert_eq!(EQMAC.landing_cost(landing(2.5, 900.0, 0)).damage, 0);
         assert_eq!(EQMAC.landing_cost(landing(f32::NAN, 0.0, 0)).damage, 0);

@@ -115,31 +115,44 @@ pub enum Step {
     Hold(Vec<KeyCode>, Duration),
     /// Pauses for a bounded duration.
     Wait(Duration),
-    /// Orbits the camera so W walks along an EQ heading (0..512), at a pitch in degrees.
+    /// Orbits the camera to look along an EQ heading (0..512), so the
+    /// camera-relative forward walks that way, at a pitch in degrees and,
+    /// where given, at a distance from the player; the view then holds both
+    /// within its own ranges, as it holds the mouse's.
     Camera {
         /// EQ heading the camera looks along.
         heading: f32,
         /// Adds the player's current heading, for views relative to the model.
         relative: bool,
-        /// Downward pitch in degrees, clamped like mouse orbiting.
+        /// Downward pitch in degrees, from level (0) to straight down.
         pitch: f32,
+        /// Distance from the player, or the one it has.
+        radius: Option<f32>,
     },
     /// Logs the player's position and frame time every frame for a bounded duration.
     Trace(Duration),
-    /// Turns the camera so W walks toward the current target.
+    /// Turns the camera so the camera-relative forward walks toward the
+    /// current target.
     Face,
-    /// Holds W toward the current target until it is within a distance, for a
+    /// Turns the player to an EQ heading (0..512), whatever the camera does,
+    /// as moving with the camera-relative keys turns them: the heading sent
+    /// turns at the turn keys' rate. It ends once the server has the heading.
+    FaceHeading(f32),
+    /// Holds a movement command for a bounded duration, as holding its key
+    /// does, whatever keys the key table gives it; traced as `hold` is.
+    Move(MoveCommand, Duration),
+    /// Moves forward the way the camera looks toward the current target until it is within a distance, for a
     /// bounded duration.
     Approach(f32, Duration),
     /// Chases the current target as a player's hands would: every frame it
     /// faces where the target is drawn now (its last reported position
-    /// carried on as the generation's program carries it) and holds W while the target
+    /// carried on as the generation's program carries it) and moves forward while the target
     /// is beyond the distance, standing within it. It ends only when the
     /// target dies or leaves the zone, or when the time runs out, never
     /// merely on reaching the target; auto-attack is the script's to turn on
     /// first.
     Chase(f32, Duration),
-    /// Holds W toward the nearest world container of one tradeskill kind
+    /// Moves forward the way the camera looks toward the nearest world container of one tradeskill kind
     /// (its container type, such as a pottery wheel's), chosen as the step
     /// starts, until it is within a distance, for a bounded duration.
     ApproachObject {
@@ -188,6 +201,31 @@ pub enum Step {
     Screenshot(PathBuf),
     /// Closes the client.
     Quit,
+}
+
+/// The movement commands a `move` step holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MoveCommand {
+    Forward,
+    Back,
+    StrafeLeft,
+    StrafeRight,
+    TurnLeft,
+    TurnRight,
+}
+
+impl MoveCommand {
+    fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "forward" => Self::Forward,
+            "back" => Self::Back,
+            "strafe_left" => Self::StrafeLeft,
+            "strafe_right" => Self::StrafeRight,
+            "turn_left" => Self::TurnLeft,
+            "turn_right" => Self::TurnRight,
+            _ => return None,
+        })
+    }
 }
 
 /// UI controls a script may click.
@@ -415,6 +453,37 @@ pub fn parse(text: &str, base: &Path) -> Result<Vec<Step>, String> {
     Ok(steps)
 }
 
+/// A camera step's heading (or `player` and an offset from the player's
+/// heading), pitch and, where given, distance.
+fn parse_camera(arguments: &[&str]) -> Result<Step, String> {
+    let number = |value: &str, low: f32, high: f32| {
+        value
+            .parse::<f32>()
+            .ok()
+            .filter(|value| (low..=high).contains(value))
+            .ok_or_else(|| format!("expected a number from {low} to {high}"))
+    };
+    let (relative, rest) = match arguments {
+        ["player", rest @ ..] => (true, rest),
+        rest => (false, rest),
+    };
+    let [heading, pitch, radius @ ..] = rest else {
+        return Err("expected a heading and a pitch".into());
+    };
+    if radius.len() > 1 {
+        return Err("expected at most a distance after the pitch".into());
+    }
+    Ok(Step::Camera {
+        heading: number(heading, 0.0, 512.0)?,
+        relative,
+        pitch: number(pitch, -89.0, 0.0)?,
+        radius: radius
+            .first()
+            .map(|radius| number(radius, 1.0, 20_000.0))
+            .transpose()?,
+    })
+}
+
 fn parse_step(line: &str) -> Result<Step, String> {
     let mut words = line.split_whitespace();
     let command = words.next().unwrap_or_default();
@@ -464,18 +533,14 @@ fn parse_step(line: &str) -> Result<Step, String> {
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
         ("wait", [duration]) => Step::Wait(millis(duration, MAX_WAIT)?),
-        ("camera", [heading, pitch]) => Step::Camera {
-            heading: number(heading, 0.0, 512.0)?,
-            relative: false,
-            pitch: number(pitch, -83.0, -8.0)?,
-        },
-        ("camera", ["player", offset, pitch]) => Step::Camera {
-            heading: number(offset, 0.0, 512.0)?,
-            relative: true,
-            pitch: number(pitch, -83.0, -8.0)?,
-        },
+        ("camera", arguments) => parse_camera(arguments)?,
         ("trace", [duration]) => Step::Trace(millis(duration, MAX_TRACE)?),
         ("face", []) => Step::Face,
+        ("face", [heading]) => Step::FaceHeading(number(heading, 0.0, 512.0)?),
+        ("move", [command, duration]) => Step::Move(
+            MoveCommand::named(command).ok_or("expected a movement command")?,
+            millis(duration, MAX_WALK)?,
+        ),
         ("approach", ["object", kind, range, duration]) => Step::ApproachObject {
             kind: station(kind)?,
             range: number(range, 1.0, 200.0)?,
@@ -1043,6 +1108,19 @@ const DIGITS: [KeyCode; 10] = [
     KeyCode::Digit8,
     KeyCode::Digit9,
 ];
+/// The keypad's digits, from 0, as Num Lock on types them.
+const NUMPAD: [KeyCode; 10] = [
+    KeyCode::Numpad0,
+    KeyCode::Numpad1,
+    KeyCode::Numpad2,
+    KeyCode::Numpad3,
+    KeyCode::Numpad4,
+    KeyCode::Numpad5,
+    KeyCode::Numpad6,
+    KeyCode::Numpad7,
+    KeyCode::Numpad8,
+    KeyCode::Numpad9,
+];
 const FUNCTIONS: [KeyCode; 12] = [
     KeyCode::F1,
     KeyCode::F2,
@@ -1088,6 +1166,18 @@ fn key(name: &str) -> Option<KeyCode> {
         "LEFT" => Some(KeyCode::ArrowLeft),
         "RIGHT" => Some(KeyCode::ArrowRight),
         "SHIFT" => Some(KeyCode::ShiftLeft),
+        "NUMLOCK" => Some(KeyCode::NumLock),
+        "INSERT" => Some(KeyCode::Insert),
+        "HOME" => Some(KeyCode::Home),
+        "END" => Some(KeyCode::End),
+        "PAGEUP" => Some(KeyCode::PageUp),
+        "PAGEDOWN" => Some(KeyCode::PageDown),
+        "NUMPAD_ADD" => Some(KeyCode::NumpadAdd),
+        "NUMPAD_SUBTRACT" => Some(KeyCode::NumpadSubtract),
+        "NUMPAD_MULTIPLY" => Some(KeyCode::NumpadMultiply),
+        "NUMPAD_DIVIDE" => Some(KeyCode::NumpadDivide),
+        "NUMPAD_DECIMAL" => Some(KeyCode::NumpadDecimal),
+        "NUMPAD_ENTER" => Some(KeyCode::NumpadEnter),
         "CTRL" => Some(KeyCode::ControlLeft),
         "ALT" => Some(KeyCode::AltLeft),
         _ if bytes.len() == 1 && bytes[0].is_ascii_uppercase() => {
@@ -1099,7 +1189,11 @@ fn key(name: &str) -> Option<KeyCode> {
         _ => upper
             .strip_prefix('F')
             .and_then(|number| number.parse::<usize>().ok())
-            .and_then(|number| FUNCTIONS.get(number.checked_sub(1)?).copied()),
+            .and_then(|number| FUNCTIONS.get(number.checked_sub(1)?).copied())
+            .or_else(|| match upper.strip_prefix("NUMPAD")?.as_bytes() {
+                [digit @ b'0'..=b'9'] => Some(NUMPAD[usize::from(digit - b'0')]),
+                _ => None,
+            }),
     }
 }
 
@@ -1125,15 +1219,18 @@ pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<St
     if let Some(index) = DIGITS.iter().position(|digit| *digit == key) {
         return character(index.to_string());
     }
+    if let Some(index) = NUMPAD.iter().position(|digit| *digit == key) {
+        return character(index.to_string());
+    }
     if let Some(index) = FUNCTIONS.iter().position(|function| *function == key) {
         return (FUNCTION_KEYS[index].clone(), None);
     }
     match key {
         KeyCode::Slash if shift => character("?".to_owned()),
-        KeyCode::Slash => character("/".to_owned()),
+        KeyCode::Slash | KeyCode::NumpadDivide => character("/".to_owned()),
         KeyCode::Space => (Key::Space, (!chorded).then(|| " ".to_owned())),
         KeyCode::Escape => (Key::Escape, None),
-        KeyCode::Enter => (Key::Enter, None),
+        KeyCode::Enter | KeyCode::NumpadEnter => (Key::Enter, None),
         KeyCode::Backspace => (Key::Backspace, None),
         KeyCode::Delete => (Key::Delete, None),
         KeyCode::Tab => (Key::Tab, None),
@@ -1141,6 +1238,16 @@ pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<St
         KeyCode::ArrowDown => (Key::ArrowDown, None),
         KeyCode::ArrowLeft => (Key::ArrowLeft, None),
         KeyCode::ArrowRight => (Key::ArrowRight, None),
+        KeyCode::NumpadAdd => character("+".to_owned()),
+        KeyCode::NumpadSubtract => character("-".to_owned()),
+        KeyCode::NumpadMultiply => character("*".to_owned()),
+        KeyCode::NumpadDecimal => character(".".to_owned()),
+        KeyCode::NumLock => (Key::NumLock, None),
+        KeyCode::Insert => (Key::Insert, None),
+        KeyCode::Home => (Key::Home, None),
+        KeyCode::End => (Key::End, None),
+        KeyCode::PageUp => (Key::PageUp, None),
+        KeyCode::PageDown => (Key::PageDown, None),
         KeyCode::ShiftLeft => (Key::Shift, None),
         KeyCode::ControlLeft => (Key::Control, None),
         KeyCode::AltLeft => (Key::Alt, None),
@@ -1192,7 +1299,7 @@ mod tests {
         let steps = parse(
             "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
              gm summon\ngm damage 10000\ngm givemoney 0 0 5 0\npress F1 # self\n\
-             press alt+1\nhold W 1500\nwait 250\ncamera 128 -20\ncamera player 256 -15\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\nhover close_box chat\n\
+             press alt+1\nhold W 1500\nwait 250\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\nhover close_box chat\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 0\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\ngive\nclick give\nreport after cast\nscreenshot a.png\nquit\n",
             base,
         )
@@ -1222,16 +1329,6 @@ mod tests {
                 Step::Press(vec![KeyCode::AltLeft, KeyCode::Digit1]),
                 Step::Hold(vec![KeyCode::KeyW], Duration::from_millis(1500)),
                 Step::Wait(Duration::from_millis(250)),
-                Step::Camera {
-                    heading: 128.0,
-                    relative: false,
-                    pitch: -20.0
-                },
-                Step::Camera {
-                    heading: 256.0,
-                    relative: true,
-                    pitch: -15.0
-                },
                 Step::Trace(Duration::from_secs(2)),
                 Step::Face,
                 Step::Approach(12.0, Duration::from_secs(5)),
@@ -1289,6 +1386,70 @@ mod tests {
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
         );
+    }
+
+    #[test]
+    fn moving_steps_name_commands_and_key_steps_name_the_keypad() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "face 128\nmove forward 12000\nmove turn_left 500\ncamera 64 0 150\n\
+                 camera player 0 -89\ncamera 128 -20\ncamera player 256 -15 300\npress numlock\nhold numpad8 500\npress pageup\n\
+                 press numpad_add\n",
+                base,
+            )
+            .unwrap(),
+            [
+                Step::FaceHeading(128.0),
+                Step::Move(MoveCommand::Forward, Duration::from_secs(12)),
+                Step::Move(MoveCommand::TurnLeft, Duration::from_millis(500)),
+                Step::Camera {
+                    heading: 64.0,
+                    relative: false,
+                    pitch: 0.0,
+                    radius: Some(150.0),
+                },
+                Step::Camera {
+                    heading: 0.0,
+                    relative: true,
+                    pitch: -89.0,
+                    radius: None,
+                },
+                Step::Camera {
+                    heading: 128.0,
+                    relative: false,
+                    pitch: -20.0,
+                    radius: None,
+                },
+                Step::Camera {
+                    heading: 256.0,
+                    relative: true,
+                    pitch: -15.0,
+                    radius: Some(300.0),
+                },
+                Step::Press(vec![KeyCode::NumLock]),
+                Step::Hold(vec![KeyCode::Numpad8], Duration::from_millis(500)),
+                Step::Press(vec![KeyCode::PageUp]),
+                Step::Press(vec![KeyCode::NumpadAdd]),
+            ]
+        );
+        for bad in [
+            "face 600",
+            "face north",
+            "move up 1000",
+            "move forward",
+            "move forward 70000",
+            "camera 64 -20 0",
+            "camera 64 -20 30000",
+            "camera 64 -20 100 5",
+            "camera 64 5",
+            "camera player",
+            "camera player 64",
+            "press numpad10",
+            "press numpad",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -28,8 +28,18 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::PrimaryWindow;
 
-use parse::{MAX_STEPS, MAX_WAIT};
+use crate::keys::Act;
+use parse::{MAX_STEPS, MAX_WAIT, MoveCommand};
 
+/// The command the steps that move toward something hold: forward the way
+/// the camera looks, which they turn toward their aim.
+const FORWARD: Act = Act::CameraForward;
+/// Longest a `face` step waits for the server to have its heading: a half
+/// turn at the turn keys' rate takes about a second.
+const FACE_LIMIT: Duration = Duration::from_secs(5);
+/// How near the heading the server has must come to a `face` step's, in
+/// heading units.
+const FACED: f32 = 0.5;
 const MAX_ONLINE_WAIT: Duration = Duration::from_mins(3);
 const MAX_RUNTIME: Duration = Duration::from_mins(15);
 const FOLLOW_POLL: Duration = Duration::from_millis(250);
@@ -48,6 +58,11 @@ pub struct Script {
     steps: VecDeque<Step>,
     current: Option<(Step, Duration)>,
     held: Vec<KeyCode>,
+    /// The movement commands a moving step holds itself, as the key map
+    /// resolves a held key to them, so the step moves under any key table.
+    acts: Vec<Act>,
+    /// The heading a `face` step turns the player to, until it is reached.
+    facing: Option<f32>,
     /// The mouse button a scripted click holds down until the next frame.
     clicked: Option<MouseButton>,
     /// The control a scripted click pressed, which the pointer is over as
@@ -139,6 +154,8 @@ impl Script {
             steps: steps.into(),
             current: None,
             held: Vec::new(),
+            acts: Vec::new(),
+            facing: None,
             clicked: None,
             pressed: None,
             started: None,
@@ -196,6 +213,21 @@ impl Script {
         self.local || self.offline
     }
 
+    /// The movement commands the script holds itself.
+    pub(crate) fn acts(&self) -> &[Act] {
+        &self.acts
+    }
+
+    /// The heading a `face` step turns the player to.
+    pub(crate) const fn facing(&self) -> Option<f32> {
+        self.facing
+    }
+
+    /// Whether the script holds a key or a movement command.
+    fn holding(&self) -> bool {
+        !self.held.is_empty() || !self.acts.is_empty()
+    }
+
     /// Marks the run offline (see [`Script::offline`]).
     #[must_use]
     pub fn offline_preview(mut self, offline: bool) -> Self {
@@ -245,6 +277,8 @@ impl Script {
         for key in self.held.drain(..) {
             keys.release(key);
         }
+        self.acts.clear();
+        self.facing = None;
         if let Some(button) = self.clicked.take() {
             mouse.release(button);
         }
@@ -487,7 +521,7 @@ pub(super) fn drive(
         script.focus,
         window.is_some_and(|window| window.focused),
     ) {
-        if !script.held.is_empty() {
+        if script.holding() {
             script.stop(
                 &mut keys,
                 &mut mouse,
@@ -568,10 +602,9 @@ pub(super) fn drive(
                 }
                 Ok(Chase::Aim(aim)) => {
                     let running = runs(face_toward(aim, &players, &mut cameras), *range);
-                    if running && script.held.is_empty() {
-                        keys.press(KeyCode::KeyW);
-                        script.held = vec![KeyCode::KeyW];
-                    } else if !running && !script.held.is_empty() {
+                    if running && script.acts.is_empty() {
+                        script.acts = vec![FORWARD];
+                    } else if !running && script.holding() {
                         script.release(&mut keys, &mut mouse);
                     }
                     false
@@ -860,9 +893,8 @@ pub(super) fn drive(
                         for mut camera in &mut cameras {
                             camera.yaw = super::behind(to.x.atan2(to.z));
                         }
-                        if script.held.is_empty() {
-                            keys.press(KeyCode::KeyW);
-                            script.held = vec![KeyCode::KeyW];
+                        if script.acts.is_empty() {
+                            script.acts = vec![FORWARD];
                         }
                         (false, elapsed >= *duration)
                     }
@@ -884,8 +916,25 @@ pub(super) fn drive(
                     }
                 }
             }
+            Step::FaceHeading(heading) => {
+                let at = online
+                    .world()
+                    .player()
+                    .map(|player| player.position.heading);
+                // The shortest turn between the two, in heading units.
+                if at.is_some_and(|at| {
+                    ((at - heading + 256.0).rem_euclid(512.0) - 256.0).abs() <= FACED
+                }) {
+                    true
+                } else if elapsed >= FACE_LIMIT {
+                    script.stop(&mut keys, &mut mouse, "face did not reach its heading");
+                    return;
+                } else {
+                    false
+                }
+            }
             // Held movement keys are traced too, to measure motion cadence.
-            Step::Hold(_, duration) | Step::Trace(duration) => {
+            Step::Hold(_, duration) | Step::Move(_, duration) | Step::Trace(duration) => {
                 if let Ok(transform) = players.single() {
                     let (x, y, z, heading) = report::placement(transform);
                     debug!(
@@ -1188,6 +1237,7 @@ pub(super) fn drive(
             heading,
             relative,
             pitch,
+            radius,
         } => {
             let base = if *relative {
                 players
@@ -1197,10 +1247,26 @@ pub(super) fn drive(
                 0.0
             };
             for mut camera in &mut cameras {
+                // The view holds the pitch and distance within its own
+                // ranges from the next frame, as it holds the mouse's.
                 camera.yaw = super::behind(eq_client_core::render_heading(base + *heading));
-                camera.pitch = pitch.to_radians().clamp(-1.45, -0.15);
+                camera.pitch = pitch.to_radians();
+                if let Some(radius) = radius {
+                    camera.radius = *radius;
+                }
             }
             return;
+        }
+        Step::FaceHeading(heading) => script.facing = Some(*heading),
+        Step::Move(command, _) => {
+            script.acts = vec![match command {
+                MoveCommand::Forward => Act::Forward,
+                MoveCommand::Back => Act::Back,
+                MoveCommand::StrafeLeft => Act::StrafeLeft,
+                MoveCommand::StrafeRight => Act::StrafeRight,
+                MoveCommand::TurnLeft => Act::TurnLeft,
+                MoveCommand::TurnRight => Act::TurnRight,
+            }];
         }
         Step::Click(_) | Step::RightClick(_) | Step::HoldClick(..) => {
             // The script pointer leaves the control a hover rested on.
@@ -1261,8 +1327,7 @@ pub(super) fn drive(
                 script.stop(&mut keys, &mut mouse, "approach needs a visible target");
                 return;
             }
-            keys.press(KeyCode::KeyW);
-            script.held = vec![KeyCode::KeyW];
+            script.acts = vec![FORWARD];
         }
         Step::Chase(..) => {
             script.awaited = online.world().target().selected;
@@ -1282,8 +1347,7 @@ pub(super) fn drive(
                 );
                 return;
             }
-            keys.press(KeyCode::KeyW);
-            script.held = vec![KeyCode::KeyW];
+            script.acts = vec![FORWARD];
         }
         Step::Walk(range, _) | Step::WalkObject { range, .. } => {
             if let Step::WalkObject { kind, .. } = &step {
@@ -2469,7 +2533,7 @@ fn chase(
     )))
 }
 
-/// Whether a chase holds W: only while its target is beyond the distance.
+/// Whether a chase moves forward: only while its target is beyond the distance.
 /// Within it the player stands, auto-attack doing the rest.
 fn runs(distance: Option<f32>, range: f32) -> bool {
     distance.is_some_and(|distance| distance > range)
@@ -3534,6 +3598,56 @@ mod tests {
     fn stopped(app: &App) -> bool {
         let script = app.world().resource::<Script>();
         script.current.is_none() && script.steps.is_empty()
+    }
+
+    #[test]
+    fn a_move_holds_its_command_and_a_face_turns_until_the_server_has_the_heading() {
+        let admitted = |app: &mut App, heading: f32| {
+            let mut player = crate::online::testing::player(1);
+            player.position.heading = heading;
+            let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+            crate::online::testing::admit(&mut online, 1, player);
+        };
+        let mut app = pointing(vec![
+            Step::Move(MoveCommand::Forward, Duration::from_millis(500)),
+            Step::FaceHeading(128.0),
+            Step::Wait(Duration::from_secs(1)),
+        ]);
+        admitted(&mut app, 120.0);
+        frame_at(&mut app, 0);
+        // The step holds the command itself and no key, so it moves the same
+        // under every key table, the Titanium program's included.
+        assert_eq!(app.world().resource::<Script>().acts(), [Act::Forward]);
+        assert_eq!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .get_pressed()
+                .count(),
+            0
+        );
+        for ms in [600, 610, 620] {
+            frame_at(&mut app, ms);
+        }
+        let script = app.world().resource::<Script>();
+        assert_eq!(script.acts(), &[] as &[Act]);
+        assert_eq!(script.facing(), Some(128.0));
+        assert!(matches!(script.current, Some((Step::FaceHeading(_), _))));
+        // Once the server has the heading, the next step runs and the
+        // facing is the player's again.
+        admitted(&mut app, 127.8);
+        frame_at(&mut app, 700);
+        frame_at(&mut app, 710);
+        let script = app.world().resource::<Script>();
+        assert_eq!(script.facing(), None);
+        assert!(matches!(script.current, Some((Step::Wait(_), _))));
+        // A heading the server never takes stops the script in time.
+        let mut app = pointing(vec![Step::FaceHeading(128.0)]);
+        admitted(&mut app, 0.0);
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 4_000);
+        assert!(!stopped(&app));
+        frame_at(&mut app, 5_100);
+        assert!(stopped(&app));
     }
 
     #[test]
