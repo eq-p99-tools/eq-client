@@ -195,6 +195,9 @@ pub struct ClientWorld {
     pvp_rule: u32,
     /// The zone header's gravity, once this admission's header came.
     zone_gravity: Option<f32>,
+    /// The zone header's top (`max_z`) and lowest height (its underworld),
+    /// once this admission's header came.
+    zone_heights: Option<crate::ZoneHeights>,
     /// The zone header's classic model scale flag, as it came; None until
     /// this admission's header comes, and where the generation has none.
     classic_model_scale_flag: Option<u32>,
