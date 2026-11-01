@@ -48,7 +48,13 @@ pub(super) fn route(
     let screen = front.screen(&online);
     let key = keys.input.just_pressed(KeyCode::Escape);
     *escape = match screen {
-        _ if !key => Escape::Unused,
+        _ if !key || keys.escape_claimed() || !keys.window_focused() => Escape::Unused,
+        _ if frames
+            .iter()
+            .any(|(id, node)| *id == WindowId::Scripts && node.display != Display::None) =>
+        {
+            Escape::Close(WindowId::Scripts)
+        }
         Screen::Login | Screen::Servers if !front.has_login() || !keys.window_focused() => {
             Escape::Unused
         }

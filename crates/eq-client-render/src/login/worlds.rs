@@ -91,7 +91,7 @@ pub(crate) fn worlds(
 ) {
     let visible = front.screen(&online) == Screen::Servers;
     let official = look.is_some_and(|look| look.official());
-    if visible && keys.window_focused() {
+    if visible && keys.window_focused() && !keys.editing_script() {
         let asked = online
             .world()
             .servers()

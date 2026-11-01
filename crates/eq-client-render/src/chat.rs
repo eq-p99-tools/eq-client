@@ -498,6 +498,12 @@ pub(super) fn input(
     viewport: Query<&ComputedNode, With<Viewport>>,
 ) {
     typing.escape_consumed = false;
+    if typing.editing_script {
+        keyboard.clear();
+        typing.composing = false;
+        state.hovered = false;
+        return;
+    }
     // Character selection owns keyboard input until the zone admits the player.
     if online.enabled && online.world().session_id().is_none() {
         keyboard.clear();

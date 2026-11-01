@@ -314,6 +314,10 @@ pub(crate) fn type_amount(
     mut state: ResMut<InventoryState>,
     boxes: Query<&Interaction, (With<AmountBox>, Changed<Interaction>)>,
 ) {
+    if typing.editing_script {
+        typing.counting = false;
+        return;
+    }
     if state.picked().is_none() {
         if typing.counting {
             typing.counting = false;

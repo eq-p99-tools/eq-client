@@ -434,23 +434,9 @@ fn wav_name(name: &str) -> bool {
 /// # Errors
 /// Returns the first line that is unknown, malformed or outside the bounds.
 pub fn parse(text: &str, base: &Path) -> Result<Vec<Step>, String> {
-    let mut steps = Vec::new();
-    for (index, raw) in text.lines().enumerate() {
-        let line = raw.split('#').next().unwrap_or_default().trim();
-        if line.is_empty() {
-            continue;
-        }
-        let step =
-            parse_step(line).map_err(|reason| format!("script line {}: {reason}", index + 1))?;
-        steps.push(match step {
-            Step::Screenshot(name) => Step::Screenshot(base.join(name)),
-            step => step,
-        });
-    }
-    if steps.len() > MAX_STEPS {
-        return Err(format!("script has more than {MAX_STEPS} steps"));
-    }
-    Ok(steps)
+    super::Program::parse(text, base)
+        .map(super::Program::into_steps)
+        .map_err(|error| error.to_string())
 }
 
 /// A camera step's heading (or `player` and an offset from the player's
@@ -484,7 +470,7 @@ fn parse_camera(arguments: &[&str]) -> Result<Step, String> {
     })
 }
 
-fn parse_step(line: &str) -> Result<Step, String> {
+pub(super) fn parse_step(line: &str) -> Result<Step, String> {
     let mut words = line.split_whitespace();
     let command = words.next().unwrap_or_default();
     let rest: Vec<&str> = words.collect();
