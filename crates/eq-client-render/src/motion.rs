@@ -788,7 +788,12 @@ fn jump_rise(speed: f32, gravity: f32, seconds: f32) -> f32 {
 
 /// How the installed client's player falls: its program's physics under
 /// the zone header's gravity once it comes, or the provisional ones until
-/// they are read for it.
+/// they are read for it. A walking step keeps the feet on the floor only
+/// within the program's on-ground tolerance and falls past it, so a steep
+/// face goes down at the walk's own pace as a run of short falls, each
+/// landing by the program's rule (R-s). This client steps in 50 ms slices,
+/// the program one step per update, so how often those short falls land
+/// waits on the update-rate question for the owner.
 pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> VerticalPhysics {
     client.falls().map_or(PROVISIONAL_PHYSICS, |falls| {
         let gravity = zone_gravity.map_or(falls.gravity, |per_step| falls.zone_gravity(per_step));
@@ -797,6 +802,7 @@ pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> Ver
             terminal_speed: falls.terminal_under(gravity),
             jump_speed: falls.jump_speed,
             air_factor: falls.air_factor,
+            ground_tolerance: falls.ground_tolerance,
         }
     })
 }

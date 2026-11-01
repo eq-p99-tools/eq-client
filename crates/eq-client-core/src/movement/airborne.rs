@@ -18,16 +18,24 @@ pub struct VerticalPhysics {
     /// which at 50 ms slices moves the feet at most 0.4 units further
     /// a slice, at the fastest fall.
     pub air_factor: f32,
+    /// How far below the feet a floor may lie for a walking step to keep
+    /// them on it, in world units; past it the step leaves the ground and
+    /// falls. Both programs count a spawn on the ground while its feet,
+    /// moved by this step's vertical speed, are within 0.5 + 0.001 of the
+    /// floor (R-s: Titanium 0x48a2f4, `EQMac` 0x50ba07).
+    pub ground_tolerance: f32,
 }
 
 /// Provisional tuning shared by the offline preview, online falls and path search.
 /// Not measured EQ gravity or jump impulse; the terminal speed is the fastest
-/// descent the network accepts for a fall.
+/// descent the network accepts for a fall. A walk keeps the feet on a floor
+/// up to a riser below them, the grounded step's own rule.
 pub const PROVISIONAL_PHYSICS: VerticalPhysics = VerticalPhysics {
     gravity: 32.0,
     terminal_speed: super::MAX_FALL_SPEED,
     jump_speed: 10.0,
     air_factor: 1.0,
+    ground_tolerance: super::MAX_GROUNDED_STEP,
 };
 
 /// One bounded local simulation step, using renderer Y-up coordinates.
@@ -143,6 +151,7 @@ impl AirborneController {
                 .all(|v| v.is_finite() && *v > 0.0)
             || !(physics.gravity.is_finite() && physics.gravity >= 0.0)
             || !(physics.air_factor > 0.0 && physics.air_factor <= 1.0)
+            || !(physics.ground_tolerance.is_finite() && physics.ground_tolerance >= 0.0)
         {
             return feet;
         }
@@ -158,7 +167,9 @@ impl AirborneController {
             self.velocity = if input.jump { physics.jump_speed } else { 0.0 };
         }
         let support = if grounded && !input.jump {
-            Support::Optional
+            Support::Optional {
+                drop: physics.ground_tolerance,
+            }
         } else {
             Support::Airborne
         };
@@ -303,6 +314,7 @@ mod tests {
                 terminal_speed: 40.0,
                 jump_speed: 10.0,
                 air_factor: 1.0,
+                ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
             },
             MotionStep {
                 horizontal: Vec3::ZERO,
@@ -367,6 +379,7 @@ mod tests {
             terminal_speed: 40.0,
             jump_speed: 10.0,
             air_factor: 1.0,
+            ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
         };
         let mut state = AirborneController::default();
         let mut feet = Vec3::new(-1.0, 40.0, 0.0);
@@ -400,6 +413,118 @@ mod tests {
             }
         }
         assert!(feet.x > foot + 5.0 && feet.y.abs() < 0.001, "{feet:?}");
+    }
+
+    /// The Titanium program's falls (sittings 8g-8i; R-s): gravity 0.4 a
+    /// 50 ms step, the air's 0.99, and the on-ground tolerance 0.5 + 0.001.
+    const PROGRAM: VerticalPhysics = VerticalPhysics {
+        gravity: 160.0,
+        terminal_speed: 792.0,
+        jump_speed: 44.55,
+        air_factor: 0.99,
+        ground_tolerance: 0.501,
+    };
+
+    /// A plateau at y `height` for x < 0, a face at `degrees` down to the
+    /// floor at y 0, and the floor beyond; the face's foot's x.
+    fn face(height: f32, degrees: f32) -> (CollisionWorld, f32) {
+        let foot = height / degrees.to_radians().tan();
+        let world = CollisionWorld::new([
+            [
+                [-20.0, height, -20.0],
+                [0.0, height, -20.0],
+                [0.0, height, 20.0],
+            ],
+            [
+                [-20.0, height, -20.0],
+                [0.0, height, 20.0],
+                [-20.0, height, 20.0],
+            ],
+            [[0.0, height, -20.0], [foot, 0.0, -20.0], [foot, 0.0, 20.0]],
+            [[0.0, height, -20.0], [foot, 0.0, 20.0], [0.0, height, 20.0]],
+            [
+                [foot, 0.0, -20.0],
+                [foot + 80.0, 0.0, -20.0],
+                [foot + 80.0, 0.0, 20.0],
+            ],
+            [
+                [foot, 0.0, -20.0],
+                [foot + 80.0, 0.0, 20.0],
+                [foot, 0.0, 20.0],
+            ],
+        ])
+        .unwrap();
+        (world, foot)
+    }
+
+    /// Runs at 43 units a second off the plateau for `slices` 50 ms
+    /// slices: where the feet end, each landing, and whether every slice
+    /// moved the whole way across.
+    fn run(world: &CollisionWorld, slices: usize) -> (Vec3, Vec<Landing>, bool) {
+        let mut state = AirborneController::default();
+        let top = world
+            .ground(Vec3::new(-1.0, 100.0, 0.0), 0.0, 200.0)
+            .unwrap();
+        let mut feet = Vec3::new(-1.0, top, 0.0);
+        let (mut landings, mut full) = (Vec::new(), true);
+        for _ in 0..slices {
+            let before = feet;
+            feet = state.step(
+                world,
+                feet,
+                PROGRAM,
+                MotionStep {
+                    horizontal: Vec3::X * 43.0 * 0.05,
+                    jump: false,
+                    seconds: 0.05,
+                    height: 6.0,
+                },
+            );
+            full &= (feet.x - before.x - 2.15).abs() < 0.01;
+            landings.extend(state.take_landing());
+        }
+        (feet, landings, full)
+    }
+
+    #[test]
+    fn a_run_down_a_steep_face_keeps_its_pace_and_lands_on_the_face() {
+        // A walking step keeps the feet on the floor only within the
+        // programs' on-ground tolerance; past it they fall under gravity and
+        // land on the face, as in both programs (R-s). A gentle face keeps
+        // them on the ground; a steep one goes by falls that each land on
+        // it; either way at the run's pace.
+        let (gentle, gentle_foot) = face(40.0, 10.0);
+        let (feet, landings, full) = run(&gentle, 40);
+        assert!(full && feet.x < gentle_foot, "{feet:?}");
+        assert!(landings.is_empty(), "{landings:?}");
+        let (steep, foot) = face(60.0, 55.0);
+        let (feet, landings, full) = run(&steep, 30);
+        assert!(full, "slowed: {feet:?}");
+        assert!(feet.x > foot && feet.y.abs() < 0.001, "{feet:?}");
+        // Falls that land on the face, then at its foot, none of them
+        // lethal by the programs' rule: under 9 + 1.5 + 2.5 units a step at
+        // touchdown (sitting 6, T2).
+        assert!(landings.len() >= 2, "{landings:?}");
+        assert!(
+            landings
+                .iter()
+                .all(|landing| landing.impact_speed * 0.05 < 13.0),
+            "{landings:?}"
+        );
+    }
+
+    #[test]
+    fn a_walk_off_a_cliff_still_falls_to_the_floor_below() {
+        // A face at 89.9 degrees is a cliff: the feet leave it at once and
+        // land at its foot.
+        let (cliff, foot) = face(30.0, 89.9);
+        let (feet, landings, full) = run(&cliff, 30);
+        assert!(full && feet.x > foot && feet.y.abs() < 0.001, "{feet:?}");
+        assert_eq!(landings.len(), 1, "{landings:?}");
+        assert!(
+            (landings[0].fall_distance - 30.0).abs() < 0.5,
+            "{landings:?}"
+        );
     }
 
     #[test]
@@ -541,6 +666,7 @@ mod tests {
             terminal_speed: 40.0,
             jump_speed: 10.0,
             air_factor: 1.0,
+            ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
         };
         let input = MotionStep {
             horizontal: Vec3::X * 0.6,
