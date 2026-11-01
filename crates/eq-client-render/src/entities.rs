@@ -21,6 +21,9 @@ pub(super) struct NearbyEntities {
     /// Whether the last pass drew every spawn it chose, so none is still to
     /// pop in.
     settled: bool,
+    /// The zone header's classic model scale flag the drawn spawns were
+    /// scaled by.
+    scaled_by: Option<u32>,
 }
 
 impl NearbyEntities {
@@ -66,6 +69,9 @@ pub(super) struct RemoteEntity {
     /// How far under the reported position a drawn model's soles hang, in
     /// world units; None for a marker, which stays where the server says.
     feet: Option<f32>,
+    /// The size its model is drawn by ([`Drawn::size`]), which sets how far
+    /// its soles reach for the floor.
+    size: f32,
     /// Where the client generation has carried it since that report, frame
     /// by frame, as its program steps a spawn
     /// ([`eq_client_core::movement::carry`]).
@@ -74,15 +80,61 @@ pub(super) struct RemoteEntity {
 
 impl RemoteEntity {
     /// A spawn not yet placed, whose model's soles hang `feet` under its
-    /// reported position (None for a marker).
-    const fn new(id: u16, feet: Option<f32>) -> Self {
+    /// reported position (None for a marker), drawn by `size`.
+    const fn new(id: u16, feet: Option<f32>, size: f32) -> Self {
         Self {
             id,
             seen: None,
             soles: None,
             feet,
+            size,
             carried: None,
         }
+    }
+}
+
+impl RemoteEntity {
+    /// How far under the reported position its model's soles hang, in
+    /// world units; None for a marker.
+    pub(super) const fn feet(&self) -> Option<f32> {
+        self.feet
+    }
+}
+
+/// How the installed client draws a spawn's model: the size it draws it by
+/// and the scale of its mesh as authored, by the client's rule
+/// ([`eq_client_assets::scale::ModelScale`]), with what the zone's header
+/// says ([`eq_client_core::world::ClientWorld::classic_model_scale_flag`]).
+/// The player, other spawns and corpses all take it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Drawn {
+    /// The size sent, or the race's default, as the client draws by it.
+    pub(crate) size: f32,
+    /// How many times its authored size the model is drawn.
+    pub(crate) scale: f32,
+}
+
+impl Drawn {
+    /// How `client` draws a spawn of this race, gender and sent size in the
+    /// zone `world` is in.
+    pub(crate) fn of(
+        client: eq_client_assets::ui::InstalledClient,
+        world: &eq_client_core::world::ClientWorld,
+        (race, gender, size): (u32, u32, f32),
+    ) -> Self {
+        let rule = client.model_scale();
+        let zone = eq_client_assets::scale::ZoneScale {
+            classic_reduced: world.classic_model_scale_flag().is_some_and(|flag| flag != 0),
+        };
+        Self {
+            size: rule.size(race, gender, size),
+            scale: rule.drawn_scale(race, gender, size, zone),
+        }
+    }
+
+    /// How far under its reported position its soles hang, in world units.
+    pub(crate) fn feet(self) -> f32 {
+        eq_client_core::drawn_feet_offset(self.scale)
     }
 }
 
@@ -159,13 +211,18 @@ pub(super) fn reconcile(
         return;
     }
     nearby_state.elapsed = 0.0;
+    // A zone header that changes how models are scaled draws every spawn
+    // again, as the program scales each one again.
+    let flag = state.world().classic_model_scale_flag();
+    let rescaled = std::mem::replace(&mut nearby_state.scaled_by, flag) != flag;
     let replaced: Vec<_> = nearby_state
         .rendered
         .keys()
         .copied()
         .filter(|id| {
-            nearby_state.revisions.get(id).copied()
-                != state.world().spawn(*id).map(|spawn| spawn.revision)
+            rescaled
+                || nearby_state.revisions.get(id).copied()
+                    != state.world().spawn(*id).map(|spawn| spawn.revision)
         })
         .collect();
     for id in replaced {
@@ -211,7 +268,7 @@ pub(super) fn reconcile(
         if draw(
             &mut commands,
             &state,
-            directory,
+            (directory, settings.0.installed_client),
             id,
             &mut nearby_state,
             (&mut meshes, &mut materials),
@@ -229,7 +286,7 @@ pub(super) fn reconcile(
 fn draw(
     commands: &mut Commands,
     state: &OnlineState,
-    directory: &std::path::Path,
+    (directory, client): (&std::path::Path, eq_client_assets::ui::InstalledClient),
     id: u16,
     nearby_state: &mut NearbyEntities,
     (meshes, materials): Stores,
@@ -261,7 +318,7 @@ fn draw(
     let position = Vec3::from_array(render_position(spawn.position));
     let entity = commands
         .spawn((
-            RemoteEntity::new(id, None),
+            RemoteEntity::new(id, None, spawn.size),
             Name::new(spawn.name.clone()),
             Transform::from_translation(position).with_rotation(Quat::from_rotation_y(
                 eq_client_core::render_heading(spawn.position.heading),
@@ -272,19 +329,17 @@ fn draw(
     if !races::drawn(spawn.race) {
         // An unseen marker, such as a spawn point: nothing to draw.
     } else if let Some(asset) = asset {
-        let height = asset.height().max(0.1);
-        let scale = if spawn.size > 0.0 {
-            (spawn.size / height).clamp(0.05, 20.0)
-        } else {
-            1.0
-        };
-        // The server reports the position EQ's size rule puts above the feet; the
-        // model hangs by it in model units, as it is scaled below its root, and
-        // `interpolate` stands its root on the floor by it in world units.
-        let feet = eq_client_core::drawn_feet_offset(spawn.race, spawn.size);
+        // The model is drawn at the installed client's scale of its mesh as
+        // authored, not stretched to its size. The server reports the
+        // position its feet hang under; the model hangs by it in model
+        // units, as it is scaled below its root, and `interpolate` stands its
+        // root on the floor by it in world units.
+        let drawn = Drawn::of(client, state.world(), (spawn.race, spawn.gender, spawn.size));
+        let scale = drawn.scale.max(0.01);
+        let feet = drawn.feet();
         character::spawn_prepared(commands, entity, &asset, feet / scale);
         commands.entity(entity).insert((
-            RemoteEntity::new(id, Some(feet)),
+            RemoteEntity::new(id, Some(feet), drawn.size),
             Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
                     spawn.position.heading,
@@ -396,8 +451,7 @@ pub(super) fn interpolate(
         );
         if let (true, Some(feet), Some(world)) = (on_floor, entity.feet, world) {
             let soles = target - Vec3::Y * feet;
-            let height =
-                eq_client_core::carried_soles(world, entity.soles, soles, spawn.race, spawn.size);
+            let height = eq_client_core::carried_soles(world, entity.soles, soles, entity.size);
             entity.soles = Some((height, Vec2::new(soles.x, soles.z)));
             target.y += height - soles.y;
             if let (true, Some(mut corpse)) = (fresh, corpse)
@@ -408,8 +462,7 @@ pub(super) fn interpolate(
                     Vec3::new(soles.x, height, soles.z),
                     eq_client_core::render_heading(spawn.position.heading),
                     length,
-                    spawn.race,
-                    spawn.size,
+                    entity.size,
                 ));
             }
         }
@@ -517,7 +570,7 @@ mod tests {
         let mut corpse = testing::pet(5, 0);
         corpse.pet_owner = None;
         corpse.size = 6.0;
-        let feet = eq_client_core::drawn_feet_offset(corpse.race, corpse.size);
+        let feet = eq_client_core::drawn_feet_offset(corpse.size * 0.2);
         corpse.position = WorldPosition {
             z: feet,
             ..WorldPosition::default()
@@ -536,7 +589,7 @@ mod tests {
         let prepared = character::testing::prepared(app.world_mut());
         let root = character::testing::drawn(app.world_mut(), &prepared);
         app.world_mut().entity_mut(root).insert((
-            RemoteEntity::new(5, Some(feet)),
+            RemoteEntity::new(5, Some(feet), 6.0),
             character::Corpse {
                 fell: None,
                 length: prepared.lying(),
@@ -615,7 +668,7 @@ mod tests {
         let drawn = |app: &mut App| {
             let entity = app
                 .world_mut()
-                .spawn((RemoteEntity::new(5, None), Transform::default()))
+                .spawn((RemoteEntity::new(5, None, 6.0), Transform::default()))
                 .id();
             app.update();
             let at = app.world().get::<Transform>(entity).unwrap().translation;

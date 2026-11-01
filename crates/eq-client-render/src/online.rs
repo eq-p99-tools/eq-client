@@ -501,9 +501,16 @@ pub(super) fn receive(
             {
                 let zone = state.world.zone().to_owned();
                 let (directory, navmesh) = (directory.clone(), settings.0.navmesh);
+                // The player's own model is drawn by the installed client's
+                // rule, as every other spawn is.
+                let drawn = super::entities::Drawn::of(
+                    settings.0.installed_client,
+                    &state.world,
+                    (player.race, player.gender, player.size),
+                );
                 state.loading.start(id, move || {
                     let loading = std::time::Instant::now();
-                    let entry = super::zone::Entry::admission(&zone, &player, &directory)
+                    let entry = super::zone::Entry::admission(&zone, &player, drawn.scale, &directory)
                         .map(|entry| entry.prepare(navmesh));
                     if entry.is_ok() {
                         // Read and prepared off the frame thread, behind the
@@ -679,6 +686,7 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
                 min_clip = description.min_clip,
                 max_clip = description.max_clip,
                 far_clip = world.far_clip(),
+                classic_model_scale_flag = description.classic_model_scale_flag,
                 "Zone header decoded"
             );
         }

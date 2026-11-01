@@ -49,9 +49,14 @@ pub(super) struct AnimatedCharacter {
     rise: Option<f32>,
     /// The swings the server sent for the spawn drawn.
     swings: Swings,
-    /// How far the model hangs above its root: what lifts a pose's top to
-    /// the root's [`super::names::Overhead`].
+    /// How far the model hangs above its root, in the root's units: what
+    /// lifts a pose's top to the root's [`super::names::Overhead`].
     lift: f32,
+    /// How many times its authored size the model is drawn under its root:
+    /// 1 where the root itself carries the drawn scale (spawns drawn by
+    /// [`spawn_prepared`]), the drawn scale for the player's own model,
+    /// whose root is its movement body.
+    scale: f32,
     /// Where its soles are in the model's own frame: the lowest point it
     /// reaches standing.
     pub(super) soles: f32,
@@ -160,14 +165,24 @@ type Placed<'w, 's> = (
 #[derive(Component)]
 pub(super) struct Model(pub PreparedCharacter);
 
-/// Attaches the model to the movement root while keeping feet at terrain height.
+/// Attaches the model to the movement root while keeping feet at terrain
+/// height: `feet_offset` under the root in the root's units, the model drawn
+/// at `scale` times its authored size. The root is the player's movement
+/// body, so it stays unscaled and the model alone carries the scale.
 pub(super) fn spawn(
     commands: &mut Commands,
     parent: Entity,
     prepared: PreparedCharacter,
     feet_offset: f32,
+    scale: f32,
 ) {
-    spawn_prepared(commands, parent, &prepared, feet_offset);
+    hang(
+        commands,
+        parent,
+        &prepared,
+        (feet_offset, scale),
+        &bevy::camera::visibility::RenderLayers::default(),
+    );
     commands.entity(parent).insert(Model(prepared));
 }
 
@@ -359,11 +374,23 @@ pub(super) fn spawn_on_layers(
     feet_offset: f32,
     layers: &bevy::camera::visibility::RenderLayers,
 ) {
+    hang(commands, parent, prepared, (feet_offset, 1.0), layers);
+}
+
+/// Hangs the model under `parent` with its soles `feet_offset` under it, in
+/// the parent's units, drawn at `scale` times its authored size.
+fn hang(
+    commands: &mut Commands,
+    parent: Entity,
+    prepared: &PreparedCharacter,
+    (feet_offset, scale): (f32, f32),
+    layers: &bevy::camera::visibility::RenderLayers,
+) {
     let asset = prepared.asset.clone();
     let (_, top) = asset.span().unwrap_or_default();
     // The soles hang by the lowest point the model reaches standing, as it
     // is drawn, not by its base pose's (inferred, item 6.277).
-    let lift = -feet_offset - prepared.soles;
+    let lift = -feet_offset - prepared.soles * scale;
     // Until gear says otherwise, only the base body and bare head show.
     let shown: Vec<bool> = asset.pieces.iter().map(|piece| piece.base()).collect();
     let mut parts = Vec::with_capacity(prepared.primitives.len());
@@ -375,7 +402,8 @@ pub(super) fn spawn_on_layers(
             // the movement root's +Z. Keep protocol heading on the root and
             // turn the model once here.
             Transform::from_xyz(0.0, lift, 0.0)
-                .with_rotation(Quat::from_rotation_y(eq_client_core::model_yaw())),
+                .with_rotation(Quat::from_rotation_y(eq_client_core::model_yaw()))
+                .with_scale(Vec3::splat(scale)),
             Visibility::Inherited,
         ))
         .with_children(|parent| {
@@ -416,7 +444,7 @@ pub(super) fn spawn_on_layers(
         .add_child(child)
         // The model hangs with its soles at the feet, so its top is this far
         // above the root until the first pose places it.
-        .insert(super::names::Overhead(top + lift))
+        .insert(super::names::Overhead(top * scale + lift))
         .insert(AnimatedCharacter {
             asset,
             joints,
@@ -435,6 +463,7 @@ pub(super) fn spawn_on_layers(
             rise: None,
             swings: Swings::default(),
             lift,
+            scale,
             soles: prepared.soles,
             measured: None,
         });
@@ -537,7 +566,7 @@ pub(super) fn animate(
         if measuring {
             log_soles(
                 &mut character,
-                (id, id.and_then(|id| world.spawn(id)), remote.is_some()),
+                (id, id.and_then(|id| world.spawn(id)), remote.and_then(|remote| remote.feet())),
                 (&posed, &placed),
                 (transform.translation, changed, now),
             );
@@ -550,7 +579,7 @@ pub(super) fn animate(
             character.asset.top(&posed, &character.shown),
             lying,
         ) {
-            overhead.set_if_neq(super::names::Overhead(top + character.lift));
+            overhead.set_if_neq(super::names::Overhead(top * character.scale + character.lift));
         }
         // Held items follow their hand or shield point, and stay hidden on a
         // skeleton without one rather than sitting at the model's origin.
@@ -619,12 +648,13 @@ impl AnimatedCharacter {
     /// Upright, exactly as it was first hung.
     fn hung(&self, tilt: eq_client_core::Tilt) -> Transform {
         let upright = Transform::from_xyz(0.0, self.lift, 0.0)
-            .with_rotation(Quat::from_rotation_y(eq_client_core::model_yaw()));
+            .with_rotation(Quat::from_rotation_y(eq_client_core::model_yaw()))
+            .with_scale(Vec3::splat(self.scale));
         if tilt.upright() {
             return upright;
         }
         let turn = tilt.rotation();
-        let soles = Vec3::Y * (self.lift + self.soles);
+        let soles = Vec3::Y * (self.lift + self.soles * self.scale);
         Transform {
             translation: soles + turn * (upright.translation - soles),
             rotation: turn * upright.rotation,
@@ -671,7 +701,7 @@ pub(super) fn lie(
 /// against. It changes nothing drawn.
 fn log_soles(
     character: &mut AnimatedCharacter,
-    (id, spawn, remote): (Option<u16>, Option<&eq_client_core::world::Spawn>, bool),
+    (id, spawn, feet): (Option<u16>, Option<&eq_client_core::world::Spawn>, Option<f32>),
     (posed, (placed, collision)): (&[Mat4], &Placed),
     (root, changed, now): (Vec3, bool, std::time::Instant),
 ) {
@@ -681,9 +711,7 @@ fn log_soles(
         .as_ref()
         .and_then(|collision| collision.0.as_ref());
     let soles = || {
-        let reach = spawn.map_or(0.0, |spawn| {
-            eq_client_core::drawn_feet_offset(spawn.state.race, spawn.state.size)
-        });
+        let reach = spawn.and(feet).unwrap_or(0.0);
         DrawnSoles::of(&character.asset, model?, posed, floors, reach)
     };
     if changed {
@@ -698,7 +726,7 @@ fn log_soles(
             "Clip"
         );
     }
-    let (Some(id), Some(spawn), true) = (id, spawn, remote) else {
+    let (Some(id), Some(spawn), true) = (id, spawn, feet.is_some()) else {
         return;
     };
     let since = now.saturating_duration_since(spawn.reported);
@@ -1401,7 +1429,7 @@ mod tests {
         // its tilt there.
         let placed = *app.world().get::<Transform>(root).unwrap();
         let length = -4.0 * 0.7;
-        let tilt = eq_client_core::corpse_tilt(&floor, placed.translation, 0.9, length, 60, 6.0);
+        let tilt = eq_client_core::corpse_tilt(&floor, placed.translation, 0.9, length, 6.0);
         assert!(tilt.upright(), "{tilt:?}");
         let corpse = Corpse {
             fell: None,
@@ -1773,5 +1801,43 @@ mod tests {
         // The soles sit the feet offset, scaled, under the root.
         let soles = placed.iter().map(|point| point.y).reduce(f32::min).unwrap();
         assert!((soles - (-2.0 - feet * 0.7)).abs() < 1e-4, "{soles}");
+    }
+
+    #[test]
+    fn the_players_model_carries_its_scale_under_an_unscaled_root() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins(bevy::transform::TransformPlugin);
+        testing::stores(app.world_mut());
+        let prepared = testing::prepared(app.world_mut());
+        let unscaled = testing::prepared(app.world_mut());
+        let feet = 3.75;
+        let (root, plain) = (
+            app.world_mut().spawn(Transform::from_xyz(4.0, -2.0, 7.0)).id(),
+            app.world_mut().spawn(Transform::from_xyz(4.0, -2.0, 7.0)).id(),
+        );
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                spawn(&mut commands, root, prepared.clone(), feet, 1.2);
+                spawn(&mut commands, plain, unscaled.clone(), feet, 1.0);
+            })
+            .unwrap();
+        app.update();
+        let world = app.world();
+        // The root stays the movement body's; the model alone is scaled.
+        assert_eq!(world.get::<Transform>(root).unwrap().scale, Vec3::ONE);
+        let lowest = |root: Entity| {
+            let character = world.get::<AnimatedCharacter>(root).unwrap();
+            let model = world.get::<GlobalTransform>(character.model).unwrap();
+            assert!((model.scale() - Vec3::splat(character.scale)).length() < 1e-5);
+            // The soles of its model, as it hangs.
+            model.transform_point(Vec3::Y * character.soles).y
+        };
+        for root in [root, plain] {
+            assert!((lowest(root) - (-2.0 - feet)).abs() < 1e-4);
+        }
+        // Its name rides over the scaled model's top.
+        let top = |root: Entity| world.get::<super::super::names::Overhead>(root).unwrap().0;
+        assert!(top(root) - (-feet) > (top(plain) - (-feet)) * 1.19);
     }
 }

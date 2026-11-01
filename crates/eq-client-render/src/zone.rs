@@ -22,6 +22,8 @@ pub(super) struct Entry {
     /// Where the player stands, in render coordinates, and which way they face.
     pub placed: Transform,
     pub body: PlayerBody,
+    /// How many times its authored size the player's model is drawn.
+    pub scale: f32,
 }
 
 /// CPU-heavy scene data prepared before returning to the render thread.
@@ -86,9 +88,12 @@ impl PreparedEntry {
 impl Entry {
     /// The zone the world admitted the player to, with the player where the
     /// server put them, or why it cannot be shown.
+    /// `scale` is how many times its authored size the installed client
+    /// draws the player's model ([`super::entities::Drawn`]).
     pub(super) fn admission(
         zone_name: &str,
         player: &eq_client_core::PlayerState,
+        scale: f32,
         directory: &std::path::Path,
     ) -> Result<Self, String> {
         let zone = eq_client_assets::load_zone(directory, zone_name)
@@ -128,6 +133,7 @@ impl Entry {
                 height,
                 size: eq_client_core::size_or_default(player.race, player.size),
             },
+            scale,
         })
     }
 
@@ -163,6 +169,8 @@ impl Entry {
                 height,
                 size: eq_client_core::size_or_default(race, 0.0),
             },
+            // The preview stands the model at its mesh's own size.
+            scale: 1.0,
         })
     }
 
@@ -265,6 +273,7 @@ impl Scene<'_, '_> {
             character,
             placed,
             body,
+            scale,
         } = entry;
         // A clone shares the world's geometry.
         let world = collision.0.clone();
@@ -315,7 +324,7 @@ impl Scene<'_, '_> {
             &mut self.materials,
         );
         if let Some(prepared) = character {
-            character::spawn(commands, player, prepared, body.feet_offset);
+            character::spawn(commands, player, prepared, body.feet_offset, scale);
         }
         commands.entity(player).insert(placed);
         self.focus(placed.translation);

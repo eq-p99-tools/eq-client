@@ -578,6 +578,27 @@ impl InstalledClient {
         }
     }
 
+    /// How this client draws a character model at a spawn's size, from the
+    /// program (program reads N1 and N1b of 11-01).
+    #[must_use]
+    pub const fn model_scale(self) -> crate::scale::ModelScale {
+        match self {
+            Self::Titanium => crate::scale::TITANIUM,
+            Self::EqMac => crate::scale::EQMAC,
+        }
+    }
+
+    /// How far this client's camera may move, from the program where read
+    /// (Titanium, program read N2 of 11-01). The Mac-era client's are not
+    /// yet read and take Titanium's (recording checklist 6.349).
+    #[must_use]
+    pub const fn camera_limits(self) -> crate::camera::CameraLimits {
+        match self {
+            Self::Titanium => crate::camera::TITANIUM,
+            Self::EqMac => crate::camera::EQMAC,
+        }
+    }
+
     /// How this client's attack key turns auto attack on and off, from the
     /// program; None until read for this client (Titanium: sittings 6 and
     /// 7). The Mac-era client's is TAKP Batch 1 R2 (recording checklist

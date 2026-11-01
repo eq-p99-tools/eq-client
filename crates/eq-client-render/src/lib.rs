@@ -582,6 +582,9 @@ fn setup_scene(
             character,
             placed,
             body,
+            // The offline viewer stands its model at the mesh's own size,
+            // with no spawn to size it by.
+            scale: 1.0,
         }
         .prepare(settings.0.navmesh),
         settings.0.terrain_only,
@@ -1315,6 +1318,7 @@ mod tests {
                             height: 6.0,
                             size: 6.0,
                         },
+                        scale: 1.0,
                     }
                     .prepare(false),
                     true,
@@ -1373,7 +1377,10 @@ mod tests {
             .init_resource::<options::OptionsState>()
             .init_resource::<Time>()
             .insert_resource(online::OnlineState::new(false))
-            .add_systems(Update, (windows::pointer::wheel, orbit_camera).chain());
+            .add_systems(
+                Update,
+                (camera::look, windows::pointer::wheel, orbit_camera).chain(),
+            );
         let mut window = Window {
             focused: true,
             ..default()
@@ -1409,8 +1416,8 @@ mod tests {
                 OrbitCamera {
                     focus: Vec3::ZERO,
                     yaw: 0.0,
-                    pitch: -1.0,
-                    radius: 100.0,
+                    pitch: -0.5,
+                    radius: 40.0,
                     pulled: None,
                 },
                 Transform::default(),
@@ -1434,7 +1441,7 @@ mod tests {
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
-        assert_eq!((state.yaw, state.pitch, state.radius), (0.0, -1.0, 100.0));
+        assert_eq!((state.yaw, state.pitch, state.radius), (0.0, -0.5, 40.0));
         // A hidden panel has zero layout size and no longer captures the pointer.
         app.world_mut().get_mut::<ComputedNode>(panel).unwrap().size = Vec2::ZERO;
         app.update();
@@ -1442,7 +1449,7 @@ mod tests {
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
-        assert!(state.yaw < 0.0 && state.pitch < -1.0 && state.radius < 100.0);
+        assert!(state.yaw < 0.0 && state.pitch < -0.5 && state.radius < 40.0);
         let previous = (state.yaw, state.pitch, state.radius);
         // The inventory toggle is a standalone button, not a window frame.
         let button = app
@@ -1483,7 +1490,9 @@ mod tests {
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.1);
-        assert_eq!(state.radius, previous.2);
+        // The distance behind the player stays; only the height moved.
+        let behind = |radius: f32, pitch: f32| radius * pitch.cos();
+        assert!((behind(state.radius, state.pitch) - behind(previous.2, previous.1)).abs() < 1e-3);
     }
 
     #[test]

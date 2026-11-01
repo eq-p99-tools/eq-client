@@ -140,6 +140,15 @@ impl ClientWorld {
         self.zone_gravity
     }
 
+    /// The Titanium zone header's classic model scale flag (`OP_NewZone`
+    /// +592), as it came: while it is not zero, the Titanium program draws
+    /// the classic character models at 1/1.3 of their usual scale. None
+    /// until this admission's header comes, and on a generation without it.
+    #[must_use]
+    pub const fn classic_model_scale_flag(&self) -> Option<u32> {
+        self.classic_model_scale_flag
+    }
+
     /// The zone's far clip distance, when the server gave one.
     #[must_use]
     pub const fn far_clip(&self) -> Option<f32> {
