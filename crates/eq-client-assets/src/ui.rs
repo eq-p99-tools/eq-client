@@ -268,6 +268,15 @@ pub enum SpawnPick {
     TrianglesThenPosedBox,
 }
 
+/// What a click in the 3D view that picks nothing does to the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickMiss {
+    /// The target is cleared.
+    ClearTarget,
+    /// The target is kept: nothing is sent.
+    KeepTarget,
+}
+
 /// Where a give or trade window the player asked for puts the cursor's
 /// item as it opens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -538,6 +547,19 @@ impl InstalledClient {
     pub const fn spawn_pick(self) -> SpawnPick {
         match self {
             Self::Titanium | Self::EqMac => SpawnPick::TrianglesThenPosedBox,
+        }
+    }
+
+    /// What a click in the 3D view that picks nothing does to the target.
+    /// Titanium keeps it: its world click (0x4a91a4) reaches the targeting
+    /// routine (0x4a6f0e) only with a spawn, and nothing on its way clears
+    /// the target (Titanium program read D-pick-T, 11-01). The Mac-era
+    /// client's is unread and taken to be the same (inferred, checklist
+    /// 6.330).
+    #[must_use]
+    pub const fn click_miss(self) -> ClickMiss {
+        match self {
+            Self::Titanium | Self::EqMac => ClickMiss::KeepTarget,
         }
     }
 

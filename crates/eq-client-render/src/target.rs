@@ -5,7 +5,7 @@ use super::{entities::NearbyEntities, online::OnlineState};
 use crate::theme::{self, Size};
 use crate::{keys::Act, outbox::Outbox};
 use bevy::{prelude::*, window::PrimaryWindow};
-use eq_client_assets::ui::{InstalledClient, SpawnPick, TargetByName};
+use eq_client_assets::ui::{ClickMiss, InstalledClient, SpawnPick, TargetByName};
 use eq_client_core::{ClientCommand, SpawnKind, targeting::cycle};
 use picking::PosedBox;
 
@@ -184,10 +184,10 @@ pub(super) fn input(
                     .and_then(|world| world.ray_distance(ray.origin, *ray.direction, distance))
                     .is_some_and(|obstruction| obstruction + 0.01 < distance)
             };
-            let rule = settings
+            let client = settings
                 .as_ref()
-                .map_or_else(InstalledClient::default, |s| s.0.installed_client)
-                .spawn_pick();
+                .map_or_else(InstalledClient::default, |s| s.0.installed_client);
+            let rule = client.spawn_pick();
             let shown = |point: Vec3| camera.world_to_viewport(camera_transform, point).ok();
             let spawns: Vec<Candidate> = ids
                 .iter()
@@ -221,9 +221,11 @@ pub(super) fn input(
                     super::give::offer(id, &mut online, &outbox);
                     proposal = Some(Some(id));
                 }
-                // A click on nothing clears the target (the official rule is
-                // unread, checklist 6.329).
-                Choice::Nothing => proposal = Some(None),
+                Choice::Nothing => match client.click_miss() {
+                    // Nothing is sent; a stale target is still dropped.
+                    ClickMiss::KeepTarget => {}
+                    ClickMiss::ClearTarget => proposal = Some(None),
+                },
             }
         }
     }
@@ -358,19 +360,20 @@ fn report_click(cursor: Vec2, spawns: &[Candidate], choice: Choice) {
         .min_by(|a, b| a.1.total_cmp(&b.1));
     let triangles = spawns.iter().filter(|spawn| spawn.hit.is_some()).count();
     let boxes = spawns.iter().filter(|spawn| spawn.posed.is_some()).count();
-    match nearest {
-        Some((id, off, size)) => debug!(
+    if let Some((id, off, size)) = nearest {
+        debug!(
             target: "eq_client_render::entities",
             "click at ({:.0}, {:.0}) picked {choice:?}; triangles hit {triangles}, boxes entered \
              {boxes}; nearest shown box spawn {id}, {off:.1} px outside, {:.0}x{:.0} px",
             cursor.x, cursor.y, size.x, size.y,
-        ),
-        None => debug!(
+        );
+    } else {
+        debug!(
             target: "eq_client_render::entities",
             "click at ({:.0}, {:.0}) picked {choice:?}; triangles hit {triangles}, boxes entered \
              {boxes}; no box shown",
             cursor.x, cursor.y,
-        ),
+        );
     }
 }
 
@@ -1041,7 +1044,7 @@ mod tests {
             candidate(3, None, Some((10.0, 4.0))),
         ];
         assert_eq!(choose(rule, &tied, None), Choice::Spawn(3, Found::PosedBox));
-        // Nothing entered, nothing picked: the target is cleared as today.
+        // Nothing entered, nothing picked.
         assert_eq!(choose(rule, &spawns[2..], None), Choice::Nothing);
         assert_eq!(choose(rule, &[], None), Choice::Nothing);
     }
@@ -1075,6 +1078,19 @@ mod tests {
         for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
             assert_eq!(client.spawn_pick(), SpawnPick::TrianglesThenPosedBox);
         }
+    }
+
+    #[test]
+    fn a_click_on_nothing_keeps_the_target_on_both_generations() {
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            assert_eq!(client.click_miss(), ClickMiss::KeepTarget);
+        }
+        // A click that enters no box and hits no triangle picks nothing.
+        let away = [candidate(2, None, None)];
+        assert_eq!(
+            choose(SpawnPick::TrianglesThenPosedBox, &away, None),
+            Choice::Nothing
+        );
     }
 
     #[test]
