@@ -24,15 +24,26 @@ enum Support {
     Required,
     /// Standing on the ground as the airborne controller walks: a stride
     /// keeps the feet on a floor no more than `drop` below them, and past
-    /// it moves across at their height, leaving the drop to the fall.
+    /// it moves across at their height, leaving the drop to the fall. It
+    /// steps up onto a floor no more than `climb` above them, and the whole
+    /// walk (one step's) rises no further. In the programs a step stands
+    /// the feet on the first surface the floor sweep from the origin meets
+    /// (read 6.344); what stops a move short of that is their horizontal
+    /// collision, a sphere swept a lift height above the origin, which this
+    /// client still makes with its own capsule, never letting the player
+    /// past what the capsule meets (6.344 remainder: the capsule against the
+    /// raised sphere, the engine's slide or stop, TAKP's twin of 0x48acef,
+    /// the model's own step value).
     Optional {
         drop: f32,
+        climb: f32,
     },
     Airborne,
 }
 
 pub use eq_network_game::movement::{
-    Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, ZBetween, between_reports, carry,
+    Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, PROGRAM_STEP_SECONDS, ZBetween,
+    between_reports, carry, climb_reach, program_steps,
 };
 use glam::Vec3;
 use parry3d::{
@@ -412,15 +423,15 @@ impl CollisionWorld {
                 next = self.dry_part(position, part, height, support);
             }
             // A walk on the ground keeps to a riser a sample up and down. One
-            // the airborne controller makes descends a stride at a time
-            // within its drop, and past it the controller falls, so only its
-            // climb is held to the riser.
+            // the airborne controller makes (a step's) descends a stride at a
+            // time within its drop, and past it the controller falls, so only
+            // its climb is held, to the step's.
             let rise = next.y - feet.y;
-            let held = match support {
-                Support::Optional { .. } => rise,
-                _ => rise.abs(),
+            let (held, limit) = match support {
+                Support::Optional { climb, .. } => (rise, climb),
+                _ => (rise.abs(), MAX_GROUNDED_STEP),
             };
-            if held > MAX_GROUNDED_STEP + 0.001 {
+            if held > limit + 0.001 {
                 break;
             }
             let moved = next.distance_squared(position) > 1e-10;
@@ -477,8 +488,8 @@ impl CollisionWorld {
                         ground
                     }
                 }
-                Support::Optional { drop } => self
-                    .support_height(probe, MAX_GROUNDED_STEP, drop)
+                Support::Optional { drop, climb } => self
+                    .support_height(probe, climb, drop)
                     .unwrap_or(position.y),
                 Support::Airborne => position.y,
             };

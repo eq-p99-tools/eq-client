@@ -47,6 +47,12 @@ pub struct ClientFalls {
     /// speed, and still count as on the ground, in units: past it the
     /// player is in the air and falls.
     pub ground_tolerance: f32,
+    /// How far above the spawn's origin the program's floor sweep starts, in
+    /// units. Each step it sweeps a sphere straight down from there and
+    /// stands the feet on the first surface it meets ([`Self::climb_per_step`]).
+    pub sweep_start: f32,
+    /// The floor sweep's sphere radius, as a share of the spawn's size.
+    pub sweep_radius: f32,
 }
 
 /// What a landing costs, before the server's own reductions.
@@ -106,6 +112,23 @@ impl ClientFalls {
         }
     }
 
+    /// How far one step can lift the feet of a body whose origin stands
+    /// `stand_height` above them, at `size`, in units: the floor sweep starts
+    /// at the origin (raised by [`Self::sweep_start`]) and takes the first
+    /// surface it meets, so any floor up to there less the sphere's radius is
+    /// stood on in one step (read 6.344). What blocks a move short of it is
+    /// the horizontal collision's, which this client still makes with its own
+    /// capsule (6.344 remainder).
+    #[must_use]
+    pub fn climb_per_step(&self, stand_height: f32, size: f32) -> f32 {
+        let climb = stand_height + self.sweep_start - self.sweep_radius * size;
+        if climb.is_finite() {
+            climb.max(0.0)
+        } else {
+            0.0
+        }
+    }
+
     /// What a landing costs: with the speed past the gate in units a step,
     /// T = carried weight / 100 + (speed − 2.5) − 1.5. None at T ≤ 0, a
     /// flat 20,000 at T ≥ 9, else trunc(10·T²) less Safe Fall's skill
@@ -161,6 +184,11 @@ pub const EQMAC: ClientFalls = ClientFalls {
     survived_line: Some(12118),
     // 0.5 + 0.001, both programs (R-s: Titanium 0x48a2f4, Mac-era 0x50ba07).
     ground_tolerance: 0.5 + 0.001,
+    // The floor finder 0x4b3a84 sweeps from the origin + 0.5, radius
+    // size / 4; the origin stands +0x90 above the feet, 3.125 × the drawn
+    // scale (0x51f79b; read 6.344).
+    sweep_start: 0.5,
+    sweep_radius: 0.25,
 };
 
 /// The Titanium client's falls (from the program): the same gravity field,
@@ -170,7 +198,10 @@ pub const EQMAC: ClientFalls = ClientFalls {
 /// field / 100 + (speed − 2.5) − 1.5, 20,000 from T = 9, else
 /// trunc(10·T²), less Safe Fall's S + trunc(S × P / 100), S the raw skill
 /// word (R-s Safe Fall follow-up). The same on-ground tolerance too (R-s,
-/// 0x48a2f4). Read but not yet known,
+/// 0x48a2f4). Its floor sweep starts at the origin itself (0x48a6f2 feeds
+/// 0x48a0fc the origin), radius size × 0.1 (read 6.344); that the origin
+/// stands this client's `z_offset` above the feet, the model height
+/// (0x4b6d42) × scale, is inferred until 0x4b6d42 is read (6.347). Read but not yet known,
 /// so left out, each costing the player more than the program would, never
 /// less: which zones zero the damage (its table was not read, 6.304), P
 /// (spell effect 228's total; not decoded, so it counts as 0, 6.305 and
@@ -184,6 +215,8 @@ pub const TITANIUM: ClientFalls = ClientFalls {
     safe_fall_rank_share: 0.0,
     damage_line: None,
     survived_line: None,
+    sweep_start: 0.0,
+    sweep_radius: 0.1,
     ..EQMAC
 };
 
@@ -251,6 +284,17 @@ mod tests {
             ..landing(6.0, 0.0, 20)
         };
         assert_eq!(EQMAC.landing_cost(ranked).damage, 14);
+    }
+
+    #[test]
+    fn a_step_climbs_to_the_floor_sweeps_start_less_its_radius() {
+        // A size 6 human stands 3.75 above its feet in both programs.
+        assert!((TITANIUM.climb_per_step(3.75, 6.0) - 3.15).abs() < 1e-5);
+        assert!((EQMAC.climb_per_step(3.75, 6.0) - 2.75).abs() < 1e-5);
+        // A size 3 gnome: under a two-unit riser.
+        assert!((TITANIUM.climb_per_step(1.875, 3.0) - 1.575).abs() < 1e-5);
+        assert!(TITANIUM.climb_per_step(f32::NAN, 6.0).abs() < f32::EPSILON);
+        assert!(TITANIUM.climb_per_step(0.1, 6.0).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -945,6 +945,9 @@ mod tests {
                     }
                 }
                 RouteStep::Arrived => return (feet, reversals),
+                // Untold, the walk this test guards against may turn back
+                // until its route gives up.
+                RouteStep::Stalled if !told => return (feet, reversals),
                 end => panic!("{end:?} at {feet:?}"),
             }
         }

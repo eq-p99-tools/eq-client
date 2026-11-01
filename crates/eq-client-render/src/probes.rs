@@ -358,13 +358,8 @@ fn inspect_admission_support() {
         cursor = airborne.step(
             &world,
             cursor,
-            eq_client_core::movement::VerticalPhysics {
-                gravity: 32.0,
-                terminal_speed: 40.0,
-                jump_speed: 10.0,
-                air_factor: 1.0,
-                ground_tolerance: eq_client_core::movement::MAX_GROUNDED_STEP,
-            },
+            // The provisional physics' numbers: 32 u/s², 40 u/s at most.
+            eq_client_core::movement::PROVISIONAL_PHYSICS,
             eq_client_core::movement::MotionStep {
                 horizontal: if frame < 40 {
                     Vec3::X * 0.1
@@ -491,6 +486,7 @@ fn inspect_walk() {
                     &mut airborne,
                     &world,
                     PROVISIONAL_PHYSICS,
+                    None,
                     feet,
                     to * 3.1,
                     0.15,
