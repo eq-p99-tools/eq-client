@@ -482,7 +482,7 @@ fn typing_box(parent: &mut ChildSpawnerCommands, node: Node) {
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub(super) fn input(
     mut state: ResMut<ChatState>,
-    online: Res<super::online::OnlineState>,
+    mut online: ResMut<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut typing: ResMut<crate::keys::Typing>,
     (mut keyboard, mouse): (MessageReader<KeyboardInput>, Res<ButtonInput<MouseButton>>),
@@ -580,7 +580,7 @@ pub(super) fn input(
             // Enter on an empty line closes the input, as in the official client.
             typing.composing = false;
         } else {
-            submit_draft(&mut state, &mut typing, &online, &outbox);
+            submit_draft(&mut state, &mut typing, &mut online, &outbox);
         }
     }
     for TabButton(tab) in tabs.iter() {
@@ -939,7 +939,7 @@ impl From<crate::outbox::Refusal> for Unsent {
 fn submit_draft(
     state: &mut ChatState,
     typing: &mut crate::keys::Typing,
-    online: &super::online::OnlineState,
+    online: &mut super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
 ) {
     let result = (|| -> Result<(), Unsent> {
@@ -947,9 +947,12 @@ fn submit_draft(
         if let Some(request) = client_request(&draft, state) {
             return Ok(request?);
         }
-        if let Some(commands) = game_commands(state.draft.trim(), online, outbox) {
+        if let Some(commands) = game_commands(&draft, online, outbox) {
             for command in commands? {
                 outbox.send(online.world(), command)?;
+            }
+            if let Some(to) = camp_destination(&draft) {
+                online.camp_to(to);
             }
             return Ok(());
         }
@@ -1259,6 +1262,18 @@ fn social_commands(
     })
 }
 
+/// Where a typed `/camp` ends, for a line that is one and whose words
+/// [`game_commands`] took; None for any other line.
+fn camp_destination(input: &str) -> Option<eq_client_core::camp::CampTo> {
+    let command = input.strip_prefix('/')?.trim();
+    let (name, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    name.eq_ignore_ascii_case("camp")
+        .then(|| eq_client_core::camp::destination(words).ok())
+        .flatten()
+}
+
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
     input: &str,
@@ -1316,6 +1331,19 @@ fn game_commands(
                     target: online.world().target().selected,
                 }])
             }),
+        // Camping requires sitting, so sit first as a player would; the
+        // words say only where the camp ends (`camp::destination`).
+        "camp" => eq_client_core::camp::destination(words).and_then(|_| {
+            let sit = posture(eq_client_core::Posture::Sitting)?;
+            let stamp = stamp()?;
+            Ok(vec![
+                sit,
+                ClientCommand::Camp {
+                    session_id: stamp.session_id,
+                    created: stamp.created,
+                },
+            ])
+        }),
         // The rest take no words; with words, they are chat.
         _ if !words.is_empty() => return None,
         // A player's corpse the player targets, pulled close or dragged.
@@ -1342,17 +1370,6 @@ fn game_commands(
         }),
         "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
-        // Camping requires sitting, so sit first as a player would.
-        "camp" => posture(eq_client_core::Posture::Sitting).and_then(|sit| {
-            let stamp = stamp()?;
-            Ok(vec![
-                sit,
-                ClientCommand::Camp {
-                    session_id: stamp.session_id,
-                    created: stamp.created,
-                },
-            ])
-        }),
         _ => return None,
     })
 }
@@ -1679,6 +1696,68 @@ mod tests {
         ));
         // Words after a command that takes none make it chat.
         assert!(game_commands("/sit down", &online, &outbox).is_none());
+    }
+
+    #[test]
+    fn camp_desktop_camps_as_camp_does_and_other_words_are_refused_not_chat() {
+        use eq_client_core::camp::CampTo;
+        let mut online = super::super::online::OnlineState::new(true);
+        let (queue, received) = std::sync::mpsc::sync_channel(8);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
+        for typed in ["/camp desktop", "/CAMP Desktop"] {
+            assert!(matches!(
+                game_commands(typed, &online, &outbox)
+                    .unwrap()
+                    .unwrap()
+                    .as_slice(),
+                [
+                    ClientCommand::SetPosture {
+                        posture: eq_client_core::Posture::Sitting,
+                        ..
+                    },
+                    ClientCommand::Camp { session_id: 4, .. }
+                ]
+            ));
+            assert_eq!(camp_destination(typed), Some(CampTo::Desktop));
+        }
+        assert_eq!(camp_destination("/camp"), Some(CampTo::CharacterSelect));
+        assert_eq!(camp_destination("/camping desktop"), None);
+        // Another word is refused in the client's words, never sent as chat.
+        let refusal = game_commands("/camp server", &online, &outbox)
+            .unwrap()
+            .unwrap_err();
+        assert!(refusal.contains("/camp desktop"), "{refusal}");
+        assert_eq!(camp_destination("/camp server"), None);
+
+        // Typed, the camp it asks for ends on the desktop once the session
+        // says it began; nothing is sent for the refused word.
+        let mut state = ChatState::default();
+        let mut typing = crate::keys::Typing::default();
+        "/camp server".clone_into(&mut state.draft);
+        submit_draft(&mut state, &mut typing, &mut online, &outbox);
+        assert!(received.try_recv().is_err());
+        "/camp desktop".clone_into(&mut state.draft);
+        submit_draft(&mut state, &mut typing, &mut online, &outbox);
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::SetPosture { .. })
+        ));
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::Camp { .. })
+        ));
+        online.tell(
+            &eq_client_core::WorldUpdate::Game(eq_client_core::WorldEvent::Camp(
+                eq_client_core::CampStatus::Preparing,
+            )),
+            std::time::Instant::now(),
+            &eq_client_core::world::NoSpells,
+        );
+        assert_eq!(
+            online.world().camp().map(|camp| camp.to),
+            Some(CampTo::Desktop)
+        );
     }
 
     #[test]

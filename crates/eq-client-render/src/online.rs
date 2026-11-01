@@ -44,6 +44,11 @@ impl OnlineState {
         &self.world
     }
 
+    /// The player asked to camp, ending there.
+    pub(super) fn camp_to(&mut self, to: eq_client_core::camp::CampTo) {
+        self.world.camp_to(to);
+    }
+
     /// News for the world, as a session would tell it; only the offline
     /// preview's own settled moves come this way besides `receive`'s.
     pub(super) fn tell(
@@ -409,6 +414,17 @@ fn vanished(front: Option<&super::login::FrontEnd>) -> bool {
     !front.is_some_and(super::login::FrontEnd::session_closed)
 }
 
+/// Tells the world which generation's program carries spawns on between
+/// reports: the installed client's.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn carry_as(settings: Res<ViewerSettings>, mut state: ResMut<OnlineState>) {
+    if settings.is_changed() || state.is_added() {
+        state
+            .world
+            .carry_as(super::entities::dialect(settings.0.installed_client));
+    }
+}
+
 /// Applies the session's news to the world and shows what it changed. The
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
@@ -537,6 +553,17 @@ pub(super) fn receive(
                 chat.history.push(super::chat::system_line(text));
             }
         }
+    }
+}
+
+/// Ends the program once the player camped to the desktop, as the
+/// character list's Quit does where there is no login screen, so what is
+/// saved on any exit is saved.
+pub(super) fn leave(mut state: ResMut<OnlineState>, mut exit: MessageWriter<AppExit>) {
+    // Read before written, so the state is marked changed only then.
+    if state.world.leaving() && state.world.take_leaving() {
+        info!("Camped to the desktop");
+        exit.write(AppExit::Success);
     }
 }
 
@@ -742,6 +769,7 @@ pub(crate) mod testing {
             gender: 2,
             position: WorldPosition::default(),
             velocity: [0.0; 3],
+            forward: 0.0,
             walk_speed: 0.0,
             run_speed: 0.0,
             size: 0.0,
@@ -925,6 +953,36 @@ mod tests {
     use super::*;
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
     use eq_client_core::PlayerState;
+
+    #[test]
+    fn a_camp_to_the_desktop_ends_the_program_once_camped_and_a_plain_one_does_not() {
+        use eq_client_core::{CampStatus, camp::CampTo};
+        let exits = |to| {
+            let mut state = OnlineState::new(true);
+            testing::admit(&mut state, 4, testing::player(12));
+            state.camp_to(to);
+            let mut app = App::new();
+            app.add_message::<AppExit>()
+                .insert_resource(state)
+                .add_systems(Update, leave);
+            let mut tell = |status| {
+                let mut state = app.world_mut().resource_mut::<OnlineState>();
+                testing::news(&mut state, [WorldEvent::Camp(status)]);
+            };
+            tell(CampStatus::Preparing);
+            tell(CampStatus::LoggingOut);
+            app.update();
+            let before = app.world().resource::<Messages<AppExit>>().len();
+            let mut state = app.world_mut().resource_mut::<OnlineState>();
+            testing::news(&mut state, [WorldEvent::Camp(CampStatus::Camped)]);
+            app.update();
+            app.update();
+            (before, app.world().resource::<Messages<AppExit>>().len())
+        };
+        // Nothing before the camp ends; then one exit, said once.
+        assert_eq!(exits(CampTo::Desktop), (0, 1));
+        assert_eq!(exits(CampTo::CharacterSelect), (0, 0));
+    }
 
     #[test]
     fn news_closed_by_its_own_session_is_not_taken_for_a_vanished_one() {
@@ -1122,6 +1180,7 @@ mod tests {
             gender: 0,
             position: eq_client_core::WorldPosition::default(),
             velocity: [0.0; 3],
+            forward: 0.0,
             walk_speed: 0.0,
             run_speed: 0.0,
             size: 0.0,

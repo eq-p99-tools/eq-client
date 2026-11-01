@@ -2432,8 +2432,8 @@ enum Chase {
 
 /// One frame of a `chase` step. A chase ends only on the target's death,
 /// its leaving the zone, or the time limit; otherwise it aims where the
-/// target is drawn: its last report carried forward at the reported
-/// velocity from when that report was first seen.
+/// target is drawn: its last report carried on as the generation's program
+/// carries it, from when that report was first seen.
 fn chase(
     world: &eq_client_core::world::ClientWorld,
     awaited: Option<u16>,
@@ -2458,7 +2458,8 @@ fn chase(
             elapsed
         }
     };
-    Ok(Chase::Aim(eq_client_core::entities::extrapolate(
+    Ok(Chase::Aim(eq_client_core::entities::carried(
+        world.generation(),
         spawn,
         elapsed.saturating_sub(since),
     )))
@@ -2635,9 +2636,10 @@ mod tests {
             x: 10.0,
             y: 0.0,
             z: 0.0,
-            heading: 0.0,
+            heading: 128.0,
         };
-        gnoll.velocity = [4.0, 0.0, 0.0];
+        gnoll.velocity = [0.0; 3];
+        gnoll.forward = 0.5;
         super::super::online::testing::news(&mut online, [WorldEvent::Spawns(vec![gnoll.clone()])]);
         let limit = at(90_000);
         let mut seen = None;
@@ -2645,10 +2647,14 @@ mod tests {
             Ok(Chase::Aim(aim)) => aim.x,
             other => panic!("expected an aim, got {other:?}"),
         };
-        // The aim carries the last report forward at its velocity.
+        // The aim carries the last report on as the generation's program
+        // does, from when it was first seen: an NPC with an input of 0.5,
+        // facing +X, at 11.64 a second once it settles.
         let world = online.world();
+        let expected = eq_client_core::entities::carried(world.generation(), &gnoll, at(500)).x;
         assert!((aim(chase(world, Some(9), &mut seen, at(1_000), limit)) - 10.0).abs() < 1e-3);
-        assert!((aim(chase(world, Some(9), &mut seen, at(1_500), limit)) - 12.0).abs() < 1e-3);
+        let half = aim(chase(world, Some(9), &mut seen, at(1_500), limit));
+        assert!((half - expected).abs() < 1e-3 && half > 14.5, "{half}");
         // Beyond the distance the player runs; within it, it stands and the
         // chase goes on, never ending merely on reaching the target.
         assert!(runs(Some(12.0), 10.0));

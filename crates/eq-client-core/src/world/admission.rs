@@ -209,20 +209,33 @@ impl ClientWorld {
     /// Camping began, went on, or stopped; once camped, the character is
     /// gone.
     pub(super) fn camp_news(&mut self, status: &CampStatus, now: Instant) -> Changes {
+        // The camp under way keeps where it ends; one the session only now
+        // says began ends where the player last asked.
+        let to = self.camp.map_or(self.camp_to, |camp| camp.to);
         if matches!(status, CampStatus::Camped) {
-            return self.reset(Reset::Camped);
+            let changes = self.reset(Reset::Camped);
+            self.camped = Some(to);
+            return changes;
         }
         self.camp = match status {
             CampStatus::Preparing => Some(Camp {
                 since: now,
                 logging_out: false,
+                to,
             }),
+            // The countdown is the camp going on as it was.
+            CampStatus::Countdown { .. } => self.camp,
             CampStatus::LoggingOut => Some(Camp {
                 since: self.camp.map_or(now, |camp| camp.since),
                 logging_out: true,
+                to,
             }),
-            _ => None,
+            CampStatus::Abandoned { .. } | CampStatus::Rejected(_) | CampStatus::Camped => None,
         };
+        if self.camp.is_none() {
+            // Abandoned or refused: the next camp ends where it asks.
+            self.camp_to = crate::camp::CampTo::default();
+        }
         Changes {
             notices: vec![Notice::Camp(status.clone())],
             ..Changes::default()

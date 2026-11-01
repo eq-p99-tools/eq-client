@@ -98,18 +98,20 @@ pub struct Spawn {
     /// When the server last said where the spawn is, from which the client
     /// carries it on.
     pub reported: Instant,
-    /// Its forward input at that report, which the Mac-era client adds
-    /// along its heading each tick; 0 where the generation sends none.
-    pub forward: f32,
 }
 
 impl Spawn {
-    /// Where the client has the spawn at `now`: carried on from its latest
-    /// report at its reported velocity ([`crate::entities::extrapolate`]),
-    /// from when that report came, however late the spawn is drawn.
+    /// Where the client generation has the spawn at `now`: carried on from
+    /// its latest report as its program carries it
+    /// ([`crate::entities::carried`]), from when that report came, however
+    /// late the spawn is drawn.
     #[must_use]
-    pub fn carried(&self, now: Instant) -> crate::WorldPosition {
-        crate::entities::extrapolate(&self.state, now.saturating_duration_since(self.reported))
+    pub fn carried(&self, dialect: crate::GameDialect, now: Instant) -> crate::WorldPosition {
+        crate::entities::carried(
+            dialect,
+            &self.state,
+            now.saturating_duration_since(self.reported),
+        )
     }
 }
 
@@ -120,6 +122,8 @@ pub struct Camp {
     pub since: Instant,
     /// Whether the logout itself has begun.
     pub logging_out: bool,
+    /// Where it ends.
+    pub to: crate::camp::CampTo,
 }
 
 /// How the session lets the player move: calibrated speeds, or none.
@@ -145,6 +149,9 @@ pub struct ClientWorld {
     /// What the player turned on of what a session may leave to them, as
     /// their options say; it outlasts every connection.
     chosen: Vec<crate::Capability>,
+    /// The installed client's generation, whose program carries spawns on
+    /// between reports; it outlasts every connection.
+    generation: crate::GameDialect,
 
     // The connection to the servers.
     connected: bool,
@@ -228,6 +235,12 @@ pub struct ClientWorld {
     target: Target,
     motion: Option<MotionGrant>,
     camp: Option<Camp>,
+    /// Where the camp the player last asked for ends, until the session
+    /// says it began, or it ends.
+    camp_to: crate::camp::CampTo,
+    /// Where the last camp ended, until a front end takes it: one to the
+    /// desktop ends the program.
+    camped: Option<crate::camp::CampTo>,
 
     // The character: from admission until camping.
     player: Option<PlayerState>,
@@ -304,6 +317,19 @@ impl ClientWorld {
         self.chosen = chosen;
     }
 
+    /// The installed client's generation, whose program carries spawns on
+    /// between reports.
+    pub const fn carry_as(&mut self, generation: crate::GameDialect) {
+        self.generation = generation;
+    }
+
+    /// The generation whose program carries spawns on, as
+    /// [`ClientWorld::carry_as`] set it.
+    #[must_use]
+    pub const fn generation(&self) -> crate::GameDialect {
+        self.generation
+    }
+
     /// The player asked to play on a world of the login server's list, by
     /// its place; the list waits for the login server's answer.
     pub fn ask_server(&mut self, index: usize) {
@@ -319,6 +345,7 @@ impl ClientWorld {
     pub fn restart(&mut self) {
         *self = Self {
             chosen: std::mem::take(&mut self.chosen),
+            generation: self.generation,
             revision: self.revision,
             motion_count: self.motion_count,
             book_action_revision: self.book_action_revision,
@@ -327,6 +354,25 @@ impl ClientWorld {
             merchant_revision: self.merchant_revision.wrapping_add(1),
             ..Self::default()
         };
+    }
+
+    /// The player asked the session to camp, ending there. The camp the
+    /// session then says began ends there; one already under way keeps
+    /// its own end.
+    pub fn camp_to(&mut self, to: crate::camp::CampTo) {
+        self.camp_to = to;
+    }
+
+    /// Whether the player camped to the desktop, once: a front end ends the
+    /// program when it is.
+    pub fn take_leaving(&mut self) -> bool {
+        self.camped.take() == Some(crate::camp::CampTo::Desktop)
+    }
+
+    /// Whether the player camped to the desktop and the program is to end.
+    #[must_use]
+    pub fn leaving(&self) -> bool {
+        self.camped == Some(crate::camp::CampTo::Desktop)
     }
 
     /// The player's own choice of target, which the client tells the session
@@ -1017,8 +1063,12 @@ impl ClientWorld {
             }),
         };
         if let Ok(id) = u16::try_from(death.spawn_id) {
-            self.zone
-                .corpse(id, death.corpse_name.as_deref(), now, &mut self.revision);
+            self.zone.corpse(
+                id,
+                death.corpse_name.as_deref(),
+                (self.generation, now),
+                &mut self.revision,
+            );
             self.zone.casts.remove(&id);
         }
         let mut changes = if self
@@ -1071,6 +1121,7 @@ impl ClientWorld {
         self.motion = None;
         if reason != Reset::Died {
             self.camp = None;
+            self.camp_to = crate::camp::CampTo::default();
         }
         match reason {
             Reset::Entered => {

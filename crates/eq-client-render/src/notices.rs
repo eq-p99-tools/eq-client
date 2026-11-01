@@ -501,23 +501,20 @@ fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
 }
 
 /// A camp's lines, in the installed client's strings for them (Titanium
-/// sittings 9p and 9q, read): 12293 and 12682 as it starts, 12684 with the
-/// seconds left at 25, 20, 15, 10 and 5, and 12290 when it is abandoned.
-/// That 12293 comes before 12682 is inferred (6.302); 12682 takes message
-/// type 270's colour (T18 part one, read). Standing ends it
-/// with 12683 and moving with 12290 (sitting 9p, read); the line for
-/// ducking, a door, a pick-up or death is unread, and says 12290 as before
-/// (6.309). A stun's 12683 comes with the stun in 3b-2.
+/// sittings 9p and 9q, read): 12293 as it starts, 12684 with the seconds
+/// left at 25, 20, 15, 10 and 5, and 12290 when it is abandoned. Standing
+/// ends it with 12683 and moving with 12290 (sitting 9p, read); the line
+/// for ducking, a door, a pick-up or death is unread, and says 12290 as
+/// before (6.309). A stun's 12683 comes with the stun in 3b-2. Sitting 9p
+/// also read 12682 near the camp's countdown, but 12682 is the line for a
+/// hide that moving ended (the `EQMac` program says it when a swing ends a
+/// hide, TAKP batch 1 R1), and a camp doesn't say it: the project owner
+/// saw it at every camp on P99 while not hiding (11-01). Where Titanium
+/// says it is unread (6.324).
 fn camp_lines(camp: &CampStatus, messages: Option<&Messages>) -> Vec<Said> {
     let said = |id, arguments: &[String]| messages.map(|messages| messages.said(id, arguments));
     match camp {
-        CampStatus::Preparing => [
-            said(12293, &[]),
-            said(12682, &[]).map(|line| line.typed(270)),
-        ]
-        .into_iter()
-        .flatten()
-        .collect(),
+        CampStatus::Preparing => said(12293, &[]).into_iter().collect(),
         CampStatus::Countdown { seconds_left } => said(12684, &[seconds_left.to_string()])
             .into_iter()
             .collect(),
@@ -1275,15 +1272,13 @@ mod tests {
     fn a_camp_says_its_start_and_each_five_seconds_left() {
         use eq_client_core::CampEnd;
         let messages = Messages::parse(
-            "EQST0002\n0 1\n12290 Abandoned.\n12293 Camping.\n12682 Sit still.\n12683 Stood.\n12684 %1 left.\n",
+            "EQST0002\n0 1\n12290 Abandoned.\n12293 Camping.\n12682 Hide ended.\n12683 Stood.\n12684 %1 left.\n",
         );
         let said = |camp| wording(&Notice::Camp(camp), Some(&messages));
+        // The start says 12293 alone: 12682 is not a camp's line.
         assert_eq!(
             said(CampStatus::Preparing),
-            [
-                (Place::Chat, Said::official("Camping.")),
-                (Place::Chat, Said::official("Sit still.").typed(270))
-            ]
+            [(Place::Chat, Said::official("Camping."))]
         );
         assert_eq!(
             said(CampStatus::Countdown { seconds_left: 25 }),
