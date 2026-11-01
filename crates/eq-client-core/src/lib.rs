@@ -239,15 +239,21 @@ pub fn grounded_soles(
 /// client carries it on between the server's reports: on the floor found
 /// from where its soles were drawn the frame before (`previous`: their
 /// height, and their spot across the ground), reaching up 0.6 × size as
-/// [`grounded_soles`] does and down 0.5 plus the distance moved across the
-/// ground since, so it follows a slope down as steep as 45° at any frame
-/// time. Of the floors in that reach, the one nearest those soles: a spawn
-/// on a bridge or a ledge stays on it while the ground runs on below. With no frame since the latest report, or no floor in that reach
-/// (a ledge, a flyer, water), [`grounded_soles`] decides from `soles`, the
-/// reported height carried on. `EQEmu` sends no vertical motion while its
-/// own z follows the floor, so a spawn carried at its reported height would
-/// float down a slope and sink into one going up until the next report.
-/// Inferred; recording item 6.276.
+/// [`grounded_soles`] does and down 0.5 plus twice the distance moved
+/// across the ground since, so it follows a slope down as steep as 63° at
+/// any frame time. Of the floors in that reach, the one nearest those
+/// soles: a spawn on a bridge or a ledge stays on it while the ground runs
+/// on below. With no frame since the latest report, or no floor in that
+/// reach (a ledge, a flyer, water), [`grounded_soles`] decides from
+/// `soles`, the reported height carried on. Neither `EQEmu` nor P99 sends
+/// vertical motion while its own z follows the floor, so a spawn carried at
+/// its reported height would float down a slope and sink into one going up
+/// until the next report. Both programs stand a spawn on the ground on the
+/// floor under it each step, a face at any angle (read, Decompile R-s and
+/// R-z, 11-01; [`movement::CollisionWorld::ground`]); P99 walks NPCs on
+/// faces of 52° to 55°. They rise to the floor at once and come down under
+/// gravity, where this comes down at once (checklist 6.335); the reach
+/// down's 63° is ours (recording item 6.276).
 #[must_use]
 pub fn carried_soles(
     world: &movement::CollisionWorld,
@@ -260,7 +266,7 @@ pub fn carried_soles(
         .and_then(|(height, spot)| {
             let step = glam::Vec2::new(soles.x, soles.z).distance(spot);
             let from = glam::Vec3::new(soles.x, height, soles.z);
-            world.nearest_ground(from, 0.6 * size_or_default(race, size), 0.5 + step)
+            world.nearest_ground(from, 0.6 * size_or_default(race, size), 0.5 + 2.0 * step)
         })
         .unwrap_or_else(|| grounded_soles(world, soles, race, size))
 }
@@ -466,7 +472,12 @@ mod tests {
         // walking NPC; drawn at 60 and at 10 frames a second.
         let (race, size, speed) = (60, 6.0, 11.8);
         let feet = super::drawn_feet_offset(race, size);
-        for grade in [0.05_f32, -0.05, 0.19, -0.19, 0.45, -0.45, 0.99, -0.99] {
+        // Up to 55°, the steepest P99 walks an NPC on, which the floor test
+        // of 45.6° once refused, leaving it at each report's height.
+        let steepest = 55.0_f32.to_radians().tan();
+        for grade in [
+            0.05_f32, -0.05, 0.19, -0.19, 0.45, -0.45, 0.99, -0.99, steepest, -steepest,
+        ] {
             let world = ramp(grade);
             for fps in [60_u16, 10] {
                 let mut previous = None;

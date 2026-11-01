@@ -386,9 +386,15 @@ pub(super) fn interpolate(
         let mut target = Vec3::from_array(render_position(carried.position));
         let spawn = &spawn.state;
         let forward = spawn.forward;
-        // A drawn model stands on the floor under it, whichever rule put its
-        // z, and keeps to the floor as it is carried on.
-        if let (Some(feet), Some(world)) = (entity.feet, world) {
+        // A drawn model on the ground stands on the floor under it, whichever
+        // rule put its z, and keeps to the floor as it is carried on, as
+        // the generation's client does between reports; one whose client
+        // keeps its carried height is drawn there.
+        let on_floor = matches!(
+            eq_client_core::movement::between_reports(dialect),
+            eq_client_core::movement::ZBetween::OnFloor
+        );
+        if let (true, Some(feet), Some(world)) = (on_floor, entity.feet, world) {
             let soles = target - Vec3::Y * feet;
             let height =
                 eq_client_core::carried_soles(world, entity.soles, soles, spawn.race, spawn.size);

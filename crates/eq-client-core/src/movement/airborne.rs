@@ -228,8 +228,10 @@ impl AirborneController {
     }
 
     /// Ends a vertical move that met something: rests on it, or keeps falling
-    /// along it when the feet do not stand on it (a slope too steep to stand on,
-    /// or the edge of a step the feet came down beside) instead of hanging there.
+    /// along it when no floor is under the feet (the edge of a step the feet
+    /// came down beside) instead of hanging there. A face at any angle under
+    /// the feet is floor ([`CollisionWorld::ground`]), so nothing slides down
+    /// a slope.
     /// A slide that would carry the feet into lava or the head under water
     /// stops short of it, and the fall is held where it stops.
     fn blocked(
@@ -311,8 +313,10 @@ mod tests {
         )
     }
     #[test]
-    fn a_fall_onto_a_slope_too_steep_to_stand_on_slides_down_it() {
+    fn a_fall_onto_a_steep_slope_lands_on_it_without_sliding() {
         // Floor at y 0 for x < 0, then a 60-degree slope rising along +x.
+        // Both programs take any face under the feet as floor, at any angle,
+        // and nothing turns its normal into a slide (Decompile R-s, 11-01).
         let rise = 60.0_f32.to_radians().tan() * 10.0;
         let world = CollisionWorld::new([
             [[-20.0, 0.0, -20.0], [0.0, 0.0, -20.0], [0.0, 0.0, 20.0]],
@@ -326,8 +330,76 @@ mod tests {
         for _ in 0..400 {
             position = tick(&mut state, &world, position, false);
         }
-        assert!(position.y.abs() < 0.01 && position.x < 0.5, "{position:?}");
+        // On the face where it came down: no lower than the face under the
+        // feet, and no higher than the face under the footprint's edge.
+        let face = rise * 0.5;
+        let edge = 0.4 * 60.0_f32.to_radians().tan();
+        assert!(
+            (position.x - 5.0).abs() < 0.001
+                && position.y >= face - 0.001
+                && position.y <= face + edge + 0.001,
+            "{position:?}"
+        );
         assert!(state.velocity().abs() < 0.001);
+        assert!(state.take_landing().is_some());
+    }
+
+    #[test]
+    fn walking_down_a_steep_face_stands_on_it_each_step_and_never_falls_far() {
+        // A plateau at y 40 for x < 0, a 55-degree face down to the floor,
+        // and the floor beyond: walking off the plateau with falls allowed
+        // goes down the face, standing on it each step (the programs make
+        // that a run of short falls, each landing on the face), and stands
+        // on the floor at its foot. No fall on the way hurts, let alone
+        // kills, and the walk is never refused.
+        let foot = 40.0 / 55.0_f32.to_radians().tan();
+        let world = CollisionWorld::new([
+            [[-20.0, 40.0, -20.0], [0.0, 40.0, -20.0], [0.0, 40.0, 20.0]],
+            [[-20.0, 40.0, -20.0], [0.0, 40.0, 20.0], [-20.0, 40.0, 20.0]],
+            [[0.0, 40.0, -20.0], [foot, 0.0, -20.0], [foot, 0.0, 20.0]],
+            [[0.0, 40.0, -20.0], [foot, 0.0, 20.0], [0.0, 40.0, 20.0]],
+            [[foot, 0.0, -20.0], [80.0, 0.0, -20.0], [80.0, 0.0, 20.0]],
+            [[foot, 0.0, -20.0], [80.0, 0.0, 20.0], [foot, 0.0, 20.0]],
+        ])
+        .unwrap();
+        let physics = VerticalPhysics {
+            gravity: 32.0,
+            terminal_speed: 40.0,
+            jump_speed: 10.0,
+            air_factor: 1.0,
+        };
+        let mut state = AirborneController::default();
+        let mut feet = Vec3::new(-1.0, 40.0, 0.0);
+        for _ in 0..200 {
+            let before = feet;
+            feet = state.step(
+                &world,
+                feet,
+                physics,
+                MotionStep {
+                    horizontal: Vec3::X * 0.5,
+                    jump: false,
+                    seconds: 0.05,
+                    height: 6.0,
+                },
+            );
+            assert!(feet.x > before.x, "refused at {before:?}");
+            if let Some(landing) = state.take_landing() {
+                assert!(landing.fall_distance < 2.0, "{landing:?} at {feet:?}");
+                assert_eq!(super::super::fall_damage(landing.fall_distance, 0), 0);
+            }
+            // On the face each step: never under it, and never higher over
+            // it than the footprint's edge reaches up it.
+            let face = (40.0 - feet.x.clamp(0.0, foot) * 55.0_f32.to_radians().tan()).max(0.0);
+            assert!(
+                feet.y >= face - 0.001 && feet.y <= face + 0.6,
+                "{feet:?} over the face at {face}"
+            );
+            if feet.x > foot + 5.0 {
+                break;
+            }
+        }
+        assert!(feet.x > foot + 5.0 && feet.y.abs() < 0.001, "{feet:?}");
     }
 
     #[test]
