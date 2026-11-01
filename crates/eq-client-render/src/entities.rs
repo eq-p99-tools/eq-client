@@ -442,9 +442,22 @@ pub(super) fn interpolate(
     // a 50 ms step.
     let physics = crate::motion::physics(settings.0.installed_client, state.world().zone_gravity());
     let step = eq_client_assets::falls::STEP_SECONDS;
+    // One that falls under the zone is put back on its top surface, by the
+    // generation's rule and the zone header's heights.
+    let underworld = settings
+        .0
+        .installed_client
+        .falls()
+        .zip(state.world().zone_heights())
+        .map(|(falls, heights)| eq_client_core::UnderworldReturn {
+            underworld: heights.underworld,
+            highest: heights.top - falls.underworld_return.under_top,
+            search_from: falls.underworld_return.search_from,
+        });
     let fall = eq_client_core::CarriedFall {
         gravity: physics.gravity * step * step,
         kept: physics.air_factor,
+        underworld,
     };
     let steps = time.delta_secs() / step;
     for (mut entity, mut transform, corpse) in &mut entities {
