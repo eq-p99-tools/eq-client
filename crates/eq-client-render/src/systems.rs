@@ -14,6 +14,14 @@ use bevy::prelude::*;
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 pub(super) fn init_presentation(app: &mut App) {
+    // A fresh installation's keys, by the installed client's own table.
+    let keys = app
+        .world()
+        .get_resource::<crate::ViewerSettings>()
+        .map_or_else(keys::KeyMap::default, |settings| {
+            keys::KeyMap::for_client(settings.0.installed_client)
+        });
+    app.insert_resource(keys);
     app.init_resource::<spell_effects::SpellParticles>()
         .init_resource::<sounds::Sounds>()
         .init_resource::<doors::Hinges>()
@@ -57,7 +65,6 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::Layouts>()
         .init_resource::<windows::Shown>()
         .init_resource::<windows::Stack>()
-        .init_resource::<keys::KeyMap>()
         .init_resource::<keys::Typing>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()

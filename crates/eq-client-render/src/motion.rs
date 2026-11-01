@@ -21,12 +21,20 @@ use eq_client_core::{
 use std::time::{Duration, Instant};
 
 #[derive(Resource)]
+#[allow(clippy::struct_excessive_bools)] // Independent movement states.
 pub(super) struct Controls {
     pub speed: Option<f32>,
     pub backward_speed: Option<f32>,
     pub walk_speed: Option<f32>,
     pub strafe_speed: Option<f32>,
     pub walking: bool,
+    /// Running forward by itself: on and off by the autorun key; a forward
+    /// or back key or a posture change turns it off, while turning,
+    /// strafing, jumping and attacking leave it on (Titanium program read
+    /// N6 of 11-01; the Mac-era client's is unread, and other ways the
+    /// program sets it, such as following, are not in this client:
+    /// recording checklist 6.359).
+    autorun: bool,
     waiting: bool,
     pub last_accepted: Instant,
     queued_at: Instant,
@@ -100,6 +108,7 @@ impl Default for Controls {
             walk_speed: None,
             strafe_speed: None,
             walking: false,
+            autorun: false,
             waiting: false,
             last_accepted: Instant::now(),
             queued_at: Instant::now(),
@@ -264,7 +273,7 @@ impl Controls {
         let mut intent = movement_input(
             keys,
             map,
-            (focused, looking_ahead),
+            (focused, looking_ahead, self.autorun),
             yaw,
             heading,
             self.speed.unwrap_or(0.0),
@@ -447,6 +456,16 @@ pub(super) fn input(
     let focused = keys.focused();
     if keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
+    }
+    let standing = online
+        .world()
+        .player()
+        .and_then(|player| online.world().posture(player.spawn_id))
+        .is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
+    if keys.pressed(Act::Autorun) {
+        controls.autorun = !controls.autorun;
+    } else if keys.pressed(Act::Forward) || keys.pressed(Act::Back) || !standing {
+        controls.autorun = false;
     }
     let now = Instant::now();
     // Held until the next sample; jumps rise and fall like falls, so only
@@ -1103,7 +1122,7 @@ struct MotionInput {
 fn movement_input(
     keyboard: &ButtonInput<KeyCode>,
     map: &KeyMap,
-    (focused, looking_ahead): (bool, bool),
+    (focused, looking_ahead, autorun): (bool, bool, bool),
     camera_yaw: f32,
     current_heading: f32,
     speed: f32,
@@ -1114,7 +1133,8 @@ fn movement_input(
         map.held(keyboard, Act::Back),
     );
     let backing = focused && behind && !ahead;
-    let forward = focused && ahead && !behind;
+    // Autorun runs on whatever has the keyboard, as held forward does.
+    let forward = (focused && ahead && !behind) || (autorun && !backing);
     let heading_radians = eq_client_core::render_heading(current_heading);
     let facing = Vec3::new(heading_radians.sin(), 0.0, heading_radians.cos());
     let (mode, speed, direction) = if backing {
@@ -1743,6 +1763,39 @@ mod tests {
         assert!(summary.net < 1e-5);
     }
     use std::sync::mpsc;
+
+    #[test]
+    fn autorun_runs_forward_with_no_key_held_until_back_is() {
+        let controls = Controls {
+            speed: Some(30.0),
+            backward_speed: Some(12.0),
+            autorun: true,
+            ..default()
+        };
+        let map = KeyMap::for_client(eq_client_assets::ui::InstalledClient::Titanium);
+        let mut keys = ButtonInput::default();
+        // On, with nothing held, and with the keyboard elsewhere.
+        for focused in [true, false] {
+            let intent = controls.intent(&keys, &map, focused, (0.0, 0.0), false);
+            assert_eq!(intent.mode, MovementMode::Forward);
+            // Along the player's heading.
+            let radians = eq_client_core::render_heading(0.0);
+            let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
+            assert!(
+                (intent.direction - facing).length() < 1e-5,
+                "{}",
+                intent.direction
+            );
+        }
+        // Turning keeps it running.
+        keys.press(KeyCode::ArrowLeft);
+        let intent = controls.intent(&keys, &map, true, (0.0, 0.0), false);
+        assert!(intent.direction != Vec3::ZERO && intent.turn != 0.0);
+        // Back wins while held.
+        keys.press(KeyCode::ArrowDown);
+        let intent = controls.intent(&keys, &map, true, (0.0, 0.0), false);
+        assert_eq!(intent.mode, MovementMode::Backward);
+    }
 
     #[test]
     fn between_frame_taps_move_once_without_sticking_or_ignoring_focus() {
