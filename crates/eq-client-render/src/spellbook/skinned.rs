@@ -97,9 +97,8 @@ impl BookView {
 /// The places on the skin's book's open pages, under the pointer or not.
 type Places<'w, 's> = Query<'w, 's, (&'static Interaction, &'static BookPlace)>;
 
-/// The skin's book's arrows, pressed or let go.
-type Arrows<'w, 's> =
-    Query<'w, 's, (&'static Interaction, &'static TurnsPages), Changed<Interaction>>;
+/// The skin's book's arrows, as they are clicked.
+type Arrows<'w, 's> = crate::clicks::Clicks<'w, 's, TurnsPages>;
 
 /// The skin's book under the player's clicks: its arrows turn its pages, a
 /// left click on a spell puts the spell on the cursor and one on an empty
@@ -158,14 +157,12 @@ pub(crate) fn clicks(
     if !keys.focused() {
         return;
     }
-    for (interaction, TurnsPages(forward)) in &arrows {
-        if *interaction == Interaction::Pressed {
-            view.spread = if *forward {
-                (view.spread + 1).min(spreads - 1)
-            } else {
-                view.spread.saturating_sub(1)
-            };
-        }
+    for TurnsPages(forward) in arrows.iter() {
+        view.spread = if *forward {
+            (view.spread + 1).min(spreads - 1)
+        } else {
+            view.spread.saturating_sub(1)
+        };
     }
     if keys.input.just_pressed(KeyCode::Delete) {
         delete_key(
@@ -778,8 +775,11 @@ mod tests {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .reset(KeyCode::Delete);
-        app.world_mut()
-            .spawn((Interaction::Pressed, crate::confirm::AnswerButton(yes)));
+        let answer = app
+            .world_mut()
+            .spawn((Interaction::None, crate::confirm::AnswerButton(yes)))
+            .id();
+        crate::clicks::testing::click(app, answer);
     }
 
     #[test]

@@ -214,7 +214,7 @@ pub(crate) fn restack(stack: Res<Stack>, mut frames: Query<(&WindowId, &mut Glob
 pub(crate) fn toggle(
     keys: crate::keys::Keys,
     (escape, mut chat): (Res<crate::escape::Escape>, ResMut<crate::chat::ChatState>),
-    buttons: Query<(&Interaction, &SelectorButton), Changed<Interaction>>,
+    buttons: crate::clicks::Clicks<SelectorButton>,
     (mut shown, mut stack): (ResMut<Shown>, ResMut<Stack>),
     online: Res<crate::online::OnlineState>,
 ) {
@@ -232,9 +232,7 @@ pub(crate) fn toggle(
                 .is_none_or(|needs| crate::outbox::offered(online.world(), needs))
             && (keys.pressed(crate::keys::Act::Toggle(*id))
                 || typed == Some(*id)
-                || buttons.iter().any(|(interaction, button)| {
-                    *interaction == Interaction::Pressed && button.0 == *id
-                }))
+                || buttons.iter().any(|button| button.0 == *id))
     });
     for id in pressed.collect::<Vec<_>>() {
         shown.toggle(id);
@@ -438,22 +436,17 @@ mod tests {
             }],
         );
         app.insert_resource(online);
-        app.world_mut()
-            .spawn((SelectorButton(WindowId::Map), Interaction::Pressed));
-        app.update();
+        let button = app
+            .world_mut()
+            .spawn((SelectorButton(WindowId::Map), Interaction::None))
+            .id();
+        crate::clicks::testing::click(&mut app, button);
         assert!(!app.world().resource::<Shown>().is_open(WindowId::Map));
         // Offered, it opens.
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
         app.insert_resource(online);
-        for mut interaction in app
-            .world_mut()
-            .query::<&mut Interaction>()
-            .iter_mut(app.world_mut())
-        {
-            *interaction = Interaction::Pressed;
-        }
-        app.update();
+        crate::clicks::testing::click(&mut app, button);
         assert!(app.world().resource::<Shown>().is_open(WindowId::Map));
     }
 
@@ -475,9 +468,9 @@ mod tests {
             .reset_all();
         let button = app
             .world_mut()
-            .spawn((SelectorButton(WindowId::Inventory), Interaction::Pressed))
+            .spawn((SelectorButton(WindowId::Inventory), Interaction::None))
             .id();
-        app.update();
+        crate::clicks::testing::click(&mut app, button);
         assert!(!app.world().resource::<Shown>().is_open(WindowId::Inventory));
         // Typing in chat never toggles a window.
         app.world_mut().entity_mut(button).despawn();
@@ -514,9 +507,9 @@ mod tests {
         let press = |app: &mut App, window| {
             let button = app
                 .world_mut()
-                .spawn((SelectorButton(window), Interaction::Pressed))
+                .spawn((SelectorButton(window), Interaction::None))
                 .id();
-            app.update();
+            crate::clicks::testing::click(app, button);
             app.world_mut().entity_mut(button).despawn();
         };
         let display = |app: &App| app.world().get::<Node>(hotbar).unwrap().display;

@@ -300,16 +300,10 @@ fn run(
     left
 }
 
-/// Starts or stops the batch as its button is pressed.
-fn press(
-    mut prebuild: ResMut<NavmeshPrebuild>,
-    buttons: Query<&Interaction, (Changed<Interaction>, With<Toggle>)>,
-) {
-    if !prebuild.usable()
-        || !buttons
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed)
-    {
+/// Starts or stops the batch as its button is clicked.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+fn press(mut prebuild: ResMut<NavmeshPrebuild>, buttons: crate::clicks::Clicks<Toggle>) {
+    if !prebuild.usable() || !buttons.any() {
         return;
     }
     if prebuild.building() {
@@ -477,6 +471,7 @@ mod tests {
             .insert_resource(OnlineState::new(true))
             .insert_resource(NavmeshPrebuild::over(zones))
             .add_systems(Update, run_batch());
+        crate::clicks::testing::install(&mut app);
         app
     }
 
@@ -498,8 +493,8 @@ mod tests {
     }
 
     fn press(app: &mut App) {
-        let button = app.world_mut().spawn((Toggle, Interaction::Pressed)).id();
-        app.update();
+        let button = app.world_mut().spawn((Toggle, Interaction::None)).id();
+        crate::clicks::testing::click(app, button);
         app.world_mut().entity_mut(button).despawn();
     }
 

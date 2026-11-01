@@ -569,14 +569,12 @@ pub(super) fn quit(
     mut online: ResMut<OnlineState>,
     mut link: Link,
     keys: crate::keys::Keys,
-    buttons: Query<(Ref<Interaction>, &super::character_select::Action)>,
+    buttons: crate::clicks::Clicks<super::character_select::Action>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let pressed = buttons.iter().any(|(interaction, action)| {
-        interaction.is_changed()
-            && *interaction == Interaction::Pressed
-            && matches!(action, super::character_select::Action::Quit)
-    });
+    let pressed = buttons
+        .iter()
+        .any(|action| matches!(action, super::character_select::Action::Quit));
     if !pressed || !keys.focused() || front.screen(&online) != Screen::Characters {
         return;
     }
@@ -793,8 +791,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex, atomic::Ordering};
 
-    /// An app at a world's character list, with character select's Quit
-    /// pressed.
+    /// An app at a world's character list, with character select's Quit.
     fn app(
         front: FrontEnd,
         updates: Option<Receiver<WorldUpdate>>,
@@ -811,6 +808,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .add_message::<AppExit>()
             .add_systems(Update, quit);
+        crate::clicks::testing::install(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -819,8 +817,18 @@ mod tests {
             bevy::window::PrimaryWindow,
         ));
         app.world_mut()
-            .spawn((Interaction::Pressed, crate::character_select::Action::Quit));
+            .spawn((Interaction::None, crate::character_select::Action::Quit));
         app
+    }
+
+    /// Clicks character select's Quit.
+    fn click_quit(app: &mut App) {
+        let quit = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::character_select::Action>>()
+            .single(app.world())
+            .unwrap();
+        crate::clicks::testing::click(app, quit);
     }
 
     #[test]
@@ -843,7 +851,7 @@ mod tests {
         front.account = "typed".into();
         front.password = Zeroizing::new("secret".into());
         let mut app = app(front, updates, commands);
-        app.update();
+        click_quit(&mut app);
         // The session stops and the world hears nothing more from it.
         assert!(thread.stopped.load(Ordering::SeqCst));
         assert!(
@@ -870,7 +878,7 @@ mod tests {
     #[test]
     fn quit_at_character_select_without_a_login_screen_leaves_the_game() {
         let mut app = app(FrontEnd::default(), None, None);
-        app.update();
+        click_quit(&mut app);
         assert_ne!(app.world().resource::<Messages<AppExit>>().len(), 0);
         assert!(app.world().resource::<OnlineState>().selection.is_some());
     }

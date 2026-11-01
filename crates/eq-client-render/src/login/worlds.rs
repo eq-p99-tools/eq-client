@@ -78,7 +78,7 @@ pub(crate) fn worlds(
     (mut front, mut online, mut link): (ResMut<FrontEnd>, ResMut<OnlineState>, Link),
     keys: crate::keys::Keys,
     strings: Option<Res<LoginStrings>>,
-    buttons: Query<(Ref<Interaction>, &Action)>,
+    buttons: crate::clicks::Clicks<Action>,
     (roots, look): (
         Query<Entity, With<Root>>,
         Option<Res<super::official::LoginLook>>,
@@ -96,13 +96,7 @@ pub(crate) fn worlds(
             .world()
             .servers()
             .is_some_and(|list| list.asked.is_some());
-        let pressed: Vec<_> = buttons
-            .iter()
-            .filter(|(interaction, _)| {
-                interaction.is_changed() && **interaction == Interaction::Pressed
-            })
-            .map(|(_, action)| *action)
-            .collect();
+        let pressed: Vec<_> = buttons.iter().copied().collect();
         if pressed.contains(&Action::Back) || keys.input.just_pressed(KeyCode::Escape) {
             front.end(None, &mut link);
         } else if !asked {
@@ -418,6 +412,8 @@ fn spawn(
                                 on: front.highlighted == Some(index),
                             },
                         );
+                        // A row is chosen as the press begins.
+                        row.insert(crate::clicks::OnPress);
                         if !open {
                             row.insert(crate::tooltip::Tooltip(
                                 "This world takes no players now".to_owned(),
@@ -537,6 +533,7 @@ mod tests {
                 Update,
                 (super::super::form, super::super::watch, worlds).chain(),
             );
+        crate::clicks::testing::install(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -560,6 +557,37 @@ mod tests {
         );
         app.update();
         (app, heard)
+    }
+
+    /// The commands the session was asked to send.
+    fn queue(heard: &Arc<Mutex<Heard>>) -> Vec<ClientCommand> {
+        let heard = heard.lock().unwrap();
+        std::iter::from_fn(|| heard.sessions[0].1.try_recv().ok()).collect()
+    }
+
+    #[test]
+    fn play_plays_when_let_go_over_it_and_not_when_let_go_off_it() {
+        use crate::clicks::testing::{click, press, release};
+        let (mut app, heard) = listed();
+        let play = app
+            .world_mut()
+            .query::<(Entity, &Action)>()
+            .iter(app.world())
+            .find(|(_, action)| **action == Action::Play)
+            .map(|(play, _)| play)
+            .unwrap();
+        press(&mut app, Some(play));
+        assert_eq!(queue(&heard), []);
+        release(&mut app, None);
+        assert_eq!(queue(&heard), []);
+        click(&mut app, play);
+        assert_eq!(
+            queue(&heard),
+            [ClientCommand::SelectServer {
+                selection_id: 5,
+                index: 1
+            }]
+        );
     }
 
     #[test]
@@ -600,10 +628,6 @@ mod tests {
         // The remembered world is highlighted first, and Enter plays there.
         assert_eq!(app.world().resource::<FrontEnd>().highlighted, Some(1));
         press(&mut app, KeyCode::Enter);
-        let queue = |heard: &Arc<Mutex<Heard>>| {
-            let heard = heard.lock().unwrap();
-            std::iter::from_fn(|| heard.sessions[0].1.try_recv().ok()).collect::<Vec<_>>()
-        };
         assert_eq!(
             queue(&heard),
             [ClientCommand::SelectServer {

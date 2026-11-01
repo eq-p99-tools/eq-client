@@ -282,6 +282,7 @@ mod tests {
             .init_resource::<crate::escape::Escape>()
             .init_resource::<crate::chat::ChatState>()
             .add_systems(Update, crate::windows::toggle.before(seat));
+        crate::clicks::testing::install(&mut app);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -309,10 +310,10 @@ mod tests {
             .world_mut()
             .spawn((
                 crate::windows::SelectorButton(WindowId::Spellbook),
-                Interaction::Pressed,
+                Interaction::None,
             ))
             .id();
-        app.update();
+        crate::clicks::testing::click(&mut app, button);
         assert!(is_open(&app));
         assert_eq!(sent(&receiver), [(7, Posture::Sitting)]);
         app.world_mut().despawn(button);

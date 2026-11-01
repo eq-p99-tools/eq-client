@@ -54,16 +54,16 @@ pub(crate) struct OptionCheckbox(pub(crate) Toggle);
 /// Turns an option the other way when its checkbox is clicked.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn toggle(
-    clicks: Query<(&Interaction, &OptionCheckbox), Changed<Interaction>>,
+    clicks: crate::clicks::Clicks<OptionCheckbox>,
     online: Res<crate::online::OnlineState>,
     mut state: ResMut<OptionsState>,
 ) {
-    for (interaction, OptionCheckbox(toggle)) in &clicks {
+    for OptionCheckbox(toggle) in clicks.iter() {
         // A greyed checkbox, for what the session does not offer, stays
         // as it is.
         let offered =
             crate::outbox::Needs::of(*toggle).is_none_or(|needs| needs.offered(online.world()));
-        if *interaction == Interaction::Pressed && offered {
+        if offered {
             let on = state.on(*toggle);
             state.options.set(*toggle, !on);
         }
@@ -224,9 +224,9 @@ mod tests {
         assert!(std::fs::read_dir(&directory).is_err());
         let checkbox = app
             .world_mut()
-            .spawn((Interaction::Pressed, OptionCheckbox(Toggle::WheelZoom)))
+            .spawn((Interaction::None, OptionCheckbox(Toggle::WheelZoom)))
             .id();
-        app.update();
+        crate::clicks::testing::click(&mut app, checkbox);
         assert!(!app.world().resource::<OptionsState>().options.wheel_zoom);
         let file = directory.join("options-ExampleWorld-Example.txt");
         assert!(
@@ -267,9 +267,11 @@ mod tests {
         app.update();
         assert_eq!(helm(&receiver), []);
         let shown = app.world().resource::<OptionsState>().on(Toggle::ShowHelm);
-        app.world_mut()
-            .spawn((Interaction::Pressed, OptionCheckbox(Toggle::ShowHelm)));
-        app.update();
+        let checkbox = app
+            .world_mut()
+            .spawn((Interaction::None, OptionCheckbox(Toggle::ShowHelm)))
+            .id();
+        crate::clicks::testing::click(&mut app, checkbox);
         assert_eq!(
             helm(&receiver),
             [ClientCommand::ShowHelm {
@@ -310,17 +312,21 @@ mod tests {
         testing::connect(&mut online, true);
         app.insert_resource(online);
         let food = Toggle::Qol(Fix::SkipModifiedFood);
-        app.world_mut()
-            .spawn((Interaction::Pressed, OptionCheckbox(food)));
-        app.update();
+        let checkbox = app
+            .world_mut()
+            .spawn((Interaction::None, OptionCheckbox(food)))
+            .id();
+        crate::clicks::testing::click(&mut app, checkbox);
         assert!(app.world().resource::<OptionsState>().on(food));
         // Where the session offers it, a click turns it off.
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 2, testing::player(7));
         app.insert_resource(online);
-        app.world_mut()
-            .spawn((Interaction::Pressed, OptionCheckbox(food)));
-        app.update();
+        let checkbox = app
+            .world_mut()
+            .spawn((Interaction::None, OptionCheckbox(food)))
+            .id();
+        crate::clicks::testing::click(&mut app, checkbox);
         assert!(!app.world().resource::<OptionsState>().on(food));
     }
 }

@@ -69,14 +69,11 @@ pub(crate) fn world_window(
 pub(crate) fn buttons(
     online: Res<OnlineState>,
     outbox: Res<Outbox>,
-    buttons: Query<(&Interaction, &CombineButton), Changed<Interaction>>,
+    buttons: crate::clicks::Clicks<CombineButton>,
 ) {
     let world = online.world();
-    for (interaction, CombineButton(container)) in &buttons {
-        if *interaction == Interaction::Pressed
-            && world.combining().is_none()
-            && combines(world, *container)
-        {
+    for CombineButton(container) in buttons.iter() {
+        if world.combining().is_none() && combines(world, *container) {
             let _ = outbox.post(world, |stamp| eq_client_core::ClientCommand::Combine {
                 session_id: stamp.session_id,
                 container: *container,

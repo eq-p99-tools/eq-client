@@ -36,6 +36,7 @@ mod buffs;
 mod character;
 mod character_select;
 mod chat;
+mod clicks;
 mod coins;
 mod combat;
 mod confirm;
@@ -405,9 +406,9 @@ pub(crate) mod testing {
     use super::*;
 
     /// An app with every presentation resource the viewer starts with, empty
-    /// and offline, plus input and a focused primary window: a test adds the
-    /// systems it exercises, and a system that comes to need another
-    /// presentation resource breaks no test's setup.
+    /// and offline, plus input, the click rule and a focused primary window:
+    /// a test adds the systems it exercises, and a system that comes to need
+    /// another presentation resource breaks no test's setup.
     pub(crate) fn app() -> App {
         let mut app = App::new();
         init_presentation(&mut app);
@@ -418,7 +419,8 @@ pub(crate) mod testing {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .insert_resource(online::OnlineState::new(false))
-            .insert_resource(outbox::Outbox::new(None));
+            .insert_resource(outbox::Outbox::new(None))
+            .add_systems(PreUpdate, clicks::track);
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -472,19 +474,24 @@ fn install_script(
         None => script::Script::new(steps),
     };
     app.insert_resource(script.local_session(local_session).offline_preview(!online));
-    app.add_systems(PreUpdate, script::drive.after(bevy::ui::UiSystems::Focus))
-        .add_systems(
-            Update,
-            (
-                script::pointer::draw,
-                // A scripted notch of the wheel replaces the real wheel's
-                // turn, read just before, and reaches the lists as one does.
-                script::pointer::turn
-                    .after(windows::pointer::wheel)
-                    .after(skinned::scrollbar::scroll)
-                    .in_set(Stage::Typing),
-            ),
-        );
+    app.add_systems(
+        PreUpdate,
+        script::drive
+            .after(bevy::ui::UiSystems::Focus)
+            .before(clicks::track),
+    )
+    .add_systems(
+        Update,
+        (
+            script::pointer::draw,
+            // A scripted notch of the wheel replaces the real wheel's
+            // turn, read just before, and reaches the lists as one does.
+            script::pointer::turn
+                .after(windows::pointer::wheel)
+                .after(skinned::scrollbar::scroll)
+                .in_set(Stage::Typing),
+        ),
+    );
     if arrow {
         app.init_resource::<script::pointer::SkinArrow>()
             .add_systems(Startup, script::pointer::spawn)

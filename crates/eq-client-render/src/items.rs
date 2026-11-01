@@ -115,16 +115,16 @@ pub(super) fn input(
     settings: Res<super::ViewerSettings>,
     chat: Res<super::chat::ChatState>,
     mut attempted: Local<bool>,
-    buttons: Query<(&Interaction, &ItemButton), Changed<Interaction>>,
-    close: Query<&Interaction, (With<CloseItem>, Changed<Interaction>)>,
+    (buttons, close): (
+        crate::clicks::Clicks<ItemButton>,
+        crate::clicks::Clicks<CloseItem>,
+    ),
     online: Res<OnlineState>,
     sender: Res<Outbox>,
     escape: Res<super::escape::Escape>,
     mut state: ResMut<ItemState>,
 ) {
-    if close.iter().any(|i| *i == Interaction::Pressed)
-        || *escape == super::escape::Escape::Close(super::windows::WindowId::Item)
-    {
+    if close.any() || *escape == super::escape::Escape::Close(super::windows::WindowId::Item) {
         state.selected = None;
         state.shown = None;
     }
@@ -160,8 +160,7 @@ pub(super) fn input(
     }
     for link in buttons
         .iter()
-        .filter(|(i, _)| **i == Interaction::Pressed)
-        .map(|(_, b)| &b.0)
+        .map(|button| &button.0)
         .chain(automatic.as_ref())
     {
         if state.pending.is_some() {
@@ -646,19 +645,22 @@ mod tests {
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, input);
         let body = format!("00002A{}1234ABCD", "0".repeat(31));
-        app.world_mut().spawn((
-            Interaction::Pressed,
-            ItemButton(ItemLink {
-                body: body.clone(),
-                text: "Synthetic blade".into(),
-                item_id: 42,
-                start: 0,
-                end: 0,
-                text_start: 0,
-                text_end: 0,
-            }),
-        ));
-        app.update();
+        let link = app
+            .world_mut()
+            .spawn((
+                Interaction::None,
+                ItemButton(ItemLink {
+                    body: body.clone(),
+                    text: "Synthetic blade".into(),
+                    item_id: 42,
+                    start: 0,
+                    end: 0,
+                    text_start: 0,
+                    text_end: 0,
+                }),
+            ))
+            .id();
+        crate::clicks::testing::click(&mut app, link);
         assert_eq!(
             receiver.try_recv().unwrap(),
             ClientCommand::InspectItem {

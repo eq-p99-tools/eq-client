@@ -256,7 +256,7 @@ pub(crate) fn buttons(
     (online, outbox): (Res<OnlineState>, Res<Outbox>),
     mut choice: ResMut<RaidChoice>,
     rows: Query<(&Interaction, &RaidRow), Changed<Interaction>>,
-    actions: Query<(&Interaction, &RaidAction), Changed<Interaction>>,
+    actions: crate::clicks::Clicks<RaidAction>,
 ) {
     for (interaction, row) in &rows {
         if *interaction == Interaction::Pressed && choice.0.as_deref() != Some(row.name.as_str()) {
@@ -272,10 +272,7 @@ pub(crate) fn buttons(
     if gone {
         choice.0 = None;
     }
-    for (interaction, action) in &actions {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
+    for action in actions.iter() {
         let chosen = choice.0.as_deref();
         let _ = outbox.post(world, |stamp| action.command(chosen, stamp.session_id));
     }
@@ -392,12 +389,7 @@ mod tests {
                 },
             ))
             .id();
-        let press = |app: &mut App, control| {
-            *app.world_mut().get_mut::<Interaction>(control).unwrap() = Interaction::Pressed;
-            app.update();
-            *app.world_mut().get_mut::<Interaction>(control).unwrap() = Interaction::None;
-            app.update();
-        };
+        let press = |app: &mut App, control| crate::clicks::testing::click(app, control);
         // With no one chosen, Disband leaves.
         press(&mut app, disband);
         assert!(matches!(

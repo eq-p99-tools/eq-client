@@ -139,7 +139,7 @@ pub(super) fn update(
     outbox: Res<Outbox>,
     keys: crate::keys::Keys,
     navigation: Res<super::navigation::NavigationKeys>,
-    buttons: Query<(Ref<Interaction>, &Action)>,
+    buttons: crate::clicks::Clicks<Action>,
     roots: Query<Entity, With<Root>>,
     mut previous: Local<String>,
     (mut shown, skinned, front, screen): (
@@ -170,10 +170,7 @@ pub(super) fn update(
         && let Some(selection) = choosing
         && !selection.submitted
     {
-        for (interaction, action) in &buttons {
-            if !interaction.is_changed() || *interaction != Interaction::Pressed {
-                continue;
-            }
+        for action in buttons.iter() {
             match action {
                 // An empty slot of the skin's list chooses nothing.
                 Action::Choose(slot) => {

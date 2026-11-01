@@ -713,17 +713,15 @@ pub(crate) fn frame_tab(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn tabs(
     mut chosen: ResMut<Tabs>,
-    clicks: Query<(&Interaction, &SkinTab), Changed<Interaction>>,
+    clicks: crate::clicks::Clicks<SkinTab>,
     mut pages: Query<(&SkinPage, &mut Node), Without<TabFace>>,
     mut faces: Query<(&TabFace, &mut Node), Without<SkinPage>>,
     mut words: Query<(&TabWords, &mut TextColor)>,
 ) {
-    for (interaction, tab) in &clicks {
-        if *interaction == Interaction::Pressed {
-            chosen
-                .0
-                .insert((tab.window, tab.tab_box.clone()), tab.index);
-        }
+    for tab in clicks.iter() {
+        chosen
+            .0
+            .insert((tab.window, tab.tab_box.clone()), tab.index);
     }
     let display = |shown: bool| if shown { Display::Flex } else { Display::None };
     for (SkinPage(tab), mut node) in &mut pages {
@@ -1517,7 +1515,7 @@ pub(crate) fn slash(
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut chat: ResMut<super::chat::ChatState>,
-    buttons: hotbar::Clicks<SlashButton>,
+    buttons: crate::clicks::Clicks<SlashButton>,
 ) {
     for SlashButton(command) in buttons.iter() {
         super::chat::run_game_command(command, &online, &outbox, &mut chat);

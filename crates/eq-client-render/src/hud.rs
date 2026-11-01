@@ -423,8 +423,8 @@ pub(super) fn actions(
     mut chat: ResMut<super::chat::ChatState>,
     online: Res<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
-    clicks: hotbar::Clicks<SpellGem>,
-    bar_clicks: hotbar::Clicks<hotbar::Slot>,
+    clicks: crate::clicks::Clicks<SpellGem>,
+    bar_clicks: crate::clicks::Clicks<hotbar::Slot>,
     bindings: Res<hotbar::Bindings>,
     definitions: (
         Res<super::spellbook::SpellNames>,

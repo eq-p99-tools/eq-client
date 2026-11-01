@@ -190,17 +190,14 @@ pub(crate) fn buttons(
     outbox: Res<Outbox>,
     mut chosen: ResMut<Chosen>,
     rows: Query<(&Interaction, &SkillRow), Changed<Interaction>>,
-    train: Query<&Interaction, (Changed<Interaction>, With<TrainButton>)>,
+    train: crate::clicks::Clicks<TrainButton>,
 ) {
     for (interaction, row) in &rows {
         if *interaction == Interaction::Pressed && chosen.0 != Some(row.skill) {
             chosen.0 = Some(row.skill);
         }
     }
-    let pressed = train
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed);
-    if pressed
+    if train.any()
         && online.world().training().is_some()
         && let Some(skill) = chosen.0
     {

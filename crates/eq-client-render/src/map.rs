@@ -189,7 +189,7 @@ pub(crate) fn load(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
     mut view: ResMut<MapView>,
-    buttons: Query<(&Interaction, &MapButton), Changed<Interaction>>,
+    buttons: crate::clicks::Clicks<MapButton>,
     canvases: Query<&ComputedNode, With<MapCanvas>>,
 ) {
     let size = canvases
@@ -198,10 +198,7 @@ pub(crate) fn buttons(
         .map_or(Vec2::new(472.0, 360.0), |node| {
             node.size() * node.inverse_scale_factor()
         });
-    for (interaction, button) in &buttons {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
+    for button in buttons.iter() {
         let scale = view
             .zone
             .as_ref()

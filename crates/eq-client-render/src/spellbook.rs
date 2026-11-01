@@ -324,16 +324,16 @@ pub(super) fn update(
     names: Res<SpellNames>,
     mut frames: Query<&mut Node, With<BookFrame>>,
     mut text: BookLabels,
-    buttons: Query<(&Interaction, &PageButton), Changed<Interaction>>,
+    buttons: crate::clicks::Clicks<PageButton>,
     mut state: ResMut<BookView>,
     mut rows: BookRows,
-    mut gems: GemChoices,
+    (mut gems, gem_clicks): (GemChoices, crate::clicks::Clicks<GemChoice>),
     online: Option<Res<super::online::OnlineState>>,
     outbox: Option<Res<crate::outbox::Outbox>>,
     mut selection: ResMut<BookSelection>,
     actions: BookActions,
 ) {
-    let (scribe, mut deletion, mut requests, options) = actions;
+    let (scribe, (mut deletion, deletion_clicks), mut requests, options) = actions;
     // Asking before a deletion, unless the player turned it off.
     let asks = options.is_none_or(|options| {
         options
@@ -353,12 +353,7 @@ pub(super) fn update(
         return;
     }
     let pending = action_pending(world) || selection.deletion.queued;
-    if !pending
-        && accepts_input
-        && scribe
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed)
-    {
+    if !pending && accepts_input && scribe.any() {
         selection.message =
             match request_scribe(online.as_deref(), world.spell_book(), outbox.as_deref()) {
                 Ok(spell) => {
@@ -394,15 +389,16 @@ pub(super) fn update(
         accepts_input,
     );
     delete_input(
-        &deletion,
+        &deletion_clicks,
         &mut selection,
         (world, outbox.as_deref()),
         &names,
         (accepts_input && !pending, asks),
     );
     refresh_actions(&mut deletion, &selection.deletion);
+    let clicked_gems: Vec<u8> = gem_clicks.iter().map(|GemChoice(gem)| *gem).collect();
     let (requested, gem_hint) = refresh_gems(
-        &mut gems,
+        (&mut gems, &clicked_gems),
         world,
         selection.selected,
         &names,
@@ -466,13 +462,9 @@ fn refresh_labels(text: &mut BookLabels, label: &str, gem_hint: Option<&str>) {
 }
 
 /// Applies fresh page clicks only while the book accepts keyboard and pointer input.
-fn turn_page(
-    buttons: &Query<(&Interaction, &PageButton), Changed<Interaction>>,
-    page: &mut usize,
-    enabled: bool,
-) {
-    for (interaction, PageButton(next)) in buttons {
-        if enabled && *interaction == Interaction::Pressed {
+fn turn_page(buttons: &crate::clicks::Clicks<PageButton>, page: &mut usize, enabled: bool) {
+    for PageButton(next) in buttons.iter() {
+        if enabled {
             *page = if *next {
                 page.saturating_add(1)
             } else {
@@ -483,8 +475,11 @@ fn turn_page(
 }
 
 type BookActions<'w, 's> = (
-    Query<'w, 's, &'static Interaction, (With<ScribeCursor>, Changed<Interaction>)>,
-    DeleteControls<'w, 's>,
+    crate::clicks::Clicks<'w, 's, ScribeCursor>,
+    (
+        DeleteControls<'w, 's>,
+        crate::clicks::Clicks<'w, 's, super::book_delete::Action>,
+    ),
     Option<ResMut<'w, super::hud::action_bar::ActionRequests>>,
     Option<Res<'w, crate::options::OptionsState>>,
 );
@@ -492,17 +487,13 @@ type BookActions<'w, 's> = (
 type DeleteControls<'w, 's> = Query<
     'w,
     's,
-    (
-        Ref<'static, Interaction>,
-        &'static super::book_delete::Action,
-        &'static mut Node,
-    ),
+    (&'static super::book_delete::Action, &'static mut Node),
     (Without<BookFrame>, Without<BookEntry>),
 >;
 
 /// Replaces editing controls with confirmation controls for the pending selection.
 fn refresh_actions(buttons: &mut DeleteControls, confirmation: &super::book_delete::Confirmation) {
-    for (_, action, mut node) in buttons.iter_mut() {
+    for (action, mut node) in buttons.iter_mut() {
         node.display = if confirmation.visible(*action) {
             Display::Flex
         } else {
@@ -514,7 +505,7 @@ fn refresh_actions(buttons: &mut DeleteControls, confirmation: &super::book_dele
 /// Processes deletion confirmation separately from gem assignment and
 /// scribing; Delete spell asks for it unless the player turned that off.
 fn delete_input(
-    buttons: &DeleteControls,
+    buttons: &crate::clicks::Clicks<super::book_delete::Action>,
     selection: &mut BookSelection,
     (world, outbox): (&ClientWorld, Option<&crate::outbox::Outbox>),
     names: &SpellNames,
@@ -532,11 +523,10 @@ fn delete_input(
         }
         return;
     }
-    let Some((_, action, _)) = buttons.iter().find(|(interaction, action, _)| {
-        interaction.is_changed()
-            && **interaction == Interaction::Pressed
-            && selection.deletion.visible(**action)
-    }) else {
+    let Some(action) = buttons
+        .iter()
+        .find(|action| selection.deletion.visible(**action))
+    else {
         return;
     };
     let result = selection.deletion.act(
@@ -598,7 +588,7 @@ type GemChoices<'w, 's> = Query<
 
 /// Styles current gem occupants and collects at most one fresh assignment click.
 fn refresh_gems(
-    gems: &mut GemChoices,
+    (gems, clicked): (&mut GemChoices, &[u8]),
     world: &ClientWorld,
     selected: Option<u32>,
     names: &SpellNames,
@@ -619,11 +609,7 @@ fn refresh_gems(
                 pending,
             ));
         }
-        if available
-            && accepts_input
-            && interaction.is_changed()
-            && *interaction == Interaction::Pressed
-        {
+        if available && accepts_input && clicked.contains(gem) {
             requested = Some(*gem);
         }
     }
@@ -1073,6 +1059,7 @@ mod tests {
             mode: 0,
         });
         let mut app = App::new();
+        crate::clicks::testing::install(&mut app);
         crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::chat::ChatState>()
@@ -1111,14 +1098,7 @@ mod tests {
             .find(|(_, entry)| entry.0 == 0)
             .unwrap()
             .0;
-        let click = |app: &mut App, entity: Entity| {
-            app.world_mut()
-                .entity_mut(entity)
-                .insert(Interaction::Pressed);
-            app.update();
-            app.world_mut().entity_mut(entity).insert(Interaction::None);
-            app.update();
-        };
+        let click = |app: &mut App, entity: Entity| crate::clicks::testing::click(app, entity);
         let buttons: Vec<_> = world
             .query::<(Entity, &Action)>()
             .iter(world)
@@ -1205,6 +1185,7 @@ mod tests {
     #[test]
     fn minimized_book_stays_collapsed_while_spell_rows_refresh() {
         let mut app = App::new();
+        crate::clicks::testing::install(&mut app);
         crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
@@ -1242,8 +1223,7 @@ mod tests {
             .unwrap()
             .0;
         let body = world.get::<ChildOf>(row).unwrap().parent();
-        world.entity_mut(button).insert(Interaction::Pressed);
-        app.update();
+        crate::clicks::testing::click(&mut app, button);
         let mut book = eq_client_core::SpellBook::default();
         book.apply(&eq_client_core::SpellUpdate::Slot {
             slot: 0,
@@ -1262,10 +1242,7 @@ mod tests {
         );
         app.world_mut().entity_mut(button).insert(Interaction::None);
         app.update();
-        app.world_mut()
-            .entity_mut(button)
-            .insert(Interaction::Pressed);
-        app.update();
+        crate::clicks::testing::click(&mut app, button);
         assert_eq!(
             app.world().get::<Node>(body).unwrap().display,
             Display::Flex
@@ -1283,6 +1260,7 @@ mod tests {
         profile[2312..2316].copy_from_slice(&42u32.to_le_bytes());
         let book = eq_client_core::SpellBook::titanium_profile(&profile).unwrap();
         let mut app = App::new();
+        crate::clicks::testing::install(&mut app);
         crate::keys::testing::install(&mut app);
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<BookView>()
@@ -1373,8 +1351,7 @@ mod tests {
             .world_mut()
             .spawn((GemChoice(2), Interaction::None, BackgroundColor::default()))
             .id();
-        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-        app.update();
+        crate::clicks::testing::click(&mut app, gem);
         assert!(
             app.world()
                 .get::<Text>(hint)
@@ -1388,8 +1365,7 @@ mod tests {
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
             eq_client_core::BookActionStatus::Rejected("Example rejection".into()),
         );
-        *app.world_mut().get_mut::<Interaction>(text).unwrap() = Interaction::Pressed;
-        app.update();
+        crate::clicks::testing::click(&mut app, text);
         assert_eq!(
             app.world().get::<BackgroundColor>(text).unwrap().0,
             crate::theme::BUTTON_ON
@@ -1397,8 +1373,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = true;
-        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-        app.update();
+        crate::clicks::testing::click(&mut app, gem);
         assert!(rx.try_recv().is_err());
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
@@ -1411,8 +1386,7 @@ mod tests {
         app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
         app.update();
-        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-        app.update();
+        crate::clicks::testing::click(&mut app, gem);
         assert!(rx.try_recv().is_err());
         app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
         // Returning focus does not replay a previously held click.
@@ -1420,8 +1394,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
         app.update();
-        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-        app.update();
+        crate::clicks::testing::click(&mut app, gem);
         assert!(matches!(
             rx.try_recv().unwrap(),
             eq_client_core::ClientCommand::MemorizeSpell {
@@ -1452,8 +1425,7 @@ mod tests {
         );
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
         app.update();
-        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-        app.update();
+        crate::clicks::testing::click(&mut app, gem);
         assert!(rx.try_recv().is_err());
         crate::online::testing::book_action(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
@@ -1468,8 +1440,7 @@ mod tests {
                 .0
                 .contains("Server relocated character")
         );
-        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-        app.update();
+        crate::clicks::testing::click(&mut app, gem);
         assert!(matches!(
             rx.try_recv().unwrap(),
             eq_client_core::ClientCommand::MemorizeSpell {
@@ -1496,8 +1467,7 @@ mod tests {
         }
         *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::None;
         app.update();
-        *app.world_mut().get_mut::<Interaction>(gem).unwrap() = Interaction::Pressed;
-        app.update();
+        crate::clicks::testing::click(&mut app, gem);
         assert!(rx.try_recv().is_err());
         assert!(
             app.world()
