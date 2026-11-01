@@ -856,6 +856,138 @@ mod tests {
         assert!(blocked.x < 0.0, "{blocked:?}");
     }
 
+    /// The walk a step on the ground makes, as the airborne controller
+    /// calls it: a Titanium human's 3.15 climb a step (6.344) and the
+    /// on-ground tolerance.
+    const STANDING: Support = Support::Optional {
+        drop: 0.501,
+        climb: 3.15,
+    };
+
+    /// A face rising toward -x at `degrees` through the origin.
+    fn steep_face(degrees: f32) -> CollisionWorld {
+        let rise = 20.0 * degrees.to_radians().tan();
+        CollisionWorld::new(quad(
+            [20.0, -rise, -20.0],
+            [-20.0, rise, -20.0],
+            [-20.0, rise, 20.0],
+            [20.0, -rise, 20.0],
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_step_climbs_a_steep_face_at_pace_until_its_reach_runs_out() {
+        // No angle stops a step on a face: the programs take a floor at any
+        // angle (R-z), and what one step climbs is its reach alone (6.344).
+        // The capsule, lifted over the feet, never touches a face below
+        // about 70°, so a run (1.6 a step) and a walk (0.6) go at full pace
+        // while the rise they need is within the 3.15, and past it go only
+        // as far as the reach allows. Feet left inside the face, as a
+        // server's move can leave them, climb the same.
+        for degrees in [45.0_f32, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0] {
+            let world = steep_face(degrees);
+            let slope = degrees.to_radians().tan();
+            for (pace, sunk) in [(1.6_f32, 0.0_f32), (0.6, 0.0), (1.6, 1.0), (0.6, 1.0)] {
+                // On the floor the footprint stands on: the face under its
+                // uphill edge.
+                let feet = Vec3::new(0.0, SUPPORT_SPREAD * slope - sunk, 0.0);
+                let next = world.walk(feet, -Vec3::X * pace, 6.0, STANDING);
+                let (moved, rise) = (feet.x - next.x, next.y - feet.y);
+                let case = format!("{degrees}° at {pace}, {sunk} in: moved {moved}, rose {rise}");
+                assert!(rise <= 3.15 + 0.001, "{case}");
+                // Never under the face beneath the feet.
+                assert!(next.y >= -next.x * slope - sunk - 0.001, "{case}");
+                if (pace * slope + sunk) <= 3.15 {
+                    assert!((moved - pace).abs() < 0.001, "{case}");
+                } else {
+                    assert!(moved < pace - 0.1, "{case}");
+                }
+            }
+        }
+        // 50° and 60° at a run: full pace, as the reach rule has them.
+        for degrees in [50.0_f32, 60.0] {
+            let world = steep_face(degrees);
+            let feet = Vec3::new(0.0, SUPPORT_SPREAD * degrees.to_radians().tan(), 0.0);
+            let next = world.walk(feet, -Vec3::X * 1.6, 6.0, STANDING);
+            assert!((feet.x - next.x - 1.6).abs() < 0.001, "{degrees}°: {next}");
+        }
+    }
+
+    #[test]
+    fn a_step_up_a_face_that_steepens_slows_only_by_its_reach() {
+        // 50° up to a crease, then a steeper face: the stride stops where
+        // the rise passes the step's reach, not at the crease; at 85° a
+        // 0.4 stride already rises past it, so the step stops there.
+        for steep in [60.0_f32, 70.0, 80.0, 85.0] {
+            let (lower, upper) = (50.0_f32.to_radians().tan(), steep.to_radians().tan());
+            let top = 10.0 * upper;
+            let mut triangles = quad(
+                [0.0, 0.0, -20.0],
+                [-10.0, top, -20.0],
+                [-10.0, top, 20.0],
+                [0.0, 0.0, 20.0],
+            )
+            .to_vec();
+            triangles.extend(quad(
+                [20.0, -20.0 * lower, -20.0],
+                [0.0, 0.0, -20.0],
+                [0.0, 0.0, 20.0],
+                [20.0, -20.0 * lower, 20.0],
+            ));
+            let world = CollisionWorld::new(triangles).unwrap();
+            let mut feet = Vec3::new(1.0, 0.0, 0.0);
+            let mut climbed = Vec::new();
+            for _ in 0..6 {
+                let next = world.walk(feet, -Vec3::X * 1.6, 6.0, STANDING);
+                assert!(
+                    next.y - feet.y <= 3.15 + 0.001,
+                    "{steep}°: {feet} to {next}"
+                );
+                climbed.push(feet.x - next.x);
+                feet = next;
+            }
+            // Past the crease each step moves on, as far as the reach allows.
+            if steep < 85.0 {
+                assert!(feet.x < -0.2, "{steep}°: {climbed:?}");
+            } else {
+                assert!(feet.x > -0.2, "{steep}°: {climbed:?}");
+            }
+            let reach = 3.15 / upper;
+            assert!(
+                climbed[2..]
+                    .iter()
+                    .all(|moved| *moved <= reach.min(1.6) + 0.001),
+                "{steep}°: {climbed:?} within {reach}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_step_stops_at_a_wall_whatever_its_reach() {
+        // A vertical face taller than the reach is a wall: the step stops
+        // at it, and moving on along it slides.
+        let wall = quad(
+            [-1.0, 0.0, -10.0],
+            [-1.0, 20.0, -10.0],
+            [-1.0, 20.0, 10.0],
+            [-1.0, 0.0, 10.0],
+        );
+        let world = CollisionWorld::new(floor(0.0).into_iter().chain(wall)).unwrap();
+        let blocked = world.walk(Vec3::ZERO, -Vec3::X * 1.6, 6.0, STANDING);
+        assert!(
+            blocked.x > -1.0 + CAPSULE_RADIUS - 0.001 && blocked.y.abs() < 0.001,
+            "{blocked}"
+        );
+        let again = world.walk(blocked, -Vec3::X * 1.6, 6.0, STANDING);
+        assert!(again.x > -1.0 + CAPSULE_RADIUS - 0.001, "{again}");
+        let along = world.walk(blocked, Vec3::new(-1.6, 0.0, 1.6), 6.0, STANDING);
+        assert!(
+            along.x > -1.0 + CAPSULE_RADIUS - 0.001 && along.z > 1.0,
+            "{along}"
+        );
+    }
+
     fn quad(a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]) -> [[[f32; 3]; 3]; 2] {
         [[a, b, c], [a, c, d]]
     }
