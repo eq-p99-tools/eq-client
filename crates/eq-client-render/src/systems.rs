@@ -71,6 +71,8 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
         .init_resource::<map::MapView>()
+        .init_resource::<map::WatchState>()
+        .init_resource::<map::MapMotion>()
         .init_resource::<login::FrontEnd>()
         .init_resource::<login::LoginLook>();
 }
@@ -132,8 +134,10 @@ pub(super) fn schedule(app: &mut App) {
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
                 navigation::update,
+                map::search_focus,
                 chat::input,
                 skinned::type_amount,
+                map::search_input,
             )
                 .chain()
                 .in_set(Stage::Typing),
@@ -166,7 +170,14 @@ pub(super) fn schedule(app: &mut App) {
                 confirm::buttons,
                 reading::buttons,
                 tradeskills::buttons,
-                map::buttons,
+                (
+                    map::buttons,
+                    map::inspect,
+                    map::control_actions,
+                    map::target_input,
+                    map::scroll_watches,
+                )
+                    .chain(),
                 raid::buttons,
             ),
             (abilities::input, skinned::slash),
@@ -233,7 +244,8 @@ pub(super) fn schedule(app: &mut App) {
                     (translocate::decline_unasked, confirm::window).chain(),
                     reading::window,
                     tradeskills::world_window,
-                    map::load,
+                    (map::sample_movement, map::load).chain(),
+                    (map::persist_watches, map::watch_alert).chain(),
                 ),
             )
                 .chain(),
@@ -264,6 +276,7 @@ pub(super) fn schedule(app: &mut App) {
                 skinned::frames,
                 (
                     skinned::apply,
+                    map::ensure_window,
                     skinned::place_own,
                     skinned::looks::load,
                     skinned::looks::dress,
@@ -297,7 +310,14 @@ pub(super) fn schedule(app: &mut App) {
                         confirm::show,
                         reading::show,
                         tradeskills::show,
-                        map::draw,
+                        (
+                            map::draw,
+                            map::update_entities,
+                            map::draw_movement,
+                            map::update_controls,
+                            map::show_target,
+                        )
+                            .chain(),
                         skinned::scrollbar::place,
                         skinned::rewind,
                     ),

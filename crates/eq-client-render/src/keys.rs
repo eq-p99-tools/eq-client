@@ -258,6 +258,7 @@ impl Default for KeyMap {
             &[Chord::key(KeyCode::KeyB)],
         );
         bind(Act::Toggle(WindowId::Options), &[Chord::alt(KeyCode::KeyO)]);
+        bind(Act::Toggle(WindowId::Map), &[Chord::ctrl(KeyCode::KeyM)]);
         // As the official client's notes on raids say (`raidsdoc.txt`).
         bind(Act::Toggle(WindowId::Raid), &[Chord::alt(KeyCode::KeyR)]);
         bind(Act::TargetSelf, &[Chord::key(KeyCode::F1)]);
@@ -610,6 +611,8 @@ pub(crate) struct Typing {
     /// A login screen is up: the login window or the login server's list,
     /// whose boxes and keys are their own.
     pub logging_in: bool,
+    /// The map's local entity search owns text input.
+    pub map_search: bool,
     /// This frame's Escape closed the chat line or left the quantity
     /// window's number, so nothing else takes it.
     pub escape_consumed: bool,
@@ -647,6 +650,7 @@ impl Keys<'_, '_> {
         !self.typing.composing
             && !self.typing.counting
             && !self.typing.logging_in
+            && !self.typing.map_search
             && self.window_focused()
     }
 
@@ -735,6 +739,12 @@ mod tests {
         }
         // The Mac-era client's table is unread: this client's own keys.
         let mac = KeyMap::for_client(InstalledClient::EqMac);
+        for client in [&map, &mac] {
+            assert_eq!(
+                client.chords(Act::Toggle(WindowId::Map)),
+                [Chord::ctrl(KeyCode::KeyM)]
+            );
+        }
         assert_eq!(mac.chords(Act::Attack), [Chord::key(KeyCode::KeyG)]);
         assert_eq!(mac.chords(Act::Autorun), [Chord::key(KeyCode::NumLock)]);
     }
@@ -795,6 +805,26 @@ mod tests {
         let tab = keys(&[KeyCode::ShiftRight], KeyCode::Tab);
         assert!(map.just_pressed(&tab, Act::TargetPrevious));
         assert!(!map.just_pressed(&tab, Act::TargetNext));
+    }
+
+    #[test]
+    fn typing_in_map_search_blocks_gameplay_bindings() {
+        #[derive(Resource, Default)]
+        struct Seen(bool);
+        let mut app = crate::testing::app();
+        app.init_resource::<Seen>()
+            .add_systems(Update, |keys: Keys, mut seen: ResMut<Seen>| {
+                seen.0 = keys.pressed(Act::Attack);
+            });
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyG);
+        app.world_mut().resource_mut::<Typing>().map_search = true;
+        app.update();
+        assert!(!app.world().resource::<Seen>().0);
+        app.world_mut().resource_mut::<Typing>().map_search = false;
+        app.update();
+        assert!(app.world().resource::<Seen>().0);
     }
 
     #[test]

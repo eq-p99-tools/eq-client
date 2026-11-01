@@ -532,7 +532,7 @@ pub(super) fn input(
         typing.counting = false;
     }
     // The quantity window's number has the keyboard: its keys are its own.
-    if typing.counting {
+    if typing.counting || typing.map_search {
         keyboard.clear();
     }
     let mut submit = send.any();

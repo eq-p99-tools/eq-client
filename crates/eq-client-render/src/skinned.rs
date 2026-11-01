@@ -409,6 +409,7 @@ type Frames<'w, 's> = Query<
         Option<&'static Drawn>,
         &'static mut super::windows::Frame,
     ),
+    Without<crate::map::FallbackMap>,
 >;
 
 /// The skin a window is drawn from: the player's, or the default skin where
@@ -455,7 +456,12 @@ pub(crate) fn apply(
         .qol
         .on(eq_client_core::qol::Fix::HiddenWindows);
     for (frame, id, mut node, mut background, mut border, drawn, mut state) in &mut frames {
-        let from = drawn_from(&mut screens, directory, (&skin.0, *id), hidden_too);
+        let from = drawn_from(
+            &mut screens,
+            directory,
+            (&skin.0, *id),
+            hidden_too || *id == WindowId::Map,
+        );
         let places = online
             .as_deref()
             .and_then(|online| fit::places(online.world(), *id));
@@ -1154,12 +1160,7 @@ fn behave(
     let skin = || SkinButton(button.look.clone());
     match does {
         Does::Toggles(toggles) => {
-            drawn.insert((Button, super::windows::SelectorButton(toggles), skin()));
-            // Greyed where the session does not offer the window.
-            match toggles.needs() {
-                Some(needs) => drawn.insert(crate::outbox::Needs::Capability(needs)),
-                None => drawn,
-            }
+            drawn.insert((Button, super::windows::SelectorButton(toggles), skin()))
         }
         Does::Closes => drawn.insert((Button, items::Closes(owner), skin())),
         Does::Gives => drawn.insert((Button, super::give::GiveButton)),

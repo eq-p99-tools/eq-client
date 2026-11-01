@@ -11,6 +11,7 @@ pub mod ground;
 pub mod hotbar;
 pub mod logs;
 pub mod machine;
+pub mod maps;
 pub mod movement;
 pub mod names;
 pub mod options;

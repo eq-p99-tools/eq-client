@@ -1,19 +1,31 @@
-//! The in-game map, in the skin's Map window: the zone's lines from the
-//! installation's map files, its labels while they are on, and the player as
-//! an arrow pointing the way they face, with the skin's toolbar to zoom, pan,
-//! reset the view and show or hide the labels and layers. The map opens only
-//! where the server type offers it.
-use crate::{
-    online::OnlineState,
-    windows::{Shown, WindowId},
+//! A local map on every server: installed map lines, the player and all
+//! known entities. Entity inspection never sends a game command.
+mod controls;
+mod entities;
+mod motion;
+#[cfg(test)]
+mod preview;
+mod target;
+mod watch;
+mod window;
+
+pub(crate) use controls::{
+    actions as control_actions, focus as search_focus, scroll as scroll_watches,
 };
+pub(crate) use controls::{input as search_input, update as update_controls};
+pub(crate) use entities::{inspect, update as update_entities};
+pub(crate) use motion::{MapMotion, draw as draw_movement, sample as sample_movement};
+pub(crate) use target::{input as target_input, show as show_target};
+pub(crate) use watch::{WatchState, alert as watch_alert, persist as persist_watches};
+pub(crate) use window::{FallbackMap, ensure_window};
+
+use crate::online::OnlineState;
 use bevy::{
     asset::RenderAssetUsages,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use eq_client_assets::maps::ZoneMap;
-use eq_client_core::Capability;
 
 /// The skin's area the map draws in.
 #[derive(Component)]
@@ -32,7 +44,7 @@ const HALF_ARROW: f32 = 8.5;
 /// so the point cannot be mistaken once the arrow turns.
 const DART: [(f32, f32); 4] = [(8.5, 1.0), (13.0, 15.5), (8.5, 12.0), (4.0, 15.5)];
 /// The arrow's colour.
-const ARROW_FILL: [u8; 4] = [220, 25, 25, 255];
+const ARROW_FILL: [u8; 4] = [180, 85, 245, 255];
 /// The arrow's darker edge, which keeps it clear of the map's lines.
 const ARROW_EDGE: [u8; 4] = [60, 10, 10, 255];
 
@@ -87,6 +99,16 @@ const ZOOM_STEPS: i32 = 8;
 pub(crate) struct MapView {
     /// The zone whose map is loaded, and its map if the installation has one.
     zone: Option<(String, Option<ZoneMap>)>,
+    /// Zone admission, so reconnecting to the same zone drops old selections.
+    admission: Option<u64>,
+    /// Stable fit of geometry and known entities, independent of 3D culling.
+    bounds: Option<(Vec2, Vec2)>,
+    /// The transform actually used by the current canvas.
+    projection: Option<Projection>,
+    /// An entity pinned for inspection; scoped to this admission.
+    selected: Option<entities::Identity>,
+    /// A name substring; unmatched markers stay on the map but become subdued.
+    query: String,
     /// Zoom steps from the whole map.
     zoom: i32,
     /// Where the view's centre is moved to, in map units.
@@ -103,6 +125,11 @@ impl Default for MapView {
     fn default() -> Self {
         Self {
             zone: None,
+            admission: None,
+            bounds: None,
+            projection: None,
+            selected: None,
+            query: String::new(),
             zoom: 0,
             pan: Vec2::ZERO,
             labels: true,
@@ -115,12 +142,15 @@ impl Default for MapView {
 /// What a drawn picture shows.
 #[derive(Clone, PartialEq)]
 struct Drawn {
+    canvas: Entity,
     zone: String,
     size: UVec2,
     zoom: i32,
     pan: Vec2,
     labels: bool,
     layers: [bool; 3],
+    bounds: (Vec2, Vec2),
+    inspecting: bool,
 }
 
 /// How map units reach the canvas: its scale and the map point at its
@@ -130,26 +160,54 @@ struct Projection {
     scale: f32,
     centre: Vec2,
     size: Vec2,
+    offset: Vec2,
 }
 
 impl Projection {
     /// The whole map fits the canvas at zoom 0, with a margin, and each step
     /// enlarges it; panning moves the centre.
-    fn new(map: &ZoneMap, size: Vec2, zoom: i32, pan: Vec2) -> Option<Self> {
-        let (min, max) = map.bounds()?;
-        let (min, max) = (Vec2::from(min), Vec2::from(max));
+    fn new((min, max): (Vec2, Vec2), size: Vec2, zoom: i32, pan: Vec2) -> Option<Self> {
+        if !min.is_finite() || !max.is_finite() || !size.is_finite() || size.min_element() <= 0.0 {
+            return None;
+        }
         let extent = (max - min).max(Vec2::splat(1.0));
+        if !extent.is_finite() || !pan.is_finite() {
+            return None;
+        }
         let fit = (size.x / extent.x).min(size.y / extent.y) * 0.95;
         Some(Self {
             scale: fit * ZOOM_STEP.powi(zoom),
-            centre: (min + max) / 2.0 + pan,
+            centre: min + (max - min) / 2.0 + pan,
             size,
+            offset: size / 2.0,
         })
+    }
+
+    /// Keep the fitted entities clear of search/legend and the pinned inspector.
+    fn for_canvas(
+        bounds: (Vec2, Vec2),
+        size: Vec2,
+        zoom: i32,
+        pan: Vec2,
+        inspecting: bool,
+    ) -> Option<Self> {
+        let top = 112.0_f32.min(size.y * 0.3);
+        let bottom = if inspecting {
+            96.0_f32.min(size.y * 0.3)
+        } else {
+            12.0
+        };
+        let inset = Vec2::new(10.0_f32.min(size.x * 0.1), top);
+        let drawable = size - Vec2::new(inset.x * 2.0, top + bottom);
+        let mut projection = Self::new(bounds, drawable, zoom, pan)?;
+        projection.offset += inset;
+        projection.size = size;
+        Some(projection)
     }
 
     /// Where a map point falls on the canvas, in its pixels.
     fn place(self, point: Vec2) -> Vec2 {
-        (point - self.centre) * self.scale + self.size / 2.0
+        (point - self.centre) * self.scale + self.offset
     }
 }
 
@@ -158,31 +216,77 @@ fn map_point(position: eq_client_core::WorldPosition) -> Vec2 {
     Vec2::new(-position.x, -position.y)
 }
 
-/// Loads the zone's map when the zone changes, and closes the map where the
-/// server type does not offer it.
+/// Loads local geometry on admission and fits every known position, even
+/// when the installation has no map file. The view expands at its default
+/// zoom, but remains stable while the player pans or zooms in.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn load(
     settings: Res<crate::ViewerSettings>,
     online: Res<OnlineState>,
+    motion: Res<MapMotion>,
     mut view: ResMut<MapView>,
-    mut shown: ResMut<Shown>,
 ) {
-    if !crate::outbox::offered(online.world(), Capability::Map) {
-        shown.close(WindowId::Map);
-    }
-    let zone = online.world().zone();
-    if zone.is_empty() || view.zone.as_ref().is_some_and(|(loaded, _)| loaded == zone) {
+    let world = online.world();
+    let zone = world.zone();
+    if zone.is_empty() {
+        *view = MapView::default();
         return;
     }
-    let map = settings
-        .0
-        .eq_directory
-        .as_deref()
-        .and_then(|directory| ZoneMap::load(directory, zone));
-    view.zone = Some((zone.to_owned(), map));
-    view.pan = Vec2::ZERO;
-    view.zoom = 0;
-    view.drawn = None;
+    if view.admission != world.session_id()
+        || view.zone.as_ref().is_none_or(|(loaded, _)| loaded != zone)
+    {
+        let map = settings
+            .0
+            .eq_directory
+            .as_deref()
+            .and_then(|directory| ZoneMap::load(directory, zone));
+        *view = MapView {
+            zone: Some((zone.to_owned(), map)),
+            admission: world.session_id(),
+            ..default()
+        };
+    }
+    if view.bounds.is_none() {
+        view.bounds = view
+            .zone
+            .as_ref()
+            .and_then(|(_, map)| map.as_ref())
+            .and_then(map_bounds);
+    }
+    if view.zoom == 0 && view.pan == Vec2::ZERO {
+        for position in motion
+            .player(world)
+            .into_iter()
+            .chain(world.spawns().values().map(|spawn| spawn.state.position))
+        {
+            expand(&mut view.bounds, map_point(position));
+        }
+    }
+}
+
+/// Finite map bounds, in the same coordinate frame as entity markers.
+fn map_bounds(map: &ZoneMap) -> Option<(Vec2, Vec2)> {
+    map.bounds()
+        .map(|(min, max)| (Vec2::from(min), Vec2::from(max)))
+        .filter(|(min, max)| min.is_finite() && max.is_finite())
+}
+
+/// Expand with breathing room so an NPC walking at the edge does not
+/// rescale the map every frame. Invalid coordinates never affect the view.
+fn expand(bounds: &mut Option<(Vec2, Vec2)>, point: Vec2) {
+    if !point.is_finite() {
+        return;
+    }
+    let margin = Vec2::splat(64.0);
+    match bounds {
+        Some((min, max)) => {
+            if point.cmplt(*min).any() || point.cmpgt(*max).any() {
+                *min = min.min(point - margin);
+                *max = max.max(point + margin);
+            }
+        }
+        None => *bounds = Some((point - margin, point + margin)),
+    }
 }
 
 /// Carries out the toolbar's buttons.
@@ -200,10 +304,10 @@ pub(crate) fn buttons(
         });
     for button in buttons.iter() {
         let scale = view
-            .zone
-            .as_ref()
-            .and_then(|(_, map)| map.as_ref())
-            .and_then(|map| Projection::new(map, size, view.zoom, view.pan))
+            .bounds
+            .and_then(|bounds| {
+                Projection::for_canvas(bounds, size, view.zoom, view.pan, view.selected.is_some())
+            })
             .map_or(1.0, |projection| projection.scale);
         match *button {
             MapButton::ZoomIn => view.zoom = (view.zoom + 1).min(ZOOM_STEPS),
@@ -214,6 +318,7 @@ pub(crate) fn buttons(
             MapButton::Reset => {
                 view.zoom = 0;
                 view.pan = Vec2::ZERO;
+                view.bounds = None;
             }
             MapButton::Labels => view.labels = !view.labels,
             MapButton::Layer(layer) => {
@@ -230,7 +335,7 @@ pub(crate) fn buttons(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn draw(
     mut commands: Commands,
-    online: Res<OnlineState>,
+    (online, motion): (Res<OnlineState>, Res<MapMotion>),
     mut view: ResMut<MapView>,
     mut images: ResMut<Assets<Image>>,
     mut canvases: Query<(Entity, &ComputedNode, &mut ImageNode), With<MapCanvas>>,
@@ -239,25 +344,38 @@ pub(crate) fn draw(
 ) {
     let Ok((canvas, node, mut image)) = canvases.single_mut() else {
         view.drawn = None;
+        view.projection = None;
         return;
     };
     let size = node.size() * node.inverse_scale_factor();
     if size.x < 1.0 || size.y < 1.0 {
+        view.projection = None;
         return;
     }
-    let Some((zone, Some(map))) = view.zone.as_ref() else {
+    let bounds = view
+        .bounds
+        .unwrap_or((Vec2::splat(-64.0), Vec2::splat(64.0)));
+    let Some(projection) =
+        Projection::for_canvas(bounds, size, view.zoom, view.pan, view.selected.is_some())
+    else {
+        view.projection = None;
         return;
     };
-    let Some(projection) = Projection::new(map, size, view.zoom, view.pan) else {
-        return;
-    };
+    view.projection = Some(projection);
+    let empty = ZoneMap::default();
+    let (zone, map) = view.zone.as_ref().map_or(("", &empty), |(zone, map)| {
+        (zone.as_str(), map.as_ref().unwrap_or(&empty))
+    });
     let wanted = Drawn {
-        zone: zone.clone(),
+        canvas,
+        zone: zone.to_owned(),
         size: size.as_uvec2(),
         zoom: view.zoom,
         pan: view.pan,
         labels: view.labels,
         layers: view.layers,
+        bounds,
+        inspecting: view.selected.is_some(),
     };
     if view.drawn.as_ref() != Some(&wanted) {
         image.image = images.add(picture(map, projection, view.layers, wanted.size));
@@ -265,39 +383,17 @@ pub(crate) fn draw(
             commands.entity(label).despawn();
         }
         if view.labels {
-            commands.entity(canvas).with_children(|canvas| {
-                for label in &map.labels {
-                    if label.layer > 0 && !view.layers[usize::from(label.layer - 1)] {
-                        continue;
-                    }
-                    let at = projection.place(Vec2::new(label.at[0], label.at[1]));
-                    if at.x < 0.0 || at.y < 0.0 || at.x > size.x || at.y > size.y {
-                        continue;
-                    }
-                    let [r, g, b] = label.color;
-                    canvas.spawn((
-                        LabelText,
-                        Text::new(label.text.clone()),
-                        crate::theme::font(crate::theme::Size::Small),
-                        TextColor(Color::srgb_u8(r, g, b)),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(at.x + 2.0),
-                            top: px(at.y - 6.0),
-                            ..default()
-                        },
-                    ));
-                }
-            });
+            draw_labels(&mut commands, canvas, map, projection, view.layers);
         }
         view.drawn = Some(wanted);
     }
     // The player's arrow, which only exists once the canvas has its first
     // picture.
-    let player = online.world().player().map(|player| player.position);
+    let player = motion.player(online.world());
     if arrows.is_empty() {
         commands.entity(canvas).with_child((
             PlayerArrow,
+            bevy::ui::FocusPolicy::Pass,
             ImageNode::new(images.add(arrow())),
             // Over the labels, which are drawn again whenever the map is.
             ZIndex(1),
@@ -332,6 +428,41 @@ pub(crate) fn draw(
     }
 }
 
+/// Rebuild local geometry labels only when the map image changes.
+fn draw_labels(
+    commands: &mut Commands,
+    canvas: Entity,
+    map: &ZoneMap,
+    projection: Projection,
+    layers: [bool; 3],
+) {
+    commands.entity(canvas).with_children(|canvas| {
+        for label in &map.labels {
+            if label.layer > 0 && !layers[usize::from(label.layer - 1)] {
+                continue;
+            }
+            let at = projection.place(Vec2::new(label.at[0], label.at[1]));
+            if !at.is_finite() || at.cmplt(Vec2::ZERO).any() || at.cmpgt(projection.size).any() {
+                continue;
+            }
+            let [r, g, b] = label.color;
+            canvas.spawn((
+                LabelText,
+                Text::new(label.text.clone()),
+                crate::theme::font(crate::theme::Size::Small),
+                TextColor(Color::srgb_u8(r, g, b)),
+                bevy::ui::FocusPolicy::Pass,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(at.x + 2.0),
+                    top: px(at.y - 6.0),
+                    ..default()
+                },
+            ));
+        }
+    });
+}
+
 /// How far the arrow, drawn pointing north, turns for a heading. EQ headings
 /// run 0 to 512 from north towards the west; on the map, north is up and
 /// the west to the left, and the UI turns clockwise for a positive angle.
@@ -351,20 +482,26 @@ fn in_dart(x: f32, y: f32) -> bool {
     inside
 }
 
-/// The player's arrow: a red dart pointing up, edged dark, on a clear
+/// The player's arrow: a purple dart pointing up, edged dark, on a clear
 /// background.
 #[allow(clippy::cast_precision_loss)] // A few pixels.
 fn arrow() -> Image {
+    arrow_picture(ARROW_FILL, ARROW_EDGE)
+}
+
+/// One shared arrow silhouette; travel arrows tint a white copy per entity.
+#[allow(clippy::cast_precision_loss)] // A few pixels.
+fn arrow_picture(fill: [u8; 4], edge: [u8; 4]) -> Image {
     let filled = |x: u32, y: u32| in_dart(x as f32 + 0.5, y as f32 + 0.5);
     let mut pixels = vec![0u8; (ARROW * ARROW * 4) as usize];
     for y in 0..ARROW {
         for x in 0..ARROW {
             let color = if filled(x, y) {
-                ARROW_FILL
+                fill
             } else if (y.saturating_sub(1)..=(y + 1).min(ARROW - 1)).any(|near| {
                 (x.saturating_sub(1)..=(x + 1).min(ARROW - 1)).any(|across| filled(across, near))
             }) {
-                ARROW_EDGE
+                edge
             } else {
                 continue;
             };
@@ -463,13 +600,19 @@ mod tests {
     #[test]
     fn the_whole_map_fits_and_zoom_and_pan_move_it() {
         let size = Vec2::new(400.0, 200.0);
-        let whole = Projection::new(&square(), size, 0, Vec2::ZERO).unwrap();
+        let whole = Projection::new(map_bounds(&square()).unwrap(), size, 0, Vec2::ZERO).unwrap();
         // The map's centre is the canvas's, and its width nearly fills it.
         assert_eq!(whole.place(Vec2::ZERO), size / 2.0);
         assert!((whole.place(Vec2::new(100.0, 0.0)).x - 390.0).abs() < 1.0);
-        let closer = Projection::new(&square(), size, 1, Vec2::ZERO).unwrap();
+        let closer = Projection::new(map_bounds(&square()).unwrap(), size, 1, Vec2::ZERO).unwrap();
         assert!((closer.scale / whole.scale - ZOOM_STEP).abs() < 1e-4);
-        let moved = Projection::new(&square(), size, 0, Vec2::new(10.0, 0.0)).unwrap();
+        let moved = Projection::new(
+            map_bounds(&square()).unwrap(),
+            size,
+            0,
+            Vec2::new(10.0, 0.0),
+        )
+        .unwrap();
         assert_eq!(moved.place(Vec2::new(10.0, 0.0)), size / 2.0);
         // The player at world (50, -20) is at map (-50, 20).
         assert_eq!(
@@ -504,7 +647,13 @@ mod tests {
     #[test]
     fn hidden_layers_leave_their_lines_out() {
         let size = UVec2::new(100, 60);
-        let projection = Projection::new(&square(), size.as_vec2(), 0, Vec2::ZERO).unwrap();
+        let projection = Projection::new(
+            map_bounds(&square()).unwrap(),
+            size.as_vec2(),
+            0,
+            Vec2::ZERO,
+        )
+        .unwrap();
         let drawn = |layers| {
             picture(&square(), projection, layers, size)
                 .data
@@ -529,5 +678,35 @@ mod tests {
             Some(MapButton::Layer(2))
         );
         assert_eq!(MapButton::for_screen("MVW_ZFilterButton"), None);
+    }
+
+    #[test]
+    fn missing_map_files_fit_all_entities_and_readmission_resets_the_view() {
+        use crate::online::testing as session;
+        let mut app = App::new();
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(1));
+        let mut spawn = session::pet(2, 1);
+        spawn.position.x = 10000.0;
+        session::spawns(&mut online, vec![spawn]);
+        app.insert_resource(online)
+            .init_resource::<crate::ViewerSettings>()
+            .init_resource::<MapView>()
+            .init_resource::<MapMotion>()
+            .add_systems(Update, load);
+        app.update();
+        let view = app.world().resource::<MapView>();
+        let bounds = view.bounds.unwrap();
+        assert!(bounds.0.x < -10000.0 && bounds.1.x > 0.0);
+        assert!(Projection::new(bounds, Vec2::splat(500.0), 0, Vec2::ZERO).is_some());
+        app.world_mut().resource_mut::<MapView>().query = "old zone".into();
+        session::admit(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            2,
+            session::player(1),
+        );
+        app.update();
+        assert_eq!(app.world().resource::<MapView>().query, "");
+        assert!(app.world().resource::<MapView>().bounds.unwrap().0.x > -100.0);
     }
 }

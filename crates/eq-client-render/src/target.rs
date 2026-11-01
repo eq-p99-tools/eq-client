@@ -232,7 +232,13 @@ pub(super) fn input(
     let Some(selected) = proposal else {
         return;
     };
-    if selected == current && !invalid {
+    select(&mut online, &outbox, selected);
+}
+
+/// Shared submission for scene, keyboard and map choices. A failed send never
+/// changes the local target; choosing the current target sends nothing again.
+pub(crate) fn select(online: &mut OnlineState, outbox: &Outbox, selected: Option<u16>) {
+    if selected == online.world().target().selected && !online.world().target_stale() {
         return;
     }
     // Offline, the choice is the viewer's alone; online, the outbox says
@@ -381,23 +387,46 @@ fn report_click(cursor: Vec2, spawns: &[Candidate], choice: Choice) {
 /// The official client targets nothing past its clip plane, and servers log a
 /// target beyond it as a possible cheat; drawn spawns may linger a little past it.
 fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<u16> {
-    let reachable = |spawn: &eq_client_core::SpawnState| {
-        online
-            .world()
-            .far_clip()
-            .zip(online.world().player())
-            .is_none_or(|(clip, player)| {
-                eq_client_core::entities::within(player.position, spawn.position, clip)
-            })
-    };
     rendered
-        .filter(|id| {
-            online
-                .world()
-                .spawn(*id)
-                .is_some_and(|spawn| !spawn.state.invisible && reachable(&spawn.state))
-        })
+        .filter(|id| unavailable(online, *id).is_none())
         .collect()
+}
+
+/// Why a known entity cannot be newly selected from a local interface. Map
+/// visibility does not grant targeting through invisibility or past the clip.
+pub(crate) fn unavailable(online: &OnlineState, id: u16) -> Option<&'static str> {
+    let world = online.world();
+    if world.death().is_some() {
+        return Some(crate::outbox::Refusal::Dead.text());
+    }
+    if !world.in_world() {
+        return Some(crate::outbox::Refusal::Away.text());
+    }
+    if online.enabled && !world.can(eq_client_core::Capability::Targeting) {
+        return Some(crate::outbox::UNAVAILABLE);
+    }
+    if world.is_player(id) {
+        return None;
+    }
+    let Some(spawn) = world.spawn(id) else {
+        return Some("This entity is no longer present");
+    };
+    if spawn.state.invisible {
+        return Some("This entity is invisible");
+    }
+    if matches!(spawn.state.kind, SpawnKind::Unknown(_)) {
+        return Some("This entity type cannot be targeted");
+    }
+    if world
+        .far_clip()
+        .zip(world.player())
+        .is_some_and(|(clip, player)| {
+            !eq_client_core::entities::within(player.position, spawn.state.position, clip)
+        })
+    {
+        return Some("Beyond the zone's targeting range");
+    }
+    None
 }
 
 /// The spawn `/target <query>` picks, by the installed generation's rule;

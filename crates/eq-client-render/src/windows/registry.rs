@@ -84,8 +84,7 @@ pub(crate) enum WindowId {
     /// The skin's container window for the world container open for the
     /// player, such as a forge.
     WorldContainer,
-    /// The skin's Map window: the zone's map and the player on it, where the
-    /// server type offers the map.
+    /// The local map and known entities, available on every server.
     Map,
     /// The buttons that open the other windows.
     Selector,
@@ -464,15 +463,6 @@ impl WindowId {
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
         })
-    }
-
-    /// What the session must offer for the window to open, if anything: the
-    /// map opens only where the server type offers it.
-    pub(crate) const fn needs(self) -> Option<eq_client_core::Capability> {
-        match self {
-            Self::Map => Some(eq_client_core::Capability::Map),
-            _ => None,
-        }
     }
 
     /// The window whose placement is saved under this name, now or before

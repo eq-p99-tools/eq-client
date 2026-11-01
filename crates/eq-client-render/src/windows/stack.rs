@@ -216,7 +216,6 @@ pub(crate) fn toggle(
     (escape, mut chat): (Res<crate::escape::Escape>, ResMut<crate::chat::ChatState>),
     buttons: crate::clicks::Clicks<SelectorButton>,
     (mut shown, mut stack): (ResMut<Shown>, ResMut<Stack>),
-    online: Res<crate::online::OnlineState>,
 ) {
     if let crate::escape::Escape::Close(id) = *escape
         && id.describe().toggle == Toggle::Opens
@@ -226,10 +225,6 @@ pub(crate) fn toggle(
     let typed = chat.toggled.take();
     let pressed = WindowId::ALL.into_iter().filter(|id| {
         id.describe().toggle != Toggle::Never
-            // A window the session does not offer stays shut.
-            && id
-                .needs()
-                .is_none_or(|needs| crate::outbox::offered(online.world(), needs))
             && (keys.pressed(crate::keys::Act::Toggle(*id))
                 || typed == Some(*id)
                 || buttons.iter().any(|button| button.0 == *id))
@@ -309,10 +304,6 @@ pub(crate) fn spawn_selector(commands: &mut Commands) {
                     SelectorLabel(window),
                     theme::text(name(window), Size::Label, theme::INK_BRIGHT),
                 ));
-                // Greyed where the session does not offer the window.
-                if let Some(needs) = window.needs() {
-                    button.insert(crate::outbox::Needs::Capability(needs));
-                }
             }
         });
 }
@@ -414,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn the_map_opens_only_where_the_session_offers_it() {
+    fn the_map_opens_without_a_server_capability() {
         use eq_client_core::{Capability, WorldEvent};
         let mut app = crate::testing::app();
         app.add_systems(Update, toggle);
@@ -441,8 +432,11 @@ mod tests {
             .spawn((SelectorButton(WindowId::Map), Interaction::None))
             .id();
         crate::clicks::testing::click(&mut app, button);
+        assert!(app.world().resource::<Shown>().is_open(WindowId::Map));
+        // A second click closes it, without changing server capabilities.
+        crate::clicks::testing::click(&mut app, button);
         assert!(!app.world().resource::<Shown>().is_open(WindowId::Map));
-        // Offered, it opens.
+        // Offered, it opens just the same.
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
         app.insert_resource(online);

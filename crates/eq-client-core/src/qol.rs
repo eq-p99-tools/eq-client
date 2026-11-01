@@ -13,10 +13,8 @@ use crate::Capability;
 /// What a fix changes, which decides where it may run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// Only what the player sees or hears: what the official client already
-    /// shows, in a clearer form, or what the player could work out
-    /// themselves, never what the official client keeps from them. It sends
-    /// nothing different, so it runs on every server.
+    /// Local presentation of installed assets and already received world
+    /// state. It sends nothing different, so it runs on every server.
     Shows,
     /// Asks first, holds back or refuses before something the official
     /// client would do at once. It sends less or later, never more, so it
@@ -57,9 +55,6 @@ pub enum Fix {
     /// Draws a window the UI skin sizes to nothing, as the Velious skin does
     /// its windows from later expansions, as the default skin draws it.
     HiddenWindows,
-    /// Lets the player open the in-game map where the server type leaves it
-    /// to them, as P99's own client keeps the map off.
-    MapWhereOff,
     /// Asks Yes or No before a spell leaves the spell book for good; the
     /// official client's Delete key deletes the chosen spell at once.
     AskBeforeDeletingSpells,
@@ -86,6 +81,9 @@ pub enum Fix {
     /// off, the camera keeps to the program's limit. Its height above the
     /// player stays the program's either way. Adam's choice (11-01).
     LongChaseCamera,
+    /// Makes the local map and known entity positions available on every
+    /// server, independently of the original client's map support.
+    MapEverywhere,
     /// Starts the Options window's Max FPS at 60 frames a second rather than
     /// as fast as vsync allows; the slider and the installation's
     /// `eqclient.ini` still set another cap. What the official client does
@@ -124,13 +122,13 @@ impl Fix {
     pub const ALL: [Self; 17] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
-        Self::MapWhereOff,
         Self::AskBeforeDeletingSpells,
         Self::ShowTimesInChat,
         Self::FlashOnTells,
         Self::TakeEnvironmentalDamage,
         Self::CorpsesAlongGround,
         Self::LongChaseCamera,
+        Self::MapEverywhere,
         Self::FrameCap,
         Self::GreyedControls,
         Self::CampCountdown,
@@ -147,7 +145,9 @@ impl Fix {
         match self {
             Self::SkipModifiedFood => "skip_modified_food",
             Self::HiddenWindows => "hidden_windows",
-            Self::MapWhereOff => "map_where_off",
+            // Retain the old settings key; an old false value is ignored
+            // because this feature is now always on.
+            Self::MapEverywhere => "map_where_off",
             Self::AskBeforeDeletingSpells => "ask_before_deleting_spells",
             Self::ShowTimesInChat => "chat_times",
             Self::FlashOnTells => "flash_on_tells",
@@ -178,7 +178,7 @@ impl Fix {
         match self {
             Self::SkipModifiedFood => "Skip Food With Modifiers",
             Self::HiddenWindows => "Draw Windows the Skin Hides",
-            Self::MapWhereOff => "Use the Map Where It's Off",
+            Self::MapEverywhere => "Maps on Every Server",
             Self::AskBeforeDeletingSpells => "Ask Before Deleting Spells",
             Self::ShowTimesInChat => "Show Times in Chat",
             Self::FlashOnTells => "Flash on Tells",
@@ -206,8 +206,8 @@ impl Fix {
             Self::HiddenWindows => {
                 "Draw the windows your UI skin hides, such as the Velious skin's Raid window, as the default skin draws them."
             }
-            Self::MapWhereOff => {
-                "Open the in-game map on servers whose own client keeps it off, such as Project 1999."
+            Self::MapEverywhere => {
+                "Show the zone map and all known entity positions on every server."
             }
             Self::AskBeforeDeletingSpells => {
                 "Ask Yes or No before a spell is deleted from your spell book for good."
@@ -257,6 +257,7 @@ impl Fix {
             | Self::TakeEnvironmentalDamage
             | Self::HotbarItemGuard => Kind::Guards,
             Self::HiddenWindows
+            | Self::MapEverywhere
             | Self::ShowTimesInChat
             | Self::FlashOnTells
             | Self::CorpsesAlongGround
@@ -268,7 +269,6 @@ impl Fix {
             | Self::BuffTimeLeft
             | Self::WeaponRatio
             | Self::WindowsApart => Kind::Shows,
-            Self::MapWhereOff => Kind::Unlocks,
         }
     }
 
@@ -283,11 +283,11 @@ impl Fix {
     pub const fn needs(self) -> Option<Capability> {
         match self {
             Self::SkipModifiedFood => Some(Capability::Inventory),
-            Self::MapWhereOff => Some(Capability::Map),
             Self::AskBeforeDeletingSpells => Some(Capability::DeletingSpells),
             Self::FlashOnTells => Some(Capability::Talking),
             Self::TakeEnvironmentalDamage => Some(Capability::EnvironmentalDamage),
             Self::HiddenWindows
+            | Self::MapEverywhere
             | Self::ShowTimesInChat
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
@@ -321,8 +321,7 @@ impl Fix {
     }
 
     /// Whether it is always on or the player's choice: windows the skin
-    /// hides stay hidden, and the map stays off where the server's own
-    /// client keeps it off, unless the player asks for them, as Adam chose;
+    /// hides stay hidden unless the player asks for them;
     /// chat lines read as the official client's do until the player asks
     /// for their times; the world's damage is taken until the player turns
     /// it off, as Adam chose; corpses lie along the ground until the player
@@ -339,10 +338,9 @@ impl Fix {
             | Self::TakeEnvironmentalDamage
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera => Availability::Setting { default: true },
-            Self::HiddenWindows | Self::MapWhereOff | Self::ShowTimesInChat => {
-                Availability::Setting { default: false }
-            }
-            Self::FrameCap
+            Self::HiddenWindows | Self::ShowTimesInChat => Availability::Setting { default: false },
+            Self::MapEverywhere
+            | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
             | Self::QuietRepeats
@@ -469,7 +467,6 @@ mod tests {
             [
                 Fix::SkipModifiedFood,
                 Fix::HiddenWindows,
-                Fix::MapWhereOff,
                 Fix::AskBeforeDeletingSpells,
                 Fix::ShowTimesInChat,
                 Fix::FlashOnTells,
@@ -502,12 +499,13 @@ mod tests {
     }
 
     #[test]
-    fn the_map_setting_unlocks_the_map_once_it_is_on() {
+    fn maps_are_local_and_always_on_even_with_an_old_disabled_setting() {
         let mut settings = Settings::default();
+        settings.set(Fix::MapEverywhere, false);
+        assert!(settings.on(Fix::MapEverywhere));
+        assert_eq!(Fix::MapEverywhere.needs(), None);
         assert_eq!(settings.unlocked(), []);
-        settings.set(Fix::MapWhereOff, true);
-        assert_eq!(settings.unlocked(), [Capability::Map]);
-        assert_eq!(Fix::unlocking(Capability::Map), Some(Fix::MapWhereOff));
+        assert_eq!(Fix::unlocking(Capability::Map), None);
         assert_eq!(Fix::unlocking(Capability::Inventory), None);
         assert_eq!(Fix::SkipModifiedFood.unlocks(), None);
     }

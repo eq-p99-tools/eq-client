@@ -14,11 +14,28 @@ Share their rules and typed records rather than letting the UI mutate session
 state directly. Route commands through `Outbox`; do not add feature-specific
 network channels or raw opcode dispatch to widgets.
 
-What a control needs is a capability the session offers (`outbox::offered`),
+What a gameplay command needs is a capability the session offers (`outbox::offered`),
 never a flag the client keeps per server. A control the server type lacks says
 "Not available on this server", and one this client lacks says "Not in this
 client yet". Official wording comes from the player's installed client by its
 eqstr id, with this client's own words only as the fallback.
+
+Local presentation needs no server capability. The map reads installed geometry
+and `ClientWorld` directly, including spawns culled from the 3D scene. Its local
+inspection selection is admission-scoped and distinct from the gameplay target;
+hovering, pinning or tracking an entity must not send a command. The explicit
+`map::target` button shares `target::select` and the existing outbox, and uses the
+same visibility and zone-range checks as scene targeting. `map` owns projection and
+geometry, `map::entities` owns markers and inspection, and `map::window` supplies
+a standard frame when the installed skin has no usable map window. Search and
+watch controls live in `map::controls`; `map::watch` owns profile persistence and
+appearance alerts. Name matching, watch-file encoding and con-level estimates
+are engine-independent in `eq-client-core::maps`. Watch identity survives spawn
+ID changes; alert deduplication is scoped to each admission's spawn revisions.
+Search claims the shared `keys::Typing` state before chat and gameplay input.
+`map::motion` samples the displayed player pose after movement interpolation;
+remote travel arrows use the existing dialect movement calculation and expire
+when reports go stale. This presentation state never writes to `ClientWorld`.
 
 ## Ordered work and asynchronous outcomes
 

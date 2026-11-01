@@ -175,6 +175,7 @@ pub(super) fn pieces(
                 });
                 window.spawn((
                     crate::map::MapCanvas,
+                    crate::windows::KeepsPress,
                     ImageNode::default(),
                     ZIndex(1),
                     Node {

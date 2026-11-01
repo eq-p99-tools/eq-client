@@ -13,10 +13,14 @@ does not cover the others. A visible panel or passing synthetic test does not
 establish live server support.
 Frontends must use the session's offered capabilities and explicit player choices,
 not infer them from a server name or protocol generation.
+Purely local presentation, such as inspecting already received entities on the
+map, needs no server capability and does not establish support for a command.
 
 | Area | Client implementation | Availability and evidence boundary |
 | --- | --- | --- |
 | Offline world and characters | S3D/WLD loading, scene rendering and local input | Requires a user-owned installation; not a server test |
+| Map and entity inspection | Local lines, all known positions, travel arrows, search, pinned details and saved Track alerts | Available on every server; limited to received data and local files; inspecting and tracking send no commands |
+| Target from map | Explicit Target button shares normal selection and outbox | Requires offered targeting, a current entity and the usual visibility/range checks; synthetic tests do not establish live validation |
 | Admission and chat | Character selection, entry, channel tabs and structured item links | Offered on every server type; recheck each server type when changing these paths |
 | Movement, targeting and combat | Typed commands, projection, correction and input paths | Only offered capabilities are actionable; shared Titanium/EQMac layouts do not imply equal policy |
 | Inventory, spells and interaction | Bags/equipment, casting/book, merchants, loot, doors and other panels | Individual actions may be absent even when a related panel exists |

@@ -768,10 +768,42 @@ offer is greyed, with the reason on hover. The settings:
 - **Draw Windows the Skin Hides** (`hidden_windows`, off): draws a window the
   UI skin sizes to nothing, such as the Velious skin's Raid and casting
   windows, as the default skin draws it.
-- **Use the Map Where It's Off** (`map_where_off`, off): opens the in-game
-  map where the server's own client keeps it off, as on Project 1999. Until
-  it is on, the Map window stays greyed there, and hovering over it names
-  this setting. It is greyed on servers that offer the map anyway.
+- **Maps on Every Server** (always on): **Ctrl+M** opens the map, including on
+  Project 1999 and Quarm. The installed skin's map is used when available;
+  otherwise a movable, minimizable window supplies the same controls. Local
+  map files supply the lines and labels. Without those files, the map still
+  shows known entity positions. Purple markers are players and the purple
+  arrow is you. NPCs use level-relative con colors; a received consider reply
+  wins over the local level estimate (classic or Mac-era ranges, including
+  light blue on Mac). Corpses and unknown entities are gray. Every known
+  position is included, independently of 3D render distance, visibility and
+  entity limits. Hover for details or click to pin an inspector; repeated
+  clicks cycle overlapping markers. Markers, colors, search emphasis and pinned
+  details refresh as events arrive. Your marker follows the displayed character
+  every frame; other positions use the latest server report. Small arrows beside
+  moving markers show travel direction, including backing up and strafing; your
+  center arrow still shows facing. Travel arrows disappear on a stop or stale
+  movement report. Details include HP where known and clear on removal or zoning.
+  Hovering, pinning and tracking send no command. **Target** in the inspector
+  selects the entity as the gameplay target through the normal command path;
+  it does not attack, cast or move. Invisible entities and those beyond the
+  zone's targeting range remain inspectable but cannot be targeted from the map.
+  **Unpin** closes the inspector without clearing the gameplay target.
+  Zoom and pan explore the map; **Fit**
+  restores the whole view. This cannot reveal entities the server has not
+  sent. The old `map_where_off` setting no longer disables the map.
+  Search by part of a displayed name to highlight matches and dim other
+  entities. **Track** in an entity's inspector saves its exact name; **Track
+  name** adds the search text as an exact name even if it is absent. Tracked
+  entities keep a gold outline and remain bright during searches. **Tracked**
+  opens the list; click a name to remove it, or choose **Untrack** in the inspector.
+  These saved spawn watches persist per character in
+  `map-watches-<world>-<character>.txt` under the settings directory. A new
+  appearance produces a local System chat notice, a map banner, and a taskbar
+  attention request if the client is in the background, even with the map
+  closed. Repeated position updates do not alert. Initial zone-list matches
+  also say "spotted": the client cannot distinguish a newly spawned entity
+  from one newly reported by the server. No sound or external message is sent.
 - **Ask Before Deleting Spells** (`ask_before_deleting_spells`, on): the skin's
   confirmation dialog asks Yes or No before the Delete key deletes a spell
   from the skin's book, where the official client deletes it at once, and
