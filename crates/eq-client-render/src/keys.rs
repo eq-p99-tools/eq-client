@@ -539,6 +539,20 @@ impl KeyMap {
         f32::from(self.held(keys, positive)) - f32::from(self.held(keys, negative))
     }
 
+    /// What movement reads as held: these keys through this table, or the
+    /// acts a script holds itself, whatever keys the table gives them.
+    pub(crate) const fn holding<'a>(
+        &'a self,
+        keys: &'a ButtonInput<KeyCode>,
+        scripted: &'a [Act],
+    ) -> Holding<'a> {
+        Holding {
+            keys,
+            map: self,
+            scripted,
+        }
+    }
+
     /// The keys that move the player, whose short taps are kept until the
     /// next movement sample.
     pub(crate) fn movement_keys(&self) -> Vec<KeyCode> {
@@ -557,6 +571,29 @@ impl KeyMap {
         .into_iter()
         .flat_map(|act| self.keys(act).collect::<Vec<_>>())
         .collect()
+    }
+}
+
+/// The movement commands held this frame: an act is held when one of its
+/// keys is, whatever is held with it, or when a script holds the act itself.
+/// A script's moving steps act here, on the commands, never on a key, so
+/// they move the same under every key table.
+#[derive(Clone, Copy)]
+pub(crate) struct Holding<'a> {
+    keys: &'a ButtonInput<KeyCode>,
+    map: &'a KeyMap,
+    scripted: &'a [Act],
+}
+
+impl Holding<'_> {
+    /// Whether the act is held, by a key or by a script.
+    pub(crate) fn held(&self, act: Act) -> bool {
+        self.map.held(self.keys, act) || self.scripted.contains(&act)
+    }
+
+    /// -1, 0 or 1 as the negative or positive act is held, or both or neither.
+    pub(crate) fn axis(&self, negative: Act, positive: Act) -> f32 {
+        f32::from(self.held(positive)) - f32::from(self.held(negative))
     }
 }
 
@@ -611,6 +648,16 @@ impl Keys<'_, '_> {
             && !self.typing.counting
             && !self.typing.logging_in
             && self.window_focused()
+    }
+
+    /// The movement acts a running script holds itself.
+    pub(crate) fn scripted(&self) -> &[Act] {
+        self.script.as_ref().map_or(&[], |script| script.acts())
+    }
+
+    /// The heading a running script's `face` step turns the player to.
+    pub(crate) fn scripted_facing(&self) -> Option<f32> {
+        self.script.as_ref().and_then(|script| script.facing())
     }
 
     /// Whether this frame's Escape belongs to the game, not to closing the chat.

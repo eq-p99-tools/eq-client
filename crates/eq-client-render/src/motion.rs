@@ -267,6 +267,7 @@ impl Controls {
         &self,
         keys: &ButtonInput<KeyCode>,
         map: &KeyMap,
+        scripted: &[Act],
         focused: bool,
         (yaw, heading): (f32, f32),
         looking_ahead: bool,
@@ -274,10 +275,9 @@ impl Controls {
         // A complete tap can arrive between render frames. Preserve its press edge
         // for this one sample without mutating Bevy's shared held-key state.
         let keys = sample_keys(keys, map);
-        let keys = &keys;
+        let held = map.holding(&keys, scripted);
         let mut intent = movement_input(
-            keys,
-            map,
+            held,
             (focused, looking_ahead, self.autorun),
             yaw,
             heading,
@@ -290,9 +290,8 @@ impl Controls {
         }
         // Pure sidesteps have priority over camera-relative keys, but do not
         // combine with forward/back arrows until diagonal wire behavior is measured.
-        let sideways = map.axis(keys, Act::StrafeLeft, Act::StrafeRight);
-        if focused && sideways != 0.0 && !map.held(keys, Act::Forward) && !map.held(keys, Act::Back)
-        {
+        let sideways = held.axis(Act::StrafeLeft, Act::StrafeRight);
+        if focused && sideways != 0.0 && !held.held(Act::Forward) && !held.held(Act::Back) {
             let radians = eq_client_core::render_heading(heading);
             intent.preserve_facing = true;
             if let Some(speed) = self.strafe_speed {
@@ -307,12 +306,17 @@ impl Controls {
         }
         intent
     }
+    /// Starts motion afresh, as an admission, a zone or a server's
+    /// correction does. The walk toggle is the player's and stays as they
+    /// left it, as walking is never faster than running (whether the
+    /// program keeps it is unread, recording checklist 6.363).
     pub fn reset(&mut self, speed: Option<f32>) {
         *self = Self {
             speed,
             last_sent: self.last_sent,
             last_answer: self.last_answer,
             last_jump: self.last_jump,
+            walking: self.walking,
             ..Self::default()
         };
     }
@@ -565,10 +569,23 @@ pub(super) fn input(
         }
     }
     let current_heading = accepted.position.heading;
+    // A script's `face` step turns the player as moving with the
+    // camera-relative keys does: the facing it names at once, the heading
+    // sent toward it at the turn keys' rate.
+    if focused && let Some(heading) = keys.scripted_facing() {
+        controls.facing = Some(heading.rem_euclid(512.0));
+    }
     let shown = controls.facing.unwrap_or(current_heading);
     let sampled = controls.taps.take(&keyboard);
     let looking_ahead = focused && look.is_some_and(|look| look.held && look.left);
-    let intent = controls.intent(&sampled, map, focused, (camera.yaw, shown), looking_ahead);
+    let intent = controls.intent(
+        &sampled,
+        map,
+        keys.scripted(),
+        focused,
+        (camera.yaw, shown),
+        looking_ahead,
+    );
     let MotionInput {
         mode,
         speed,
@@ -746,6 +763,7 @@ pub(super) fn input(
         debug!(
             fall_distance = fall.fall_distance,
             impact_speed = fall.impact_speed,
+            carried_weight = online.world().carried_weight(),
             damage = cost.damage,
             safe_fall = cost.safe_fall,
             "Landing"
@@ -1176,18 +1194,14 @@ struct MotionInput {
 /// the camera-relative forward key does (Adam's observation of the official
 /// client; inferred, recording checklist 6.341).
 fn movement_input(
-    keyboard: &ButtonInput<KeyCode>,
-    map: &KeyMap,
+    held: crate::keys::Holding,
     (focused, looking_ahead, autorun): (bool, bool, bool),
     camera_yaw: f32,
     current_heading: f32,
     speed: f32,
     backward_speed: Option<f32>,
 ) -> MotionInput {
-    let (ahead, behind) = (
-        map.held(keyboard, Act::Forward),
-        map.held(keyboard, Act::Back),
-    );
+    let (ahead, behind) = (held.held(Act::Forward), held.held(Act::Back));
     let backing = focused && behind && !ahead;
     // Autorun runs on whatever has the keyboard, as held forward does.
     let forward = (focused && ahead && !behind) || (autorun && !backing);
@@ -1206,9 +1220,9 @@ fn movement_input(
             MovementMode::Forward,
             speed,
             camera_relative_direction(
-                map.axis(keyboard, Act::CameraLeft, Act::CameraRight),
-                f32::from(looking_ahead || map.held(keyboard, Act::CameraForward))
-                    - f32::from(map.held(keyboard, Act::CameraBack)),
+                held.axis(Act::CameraLeft, Act::CameraRight),
+                f32::from(looking_ahead || held.held(Act::CameraForward))
+                    - f32::from(held.held(Act::CameraBack)),
                 camera_yaw,
             ),
         )
@@ -1223,7 +1237,7 @@ fn movement_input(
         (mode, direction)
     };
     let turn = if focused {
-        map.axis(keyboard, Act::TurnRight, Act::TurnLeft)
+        held.axis(Act::TurnRight, Act::TurnLeft)
     } else {
         0.0
     };
@@ -1834,6 +1848,73 @@ mod tests {
     }
 
     #[test]
+    fn a_running_drop_off_a_ledge_at_the_live_cadence_lands_at_the_read_steps_speed() {
+        use eq_client_assets::falls::{FallLanding, TITANIUM};
+        // Live's local EQEmu drops (11-01): a run off a ledge this high,
+        // the impact the client logged, and the damage for a carried weight
+        // of 0, of 16.5 (what the four drops fit) and of 18 (the inventory
+        // window two hours earlier): T = whole weight / 100 + v - 4.
+        for (height, impact, damages) in [
+            (30.2, 90.0, [2, 4, 4]),
+            (50.2, 110.8, [23, 28, 29]),
+            (80.2, 144.2, [103, 113, 114]),
+            (100.2, 157.1, [148, 161, 162]),
+        ] {
+            let ledge = |x0: f32, x1: f32, y: f32| {
+                [
+                    [[x0, y, -20.0], [x1, y, -20.0], [x1, y, 20.0]],
+                    [[x0, y, -20.0], [x1, y, 20.0], [x0, y, 20.0]],
+                ]
+            };
+            let [a, b] = ledge(-40.0, 0.0, height);
+            let [c, d] = ledge(-40.0, 400.0, 0.0);
+            let world = CollisionWorld::new([a, b, c, d]).unwrap();
+            let physics = climbing(
+                physics(InstalledClient::Titanium, None),
+                InstalledClient::Titanium,
+                &HUMAN,
+            );
+            let mut airborne = AirborneController::default();
+            let mut feet = Vec3::new(-20.0, height, 0.0);
+            // About 100 frames a second: each sample waits out the 100 ms
+            // gate, then the frame that sends it, up to 21 ms.
+            let spans = [0.10, 0.11, 0.12, 0.105, 0.121];
+            let landing = (0..200)
+                .find_map(|sample| {
+                    let span = spans[sample % spans.len()];
+                    feet = fall_step(
+                        &mut airborne,
+                        &world,
+                        physics,
+                        Some(physics.climb),
+                        feet,
+                        Vec3::X * 43.0 * span,
+                        span,
+                        HUMAN.height,
+                        false,
+                    );
+                    airborne.take_landing()
+                })
+                .expect("the run lands");
+            assert!(feet.y.abs() < 0.01, "{height}: {feet}");
+            assert!(
+                (landing.impact_speed - impact).abs() < 0.06,
+                "{height}: {landing:?}"
+            );
+            for (weight, damage) in [0.0, 16.5, 18.0].into_iter().zip(damages) {
+                let cost = TITANIUM.landing_cost(FallLanding {
+                    impact_speed: landing.impact_speed,
+                    carried_weight: weight,
+                    safe_fall: 0,
+                    safe_fall_ranks: 0,
+                    zone: 1,
+                });
+                assert_eq!(cost.damage, damage, "{height} at {weight}: {landing:?}");
+            }
+        }
+    }
+
+    #[test]
     fn a_landing_costs_what_the_installed_clients_rule_says() {
         let floor = CollisionWorld::new([
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
@@ -1896,7 +1977,7 @@ mod tests {
         let mut keys = ButtonInput::default();
         // On, with nothing held, and with the keyboard elsewhere.
         for focused in [true, false] {
-            let intent = controls.intent(&keys, &map, focused, (0.0, 0.0), false);
+            let intent = controls.intent(&keys, &map, &[], focused, (0.0, 0.0), false);
             assert_eq!(intent.mode, MovementMode::Forward);
             // Along the player's heading.
             let radians = eq_client_core::render_heading(0.0);
@@ -1909,11 +1990,11 @@ mod tests {
         }
         // Turning keeps it running.
         keys.press(KeyCode::ArrowLeft);
-        let intent = controls.intent(&keys, &map, true, (0.0, 0.0), false);
+        let intent = controls.intent(&keys, &map, &[], true, (0.0, 0.0), false);
         assert!(intent.direction != Vec3::ZERO && intent.turn != 0.0);
         // Back wins while held.
         keys.press(KeyCode::ArrowDown);
-        let intent = controls.intent(&keys, &map, true, (0.0, 0.0), false);
+        let intent = controls.intent(&keys, &map, &[], true, (0.0, 0.0), false);
         assert_eq!(intent.mode, MovementMode::Backward);
     }
 
@@ -1930,20 +2011,20 @@ mod tests {
         assert!(!keys.pressed(KeyCode::ArrowUp));
         assert_ne!(
             controls
-                .intent(&keys, &KeyMap::default(), true, (0.0, 0.0), false)
+                .intent(&keys, &KeyMap::default(), &[], true, (0.0, 0.0), false)
                 .direction,
             Vec3::ZERO
         );
         assert_eq!(
             controls
-                .intent(&keys, &KeyMap::default(), false, (0.0, 0.0), false)
+                .intent(&keys, &KeyMap::default(), &[], false, (0.0, 0.0), false)
                 .direction,
             Vec3::ZERO
         );
         keys.clear();
         assert_eq!(
             controls
-                .intent(&keys, &KeyMap::default(), true, (0.0, 0.0), false)
+                .intent(&keys, &KeyMap::default(), &[], true, (0.0, 0.0), false)
                 .direction,
             Vec3::ZERO
         );
@@ -1951,7 +2032,7 @@ mod tests {
         keys.release(KeyCode::ArrowDown);
         assert_eq!(
             controls
-                .intent(&keys, &KeyMap::default(), true, (0.0, 0.0), false)
+                .intent(&keys, &KeyMap::default(), &[], true, (0.0, 0.0), false)
                 .mode,
             MovementMode::Backward
         );
@@ -2096,12 +2177,13 @@ mod tests {
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), true, (0.0, heading), false)
+                    .intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
             controls.strafe_speed = Some(3.0);
-            let right = controls.intent(&keys, &KeyMap::default(), true, (0.0, heading), false);
+            let right =
+                controls.intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false);
             assert_eq!(right.mode, MovementMode::Strafe);
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
@@ -2109,22 +2191,48 @@ mod tests {
             assert!(right.direction.dot(facing.cross(Vec3::Y)) > 0.999);
             keys.reset_all();
             keys.press(KeyCode::ArrowLeft);
-            let left = controls.intent(&keys, &KeyMap::default(), true, (0.0, heading), false);
+            let left = controls.intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false);
             assert!((left.direction + right.direction).length() < 0.0001);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), false, (0.0, heading), false)
+                    .intent(&keys, &KeyMap::default(), &[], false, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), true, (0.0, heading), false)
+                    .intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
         }
+    }
+
+    #[test]
+    fn a_scripts_held_command_moves_whatever_keys_the_table_gives_it() {
+        let controls = Controls {
+            speed: Some(6.0),
+            ..Controls::default()
+        };
+        let keys = ButtonInput::<KeyCode>::default();
+        let titanium = KeyMap::for_client(InstalledClient::Titanium);
+        // The Titanium table gives the camera-relative forward no key, and
+        // a script holding it still moves.
+        assert_eq!(titanium.keys(Act::CameraForward).count(), 0);
+        let held = |scripted: &[Act], focused, heading| {
+            controls
+                .intent(&keys, &titanium, scripted, focused, (0.0, heading), false)
+                .direction
+        };
+        assert!((held(&[Act::CameraForward], true, 0.0).length() - 1.0).abs() < 1e-4);
+        // Forward goes the way the player faces.
+        let ahead = held(&[Act::Forward], true, 128.0);
+        let radians = eq_client_core::render_heading(128.0);
+        assert!((ahead - Vec3::new(radians.sin(), 0.0, radians.cos())).length() < 1e-4);
+        // Without the keyboard, as without a key, nothing moves.
+        assert_eq!(held(&[Act::Forward], false, 128.0), Vec3::ZERO);
+        assert_eq!(held(&[], true, 128.0), Vec3::ZERO);
     }
 
     #[test]
@@ -2140,9 +2248,29 @@ mod tests {
         };
         assert_eq!(request.mode, MovementMode::Walk);
         assert!((request.position.x.hypot(request.position.y) - 0.2).abs() < 0.001);
-        app.world_mut().resource_mut::<Controls>().reset(None);
-        assert!(!app.world().resource::<Controls>().walking);
-        assert!(app.world().resource::<Controls>().walk_speed.is_none());
+        // A server's correction, as after a gm goto, starts motion afresh
+        // but leaves the toggle as the player left it (6.363), so the next
+        // grant walks again.
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.reset(None);
+        assert!(controls.walking);
+        assert!(controls.walk_speed.is_none());
+        controls.grant(eq_client_core::world::MotionGrant {
+            units_per_second: Some(6.0),
+            backward_units_per_second: None,
+            walk_units_per_second: Some(2.0),
+            strafe_units_per_second: None,
+            falls: false,
+        });
+        controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected walking movement after the correction")
+        };
+        assert_eq!(request.mode, MovementMode::Walk);
         let (mut app, _) = self::app();
         app.world_mut().resource_mut::<Controls>().walk_speed = Some(2.0);
         app.world_mut()
