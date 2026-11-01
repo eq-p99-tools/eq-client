@@ -59,6 +59,20 @@ unbound; a Mac-era installation takes this client's own, the keys listed below.
 The Options window's Keys page lists them. Add `--camera
 orthographic` for a locked isometric-style projection.
 
+Press **F9** to detach the camera and press it again to snap back to the
+character. While detached, movement keys fly the camera through walls and
+terrain; turn keys and right-drag change its direction. Page Up or Jump raises
+it, and Page Down lowers it. The character's movement keys and autorun are
+stopped while the camera is free; falls and server updates still affect the
+character. A status line shows the key that returns to the character.
+
+To choose a different toggle, open Options (Alt+O), select Keyboard and filter
+to Camera, then click the primary or alternate key beside **Toggle Free
+Camera** and press the desired key or chord. The same page edits the other
+assignments: Escape cancels and Delete clears a key. Assigning a chord already
+used elsewhere moves it to the chosen action. Keys are saved per character in
+the settings directory (`keys.txt` seeds characters without their own file).
+
 To validate asset loading without opening a graphics window:
 
 ```console

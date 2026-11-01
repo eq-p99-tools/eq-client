@@ -66,6 +66,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::Shown>()
         .init_resource::<windows::Stack>()
         .init_resource::<keys::Typing>()
+        .init_resource::<keys::bindings::Bindings>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()
         .init_resource::<confirm::Asked>()
@@ -127,6 +128,8 @@ pub(super) fn schedule(app: &mut App) {
                 .chain()
                 .in_set(Stage::Scene),
             (
+                keys::bindings::persist,
+                keys::bindings::capture,
                 login::claim,
                 windows::pointer::wheel,
                 // A scrollbar's press scrolls its box as the wheel does.
@@ -198,8 +201,7 @@ pub(super) fn schedule(app: &mut App) {
                 ),
             ),
             windows::input,
-            move_player,
-            motion::input,
+            (crate::camera::toggle_free, move_player, motion::input).chain(),
         )
             .chain()
             .in_set(Stage::Input),
@@ -222,6 +224,7 @@ pub(super) fn schedule(app: &mut App) {
                 (login::login_screen, login::worlds_screen, login::scroll).chain(),
                 skinned::scroll_lists,
                 motion::interpolate,
+                crate::camera::fly_camera,
                 orbit_camera,
                 update_hud,
                 // Opens the give, quantity and training windows before their

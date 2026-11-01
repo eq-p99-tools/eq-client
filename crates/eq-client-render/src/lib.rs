@@ -816,7 +816,7 @@ fn move_player(
     collision: Res<Collision>,
     mut airborne: Local<eq_client_core::movement::AirborneController>,
     mut players: Query<(&mut Transform, &PlayerBody), With<Player>>,
-    mut cameras: Query<&mut OrbitCamera>,
+    mut cameras: Query<(&mut OrbitCamera, Has<camera::FreeCamera>)>,
 ) {
     if online.enabled {
         airborne.reset();
@@ -825,7 +825,10 @@ fn move_player(
     let Ok((mut player, body)) = players.single_mut() else {
         return;
     };
-    let accepts_input = keys.focused();
+    let Ok((mut camera, free)) = cameras.single_mut() else {
+        return;
+    };
+    let accepts_input = keys.focused() && !free;
     let (horizontal, vertical) = if accepts_input {
         (
             keys.map
@@ -835,9 +838,6 @@ fn move_player(
         )
     } else {
         (0.0, 0.0)
-    };
-    let Ok(mut camera) = cameras.single_mut() else {
-        return;
     };
     let direction = camera_relative_direction(horizontal, vertical, camera.yaw);
     if direction != Vec3::ZERO {
@@ -864,7 +864,7 @@ fn move_player(
         physics,
         eq_client_core::movement::MotionStep {
             horizontal: delta,
-            jump: keys.pressed(keys::Act::Jump),
+            jump: accepts_input && keys.pressed(keys::Act::Jump),
             seconds: time.delta_secs(),
             height: body.height,
         },
@@ -897,12 +897,16 @@ fn update_hud(
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
     mut labels: Query<(&mut Text, &mut Visibility), With<HudText>>,
+    free: Query<(), With<camera::FreeCamera>>,
 ) {
     let (Ok(player), Ok((mut label, mut visibility))) = (players.single(), labels.single_mut())
     else {
         return;
     };
     let mut lines = vec![notices.status.text().to_owned()];
+    if !free.is_empty() {
+        lines.push(map.named(keys::Act::FreeCamera, "Free camera - return to character"));
+    }
     let nearest = interact::nearest(&online);
     lines.push(match nearest {
         Some(interact::Use::Door(..)) => map.help(&[(keys::Act::Use, "use the door")]),

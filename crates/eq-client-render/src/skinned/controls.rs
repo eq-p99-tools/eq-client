@@ -891,6 +891,7 @@ pub(crate) fn fill_lists(
     mut commands: Commands,
     filter: Res<KeyFilter>,
     keys: Res<KeyMap>,
+    bindings: Res<crate::keys::bindings::Bindings>,
     mut lists: Query<(Entity, &mut ListRows, Option<&Children>)>,
 ) {
     for (entity, mut rows, children) in &mut lists {
@@ -900,7 +901,7 @@ pub(crate) fn fill_lists(
             // themselves.
             Listing::Training | Listing::Skills | Listing::Merchant | Listing::Raid(_) => continue,
         };
-        if rows.filled && rows.filter == wanted && !keys.is_changed() {
+        if rows.filled && rows.filter == wanted && !keys.is_changed() && !bindings.is_changed() {
             continue;
         }
         if let Some(children) = children {
@@ -931,8 +932,15 @@ pub(crate) fn fill_lists(
                     ChildOf(entity),
                 ))
                 .id();
-            for (words, width) in cells.into_iter().zip(&rows.columns) {
-                commands.spawn((
+            for (column, (mut words, width)) in cells.into_iter().zip(&rows.columns).enumerate() {
+                let assignment = crate::keys::bindings::Assignment {
+                    act,
+                    slot: column.saturating_sub(1),
+                };
+                if column > 0 && bindings.active == Some(assignment) {
+                    "Press key...".clone_into(&mut words);
+                }
+                let mut cell = commands.spawn((
                     theme::text(words, Size::Small, theme::INK_BRIGHT),
                     TextLayout::new(Justify::Left, LineBreak::NoWrap),
                     Node {
@@ -943,6 +951,15 @@ pub(crate) fn fill_lists(
                     },
                     ChildOf(row),
                 ));
+                if column > 0 {
+                    cell.insert((
+                        Button,
+                        assignment,
+                        crate::tooltip::Tooltip(
+                            "Click to assign a key. Escape cancels; Delete clears.".to_owned(),
+                        ),
+                    ));
+                }
             }
         }
         rows.filled = true;
@@ -996,6 +1013,59 @@ impl KeyGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_key_rows_offer_editable_bindings_and_show_the_captured_key() {
+        use crate::keys::{Act, bindings};
+        let mut app = crate::testing::app();
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(WindowId::Options);
+        app.world_mut().resource_mut::<KeyFilter>().0 = Some("Camera".to_owned());
+        let list = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                ListRows {
+                    listing: Listing::Keys,
+                    columns: vec![180.0, 90.0, 90.0],
+                    filled: false,
+                    filter: None,
+                },
+            ))
+            .id();
+        app.add_systems(Update, (bindings::capture, fill_lists).chain());
+        app.update();
+        assert_eq!(app.world().get::<Children>(list).unwrap().len(), 3);
+        let world = app.world_mut();
+        let mut cells = world.query::<(Entity, &bindings::Assignment, &Text)>();
+        let (button, _, text) = cells
+            .iter(world)
+            .find(|(_, cell, _)| cell.act == Act::FreeCamera && cell.slot == 0)
+            .unwrap();
+        assert_eq!(text.0, "F9");
+        crate::clicks::testing::click(&mut app, button);
+        let world = app.world_mut();
+        assert!(
+            world
+                .query::<&Text>()
+                .iter(world)
+                .any(|text| text.0 == "Press key...")
+        );
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F8);
+        app.update();
+        let world = app.world_mut();
+        assert!(
+            world
+                .query::<(&bindings::Assignment, &Text)>()
+                .iter(world)
+                .any(|(cell, text)| cell.act == Act::FreeCamera
+                    && cell.slot == 0
+                    && text.0 == "F8")
+        );
+    }
 
     #[test]
     fn a_scripted_press_lands_where_the_setting_is() {
