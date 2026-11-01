@@ -2569,7 +2569,8 @@ mod tests {
             height: 6.0,
             size: 6.0,
         };
-        let (_, goal) = walk_ends(&online, InstalledClient::Titanium, body, None, Some(&world)).unwrap();
+        let (_, goal) =
+            walk_ends(&online, InstalledClient::Titanium, body, None, Some(&world)).unwrap();
         assert!(goal.y.abs() < 1e-3, "{goal}");
         assert!(
             (goal.x - 4.0).abs() < 1e-3 && (goal.z - 1.0).abs() < 1e-3,
@@ -2588,7 +2589,14 @@ mod tests {
                 }),
             )],
         );
-        let (_, goal) = walk_ends(&online, InstalledClient::Titanium, body, Some(40), Some(&world)).unwrap();
+        let (_, goal) = walk_ends(
+            &online,
+            InstalledClient::Titanium,
+            body,
+            Some(40),
+            Some(&world),
+        )
+        .unwrap();
         assert_eq!(
             goal,
             Vec3::from_array(eq_client_core::render_position(base))

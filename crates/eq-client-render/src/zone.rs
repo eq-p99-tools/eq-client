@@ -88,12 +88,13 @@ impl PreparedEntry {
 impl Entry {
     /// The zone the world admitted the player to, with the player where the
     /// server put them, or why it cannot be shown.
-    /// `scale` is how many times its authored size the installed client
-    /// draws the player's model ([`super::entities::Drawn`]).
+    /// The player's own model is drawn by the installed client's rule, with
+    /// the zone header's classic model scale flag, as every other spawn is
+    /// ([`super::entities::Drawn`]).
     pub(super) fn admission(
         zone_name: &str,
         player: &eq_client_core::PlayerState,
-        scale: f32,
+        (client, flag): (eq_client_assets::ui::InstalledClient, Option<u32>),
         directory: &std::path::Path,
     ) -> Result<Self, String> {
         let zone = eq_client_assets::load_zone(directory, zone_name)
@@ -133,7 +134,12 @@ impl Entry {
                 height,
                 size: eq_client_core::size_or_default(player.race, player.size),
             },
-            scale,
+            scale: super::entities::Drawn::by(
+                client,
+                flag,
+                (player.race, player.gender, player.size),
+            )
+            .scale,
         })
     }
 

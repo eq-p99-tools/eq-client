@@ -63,9 +63,11 @@ pub(super) struct RemoteEntity {
     pub(super) id: u16,
     /// When the server report this entity moves on from came, once placed.
     seen: Option<std::time::Instant>,
-    /// Where its soles were drawn the frame before, since that report: their
-    /// height, and their spot across the ground.
-    soles: Option<(f32, Vec2)>,
+    /// Where its soles were drawn the frame before, since that report, and
+    /// how it falls ([`eq_client_core::carried_soles`]).
+    soles: Option<eq_client_core::DrawnSoles>,
+    /// What is left of the latest report's correction to the drawn model.
+    correction: eq_client_core::Correction,
     /// How far under the reported position a drawn model's soles hang, in
     /// world units; None for a marker, which stays where the server says.
     feet: Option<f32>,
@@ -86,6 +88,7 @@ impl RemoteEntity {
             id,
             seen: None,
             soles: None,
+            correction: eq_client_core::Correction::NONE,
             feet,
             size,
             carried: None,
@@ -122,9 +125,23 @@ impl Drawn {
         world: &eq_client_core::world::ClientWorld,
         (race, gender, size): (u32, u32, f32),
     ) -> Self {
+        Self::by(
+            client,
+            world.classic_model_scale_flag(),
+            (race, gender, size),
+        )
+    }
+
+    /// How `client` draws a spawn of this race, gender and sent size in a
+    /// zone whose header sent this classic model scale flag.
+    pub(crate) fn by(
+        client: eq_client_assets::ui::InstalledClient,
+        flag: Option<u32>,
+        (race, gender, size): (u32, u32, f32),
+    ) -> Self {
         let rule = client.model_scale();
         let zone = eq_client_assets::scale::ZoneScale {
-            classic_reduced: world.classic_model_scale_flag().is_some_and(|flag| flag != 0),
+            classic_reduced: flag.is_some_and(|flag| flag != 0),
         };
         Self {
             size: rule.size(race, gender, size),
@@ -334,7 +351,11 @@ fn draw(
         // position its feet hang under; the model hangs by it in model
         // units, as it is scaled below its root, and `interpolate` stands its
         // root on the floor by it in world units.
-        let drawn = Drawn::of(client, state.world(), (spawn.race, spawn.gender, spawn.size));
+        let drawn = Drawn::of(
+            client,
+            state.world(),
+            (spawn.race, spawn.gender, spawn.size),
+        );
         let scale = drawn.scale.max(0.01);
         let feet = drawn.feet();
         character::spawn_prepared(commands, entity, &asset, feet / scale);
@@ -391,8 +412,9 @@ fn draw(
 }
 
 /// Draws each spawn where the installed client's program carries it on from
-/// its latest report ([`eq_client_core::movement::carry`]), easing the
-/// model toward that point. A drawn corpse finds how it leans to lie along the floor
+/// its latest report ([`eq_client_core::movement::carry`]), sliding the
+/// model onto that point over a tenth of a second after each report
+/// ([`eq_client_core::Correction`]). A drawn corpse finds how it leans to lie along the floor
 /// under it as it is first drawn and when a report moves it
 /// ([`eq_client_core::corpse_tilt`]), for [`character::lie`] to lay it by.
 #[allow(clippy::needless_pass_by_value)]
@@ -412,6 +434,15 @@ pub(super) fn interpolate(
     let weight = 1.0 - (-time.delta_secs().min(0.1) / 0.1).exp();
     let now = std::time::Instant::now();
     let dialect = dialect(settings.0.installed_client);
+    // A spawn on the ground falls as the player does, in the program's units
+    // a 50 ms step.
+    let physics = crate::motion::physics(settings.0.installed_client, state.world().zone_gravity());
+    let step = eq_client_assets::falls::STEP_SECONDS;
+    let fall = eq_client_core::CarriedFall {
+        gravity: physics.gravity * step * step,
+        kept: physics.air_factor,
+    };
+    let steps = time.delta_secs() / step;
     for (mut entity, mut transform, corpse) in &mut entities {
         let Some(spawn) = state.world().spawn(entity.id) else {
             continue;
@@ -451,8 +482,10 @@ pub(super) fn interpolate(
         );
         if let (true, Some(feet), Some(world)) = (on_floor, entity.feet, world) {
             let soles = target - Vec3::Y * feet;
-            let height = eq_client_core::carried_soles(world, entity.soles, soles, entity.size);
-            entity.soles = Some((height, Vec2::new(soles.x, soles.z)));
+            let drawn =
+                eq_client_core::carried_soles(world, entity.soles, soles, feet, fall, steps);
+            entity.soles = Some(drawn);
+            let height = drawn.height;
             target.y += height - soles.y;
             if let (true, Some(mut corpse)) = (fresh, corpse)
                 && let Some(length) = corpse.length
@@ -472,9 +505,13 @@ pub(super) fn interpolate(
             report_snap(entity.id, (spawn, forward), transform.translation, target);
         }
         if first || transform.translation.distance_squared(target) > 100.0 * 100.0 {
+            entity.correction = eq_client_core::Correction::NONE;
             transform.translation = target;
+        } else if fresh {
+            entity.correction = eq_client_core::Correction::new(transform.translation, target);
+            transform.translation = entity.correction.advance(target, 0.0);
         } else {
-            transform.translation = transform.translation.lerp(target, weight);
+            transform.translation = entity.correction.advance(target, time.delta_secs());
         }
         transform.rotation = transform.rotation.slerp(
             Quat::from_rotation_y(eq_client_core::render_heading(spawn.position.heading)),

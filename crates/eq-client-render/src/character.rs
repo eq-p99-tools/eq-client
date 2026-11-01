@@ -566,7 +566,7 @@ pub(super) fn animate(
         if measuring {
             log_soles(
                 &mut character,
-                (id, id.and_then(|id| world.spawn(id)), remote.and_then(|remote| remote.feet())),
+                (id, id.and_then(|id| world.spawn(id)), remote),
                 (&posed, &placed),
                 (transform.translation, changed, now),
             );
@@ -579,7 +579,7 @@ pub(super) fn animate(
             character.asset.top(&posed, &character.shown),
             lying,
         ) {
-            overhead.set_if_neq(super::names::Overhead(top * character.scale + character.lift));
+            overhead.set_if_neq(character.overhead(top));
         }
         // Held items follow their hand or shield point, and stay hidden on a
         // skeleton without one rather than sitting at the model's origin.
@@ -643,6 +643,12 @@ impl AnimatedCharacter {
 }
 
 impl AnimatedCharacter {
+    /// Where its name rides over its root when its pose's top is `top`, in
+    /// the model's own units.
+    fn overhead(&self, top: f32) -> super::names::Overhead {
+        super::names::Overhead(top * self.scale + self.lift)
+    }
+
     /// Where its model hangs from its root, leaning by `tilt` about its
     /// soles' point under the root, which stays where the root puts it.
     /// Upright, exactly as it was first hung.
@@ -701,10 +707,15 @@ pub(super) fn lie(
 /// against. It changes nothing drawn.
 fn log_soles(
     character: &mut AnimatedCharacter,
-    (id, spawn, feet): (Option<u16>, Option<&eq_client_core::world::Spawn>, Option<f32>),
+    (id, spawn, remote): (
+        Option<u16>,
+        Option<&eq_client_core::world::Spawn>,
+        Option<&super::entities::RemoteEntity>,
+    ),
     (posed, (placed, collision)): (&[Mat4], &Placed),
     (root, changed, now): (Vec3, bool, std::time::Instant),
 ) {
+    let feet = remote.and_then(super::entities::RemoteEntity::feet);
     let (clip, held) = character.clip;
     let model = placed.get(character.model).ok();
     let floors = collision
@@ -1813,8 +1824,12 @@ mod tests {
         let unscaled = testing::prepared(app.world_mut());
         let feet = 3.75;
         let (root, plain) = (
-            app.world_mut().spawn(Transform::from_xyz(4.0, -2.0, 7.0)).id(),
-            app.world_mut().spawn(Transform::from_xyz(4.0, -2.0, 7.0)).id(),
+            app.world_mut()
+                .spawn(Transform::from_xyz(4.0, -2.0, 7.0))
+                .id(),
+            app.world_mut()
+                .spawn(Transform::from_xyz(4.0, -2.0, 7.0))
+                .id(),
         );
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {

@@ -264,8 +264,7 @@ impl Controls {
         let mut intent = movement_input(
             keys,
             map,
-            focused,
-            looking_ahead,
+            (focused, looking_ahead),
             yaw,
             heading,
             self.speed.unwrap_or(0.0),
@@ -1104,8 +1103,7 @@ struct MotionInput {
 fn movement_input(
     keyboard: &ButtonInput<KeyCode>,
     map: &KeyMap,
-    focused: bool,
-    looking_ahead: bool,
+    (focused, looking_ahead): (bool, bool),
     camera_yaw: f32,
     current_heading: f32,
     speed: f32,
@@ -1195,8 +1193,10 @@ mod tests {
     #[test]
     fn each_sample_plays_over_the_span_it_covers_in_turn() {
         use bevy::prelude::{Transform, Vec3};
-        let mut controls = super::Controls::default();
-        controls.sent_span = super::MAX_CYCLE;
+        let mut controls = super::Controls {
+            sent_span: super::MAX_CYCLE,
+            ..super::Controls::default()
+        };
         controls.display_sample(
             Transform::IDENTITY,
             eq_client_core::world_position([10.0, 0.0, 0.0], 0.0),
@@ -1240,8 +1240,10 @@ mod tests {
         let mut out: Option<(u32, f32, f32)> = None;
         let mut sent = 0_usize;
         let mut shown = 0.0_f32;
-        for frame in 0..(seconds / FRAME) as u32 {
-            let now = frame as f32 * FRAME;
+        let frames = std::iter::successors(Some(0_u16), |frame| frame.checked_add(1))
+            .map(|frame| (u32::from(frame), f32::from(frame) * FRAME))
+            .take_while(|(_, now)| *now < seconds);
+        for (frame, now) in frames {
             if let Some((due, end, span)) = out
                 && frame >= due
             {
