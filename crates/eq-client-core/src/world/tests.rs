@@ -2435,6 +2435,7 @@ fn a_zone_header_sent_again_changes_the_sky_fog_and_far_clip() {
             music: None,
             sky_lock: None,
             graveyard_minutes: None,
+            classic_model_scale_flag: None,
         };
         (sky, description)
     };

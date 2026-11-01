@@ -235,40 +235,172 @@ pub fn grounded_soles(
     world.ground(soles, reach, 0.5).unwrap_or(soles.y)
 }
 
+/// How a carried spawn on the ground falls between the server's reports, in
+/// the program's own units: its fall speed is in units a 50 ms step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CarriedFall {
+    /// What the fall speed gains each step: the zone header's gravity, 0.4
+    /// by default.
+    pub gravity: f32,
+    /// The share of the fall speed each call keeps, the vertical D: 0.99.
+    pub kept: f32,
+}
+
+/// Where a carried model's soles were drawn the frame before, since its
+/// latest report.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrawnSoles {
+    /// Their height, in renderer coordinates.
+    pub height: f32,
+    /// Their spot across the ground.
+    pub spot: glam::Vec2,
+    /// Its fall speed, in units a 50 ms step, downward negative: 0 while it
+    /// stands on a floor. None until it has stood on one since the report.
+    pub fall: Option<f32>,
+}
+
 /// Where a remote model's soles are drawn, in renderer coordinates, as the
-/// client carries it on between the server's reports: on the floor found
-/// from where its soles were drawn the frame before (`previous`: their
-/// height, and their spot across the ground), reaching up 0.6 × size as
-/// [`grounded_soles`] does and down 0.5 plus twice the distance moved
-/// across the ground since, so it follows a slope down as steep as 63° at
-/// any frame time. Of the floors in that reach, the one nearest those
-/// soles: a spawn on a bridge or a ledge stays on it while the ground runs
-/// on below. With no frame since the latest report, or no floor in that
-/// reach (a ledge, a flyer, water), [`grounded_soles`] decides from
-/// `soles`, the reported height carried on. Neither `EQEmu` nor P99 sends
-/// vertical motion while its own z follows the floor, so a spawn carried at
-/// its reported height would float down a slope and sink into one going up
-/// until the next report. Both programs stand a spawn on the ground on the
-/// floor under it each step, a face at any angle (read, Decompile R-s and
-/// R-z, 11-01; [`movement::CollisionWorld::ground`]); P99 walks NPCs on
-/// faces of 52° to 55°. They rise to the floor at once and come down under
-/// gravity, where this comes down at once (checklist 6.335); the reach
-/// down's 63° is ours (recording item 6.276).
+/// client carries it on between the server's reports, `steps` 50 ms steps
+/// after the frame before (`previous`), as both programs draw a spawn on the
+/// ground: its height falls from where it was drawn under the zone's gravity
+/// (the fall speed gains `fall.gravity` × steps, then keeps `fall.kept` of
+/// itself, and the height moves by it × steps, steps held to 3), and where
+/// its soles pass a floor, or one lies above them within its stand height
+/// ([`z_offset`]), it stands on the floor nearest the height it was drawn
+/// at, its fall stopped. So it rises to the floor at once, comes down a slope or off a
+/// ledge under gravity, a little behind the floor going down, and with no
+/// floor under it falls until the next report. Read for Titanium (Decompile
+/// R-z, 11-01: the gravity path 0x4850a0, the landing check 0x48b6c5 and
+/// the floor finder 0x48a0fc, which takes a face at any angle) and in part
+/// for `EQMac` (0x50ba07, 0x4b3a84, 0x4b479e). The reach up is read too:
+/// both programs sweep for the floor from the spawn's origin, its stand
+/// height above its feet (6.344; Titanium's height inferred as
+/// [`z_offset`], 6.347), the `EQMac` sweep starting a further 0.5 up, which
+/// is left out here, as is the sweep's radius (6.336). Neither `EQEmu` nor P99 sends vertical motion while
+/// its own z follows the floor, so a model drawn at its reported height
+/// would float down a slope and sink into one going up until the next
+/// report.
+///
+/// It falls only once a floor has come within that stand height of its
+/// carried soles, above or below, since its latest report: at the report it stands
+/// on such a floor above them, or falls from them onto one below, as the
+/// program falls from a reported height. One reported further off the floor
+/// keeps its carried height (`soles`), as a flyer does, until a floor comes
+/// within that reach. The program leaves a levitating or flying spawn out of
+/// gravity by its movement mode, which this client doesn't read: until it
+/// does (checklist 6.337), this is the only way a flyer and a spawn reported
+/// in mid-air are told apart, and inferred, the stand height's reach down
+/// included. A P99 player running downhill is reported up to 1.4 over our
+/// floor at a 0.625 × size feet offset (pair 967 of the 11-01 sitting).
 #[must_use]
 pub fn carried_soles(
     world: &movement::CollisionWorld,
-    previous: Option<(f32, glam::Vec2)>,
+    previous: Option<DrawnSoles>,
     soles: glam::Vec3,
-    race: u32,
-    size: f32,
-) -> f32 {
-    previous
-        .and_then(|(height, spot)| {
-            let step = glam::Vec2::new(soles.x, soles.z).distance(spot);
-            let from = glam::Vec3::new(soles.x, height, soles.z);
-            world.nearest_ground(from, 0.6 * size_or_default(race, size), 0.5 + 2.0 * step)
-        })
-        .unwrap_or_else(|| grounded_soles(world, soles, race, size))
+    (race, size): (u32, f32),
+    fall: CarriedFall,
+    steps: f32,
+) -> DrawnSoles {
+    let reach = z_offset(race, size);
+    let spot = glam::Vec2::new(soles.x, soles.z);
+    if let Some(DrawnSoles {
+        height,
+        fall: Some(speed),
+        ..
+    }) = previous
+    {
+        let steps = if steps.is_finite() {
+            steps.clamp(0.0, 3.0)
+        } else {
+            0.0
+        };
+        let speed = (speed - fall.gravity * steps) * fall.kept;
+        let below = (-speed * steps).max(0.0);
+        let from = glam::Vec3::new(soles.x, height, soles.z);
+        return match world.nearest_ground(from, reach, below) {
+            Some(floor) => DrawnSoles {
+                height: floor,
+                spot,
+                fall: Some(0.0),
+            },
+            None => DrawnSoles {
+                height: height - below,
+                spot,
+                fall: Some(speed),
+            },
+        };
+    }
+    match world.ground(soles, reach, reach) {
+        // A floor above the soles, or at them, it stands on at once.
+        Some(floor) if floor >= soles.y => DrawnSoles {
+            height: floor,
+            spot,
+            fall: Some(0.0),
+        },
+        // One under them it falls onto from there.
+        Some(_) => DrawnSoles {
+            height: soles.y,
+            spot,
+            fall: Some(0.0),
+        },
+        None => DrawnSoles {
+            height: soles.y,
+            spot,
+            fall: None,
+        },
+    }
+}
+
+/// How long a drawn model takes to slide from where it was drawn onto a new
+/// report's carried point: 0.1 s.
+pub const CORRECTION_SECONDS: f32 = 0.1;
+
+/// The part of a report's correction a drawn model still has to make. The
+/// official client draws a spawn at its carried point, which each report
+/// moves outright (Titanium read R2, `EQMac` R1); this client draws it at
+/// that point plus what is left of the jump the report made, which shrinks
+/// evenly to nothing over [`CORRECTION_SECONDS`], so a correction shows as a
+/// short slide and steady motion is drawn where the program draws it, not
+/// behind it. Display only, and ours (checklist 6.345).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Correction {
+    /// The jump left to make: where the model was drawn less where the
+    /// report put it.
+    offset: glam::Vec3,
+    /// The seconds of the slide left.
+    left: f32,
+}
+
+impl Correction {
+    /// No correction left to make.
+    pub const NONE: Self = Self {
+        offset: glam::Vec3::ZERO,
+        left: 0.0,
+    };
+
+    /// Starts the slide from where the model was `drawn` onto a report's
+    /// carried point, `target`.
+    #[must_use]
+    pub fn new(drawn: glam::Vec3, target: glam::Vec3) -> Self {
+        let offset = drawn - target;
+        if offset.is_finite() {
+            Self {
+                offset,
+                left: CORRECTION_SECONDS,
+            }
+        } else {
+            Self::default()
+        }
+    }
+
+    /// Where the model is drawn `seconds` on, when its carried point is
+    /// `target` then.
+    pub fn advance(&mut self, target: glam::Vec3, seconds: f32) -> glam::Vec3 {
+        if seconds.is_finite() && seconds > 0.0 {
+            self.left = (self.left - seconds).max(0.0);
+        }
+        target + self.offset * (self.left / CORRECTION_SECONDS)
+    }
 }
 
 /// How far a corpse leans to lie along the floor under it, each way, at
@@ -322,9 +454,8 @@ impl Tilt {
 /// the soles, at half the length and at the length along the side the body
 /// lies, and at two points across the body from its middle, an eighth of
 /// the length to each side (half of a side span a quarter of the length),
-/// each with the reach
-/// [`carried_soles`] gives a step that far across the ground: up 0.6 × size
-/// and down 0.5 plus the distance from the soles. The pitch is the
+/// each with a reach of up 0.6 × size and down 0.5 plus the distance from
+/// the soles. The pitch is the
 /// least-squares slope of the floor along the body over the samples it has,
 /// and the roll the slope between the two side samples, each clamped to
 /// [`MOST_TILT`]. A sample with no floor in reach is skipped: with no floor
@@ -465,60 +596,96 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn a_carried_spawn_keeps_to_the_floor_up_and_down_a_slope() {
-        // A size 6 skeleton (race 60) walking 11.8 units a second, reported
-        // on the floor every 5 s with no vertical motion, as EQEmu reports a
-        // walking NPC; drawn at 60 and at 10 frames a second.
+    /// Both programs' fall for a spawn on the ground: the default gravity of
+    /// 0.4 a step and the vertical D of 0.99 (Decompile R-z).
+    const FALL: super::CarriedFall = super::CarriedFall {
+        gravity: 0.4,
+        kept: 0.99,
+    };
+
+    /// The most a carried spawn on a ramp of `grade` is drawn over the floor,
+    /// walking 11.8 units a second, reported on the floor every 5 s with no
+    /// vertical motion as `EQEmu` and P99 report a walking NPC, drawn at
+    /// `fps`; it is never drawn under the floor.
+    fn most_over_the_ramp(grade: f32, fps: u16) -> f32 {
         let (race, size, speed) = (60, 6.0, 11.8);
         let feet = super::drawn_feet_offset(race, size);
+        let world = ramp(grade);
+        let mut previous = None;
+        let mut most = 0.0_f32;
+        for frame in 0..=fps * 10 {
+            let t = f32::from(frame) / f32::from(fps);
+            let report = (t / 5.0).floor() * 5.0;
+            if (t - report).abs() < 1e-6 {
+                previous = None;
+            }
+            let x = speed * t;
+            let reported_z = grade * speed * report + feet;
+            let soles = glam::Vec3::from_array(super::render_position(super::WorldPosition {
+                x,
+                y: 0.0,
+                z: reported_z - feet,
+                heading: 0.0,
+            }));
+            let steps = 20.0 / f32::from(fps);
+            let drawn = super::carried_soles(&world, previous, soles, (race, size), FALL, steps);
+            let floor = super::render_position(super::WorldPosition {
+                x,
+                y: 0.0,
+                z: grade * x,
+                heading: 0.0,
+            })[1];
+            assert!(
+                drawn.height >= floor - 0.01,
+                "grade {grade} at {fps} fps, {t:.2} s: drawn {}, under the floor {floor}",
+                drawn.height
+            );
+            most = most.max(drawn.height - floor);
+            previous = Some(drawn);
+        }
+        most
+    }
+
+    #[test]
+    fn a_carried_spawn_keeps_to_the_floor_up_a_slope_and_falls_down_one() {
         // Up to 55°, the steepest P99 walks an NPC on, which the floor test
-        // of 45.6° once refused, leaving it at each report's height.
+        // of 45.6° once refused, leaving it at each report's height. Going
+        // up it stands on the floor at once; going down it falls onto it
+        // under gravity, as the programs' do, a little over it.
         let steepest = 55.0_f32.to_radians().tan();
-        for grade in [
-            0.05_f32, -0.05, 0.19, -0.19, 0.45, -0.45, 0.99, -0.99, steepest, -steepest,
-        ] {
-            let world = ramp(grade);
+        for grade in [0.05_f32, 0.19, 0.45, 0.99, steepest] {
             for fps in [60_u16, 10] {
-                let mut previous = None;
-                for frame in 0..=fps * 10 {
-                    let t = f32::from(frame) / f32::from(fps);
-                    let report = (t / 5.0).floor() * 5.0;
-                    if (t - report).abs() < 1e-6 {
-                        previous = None;
-                    }
-                    let x = speed * t;
-                    let reported_z = grade * speed * report + feet;
-                    let soles =
-                        glam::Vec3::from_array(super::render_position(super::WorldPosition {
-                            x,
-                            y: 0.0,
-                            z: reported_z - feet,
-                            heading: 0.0,
-                        }));
-                    let drawn = super::carried_soles(&world, previous, soles, race, size);
-                    let floor = super::render_position(super::WorldPosition {
-                        x,
-                        y: 0.0,
-                        z: grade * x,
-                        heading: 0.0,
-                    })[1];
-                    assert!(
-                        (drawn - floor).abs() < 0.01,
-                        "grade {grade} at {fps} fps, {t:.2} s: drawn {drawn}, floor {floor}"
-                    );
-                    previous = Some((drawn, glam::Vec2::new(soles.x, soles.z)));
-                }
+                let over = most_over_the_ramp(grade, fps);
+                assert!(over < 0.01, "up {grade} at {fps} fps: {over} over");
+            }
+        }
+        // Going down, the most it is drawn over the floor is the lag the
+        // programs' fall gives (6.335), measured at 60 frames a second, the
+        // largest: none to 19%, 0.05 at 0.45, 0.34 at 45° and 0.78 at 55°
+        // (0.64 and 0.10 at 30 and 10 frames a second).
+        for (grade, lag) in [
+            (0.05_f32, 0.01),
+            (0.19, 0.01),
+            (0.45, 0.05),
+            (0.99, 0.35),
+            (steepest, 0.8),
+        ] {
+            for fps in [60_u16, 30, 10] {
+                let over = most_over_the_ramp(-grade, fps);
+                assert!(
+                    over < lag,
+                    "down {grade} at {fps} fps: {over} over the floor, against the fall's lag of {lag}"
+                );
             }
         }
         // Held at the reported height, as before, it loses the floor two
         // seconds into a 19% climb and is drawn 4.5 under the hill.
         let world = ramp(0.19);
         let soles = glam::Vec3::from_array(super::render_position(super::WorldPosition {
-            x: speed * 2.0,
+            x: 11.8 * 2.0,
             ..Default::default()
         }));
-        assert!((super::grounded_soles(&world, soles, race, size) - soles.y).abs() < 0.001);
+        assert!((super::grounded_soles(&world, soles, 60, 6.0) - soles.y).abs() < 0.001);
     }
 
     #[test]
@@ -534,36 +701,200 @@ mod tests {
             [plate(0.0, 50.0), plate(2.0, 20.0), plate(5.0, 10.0)].concat(),
         )
         .unwrap();
-        // Two units a frame, a long frame: the reach down takes in the ground
-        // under the deck and the reach up the slab, yet it stays on the deck.
+        let standing = |x: f32| super::DrawnSoles {
+            height: 2.0,
+            spot: glam::Vec2::new(x, 0.0),
+            fall: Some(0.0),
+        };
+        // A long frame: the reach up takes in the slab, yet it stays on the
+        // deck.
         let on = super::carried_soles(
             &world,
-            Some((2.0, glam::Vec2::ZERO)),
+            Some(standing(0.0)),
             glam::Vec3::new(2.0, 2.0, 0.0),
-            60,
-            6.0,
+            (60, 6.0),
+            FALL,
+            3.0,
         );
-        assert!((on - 2.0).abs() < 0.001, "{on}");
-        // Off the deck's end, the ground under it is the floor in reach.
-        let off = super::carried_soles(
+        assert!(
+            (on.height - 2.0).abs() < 0.001 && on.fall == Some(0.0),
+            "{on:?}"
+        );
+        // Off the deck's end, it falls to the ground under it.
+        let mut drawn = super::carried_soles(
             &world,
-            Some((2.0, glam::Vec2::new(19.0, 0.0))),
+            Some(standing(19.0)),
             glam::Vec3::new(21.0, 2.0, 0.0),
-            60,
-            6.0,
+            (60, 6.0),
+            FALL,
+            1.0 / 3.0,
         );
-        assert!(off.abs() < 0.001, "{off}");
+        assert!(
+            drawn.height < 2.0 && drawn.fall.is_some_and(|speed| speed < 0.0),
+            "{drawn:?}"
+        );
+        for _ in 0..30 {
+            drawn = super::carried_soles(
+                &world,
+                Some(drawn),
+                glam::Vec3::new(21.0, 2.0, 0.0),
+                (60, 6.0),
+                FALL,
+                1.0 / 3.0,
+            );
+        }
+        assert!(
+            drawn.height.abs() < 0.001 && drawn.fall == Some(0.0),
+            "{drawn:?}"
+        );
+    }
+
+    #[test]
+    fn a_carried_spawn_off_a_drop_reaches_the_floor_within_a_report_gap() {
+        // Pair 967 of the 11-01 P99 sitting: on the floor at a report, then a
+        // 16-unit drop. Under the zone's default gravity it lands well inside
+        // the report's 1 s gap, at 60 and at 10 frames a second, where the
+        // carried height stayed 16 over it.
+        let plate = |y: f32, from: f32, to: f32| {
+            [
+                [[from, y, -20.0], [to, y, -20.0], [to, y, 20.0]],
+                [[from, y, -20.0], [to, y, 20.0], [from, y, 20.0]],
+            ]
+        };
+        let world = crate::movement::CollisionWorld::new(
+            [plate(16.0, -20.0, 0.0), plate(0.0, 0.0, 40.0)].concat(),
+        )
+        .unwrap();
+        for fps in [60_u16, 10] {
+            let mut drawn = None;
+            let mut landed = None;
+            for frame in 0..=fps {
+                let t = f32::from(frame) / f32::from(fps);
+                // Running 30 units a second off the edge at x 0, carried at
+                // the report's height.
+                let soles = glam::Vec3::new(-5.0 + 30.0 * t, 16.0, 0.0);
+                let next = super::carried_soles(
+                    &world,
+                    drawn,
+                    soles,
+                    (0, 6.0),
+                    FALL,
+                    20.0 / f32::from(fps),
+                );
+                if landed.is_none() && soles.x > 0.0 && next.height.abs() < 0.001 {
+                    landed = Some(t);
+                }
+                drawn = Some(next);
+            }
+            assert!(
+                landed.is_some_and(|t| t < 0.7),
+                "{fps} fps: landed at {landed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_carried_runner_reported_over_its_floor_falls_onto_it_and_keeps_to_it() {
+        // Pair 967 of the 11-01 P99 sitting: a size 4.5 player running 30
+        // units a second down a 27° slope, reported with its soles 1.4 over
+        // our floor and carried at that height. It falls onto the floor and
+        // follows it down, where the report's height held it 16 over it.
+        let grade = -27.0_f32.to_radians().tan();
+        let world = ramp(grade);
+        let (race, size) = (0, 4.5);
+        for fps in [60_u16, 10] {
+            let mut drawn = None;
+            let mut over = 0.0_f32;
+            for frame in 0..=fps {
+                let t = f32::from(frame) / f32::from(fps);
+                let x = 30.0 * t;
+                let soles = glam::Vec3::from_array(super::render_position(super::WorldPosition {
+                    x,
+                    y: 0.0,
+                    z: 1.4,
+                    heading: 0.0,
+                }));
+                let next = super::carried_soles(
+                    &world,
+                    drawn,
+                    soles,
+                    (race, size),
+                    FALL,
+                    20.0 / f32::from(fps),
+                );
+                let floor = super::render_position(super::WorldPosition {
+                    x,
+                    y: 0.0,
+                    z: grade * x,
+                    heading: 0.0,
+                })[1];
+                assert!(
+                    next.height >= floor - 0.01,
+                    "{fps} fps at {t:.2} s: {next:?} under {floor}"
+                );
+                if t > 0.3 {
+                    over = over.max(next.height - floor);
+                }
+                drawn = Some(next);
+            }
+            assert!(over < 1.5, "{fps} fps: {over} over the floor after 0.3 s");
+        }
     }
 
     #[test]
     fn a_carried_flyer_stays_at_its_reported_height() {
         let world = ramp(0.0);
         let soles = glam::Vec3::Y * 9.0;
-        let first = super::carried_soles(&world, None, soles, 60, 6.0);
-        assert!((first - 9.0).abs() < 0.001);
+        let first = super::carried_soles(&world, None, soles, (60, 6.0), FALL, 0.0);
+        assert!(
+            (first.height - 9.0).abs() < 0.001 && first.fall.is_none(),
+            "{first:?}"
+        );
         let on = glam::Vec3::new(1.0, 9.0, 0.0);
-        let next = super::carried_soles(&world, Some((first, glam::Vec2::ZERO)), on, 60, 6.0);
-        assert!((next - 9.0).abs() < 0.001);
+        let next = super::carried_soles(&world, Some(first), on, (60, 6.0), FALL, 1.0 / 3.0);
+        assert!(
+            (next.height - 9.0).abs() < 0.001 && next.fall.is_none(),
+            "{next:?}"
+        );
+        // Come down within reach of the floor, it falls onto it.
+        let low = glam::Vec3::new(2.0, 3.0, 0.0);
+        let mut drawn = super::carried_soles(&world, Some(next), low, (60, 6.0), FALL, 1.0 / 3.0);
+        assert!(
+            (drawn.height - 3.0).abs() < 0.001 && drawn.fall == Some(0.0),
+            "{drawn:?}"
+        );
+        for _ in 0..20 {
+            drawn = super::carried_soles(&world, Some(drawn), low, (60, 6.0), FALL, 1.0 / 3.0);
+        }
+        assert!(
+            drawn.height.abs() < 0.001 && drawn.fall == Some(0.0),
+            "{drawn:?}"
+        );
+    }
+
+    #[test]
+    fn a_correction_slides_evenly_onto_the_carried_point_within_a_tenth_of_a_second() {
+        // A runner at 30 units a second, carried on with no report: drawn at
+        // its carried point each frame, never behind it.
+        let mut none = super::Correction::default();
+        for frame in 0..60_u8 {
+            let target = glam::Vec3::X * 30.0 * f32::from(frame) / 60.0;
+            assert!(none.advance(target, 1.0 / 60.0).distance(target) < 1e-6);
+        }
+        // A report 4 units ahead of where it was drawn: drawn where it was at
+        // first, half way at 0.05 s, on the carried point from 0.1 s.
+        let drawn = glam::Vec3::new(10.0, 0.0, 0.0);
+        let target = glam::Vec3::new(14.0, 0.0, 0.0);
+        let mut correction = super::Correction::new(drawn, target);
+        assert!(correction.advance(target, 0.0).distance(drawn) < 1e-6);
+        let half = correction.advance(target, 0.05);
+        assert!(
+            half.distance(glam::Vec3::new(12.0, 0.0, 0.0)) < 1e-4,
+            "{half}"
+        );
+        let moved = target + glam::Vec3::X * 1.5;
+        assert!(correction.advance(moved, 0.05).distance(moved) < 1e-4);
+        assert!(correction.advance(moved, 1.0).distance(moved) < 1e-6);
     }
 
     #[test]
