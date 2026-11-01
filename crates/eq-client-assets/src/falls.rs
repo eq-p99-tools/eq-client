@@ -43,6 +43,10 @@ pub struct ClientFalls {
     pub damage_line: Option<u32>,
     /// The line it says after that on a fall the player lives through.
     pub survived_line: Option<u32>,
+    /// How far above the floor the feet may be, after this step's vertical
+    /// speed, and still count as on the ground, in units: past it the
+    /// player is in the air and falls.
+    pub ground_tolerance: f32,
 }
 
 /// What a landing costs, before the server's own reductions.
@@ -155,6 +159,8 @@ pub const EQMAC: ClientFalls = ClientFalls {
     safe_fall_rank_share: 0.1,
     damage_line: Some(12481),
     survived_line: Some(12118),
+    // 0.5 + 0.001, both programs (R-s: Titanium 0x48a2f4, Mac-era 0x50ba07).
+    ground_tolerance: 0.5 + 0.001,
 };
 
 /// The Titanium client's falls (from the program): the same gravity field,
@@ -162,11 +168,14 @@ pub const EQMAC: ClientFalls = ClientFalls {
 /// (sittings 8g, 8h and 8i), and the same landing rule (sitting 6, T2):
 /// a landing counts past 2.5 units a step, then T = the character's +0x48
 /// field / 100 + (speed − 2.5) − 1.5, 20,000 from T = 9, else
-/// trunc(10·T²), less Safe Fall's S + S × P / 100. Read but not yet known,
+/// trunc(10·T²), less Safe Fall's S + trunc(S × P / 100), S the raw skill
+/// word (R-s Safe Fall follow-up). The same on-ground tolerance too (R-s,
+/// 0x48a2f4). Read but not yet known,
 /// so left out, each costing the player more than the program would, never
 /// less: which zones zero the damage (its table was not read, 6.304), P
-/// (probably spell effect 228's total; not decoded, so it counts as 0,
-/// 6.305), the character flag that zeroes damage under 200 (6.306), and any
+/// (spell effect 228's total; not decoded, so it counts as 0, 6.305 and
+/// 6.338, which also notes that the program announces Safe Fall only on
+/// that reduced path), the character flag that zeroes damage under 200 (6.306), and any
 /// line the client says (none in the damage routine; not traced further).
 /// That +0x48 is the carried weight the Mac-era rule names is inferred
 /// (6.303).

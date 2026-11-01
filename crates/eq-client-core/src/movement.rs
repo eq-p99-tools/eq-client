@@ -20,8 +20,14 @@ pub use route::{Background, Route, RouteStep, SearchTiming};
 
 #[derive(Clone, Copy)]
 enum Support {
+    /// Ground under every stride, within a riser up or down.
     Required,
-    Optional,
+    /// Standing on the ground as the airborne controller walks: a stride
+    /// keeps the feet on a floor no more than `drop` below them, and past
+    /// it moves across at their height, leaving the drop to the fall.
+    Optional {
+        drop: f32,
+    },
     Airborne,
 }
 
@@ -405,7 +411,16 @@ impl CollisionWorld {
             if wet {
                 next = self.dry_part(position, part, height, support);
             }
-            if (next.y - feet.y).abs() > MAX_GROUNDED_STEP + 0.001 {
+            // A walk on the ground keeps to a riser a sample up and down. One
+            // the airborne controller makes descends a stride at a time
+            // within its drop, and past it the controller falls, so only its
+            // climb is held to the riser.
+            let rise = next.y - feet.y;
+            let held = match support {
+                Support::Optional { .. } => rise,
+                _ => rise.abs(),
+            };
+            if held > MAX_GROUNDED_STEP + 0.001 {
                 break;
             }
             let moved = next.distance_squared(position) > 1e-10;
@@ -462,8 +477,8 @@ impl CollisionWorld {
                         ground
                     }
                 }
-                Support::Optional => self
-                    .support_height(probe, MAX_GROUNDED_STEP, MAX_GROUNDED_STEP)
+                Support::Optional { drop } => self
+                    .support_height(probe, MAX_GROUNDED_STEP, drop)
                     .unwrap_or(position.y),
                 Support::Airborne => position.y,
             };
