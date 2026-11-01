@@ -187,6 +187,8 @@ pub struct ClientWorld {
     choices: Vec<crate::Capability>,
     zone_name: String,
     far_clip: Option<f32>,
+    /// The zone header's minimum clip, once this admission's header came.
+    min_clip: Option<f32>,
     /// The zone header's gravity, once this admission's header came.
     zone_gravity: Option<f32>,
     /// The zone header's classic model scale flag, as it came; None until

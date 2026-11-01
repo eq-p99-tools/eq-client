@@ -155,6 +155,13 @@ impl ClientWorld {
         self.far_clip
     }
 
+    /// The zone header's minimum clip, the nearest its far plane comes;
+    /// None until this admission's header comes.
+    #[must_use]
+    pub const fn min_clip(&self) -> Option<f32> {
+        self.min_clip
+    }
+
     /// The player's death, until the next admission.
     #[must_use]
     pub const fn death(&self) -> Option<&Death> {

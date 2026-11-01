@@ -254,17 +254,21 @@ pub(super) fn reconcile(
         player.spawn_id,
         player.position,
         &present,
-        // Drawing stops where the scene's does, the Far Clip Plane's share of
-        // the zone's far clip; with no far clip, at its share of the client's
-        // own distance.
+        // Spawns are drawn as far as the scene is, to the camera's far
+        // plane, with no distance or count of their own (program read N7;
+        // the engine's own culling is unread, 6.342). Before the zone gives a
+        // clip, as far as the program draws an unclipped zone. A distance
+        // given on the command line draws them nearer.
         {
-            let distance = settings.0.entity_distance.unwrap_or(200.0);
-            match options.options.clip_distance(state.world().far_clip()) {
-                Some(clip) => distance.min(clip),
-                None => distance * options.options.clip_share(),
-            }
+            let client = settings.0.installed_client;
+            let clip = super::camera::clip_distance(client, &options.options, state.world())
+                .unwrap_or(eq_client_assets::camera::FarPlane::UNCLIPPED);
+            settings
+                .0
+                .entity_distance
+                .map_or(clip, |distance| distance.min(clip))
         },
-        200,
+        usize::MAX,
     );
     let desired: BTreeSet<_> = selected.iter().copied().collect();
     for id in present.difference(&desired) {

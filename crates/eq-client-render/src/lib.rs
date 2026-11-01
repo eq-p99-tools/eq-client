@@ -176,7 +176,8 @@ pub struct ViewerConfig {
     /// Which official client that installation holds, which decides how its
     /// own settings files are read.
     pub installed_client: eq_client_assets::ui::InstalledClient,
-    /// Nearby-entity radius in EQ units; None uses 200.
+    /// How far spawns are drawn at most, in EQ units, where nearer than the
+    /// scene's far plane; None draws them to the far plane.
     pub entity_distance: Option<f32>,
     /// Optional read-only live validation action.
     pub validation: Option<ValidationAction>,

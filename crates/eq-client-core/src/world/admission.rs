@@ -86,9 +86,10 @@ impl ClientWorld {
     }
 
     /// A zone header, at entry or sent again mid-zone, sets the far clip to
-    /// its maximum clip when it gives one.
+    /// its maximum clip when it gives one, and keeps its minimum clip.
     pub(super) fn described(&mut self, description: &ZoneDescription) {
         self.zone_gravity = Some(description.gravity);
+        self.min_clip = Some(description.min_clip).filter(|min| min.is_finite());
         self.classic_model_scale_flag = description.classic_model_scale_flag;
         let clip = description.max_clip;
         if clip.is_finite() && clip > 0.0 {
@@ -114,6 +115,7 @@ impl ClientWorld {
             .notices
             .push(Notice::Arrived(self.zone_long_name().to_owned()));
         self.far_clip = far_clip;
+        self.min_clip = None;
         self.zone_gravity = None;
         self.classic_model_scale_flag = None;
         self.spell_landing_flag = spell_landing_flag;

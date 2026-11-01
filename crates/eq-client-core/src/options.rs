@@ -391,16 +391,6 @@ impl Options {
         (f32::from(self.clip_plane.min(100)) / 100.0).max(0.05)
     }
 
-    /// How far the scene is drawn, terrain, objects and spawns alike, in a
-    /// zone with this far clip: the clip plane's share of it, but never
-    /// nearer than 100 units. Provisional: the official slider's mapping is
-    /// unverified. None where the zone gives no far clip.
-    #[must_use]
-    pub fn clip_distance(&self, far_clip: Option<f32>) -> Option<f32> {
-        let far_clip = far_clip.filter(|far| far.is_finite() && *far > 0.0)?;
-        Some((far_clip * self.clip_share()).max(far_clip.min(100.0)))
-    }
-
     /// How loud sounds play, from 0 for silent to 1 for their files' own
     /// loudness: nothing when sounds are off.
     #[must_use]
@@ -563,16 +553,12 @@ mod tests {
         assert!((quick.turn_per_pixel() - 0.005).abs() < 1e-6);
         quick.set_level(Level::MouseSensitivity, 75);
         assert!((quick.turn_per_pixel() - 0.01).abs() < 1e-6);
-        // The scene always draws within a twentieth of the distance, and no
-        // nearer than 100 units.
+        // The scene always draws at least a twentieth of the way; how far
+        // that is, each client generation's far plane says.
         options.set_level(Level::ClipPlane, 0);
         assert!((options.clip_share() - 0.05).abs() < f32::EPSILON);
-        assert_eq!(options.clip_distance(Some(2400.0)), Some(120.0));
-        assert_eq!(options.clip_distance(Some(1000.0)), Some(100.0));
-        assert_eq!(options.clip_distance(Some(80.0)), Some(80.0));
         options.set_level(Level::ClipPlane, 50);
-        assert_eq!(options.clip_distance(Some(2400.0)), Some(1200.0));
-        assert_eq!(options.clip_distance(None), None);
+        assert!((options.clip_share() - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]

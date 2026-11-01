@@ -2447,13 +2447,14 @@ fn a_zone_header_sent_again_changes_the_sky_fog_and_far_clip() {
     }
     game(&mut world, admission);
     assert_eq!(world.far_clip(), Some(1400.0));
-    assert_eq!(world.zone_gravity(), None);
+    assert_eq!((world.zone_gravity(), world.min_clip()), (None, None));
     let (sky, description) = header(1, 800.0, 1400.0);
     game(&mut world, WorldEvent::Sky(sky));
     game(&mut world, WorldEvent::ZoneDescription(description));
     assert_eq!((world.sky(), world.far_clip()), (Some(sky), Some(1400.0)));
     assert_eq!(world.zone_gravity(), Some(0.4));
     assert_eq!(world.classic_model_scale_flag(), Some(1));
+    assert_eq!(world.min_clip(), Some(50.0));
     // A game master's change sends the header again mid-zone: every field it
     // carries takes effect, the clip as well as the sky and fog.
     let (sky, description) = header(0, 500.0, 600.0);

@@ -186,11 +186,10 @@ pub(super) fn orbit_camera(
         wheel.lines
     };
 
-    let limits = settings
-        .map_or_else(Default::default, |settings| settings.0.installed_client)
-        .camera_limits();
+    let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
+    let limits = client.camera_limits();
     let rise = if options.options.invert_y { -1.0 } else { 1.0 };
-    let clip = options.options.clip_distance(online.world().far_clip());
+    let clip = clip_distance(client, &options.options, online.world());
     for (mut camera, mut transform, projection) in &mut cameras {
         let turn = options.options.turn_per_pixel();
         camera.yaw -= drag.x * turn;
@@ -255,6 +254,20 @@ pub(super) fn chase(
 /// How far the view reaches: the clip distance past the player the camera
 /// orbits, or, where the zone gives no clip, ten times the orbit distance,
 /// so zooming out never pushes the scene past the far plane.
+/// How far the scene is drawn, terrain, objects and spawns alike, by the
+/// installed client's far plane rule with the player's clip plane setting;
+/// None while the zone has given no far clip.
+pub(crate) fn clip_distance(
+    client: eq_client_assets::ui::InstalledClient,
+    options: &eq_client_core::options::Options,
+    world: &eq_client_core::world::ClientWorld,
+) -> Option<f32> {
+    client
+        .camera_limits()
+        .far_plane
+        .distance(options.clip_share(), (world.min_clip(), world.far_clip()))
+}
+
 fn far_plane(radius: f32, clip: Option<f32>) -> f32 {
     clip.map_or(radius * 10.0, |clip| clip + radius)
 }
