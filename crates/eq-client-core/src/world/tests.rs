@@ -47,6 +47,7 @@ fn spawn(spawn_id: u16) -> SpawnState {
         gender: 0,
         position: WorldPosition::default(),
         velocity: [0.0; 3],
+        forward: 0.0,
         walk_speed: 0.0,
         run_speed: 0.0,
         size: 0.0,
@@ -3688,18 +3689,30 @@ fn a_spawn_that_dies_moving_lies_where_it_was_carried_and_moves_no_more() {
         &mut world,
         WorldEvent::Position {
             spawn_id: 5,
-            position: WorldPosition::default(),
+            position: WorldPosition {
+                heading: 128.0,
+                ..WorldPosition::default()
+            },
             velocity: [4.0, 0.0, 0.0],
-            forward: 0.0,
+            forward: 0.5,
         },
         reported,
     );
-    // Drawn late, it is carried from when its report came.
-    let carried = world
-        .spawn(5)
-        .unwrap()
-        .carried(reported + std::time::Duration::from_secs(1));
-    assert!((carried.x - 4.0).abs() < 0.001);
+    // Drawn late, it is carried from when its report came, as the
+    // generation's program carries it.
+    let dialect = world.generation();
+    let walker = world.spawn(5).unwrap();
+    let carried = walker.carried(dialect, reported + std::time::Duration::from_secs(1));
+    let expected = |seconds| {
+        crate::entities::carried(
+            dialect,
+            &walker.state,
+            std::time::Duration::from_secs(seconds),
+        )
+        .x
+    };
+    assert!(carried.x > 5.0 && (carried.x - expected(1)).abs() < 0.001);
+    let at_death = expected(2);
     let died = reported + std::time::Duration::from_secs(2);
     at(
         &mut world,
@@ -3714,10 +3727,13 @@ fn a_spawn_that_dies_moving_lies_where_it_was_carried_and_moves_no_more() {
     );
     let corpse = world.spawn(5).unwrap();
     assert_eq!(corpse.state.kind, SpawnKind::NpcCorpse);
-    assert!((corpse.state.position.x - 8.0).abs() < 0.001);
-    assert_eq!(corpse.state.velocity, [0.0; 3]);
-    let later = corpse.carried(died + std::time::Duration::from_secs(10));
-    assert!((later.x - 8.0).abs() < 0.001);
+    assert!((corpse.state.position.x - at_death).abs() < 0.001);
+    assert_eq!(
+        (corpse.state.velocity, corpse.state.forward),
+        ([0.0; 3], 0.0)
+    );
+    let later = corpse.carried(dialect, died + std::time::Duration::from_secs(10));
+    assert!((later.x - at_death).abs() < 0.001);
     // A position for the corpse places it, and still it does not move on.
     let dragged = WorldPosition {
         x: 20.0,
@@ -3729,21 +3745,23 @@ fn a_spawn_that_dies_moving_lies_where_it_was_carried_and_moves_no_more() {
             spawn_id: 5,
             position: dragged,
             velocity: [4.0, 0.0, 0.0],
-            forward: 0.0,
+            forward: 0.5,
         },
         died,
     );
     let corpse = world.spawn(5).unwrap();
     assert_eq!(
-        corpse.carried(died + std::time::Duration::from_secs(3)),
+        corpse.carried(dialect, died + std::time::Duration::from_secs(3)),
         dragged
     );
     // One arriving as a corpse is as still.
     let mut arriving = spawn(6);
     arriving.kind = SpawnKind::NpcCorpse;
     arriving.velocity = [4.0, 0.0, 0.0];
+    arriving.forward = 0.5;
     game(&mut world, WorldEvent::Spawns(vec![arriving]));
-    assert_eq!(world.spawn(6).unwrap().state.velocity, [0.0; 3]);
+    let still = &world.spawn(6).unwrap().state;
+    assert_eq!((still.velocity, still.forward), ([0.0; 3], 0.0));
 }
 
 #[test]

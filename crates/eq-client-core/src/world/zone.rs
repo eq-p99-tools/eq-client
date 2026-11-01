@@ -60,15 +60,15 @@ impl Zone {
             self.spawns.insert(
                 spawn.spawn_id,
                 Spawn {
-                    state: SpawnState {
-                        velocity: still_if_corpse(spawn.kind, spawn.velocity),
-                        ..spawn.clone()
+                    state: {
+                        let mut state = spawn.clone();
+                        still_if_corpse(&mut state);
+                        state
                     },
                     health: spawn.hp_percent,
                     posture: None,
                     revision: *revision,
                     reported: now,
-                    forward: 0.0,
                 },
             );
         }
@@ -128,15 +128,9 @@ impl Zone {
     ) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
             spawn.state.position = position;
-            spawn.state.velocity = still_if_corpse(spawn.state.kind, velocity);
-            spawn.forward = if matches!(
-                spawn.state.kind,
-                SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse
-            ) {
-                0.0
-            } else {
-                forward
-            };
+            spawn.state.velocity = velocity;
+            spawn.state.forward = forward;
+            still_if_corpse(&mut spawn.state);
             spawn.reported = now;
         }
     }
@@ -177,7 +171,13 @@ impl Zone {
     /// changes nothing of that. The death says nothing of where, so the
     /// corpse lies where the client had carried the spawn to when the death
     /// came, and moves no more on its own. Inferred; recording item 6.275.
-    pub(super) fn corpse(&mut self, id: u16, name: Option<&str>, now: Instant, revision: &mut u64) {
+    pub(super) fn corpse(
+        &mut self,
+        id: u16,
+        name: Option<&str>,
+        (dialect, now): (crate::GameDialect, Instant),
+        revision: &mut u64,
+    ) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
             *revision = revision.wrapping_add(1);
             spawn.health = Some(0);
@@ -187,11 +187,11 @@ impl Zone {
                 if let Some(name) = name {
                     spawn.state.name = name.into();
                 }
-                spawn.state.position = spawn.carried(now);
+                spawn.state.position = spawn.carried(dialect, now);
                 spawn.reported = now;
             }
             spawn.state.kind = kind;
-            spawn.state.velocity = still_if_corpse(kind, spawn.state.velocity);
+            still_if_corpse(&mut spawn.state);
             spawn.revision = *revision;
         }
     }
@@ -202,13 +202,12 @@ impl Zone {
     }
 }
 
-/// A spawn's velocity, or none for a corpse, which never moves on its own:
-/// a drag places it anew. Inferred; recording item 6.275.
-fn still_if_corpse(kind: SpawnKind, velocity: [f32; 3]) -> [f32; 3] {
-    if matches!(kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse) {
-        [0.0; 3]
-    } else {
-        velocity
+/// Stills a corpse, which never moves on its own: no velocity and no
+/// forward input; a drag places it anew. Inferred; recording item 6.275.
+fn still_if_corpse(state: &mut SpawnState) {
+    if matches!(state.kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse) {
+        state.velocity = [0.0; 3];
+        state.forward = 0.0;
     }
 }
 

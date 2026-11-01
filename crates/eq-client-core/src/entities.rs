@@ -1,36 +1,54 @@
 //! Distance-based entity selection, independent of the rendering engine.
 
-use crate::{SpawnKind, SpawnState, WorldPosition};
+use crate::{
+    GameDialect, SpawnKind, SpawnState, WorldPosition,
+    movement::{Carried, carry},
+};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-/// Longest a spawn's reported motion is carried forward. Servers repeat a moving
-/// spawn's position every few seconds (P99 about every 2.3 s, `EQEmu` at least
-/// every 5 s), so a spawn with no newer report stops where it got to.
-pub const MOTION_HORIZON: Duration = Duration::from_secs(6);
+/// One call of the programs' step when the client asks where a spawn is
+/// rather than drawing it: one 50 ms span, the programs' unit of time.
+const CALL: Duration = Duration::from_millis(50);
 
-/// Where a spawn is `elapsed` after its last report: its reported velocity is
-/// carried forward, up to [`MOTION_HORIZON`], as the official client moves
-/// spawns between updates instead of leaving them at the last report.
+/// A spawn carried on `elapsed` from its last report, as the generation's
+/// program carries it ([`crate::movement::carry`]): from its reported
+/// velocity and forward input, one step each 50 ms span, as a client
+/// drawing it all along would have. A spawn reported standing, with
+/// neither, stays where it was reported.
 #[must_use]
-pub fn extrapolate(spawn: &SpawnState, elapsed: Duration) -> WorldPosition {
-    let seconds = elapsed.min(MOTION_HORIZON).as_secs_f32();
-    let [x, y, z] = spawn.velocity;
-    let position = spawn.position;
-    let moved = WorldPosition {
-        x: position.x + x * seconds,
-        y: position.y + y * seconds,
-        z: position.z + z * seconds,
-        heading: position.heading,
-    };
-    if [moved.x, moved.y, moved.z]
+pub fn carried_since(dialect: GameDialect, spawn: &SpawnState, elapsed: Duration) -> Carried {
+    let mut carried = Carried::reported(
+        dialect,
+        spawn.kind,
+        spawn.race,
+        spawn.position,
+        spawn.velocity,
+        spawn.forward,
+    );
+    // Exactly zero is what a standing report sends.
+    #[allow(clippy::float_cmp)]
+    let standing = spawn.velocity == [0.0; 3] && spawn.forward == 0.0;
+    let mut left = if standing { Duration::ZERO } else { elapsed };
+    while !left.is_zero() {
+        let call = left.min(CALL);
+        carry(dialect, &mut carried, call);
+        left -= call;
+    }
+    let moved = carried.position;
+    if ![moved.x, moved.y, moved.z]
         .iter()
         .all(|value| value.is_finite())
     {
-        moved
-    } else {
-        position
+        carried.position = spawn.position;
     }
+    carried
+}
+
+/// Where a spawn is `elapsed` after its last report ([`carried_since`]).
+#[must_use]
+pub fn carried(dialect: GameDialect, spawn: &SpawnState, elapsed: Duration) -> WorldPosition {
+    carried_since(dialect, spawn, elapsed).position
 }
 
 /// Selects nearby visible entities, nearest first, with an exit margin and hard cap.
@@ -107,7 +125,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::float_cmp)] // Exactly representable fixture values.
-    fn moving_spawns_carry_their_reported_velocity_up_to_the_horizon() {
+    fn moving_spawns_are_carried_on_as_the_generations_program_does() {
         let spawn = SpawnState {
             class: None,
             spawn_id: 9,
@@ -121,7 +139,8 @@ mod tests {
                 z: 2.0,
                 heading: 128.0,
             },
-            velocity: [4.0, -2.0, 0.5],
+            velocity: [0.0; 3],
+            forward: 0.5,
             walk_speed: 0.0,
             run_speed: 0.0,
             size: 0.0,
@@ -133,16 +152,33 @@ mod tests {
             pet_owner: None,
             hp_percent: None,
         };
-        let at = extrapolate(&spawn, Duration::from_secs(2));
-        assert_eq!((at.x, at.y, at.z, at.heading), (18.0, -8.0, 3.0, 128.0));
-        let far = extrapolate(&spawn, Duration::from_mins(1));
-        assert_eq!((far.x, far.y), (34.0, -16.0));
+        // An NPC with an input of 0.5, facing +X, settles at 11.64 a
+        // second on either generation; it climbs to it within a few calls.
+        for dialect in [GameDialect::Titanium, GameDialect::EqMac] {
+            let at = carried(dialect, &spawn, Duration::from_secs(2));
+            assert!((at.x - 10.0 - 2.0 * 11.636).abs() < 0.5, "{at:?}");
+            assert!((at.y + 4.0).abs() < 0.001 && at.z == 2.0 && at.heading == 128.0);
+        }
+        // Titanium walks it on; EQMac holds a walker with no report for
+        // over 12 s.
+        let far = carried(GameDialect::Titanium, &spawn, Duration::from_secs(30));
+        assert!((far.x - 10.0 - 30.0 * 11.636).abs() < 0.5, "{far:?}");
+        let held = carried(GameDialect::EqMac, &spawn, Duration::from_secs(30));
+        assert!((held.x - 10.0 - 12.0 * 11.636).abs() < 0.5, "{held:?}");
+        // A reported velocity with no input dies away.
+        let coasting = SpawnState {
+            velocity: [20.0, 0.0, 0.0],
+            forward: 0.0,
+            ..spawn.clone()
+        };
+        let stop = carried(GameDialect::Titanium, &coasting, Duration::from_secs(5));
+        assert!(stop.x > 10.0 && stop.x < 11.0, "{stop:?}");
         let standing = SpawnState {
-            velocity: [0.0; 3],
+            forward: 0.0,
             ..spawn
         };
         assert_eq!(
-            extrapolate(&standing, Duration::from_secs(3)),
+            carried(GameDialect::Titanium, &standing, Duration::from_secs(3)),
             standing.position
         );
     }
@@ -172,6 +208,7 @@ mod tests {
                 ..Default::default()
             },
             velocity: [0.0; 3],
+            forward: 0.0,
             walk_speed: 0.0,
             run_speed: 0.0,
             size: 0.0,
