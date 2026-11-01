@@ -582,15 +582,17 @@ fn report_snap(
 }
 
 /// A debug line as a spawn is first drawn, a corpse after its death
-/// included: its kind, where it is reported and how it moves on from there.
-/// Off unless the log filter asks for this module at debug level.
+/// included: its kind, where it is reported, how it moves on from there,
+/// and the race, gender and size the server sent (0 for none), which set
+/// how large it is drawn. Off unless the log filter asks for this module at
+/// debug level.
 fn report_drawn(id: u16, (spawn, forward): (&eq_client_core::SpawnState, f32)) {
     let p = spawn.position;
     let [vx, vy, vz] = spawn.velocity;
     debug!(
         "spawn {id} drawn as {:?} at report ({:.1}, {:.1}, {:.1}) velocity ({vx:.1}, {vy:.1}, {vz:.1}) \
-         forward {forward:.2}",
-        spawn.kind, p.x, p.y, p.z,
+         forward {forward:.2} race {} gender {} size sent {:.2}",
+        spawn.kind, p.x, p.y, p.z, spawn.race, spawn.gender, spawn.size,
     );
 }
 
