@@ -84,7 +84,7 @@ pub(crate) fn look(
 pub(super) const CHASE_PITCH: f32 = -20.0_f32.to_radians();
 
 /// The orbit yaw that puts the camera behind whatever faces the render yaw
-/// `facing`, looking along it, so W walks that way: the camera sits opposite
+/// `facing`, looking along it, so the camera-relative forward walks that way: the camera sits opposite
 /// the direction it looks.
 pub(super) fn behind(facing: f32) -> f32 {
     facing + std::f32::consts::PI
