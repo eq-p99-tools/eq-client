@@ -24,6 +24,8 @@ pub(super) struct NearbyEntities {
     /// The zone header's classic model scale flag the drawn spawns were
     /// scaled by.
     scaled_by: Option<u32>,
+    /// How many spawns the last pass chose to load.
+    chosen: usize,
 }
 
 impl NearbyEntities {
@@ -165,6 +167,20 @@ pub(crate) const fn dialect(
     }
 }
 
+/// How far from the player, `player` in the renderer's frame, a spawn
+/// can show with the scene drawn to `clip` from the camera: through a
+/// perspective view's corners, where it sees farthest, past the camera's
+/// own place behind the player. This is how far spawns are loaded, not how
+/// far they show; the far plane decides that ([`super::camera::past_far`]).
+/// An orthographic view, or none yet, loads them to the clip.
+fn loading_reach(clip: f32, view: Option<(&Transform, &Projection)>, player: Vec3) -> f32 {
+    view.and_then(|(transform, projection)| {
+        super::camera::corner_reach(projection)
+            .map(|corner| clip * corner + transform.translation.distance(player))
+    })
+    .unwrap_or(clip)
+}
+
 /// The stores a drawn spawn's meshes and materials go in; its model's
 /// textures went in when the model was read.
 type Stores<'a> = (&'a mut Assets<Mesh>, &'a mut Assets<StandardMaterial>);
@@ -191,6 +207,7 @@ pub(super) fn reconcile(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+    cameras: Query<(&Transform, &Projection), With<crate::OrbitCamera>>,
 ) {
     if !state.world().connected() {
         nearby_state.loading = None;
@@ -249,27 +266,41 @@ pub(super) fn reconcile(
         nearby_state.revisions.remove(&id);
     }
     let present: BTreeSet<_> = nearby_state.rendered.keys().copied().collect();
+    // Spawns are loaded as far as the view could show one, with no distance
+    // or count of their own: the camera's far plane alone decides which
+    // show (program read N7; the engine's own culling is unread, 6.342).
+    // Before the zone gives a clip, as far as the program draws an unclipped
+    // zone. A distance given on the command line loads them nearer.
+    let reach = {
+        let client = settings.0.installed_client;
+        let clip = super::camera::clip_distance(client, &options.options, state.world())
+            .unwrap_or(eq_client_assets::camera::FarPlane::UNCLIPPED);
+        let reach = loading_reach(
+            clip,
+            cameras.single().ok(),
+            Vec3::from_array(render_position(player.position)),
+        );
+        settings
+            .0
+            .entity_distance
+            .map_or(reach, |distance| distance.min(reach))
+    };
     let selected = nearby(
         state.world().spawns().values().map(|spawn| &spawn.state),
         player.spawn_id,
         player.position,
         &present,
-        // Spawns are drawn as far as the scene is, to the camera's far
-        // plane, with no distance or count of their own (program read N7;
-        // the engine's own culling is unread, 6.342). Before the zone gives a
-        // clip, as far as the program draws an unclipped zone. A distance
-        // given on the command line draws them nearer.
-        {
-            let client = settings.0.installed_client;
-            let clip = super::camera::clip_distance(client, &options.options, state.world())
-                .unwrap_or(eq_client_assets::camera::FarPlane::UNCLIPPED);
-            settings
-                .0
-                .entity_distance
-                .map_or(clip, |distance| distance.min(clip))
-        },
+        reach,
         usize::MAX,
     );
+    if nearby_state.chosen != selected.len() {
+        nearby_state.chosen = selected.len();
+        debug!(
+            "spawns loaded: {} of {} within {reach:.0} of the player",
+            selected.len(),
+            state.world().spawns().len(),
+        );
+    }
     let desired: BTreeSet<_> = selected.iter().copied().collect();
     for id in present.difference(&desired) {
         if let Some(entity) = nearby_state.rendered.remove(id) {
@@ -567,6 +598,32 @@ fn report_drawn(id: u16, (spawn, forward): (&eq_client_core::SpawnState, f32)) {
 mod tests {
     use super::*;
     use crate::online::testing;
+
+    #[test]
+    fn spawns_load_as_far_as_the_view_could_show_one() {
+        let projection = Projection::Perspective(PerspectiveProjection {
+            fov: std::f32::consts::FRAC_PI_2,
+            aspect_ratio: 1.0,
+            far: 2400.0,
+            ..default()
+        });
+        let player = Vec3::new(10.0, 0.0, 0.0);
+        let camera = Transform::from_xyz(10.0, 30.0, 200.0).looking_at(player, Vec3::Y);
+        let reach = loading_reach(2400.0, Some((&camera, &projection)), player);
+        // The far plane's corner, the farthest the view shows anything, is
+        // loaded, though it lies farther than the clip from the camera.
+        let corner = camera.translation
+            + 2400.0 * (*camera.forward() + *camera.right() + *camera.up())
+            - *camera.forward();
+        assert!(!crate::camera::past_far(&projection, &camera, corner));
+        assert!(corner.distance(camera.translation) > 2400.0 * 1.7);
+        assert!(corner.distance(player) <= reach, "{reach}");
+        // Without a perspective view yet, to the clip.
+        assert_eq!(
+            loading_reach(2400.0, None, player).to_bits(),
+            2400.0_f32.to_bits()
+        );
+    }
 
     #[test]
     fn with_no_installation_no_spawn_is_still_to_come() {

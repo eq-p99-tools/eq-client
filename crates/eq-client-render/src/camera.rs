@@ -281,11 +281,48 @@ pub(super) fn top_down(camera: &mut OrbitCamera, tilt: f32, zoom: f32) {
     camera.radius = (camera.radius * zoom).clamp(20.0, 20_000.0);
 }
 
-/// How far the view reaches: the clip distance past the player the camera
-/// orbits, or, where the zone gives no clip, ten times the orbit distance,
-/// so zooming out never pushes the scene past the far plane.
+/// How far the view reaches from the camera: the clip distance, as the
+/// program gives the camera itself its far clip (0x43c78f, program read
+/// N7), never nearer than [`NEAREST_FAR`]; or, where the zone gives no clip,
+/// ten times the orbit distance, so zooming out never pushes the scene past
+/// the far plane.
+///
+/// The far plane here is a cull, not a cut: the view's projection has no
+/// far side, so the engine leaves out a model whose whole box lies past the
+/// plane and draws one that crosses it whole, where the program's camera
+/// cuts it at the plane (recording checklist 6.342).
 fn far_plane(radius: f32, clip: Option<f32>) -> f32 {
-    clip.map_or(radius * 10.0, |clip| clip + radius)
+    clip.map_or(radius * 10.0, |clip| clip.max(NEAREST_FAR))
+}
+
+/// The nearest the far plane comes, twice the near plane's distance, so a
+/// clip of nothing still leaves the view a depth.
+const NEAREST_FAR: f32 = 2.0;
+
+/// Whether `point` lies past the camera's far plane: deeper along the view
+/// than its far distance, the test that leaves a model out of the view.
+/// Only a perspective view has one; an orthographic view shows the whole
+/// scene it orbits.
+pub(crate) fn past_far(projection: &Projection, view: &Transform, point: Vec3) -> bool {
+    match projection {
+        Projection::Perspective(perspective) => {
+            (point - view.translation).dot(*view.forward()) > perspective.far
+        }
+        Projection::Orthographic(_) | Projection::Custom(_) => false,
+    }
+}
+
+/// How much farther than its depth a perspective view sees at its corners,
+/// where the line of sight is longest: a point at the far plane's depth in
+/// a corner of the view lies this many times the far distance from the
+/// camera. None for other views.
+pub(crate) fn corner_reach(projection: &Projection) -> Option<f32> {
+    let Projection::Perspective(perspective) = projection else {
+        return None;
+    };
+    let tall = (perspective.fov / 2.0).tan();
+    let wide = tall * perspective.aspect_ratio;
+    Some(tall.mul_add(tall, wide.mul_add(wide, 1.0)).sqrt())
 }
 
 /// Whether the view already reaches as far as it should; an orthographic
@@ -452,6 +489,60 @@ mod tests {
         // Dragged off the window onto the world, it still turns nothing.
         look.follow(&held(), true, true);
         assert!(!look.held);
+    }
+
+    #[test]
+    fn the_far_plane_sits_at_the_clip_from_the_camera() {
+        // The program gives the camera itself the far clip (N7), so zooming
+        // out never carries it farther.
+        for radius in [2.0, 200.0] {
+            let mut projection = Projection::Perspective(PerspectiveProjection::default());
+            fit_projection(&mut projection, radius, Some(2400.0));
+            let Projection::Perspective(perspective) = &projection else {
+                unreachable!("fitting keeps the projection's kind");
+            };
+            assert_eq!(perspective.far.to_bits(), 2400.0_f32.to_bits());
+            assert!(fitted(&projection, radius, Some(2400.0)));
+        }
+        // A clip of nothing still leaves a depth; no clip follows the orbit.
+        assert_eq!(far_plane(50.0, Some(0.0)).to_bits(), NEAREST_FAR.to_bits());
+        assert_eq!(far_plane(50.0, None).to_bits(), 500.0_f32.to_bits());
+    }
+
+    #[test]
+    fn a_point_deeper_than_the_far_plane_is_past_it_wherever_it_lies() {
+        let projection = Projection::Perspective(PerspectiveProjection {
+            far: 2400.0,
+            ..default()
+        });
+        let view = Transform::default().looking_to(Vec3::NEG_Z, Vec3::Y);
+        assert!(!past_far(&projection, &view, Vec3::new(0.0, 0.0, -2399.0)));
+        assert!(past_far(&projection, &view, Vec3::new(0.0, 0.0, -2401.0)));
+        // Off to the side: farther than the far distance, but not as deep.
+        assert!(!past_far(
+            &projection,
+            &view,
+            Vec3::new(1500.0, 0.0, -2300.0)
+        ));
+        // Behind the camera is never past it, and a top-down view has none.
+        assert!(!past_far(&projection, &view, Vec3::new(0.0, 0.0, 3000.0)));
+        let top_down = Projection::Orthographic(OrthographicProjection::default_3d());
+        assert!(!past_far(&top_down, &view, Vec3::new(0.0, 0.0, -9000.0)));
+    }
+
+    #[test]
+    fn a_views_corners_see_farther_than_its_depth() {
+        // A quarter-turn view as wide as it is tall: a corner's line of sight
+        // runs one across and one up for each one deep.
+        let projection = Projection::Perspective(PerspectiveProjection {
+            fov: std::f32::consts::FRAC_PI_2,
+            aspect_ratio: 1.0,
+            ..default()
+        });
+        let corner = corner_reach(&projection).unwrap();
+        assert!((corner - 3.0_f32.sqrt()).abs() < 1e-5, "{corner}");
+        let top_down = Projection::Orthographic(OrthographicProjection::default_3d());
+        assert_eq!(corner_reach(&top_down), None);
     }
 
     #[test]

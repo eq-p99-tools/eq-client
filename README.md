@@ -328,12 +328,15 @@ Implemented locally:
   new action (no slot update), which is replayed as a tracker test; replacement by
   a different, resource-changing buff has not been traced yet.
 - Initial/incremental spawn batches, despawns, and interpolated nearby players/NPCs.
-  Spawns are drawn as far as the scene is, to the installed client's far plane
-  (the Titanium program's: the zone's minimum clip plus the Clip Plane setting's
-  share of the way to its maximum), with no count limit, as the program draws
-  them. `--entity-distance` draws them no farther than a three-dimensional
-  EQ-unit radius; entities already drawn remain until 1.2 times the radius to
-  avoid boundary flicker. Distant entities retain state but have no render
+  Spawns show as far as the scene does, to the camera's far plane, set at the
+  installed client's clip distance from the camera (the Titanium program's: the
+  zone's minimum clip plus the Clip Plane setting's share of the way to its
+  maximum), with no count limit, as the program draws them; a name past the far
+  plane hides with its model. Spawns are loaded out to the farthest the view
+  could show one, through its corners, and the far plane decides which show.
+  `--entity-distance` loads them no farther than a three-dimensional EQ-unit
+  radius; entities already loaded remain until 1.2 times the reach to avoid
+  boundary flicker. Distant entities retain state but have no render
   objects or animation work. Model textures/materials are shared, poses update
   at most 30 times per second, and new instances are created gradually.
   A moving character walks or runs by its speed against its spawn record's
