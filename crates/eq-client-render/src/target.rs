@@ -5,8 +5,9 @@ use super::{entities::NearbyEntities, online::OnlineState};
 use crate::theme::{self, Size};
 use crate::{keys::Act, outbox::Outbox};
 use bevy::{prelude::*, window::PrimaryWindow};
-use eq_client_assets::ui::TargetByName;
+use eq_client_assets::ui::{InstalledClient, SpawnPick, TargetByName};
 use eq_client_core::{ClientCommand, SpawnKind, targeting::cycle};
+use picking::PosedBox;
 
 #[derive(Component)]
 pub(super) struct TargetPanel;
@@ -183,31 +184,46 @@ pub(super) fn input(
                     .and_then(|world| world.ray_distance(ray.origin, *ray.direction, distance))
                     .is_some_and(|obstruction| obstruction + 0.01 < distance)
             };
-            let spawn = ids
+            let rule = settings
+                .as_ref()
+                .map_or_else(InstalledClient::default, |s| s.0.installed_client)
+                .spawn_pick();
+            let shown = |point: Vec3| camera.world_to_viewport(camera_transform, point).ok();
+            let spawns: Vec<Candidate> = ids
                 .iter()
-                .filter_map(|id| {
-                    let distance = picker.distance(nearby.rendered[id], ray)?;
-                    (!blocked(distance)).then_some((*id, distance))
+                .map(|id| {
+                    let pick = picker.pick(nearby.rendered[id], ray);
+                    Candidate {
+                        id: *id,
+                        hit: pick.hit.filter(|distance| !blocked(*distance)),
+                        posed: pick.posed.and_then(|posed| {
+                            let distance = posed.entry(ray).filter(|d| !blocked(*d))?;
+                            let offset = shown(posed.middle())?.distance(cursor);
+                            Some(PosedHit { distance, offset })
+                        }),
+                        shown: pick.posed.and_then(|posed| shown_rect(&posed, shown)),
+                    }
                 })
-                .min_by(|a, b| a.1.total_cmp(&b.1));
+                .collect();
             let item = super::ground::hit(ray, ground.iter()).filter(|hit| !blocked(hit.1));
-            // Clicking an item on the ground picks it up and keeps the target.
-            match (spawn, item) {
-                (spawn, Some((drop_id, distance)))
-                    if spawn.is_none_or(|(_, nearer)| distance < nearer) =>
-                {
+            let choice = choose(rule, &spawns, item);
+            report_click(cursor, &spawns, choice);
+            match choice {
+                // Clicking an item on the ground picks it up and keeps the target.
+                Choice::Item(drop_id) => {
                     if let Some(line) = super::ground::use_object(drop_id, &mut online, &outbox) {
                         chat.history.push(super::chat::system_line(line));
                     }
                 }
-                (spawn, _) => {
+                Choice::Spawn(id, _) => {
                     // An NPC clicked with an item on the cursor is asked to
                     // take it, as well as targeted.
-                    if let Some((id, _)) = spawn {
-                        super::give::offer(id, &mut online, &outbox);
-                    }
-                    proposal = Some(spawn.map(|(id, _)| id));
+                    super::give::offer(id, &mut online, &outbox);
+                    proposal = Some(Some(id));
                 }
+                // A click on nothing clears the target (the official rule is
+                // unread, checklist 6.329).
+                Choice::Nothing => proposal = Some(None),
             }
         }
     }
@@ -231,6 +247,131 @@ pub(super) fn input(
     }
     // A choice sent says nothing, as in the official client.
     online.select_target(selected);
+}
+
+/// What a click's ray meets of one targetable spawn, line of sight
+/// already checked.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Candidate {
+    id: u16,
+    /// World distance to its nearest drawn triangle hit, if seen.
+    hit: Option<f32>,
+    /// Its posed box, if the ray enters it where it is seen.
+    posed: Option<PosedHit>,
+    /// The screen rectangle its posed box covers, for the debug line only.
+    shown: Option<Rect>,
+}
+
+/// A ray entering a spawn's posed box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PosedHit {
+    /// World distance to where the ray enters the box.
+    distance: f32,
+    /// Screen distance from the cursor to the box's middle, in logical pixels.
+    offset: f32,
+}
+
+/// How a spawn was found by a click.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Found {
+    Triangles,
+    PosedBox,
+}
+
+/// What a click in the 3D view picks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Choice {
+    Spawn(u16, Found),
+    /// An object on the ground, by its drop id.
+    Item(u32),
+    Nothing,
+}
+
+/// The click's pick by the installed generation's rule: the nearest drawn
+/// triangle, or a ground item nearer than it; then, by
+/// [`SpawnPick::TrianglesThenPosedBox`], the posed box whose middle shows
+/// nearest the cursor, a tie going to the nearer. A ground item the ray
+/// hits beats a spawn found only by its box.
+fn choose(rule: SpawnPick, spawns: &[Candidate], item: Option<(u32, f32)>) -> Choice {
+    let exact = spawns
+        .iter()
+        .filter_map(|spawn| Some((spawn.id, spawn.hit?)))
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    match (exact, item) {
+        (exact, Some((drop_id, distance))) if exact.is_none_or(|(_, nearer)| distance < nearer) => {
+            return Choice::Item(drop_id);
+        }
+        (Some((id, _)), _) => return Choice::Spawn(id, Found::Triangles),
+        (None, _) => {}
+    }
+    if rule != SpawnPick::TrianglesThenPosedBox {
+        return Choice::Nothing;
+    }
+    spawns
+        .iter()
+        .filter_map(|spawn| Some((spawn.id, spawn.posed?)))
+        .min_by(|(_, a), (_, b)| {
+            a.offset
+                .total_cmp(&b.offset)
+                .then(a.distance.total_cmp(&b.distance))
+        })
+        .map_or(Choice::Nothing, |(id, _)| {
+            Choice::Spawn(id, Found::PosedBox)
+        })
+}
+
+/// The screen rectangle a posed box covers; None when a corner lies off the
+/// view's front.
+fn shown_rect(posed: &PosedBox, shown: impl Fn(Vec3) -> Option<Vec2>) -> Option<Rect> {
+    posed
+        .corners()
+        .into_iter()
+        .map(shown)
+        .try_fold(None::<Rect>, |rect, point| {
+            let point = point?;
+            Some(Some(
+                rect.map_or(Rect::from_corners(point, point), |rect| {
+                    rect.union_point(point)
+                }),
+            ))
+        })
+        .flatten()
+}
+
+/// Logical pixels from a point to a screen rectangle, 0 inside it.
+fn outside(rect: Rect, point: Vec2) -> f32 {
+    (point.clamp(rect.min, rect.max) - point).length()
+}
+
+/// A debug line for each click in the 3D view, to measure misses: what it
+/// picked and how, and, for the spawn whose shown box lies nearest the
+/// cursor, how far outside that box the click landed and the box's size on
+/// screen. Spawn ids and screen pixels only. Off unless the log filter asks
+/// for the entities module at debug level.
+fn report_click(cursor: Vec2, spawns: &[Candidate], choice: Choice) {
+    let nearest = spawns
+        .iter()
+        .filter_map(|spawn| {
+            let rect = spawn.shown?;
+            Some((spawn.id, outside(rect, cursor), rect.size()))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    let triangles = spawns.iter().filter(|spawn| spawn.hit.is_some()).count();
+    let boxes = spawns.iter().filter(|spawn| spawn.posed.is_some()).count();
+    match nearest {
+        Some((id, off, size)) => debug!(
+            target: "eq_client_render::entities",
+            "click at ({:.0}, {:.0}) picked {choice:?}; triangles hit {triangles}, boxes entered \
+             {boxes}; nearest shown box spawn {id}, {off:.1} px outside, {:.0}x{:.0} px",
+            cursor.x, cursor.y, size.x, size.y,
+        ),
+        None => debug!(
+            target: "eq_client_render::entities",
+            "click at ({:.0}, {:.0}) picked {choice:?}; triangles hit {triangles}, boxes entered \
+             {boxes}; no box shown",
+            cursor.x, cursor.y,
+        ),
+    }
 }
 
 /// Drawn spawns the player may target: visible ones within the zone's far clip.
@@ -854,5 +995,101 @@ mod tests {
         );
         app.update();
         assert_eq!(app.world().get::<Node>(bar).unwrap().width, percent(31));
+    }
+
+    fn candidate(id: u16, hit: Option<f32>, posed: Option<(f32, f32)>) -> Candidate {
+        Candidate {
+            id,
+            hit,
+            posed: posed.map(|(distance, offset)| PosedHit { distance, offset }),
+            shown: None,
+        }
+    }
+
+    #[test]
+    fn a_drawn_triangle_beats_any_posed_box() {
+        let rule = SpawnPick::TrianglesThenPosedBox;
+        // The nearer triangle hit wins, whatever the boxes say.
+        let spawns = [
+            candidate(2, Some(30.0), Some((25.0, 40.0))),
+            candidate(3, Some(20.0), Some((18.0, 9.0))),
+            candidate(4, None, Some((5.0, 0.0))),
+        ];
+        assert_eq!(
+            choose(rule, &spawns, None),
+            Choice::Spawn(3, Found::Triangles)
+        );
+    }
+
+    #[test]
+    fn with_no_triangle_hit_the_box_shown_nearest_the_cursor_wins() {
+        let rule = SpawnPick::TrianglesThenPosedBox;
+        // A big model's box swallowing a small one in front of it: the
+        // small one's middle is nearer the cursor, though its box is farther.
+        let spawns = [
+            candidate(2, None, Some((10.0, 60.0))),
+            candidate(3, None, Some((40.0, 4.0))),
+            candidate(4, None, None),
+        ];
+        assert_eq!(
+            choose(rule, &spawns, None),
+            Choice::Spawn(3, Found::PosedBox)
+        );
+        // A tie on screen goes to the nearer.
+        let tied = [
+            candidate(2, None, Some((40.0, 4.0))),
+            candidate(3, None, Some((10.0, 4.0))),
+        ];
+        assert_eq!(choose(rule, &tied, None), Choice::Spawn(3, Found::PosedBox));
+        // Nothing entered, nothing picked: the target is cleared as today.
+        assert_eq!(choose(rule, &spawns[2..], None), Choice::Nothing);
+        assert_eq!(choose(rule, &[], None), Choice::Nothing);
+    }
+
+    #[test]
+    fn ground_items_rank_with_the_triangles_and_beat_a_box() {
+        let rule = SpawnPick::TrianglesThenPosedBox;
+        let hit = [candidate(2, Some(20.0), None)];
+        assert_eq!(choose(rule, &hit, Some((7, 15.0))), Choice::Item(7));
+        assert_eq!(
+            choose(rule, &hit, Some((7, 25.0))),
+            Choice::Spawn(2, Found::Triangles)
+        );
+        let boxed = [candidate(2, None, Some((5.0, 0.0)))];
+        assert_eq!(choose(rule, &boxed, Some((7, 25.0))), Choice::Item(7));
+    }
+
+    #[test]
+    fn the_triangles_rule_ignores_boxes() {
+        let spawns = [candidate(2, None, Some((5.0, 0.0)))];
+        assert_eq!(choose(SpawnPick::Triangles, &spawns, None), Choice::Nothing);
+        let hit = [candidate(2, Some(5.0), None)];
+        assert_eq!(
+            choose(SpawnPick::Triangles, &hit, None),
+            Choice::Spawn(2, Found::Triangles)
+        );
+    }
+
+    #[test]
+    fn both_generations_pick_by_triangles_then_the_posed_box_until_read() {
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            assert_eq!(client.spawn_pick(), SpawnPick::TrianglesThenPosedBox);
+        }
+    }
+
+    #[test]
+    fn a_shown_box_is_measured_in_screen_pixels() {
+        let posed = PosedBox {
+            frame: Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+            min: Vec3::new(-1.0, 0.0, -1.0),
+            max: Vec3::new(1.0, 4.0, 1.0),
+        };
+        // A flat projection dropping depth, ten pixels to a unit.
+        let rect = shown_rect(&posed, |p| Some(Vec2::new(p.x, p.y) * 10.0)).unwrap();
+        assert_eq!(rect, Rect::new(90.0, 0.0, 110.0, 40.0));
+        assert!(outside(rect, Vec2::new(100.0, 20.0)).abs() < 1e-4);
+        assert!((outside(rect, Vec2::new(113.0, 44.0)) - 5.0).abs() < 1e-4);
+        // A corner off the view's front shows no box.
+        assert!(shown_rect(&posed, |p| (p.z > 0.0).then_some(Vec2::ZERO)).is_none());
     }
 }
