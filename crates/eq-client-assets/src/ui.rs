@@ -254,6 +254,29 @@ pub enum TargetByName {
     Shortest,
 }
 
+/// How a client generation picks the spawn a click in the 3D view lands on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpawnPick {
+    /// Only the model's drawn triangles count.
+    Triangles,
+    /// The model's drawn triangles first; when the click hits none, the box
+    /// the drawn model spans in its current pose, in the spawn's own frame.
+    /// Among the boxes it enters, the one whose middle shows nearest the
+    /// cursor wins, a tie going to the nearer (inferred, checklist 6.329
+    /// for Titanium and 6.330 for the Mac-era client: neither program's
+    /// pick is read).
+    TrianglesThenPosedBox,
+}
+
+/// What a click in the 3D view that picks nothing does to the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickMiss {
+    /// The target is cleared.
+    ClearTarget,
+    /// The target is kept: nothing is sent.
+    KeepTarget,
+}
+
 /// Where a give or trade window the player asked for puts the cursor's
 /// item as it opens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -514,6 +537,29 @@ impl InstalledClient {
         match self {
             Self::Titanium => TargetByName::Nearest,
             Self::EqMac => TargetByName::Shortest,
+        }
+    }
+
+    /// How a click in the 3D view picks a spawn: the same inferred rule on
+    /// both generations until their programs' picks are read (checklist
+    /// 6.329, 6.330).
+    #[must_use]
+    pub const fn spawn_pick(self) -> SpawnPick {
+        match self {
+            Self::Titanium | Self::EqMac => SpawnPick::TrianglesThenPosedBox,
+        }
+    }
+
+    /// What a click in the 3D view that picks nothing does to the target.
+    /// Titanium keeps it: its world click (0x4a91a4) reaches the targeting
+    /// routine (0x4a6f0e) only with a spawn, and nothing on its way clears
+    /// the target (Titanium program read D-pick-T, 11-01). The Mac-era
+    /// client's is unread and taken to be the same (inferred, checklist
+    /// 6.330).
+    #[must_use]
+    pub const fn click_miss(self) -> ClickMiss {
+        match self {
+            Self::Titanium | Self::EqMac => ClickMiss::KeepTarget,
         }
     }
 
