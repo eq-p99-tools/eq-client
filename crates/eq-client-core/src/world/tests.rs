@@ -2435,7 +2435,7 @@ fn a_zone_header_sent_again_changes_the_sky_fog_and_far_clip() {
             music: None,
             sky_lock: None,
             graveyard_minutes: None,
-            classic_model_scale_flag: None,
+            classic_model_scale_flag: Some(1),
         };
         (sky, description)
     };
@@ -2447,12 +2447,14 @@ fn a_zone_header_sent_again_changes_the_sky_fog_and_far_clip() {
     }
     game(&mut world, admission);
     assert_eq!(world.far_clip(), Some(1400.0));
-    assert_eq!(world.zone_gravity(), None);
+    assert_eq!((world.zone_gravity(), world.min_clip()), (None, None));
     let (sky, description) = header(1, 800.0, 1400.0);
     game(&mut world, WorldEvent::Sky(sky));
     game(&mut world, WorldEvent::ZoneDescription(description));
     assert_eq!((world.sky(), world.far_clip()), (Some(sky), Some(1400.0)));
     assert_eq!(world.zone_gravity(), Some(0.4));
+    assert_eq!(world.classic_model_scale_flag(), Some(1));
+    assert_eq!(world.min_clip(), Some(50.0));
     // A game master's change sends the header again mid-zone: every field it
     // carries takes effect, the clip as well as the sky and fog.
     let (sky, description) = header(0, 500.0, 600.0);
@@ -4017,4 +4019,20 @@ fn carried_weight_counts_what_the_player_wears_carries_and_holds_and_their_coins
         "{}",
         world.carried_weight()
     );
+}
+
+#[test]
+fn the_worlds_pvp_ruleset_stays_through_zones_and_characters() {
+    let mut world = ClientWorld::default();
+    assert_eq!(world.pvp_rule(), 0);
+    game(
+        &mut world,
+        WorldEvent::Rules(eq_network_game::rules::WorldRules {
+            pvp: 4,
+            ..Default::default()
+        }),
+    );
+    assert_eq!(world.pvp_rule(), 4);
+    game(&mut world, entered(1));
+    assert_eq!(world.pvp_rule(), 4);
 }

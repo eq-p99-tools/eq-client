@@ -199,18 +199,26 @@ pub fn z_offset(race: u32, size: f32) -> f32 {
     0.2 * size_or_default(race, size) * factor
 }
 
-/// How far under a remote spawn's reported position its soles are drawn:
-/// 0.625 × size for every model, with the race's default size when none was
-/// sent. A local server's static spawns of five humanoid races in four cities,
-/// short races included, all sat at floor + 0.625 × their own size, and the
-/// classic meshes share one shape about their origin, so `EQEmu`'s per-model
-/// factors (applied by the server only to mobs it moves) play no part here. A
-/// mob the server has moved to its own lower height draws into the floor, as
-/// the official client is expected to draw it. Inferred until a recording of
-/// the official client: item 6.231.
+/// The height above its soles at which a model hangs from its spawn's
+/// reported position, in the model's own units, before its drawn scale: the
+/// Mac-era program starts a spawn's stand height at this and multiplies it
+/// by the scale it draws the model at (program read N1, 0x51f79b). The
+/// Titanium program takes the height from the model (0x4b6d42), not yet
+/// read: this stands in for it there (recording checklist 6.347).
+pub const STAND_HEIGHT: f32 = 3.125;
+
+/// How far under a remote spawn's reported position its soles are drawn, its
+/// stand height: [`STAND_HEIGHT`] × the scale its model is drawn at, which is
+/// 0.625 × size for a classic model drawn at size × 0.2. A local server's
+/// static spawns of five humanoid races in four cities, short races
+/// included, all sat at floor + 0.625 × their own size, and the classic
+/// meshes share one shape about their origin, so `EQEmu`'s per-model factors
+/// (applied by the server only to mobs it moves) play no part here. A mob
+/// the server has moved to its own lower height draws into the floor, as the
+/// official client is expected to draw it (recording item 6.231).
 #[must_use]
-pub fn drawn_feet_offset(race: u32, size: f32) -> f32 {
-    0.625 * size_or_default(race, size)
+pub fn drawn_feet_offset(scale: f32) -> f32 {
+    STAND_HEIGHT * scale
 }
 
 /// Where a remote model's soles are drawn, in renderer coordinates: on the
@@ -222,16 +230,12 @@ pub fn drawn_feet_offset(race: u32, size: f32) -> f32 {
 /// The fix only ever raises a model: a standing spawn's soles already sit a
 /// little over the floor, so the reach down is kept short, and a low flyer, a
 /// mob on a lift or a door (doors are not in this geometry) or one over ground
-/// this geometry lacks stays where the server says. Inferred; recording item
-/// 6.231.
+/// this geometry lacks stays where the server says. `size` is the size the
+/// model is drawn by: the size sent, or its race's default, as the installed
+/// client takes it. Inferred; recording item 6.231.
 #[must_use]
-pub fn grounded_soles(
-    world: &movement::CollisionWorld,
-    soles: glam::Vec3,
-    race: u32,
-    size: f32,
-) -> f32 {
-    let reach = 0.6 * size_or_default(race, size);
+pub fn grounded_soles(world: &movement::CollisionWorld, soles: glam::Vec3, size: f32) -> f32 {
+    let reach = 0.6 * size;
     world.ground(soles, reach, 0.5).unwrap_or(soles.y)
 }
 
@@ -274,8 +278,8 @@ pub struct DrawnSoles {
 /// the floor finder 0x48a0fc, which takes a face at any angle) and in part
 /// for `EQMac` (0x50ba07, 0x4b3a84, 0x4b479e). The reach up is read too:
 /// both programs sweep for the floor from the spawn's origin, its stand
-/// height above its feet (6.344; Titanium's height inferred as
-/// [`z_offset`], 6.347), the `EQMac` sweep starting a further 0.5 up, which
+/// height above its feet (6.344): `stand`, its [`drawn_feet_offset`]
+/// (Titanium's height inferred, 6.347), the `EQMac` sweep starting a further 0.5 up, which
 /// is left out here, as is the sweep's radius (6.336). Neither `EQEmu` nor P99 sends vertical motion while
 /// its own z follows the floor, so a model drawn at its reported height
 /// would float down a slope and sink into one going up until the next
@@ -297,11 +301,11 @@ pub fn carried_soles(
     world: &movement::CollisionWorld,
     previous: Option<DrawnSoles>,
     soles: glam::Vec3,
-    (race, size): (u32, f32),
+    stand: f32,
     fall: CarriedFall,
     steps: f32,
 ) -> DrawnSoles {
-    let reach = z_offset(race, size);
+    let reach = stand;
     let spot = glam::Vec2::new(soles.x, soles.z);
     if let Some(DrawnSoles {
         height,
@@ -469,10 +473,9 @@ pub fn corpse_tilt(
     soles: glam::Vec3,
     yaw: f32,
     length: f32,
-    race: u32,
     size: f32,
 ) -> Tilt {
-    let reach = 0.6 * size_or_default(race, size);
+    let reach = 0.6 * size;
     let floor =
         |offset: glam::Vec3| world.nearest_ground(soles + offset, reach, 0.5 + offset.length());
     if !length.is_finite() || length == 0.0 || floor(glam::Vec3::ZERO).is_none() {
@@ -561,12 +564,13 @@ mod tests {
     }
 
     #[test]
-    fn remote_models_hang_their_soles_by_size_alone() {
+    fn remote_models_hang_their_soles_by_their_drawn_scale() {
         let offset = super::drawn_feet_offset;
-        assert!((offset(1, 6.0) - 3.75).abs() < 0.0001); // human, as z_offset
-        assert!((offset(183, 4.8) - 3.0).abs() < 0.0001); // Coldain
-        assert!((offset(8, 0.0) - 2.5).abs() < 0.0001); // dwarf, default size 4
-        assert!((offset(12, f32::NAN) - 1.875).abs() < 0.0001); // gnome, default 3
+        // A classic model drawn at size × 0.2 hangs 0.625 × size.
+        assert!((offset(6.0 * 0.2) - 3.75).abs() < 0.0001); // human, as z_offset
+        assert!((offset(4.8 * 0.2) - 3.0).abs() < 0.0001); // Coldain
+        // A model drawn smaller than its size hangs by its scale.
+        assert!((offset(0.54) - 1.6875).abs() < 0.0001);
     }
 
     /// A ramp rising `grade` units per unit along world x, in renderer
@@ -608,8 +612,8 @@ mod tests {
     /// vertical motion as `EQEmu` and P99 report a walking NPC, drawn at
     /// `fps`; it is never drawn under the floor.
     fn most_over_the_ramp(grade: f32, fps: u16) -> f32 {
-        let (race, size, speed) = (60, 6.0, 11.8);
-        let feet = super::drawn_feet_offset(race, size);
+        let (size, speed) = (6.0, 11.8);
+        let feet = super::drawn_feet_offset(size * 0.2);
         let world = ramp(grade);
         let mut previous = None;
         let mut most = 0.0_f32;
@@ -628,7 +632,7 @@ mod tests {
                 heading: 0.0,
             }));
             let steps = 20.0 / f32::from(fps);
-            let drawn = super::carried_soles(&world, previous, soles, (race, size), FALL, steps);
+            let drawn = super::carried_soles(&world, previous, soles, feet, FALL, steps);
             let floor = super::render_position(super::WorldPosition {
                 x,
                 y: 0.0,
@@ -685,7 +689,7 @@ mod tests {
             x: 11.8 * 2.0,
             ..Default::default()
         }));
-        assert!((super::grounded_soles(&world, soles, 60, 6.0) - soles.y).abs() < 0.001);
+        assert!((super::grounded_soles(&world, soles, 6.0) - soles.y).abs() < 0.001);
     }
 
     #[test]
@@ -712,7 +716,7 @@ mod tests {
             &world,
             Some(standing(0.0)),
             glam::Vec3::new(2.0, 2.0, 0.0),
-            (60, 6.0),
+            3.75,
             FALL,
             3.0,
         );
@@ -725,7 +729,7 @@ mod tests {
             &world,
             Some(standing(19.0)),
             glam::Vec3::new(21.0, 2.0, 0.0),
-            (60, 6.0),
+            3.75,
             FALL,
             1.0 / 3.0,
         );
@@ -738,7 +742,7 @@ mod tests {
                 &world,
                 Some(drawn),
                 glam::Vec3::new(21.0, 2.0, 0.0),
-                (60, 6.0),
+                3.75,
                 FALL,
                 1.0 / 3.0,
             );
@@ -773,14 +777,8 @@ mod tests {
                 // Running 30 units a second off the edge at x 0, carried at
                 // the report's height.
                 let soles = glam::Vec3::new(-5.0 + 30.0 * t, 16.0, 0.0);
-                let next = super::carried_soles(
-                    &world,
-                    drawn,
-                    soles,
-                    (0, 6.0),
-                    FALL,
-                    20.0 / f32::from(fps),
-                );
+                let next =
+                    super::carried_soles(&world, drawn, soles, 3.75, FALL, 20.0 / f32::from(fps));
                 if landed.is_none() && soles.x > 0.0 && next.height.abs() < 0.001 {
                     landed = Some(t);
                 }
@@ -801,7 +799,7 @@ mod tests {
         // follows it down, where the report's height held it 16 over it.
         let grade = -27.0_f32.to_radians().tan();
         let world = ramp(grade);
-        let (race, size) = (0, 4.5);
+        let size = 4.5;
         for fps in [60_u16, 10] {
             let mut drawn = None;
             let mut over = 0.0_f32;
@@ -818,7 +816,7 @@ mod tests {
                     &world,
                     drawn,
                     soles,
-                    (race, size),
+                    super::drawn_feet_offset(size * 0.2),
                     FALL,
                     20.0 / f32::from(fps),
                 );
@@ -845,26 +843,26 @@ mod tests {
     fn a_carried_flyer_stays_at_its_reported_height() {
         let world = ramp(0.0);
         let soles = glam::Vec3::Y * 9.0;
-        let first = super::carried_soles(&world, None, soles, (60, 6.0), FALL, 0.0);
+        let first = super::carried_soles(&world, None, soles, 3.75, FALL, 0.0);
         assert!(
             (first.height - 9.0).abs() < 0.001 && first.fall.is_none(),
             "{first:?}"
         );
         let on = glam::Vec3::new(1.0, 9.0, 0.0);
-        let next = super::carried_soles(&world, Some(first), on, (60, 6.0), FALL, 1.0 / 3.0);
+        let next = super::carried_soles(&world, Some(first), on, 3.75, FALL, 1.0 / 3.0);
         assert!(
             (next.height - 9.0).abs() < 0.001 && next.fall.is_none(),
             "{next:?}"
         );
         // Come down within reach of the floor, it falls onto it.
         let low = glam::Vec3::new(2.0, 3.0, 0.0);
-        let mut drawn = super::carried_soles(&world, Some(next), low, (60, 6.0), FALL, 1.0 / 3.0);
+        let mut drawn = super::carried_soles(&world, Some(next), low, 3.75, FALL, 1.0 / 3.0);
         assert!(
             (drawn.height - 3.0).abs() < 0.001 && drawn.fall == Some(0.0),
             "{drawn:?}"
         );
         for _ in 0..20 {
-            drawn = super::carried_soles(&world, Some(drawn), low, (60, 6.0), FALL, 1.0 / 3.0);
+            drawn = super::carried_soles(&world, Some(drawn), low, 3.75, FALL, 1.0 / 3.0);
         }
         assert!(
             drawn.height.abs() < 0.001 && drawn.fall == Some(0.0),
@@ -904,7 +902,7 @@ mod tests {
             [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
         ];
         let world = crate::movement::CollisionWorld::new(floor).unwrap();
-        let soles = |y: f32| super::grounded_soles(&world, glam::Vec3::Y * y, 183, 4.0);
+        let soles = |y: f32| super::grounded_soles(&world, glam::Vec3::Y * y, 4.0);
         // Reported two under the floor, as a walked mob's z puts it, it lands;
         // two over, as a flyer or a mob on a lift, it stays.
         assert!(soles(-2.0).abs() < 0.001);
@@ -916,8 +914,6 @@ mod tests {
         assert!(soles(0.49).abs() < 0.001);
         assert!((soles(0.51) - 0.51).abs() < 0.001);
         assert!((soles(5.0) - 5.0).abs() < 0.001);
-        // A size-less spawn reaches by its race's default size: 0.6 × 4 for a dwarf.
-        assert!(super::grounded_soles(&world, glam::Vec3::Y * -2.3, 8, 0.0).abs() < 0.001);
     }
 
     /// The soles on the ramp at a world x and y, in renderer coordinates.
@@ -939,7 +935,7 @@ mod tests {
             let slope = grade.atan();
             let soles = on_ramp(grade, 0.0, 0.0);
             for (yaw, raised) in [(std::f32::consts::PI, slope), (0.0, -slope)] {
-                let tilt = super::corpse_tilt(&world, soles, yaw, -6.0, 60, 6.0);
+                let tilt = super::corpse_tilt(&world, soles, yaw, -6.0, 6.0);
                 // A negative pitch raises the way it faces.
                 assert!(
                     (-tilt.pitch - raised).abs() < 1.0_f32.to_radians(),
@@ -954,7 +950,7 @@ mod tests {
             }
             // Lying ahead of its soles instead, on an even slope, it leans
             // the same.
-            let ahead = super::corpse_tilt(&world, soles, std::f32::consts::PI, 6.0, 60, 6.0);
+            let ahead = super::corpse_tilt(&world, soles, std::f32::consts::PI, 6.0, 6.0);
             assert!(
                 (-ahead.pitch - slope).abs() < 1.0_f32.to_radians(),
                 "grade {grade}: {ahead:?}"
@@ -962,14 +958,7 @@ mod tests {
         }
         // A slope steeper than 35° is followed only so far.
         let world = ramp(0.9);
-        let tilt = super::corpse_tilt(
-            &world,
-            glam::Vec3::ZERO,
-            std::f32::consts::PI,
-            -6.0,
-            60,
-            6.0,
-        );
+        let tilt = super::corpse_tilt(&world, glam::Vec3::ZERO, std::f32::consts::PI, -6.0, 6.0);
         assert!((tilt.pitch + super::MOST_TILT).abs() < 1e-5, "{tilt:?}");
     }
 
@@ -996,9 +985,9 @@ mod tests {
         let yaw = std::f32::consts::PI;
         // Lying behind, on the level, it lies level; lying ahead, over the
         // crest, it pitches down the fall.
-        let behind = super::corpse_tilt(&world, glam::Vec3::ZERO, yaw, -6.0, 60, 6.0);
+        let behind = super::corpse_tilt(&world, glam::Vec3::ZERO, yaw, -6.0, 6.0);
         assert!(behind.upright(), "{behind:?}");
-        let ahead = super::corpse_tilt(&world, glam::Vec3::ZERO, yaw, 6.0, 60, 6.0);
+        let ahead = super::corpse_tilt(&world, glam::Vec3::ZERO, yaw, 6.0, 6.0);
         assert!(
             (ahead.pitch - grade.atan()).abs() < 1.0_f32.to_radians(),
             "{ahead:?}"
@@ -1012,7 +1001,7 @@ mod tests {
         for grade in [0.2_f32, -0.4] {
             let world = ramp(grade);
             let yaw = std::f32::consts::FRAC_PI_2;
-            let tilt = super::corpse_tilt(&world, on_ramp(grade, 0.0, 0.0), yaw, -6.0, 60, 6.0);
+            let tilt = super::corpse_tilt(&world, on_ramp(grade, 0.0, 0.0), yaw, -6.0, 6.0);
             assert!(
                 (tilt.roll - grade.atan()).abs() < 1.0_f32.to_radians(),
                 "grade {grade}: {tilt:?}"
@@ -1025,7 +1014,7 @@ mod tests {
     fn a_corpse_on_flat_ground_lies_level() {
         let world = ramp(0.0);
         for yaw in [0.0_f32, 0.7, 2.0, -2.9] {
-            let tilt = super::corpse_tilt(&world, glam::Vec3::ZERO, yaw, -5.0, 60, 6.0);
+            let tilt = super::corpse_tilt(&world, glam::Vec3::ZERO, yaw, -5.0, 6.0);
             assert!(tilt.upright(), "yaw {yaw}: {tilt:?}");
             assert_eq!(tilt.rotation(), glam::Quat::IDENTITY);
         }
@@ -1038,9 +1027,9 @@ mod tests {
         // Behind its soles, where its body lies, the ramp has ended: no
         // pitch, though it slopes; lying ahead instead, it has the floor.
         let edge = on_ramp(grade, -99.5, 0.0);
-        let tilt = super::corpse_tilt(&world, edge, std::f32::consts::PI, -6.0, 60, 6.0);
+        let tilt = super::corpse_tilt(&world, edge, std::f32::consts::PI, -6.0, 6.0);
         assert!(tilt.upright(), "{tilt:?}");
-        let tilt = super::corpse_tilt(&world, edge, std::f32::consts::PI, 6.0, 60, 6.0);
+        let tilt = super::corpse_tilt(&world, edge, std::f32::consts::PI, 6.0, 6.0);
         assert!(
             (-tilt.pitch - grade.atan()).abs() < 1.0_f32.to_radians(),
             "{tilt:?}"
@@ -1052,7 +1041,6 @@ mod tests {
             on_ramp(grade, -96.5, 0.0),
             std::f32::consts::PI,
             -6.0,
-            60,
             6.0,
         );
         assert!(
@@ -1061,12 +1049,12 @@ mod tests {
         );
         // Facing along that edge, one side is off the ramp: no roll, though
         // the ramp rises to its side.
-        let tilt = super::corpse_tilt(&world, edge, std::f32::consts::FRAC_PI_2, -6.0, 60, 6.0);
+        let tilt = super::corpse_tilt(&world, edge, std::f32::consts::FRAC_PI_2, -6.0, 6.0);
         assert!(tilt.upright(), "{tilt:?}");
         // Facing up the ramp by its side edge, the pitch still follows it
         // with a side off the ramp.
         let along = on_ramp(grade, 0.0, 19.5);
-        let tilt = super::corpse_tilt(&world, along, std::f32::consts::PI, -6.0, 60, 6.0);
+        let tilt = super::corpse_tilt(&world, along, std::f32::consts::PI, -6.0, 6.0);
         assert!(
             (-tilt.pitch - grade.atan()).abs() < 1.0_f32.to_radians(),
             "{tilt:?}"
@@ -1074,10 +1062,10 @@ mod tests {
         assert!(tilt.roll.abs() < f32::EPSILON, "{tilt:?}");
         // With no floor at its soles, it stays upright.
         let over = on_ramp(grade, 0.0, 0.0) + glam::Vec3::Y * 9.0;
-        let tilt = super::corpse_tilt(&world, over, std::f32::consts::PI, -6.0, 60, 6.0);
+        let tilt = super::corpse_tilt(&world, over, std::f32::consts::PI, -6.0, 6.0);
         assert_eq!(tilt, super::Tilt::default());
         // A model with no death clip to measure has no length to lie along.
-        let tilt = super::corpse_tilt(&world, on_ramp(grade, 0.0, 0.0), 0.0, 0.0, 60, 6.0);
+        let tilt = super::corpse_tilt(&world, on_ramp(grade, 0.0, 0.0), 0.0, 0.0, 6.0);
         assert!(tilt.upright());
     }
 

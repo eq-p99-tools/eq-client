@@ -431,13 +431,17 @@ pub(super) fn drive(
         Query<&crate::outbox::Needs>,
         pointer::Aim,
     ),
-    windows: Query<&Window, With<PrimaryWindow>>,
+    (windows, settings): (
+        Query<&Window, With<PrimaryWindow>>,
+        Option<Res<super::ViewerSettings>>,
+    ),
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let Some(mut script) = script else {
         return;
     };
+    let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
     // Plain borrows of the fields, so a walk can hold its route and note
     // where it heads at once.
     let script = &mut *script;
@@ -606,7 +610,8 @@ pub(super) fn drive(
                 let world = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
-                let ends = body.and_then(|body| walk_ends(&online, body, script.approached, world));
+                let ends = body
+                    .and_then(|body| walk_ends(&online, client, body, script.approached, world));
                 let (Some((feet, goal)), Some(world), Some(body)) = (ends, world, body) else {
                     script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
                     return;
@@ -1297,7 +1302,7 @@ pub(super) fn drive(
                 let floors = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
-                let (feet, goal) = walk_ends(&online, *body, script.approached, floors)?;
+                let (feet, goal) = walk_ends(&online, client, *body, script.approached, floors)?;
                 // Ledges are routes only where the session simulates falls.
                 let route = eq_client_core::movement::Route::new(feet, goal, *range, body.height)
                     .with_drops(observed.4.airborne.is_some())
@@ -2255,6 +2260,7 @@ fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
 /// target's soles, as [`spawn_goal`] finds them on `floors`.
 fn walk_ends(
     online: &super::online::OnlineState,
+    client: eq_client_assets::ui::InstalledClient,
     body: super::PlayerBody,
     object: Option<u32>,
     floors: Option<&eq_client_core::movement::CollisionWorld>,
@@ -2274,8 +2280,7 @@ fn walk_ends(
         spawn_goal(
             floors,
             Vec3::from_array(eq_client_core::render_position(target.position)),
-            target.race,
-            target.size,
+            super::entities::Drawn::of(client, world, (target.race, target.gender, target.size)),
         )
     };
     let origin = Vec3::from_array(eq_client_core::render_position(player.position));
@@ -2290,14 +2295,13 @@ fn walk_ends(
 fn spawn_goal(
     floors: Option<&eq_client_core::movement::CollisionWorld>,
     reported: Vec3,
-    race: u32,
-    size: f32,
+    drawn: super::entities::Drawn,
 ) -> Vec3 {
-    let soles = reported - Vec3::Y * eq_client_core::drawn_feet_offset(race, size);
+    let soles = reported - Vec3::Y * drawn.feet();
     floors.map_or(soles, |floors| {
         Vec3::new(
             soles.x,
-            eq_client_core::grounded_soles(floors, soles, race, size),
+            eq_client_core::grounded_soles(floors, soles, drawn.size),
             soles.z,
         )
     })
@@ -2474,6 +2478,7 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eq_client_assets::ui::InstalledClient;
 
     /// A flat floor at height 0, 40 across, as a collision world and its
     /// triangles.
@@ -2490,6 +2495,12 @@ mod tests {
         (world, triangles)
     }
 
+    /// A human of size 6, as both clients draw one.
+    const HUMAN: crate::entities::Drawn = crate::entities::Drawn {
+        size: 6.0,
+        scale: 1.2,
+    };
+
     #[test]
     fn a_walk_to_a_target_aims_at_its_soles_on_the_floor_not_its_middle() {
         use eq_client_core::movement::navmesh::{NavMesh, Settings};
@@ -2497,17 +2508,17 @@ mod tests {
         let (world, triangles) = flat_floor();
         // A human of size 6, reported at its middle: 0.625 x 6 over its
         // soles; and one the server reports a little high.
-        let offset = eq_client_core::drawn_feet_offset(1, 6.0);
+        let offset = HUMAN.feet();
         for over in [0.0, 0.3] {
             let reported = Vec3::new(5.0, offset + over, 2.0);
-            let goal = spawn_goal(Some(&world), reported, 1, 6.0);
+            let goal = spawn_goal(Some(&world), reported, HUMAN);
             assert!(goal.y.abs() < 1e-3, "{over}: {goal}");
             assert_eq!((goal.x, goal.z), (5.0, 2.0));
         }
         // The mesh finds floor under the soles and none within its reach of
         // the middle.
         let reported = Vec3::new(5.0, offset, 2.0);
-        let goal = spawn_goal(Some(&world), reported, 1, 6.0);
+        let goal = spawn_goal(Some(&world), reported, HUMAN);
         let (mesh, _) = NavMesh::build(
             &triangles,
             &Settings::walker(6.0),
@@ -2529,8 +2540,8 @@ mod tests {
     #[test]
     fn with_no_floors_a_target_s_goal_is_its_drawn_soles() {
         let reported = Vec3::new(1.0, 10.0, -3.0);
-        let goal = spawn_goal(None, reported, 1, 6.0);
-        let lowered = reported.y - eq_client_core::drawn_feet_offset(1, 6.0);
+        let goal = spawn_goal(None, reported, HUMAN);
+        let lowered = reported.y - HUMAN.feet();
         assert!((goal.y - lowered).abs() < 1e-6);
         assert_eq!((goal.x, goal.z), (1.0, -3.0));
     }
@@ -2545,7 +2556,7 @@ mod tests {
             1,
             super::super::online::testing::player(1),
         );
-        let offset = eq_client_core::drawn_feet_offset(1, 6.0);
+        let offset = HUMAN.feet();
         let mut npc = super::super::online::testing::pet(9, 0);
         npc.pet_owner = None;
         npc.race = 1;
@@ -2558,7 +2569,8 @@ mod tests {
             height: 6.0,
             size: 6.0,
         };
-        let (_, goal) = walk_ends(&online, body, None, Some(&world)).unwrap();
+        let (_, goal) =
+            walk_ends(&online, InstalledClient::Titanium, body, None, Some(&world)).unwrap();
         assert!(goal.y.abs() < 1e-3, "{goal}");
         assert!(
             (goal.x - 4.0).abs() < 1e-3 && (goal.z - 1.0).abs() < 1e-3,
@@ -2577,7 +2589,14 @@ mod tests {
                 }),
             )],
         );
-        let (_, goal) = walk_ends(&online, body, Some(40), Some(&world)).unwrap();
+        let (_, goal) = walk_ends(
+            &online,
+            InstalledClient::Titanium,
+            body,
+            Some(40),
+            Some(&world),
+        )
+        .unwrap();
         assert_eq!(
             goal,
             Vec3::from_array(eq_client_core::render_position(base))

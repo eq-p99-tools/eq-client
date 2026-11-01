@@ -65,9 +65,11 @@ struct Arguments {
     #[arg(long, value_parser = distance)]
     camera_distance: Option<f32>,
 
-    /// Radius in EQ units for nearby players and creatures (maximum 200 rendered).
-    #[arg(long, default_value = "200")]
-    entity_distance: f32,
+    /// Draw players and creatures no farther than this, in EQ units. Without
+    /// it they are drawn as far as the scene is, as the official client
+    /// draws them.
+    #[arg(long, value_parser = distance)]
+    entity_distance: Option<f32>,
 
     /// Hide your own character's helm, as the official client's Show My Helm
     /// option does; other characters always show theirs. A character's own
@@ -457,7 +459,6 @@ fn main() {
         eprintln!("error: {error}");
         std::process::exit(2);
     }
-    require_positive_distance(arguments.entity_distance);
     let eq_directory = eq_directory(arguments.eq_dir.take(), start.as_ref());
     let client = start
         .as_ref()
@@ -670,7 +671,7 @@ fn viewer_config(
         terrain_only: arguments.terrain_only,
         eq_directory: Some(eq_directory),
         installed_client: client.unwrap_or_default(),
-        entity_distance: Some(arguments.entity_distance),
+        entity_distance: arguments.entity_distance,
         option_defaults: {
             let mut defaults = eq_client_core::options::Options {
                 show_helm: !arguments.hide_own_helm,
@@ -726,13 +727,6 @@ fn run_client(
     };
     check_installation(directory, client, mode);
     client
-}
-
-fn require_positive_distance(distance: f32) {
-    if !distance.is_finite() || distance <= 0.0 {
-        eprintln!("error: --entity-distance must be a finite positive number");
-        std::process::exit(2);
-    }
 }
 
 /// The validated script and, when following, where to keep reading it.

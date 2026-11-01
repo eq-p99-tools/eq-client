@@ -187,8 +187,17 @@ pub struct ClientWorld {
     choices: Vec<crate::Capability>,
     zone_name: String,
     far_clip: Option<f32>,
+    /// The zone header's minimum clip, once this admission's header came.
+    min_clip: Option<f32>,
+    /// The world's player-versus-player ruleset, by the server's number, as
+    /// its rules last said: 0 until they say. The Titanium program keeps it
+    /// from its start, whatever zone or character follows (0x4a4cd5).
+    pvp_rule: u32,
     /// The zone header's gravity, once this admission's header came.
     zone_gravity: Option<f32>,
+    /// The zone header's classic model scale flag, as it came; None until
+    /// this admission's header comes, and where the generation has none.
+    classic_model_scale_flag: Option<u32>,
     /// The spell action flag that says a spell landed on its target, as the
     /// admission says for its server type; None records no landings.
     spell_landing_flag: Option<u8>,
@@ -571,7 +580,10 @@ impl ClientWorld {
                 self.created(name, *outcome, news);
             }
 
-            // Nothing here shows the world's rules, the expansions it allows,
+            // The world's player-versus-player ruleset decides names' colours.
+            WorldEvent::Rules(rules) => self.pvp_rule = rules.pvp,
+
+            // Nothing here shows the world's other rules, the expansions it allows,
             // its chat server, a zone it says is down, the zone's weather or
             // its header beyond the sky and the clip yet, nor stops the
             // player while stunned, charmed, held by the server or berserk,
@@ -596,8 +608,7 @@ impl ClientWorld {
             // wait for a window to choose one from, and what a game master did
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
-            WorldEvent::Rules(_)
-            | WorldEvent::Expansions(_)
+            WorldEvent::Expansions(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::Weather(_)

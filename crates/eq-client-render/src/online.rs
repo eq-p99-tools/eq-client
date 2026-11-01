@@ -496,33 +496,7 @@ pub(super) fn receive(
             // The session is this zone's even if its assets fail to load, so
             // nothing of the previous zone stays on screen either.
             scene.leave(&mut commands, &mut state.regions);
-            if let (Some(id), Some(player)) =
-                (state.world.session_id(), state.world.player().cloned())
-            {
-                let zone = state.world.zone().to_owned();
-                let (directory, navmesh) = (directory.clone(), settings.0.navmesh);
-                state.loading.start(id, move || {
-                    let loading = std::time::Instant::now();
-                    let entry = super::zone::Entry::admission(&zone, &player, &directory)
-                        .map(|entry| entry.prepare(navmesh));
-                    if entry.is_ok() {
-                        // Read and prepared off the frame thread, behind the
-                        // loading screen.
-                        info!(
-                            zone = zone.as_str(),
-                            milliseconds = loading.elapsed().as_millis(),
-                            "Zone loaded"
-                        );
-                    }
-                    entry
-                });
-            } else {
-                // Nothing to show the zone around, said as it was before the
-                // load moved off the frame.
-                let text = "No admitted player".to_owned();
-                error!("{text}");
-                chat.history.push(super::chat::system_line(text));
-            }
+            start_entry(&mut state, &settings.0, directory, &mut chat);
         }
         if let Some(position) = changes.placed {
             let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
@@ -609,6 +583,45 @@ const fn admits(update: &WorldUpdate) -> bool {
 }
 
 /// Logs what diagnosing a session needs from its news.
+/// Starts loading the zone the world just admitted the player to, off the
+/// frame thread, or says why there is nothing to load.
+fn start_entry(
+    state: &mut OnlineState,
+    settings: &crate::ViewerConfig,
+    directory: &std::path::Path,
+    chat: &mut super::chat::ChatState,
+) {
+    if let (Some(id), Some(player)) = (state.world.session_id(), state.world.player().cloned()) {
+        let zone = state.world.zone().to_owned();
+        let (directory, navmesh) = (directory.to_path_buf(), settings.navmesh);
+        let drawn_by = (
+            settings.installed_client,
+            state.world.classic_model_scale_flag(),
+        );
+        state.loading.start(id, move || {
+            let loading = std::time::Instant::now();
+            let entry = super::zone::Entry::admission(&zone, &player, drawn_by, &directory)
+                .map(|entry| entry.prepare(navmesh));
+            if entry.is_ok() {
+                // Read and prepared off the frame thread, behind the
+                // loading screen.
+                info!(
+                    zone = zone.as_str(),
+                    milliseconds = loading.elapsed().as_millis(),
+                    "Zone loaded"
+                );
+            }
+            entry
+        });
+    } else {
+        // Nothing to show the zone around, said as it was before the
+        // load moved off the frame.
+        let text = "No admitted player".to_owned();
+        error!("{text}");
+        chat.history.push(super::chat::system_line(text));
+    }
+}
+
 fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: &ClientWorld) {
     let event = match update {
         WorldUpdate::Game(event) => event,
@@ -679,6 +692,7 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
                 min_clip = description.min_clip,
                 max_clip = description.max_clip,
                 far_clip = world.far_clip(),
+                classic_model_scale_flag = description.classic_model_scale_flag,
                 "Zone header decoded"
             );
         }

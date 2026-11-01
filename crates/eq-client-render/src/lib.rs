@@ -176,7 +176,8 @@ pub struct ViewerConfig {
     /// Which official client that installation holds, which decides how its
     /// own settings files are read.
     pub installed_client: eq_client_assets::ui::InstalledClient,
-    /// Nearby-entity radius in EQ units; None uses 200.
+    /// How far spawns are drawn at most, in EQ units, where nearer than the
+    /// scene's far plane; None draws them to the far plane.
     pub entity_distance: Option<f32>,
     /// Optional read-only live validation action.
     pub validation: Option<ValidationAction>,
@@ -418,6 +419,7 @@ pub(crate) mod testing {
             .init_resource::<Assets<Image>>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<Time>()
             .insert_resource(online::OnlineState::new(false))
             .insert_resource(outbox::Outbox::new(None))
             .init_resource::<login::FrontEnd>()
@@ -582,6 +584,9 @@ fn setup_scene(
             character,
             placed,
             body,
+            // The offline viewer stands its model at the mesh's own size,
+            // with no spawn to size it by.
+            scale: 1.0,
         }
         .prepare(settings.0.navmesh),
         settings.0.terrain_only,
@@ -1317,6 +1322,7 @@ mod tests {
                             height: 6.0,
                             size: 6.0,
                         },
+                        scale: 1.0,
                     }
                     .prepare(false),
                     true,
@@ -1356,6 +1362,72 @@ mod tests {
         clippy::float_cmp,
         reason = "Exact equality verifies unchanged or explicitly assigned state"
     )]
+    fn the_top_down_view_keeps_its_own_pitch_and_zoom() {
+        use super::*;
+        use bevy::input::mouse::MouseWheel;
+        let mut app = App::new();
+        app.init_resource::<chat::ChatState>()
+            .init_resource::<items::ItemState>()
+            .init_resource::<inventory::InventoryState>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<camera::MouseLook>()
+            .add_message::<MouseMotion>()
+            .add_message::<MouseWheel>()
+            .init_resource::<windows::pointer::Wheel>()
+            .init_resource::<options::OptionsState>()
+            .init_resource::<Time>()
+            .insert_resource(online::OnlineState::new(false))
+            .add_systems(
+                Update,
+                (camera::look, windows::pointer::wheel, orbit_camera).chain(),
+            );
+        let mut window = Window {
+            focused: true,
+            ..default()
+        };
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::new(50.0, 50.0)));
+        let window = app
+            .world_mut()
+            .spawn((window, bevy::window::PrimaryWindow))
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                OrbitCamera {
+                    focus: Vec3::ZERO,
+                    yaw: 0.0,
+                    pitch: -1.0,
+                    radius: 300.0,
+                    pulled: None,
+                },
+                Transform::default(),
+                Projection::Orthographic(OrthographicProjection::default_3d()),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        // Dragged far and wheeled out: it tilts to its steepest and
+        // backs off past the chase camera's 200 units.
+        for _ in 0..20 {
+            app.world_mut().write_message(MouseMotion {
+                delta: Vec2::new(0.0, 200.0),
+            });
+            app.world_mut().write_message(MouseWheel {
+                unit: bevy::input::mouse::MouseScrollUnit::Line,
+                phase: bevy::input::touch::TouchPhase::Moved,
+                x: 0.0,
+                y: -3.0,
+                window,
+            });
+            app.update();
+        }
+        let state = app.world().get::<OrbitCamera>(camera).unwrap();
+        assert!((state.pitch + 1.45).abs() < 1e-6, "{}", state.pitch);
+        assert!(state.radius > 1000.0, "{}", state.radius);
+    }
+
+    #[test]
     #[allow(
         clippy::too_many_lines,
         reason = "Keep the ordered integration scenario and its assertions together"
@@ -1368,13 +1440,17 @@ mod tests {
             .init_resource::<items::ItemState>()
             .init_resource::<inventory::InventoryState>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<camera::MouseLook>()
             .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()
             .init_resource::<options::OptionsState>()
             .init_resource::<Time>()
             .insert_resource(online::OnlineState::new(false))
-            .add_systems(Update, (windows::pointer::wheel, orbit_camera).chain());
+            .add_systems(
+                Update,
+                (camera::look, windows::pointer::wheel, orbit_camera).chain(),
+            );
         let mut window = Window {
             focused: true,
             ..default()
@@ -1410,8 +1486,8 @@ mod tests {
                 OrbitCamera {
                     focus: Vec3::ZERO,
                     yaw: 0.0,
-                    pitch: -1.0,
-                    radius: 100.0,
+                    pitch: -0.5,
+                    radius: 40.0,
                     pulled: None,
                 },
                 Transform::default(),
@@ -1435,7 +1511,7 @@ mod tests {
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
-        assert_eq!((state.yaw, state.pitch, state.radius), (0.0, -1.0, 100.0));
+        assert_eq!((state.yaw, state.pitch, state.radius), (0.0, -0.5, 40.0));
         // A hidden panel has zero layout size and no longer captures the pointer.
         app.world_mut().get_mut::<ComputedNode>(panel).unwrap().size = Vec2::ZERO;
         app.update();
@@ -1443,7 +1519,7 @@ mod tests {
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
-        assert!(state.yaw < 0.0 && state.pitch < -1.0 && state.radius < 100.0);
+        assert!(state.yaw < 0.0 && state.pitch < -0.5 && state.radius < 40.0);
         let previous = (state.yaw, state.pitch, state.radius);
         // The inventory toggle is a standalone button, not a window frame.
         let button = app
@@ -1484,7 +1560,9 @@ mod tests {
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.1);
-        assert_eq!(state.radius, previous.2);
+        // The distance behind the player stays; only the height moved.
+        let behind = |radius: f32, pitch: f32| radius * pitch.cos();
+        assert!((behind(state.radius, state.pitch) - behind(previous.2, previous.1)).abs() < 1e-3);
     }
 
     #[test]

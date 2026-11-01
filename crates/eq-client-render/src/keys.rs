@@ -51,6 +51,9 @@ pub(crate) enum Act {
     Jump,
     /// Switches between walking and running.
     Walk,
+    /// Runs forward until a forward or back key, this key again or a
+    /// posture change stops it.
+    Autorun,
 }
 
 /// The groups the Options window's key list filters by, as the official
@@ -104,6 +107,7 @@ impl Act {
             Self::TurnRight => "Turn Right",
             Self::Jump => "Jump",
             Self::Walk => "Walk or Run",
+            Self::Autorun => "Autorun",
         };
         fixed.to_owned()
     }
@@ -132,7 +136,8 @@ impl Act {
             | Self::TurnLeft
             | Self::TurnRight
             | Self::Jump
-            | Self::Walk => KeyGroup::Movement,
+            | Self::Walk
+            | Self::Autorun => KeyGroup::Movement,
         }
     }
 }
@@ -287,11 +292,190 @@ impl Default for KeyMap {
         bind(Act::TurnRight, &[Chord::key(KeyCode::KeyE)]);
         bind(Act::Jump, &[Chord::key(KeyCode::Space)]);
         bind(Act::Walk, &[Chord::key(KeyCode::Insert)]);
+        // Num Lock, as the Titanium program binds it; the Mac-era client's
+        // key is unread (recording checklist 6.351).
+        bind(Act::Autorun, &[Chord::key(KeyCode::NumLock)]);
         Self(map)
     }
 }
 
+/// The acts a client's built-in table leaves unbound where it binds its
+/// own: the Titanium program's two strafe commands have no default key
+/// (which is left and which right is unread, recording checklist 6.361),
+/// and it has no camera-relative moves, which stay this client's to bind.
+const UNBOUND_BY_TABLE: [Act; 6] = [
+    Act::StrafeLeft,
+    Act::StrafeRight,
+    Act::CameraForward,
+    Act::CameraBack,
+    Act::CameraLeft,
+    Act::CameraRight,
+];
+
+/// The act a program key command asks for, where this client has it.
+const fn act_for(command: eq_client_assets::keys::Command) -> Option<Act> {
+    use eq_client_assets::keys::Command;
+    Some(match command {
+        Command::Autorun => Act::Autorun,
+        Command::Jump => Act::Jump,
+        Command::Forward => Act::Forward,
+        Command::Back => Act::Back,
+        Command::TurnRight => Act::TurnRight,
+        Command::TurnLeft => Act::TurnLeft,
+        Command::WalkRun => Act::Walk,
+        Command::AutoAttack => Act::Attack,
+        Command::Consider => Act::Consider,
+        Command::Duck => Act::Duck,
+        Command::Hail => Act::Hail,
+        Command::Inventory => Act::Toggle(WindowId::Inventory),
+        Command::Use => Act::Use,
+        Command::TargetSelf => Act::TargetSelf,
+        Command::TargetNext => Act::TargetNext,
+        // This client keeps eight gems.
+        Command::Gem(gem) if gem < 8 => Act::Gem(gem),
+        Command::Gem(_) => return None,
+        Command::HotButton(slot) => Act::Slot(slot),
+    })
+}
+
+/// The key a `DirectInput` scan code names, where it names one.
+const fn scan_key(scan: u8) -> Option<KeyCode> {
+    Some(match scan {
+        0x01 => KeyCode::Escape,
+        0x02 => KeyCode::Digit1,
+        0x03 => KeyCode::Digit2,
+        0x04 => KeyCode::Digit3,
+        0x05 => KeyCode::Digit4,
+        0x06 => KeyCode::Digit5,
+        0x07 => KeyCode::Digit6,
+        0x08 => KeyCode::Digit7,
+        0x09 => KeyCode::Digit8,
+        0x0a => KeyCode::Digit9,
+        0x0b => KeyCode::Digit0,
+        0x0c => KeyCode::Minus,
+        0x0d => KeyCode::Equal,
+        0x0e => KeyCode::Backspace,
+        0x0f => KeyCode::Tab,
+        0x10 => KeyCode::KeyQ,
+        0x11 => KeyCode::KeyW,
+        0x12 => KeyCode::KeyE,
+        0x13 => KeyCode::KeyR,
+        0x14 => KeyCode::KeyT,
+        0x15 => KeyCode::KeyY,
+        0x16 => KeyCode::KeyU,
+        0x17 => KeyCode::KeyI,
+        0x18 => KeyCode::KeyO,
+        0x19 => KeyCode::KeyP,
+        0x1a => KeyCode::BracketLeft,
+        0x1b => KeyCode::BracketRight,
+        0x1c => KeyCode::Enter,
+        0x1e => KeyCode::KeyA,
+        0x1f => KeyCode::KeyS,
+        0x20 => KeyCode::KeyD,
+        0x21 => KeyCode::KeyF,
+        0x22 => KeyCode::KeyG,
+        0x23 => KeyCode::KeyH,
+        0x24 => KeyCode::KeyJ,
+        0x25 => KeyCode::KeyK,
+        0x26 => KeyCode::KeyL,
+        0x27 => KeyCode::Semicolon,
+        0x28 => KeyCode::Quote,
+        0x29 => KeyCode::Backquote,
+        0x2b => KeyCode::Backslash,
+        0x2c => KeyCode::KeyZ,
+        0x2d => KeyCode::KeyX,
+        0x2e => KeyCode::KeyC,
+        0x2f => KeyCode::KeyV,
+        0x30 => KeyCode::KeyB,
+        0x31 => KeyCode::KeyN,
+        0x32 => KeyCode::KeyM,
+        0x33 => KeyCode::Comma,
+        0x34 => KeyCode::Period,
+        0x35 => KeyCode::Slash,
+        0x37 => KeyCode::NumpadMultiply,
+        0x39 => KeyCode::Space,
+        0x3b => KeyCode::F1,
+        0x3c => KeyCode::F2,
+        0x3d => KeyCode::F3,
+        0x3e => KeyCode::F4,
+        0x3f => KeyCode::F5,
+        0x40 => KeyCode::F6,
+        0x41 => KeyCode::F7,
+        0x42 => KeyCode::F8,
+        0x43 => KeyCode::F9,
+        0x44 => KeyCode::F10,
+        0x45 => KeyCode::NumLock,
+        0x47 => KeyCode::Numpad7,
+        0x48 => KeyCode::Numpad8,
+        0x49 => KeyCode::Numpad9,
+        0x4a => KeyCode::NumpadSubtract,
+        0x4b => KeyCode::Numpad4,
+        0x4c => KeyCode::Numpad5,
+        0x4d => KeyCode::Numpad6,
+        0x4e => KeyCode::NumpadAdd,
+        0x4f => KeyCode::Numpad1,
+        0x50 => KeyCode::Numpad2,
+        0x51 => KeyCode::Numpad3,
+        0x52 => KeyCode::Numpad0,
+        0x53 => KeyCode::NumpadDecimal,
+        0x57 => KeyCode::F11,
+        0x58 => KeyCode::F12,
+        0x9c => KeyCode::NumpadEnter,
+        0xb5 => KeyCode::NumpadDivide,
+        0xc7 => KeyCode::Home,
+        0xc8 => KeyCode::ArrowUp,
+        0xc9 => KeyCode::PageUp,
+        0xcb => KeyCode::ArrowLeft,
+        0xcd => KeyCode::ArrowRight,
+        0xcf => KeyCode::End,
+        0xd0 => KeyCode::ArrowDown,
+        0xd1 => KeyCode::PageDown,
+        0xd2 => KeyCode::Insert,
+        0xd3 => KeyCode::Delete,
+        _ => return None,
+    })
+}
+
 impl KeyMap {
+    /// The keys a fresh installation of `client` starts with: its program's
+    /// built-in table where read, in which each command this client has
+    /// takes the table's keys and nothing else; this client's own keys for
+    /// the rest, less any key the table gives a command and less
+    /// [`UNBOUND_BY_TABLE`]. Without a table, this client's own.
+    pub(crate) fn for_client(client: eq_client_assets::ui::InstalledClient) -> Self {
+        let mut map = Self::default();
+        let Some(table) = client.default_keys() else {
+            return map;
+        };
+        let mut read: BTreeMap<Act, Vec<Chord>> = BTreeMap::new();
+        // Primaries first, then alternates, as the key list shows them.
+        for alternate in [false, true] {
+            for entry in table.iter().filter(|entry| entry.alternate == alternate) {
+                let (Some(act), Some(key)) = (act_for(entry.command), scan_key(entry.key.scan))
+                else {
+                    continue;
+                };
+                read.entry(act).or_default().push(Chord {
+                    key,
+                    ctrl: entry.key.ctrl,
+                    shift: entry.key.shift,
+                    alt: entry.key.alt,
+                });
+            }
+        }
+        let taken: Vec<Chord> = read.values().flatten().copied().collect();
+        for (act, chords) in &mut map.0 {
+            if let Some(keys) = read.remove(act) {
+                *chords = keys;
+            } else if UNBOUND_BY_TABLE.contains(act) {
+                chords.clear();
+            } else {
+                chords.retain(|chord| !taken.contains(chord));
+            }
+        }
+        map.0.extend(read);
+        map
+    }
     /// Every action with its keys, in the key map's order.
     pub(crate) fn assignments(&self) -> impl Iterator<Item = (Act, &[Chord])> {
         self.0.iter().map(|(act, chords)| (*act, chords.as_slice()))
@@ -462,6 +646,51 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titanium_starts_with_its_programs_keys() {
+        use eq_client_assets::ui::InstalledClient;
+        let map = KeyMap::for_client(InstalledClient::Titanium);
+        let keys = |act| map.chords(act).to_vec();
+        assert_eq!(keys(Act::Autorun), [Chord::key(KeyCode::NumLock)]);
+        assert_eq!(
+            keys(Act::Forward),
+            [Chord::key(KeyCode::Numpad8), Chord::key(KeyCode::ArrowUp)]
+        );
+        assert_eq!(
+            keys(Act::TurnLeft),
+            [Chord::key(KeyCode::Numpad4), Chord::key(KeyCode::ArrowLeft)]
+        );
+        assert_eq!(keys(Act::Attack), [Chord::key(KeyCode::KeyQ)]);
+        assert_eq!(keys(Act::Consider), [Chord::key(KeyCode::KeyC)]);
+        assert_eq!(keys(Act::Duck), [Chord::key(KeyCode::KeyD)]);
+        assert_eq!(keys(Act::Use), [Chord::key(KeyCode::KeyU)]);
+        assert_eq!(keys(Act::Walk), [Chord::key(KeyCode::F12)]);
+        assert_eq!(keys(Act::Gem(7)), [Chord::alt(KeyCode::Digit8)]);
+        assert_eq!(keys(Act::Slot(9)), [Chord::key(KeyCode::Digit0)]);
+        // The program has no default for strafing nor any camera-relative
+        // move; a key its table gives a command leaves this client's act.
+        for act in UNBOUND_BY_TABLE {
+            assert_eq!(keys(act), [], "{act:?}");
+            assert!(map.assignments().any(|(listed, _)| listed == act));
+        }
+        assert_eq!(keys(Act::Trade), []);
+        // This client's own keys stay where the table leaves them free.
+        assert_eq!(keys(Act::BindSlot(0)), [Chord::ctrl(KeyCode::Digit1)]);
+        assert_eq!(keys(Act::Loot), [Chord::key(KeyCode::KeyL)]);
+        // No key does two things.
+        let all: Vec<Chord> = map
+            .assignments()
+            .flat_map(|(_, chords)| chords.to_vec())
+            .collect();
+        for (index, chord) in all.iter().enumerate() {
+            assert!(!all[index + 1..].contains(chord), "{chord:?}");
+        }
+        // The Mac-era client's table is unread: this client's own keys.
+        let mac = KeyMap::for_client(InstalledClient::EqMac);
+        assert_eq!(mac.chords(Act::Attack), [Chord::key(KeyCode::KeyG)]);
+        assert_eq!(mac.chords(Act::Autorun), [Chord::key(KeyCode::NumLock)]);
+    }
 
     #[test]
     fn an_unattended_script_drives_a_window_without_the_focus() {

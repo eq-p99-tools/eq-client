@@ -1,12 +1,16 @@
 #![doc = "Owned, renderer-independent zone assets loaded from a local EQ installation."]
 
+pub mod camera;
 pub mod characters;
 pub mod clock;
 pub mod falls;
 pub mod items;
+pub mod keys;
 pub mod maps;
 pub mod merchants;
+pub mod names;
 pub mod regions;
+pub mod scale;
 pub mod sidl;
 mod skeleton;
 pub mod sounds;

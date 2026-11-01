@@ -21,18 +21,27 @@ use eq_client_core::{
 use std::time::{Duration, Instant};
 
 #[derive(Resource)]
+#[allow(clippy::struct_excessive_bools)] // Independent movement states.
 pub(super) struct Controls {
     pub speed: Option<f32>,
     pub backward_speed: Option<f32>,
     pub walk_speed: Option<f32>,
     pub strafe_speed: Option<f32>,
     pub walking: bool,
+    /// Running forward by itself: on and off by the autorun key; a forward
+    /// or back key or a posture change turns it off, while turning,
+    /// strafing, jumping and attacking leave it on (Titanium program read
+    /// N6 of 11-01; the Mac-era client's is unread, and other ways the
+    /// program sets it, such as following, are not in this client:
+    /// recording checklist 6.359).
+    autorun: bool,
     waiting: bool,
     pub last_accepted: Instant,
     queued_at: Instant,
     moving: bool,
-    /// Seconds between the last two accepted samples while moving continuously.
-    cycle: f32,
+    /// Seconds of play the latest sample sent covers: the model shows it
+    /// over that long once the session accepts it.
+    sent_span: f32,
     boundary: BoundaryTracker,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
@@ -103,11 +112,12 @@ impl Default for Controls {
             walk_speed: None,
             strafe_speed: None,
             walking: false,
+            autorun: false,
             waiting: false,
             last_accepted: Instant::now(),
             queued_at: Instant::now(),
             moving: false,
-            cycle: 0.1,
+            sent_span: 0.1,
             boundary: BoundaryTracker::default(),
             taps: TapBuffer::default(),
             visual: None,
@@ -206,39 +216,51 @@ impl BoundaryTracker {
     }
 }
 impl Controls {
-    /// Smooths a locally accepted sample without changing the simulation position.
+    /// Shows a locally accepted sample without changing the simulation
+    /// position: the model plays the accepted samples back in order, each
+    /// over the time of play it covers, so it passes at the pace sent and
+    /// never ahead of the newest accepted position. A sample accepted while
+    /// the last still plays waits its turn; when none is left the model
+    /// stands at the newest until the next is accepted. Display only;
+    /// inferred, recording checklist 6.340 (the official client moves its
+    /// own player every frame).
+    ///
     /// The model shows where the player faces, which the heading sent may
     /// still be turning toward. A facing change beyond what the turn keys
-    /// turn in a cycle is the player facing a new way at once, so it shows at
-    /// once while the position still eases.
+    /// turn in the sample's span is the player facing a new way at once, so
+    /// it shows at once while the positions still play.
     pub fn display_sample(&mut self, from: Transform, position: eq_client_core::WorldPosition) {
         let rotation = Quat::from_rotation_y(eq_client_core::render_heading(
             self.facing.unwrap_or(position.heading),
         ));
+        let to = Transform::from_translation(Vec3::from_array(eq_client_core::render_position(
+            position,
+        )))
+        .with_rotation(rotation);
+        let span = self.sent_span;
         // Measured from the facing the last sample asked for, which the
-        // model shows once that sample's easing ends: a turn key's sample can
+        // model shows once that sample has played: a turn key's sample can
         // arrive before then.
         let asked = self
             .visual
             .as_ref()
-            .map_or(from.rotation, |visual| visual.to.rotation);
-        let limit = TURN_RATE * self.cycle / 512.0 * std::f32::consts::TAU;
-        // A turn key turns at most the limit in a cycle; the 1% margin keeps
+            .map_or(from.rotation, |visual| visual.last().rotation);
+        let limit = TURN_RATE * span / 512.0 * std::f32::consts::TAU;
+        // A turn key turns at most the limit in a span; the 1% margin keeps
         // rounding in the angle between two rotations from making that a snap.
-        let from = if asked.angle_between(rotation) > limit * 1.01 {
-            from.with_rotation(rotation)
-        } else {
-            from
-        };
-        self.visual = Some(VisualMotion {
-            from,
-            to: Transform::from_translation(Vec3::from_array(eq_client_core::render_position(
-                position,
-            )))
-            .with_rotation(rotation),
-            elapsed: 0.0,
-            duration: self.cycle,
-        });
+        let snap = asked.angle_between(rotation) > limit * 1.01;
+        let segment = Segment { to, span, snap };
+        match self.visual.as_mut().filter(|visual| !visual.finished()) {
+            Some(visual) => {
+                // A new way shows at once, though the samples before it are
+                // still playing their positions.
+                if snap {
+                    visual.face(rotation);
+                }
+                visual.queue.push_back(segment);
+            }
+            None => self.visual = Some(VisualMotion::start(from, segment)),
+        }
     }
     /// Selects a granted locomotion mode without modifying its timing budget.
     fn intent(
@@ -246,8 +268,8 @@ impl Controls {
         keys: &ButtonInput<KeyCode>,
         map: &KeyMap,
         focused: bool,
-        yaw: f32,
-        heading: f32,
+        (yaw, heading): (f32, f32),
+        looking_ahead: bool,
     ) -> MotionInput {
         // A complete tap can arrive between render frames. Preserve its press edge
         // for this one sample without mutating Bevy's shared held-key state.
@@ -256,7 +278,7 @@ impl Controls {
         let mut intent = movement_input(
             keys,
             map,
-            focused,
+            (focused, looking_ahead, self.autorun),
             yaw,
             heading,
             self.speed.unwrap_or(0.0),
@@ -299,7 +321,6 @@ impl Controls {
     /// proposal still owns the movement slot until its result or a reset arrives.
     fn pause_prediction(&mut self) {
         self.moving = false;
-        self.cycle = 0.1;
         self.visual = None;
         self.taps = TapBuffer::default();
         self.jump = None;
@@ -340,15 +361,6 @@ impl Controls {
 
     pub fn accepted(&mut self) {
         let now = Instant::now();
-        // Spread each sample over the whole proposal cycle so continuous motion
-        // does not pause while the next proposal is in flight.
-        self.cycle = if self.moving {
-            now.saturating_duration_since(self.last_accepted)
-                .as_secs_f32()
-                .clamp(0.05, MAX_CYCLE)
-        } else {
-            0.1
-        };
         self.waiting = false;
         self.last_accepted = now;
         self.last_answer = Some(now);
@@ -434,6 +446,7 @@ pub(super) fn input(
         Res<crate::hud::messages::Messages>,
         ResMut<crate::chat::ChatState>,
     ),
+    look: Option<Res<crate::camera::MouseLook>>,
 ) {
     let client = settings.0.installed_client;
     if !online.enabled || !online.world().connected() || online.world().death().is_some() {
@@ -448,6 +461,16 @@ pub(super) fn input(
     let focused = keys.focused();
     if keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
+    }
+    let standing = online
+        .world()
+        .player()
+        .and_then(|player| online.world().posture(player.spawn_id))
+        .is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
+    if keys.pressed(Act::Autorun) {
+        controls.autorun = !controls.autorun;
+    } else if keys.pressed(Act::Forward) || keys.pressed(Act::Back) || !standing {
+        controls.autorun = false;
     }
     let now = Instant::now();
     // Held until the next sample; jumps rise and fall like falls, so only
@@ -544,7 +567,8 @@ pub(super) fn input(
     let current_heading = accepted.position.heading;
     let shown = controls.facing.unwrap_or(current_heading);
     let sampled = controls.taps.take(&keyboard);
-    let intent = controls.intent(&sampled, map, focused, camera.yaw, shown);
+    let looking_ahead = focused && look.is_some_and(|look| look.held && look.left);
+    let intent = controls.intent(&sampled, map, focused, (camera.yaw, shown), looking_ahead);
     let MotionInput {
         mode,
         speed,
@@ -704,6 +728,7 @@ pub(super) fn input(
     // The host's movement session budgets each sample from the previous
     // request's stamp to this one's, so the next span runs from the stamp.
     controls.last_sent = Some(created);
+    controls.sent_span = span;
     controls.held = None;
     // A landing's damage follows the sample that lands.
     if let Some(fall) = controls
@@ -997,24 +1022,87 @@ fn safe_fall(world: &ClientWorld) -> u32 {
         .unwrap_or(0)
 }
 
-/// A bounded visual transition; never extrapolates past the accepted destination.
+/// One accepted sample waiting to play: where it ends, how many seconds of
+/// play it covers, and whether its facing shows at once.
+#[derive(Clone, Copy, Debug)]
+struct Segment {
+    to: Transform,
+    span: f32,
+    snap: bool,
+}
+
+/// The accepted samples the model plays back, one after another, each over
+/// its own span; never past the newest accepted position.
 struct VisualMotion {
     from: Transform,
     to: Transform,
     elapsed: f32,
     duration: f32,
+    /// Samples accepted while an earlier one still plays, oldest first.
+    queue: std::collections::VecDeque<Segment>,
 }
 
 impl VisualMotion {
+    /// Plays `segment` from where the model is shown now.
+    fn start(from: Transform, segment: Segment) -> Self {
+        Self {
+            from: if segment.snap {
+                from.with_rotation(segment.to.rotation)
+            } else {
+                from
+            },
+            to: segment.to,
+            elapsed: 0.0,
+            duration: segment.span,
+            queue: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// Faces the model `rotation` from now on, through every sample still
+    /// to play.
+    fn face(&mut self, rotation: Quat) {
+        self.from.rotation = rotation;
+        self.to.rotation = rotation;
+        for segment in &mut self.queue {
+            segment.to.rotation = rotation;
+        }
+    }
+
+    /// Where the newest accepted sample ends.
+    fn last(&self) -> Transform {
+        self.queue.back().map_or(self.to, |segment| segment.to)
+    }
+
+    /// Whether everything accepted has played.
+    fn finished(&self) -> bool {
+        self.queue.is_empty() && self.elapsed >= self.duration
+    }
+
+    /// Plays on `seconds`, moving to the next accepted sample as each ends,
+    /// with the time left over carried into it.
     fn advance(&mut self, seconds: f32, transform: &mut Transform) {
-        self.elapsed += seconds;
+        self.elapsed += seconds.max(0.0);
+        while self.elapsed >= self.duration
+            && let Some(next) = self.queue.pop_front()
+        {
+            self.elapsed -= self.duration;
+            let mut from = self.to;
+            if next.snap {
+                from.rotation = next.to.rotation;
+            }
+            self.from = from;
+            self.to = next.to;
+            self.duration = next.span;
+        }
         let fraction = (self.elapsed / self.duration.max(0.01)).clamp(0.0, 1.0);
         transform.translation = self.from.translation.lerp(self.to.translation, fraction);
         transform.rotation = self.from.rotation.slerp(self.to.rotation, fraction);
     }
 }
 
-/// Advances the player and follow camera every rendered frame between network samples.
+/// Advances the player and follow camera every rendered frame between network
+/// samples. With `eq_client_render::motion::pace` logging at debug, each
+/// frame says how fast the model was shown moving, for a sitting's numbers.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn interpolate(
     time: Res<Time>,
@@ -1028,11 +1116,23 @@ pub(super) fn interpolate(
     let Ok(mut transform) = players.single_mut() else {
         return;
     };
-    visual.advance(time.delta_secs(), &mut transform);
+    let seconds = time.delta_secs();
+    let before = transform.translation;
+    visual.advance(seconds, &mut transform);
+    if seconds > 0.0 {
+        let moved = transform.translation - before;
+        debug!(
+            target: "eq_client_render::motion::pace",
+            seconds,
+            shown_speed = moved.with_y(0.0).length() / seconds,
+            waiting = visual.queue.len(),
+            "Shown pace"
+        );
+    }
     for mut camera in &mut cameras {
         camera.focus = transform.translation;
     }
-    if visual.elapsed >= visual.duration {
+    if visual.finished() {
         controls.visual = None;
     }
 }
@@ -1070,11 +1170,15 @@ struct MotionInput {
     preserve_facing: bool,
 }
 
-/// Resolves character-relative arrows and camera-relative WASD without mixing modes.
+/// Resolves character-relative arrows and camera-relative WASD without mixing
+/// modes. `looking_ahead` is the left button held
+/// while the right one looks around, which runs the way the camera faces as
+/// the camera-relative forward key does (Adam's observation of the official
+/// client; inferred, recording checklist 6.341).
 fn movement_input(
     keyboard: &ButtonInput<KeyCode>,
     map: &KeyMap,
-    focused: bool,
+    (focused, looking_ahead, autorun): (bool, bool, bool),
     camera_yaw: f32,
     current_heading: f32,
     speed: f32,
@@ -1085,7 +1189,8 @@ fn movement_input(
         map.held(keyboard, Act::Back),
     );
     let backing = focused && behind && !ahead;
-    let forward = focused && ahead && !behind;
+    // Autorun runs on whatever has the keyboard, as held forward does.
+    let forward = (focused && ahead && !behind) || (autorun && !backing);
     let heading_radians = eq_client_core::render_heading(current_heading);
     let facing = Vec3::new(heading_radians.sin(), 0.0, heading_radians.cos());
     let (mode, speed, direction) = if backing {
@@ -1102,7 +1207,8 @@ fn movement_input(
             speed,
             camera_relative_direction(
                 map.axis(keyboard, Act::CameraLeft, Act::CameraRight),
-                map.axis(keyboard, Act::CameraBack, Act::CameraForward),
+                f32::from(looking_ahead || map.held(keyboard, Act::CameraForward))
+                    - f32::from(map.held(keyboard, Act::CameraBack)),
                 camera_yaw,
             ),
         )
@@ -1151,12 +1257,14 @@ mod tests {
     };
     #[test]
     fn visual_motion_interpolates_without_extrapolation_and_preserves_scale() {
-        let mut visual = super::VisualMotion {
-            from: bevy::prelude::Transform::IDENTITY,
-            to: bevy::prelude::Transform::from_xyz(10.0, 0.0, 0.0),
-            elapsed: 0.0,
-            duration: 0.1,
-        };
+        let mut visual = super::VisualMotion::start(
+            bevy::prelude::Transform::IDENTITY,
+            super::Segment {
+                to: bevy::prelude::Transform::from_xyz(10.0, 0.0, 0.0),
+                span: 0.1,
+                snap: false,
+            },
+        );
         let mut transform = bevy::prelude::Transform::from_scale(bevy::prelude::Vec3::splat(2.0));
         visual.advance(0.05, &mut transform);
         assert!((transform.translation.x - 5.0).abs() < 0.001);
@@ -1166,28 +1274,136 @@ mod tests {
     }
 
     #[test]
-    fn continuous_samples_are_displayed_over_their_whole_cycle() {
-        let mut controls = super::Controls::default();
-        controls.accepted();
-        assert!((controls.cycle - 0.1).abs() < f32::EPSILON);
-        controls.moving = true;
-        controls.last_accepted = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_millis(150))
-            .unwrap();
-        controls.accepted();
-        assert!((controls.cycle - 0.15).abs() < 0.02, "{}", controls.cycle);
-        controls.moving = true;
-        controls.last_accepted = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_secs(3))
-            .unwrap();
-        controls.accepted();
-        assert!((controls.cycle - super::MAX_CYCLE).abs() < f32::EPSILON);
+    fn each_sample_plays_over_the_span_it_covers_in_turn() {
+        use bevy::prelude::{Transform, Vec3};
+        let mut controls = super::Controls {
+            sent_span: super::MAX_CYCLE,
+            ..super::Controls::default()
+        };
         controls.display_sample(
-            bevy::prelude::Transform::IDENTITY,
+            Transform::IDENTITY,
             eq_client_core::world_position([10.0, 0.0, 0.0], 0.0),
         );
-        let visual = controls.visual.as_ref().unwrap();
+        // The next is accepted while the first still plays: it waits.
+        controls.sent_span = 0.1;
+        controls.display_sample(
+            Transform::from_xyz(4.0, 0.0, 0.0),
+            eq_client_core::world_position([14.0, 0.0, 0.0], 0.0),
+        );
+        let visual = controls.visual.as_mut().unwrap();
         assert!((visual.duration - super::MAX_CYCLE).abs() < f32::EPSILON);
+        let mut shown = Transform::IDENTITY;
+        visual.advance(0.2, &mut shown);
+        assert!((shown.translation - Vec3::new(8.0, 0.0, 0.0)).length() < 0.001);
+        // Past the first's end, the time left over plays the second.
+        visual.advance(0.1, &mut shown);
+        assert!((shown.translation - Vec3::new(12.0, 0.0, 0.0)).length() < 0.001);
+        // Never past the newest accepted position.
+        visual.advance(1.0, &mut shown);
+        assert!((shown.translation - Vec3::new(14.0, 0.0, 0.0)).length() < 0.001);
+        assert!(visual.finished());
+    }
+
+    /// Runs a held run for `seconds` at 60 frames a second: a sample goes
+    /// out at the first frame 100 ms after the last answer, covering the
+    /// time since the last went out, and its answer comes back after the
+    /// round trip `trips` gives in frames. Each frame's shown speed comes
+    /// back, and `show` is told of each answer: the sample's end, the time
+    /// it covers and the time between the last two answers.
+    fn held_run(
+        seconds: f32,
+        trips: &[u32],
+        mut show: impl FnMut(f32, f32, f32),
+        mut play: impl FnMut(f32) -> f32,
+    ) -> Vec<f32> {
+        const FRAME: f32 = 1.0 / 60.0;
+        const SPEED: f32 = 30.0;
+        let mut speeds = Vec::new();
+        let (mut sent_at, mut answered_at, mut position) = (0.0_f32, -1.0_f32, 0.0_f32);
+        let mut out: Option<(u32, f32, f32)> = None;
+        let mut sent = 0_usize;
+        let mut shown = 0.0_f32;
+        let frames = std::iter::successors(Some(0_u16), |frame| frame.checked_add(1))
+            .map(|frame| (u32::from(frame), f32::from(frame) * FRAME))
+            .take_while(|(_, now)| *now < seconds);
+        for (frame, now) in frames {
+            if let Some((due, end, span)) = out
+                && frame >= due
+            {
+                out = None;
+                show(end, span, now - answered_at);
+                answered_at = now;
+            }
+            if out.is_none() && now - answered_at >= 0.1 - 1e-4 {
+                let span = (now - sent_at).min(super::MAX_CYCLE);
+                position += SPEED * span;
+                sent_at = now;
+                out = Some((frame + trips[sent % trips.len()], position, span));
+                sent += 1;
+            }
+            let next = play(FRAME);
+            speeds.push((next - shown) / FRAME);
+            shown = next;
+        }
+        speeds
+    }
+
+    #[test]
+    fn the_shown_pace_holds_steady_through_jittered_round_trips() {
+        use bevy::prelude::Transform;
+        use std::cell::RefCell;
+        // Round trips of none to two frames, as the session's answers come.
+        let trips = [1, 0, 2, 1, 1, 0, 2, 2, 0, 1];
+        // The rule before 6.340, kept here as the hypothesis's check: each
+        // answer eased from where the model stood over the time between the
+        // last two answers. The pace swings with the round trips.
+        let eased = RefCell::new((0.0_f32, 0.0_f32, 0.0_f32, 0.1_f32));
+        let before = held_run(
+            4.0,
+            &trips,
+            |end, _, between| {
+                let (from, to, elapsed, duration) = *eased.borrow();
+                let shown = from + (to - from) * (elapsed / duration).min(1.0);
+                *eased.borrow_mut() = (shown, end, 0.0, between.clamp(0.05, super::MAX_CYCLE));
+            },
+            |seconds| {
+                let mut state = eased.borrow_mut();
+                state.2 += seconds;
+                state.0 + (state.1 - state.0) * (state.2 / state.3).min(1.0)
+            },
+        );
+        let swing = |speeds: &[f32]| {
+            speeds[60..]
+                .iter()
+                .map(|speed| (speed / 30.0 - 1.0).abs())
+                .fold(0.0_f32, f32::max)
+        };
+        assert!(swing(&before) > 0.1, "{}", swing(&before));
+        // Played back over the time each covers, the pace stays the run's.
+        let controls = RefCell::new(super::Controls::default());
+        let shown = RefCell::new(Transform::IDENTITY);
+        let after = held_run(
+            4.0,
+            &trips,
+            |end, span, _| {
+                let mut controls = controls.borrow_mut();
+                controls.sent_span = span;
+                let from = *shown.borrow();
+                controls.display_sample(from, eq_client_core::world_position([end, 0.0, 0.0], 0.0));
+            },
+            |seconds| {
+                let mut controls = controls.borrow_mut();
+                let mut shown = shown.borrow_mut();
+                if let Some(visual) = controls.visual.as_mut() {
+                    visual.advance(seconds, &mut shown);
+                    if visual.finished() {
+                        controls.visual = None;
+                    }
+                }
+                shown.translation.x
+            },
+        );
+        assert!(swing(&after) < 0.02, "{}", swing(&after));
     }
 
     #[test]
@@ -1669,6 +1885,39 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
+    fn autorun_runs_forward_with_no_key_held_until_back_is() {
+        let controls = Controls {
+            speed: Some(30.0),
+            backward_speed: Some(12.0),
+            autorun: true,
+            ..default()
+        };
+        let map = KeyMap::for_client(eq_client_assets::ui::InstalledClient::Titanium);
+        let mut keys = ButtonInput::default();
+        // On, with nothing held, and with the keyboard elsewhere.
+        for focused in [true, false] {
+            let intent = controls.intent(&keys, &map, focused, (0.0, 0.0), false);
+            assert_eq!(intent.mode, MovementMode::Forward);
+            // Along the player's heading.
+            let radians = eq_client_core::render_heading(0.0);
+            let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
+            assert!(
+                (intent.direction - facing).length() < 1e-5,
+                "{}",
+                intent.direction
+            );
+        }
+        // Turning keeps it running.
+        keys.press(KeyCode::ArrowLeft);
+        let intent = controls.intent(&keys, &map, true, (0.0, 0.0), false);
+        assert!(intent.direction != Vec3::ZERO && intent.turn != 0.0);
+        // Back wins while held.
+        keys.press(KeyCode::ArrowDown);
+        let intent = controls.intent(&keys, &map, true, (0.0, 0.0), false);
+        assert_eq!(intent.mode, MovementMode::Backward);
+    }
+
+    #[test]
     fn between_frame_taps_move_once_without_sticking_or_ignoring_focus() {
         let controls = Controls {
             speed: Some(30.0),
@@ -1681,20 +1930,20 @@ mod tests {
         assert!(!keys.pressed(KeyCode::ArrowUp));
         assert_ne!(
             controls
-                .intent(&keys, &KeyMap::default(), true, 0.0, 0.0)
+                .intent(&keys, &KeyMap::default(), true, (0.0, 0.0), false)
                 .direction,
             Vec3::ZERO
         );
         assert_eq!(
             controls
-                .intent(&keys, &KeyMap::default(), false, 0.0, 0.0)
+                .intent(&keys, &KeyMap::default(), false, (0.0, 0.0), false)
                 .direction,
             Vec3::ZERO
         );
         keys.clear();
         assert_eq!(
             controls
-                .intent(&keys, &KeyMap::default(), true, 0.0, 0.0)
+                .intent(&keys, &KeyMap::default(), true, (0.0, 0.0), false)
                 .direction,
             Vec3::ZERO
         );
@@ -1702,7 +1951,7 @@ mod tests {
         keys.release(KeyCode::ArrowDown);
         assert_eq!(
             controls
-                .intent(&keys, &KeyMap::default(), true, 0.0, 0.0)
+                .intent(&keys, &KeyMap::default(), true, (0.0, 0.0), false)
                 .mode,
             MovementMode::Backward
         );
@@ -1847,12 +2096,12 @@ mod tests {
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), true, 0.0, heading)
+                    .intent(&keys, &KeyMap::default(), true, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
             controls.strafe_speed = Some(3.0);
-            let right = controls.intent(&keys, &KeyMap::default(), true, 0.0, heading);
+            let right = controls.intent(&keys, &KeyMap::default(), true, (0.0, heading), false);
             assert_eq!(right.mode, MovementMode::Strafe);
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
@@ -1860,18 +2109,18 @@ mod tests {
             assert!(right.direction.dot(facing.cross(Vec3::Y)) > 0.999);
             keys.reset_all();
             keys.press(KeyCode::ArrowLeft);
-            let left = controls.intent(&keys, &KeyMap::default(), true, 0.0, heading);
+            let left = controls.intent(&keys, &KeyMap::default(), true, (0.0, heading), false);
             assert!((left.direction + right.direction).length() < 0.0001);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), false, 0.0, heading)
+                    .intent(&keys, &KeyMap::default(), false, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), true, 0.0, heading)
+                    .intent(&keys, &KeyMap::default(), true, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
@@ -2007,6 +2256,36 @@ mod tests {
                 "{key:?} showed {}",
                 visual.from.rotation
             );
+        }
+    }
+
+    #[test]
+    fn the_left_button_while_looking_around_runs_the_way_the_camera_faces() {
+        // The camera looks along 384; with no key held, the left button
+        // alone moves nothing, and held while the right button looks
+        // around (the look takes it, `MouseLook::left`) it runs that way,
+        // as W does.
+        for (looking, left, moves) in [
+            (false, true, false),
+            (true, false, false),
+            (true, true, true),
+        ] {
+            let (mut app, receiver) = app();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            app.insert_resource(crate::camera::MouseLook {
+                held: looking,
+                left: looking && left,
+            });
+            app.update();
+            let sent = receiver.try_recv().ok();
+            assert_eq!(sent.is_some(), moves, "looking {looking}, left {left}");
+            if let Some(ClientCommand::Move(request)) = sent {
+                assert_eq!(request.mode, MovementMode::Forward);
+                assert!(request.position.x < -0.1, "{:?}", request.position);
+                assert!(request.position.y.abs() < 0.01, "{:?}", request.position);
+            }
         }
     }
 

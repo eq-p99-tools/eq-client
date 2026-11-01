@@ -140,10 +140,33 @@ impl ClientWorld {
         self.zone_gravity
     }
 
+    /// The Titanium zone header's classic model scale flag (`OP_NewZone`
+    /// +592), as it came: while it is not zero, the Titanium program draws
+    /// the classic character models at 1/1.3 of their usual scale. None
+    /// until this admission's header comes, and on a generation without it.
+    #[must_use]
+    pub const fn classic_model_scale_flag(&self) -> Option<u32> {
+        self.classic_model_scale_flag
+    }
+
     /// The zone's far clip distance, when the server gave one.
     #[must_use]
     pub const fn far_clip(&self) -> Option<f32> {
         self.far_clip
+    }
+
+    /// The world's player-versus-player ruleset, by the server's number: 0
+    /// for none, and until the world's rules say.
+    #[must_use]
+    pub const fn pvp_rule(&self) -> u32 {
+        self.pvp_rule
+    }
+
+    /// The zone header's minimum clip, the nearest its far plane comes;
+    /// None until this admission's header comes.
+    #[must_use]
+    pub const fn min_clip(&self) -> Option<f32> {
+        self.min_clip
     }
 
     /// The player's death, until the next admission.

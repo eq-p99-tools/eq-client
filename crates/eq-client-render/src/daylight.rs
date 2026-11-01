@@ -226,7 +226,7 @@ pub(super) fn update(
     let mut lit = lighting(&sky, minute, &day_night(clock));
     lit.fog = closed_in(
         lit.fog,
-        options.options.clip_distance(world.far_clip()),
+        crate::camera::clip_distance(settings.0.installed_client, &options.options, world),
         world.far_clip(),
         lit.sky,
     );

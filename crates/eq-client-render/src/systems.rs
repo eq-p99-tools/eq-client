@@ -14,6 +14,14 @@ use bevy::prelude::*;
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 pub(super) fn init_presentation(app: &mut App) {
+    // A fresh installation's keys, by the installed client's own table.
+    let keys = app
+        .world()
+        .get_resource::<crate::ViewerSettings>()
+        .map_or_else(keys::KeyMap::default, |settings| {
+            keys::KeyMap::for_client(settings.0.installed_client)
+        });
+    app.insert_resource(keys);
     app.init_resource::<spell_effects::SpellParticles>()
         .init_resource::<sounds::Sounds>()
         .init_resource::<doors::Hinges>()
@@ -47,6 +55,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<items::ItemState>()
         .init_resource::<inventory::InventoryState>()
         .init_resource::<motion::Controls>()
+        .init_resource::<crate::camera::MouseLook>()
         .init_resource::<entities::NearbyEntities>()
         .init_resource::<names::NameTags>()
         .init_resource::<item_models::ItemLibrary>()
@@ -56,7 +65,6 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::Layouts>()
         .init_resource::<windows::Shown>()
         .init_resource::<windows::Stack>()
-        .init_resource::<keys::KeyMap>()
         .init_resource::<keys::Typing>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()
@@ -149,7 +157,7 @@ pub(super) fn schedule(app: &mut App) {
                 group::window,
                 raid::window,
             ),
-            combat::input,
+            (combat::input, combat::idle_swings).chain(),
             (trade::input, speed::report).chain(),
             (
                 give::buttons,
@@ -348,6 +356,13 @@ pub(super) fn install_overlays(app: &mut App) {
     // A click is read once Bevy has marked the controls the pointer is over,
     // and a script's pointer has pressed or let go.
     app.add_systems(PreUpdate, clicks::track.after(bevy::ui::UiSystems::Focus));
+    // The right button's look takes the mouse before the windows see it.
+    app.add_systems(
+        PreUpdate,
+        crate::camera::look
+            .after(bevy::input::InputSystems)
+            .before(bevy::ui::UiSystems::Focus),
+    );
     windows::register_layout(app);
     paperdoll::register(app);
     app.add_systems(

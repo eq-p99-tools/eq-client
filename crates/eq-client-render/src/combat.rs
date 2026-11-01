@@ -4,7 +4,7 @@
 //! the current target and prints what the server reports.
 use bevy::prelude::*;
 use eq_client_core::{
-    ClientCommand, OutboundChat, PostureState, SpawnKind,
+    ClientCommand, OutboundChat, PostureState,
     combat::{ConColor, Consideration, Damage, DamageOutcome, SPELL_DAMAGE_KIND},
     entities::display_name,
 };
@@ -16,8 +16,61 @@ use super::hud::messages::Messages;
 pub(super) struct CombatState {
     /// Whether this client last asked the server to auto-attack.
     pub auto_attack: bool,
-    /// Target that the current auto-attack request was made against.
-    attack_target: Option<u16>,
+    /// How far each hand is through its swing while auto attack is on with
+    /// no one to swing at.
+    idle: IdleSwings,
+}
+
+/// How far the primary and secondary hands are through their swings, in
+/// seconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct IdleSwings([f32; 2]);
+
+impl IdleSwings {
+    /// Moves each hand `seconds` on through a swing of its delay, if it
+    /// swings, and says how many swings came due: at most one a hand.
+    fn advance(&mut self, seconds: f32, delays: [Option<f32>; 2]) -> usize {
+        let mut due = 0;
+        for (elapsed, delay) in self.0.iter_mut().zip(delays) {
+            let Some(delay) = delay.filter(|delay| delay.is_finite() && *delay > 0.0) else {
+                *elapsed = 0.0;
+                continue;
+            };
+            *elapsed += seconds.max(0.0);
+            if *elapsed >= delay {
+                *elapsed = (*elapsed - delay) % delay;
+                due += 1;
+            }
+        }
+        due
+    }
+}
+
+/// How long each hand's swing takes, in seconds: the primary's weapon's
+/// delay, or the bare hand's with none; the secondary's weapon's, with no
+/// swing there without one. An item's delay is in tenths of a second, as
+/// the program's strike timer takes it; haste is not applied (recording
+/// checklist 6.356).
+fn swing_delays(
+    inventory: &eq_client_core::inventory::Inventory,
+    bare_hand_tenths: u32,
+) -> [Option<f32>; 2] {
+    use eq_client_core::inventory::InventorySlot;
+    let delay = |slot: i32| {
+        let item = inventory.items().get(&InventorySlot(slot))?;
+        let stat = item
+            .details
+            .stats
+            .iter()
+            .find(|stat| stat.label == "Delay")?;
+        u16::try_from(stat.value)
+            .ok()
+            .filter(|tenths| *tenths > 0)
+            .map(|tenths| f32::from(tenths) / 10.0)
+    };
+    #[allow(clippy::cast_precision_loss)] // A few hundred at most.
+    let bare = bare_hand_tenths as f32 / 10.0;
+    [Some(delay(13).unwrap_or(bare)), delay(14)]
 }
 
 fn capitalized(text: &str) -> String {
@@ -63,26 +116,17 @@ pub(super) fn input(
         .selected
         .filter(|id| *id != player.spawn_id)
         .and_then(|id| world.spawn(id).map(|spawn| (id, &spawn.state)));
-    let attackable = spawn.filter(|(_, spawn)| spawn.kind == SpawnKind::Npc && !spawn.invisible);
     let toggle = settings.0.installed_client.attack_toggle();
     let posture = world
         .posture(player.spawn_id)
         .filter(|posture| *posture != PostureState::Standing);
-    // The Titanium client stops attacking when its target goes away; the
-    // Mac-era client when the player stops standing.
-    let stopped = match toggle {
-        Some(_) => posture.is_some(),
-        None => attackable.map(|(id, _)| id) != combat.attack_target,
-    };
+    // Both clients stop attacking when the player stops standing, and keep
+    // on whatever becomes of the target.
     let live = world.connected() && world.death().is_none();
-    if combat.auto_attack && (!live || stopped) {
+    if combat.auto_attack && (!live || posture.is_some()) {
         combat.auto_attack = false;
-        combat.attack_target = None;
         if world.connected() && outbox.post(world, attack(false)).is_ok() {
-            chat.history.push(match toggle {
-                Some(toggle) => toggle_line(toggle, false, &messages),
-                None => super::chat::system_line(messages.said(1466, &[])),
-            });
+            chat.history.push(toggle_line(toggle, false, &messages));
         }
     }
     if !live || !keys.focused() {
@@ -113,37 +157,65 @@ pub(super) fn input(
     let bar_attack = super::hud::hotbar::requested(&keys, &bindings, &bar_clicks)
         == Some(super::hud::hotbar::Action::Attack);
     let pressed = keys.pressed(Act::Attack) || attack_button.iter().next().is_some() || bar_attack;
-    if let Some(toggle) = toggle.filter(|_| pressed) {
+    if pressed {
         let enable = !combat.auto_attack;
-        // Not standing, the key only turns auto attack off.
+        // Not standing, the key only turns auto attack off. It needs no
+        // target, but the Titanium client will not turn it on against the
+        // player themselves.
         if enable && let Some(posture) = posture {
             feedback(messages.said(refusal(toggle, posture), &[]));
             return;
         }
+        let own = world.target().selected == Some(player.spawn_id);
+        if enable
+            && own
+            && let Some(id) = toggle.self_target
+        {
+            feedback(messages.said(id, &[]));
+            return;
+        }
         if outbox.post(world, attack(enable)).is_err() {
             return;
         }
         combat.auto_attack = enable;
-        combat.attack_target = None;
+        combat.idle = IdleSwings::default();
         chat.history.push(toggle_line(toggle, enable, &messages));
-        return;
     }
-    if pressed {
-        let enable = !combat.auto_attack;
-        if enable && attackable.is_none() {
-            feedback("Target a creature to attack it".into());
-            return;
-        }
-        if outbox.post(world, attack(enable)).is_err() {
-            return;
-        }
-        combat.auto_attack = enable;
-        combat.attack_target = attackable.filter(|_| enable).map(|(id, _)| id);
-        feedback(if enable {
-            "Auto attack is on.".into()
-        } else {
-            messages.said(1466, &[])
+}
+
+/// While auto attack is on with no one to swing at, says the installed
+/// client's line each time a hand's swing comes due, as its program does,
+/// and leaves auto attack on: with no target, or with the player as their
+/// own. A swing at another target is the server's to answer; the lines the
+/// program says for one out of reach, out of sight or not faced are unread
+/// (recording checklist 6.357).
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+pub(super) fn idle_swings(
+    time: Res<Time>,
+    online: Res<super::online::OnlineState>,
+    settings: Res<crate::ViewerSettings>,
+    messages: Res<Messages>,
+    mut combat: ResMut<CombatState>,
+    mut chat: ResMut<super::chat::ChatState>,
+) {
+    let world = online.world();
+    let idle = settings.0.installed_client.attack_toggle().idle;
+    let line = idle
+        .zip(world.player())
+        .and_then(|(idle, player)| match world.target().selected {
+            None => Some((idle, idle.no_target)),
+            Some(id) if id == player.spawn_id => Some((idle, idle.self_target)),
+            Some(_) => None,
         });
+    let Some((idle, id)) = line.filter(|_| combat.auto_attack && world.connected()) else {
+        combat.idle = IdleSwings::default();
+        return;
+    };
+    let delays = swing_delays(world.inventory(), idle.bare_hand_tenths);
+    for _ in 0..combat.idle.advance(time.delta_secs(), delays) {
+        let mut said = super::chat::system_line(messages.said(id, &[]));
+        said.message_type = Some(idle.line_type);
+        chat.history.push(said);
     }
 }
 
@@ -425,8 +497,11 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<CombatState>()
-            .init_resource::<Messages>()
-            .add_systems(Update, input);
+            .insert_resource(Messages::parse(
+                "EQST0002\n0 0\n12370 On.\n12371 Off.\n12696 Self.\n12697 Nobody.\n",
+            ))
+            .init_resource::<Time>()
+            .add_systems(Update, (input, idle_swings).chain());
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -477,6 +552,80 @@ mod tests {
         press(&mut app);
         assert_eq!(sent(&rx), Some(false));
         assert!(!app.world().resource::<CombatState>().auto_attack);
+    }
+
+    /// Runs the frame `seconds` after the last with no key held.
+    fn idle(app: &mut App, seconds: f32) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(seconds));
+        app.update();
+    }
+
+    fn lines(app: &App) -> Vec<(String, Option<u32>)> {
+        let chat = app.world().resource::<super::super::chat::ChatState>();
+        chat.history
+            .lines(eq_client_core::chat::ChatTab::All)
+            .iter()
+            .map(|(_, line)| (line.message.text.clone(), line.message_type))
+            .collect()
+    }
+
+    #[test]
+    fn titaniums_auto_attack_stays_on_without_a_target_and_says_so_each_swing() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        app.world_mut()
+            .resource_mut::<crate::online::OnlineState>()
+            .select_target(None);
+        press(&mut app);
+        assert_eq!(sent(&rx), Some(true));
+        assert_eq!(newest(&app), ("On.".into(), Some(13)));
+        // Bare-handed, a swing comes due each 3.5 s: a line each time, and
+        // auto attack stays on.
+        idle(&mut app, 2.0);
+        assert_eq!(lines(&app).len(), 1);
+        idle(&mut app, 2.0);
+        assert_eq!(newest(&app), ("Nobody.".into(), Some(303)));
+        idle(&mut app, 3.5);
+        assert_eq!(lines(&app).len(), 3);
+        assert!(app.world().resource::<CombatState>().auto_attack);
+        assert_eq!(sent(&rx), None);
+        // A target the server can answer for ends the lines.
+        app.world_mut()
+            .resource_mut::<crate::online::OnlineState>()
+            .select_target(Some(30));
+        idle(&mut app, 4.0);
+        assert_eq!(lines(&app).len(), 3);
+    }
+
+    #[test]
+    fn titanium_refuses_to_turn_auto_attack_on_against_the_player_themselves() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        app.world_mut()
+            .resource_mut::<crate::online::OnlineState>()
+            .select_target(Some(12));
+        press(&mut app);
+        assert_eq!(sent(&rx), None);
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        assert_eq!(newest(&app).0, "Self.");
+    }
+
+    #[test]
+    fn a_weapon_swings_on_its_own_delay() {
+        let mut swings = IdleSwings::default();
+        // A 2.2 s primary and a 3.0 s secondary.
+        let delays = [Some(2.2), Some(3.0)];
+        assert_eq!(swings.advance(2.0, delays), 0);
+        assert_eq!(swings.advance(0.5, delays), 1);
+        assert_eq!(swings.advance(0.5, delays), 1);
+        // A long frame says each hand's line once.
+        assert_eq!(swings.advance(31.0, delays), 2);
+        // A hand with nothing to swing starts again when it has.
+        assert_eq!(swings.advance(1.0, [Some(2.2), None]), 0);
+        assert!(swings.0[1].abs() < f32::EPSILON);
     }
 
     #[test]

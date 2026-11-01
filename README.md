@@ -48,8 +48,15 @@ Without `--offline` the client opens its login screen instead (see
 [Logging in](#logging-in)). `--inspect-only`, `--screenshot`, the `--demo-*`
 previews and a script without a `login` step stay offline by themselves.
 
-Use WASD to move the locally loaded character across the terrain, drag with the
-right mouse button to orbit, and use the wheel to zoom. Add `--camera
+Use the arrow keys or the keypad to move the locally loaded character across the
+terrain (W/A/S/D under this client's own keys), drag with the right mouse button
+to orbit, and use the wheel to zoom. Keys start as the installed client's: a
+Titanium installation takes the program's own built-in table (Num Lock autorun,
+arrows and keypad to move and turn, Q auto attack, C consider, D duck, H hail,
+U use, I inventory, F1 target self, Tab next target, F12 walk or run, 1 to 0
+hotbuttons, Alt+1 to Alt+8 spells), with strafing and the camera-relative moves
+unbound; a Mac-era installation takes this client's own, the keys listed below.
+The Options window's Keys page lists them. Add `--camera
 orthographic` for a locked isometric-style projection.
 
 To validate asset loading without opening a graphics window:
@@ -321,9 +328,12 @@ Implemented locally:
   new action (no slot update), which is replayed as a tracker test; replacement by
   a different, resource-changing buff has not been traced yet.
 - Initial/incremental spawn batches, despawns, and interpolated nearby players/NPCs.
-  `--entity-distance 200` selects a three-dimensional EQ-unit radius; entities
-  already drawn remain until 240 units to avoid boundary flicker. At most 200
-  nearest entities are rendered. Distant entities retain state but have no render
+  Spawns are drawn as far as the scene is, to the installed client's far plane
+  (the Titanium program's: the zone's minimum clip plus the Clip Plane setting's
+  share of the way to its maximum), with no count limit, as the program draws
+  them. `--entity-distance` draws them no farther than a three-dimensional
+  EQ-unit radius; entities already drawn remain until 1.2 times the radius to
+  avoid boundary flicker. Distant entities retain state but have no render
   objects or animation work. Model textures/materials are shared, poses update
   at most 30 times per second, and new instances are created gradually.
   A moving character walks or runs by its speed against its spawn record's
@@ -353,7 +363,8 @@ The host reports these on admission and whenever they change. Until a
 generation's rule is read, its player cannot move, and the debug overlay says
 "Movement paused".
 
-WASD uses camera-relative direction and terrain collision, with at most one
+The camera-relative moves (W/A/S/D under this client's own keys) use the
+camera's direction, and every move uses terrain collision, with at most one
 pending proposal and a 100 ms displacement budget. After the worker accepts a
 position, the player model and camera interpolate toward it over 100 ms,
 independently of the movement simulation. This adds visual latency but avoids
@@ -821,8 +832,10 @@ The target panel lists the keys that apply to the current target:
   text and colors the target name by level; the level phrases are a best-effort
   mapping from the server's color code.
 - **H** hails the target with `/say Hail, <name>`.
-- **G** toggles melee auto-attack against a creature. The client stops
-  attacking when the target changes, dies or goes away.
+- **G** (Q under Titanium's keys) toggles melee auto-attack. It needs no
+  target; it stays on whatever becomes of the target, turns off when the player
+  sits or ducks, and, under Titanium, says the program's line each time a swing
+  comes due with no one to swing at.
 - **L** opens the targeted corpse: coins received are reported in chat, items are
   listed in the LOOT window, clicking one takes it into the inventory, and
   **Loot all** takes one item at a time, waiting for each acknowledgement. Killed
