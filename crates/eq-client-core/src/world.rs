@@ -120,6 +120,8 @@ pub struct Camp {
     pub since: Instant,
     /// Whether the logout itself has begun.
     pub logging_out: bool,
+    /// Where it ends.
+    pub to: crate::camp::CampTo,
 }
 
 /// How the session lets the player move: calibrated speeds, or none.
@@ -228,6 +230,12 @@ pub struct ClientWorld {
     target: Target,
     motion: Option<MotionGrant>,
     camp: Option<Camp>,
+    /// Where the camp the player last asked for ends, until the session
+    /// says it began, or it ends.
+    camp_to: crate::camp::CampTo,
+    /// Where the last camp ended, until a front end takes it: one to the
+    /// desktop ends the program.
+    camped: Option<crate::camp::CampTo>,
 
     // The character: from admission until camping.
     player: Option<PlayerState>,
@@ -327,6 +335,25 @@ impl ClientWorld {
             merchant_revision: self.merchant_revision.wrapping_add(1),
             ..Self::default()
         };
+    }
+
+    /// The player asked the session to camp, ending there. The camp the
+    /// session then says began ends there; one already under way keeps
+    /// its own end.
+    pub fn camp_to(&mut self, to: crate::camp::CampTo) {
+        self.camp_to = to;
+    }
+
+    /// Whether the player camped to the desktop, once: a front end ends the
+    /// program when it is.
+    pub fn take_leaving(&mut self) -> bool {
+        self.camped.take() == Some(crate::camp::CampTo::Desktop)
+    }
+
+    /// Whether the player camped to the desktop and the program is to end.
+    #[must_use]
+    pub fn leaving(&self) -> bool {
+        self.camped == Some(crate::camp::CampTo::Desktop)
     }
 
     /// The player's own choice of target, which the client tells the session
@@ -1071,6 +1098,7 @@ impl ClientWorld {
         self.motion = None;
         if reason != Reset::Died {
             self.camp = None;
+            self.camp_to = crate::camp::CampTo::default();
         }
         match reason {
             Reset::Entered => {

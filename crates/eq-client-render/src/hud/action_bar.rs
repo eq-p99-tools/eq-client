@@ -218,7 +218,9 @@ pub(super) fn current(
         if !qol.on(Fix::CampCountdown) {
             return None;
         }
-        let eq_client_core::world::Camp { since, logging_out } = world.camp()?;
+        let eq_client_core::world::Camp {
+            since, logging_out, ..
+        } = world.camp()?;
         Some(if logging_out {
             Shown {
                 label: "Logging out".into(),

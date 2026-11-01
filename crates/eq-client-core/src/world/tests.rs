@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     CampStatus, Coins, SpawnKind, SpellUpdate, WorldPosition, ZoneRejection,
+    camp::CampTo,
     combat::ConColor,
     doors::{Door, DoorUpdate},
     ground::ObjectUpdate,
@@ -1912,7 +1913,8 @@ fn camping_progress_follows_the_session_and_only_death_leaves_it() {
         world.camp(),
         Some(Camp {
             since: start,
-            logging_out: false
+            logging_out: false,
+            to: CampTo::CharacterSelect,
         })
     );
     // The logout keeps the time camping began.
@@ -1925,7 +1927,8 @@ fn camping_progress_follows_the_session_and_only_death_leaves_it() {
         world.camp(),
         Some(Camp {
             since: start,
-            logging_out: true
+            logging_out: true,
+            to: CampTo::CharacterSelect,
         })
     );
     camp(
@@ -1950,6 +1953,88 @@ fn camping_progress_follows_the_session_and_only_death_leaves_it() {
     assert!(world.camp().is_some());
     connection(&mut world, false, false);
     assert_eq!(world.camp(), None);
+}
+
+#[test]
+fn the_countdown_keeps_the_camp_as_it_was() {
+    let mut world = admitted();
+    let start = Instant::now();
+    let camp = |world: &mut ClientWorld, status, at| {
+        world.apply(&WorldUpdate::Game(WorldEvent::Camp(status)), at, &NoSpells)
+    };
+    camp(&mut world, CampStatus::Preparing, start);
+    let later = start + std::time::Duration::from_secs(5);
+    camp(
+        &mut world,
+        CampStatus::Countdown { seconds_left: 25 },
+        later,
+    );
+    assert_eq!(
+        world.camp(),
+        Some(Camp {
+            since: start,
+            logging_out: false,
+            to: CampTo::CharacterSelect,
+        })
+    );
+}
+
+#[test]
+fn a_desktop_camp_leaves_the_program_once_camped_and_a_plain_one_does_not() {
+    let mut world = admitted();
+    let start = Instant::now();
+    let camp = |world: &mut ClientWorld, status| {
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::Camp(status)),
+            start,
+            &NoSpells,
+        )
+    };
+    world.camp_to(CampTo::Desktop);
+    camp(&mut world, CampStatus::Preparing);
+    assert_eq!(world.camp().map(|camp| camp.to), Some(CampTo::Desktop));
+    // A second ask while it runs doesn't change where it ends.
+    world.camp_to(CampTo::CharacterSelect);
+    camp(&mut world, CampStatus::Countdown { seconds_left: 5 });
+    camp(&mut world, CampStatus::LoggingOut);
+    assert_eq!(world.camp().map(|camp| camp.to), Some(CampTo::Desktop));
+    let changes = camp(&mut world, CampStatus::Camped);
+    assert_eq!(changes.reset, Some(Reset::Camped));
+    assert!(world.leaving());
+    // Said once.
+    assert!(world.take_leaving());
+    assert!(!world.leaving());
+
+    // Abandoned, a desktop camp's end is forgotten: the next plain camp
+    // ends at the character list.
+    let mut world = admitted();
+    world.camp_to(CampTo::Desktop);
+    camp(&mut world, CampStatus::Preparing);
+    camp(
+        &mut world,
+        CampStatus::Abandoned {
+            by: crate::CampEnd::Standing,
+        },
+    );
+    camp(&mut world, CampStatus::Preparing);
+    assert_eq!(
+        world.camp().map(|camp| camp.to),
+        Some(CampTo::CharacterSelect)
+    );
+    let changes = camp(&mut world, CampStatus::Camped);
+    assert_eq!(changes.reset, Some(Reset::Camped));
+    assert!(!world.leaving());
+
+    // Refused before it began, likewise.
+    let mut world = admitted();
+    world.camp_to(CampTo::Desktop);
+    camp(
+        &mut world,
+        CampStatus::Rejected("Enter the world first".into()),
+    );
+    camp(&mut world, CampStatus::Preparing);
+    camp(&mut world, CampStatus::Camped);
+    assert!(!world.leaving());
 }
 
 #[test]
