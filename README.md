@@ -26,8 +26,8 @@ See [support and validation](SUPPORT.md) for the difference between implemented,
 offered and live-tested behavior, and [architecture contracts](ARCHITECTURE.md)
 before extending a feature.
 
-The built-in [script workbench](docs/scripts/README.md) loads and edits scenario
-files, runs them through the normal controls, and shows their execution. Its
+The built-in [script workbench](docs/scripts/README.md) lets you edit and run
+action sequences while playing your character, and watch their execution. Its
 Help tab renders the same linked Markdown guide available here. Open **Scripts**
 in the client or pass `--script-editor` at launch.
 

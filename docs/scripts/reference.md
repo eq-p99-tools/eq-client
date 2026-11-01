@@ -11,15 +11,10 @@ One action per line. Blank lines are ignored. `#` begins a comment, including af
 
 Durations are milliseconds. Headings use EQ's 0 to 512 units; positions and distances use EQ world units unless described as screen pixels. The first invalid line prevents the entire buffer from running.
 
-## Connection and waiting
+## Your current session
 
-- `login`: use the configured environment credentials at the login screen.
-- `wait_servers`: wait for the world-server list.
-- `server name`: choose a listed server by its full name.
-- `wait_select`: wait for character selection.
-- `select name`: choose a character and enter the world.
-- `create name race class gender deity start_zone primary_stat`: create a character on a local test server using numeric identifiers; the final stat receives the free stat points.
-- `wait_online`: wait for a zone admission and player.
+Run a script from the workbench while logged in to act on your current character. Commands use your existing target and UI state. Login and character-selection commands are unnecessary for this workflow.
+
 - `wait_zone shortname`: wait for admission to the named zone.
 - `wait_dead milliseconds`: wait for the targeted NPC to die or leave.
 - `wait milliseconds`: wait without sending input.
@@ -67,3 +62,15 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 - `quit`: close the client.
 
 The typed parser and normal client capability checks decide which commands and controls are available. A valid action can still fail at runtime when its target, session or expected result is unavailable.
+
+## Optional login automation
+
+These commands support scripts that deliberately start before world entry. They are separate from the usual workflow of editing and running scripts while playing.
+
+- `login`: use the configured environment credentials at the login screen.
+- `wait_servers`: wait for the world-server list.
+- `server name`: choose a listed server by its full name.
+- `wait_select`: wait for character selection.
+- `select name`: choose a character and enter the world.
+- `create name race class gender deity start_zone primary_stat`: create a character on a local test server using numeric identifiers; the final stat receives the free stat points.
+- `wait_online`: wait for a zone admission and player before continuing.
