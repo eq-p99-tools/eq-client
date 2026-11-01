@@ -143,8 +143,7 @@ pub(super) fn schedule(app: &mut App) {
     .add_systems(
         Update,
         (
-            items::link_input,
-            items::input,
+            (items::input, chat::links::input).chain(),
             inventory::input,
             coins::input,
             inventory::colors::input,
@@ -353,9 +352,14 @@ pub(crate) enum Stage {
 /// Registers the startup work of the overlays and the windows' shared systems.
 pub(super) fn install_overlays(app: &mut App) {
     app.add_systems(Startup, tooltip::spawn);
-    // A click is read once Bevy has marked the controls the pointer is over,
-    // and a script's pointer has pressed or let go.
-    app.add_systems(PreUpdate, clicks::track.after(bevy::ui::UiSystems::Focus));
+    // Text spans need their shaped-run hit test before the click tracker,
+    // just as controls need Bevy's focus and the script's pointer first.
+    app.add_systems(
+        PreUpdate,
+        (items::link_input, clicks::track)
+            .chain()
+            .after(bevy::ui::UiSystems::Focus),
+    );
     // The right button's look takes the mouse before the windows see it.
     app.add_systems(
         PreUpdate,

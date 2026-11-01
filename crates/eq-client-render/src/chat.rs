@@ -12,6 +12,8 @@ use eq_client_core::{
 };
 use std::collections::{BTreeMap, HashSet};
 
+pub(super) mod links;
+
 /// Words the client says in the chat, and whose they are: the official
 /// client's, read from its string table, or this client's own, which the
 /// official client's log never takes.
@@ -864,7 +866,7 @@ fn sync_lines(
 
 /// Appends one chat line in the official client's words, as its log
 /// writes it without the time (`logs::shown`) unless the player wants the
-/// time ([`Fix::ShowTimesInChat`]), with item links clickable; in its
+/// time ([`Fix::ShowTimesInChat`]), with item and web links clickable; in its
 /// channel's colour, the player's and in the player's font where the chat
 /// has them.
 fn spawn_line(
@@ -887,7 +889,7 @@ fn spawn_line(
     if times {
         stamp(&mut message, at);
     }
-    if message.item_links.is_empty() {
+    if message.item_links.is_empty() && !links::contains_url(&message.text) {
         parent.spawn((
             LineId(id),
             Text::new(message.text),

@@ -723,6 +723,11 @@ focus. Escape used to close the chat editor does not also clear the target.
 
 Item links are preserved in chat and displayed as clickable purple names inline within each message. Selecting one requests the definition from the current P99 zone session and opens a read-only stats panel. Results are cached within that session; reconnects clear them. Inspection never equips or activates the item. Quest say-links are rejected. Quarm item inspection is not implemented.
 
+HTTP and HTTPS addresses in chat are underlined links that open in the system's
+default browser. Links can wrap across lines and appear alongside item links.
+Other schemes, email addresses, and addresses without `http://` or `https://`
+remain plain text.
+
 Mouse selection intersects the current posed model triangles, including child
 transforms and scale, and chooses the nearest body under the cursor. A gold ground
 ring follows the selected rendered entity (or self), respects scene depth, and
