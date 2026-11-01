@@ -93,6 +93,7 @@ pub(super) fn schedule(app: &mut App) {
         (
             (
                 online::receive,
+                online::leave,
                 online::report_bleed_out,
                 login::watch,
                 online::tick,
