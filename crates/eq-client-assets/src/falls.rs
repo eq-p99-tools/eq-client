@@ -56,6 +56,25 @@ pub struct ClientFalls {
     /// The landing rule counts the carried weight in whole units, cut
     /// toward zero, as an integer field holds it; else as the weight is.
     pub whole_weight: bool,
+    /// Where a spawn other than the player's that falls under the zone with
+    /// no floor beneath it is put back.
+    pub underworld_return: UnderworldReturn,
+}
+
+/// How the program puts back a spawn other than the player's that falls with
+/// no floor beneath it until its feet pass under the zone's lowest height:
+/// it finds the zone's top surface at the spawn's spot, straight down from
+/// [`Self::search_from`], and puts the spawn there if that surface lies more
+/// than [`Self::under_top`] under the zone's top, else leaves it be. Read
+/// for Titanium (R-s Titanium addendum, section 5), but for a zone flag
+/// (0x923b88) it does so under, whose meaning is unread and which this
+/// client takes as set in every zone (checklist 6.362).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnderworldReturn {
+    /// The height the search for the top surface starts from.
+    pub search_from: f32,
+    /// How far under the zone's top that surface must lie.
+    pub under_top: f32,
 }
 
 /// What a landing costs, before the server's own reductions.
@@ -201,6 +220,16 @@ pub const EQMAC: ClientFalls = ClientFalls {
     sweep_radius: 0.25,
     // W is the weight routine's float (R3, 0x4bbb78).
     whole_weight: false,
+    // Titanium's (below), taken as the Mac-era program's until read (6.362).
+    underworld_return: TITANIUM_UNDERWORLD_RETURN,
+};
+
+/// The Titanium program's return from under the zone: the search starts at
+/// 32,000 (0x64863c, through 0x439f26), and the surface must lie under the
+/// zone's top (0x923bd8) less 10 (R-s Titanium addendum, section 5).
+const TITANIUM_UNDERWORLD_RETURN: UnderworldReturn = UnderworldReturn {
+    search_from: 32_000.0,
+    under_top: 10.0,
 };
 
 /// The Titanium client's falls (from the program): the same gravity field,
@@ -233,6 +262,7 @@ pub const TITANIUM: ClientFalls = ClientFalls {
     // read); that it holds the carried weight cut toward zero is inferred
     // with the field itself (6.303).
     whole_weight: true,
+    underworld_return: TITANIUM_UNDERWORLD_RETURN,
     ..EQMAC
 };
 
