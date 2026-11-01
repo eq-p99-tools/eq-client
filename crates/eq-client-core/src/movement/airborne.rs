@@ -88,6 +88,15 @@ fn buried_floor(world: &CollisionWorld, feet: Vec3, height: f32) -> Option<f32> 
     .then_some(floor)
 }
 
+/// The floor above the feet, up to `climb` over them, that a step stands
+/// them on: the highest under their footprint, met straight down from
+/// `climb` up, as the programs' floor sweep from the origin meets it.
+fn risen_floor(world: &CollisionWorld, feet: Vec3, climb: f32) -> Option<f32> {
+    world
+        .support_height(feet, climb, 0.0)
+        .filter(|floor| *floor > feet.y + 0.001)
+}
+
 /// Whether feet stand on ground the next step finds: under the footprint, or a
 /// floor they are buried in.
 fn supported(world: &CollisionWorld, feet: Vec3, height: f32) -> bool {
@@ -195,7 +204,14 @@ impl AirborneController {
             return feet;
         }
         let dt = input.seconds.min(STEP);
-        let feet = match buried_floor(world, feet, input.height) {
+        // The programs' floor sweep starts at the origin, the stand height
+        // above the feet, and takes the first surface it meets, so feet a
+        // server's move left under a floor within the body's reach stand on
+        // it at once (6.344, R-s); deeper, it starts under the floor, meets
+        // nothing and the body falls.
+        let feet = match risen_floor(world, feet, physics.climb)
+            .or_else(|| buried_floor(world, feet, input.height))
+        {
             Some(floor) if self.velocity <= 0.0 => Vec3::new(feet.x, floor, feet.z),
             _ => feet,
         };
@@ -610,9 +626,11 @@ mod tests {
     }
 
     #[test]
-    fn a_fall_beside_a_step_slides_off_its_edge_onto_the_floor() {
-        // Floor at y 0, and a step 1.5 high for x >= 0. The feet start below its
-        // top, beside it, where the floating capsule meets its edge on the way down.
+    fn feet_beside_a_step_within_the_reach_of_its_top_stand_on_it_and_past_it_fall() {
+        // Floor at y 0, and a step 1.5 high for x >= 0. Feet beside it, below
+        // its top by less than the body's reach (2 for these physics), whose
+        // footprint takes in its top, stand on it at once, as the programs'
+        // floor sweep from the origin meets it, rather than hang on its edge.
         let world = CollisionWorld::new([
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
             [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
@@ -622,15 +640,14 @@ mod tests {
             [[0.0, 0.0, -20.0], [0.0, 1.5, 20.0], [0.0, 0.0, 20.0]],
         ])
         .unwrap();
-        for x in [-0.1, -0.24, -0.35] {
+        for (x, floor) in [(-0.1, 1.5), (-0.24, 1.5), (-0.35, 1.5), (-0.45, 0.0)] {
             let mut state = AirborneController::default();
             let mut position = Vec3::new(x, 1.0, 0.0);
             for _ in 0..100 {
                 position = tick(&mut state, &world, position, false);
             }
-            // Never left hanging on the edge with no ground under the feet.
             assert!(
-                position.y.abs() < 0.001 && position.x < x,
+                (position.y - floor).abs() < 0.001 && (position.x - x).abs() < 0.001,
                 "{x}: {position:?}"
             );
             assert!(state.velocity().abs() < 0.001, "{x}: {}", state.velocity());
@@ -694,15 +711,22 @@ mod tests {
         assert!(stood.y.abs() < 0.001, "{stood:?}");
         assert!(state.velocity().abs() < 0.001);
         assert!(state.take_landing().is_none());
-        // Deeper than the capsule's lift is inside the ground, not standing on it.
+        // Within the body's reach (2 for these physics) the floor is stood
+        // on too, as the programs' floor sweep from the origin finds it.
         let mut state = AirborneController::default();
-        let deep = Vec3::new(0.0, -1.0, 0.0);
+        let stood = tick(&mut state, &world, Vec3::new(0.0, -1.9, 0.0), false);
+        assert!(stood.y.abs() < 0.001, "{stood:?}");
+        // Deeper than it is inside the ground, not standing on it.
+        let mut state = AirborneController::default();
+        let deep = Vec3::new(0.0, -2.1, 0.0);
         assert!(tick(&mut state, &world, deep, false).y <= deep.y);
-        // No head room: a ceiling right above the capsule keeps it where it is.
+        // Under the reach's floor, a ceiling above the capsule does not keep
+        // it down: the sweep starts under the ceiling. Past the reach, the
+        // capsule's lift still asks for head room.
         let covered = CollisionWorld::new(floor(0.0).into_iter().chain(floor(6.7))).unwrap();
         let mut state = AirborneController::default();
-        let pinned = Vec3::new(0.0, -0.3, 0.0);
-        assert!(tick(&mut state, &covered, pinned, false).y <= pinned.y);
+        let stood = tick(&mut state, &covered, Vec3::new(0.0, -0.3, 0.0), false);
+        assert!(stood.y.abs() < 0.001, "{stood:?}");
     }
 
     #[test]
@@ -951,6 +975,66 @@ mod tests {
             assert!((moved.x - last * 0.99).abs() < 0.001, "{air:?}");
             last = moved.x;
         }
+    }
+
+    #[test]
+    fn feet_put_under_a_face_within_the_bodys_reach_stand_on_it_and_climb_it() {
+        // Live's look (11-01): a goto left the feet 2.9 under a 30° hillside,
+        // and the run held there moved nothing. The program's floor sweep
+        // starts at the origin, the stand height above the feet, so a floor
+        // up to the body's reach above them is stood on at once (6.344).
+        let height = 100.0_f32;
+        let run = MotionStep {
+            horizontal: -Vec3::X * 2.15,
+            jump: false,
+            seconds: 0.05,
+            height: 6.0,
+        };
+        for (degrees, under) in [
+            (30.0_f32, 2.9_f32),
+            (40.0, 2.9),
+            (50.0, 2.9),
+            (50.0, 3.1),
+            // A goto a unit above the face falls onto it and climbs on.
+            (30.0, -1.0),
+            (50.0, -1.0),
+        ] {
+            let (world, foot) = face(height, degrees);
+            let slope = degrees.to_radians().tan();
+            let surface = |x: f32| height - x.clamp(0.0, foot) * slope;
+            let start = foot * 0.7;
+            let mut state = AirborneController::default();
+            let mut feet = Vec3::new(start, surface(start) - under, 0.0);
+            let mut landings = Vec::new();
+            for _ in 0..30 {
+                feet = state.step(&world, feet, PROGRAM, run);
+                landings.extend(state.take_landing());
+            }
+            let case = format!("{degrees}° from {under} under: {feet}");
+            assert!(start - feet.x > 60.0, "{case}");
+            assert!(feet.y >= surface(feet.x) - 0.01, "{case}");
+            assert!(
+                feet.y <= surface(feet.x - crate::movement::SUPPORT_SPREAD) + 0.6,
+                "{case}"
+            );
+            assert!(
+                landings
+                    .iter()
+                    .all(|landing| landing.impact_speed * STEP <= 2.5),
+                "{case}: {landings:?}"
+            );
+        }
+        // Deeper than the reach, the sweep starts under the face and meets
+        // nothing: the feet are not put on it.
+        let (world, foot) = face(height, 30.0);
+        let start = foot * 0.7;
+        let surface = height - start * 30.0_f32.to_radians().tan();
+        let mut state = AirborneController::default();
+        let mut feet = Vec3::new(start, surface - 3.5, 0.0);
+        for _ in 0..10 {
+            feet = state.step(&world, feet, PROGRAM, run);
+        }
+        assert!(feet.y <= surface - 3.5 + 0.001, "{feet}");
     }
 
     #[test]
