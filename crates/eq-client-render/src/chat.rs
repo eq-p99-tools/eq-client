@@ -943,7 +943,7 @@ fn submit_draft(
     outbox: &crate::outbox::Outbox,
 ) {
     let result = (|| -> Result<(), Unsent> {
-        let draft = state.draft.trim().to_owned();
+        let draft = typed_command(state.draft.trim()).into_owned();
         if let Some(request) = client_request(&draft, state) {
             return Ok(request?);
         }
@@ -1260,6 +1260,19 @@ fn social_commands(
         }
         _ => return None,
     })
+}
+
+/// A typed line as the commands read it: a bare `/`, alone or with words,
+/// is `/who` with the same words, as in the official client (the project
+/// owner's report, 11-01). That the words after it are `/who`'s is
+/// inferred (checklist 6.328). Every other line is unchanged.
+fn typed_command(input: &str) -> std::borrow::Cow<'_, str> {
+    match input.strip_prefix('/') {
+        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
+            format!("/who{rest}").into()
+        }
+        _ => input.into(),
+    }
 }
 
 /// Where a typed `/camp` ends, for a line that is one and whose words
@@ -1613,6 +1626,59 @@ mod tests {
         assert!(target_request("/target  ").unwrap().is_err());
         assert_eq!(target_request("/targetx rat"), None);
         assert_eq!(target_request("target rat"), None);
+    }
+
+    #[test]
+    fn a_bare_slash_is_who_with_the_same_words() {
+        assert_eq!(typed_command("/"), "/who");
+        assert_eq!(typed_command("/ wiz"), "/who wiz");
+        assert_eq!(typed_command("/ all wiz 50 60"), "/who all wiz 50 60");
+        for unchanged in ["//", "/say hi", "/who", "hello", "/camp desktop"] {
+            assert_eq!(typed_command(unchanged), unchanged);
+        }
+        assert_eq!(
+            zone_who_request(&typed_command("/")),
+            Some(Ok(eq_client_core::who::WhoFilter::default()))
+        );
+        assert_eq!(
+            zone_who_request(&typed_command("/ wiz")),
+            Some(Ok(eq_client_core::who::WhoFilter {
+                class: Some(12),
+                ..eq_client_core::who::WhoFilter::default()
+            }))
+        );
+
+        let mut online = super::super::online::OnlineState::new(true);
+        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
+        assert!(matches!(
+            game_commands(&typed_command("/ all wiz 50 60"), &online, &outbox)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::WhoAll {
+                session_id: 4,
+                filter: eq_client_core::who::WhoFilter {
+                    class: Some(12),
+                    levels: Some((50, 60)),
+                    ..
+                },
+            }]
+        ));
+
+        // Typed, a bare `/` lists the zone as `/who` does, with no refusal.
+        let mut state = ChatState::default();
+        let mut typing = crate::keys::Typing::default();
+        "/".clone_into(&mut state.draft);
+        submit_draft(&mut state, &mut typing, &mut online, &outbox);
+        assert_eq!(
+            state.zone_who,
+            Some(eq_client_core::who::WhoFilter::default())
+        );
+        assert!(state.history.lines(ChatTab::All).is_empty());
+        assert_eq!(state.draft, "");
+        assert!(received.try_recv().is_err());
     }
 
     #[test]
