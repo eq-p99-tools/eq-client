@@ -74,4 +74,6 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 - `map zoom_in`, `map zoom_out`, `map reset` or `map labels`: a map toolbar button.
 - `map up`, `map down`, `map left` or `map right`: pan the map.
 
+The map is available on every server and can show known entities without local map files. Search, watches and the inspector are interactive controls; they do not yet have dedicated named script targets. Map inspection is local, while its explicit Target button uses the ordinary gameplay capability and range checks.
+
 Targets are resolved through the normal client UI and session capabilities. No target bypasses a server's unsupported feature or conjures a closed merchant, bag or spellbook into existence.

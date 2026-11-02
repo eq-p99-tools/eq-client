@@ -46,7 +46,7 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `chase range milliseconds`: follow the target until it dies, leaves or times out.
 - `give`: give the cursor item to the current target.
 
-Movement uses the client's ordinary movement and collision behavior. It is not a teleport. Path-based commands require the existing navigation support and a reachable destination.
+Movement uses the client's ordinary movement and collision behavior. It is not a teleport. Walk uses a ready navigation mesh when `--navmesh` is enabled and falls back to grid search otherwise. A reachable destination and the session's movement grant are still required. Keep the camera attached when using movement scripts; free-camera mode consumes movement input for the camera.
 
 Approach, walk and chase hold the camera-relative forward command, independent of key bindings. Object commands choose the nearest matching tradeskill container when they start. Missing targets, unreachable routes and timeouts stop the run. `wait_dead` only recognizes NPC corpses or a target leaving the zone; a player's death does not satisfy it while their corpse remains.
 
@@ -72,5 +72,5 @@ These commands support scripts that deliberately start before world entry. They 
 - `server name`: choose a listed server by its full name.
 - `wait_select`: wait for character selection.
 - `select name`: choose a character and enter the world.
-- `create name race class gender deity start_zone primary_stat`: create a character on a local test server using numeric identifiers; the final stat receives the free stat points.
+- `create name race class gender deity start_zone primary_stat`: request character creation from selection where the server policy supports it, using numeric identifiers; the final stat receives the free stat points. This command is not restricted to local servers by the script parser.
 - `wait_online`: wait for a zone admission and player before continuing.

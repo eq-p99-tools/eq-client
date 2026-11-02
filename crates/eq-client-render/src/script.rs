@@ -1,15 +1,15 @@
-//! Opt-in scripted live checks that press keys through the ordinary input paths.
+//! Bounded scenarios shared by the in-game workbench and command-line runner.
 //!
-//! A script never runs unattended: it pauses until the client window is focused,
-//! stops if focus is lost while a key is held, and ends after a bounded time.
+//! Public-server runs require focus and stop if it is lost while a key is held.
+//! Offline and network-constrained local test runs can proceed without focus;
+//! all runs have bounded time and use the ordinary input and action paths.
 //! Scripted clicks are only injected while the real pointer is outside the window,
 //! so they cannot also press whatever the pointer happens to be over; each click
 //! and hover first glides the script's own pointer to its control (see
 //! [`pointer`]), scrolling a list the control has scrolled out of view as
 //! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
-//! `gm` steps send `#` commands only to a local `EQEmu` server, and `chat`
-//! steps speak only there.
+//! `gm` and `chat` steps require a network-constrained local EQEmu/TAKP session.
 mod execution;
 mod parse;
 pub(crate) mod pointer;

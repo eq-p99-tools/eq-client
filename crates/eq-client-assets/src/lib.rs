@@ -1,4 +1,4 @@
-#![doc = "Owned, renderer-independent zone assets loaded from a local EQ installation."]
+#![doc = "Owned, renderer-independent world, character and UI data from a local EQ installation."]
 
 pub mod camera;
 pub mod characters;

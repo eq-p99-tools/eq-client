@@ -1,4 +1,4 @@
-#![doc = "Bevy scene and camera support for renderer-independent EQ zone assets."]
+#![doc = "Bevy presentation, gameplay input and UI for the native EQ client and offline previews."]
 
 use std::path::PathBuf;
 use theme::Size;

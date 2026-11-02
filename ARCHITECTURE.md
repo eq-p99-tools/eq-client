@@ -1,6 +1,18 @@
 # Client extension contracts
 
+[Documentation index](docs/README.md) · [Development](docs/development.md) ·
+[Server policy and evidence](SUPPORT.md)
+
 ## Ownership
+
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| `eq-client-axes` | EQ/file/render coordinate conversions | Protocol or gameplay policy |
+| `eq-network` (external) | Wire codecs, connection lifecycle, server policy, command validation | Bevy UI or assets |
+| `eq-client-core` | Reduced world state, calculations and renderer-independent rules | Socket I/O or widgets |
+| `eq-client-assets` | Owned decoded installation data | Bevy entities or session commands |
+| `eq-client-render` | Scene, UI, input, presentation and command intent | Raw packet encoding |
+| `apps/eq-client` | Configuration, network-worker lifetime and event bridge | Duplicated server policy |
 
 Keep packet decoding and server policy in `eq-network`. Put engine-independent
 world reduction, validation and gameplay calculations in `eq-client-core`, with
@@ -19,6 +31,8 @@ never a flag the client keeps per server. A control the server type lacks says
 "Not available on this server", and one this client lacks says "Not in this
 client yet". Official wording comes from the player's installed client by its
 eqstr id, with this client's own words only as the fallback.
+Capabilities authorize command paths; they are not a record of exhaustive live
+validation. Keep those claims in SUPPORT and scenario evidence.
 
 Local presentation needs no server capability. The map reads installed geometry
 and `ClientWorld` directly, including spawns culled from the 3D scene. Its local
@@ -47,6 +61,17 @@ and world-to-label and gauge updates in
 `skinned::presentation`. The crate root composes startup and the shared scene.
 These modules keep their helpers internal rather than expanding the public API.
 
+`camera` owns attached/free view state. Detaching consumes movement input for the
+camera and clears character input, but does not suspend authoritative position
+updates or gravity. Zone/session changes reset the view. `keys::bindings` owns
+keyboard reassignment and per-character persistence; all input consumers use the
+shared key map and typing gate.
+
+`chat::links` recognizes validated HTTP(S) ranges and opens browsers in background
+work. Item and web links share text-span hit testing before the shared click
+tracker, so only the released link acts. Item definitions remain in the normal
+session inspection path; web links never become game commands.
+
 The script workbench is a client feature over the existing scenario executor.
 `script::Program` owns validated source and line locations; `Script` owns the
 active run; `RunStatus` retains progress and the terminal outcome after that run
@@ -59,7 +84,8 @@ operations. File jobs run off the frame thread, use document generations rather
 than game admissions, and preserve the buffer on failure. `view` owns chrome,
 `syntax` owns presentation-only token colors, and `help` renders the Markdown
 pages in `docs/scripts` that GitHub also displays. Executable help examples are
-tested with the real parser. The workbench clears text focus before injected
+tested with the real parser. `input` adapts editor keyboard/clipboard events.
+The workbench clears text focus before injected
 input and uses the shared typing gate to keep editor input out of gameplay and
 login. The existing local-session restrictions and pointer ownership still apply.
 
@@ -69,11 +95,13 @@ reconciliation must see the reduced world. Existing chains also order focus and
 deferred entity changes. Preserve these edges when extracting feature systems.
 Do not claim that removing a chain improves performance without measuring it.
 
-Archive I/O and CPU decoding should run outside the frame consumer. Scope every
-result to its admission, discard obsolete work, and apply the latest authoritative
+Archive I/O and CPU decoding should run outside the frame consumer. Scope
+session-related results to their admission, discard obsolete work, and apply the latest authoritative
 placement when installing a scene. Keep graphics-resource mutation on the engine
 thread. Cache owners need a documented lifetime or budget, including failed-load
 entries; a process-wide map of strong handles is not an eviction policy.
+Independent file/document jobs use their own generation or profile identity;
+they should not be invalidated merely because the player zones.
 
 An enqueued command is not a successful action. `Outbox` refuses what it cannot
 send, such as a command while the queue is full; what it sends settles only when

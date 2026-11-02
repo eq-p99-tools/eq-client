@@ -171,8 +171,7 @@ impl Fix {
         Self::ALL.into_iter().find(|fix| fix.key() == key)
     }
 
-    /// Its checkbox's words on the quality-of-life page, and its name in
-    /// the README.
+    /// Its checkbox's words on the quality-of-life page and in the settings guide.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -443,12 +442,12 @@ mod tests {
     }
 
     #[test]
-    fn the_readme_names_every_fix() {
-        let readme = include_str!("../../../README.md");
+    fn the_settings_guide_names_every_fix() {
+        let guide = include_str!("../../../docs/settings.md");
         for fix in Fix::ALL {
             assert!(
-                readme.contains(&format!("**{}**", fix.label())),
-                "the README's Quality of life section leaves out {fix:?}"
+                guide.contains(&format!("| {} |", fix.label())),
+                "the settings guide's Quality of life section leaves out {fix:?}"
             );
         }
     }

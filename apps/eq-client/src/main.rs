@@ -1,4 +1,4 @@
-#![doc = "Command-line entry point for the offline EQ zone viewer."]
+#![doc = "Native EQ client entry point: login, online play and offline asset previews."]
 
 mod logins;
 mod presets;
@@ -32,7 +32,7 @@ struct Arguments {
     #[arg(long, default_value = "ecommons")]
     zone: String,
 
-    /// Camera projection used by the offline viewer.
+    /// Camera projection used by the client.
     #[arg(long, value_enum, default_value_t = CameraStyle::Perspective)]
     camera: CameraStyle,
 
@@ -90,9 +90,8 @@ struct Arguments {
     #[arg(long)]
     debug_overlay: bool,
 
-    /// Build each zone's navigation mesh at entry, off the frame, and keep it
-    /// under the settings directory; for probes, scripts and looks. Nothing
-    /// plans routes over it yet.
+    /// Build and cache each zone's navigation mesh in background work. Script
+    /// walks use a ready mesh for the character's size, otherwise grid search.
     #[arg(long, env = "EQ_CLIENT_NAVMESH")]
     navmesh: bool,
 
@@ -173,7 +172,8 @@ struct Arguments {
     #[arg(long)]
     terrain_only: bool,
 
-    /// Attended key script (press/hold/wait/report/screenshot/quit), run only
+    /// Start a scenario file through the same executor as the in-game Scripts
+    /// workbench. Runs only
     /// while the client window is focused, except offline or on a local
     /// `EQEmu` or TAKP server.
     /// Screenshots are saved beside it.
