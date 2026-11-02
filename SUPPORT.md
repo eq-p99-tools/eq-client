@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `73a1935138b62f412c111696f0e133ff47403cae`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/73a1935138b62f412c111696f0e133ff47403cae/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `2a348c5cd6ad39968fb97af8ac2d8ad5090975ba`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/2a348c5cd6ad39968fb97af8ac2d8ad5090975ba/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -83,13 +83,33 @@ zone-line transfer, server relocation, death/respawn and reconnect separately.
 Keep assets, raw packets, keys, credentials, account/character identifiers and
 installed-client text private. Public regression fixtures should be synthetic.
 
-The documentation refresh itself adds no new live evidence. Free camera,
-HTTP(S) browser launch and the all-server entity-map changes have local automated
-coverage; their PR descriptions distinguish that from live/manual validation.
+### Consolidated UI validation, 2026-11-02
+
+The client changes through `69157ab`, combined with the networking revision above,
+passed native Windows checks against local EQEmu and TAKP. Live coverage includes:
+
+- Character-creation pages, appearance, name paste, duplicate refusal, refreshed
+  selection and new-character admission. Tutorial entry was checked on EQEmu.
+- Script editing, diagnostics, clipboard and undo/redo, nested files, external
+  edit conflicts, help navigation, run controls, held-input cancellation,
+  continued execution with the window closed, and real zone handoffs.
+- Free-camera controls and saved bindings, window/menu stacking, chat paste,
+  actual HTTP(S) browser launches and item-link coexistence.
+- Map pan/zoom/opacity, target eligibility, tracking with the map closed,
+  reconnect persistence, and real remote-player heading changes. A real EQEmu
+  pickup removed its ground-item marker; TAKP exposes no ground-item state.
+- Terminal disconnects during held input: both protocols retained a failed run
+  with `Session ended` and skipped the remaining actions.
+
+P99 and Quarm each completed an attended two-minute script while connected and
+receiving server state. These compatibility checks used existing characters,
+without sending chat, moving them or creating characters. The final Quarm
+stamina-layout fix still requires a public retest. Consult the PR descriptions
+for later results; this is not a certification of all gameplay on either server.
 
 ## Dependency integration and CI
 
-Cargo.toml pins networking's creation prerequisite, and Cargo.lock selects that
+Cargo.toml pins the reviewed networking integration, and Cargo.lock selects that
 exact commit. Use `cargo metadata --locked --format-version 1` to inspect it. A newer
 network README may describe work this client has not integrated. For an intentional
 update, review old/new revisions and lockfile changes, run local checks, then
