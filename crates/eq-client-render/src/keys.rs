@@ -10,6 +10,8 @@ use super::windows::WindowId;
 use bevy::{prelude::*, window::PrimaryWindow};
 use std::collections::BTreeMap;
 
+pub(crate) mod bindings;
+
 /// Something a key press asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Act {
@@ -46,6 +48,10 @@ pub(crate) enum Act {
     CameraBack,
     CameraLeft,
     CameraRight,
+    /// Detaches the view, or returns it to the player.
+    FreeCamera,
+    CameraUp,
+    CameraDown,
     TurnLeft,
     TurnRight,
     Jump,
@@ -103,6 +109,9 @@ impl Act {
             Self::CameraBack => "Back, Facing the Camera",
             Self::CameraLeft => "Left, Facing the Camera",
             Self::CameraRight => "Right, Facing the Camera",
+            Self::FreeCamera => "Toggle Free Camera",
+            Self::CameraUp => "Free Camera Up",
+            Self::CameraDown => "Free Camera Down",
             Self::TurnLeft => "Turn Left",
             Self::TurnRight => "Turn Right",
             Self::Jump => "Jump",
@@ -122,6 +131,7 @@ impl Act {
             }
             Self::Gem(_) => KeyGroup::SpellCasting,
             Self::Slot(_) | Self::BindSlot(_) | Self::ClearSlot(_) => KeyGroup::Hotbar(1),
+            Self::FreeCamera | Self::CameraUp | Self::CameraDown => KeyGroup::Camera,
             Self::Sit
             | Self::Duck
             | Self::Stand
@@ -288,6 +298,9 @@ impl Default for KeyMap {
         bind(Act::CameraBack, &[Chord::key(KeyCode::KeyS)]);
         bind(Act::CameraLeft, &[Chord::key(KeyCode::KeyA)]);
         bind(Act::CameraRight, &[Chord::key(KeyCode::KeyD)]);
+        bind(Act::FreeCamera, &[Chord::key(KeyCode::F9)]);
+        bind(Act::CameraUp, &[Chord::key(KeyCode::PageUp)]);
+        bind(Act::CameraDown, &[Chord::key(KeyCode::PageDown)]);
         bind(Act::TurnLeft, &[Chord::key(KeyCode::KeyQ)]);
         bind(Act::TurnRight, &[Chord::key(KeyCode::KeyE)]);
         bind(Act::Jump, &[Chord::key(KeyCode::Space)]);
@@ -610,6 +623,10 @@ pub(crate) struct Typing {
     /// A login screen is up: the login window or the login server's list,
     /// whose boxes and keys are their own.
     pub logging_in: bool,
+    /// A key assignment is being edited, including its finishing frame.
+    pub rebinding: bool,
+    /// A script document or path field owns the keyboard.
+    pub editing_script: bool,
     /// This frame's Escape closed the chat line or left the quantity
     /// window's number, so nothing else takes it.
     pub escape_consumed: bool,
@@ -645,8 +662,10 @@ impl Keys<'_, '_> {
     /// Whether the game has the keyboard.
     pub(crate) fn focused(&self) -> bool {
         !self.typing.composing
+            && !self.typing.editing_script
             && !self.typing.counting
             && !self.typing.logging_in
+            && !self.typing.rebinding
             && self.window_focused()
     }
 
@@ -663,6 +682,16 @@ impl Keys<'_, '_> {
     /// Whether this frame's Escape belongs to the game, not to closing the chat.
     pub(crate) fn escape_free(&self) -> bool {
         self.focused() && !self.typing.escape_consumed
+    }
+
+    /// A separate text editor owns keys, including on the login screens.
+    pub(crate) fn editing_script(&self) -> bool {
+        self.typing.editing_script
+    }
+
+    /// A text field already used this frame's Escape press.
+    pub(crate) fn escape_claimed(&self) -> bool {
+        self.typing.escape_consumed || self.typing.editing_script
     }
 
     /// A fresh press of the action, while the game has the keyboard.

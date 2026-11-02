@@ -208,7 +208,7 @@ pub(super) fn placement(position: eq_client_core::WorldPosition) -> Transform {
 pub(super) struct Scene<'w, 's> {
     roots: Query<'w, 's, Entity, Roots>,
     players: Query<'w, 's, &'static mut Transform, With<Player>>,
-    cameras: Query<'w, 's, &'static mut OrbitCamera>,
+    cameras: Query<'w, 's, (Entity, &'static mut OrbitCamera)>,
     images: ResMut<'w, Assets<Image>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
@@ -229,6 +229,11 @@ impl Scene<'_, '_> {
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
         );
         if gone {
+            for (entity, _) in &self.cameras {
+                commands
+                    .entity(entity)
+                    .remove::<super::camera::FreeCamera>();
+            }
             if let Some(nearby) = self.nearby.as_mut() {
                 nearby.forget(commands);
             }
@@ -336,7 +341,7 @@ impl Scene<'_, '_> {
         self.focus(placed.translation);
         // Each zone entry starts the camera behind the player's new heading;
         // its pitch and zoom stay as chosen. Inferred, item 6.240.
-        for mut camera in &mut self.cameras {
+        for (_, mut camera) in &mut self.cameras {
             super::start_behind(&mut camera, &placed);
         }
         player
@@ -364,7 +369,7 @@ impl Scene<'_, '_> {
     }
 
     fn focus(&mut self, point: Vec3) {
-        for mut camera in &mut self.cameras {
+        for (_, mut camera) in &mut self.cameras {
             camera.focus = point;
         }
     }

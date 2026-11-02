@@ -83,6 +83,7 @@ mod reading;
 mod resources;
 mod resurrection;
 pub mod script;
+mod script_workbench;
 mod select_preview;
 mod sheets;
 mod skills;
@@ -182,7 +183,11 @@ pub struct ViewerConfig {
     /// Optional read-only live validation action.
     pub validation: Option<ValidationAction>,
     /// Optional attended key script driven through the normal input paths.
-    pub script: Option<Vec<script::Step>>,
+    pub script: Option<script::Program>,
+    /// Open the script workbench at launch without starting a scenario.
+    pub script_editor: bool,
+    /// The script source's path, also offered in the workbench.
+    pub script_path: Option<PathBuf>,
     /// Script file and byte offset to keep reading appended steps from.
     pub script_follow: Option<(PathBuf, usize)>,
     /// Leave the script pointer's arrow undrawn while a script runs; it is
@@ -389,9 +394,8 @@ pub fn run(
     loading::install(&mut app);
     device_pixels::install(&mut app);
     install_overlays(&mut app);
-    if let Some(steps) = steps {
-        install_script(&mut app, (steps, follow), (local_session, online), arrow);
-    }
+    install_script(&mut app, (steps, follow), (local_session, online), arrow);
+    script_workbench::install(&mut app);
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
             path,
@@ -468,15 +472,19 @@ fn exit_status(exit: &AppExit) -> i32 {
 /// The script pointer's arrow is drawn while it runs, unless `arrow` is false.
 fn install_script(
     app: &mut App,
-    (steps, follow): (Vec<script::Step>, Option<(PathBuf, usize)>),
+    (program, follow): (Option<script::Program>, Option<(PathBuf, usize)>),
     (local_session, online): (bool, bool),
     arrow: bool,
 ) {
-    let script = match follow {
-        Some((path, offset)) => script::Script::following(steps, path, offset),
-        None => script::Script::new(steps),
-    };
-    app.insert_resource(script.local_session(local_session).offline_preview(!online));
+    if let Some(program) = program {
+        let mut script = script::Script::from_program(program);
+        if let Some((path, offset)) = follow {
+            script = script.with_follow(path, offset);
+        }
+        app.insert_resource(script.local_session(local_session).offline_preview(!online));
+    }
+    app.init_resource::<script::RunStatus>()
+        .init_resource::<script::RunControl>();
     app.add_systems(
         PreUpdate,
         script::drive
@@ -486,6 +494,7 @@ fn install_script(
     .add_systems(
         Update,
         (
+            script::observe.in_set(Stage::Receive),
             script::pointer::draw,
             // A scripted notch of the wheel replaces the real wheel's
             // turn, read just before, and reaches the lists as one does.
@@ -816,7 +825,7 @@ fn move_player(
     collision: Res<Collision>,
     mut airborne: Local<eq_client_core::movement::AirborneController>,
     mut players: Query<(&mut Transform, &PlayerBody), With<Player>>,
-    mut cameras: Query<&mut OrbitCamera>,
+    mut cameras: Query<(&mut OrbitCamera, Has<camera::FreeCamera>)>,
 ) {
     if online.enabled {
         airborne.reset();
@@ -825,7 +834,10 @@ fn move_player(
     let Ok((mut player, body)) = players.single_mut() else {
         return;
     };
-    let accepts_input = keys.focused();
+    let Ok((mut camera, free)) = cameras.single_mut() else {
+        return;
+    };
+    let accepts_input = keys.focused() && !free;
     let (horizontal, vertical) = if accepts_input {
         (
             keys.map
@@ -835,9 +847,6 @@ fn move_player(
         )
     } else {
         (0.0, 0.0)
-    };
-    let Ok(mut camera) = cameras.single_mut() else {
-        return;
     };
     let direction = camera_relative_direction(horizontal, vertical, camera.yaw);
     if direction != Vec3::ZERO {
@@ -864,7 +873,7 @@ fn move_player(
         physics,
         eq_client_core::movement::MotionStep {
             horizontal: delta,
-            jump: keys.pressed(keys::Act::Jump),
+            jump: accepts_input && keys.pressed(keys::Act::Jump),
             seconds: time.delta_secs(),
             height: body.height,
         },
@@ -897,12 +906,16 @@ fn update_hud(
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
     mut labels: Query<(&mut Text, &mut Visibility), With<HudText>>,
+    free: Query<(), With<camera::FreeCamera>>,
 ) {
     let (Ok(player), Ok((mut label, mut visibility))) = (players.single(), labels.single_mut())
     else {
         return;
     };
     let mut lines = vec![notices.status.text().to_owned()];
+    if !free.is_empty() {
+        lines.push(map.named(keys::Act::FreeCamera, "Free camera - return to character"));
+    }
     let nearest = interact::nearest(&online);
     lines.push(match nearest {
         Some(interact::Use::Door(..)) => map.help(&[(keys::Act::Use, "use the door")]),

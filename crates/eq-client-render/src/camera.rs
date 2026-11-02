@@ -16,6 +16,123 @@ pub(super) struct OrbitCamera {
     pub(super) pulled: Option<f32>,
 }
 
+/// A detached view. Its transform is the camera's alone; the orbit keeps
+/// following the real player so returning never changes the player's position.
+#[derive(Component)]
+pub(crate) struct FreeCamera {
+    yaw: f32,
+    pitch: f32,
+    admission: Option<u64>,
+}
+
+/// Toggles before character input, and leaves free camera on an admission change.
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+pub(crate) fn toggle_free(
+    mut commands: Commands,
+    keys: crate::keys::Keys,
+    online: Res<online::OnlineState>,
+    players: Query<&Transform, (With<Player>, Without<OrbitCamera>)>,
+    mut cameras: Query<
+        (
+            Entity,
+            &mut OrbitCamera,
+            &mut Transform,
+            Option<&FreeCamera>,
+        ),
+        Without<Player>,
+    >,
+) {
+    let admission = online.world().session_id();
+    let playing = !online.enabled || (admission.is_some() && online.world().connected());
+    let pressed = keys.pressed(crate::keys::Act::FreeCamera);
+    for (entity, mut orbit, mut transform, free) in &mut cameras {
+        let expired = free.is_some_and(|free| free.admission != admission || !playing);
+        if free.is_some() && (pressed || expired) {
+            commands.entity(entity).remove::<FreeCamera>();
+            if let Ok(player) = players.single() {
+                orbit.focus = player.translation;
+            }
+            orbit.pulled = None;
+            *transform = orbit_transform(&orbit);
+        } else if pressed && playing && players.single().is_ok() {
+            let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+            commands.entity(entity).insert(FreeCamera {
+                yaw,
+                pitch,
+                admission,
+            });
+        }
+    }
+}
+
+/// The free camera's speed in world units per second, independent of the
+/// character's movement grants, and its keyboard turning rate in radians.
+const FLY_SPEED: f32 = 60.0;
+const FLY_TURN: f32 = 2.0;
+
+impl FreeCamera {
+    fn fly(
+        &mut self,
+        transform: &mut Transform,
+        drag: Vec2,
+        movement: Vec3,
+        turn: f32,
+        seconds: f32,
+    ) {
+        self.yaw += turn * FLY_TURN * seconds - drag.x;
+        self.pitch = (self.pitch - drag.y).clamp(-1.55, 1.55);
+        transform.rotation = Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0);
+        let direction = *transform.right() * movement.x
+            + Vec3::Y * movement.y
+            + *transform.forward() * movement.z;
+        transform.translation += direction.normalize_or_zero() * FLY_SPEED * seconds;
+    }
+}
+
+/// Flies only the detached view, with the same keyboard ownership and mouse
+/// sensitivity as the character controls. No collision or network path runs here.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+pub(crate) fn fly_camera(
+    keys: crate::keys::Keys,
+    navigation: Res<crate::navigation::NavigationKeys>,
+    time: Res<Time>,
+    look: Res<MouseLook>,
+    options: Res<options::OptionsState>,
+    mut motion: MessageReader<MouseMotion>,
+    mut cameras: Query<(&mut FreeCamera, &mut Transform)>,
+) {
+    use crate::keys::Act;
+    let drag = if look.held && keys.focused() {
+        motion.read().map(|event| event.delta).sum::<Vec2>()
+    } else {
+        motion.clear();
+        Vec2::ZERO
+    };
+    let (mut movement, mut turning) = (Vec3::ZERO, 0.0);
+    if keys.focused() {
+        let input = navigation.sample(&keys.input);
+        let held = |a, b| keys.map.held(&input, a) || keys.map.held(&input, b);
+        movement.x = f32::from(held(Act::StrafeRight, Act::CameraRight))
+            - f32::from(held(Act::StrafeLeft, Act::CameraLeft));
+        movement.y = f32::from(held(Act::CameraUp, Act::Jump))
+            - f32::from(keys.map.held(&input, Act::CameraDown));
+        movement.z = f32::from(held(Act::Forward, Act::CameraForward))
+            - f32::from(held(Act::Back, Act::CameraBack));
+        turning = keys.map.axis(&input, Act::TurnRight, Act::TurnLeft);
+    }
+    let turn = options.options.turn_per_pixel();
+    let rise = if options.options.invert_y { -1.0 } else { 1.0 };
+    for (mut free, mut transform) in &mut cameras {
+        free.fly(
+            &mut transform,
+            drag * Vec2::new(turn, turn * rise),
+            movement,
+            turning,
+            time.delta_secs(),
+        );
+    }
+}
+
 /// The right button's look: from a press over the world (not over a
 /// window) until the button is let go, the mouse belongs to the look
 /// wherever the pointer goes, and the windows see none of its buttons, as
@@ -152,7 +269,12 @@ pub(super) fn orbit_camera(
         Option<Res<crate::ViewerSettings>>,
     ),
     online: Res<online::OnlineState>,
-    mut cameras: Query<(&mut OrbitCamera, &mut Transform, Option<&mut Projection>)>,
+    mut cameras: Query<(
+        &mut OrbitCamera,
+        &mut Transform,
+        Option<&mut Projection>,
+        Has<FreeCamera>,
+    )>,
     bodies: Query<&PlayerBody, With<Player>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
@@ -191,8 +313,17 @@ pub(super) fn orbit_camera(
     let limits = program.on_leash(leash(&options.options));
     let rise = if options.options.invert_y { -1.0 } else { 1.0 };
     let clip = clip_distance(client, &options.options, online.world());
-    for (mut camera, mut transform, projection) in &mut cameras {
+    for (mut camera, mut transform, projection, free) in &mut cameras {
         let turn = options.options.turn_per_pixel();
+        if free {
+            let clip = clip.map(|clip| clip + past_program(camera.radius, program));
+            if let Some(mut projection) = projection
+                && !fitted(&projection, camera.radius, clip)
+            {
+                fit_projection(&mut projection, camera.radius, clip);
+            }
+            continue;
+        }
         camera.yaw -= drag.x * turn;
         // The limits are the program's chase camera's, with the distance on
         // the player's leash. The top-down
@@ -478,6 +609,237 @@ pub(super) fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn free_app() -> (App, Entity, Entity) {
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_secs(1));
+        app.insert_resource(time)
+            .init_resource::<crate::navigation::NavigationKeys>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<MouseLook>()
+            .init_resource::<chat::ChatState>()
+            .init_resource::<items::ItemState>()
+            .init_resource::<inventory::InventoryState>()
+            .init_resource::<options::OptionsState>()
+            .init_resource::<windows::pointer::Wheel>()
+            .add_message::<MouseMotion>()
+            .insert_resource(online::OnlineState::new(false))
+            .insert_resource(Collision(Some(
+                eq_client_core::movement::CollisionWorld::new([
+                    [
+                        [-1000.0, 0.0, -1000.0],
+                        [1000.0, 0.0, -1000.0],
+                        [1000.0, 0.0, 1000.0],
+                    ],
+                    [
+                        [-1000.0, 0.0, -1000.0],
+                        [1000.0, 0.0, 1000.0],
+                        [-1000.0, 0.0, 1000.0],
+                    ],
+                    [
+                        [-100.0, -100.0, -2.0],
+                        [100.0, -100.0, -2.0],
+                        [100.0, 100.0, -2.0],
+                    ],
+                    [
+                        [-100.0, -100.0, -2.0],
+                        [100.0, 100.0, -2.0],
+                        [-100.0, 100.0, -2.0],
+                    ],
+                ])
+                .unwrap(),
+            )))
+            .add_systems(
+                Update,
+                (toggle_free, crate::move_player, fly_camera, orbit_camera).chain(),
+            );
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        let player = app
+            .world_mut()
+            .spawn((
+                Player,
+                PlayerBody {
+                    feet_offset: 3.0,
+                    height: 6.0,
+                    size: 6.0,
+                },
+                Transform::from_xyz(0.0, 3.0, 0.0),
+            ))
+            .id();
+        let orbit = OrbitCamera {
+            focus: Vec3::new(0.0, 3.0, 0.0),
+            radius: 30.0,
+            yaw: 0.0,
+            pitch: -0.35,
+            pulled: None,
+        };
+        let camera = app.world_mut().spawn((orbit_transform(&orbit), orbit)).id();
+        (app, camera, player)
+    }
+
+    fn press(app: &mut App, key: KeyCode) {
+        let mut input = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        input.reset_all();
+        input.press(key);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+    }
+
+    #[test]
+    fn free_camera_crosses_walls_and_floor_and_returns_to_the_current_player() {
+        let (mut app, camera, player) = free_app();
+        let before = *app.world().get::<Transform>(camera).unwrap();
+        press(&mut app, KeyCode::F9);
+        assert!(app.world().get::<FreeCamera>(camera).is_some());
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .translation
+                .abs_diff_eq(before.translation, 1e-5)
+        );
+        // Holding the toggle does not switch again.
+        app.update();
+        assert!(app.world().get::<FreeCamera>(camera).is_some());
+        press(&mut app, KeyCode::KeyW);
+        let flying = *app.world().get::<Transform>(camera).unwrap();
+        assert!(flying.translation.z < -2.0 && flying.translation.y < 0.0);
+        assert!(
+            app.world()
+                .get::<Transform>(player)
+                .unwrap()
+                .translation
+                .abs_diff_eq(Vec3::new(0.0, 3.0, 0.0), 1e-5)
+        );
+        // A server placement while detached never drags the camera along.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .unwrap()
+            .translation
+            .x = 80.0;
+        app.update();
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .translation
+                .abs_diff_eq(flying.translation, 1e-5)
+        );
+        press(&mut app, KeyCode::F9);
+        assert!(app.world().get::<FreeCamera>(camera).is_none());
+        let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+        assert!(orbit.focus.abs_diff_eq(Vec3::new(80.0, 3.0, 0.0), 1e-5));
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .translation
+                .abs_diff_eq(orbit_transform(orbit).translation, 1e-5)
+        );
+        assert!((orbit.radius - 30.0).abs() < 1e-5 && (orbit.pitch + 0.35).abs() < 1e-5);
+    }
+
+    #[test]
+    fn free_camera_respects_typing_focus_and_vertical_keys() {
+        let (mut app, camera, _) = free_app();
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        press(&mut app, KeyCode::F9);
+        assert!(app.world().get::<FreeCamera>(camera).is_none());
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = false;
+        press(&mut app, KeyCode::F9);
+        let before = app.world().get::<Transform>(camera).unwrap().translation;
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .counting = true;
+        press(&mut app, KeyCode::KeyW);
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .translation
+                .abs_diff_eq(before, 1e-5)
+        );
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .counting = false;
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
+        press(&mut app, KeyCode::F9);
+        assert!(app.world().get::<FreeCamera>(camera).is_some());
+        press(&mut app, KeyCode::KeyW);
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .translation
+                .abs_diff_eq(before, 1e-5)
+        );
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
+        press(&mut app, KeyCode::PageUp);
+        let up = app.world().get::<Transform>(camera).unwrap().translation;
+        assert!(up.y > before.y && (up.z - before.z).abs() < 1e-5);
+        press(&mut app, KeyCode::PageDown);
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .translation
+                .abs_diff_eq(before, 1e-5)
+        );
+        // Leaving a session also returns the view, without another key press.
+        app.world_mut()
+            .resource_mut::<online::OnlineState>()
+            .enabled = true;
+        app.update();
+        assert!(app.world().get::<FreeCamera>(camera).is_none());
+    }
+
+    #[test]
+    fn detaching_a_zoomed_out_camera_keeps_the_extended_view_distance() {
+        let (mut app, camera, _) = free_app();
+        let mut settings = crate::ViewerSettings::default();
+        settings.0.installed_client = eq_client_assets::ui::InstalledClient::Titanium;
+        app.insert_resource(settings);
+        app.world_mut()
+            .get_mut::<OrbitCamera>(camera)
+            .unwrap()
+            .radius = 1000.0;
+        app.world_mut()
+            .entity_mut(camera)
+            .insert(Projection::Perspective(PerspectiveProjection::default()));
+        app.update();
+        let Projection::Perspective(before) = app.world().get::<Projection>(camera).unwrap() else {
+            panic!("expected perspective view")
+        };
+        let distance = before.far;
+        assert!(distance > eq_client_assets::camera::FarPlane::UNCLIPPED);
+        press(&mut app, KeyCode::F9);
+        let Projection::Perspective(after) = app.world().get::<Projection>(camera).unwrap() else {
+            panic!("expected perspective view")
+        };
+        assert_eq!(after.far.to_bits(), distance.to_bits());
+    }
 
     /// The right button held since an earlier frame: pressed, not fresh.
     fn held() -> ButtonInput<MouseButton> {

@@ -127,6 +127,10 @@ pub(super) struct Frame {
 pub(super) struct DragHandle(Entity);
 
 impl Frame {
+    /// Whether only this frame's title bar is currently shown.
+    pub(crate) const fn minimized(&self) -> bool {
+        self.minimized
+    }
     /// Whether the player moved or minimized the window, or its placement
     /// was restored, so it is not left where it opens.
     pub(crate) const fn placed(&self) -> bool {

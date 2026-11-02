@@ -91,6 +91,8 @@ pub(crate) enum WindowId {
     Selector,
     /// The character list.
     CharacterSelect,
+    /// The scenario editor and execution monitor, also available before login.
+    Scripts,
 }
 
 /// Where a window opens before the player moves it.
@@ -202,6 +204,8 @@ pub(crate) enum Layer {
     Popup,
     /// Screens that replace the game, such as the character list.
     Screen,
+    /// Tools that remain accessible above the login and character screens.
+    Tool,
 }
 
 impl Layer {
@@ -212,6 +216,7 @@ impl Layer {
             Self::Floating => 20,
             Self::Popup => 60,
             Self::Screen => 500,
+            Self::Tool => 800,
         }
     }
 }
@@ -326,7 +331,7 @@ impl WindowId {
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 32] = [
+    pub(crate) const ALL: [Self; 33] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -359,6 +364,7 @@ impl WindowId {
         Self::Map,
         Self::Selector,
         Self::CharacterSelect,
+        Self::Scripts,
     ];
 
     /// The windows of the bags in the slots that hold one: carried, then
@@ -403,7 +409,7 @@ impl WindowId {
             Self::Map => Some("MapViewWnd"),
             Self::Selector => Some("SelectorWindow"),
             Self::CharacterSelect => Some("CharacterSelectWindow"),
-            Self::Status => None,
+            Self::Status | Self::Scripts => None,
         }
     }
 
@@ -463,6 +469,7 @@ impl WindowId {
             Self::Map => "map",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
+            Self::Scripts => "scripts",
         })
     }
 
@@ -493,6 +500,11 @@ impl WindowId {
     pub(crate) const fn describe(self) -> Description {
         match self {
             // Clear of the skin's spell gems along the left edge.
+            Self::Scripts => Description {
+                layer: Layer::Tool,
+                opening: Opening::Own,
+                ..floating("SCRIPTS", Placement::TopLeft(80.0, 48.0), true, &[])
+            },
             Self::Status => hud("", Placement::TopLeft(56.0, 16.0), &["POSITION"]),
             Self::Target => hud(
                 "",
