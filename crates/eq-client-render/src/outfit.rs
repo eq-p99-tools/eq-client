@@ -134,6 +134,17 @@ fn shape_of(asset: &CharacterAsset, race: u32, look: &Appearance, helm: bool) ->
     )
 }
 
+type Characters<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut super::character::AnimatedCharacter,
+        Option<&'static super::entities::RemoteEntity>,
+        Option<&'static super::select_preview::Look>,
+    ),
+    Without<super::creation_preview::Figure>,
+>;
+
 /// Redraws a character's parts and held items whenever its gear changes:
 /// other spawns from their spawn record and wear changes, a character
 /// shown at character select from its list's look, the player and the
@@ -147,11 +158,7 @@ pub(super) fn dress(
         Res<super::options::OptionsState>,
     ),
     (mut wardrobe, mut library): (ResMut<Wardrobe>, ResMut<super::item_models::ItemLibrary>),
-    mut characters: Query<(
-        &mut super::character::AnimatedCharacter,
-        Option<&super::entities::RemoteEntity>,
-        Option<&super::select_preview::Look>,
-    )>,
+    mut characters: Characters<'_, '_>,
     mut parts: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut Visibility)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {

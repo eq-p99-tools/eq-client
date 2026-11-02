@@ -511,6 +511,7 @@ fn main() {
         }
     };
     let preview = Preview {
+        creation: None,
         entities: arguments.demo_entities,
         inventory: arguments.demo_inventory,
         bank: arguments.demo_bank,

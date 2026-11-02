@@ -44,6 +44,8 @@ impl Draft {
                 start_zone: 1,
                 stats: [0; 7],
                 face: 0,
+                cosmetics: creation::Cosmetics::default(),
+                tutorial: false,
             },
         };
         draft.reconcile();
@@ -113,6 +115,8 @@ impl Draft {
         if !cities.iter().any(|city| city.start_zone == c.start_zone) {
             c.start_zone = cities.first().map_or(0, |city| city.start_zone);
         }
+        self.rules.appearance(c.race, c.gender).reconcile(c);
+        c.tutorial &= self.rules.offers_tutorial();
     }
 
     /// Base stats and the class's points to distribute.
@@ -206,6 +210,16 @@ impl Draft {
             .any(|(stat, base)| *stat > (base + 25).min(150))
         {
             return Err("A stat exceeds its creation limit.".into());
+        }
+        if !self
+            .rules
+            .appearance(character.race, character.gender)
+            .accepts(&character)
+        {
+            return Err("Choose an available appearance.".into());
+        }
+        if character.tutorial && !self.rules.offers_tutorial() {
+            return Err("This server does not offer the tutorial.".into());
         }
         character.validate().map_err(|error| error.to_string())?;
         Ok(character)

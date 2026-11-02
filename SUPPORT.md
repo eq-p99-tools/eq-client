@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `652179282165579ab935ab89cfb91f48e6b7baa5`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/652179282165579ab935ab89cfb91f48e6b7baa5/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `73a1935138b62f412c111696f0e133ff47403cae`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/73a1935138b62f412c111696f0e133ff47403cae/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -63,15 +63,19 @@ server either fully tested or wholly untested based on one of them.
 The native client still has incomplete model/UI coverage, swimming, client-side
 same-zone teleporter detection and some cooldown/resource information. Character
 creation has UI and scenario paths on all four policies; deletion is unavailable.
-The creation form includes classic face selection, with other cosmetics using
-defaults and no creation model preview. [Gameplay](docs/gameplay.md) and
-[Assets](docs/assets.md) describe practical limitations.
+The creation form includes the appearance choices supported by each policy,
+with a model preview from the user's installation. Classic/Titanium names come
+from the world; EQMac uses a local generator. Titanium also offers tutorial
+entry. [Gameplay](docs/gameplay.md) and [Assets](docs/assets.md) describe practical
+limitations outside creation.
 
 Creation choices were checked against the installed clients' functional rules.
 Synthetic tests cover all offered race/class combinations, deity/city choices,
-expansion limits, both packet generations, refusals, repeated submissions and
-stale lists. Quarm creation was checked against its own published world handlers
-and record layout. These checks add no live-server creation certification.
+expansion limits, all offered cosmetic values, both packet generations,
+refusals, repeated submissions, stale lists and delayed name suggestions.
+Offline checks cover all 30 playable race/gender models and the creation UI.
+Quarm creation was checked against its own published world handlers and record
+layout. These checks add no live-server creation certification.
 
 For live checks, record the client and network commits, server policy, steps,
 duration and result. Test initial admission, continued connection, movement,

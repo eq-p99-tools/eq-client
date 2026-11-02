@@ -16,6 +16,12 @@ complete coverage for every race, armor set, animation or custom UI atlas.
 Terrain, collision and zone regions share coordinate conversions in
 `eq-client-axes`.
 
+Character creation also previews Luclin models where its server policy uses
+those appearance options. It reads layered face textures, hair/beard attachments
+and the installed executable's color palette locally. See the
+[creation render check](development.md#character-creation-render-check) for an
+offline probe and repeatable screenshots.
+
 Nearby entity models follow the camera's scene reach; `--entity-distance` can
 restrict loading further. There is no fixed 200-entity count cap. Distant entities
 retain game state without model/animation work, and the map can still display

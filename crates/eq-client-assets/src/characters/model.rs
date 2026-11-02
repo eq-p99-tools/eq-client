@@ -16,6 +16,10 @@ use super::{invalid, resolve};
 use crate::skeleton::{LocalTransform, Rest, Skeleton, Skin, compose_hierarchy};
 use crate::{LoadError, MaterialMode, ZonePrimitive, ZoneTexture, load_texture, stage_mesh};
 
+#[path = "appearance.rs"]
+mod appearance;
+pub use appearance::{CreationAppearance, load_creation_character};
+
 /// The clip a model plays standing still.
 pub const STANDING_CLIP: &str = "P01";
 
@@ -28,8 +32,8 @@ pub struct CharacterAsset {
     pub primitives: Vec<ZonePrimitive>,
     /// Locally decoded diffuse textures.
     pub textures: Vec<ZoneTexture>,
-    /// Per primitive, the material it draws with in its base look, in upper
-    /// case, such as `HUMCH0001_MDF`.
+    /// Per primitive, the selected material in upper case, such as
+    /// `HUMCH0001_MDF`; initially the model's base look.
     pub materials: Vec<Option<String>>,
     /// Per primitive, the piece of the model it belongs to.
     pub pieces: Vec<Piece>,
@@ -43,6 +47,8 @@ pub struct CharacterAsset {
     skins: Vec<Skin>,
     /// Bones held items attach to, in [`Attachment`] order.
     attachments: [Option<usize>; 3],
+    cosmetics: [Option<usize>; 2],
+    head: Option<usize>,
 }
 
 /// Which interchangeable piece of a classic model a mesh is. Models swap
@@ -159,6 +165,38 @@ struct AnimationTrack {
 }
 
 impl CharacterAsset {
+    /// Applies a material selection to this private model copy, decoding only
+    /// changed textures. Call off the frame thread before uploading a preview.
+    ///
+    /// # Errors
+    /// Returns an error if an installed replacement texture cannot be read.
+    pub fn dress_materials(&mut self, choose: impl Fn(&str) -> String) -> Result<(), LoadError> {
+        let mut replaced = HashMap::new();
+        for index in 0..self.primitives.len() {
+            let Some(base) = &self.materials[index] else {
+                continue;
+            };
+            let name = choose(base);
+            if name == *base || !self.has_material(&name) {
+                continue;
+            }
+            let texture = if let Some(value) = replaced.get(&name) {
+                *value
+            } else if let Some((texture, mode)) = self.material_texture(&name)? {
+                let index = self.textures.len();
+                self.textures.push(texture);
+                replaced.insert(name.clone(), (index, mode));
+                (index, mode)
+            } else {
+                continue;
+            };
+            self.primitives[index].texture = Some(texture.0);
+            self.primitives[index].material_mode = texture.1;
+            self.materials[index] = Some(name);
+        }
+        Ok(())
+    }
+
     /// Height of the base-pose mesh in native EQ world units.
     pub fn height(&self) -> f32 {
         self.span().map_or(1.0, |(min, max)| (max - min).max(1.0))
@@ -278,6 +316,44 @@ impl CharacterAsset {
                 )
             })
             .reduce(f32::max)
+    }
+
+    /// Posed vertices of the bare head and its attached hair/beard. Luclin
+    /// meshes share body vertices, so follow the head's bone descendants and
+    /// the primitive's actual indices instead of treating a whole mesh as head.
+    #[must_use]
+    pub fn head_points(&self, joints: &[Mat4]) -> Vec<Vec3> {
+        let belongs = |mut bone| {
+            loop {
+                if Some(bone) == self.head {
+                    return true;
+                }
+                let Some(parent) = self.parents.get(bone).copied().flatten() else {
+                    return false;
+                };
+                bone = parent;
+            }
+        };
+        self.primitives
+            .iter()
+            .zip(&self.skins)
+            .zip(&self.pieces)
+            .filter(|(_, piece)| piece.base())
+            .flat_map(|((primitive, skin), piece)| {
+                primitive.indices.iter().filter_map(move |index| {
+                    let index = *index as usize;
+                    let bone = *skin.bones.get(index)?;
+                    if !matches!(piece, Piece::Head(0)) && !belongs(bone) {
+                        return None;
+                    }
+                    Some(
+                        joints
+                            .get(bone)?
+                            .transform_point3(Vec3::from_array(*skin.positions.get(index)?)),
+                    )
+                })
+            })
+            .collect()
     }
 
     /// How many bones the skeleton has, which is how many joints
@@ -559,6 +635,8 @@ impl CharacterAsset {
                 bones: vec![1; 3],
             }],
             attachments: [Some(1), None, None],
+            cosmetics: [None; 2],
+            head: None,
         };
         let pose = asset.pose("", 0.0);
         for (primitive, pose) in asset.primitives.iter_mut().zip(pose) {
@@ -585,12 +663,30 @@ pub fn load_character(path: &Path, model: &str) -> Result<CharacterAsset, LoadEr
 ///
 /// # Errors
 /// As [`load_character`], for the model's own archive only.
-#[allow(clippy::too_many_lines)]
 pub(super) fn load_with_donors(
     path: &Path,
     model: &str,
     donor_archives: &[PathBuf],
     parsed: &super::DonorArchives,
+) -> Result<CharacterAsset, LoadError> {
+    load_with_source(
+        path,
+        model,
+        donor_archives,
+        parsed,
+        animation_source(&model.to_ascii_uppercase()),
+    )
+}
+
+// Classic and Luclin models have different skeleton families. The caller that
+// selects a model generation also selects its animation source.
+#[allow(clippy::too_many_lines)]
+pub(super) fn load_with_source(
+    path: &Path,
+    model: &str,
+    donor_archives: &[PathBuf],
+    parsed: &super::DonorArchives,
+    source: Option<&str>,
 ) -> Result<CharacterAsset, LoadError> {
     let (mut archive, bytes) = open_world(path)?;
     let doc = WldDoc::parse(&bytes)
@@ -619,7 +715,6 @@ pub(super) fn load_with_donors(
         .collect::<Result<Vec<_>, _>>()?;
     let parents = bones.parents;
     let mut clips = HashMap::new();
-    let source = animation_source(&name);
     let borrowed = gather_clips(&doc, &name, &bone_names, source, true, &mut clips);
     // A donor kept in another archive (the dwarf's movements in global_chr for
     // a zone's Coldain) lends its tracks from there.
@@ -719,6 +814,15 @@ pub(super) fn load_with_donors(
         Attachment::Shield,
     ]
     .map(|point| attachment_bone(&bone_names, &name, point));
+    let cosmetics = ["HAIR_POINT", "BEARD_POINT"].map(|point| {
+        let track = format!("{name}{point}_TRACK");
+        bone_names
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(&track))
+    });
+    let head = bone_names
+        .iter()
+        .position(|bone| bone.eq_ignore_ascii_case(&format!("{name}HEHEAD_TRACK")));
     let mut asset = CharacterAsset {
         name,
         primitives,
@@ -732,6 +836,8 @@ pub(super) fn load_with_donors(
         clips,
         skins,
         attachments,
+        cosmetics,
+        head,
     };
     let pose = asset.pose("", 0.0);
     for (primitive, pose) in asset.primitives.iter_mut().zip(pose) {
@@ -782,9 +888,19 @@ fn gather_clips(
         let Some(track_name) = doc.get_string(track.name_reference) else {
             continue;
         };
-        let Some((code, suffix)) = track_name.split_at_checked(3) else {
+        let Some((code, tail)) = track_name.split_at_checked(3) else {
             continue;
         };
+        // Luclin adds a variant letter after the three-character action
+        // (P01AHUM...); use its A variant for the ordinary standing/action clip.
+        let suffix =
+            if tail.starts_with(name) || source.is_some_and(|source| tail.starts_with(source)) {
+                tail
+            } else if let Some(tail) = tail.strip_prefix('A') {
+                tail
+            } else {
+                continue;
+            };
         let inherited = source.is_some_and(|source| suffix.starts_with(source));
         let Some(index) = bone_names.iter().position(|bone| {
             (own && *bone == suffix)
@@ -883,6 +999,7 @@ fn animation_source(model: &str) -> Option<&'static str> {
         "PIF" => "FAF",
         "FDF" => "FDR",
         "FRG" => "FRO",
+        "FRF" => "FRM",
         "STG" => "FSG",
         "GAM" | "IMP" => "GAR",
         "GOL" | "GOM" => "GIA",
@@ -920,6 +1037,7 @@ mod tests {
         assert_eq!(animation_source("COK"), Some("DWM"));
         assert_eq!(animation_source("KOB"), Some("WER"));
         assert_eq!(animation_source("HUM"), Some("ELM"));
+        assert_eq!(animation_source("FRF"), Some("FRM"));
         assert_eq!(animation_source("GNN"), None);
         assert_eq!(animation_source("CL"), None);
     }
@@ -940,7 +1058,7 @@ mod tests {
                 assert_eq!(animation_source(donor), None, "{model} -> {donor}");
             }
         }
-        assert_eq!(rows, 99);
+        assert_eq!(rows, 100);
     }
 
     #[test]
@@ -1006,6 +1124,8 @@ mod tests {
                 bones: vec![0],
             }],
             attachments: [Some(0), None, None],
+            cosmetics: [None; 2],
+            head: None,
         };
         for time in [1.0, 1.5, 2.0, 10.0] {
             assert!((asset.pose_held("P02", time)[0].positions[0][0] + 1.0).abs() < 0.0001);
@@ -1046,6 +1166,8 @@ mod tests {
             ]),
             skins: Vec::new(),
             attachments: [None; 3],
+            cosmetics: [None; 2],
+            head: None,
         };
         assert!((asset.clip_seconds("C05").unwrap() - 0.8).abs() < 0.0001);
         // A clip with no tracks, or none at all, has no length.
@@ -1083,6 +1205,8 @@ mod tests {
             ]),
             skins: Vec::new(),
             attachments: [None; 3],
+            cosmetics: [None; 2],
+            head: None,
         };
         assert!(!asset.clip_moves_body("L01"));
         assert!(asset.clip_moves_body("L02"));
@@ -1153,6 +1277,8 @@ mod tests {
             clips: HashMap::new(),
             skins: Vec::new(),
             attachments: [Some(0), None, None],
+            cosmetics: [None; 2],
+            head: None,
         };
         let (_, attachments) = asset.pose_with_attachments("", 0.0, true, &[]);
         let hand = attachments[Attachment::RightHand.index()].unwrap();
@@ -1180,6 +1306,8 @@ mod tests {
             clips: HashMap::new(),
             skins: vec![at(&[0.0, 6.0]), at(&[3.0, 4.5]), at(&[5.0])],
             attachments: [None; 3],
+            cosmetics: [None; 2],
+            head: None,
         };
         let still = [Mat4::IDENTITY];
         // Arms raised over a lowered head: the name stays with the head.
@@ -1234,6 +1362,8 @@ mod tests {
                     bones: vec![1],
                 }],
                 attachments: [None; 3],
+                cosmetics: [None; 2],
+                head: None,
             };
             let pose = asset.pose("", 0.0);
             asset.primitives[0].positions = pose[0].positions.clone();
@@ -1284,6 +1414,8 @@ mod tests {
                 bones: vec![0],
             }],
             attachments: [None; 3],
+            cosmetics: [None; 2],
+            head: None,
         };
         // Skinning in WLD space, then converting to the renderer's frame.
         let wld = bone.matrix();

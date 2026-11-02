@@ -41,6 +41,7 @@ mod clicks;
 mod coins;
 mod combat;
 mod confirm;
+mod creation_preview;
 mod daylight;
 mod device_pixels;
 mod display_report;

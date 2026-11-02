@@ -70,6 +70,17 @@ pub struct Creation {
     pub outcome: crate::creation::CreationOutcome,
 }
 
+/// A generation request's answer, scoped to its character list and editor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NameSuggestion {
+    /// Character list identity.
+    pub selection_id: u64,
+    /// Frontend request identity.
+    pub request_id: u64,
+    /// Valid suggestion, or no suggestion on failure.
+    pub name: Option<String>,
+}
+
 /// The worlds the login server listed for the player to choose from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerList {
@@ -169,6 +180,8 @@ pub struct ClientWorld {
     /// The world's answers to the player's character creations, counted, and
     /// the last of them.
     creation: Option<Creation>,
+    name_suggestion: Option<NameSuggestion>,
+    name_generator: Option<bool>,
     /// The world's expansion mask, when it reported one.
     expansions: Option<crate::rules::Expansions>,
     /// The last revision given to a spawn, which never repeats.
@@ -589,7 +602,13 @@ impl ClientWorld {
             }
 
             // The world's player-versus-player ruleset decides names' colours.
-            WorldEvent::Rules(rules) => self.pvp_rule = rules.pvp,
+            WorldEvent::Rules(rules) => {
+                self.pvp_rule = rules.pvp;
+                if let Some(enabled) = rules.name_generator { self.name_generator = Some(enabled); }
+            }
+            WorldEvent::NameSuggestion { selection_id, request_id, name } => {
+                self.name_suggestion = Some(NameSuggestion { selection_id: *selection_id, request_id: *request_id, name: name.clone() });
+            }
             WorldEvent::Expansions(expansions) => self.expansions = Some(*expansions),
 
             // Nothing here shows the world's other rules,

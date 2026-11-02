@@ -14,13 +14,14 @@ use bevy::{
 use eq_client_core::{
     ClientCommand,
     character_creation::{Draft, STATS},
-    creation::{CLASSES, CreationOutcome, DEITIES, RACES},
+    creation::{CLASSES, CreationOutcome, DEITIES, RACES, appearance::Feature, names},
     world::ClientWorld,
 };
 
 #[derive(Resource, Default)]
 pub(super) struct Editor {
     form: Option<Form>,
+    request_id: u64,
 }
 
 #[derive(Debug)]
@@ -31,10 +32,18 @@ struct Form {
     typing: bool,
     select_all: bool,
     pending: Option<(String, Option<u64>)>,
+    generating: Option<u64>,
+    generator_enabled: bool,
     message: String,
 }
 
 impl Editor {
+    pub(super) fn preview(&self) -> Option<(&eq_client_core::creation::NewCharacter, bool)> {
+        self.form
+            .as_ref()
+            .map(|form| (&form.draft.character, form.draft.rules.classic_appearance()))
+    }
+
     pub(super) fn active(&self) -> bool {
         self.form.is_some()
     }
@@ -53,8 +62,22 @@ impl Editor {
             typing: true,
             select_all: false,
             pending: None,
+            generating: None,
+            generator_enabled: world.name_generator(),
             message: String::new(),
         });
+    }
+
+    pub(super) fn open_preview(
+        &mut self,
+        selection: &Selection,
+        world: &ClientWorld,
+        draft: Draft,
+    ) {
+        self.open(selection, world);
+        if let Some(form) = self.form.as_mut() {
+            form.draft = draft;
+        }
     }
 
     /// A refreshed list invalidates the draft. Success selects the new
@@ -68,6 +91,21 @@ impl Editor {
             self.form = None;
             return;
         };
+        form.generator_enabled = world.name_generator();
+        if let Some(answer) = world.name_suggestion().filter(|answer| {
+            answer.selection_id == form.selection_id && Some(answer.request_id) == form.generating
+        }) {
+            form.generating = None;
+            if let Some(name) = &answer.name {
+                form.draft.name.clone_from(name);
+                form.typing = form.page == 0;
+                form.select_all = true;
+                form.message.clear();
+            } else {
+                form.message =
+                    "No name suggestion received. You can type a name or try again.".into();
+            }
+        }
         if let Some((name, before)) = &form.pending
             && let Some(answer) = world
                 .creation()
@@ -103,6 +141,38 @@ impl Editor {
 }
 
 impl Form {
+    fn generate(&mut self, id: u64, online: &OnlineState, outbox: &Outbox) {
+        if self.generating.is_some() || self.pending.is_some() || !self.generator_enabled {
+            return;
+        }
+        let c = &self.draft.character;
+        match self.draft.rules.name_source() {
+            names::Source::Local => match names::local(c.race, c.gender) {
+                Ok(name) => {
+                    self.draft.name = name;
+                    self.select_all = true;
+                    self.typing = true;
+                    self.message.clear();
+                }
+                Err(error) => self.message = error.to_string(),
+            },
+            names::Source::World => match outbox.send(
+                online.world(),
+                ClientCommand::GenerateName {
+                    selection_id: self.selection_id,
+                    request_id: id,
+                    race: c.race,
+                    gender: c.gender,
+                },
+            ) {
+                Ok(()) => {
+                    self.generating = Some(id);
+                    self.message = "Asking the server for a name...".into();
+                }
+                Err(error) => self.message = error.text().into(),
+            },
+        }
+    }
     fn submit(&mut self, online: &OnlineState, outbox: &Outbox) {
         if self.pending.is_some() {
             return;
@@ -124,6 +194,7 @@ impl Form {
                     },
                 ) {
                     Ok(()) => {
+                        self.generating = None;
                         self.pending =
                             Some((name, online.world().creation().map(|answer| answer.count)));
                         self.message = "Waiting for the server to approve the name and create your character...".into();
@@ -143,9 +214,14 @@ pub(super) enum Action {
     Race(u32),
     Class(u32),
     Gender(u32),
-    Face(bool),
+    Feature(Feature, bool),
+    Generate,
+    RandomizeAppearance,
+    Turn(bool),
+    Zoom,
     Deity(u32),
     City(u32),
+    Tutorial(bool),
     Point(usize, bool),
     Allocate,
     Reset,
@@ -185,6 +261,7 @@ pub(super) fn input(
     mut online: ResMut<OnlineState>,
     front: Res<login::FrontEnd>,
     outbox: Res<Outbox>,
+    mut preview: ResMut<crate::creation_preview::Preview>,
     keys: crate::keys::Keys,
     buttons: crate::clicks::Clicks<Action>,
     mut typed: MessageReader<KeyboardInput>,
@@ -197,42 +274,24 @@ pub(super) fn input(
     if front.screen(&online) != login::Screen::Characters {
         editor.form = None;
     }
+    // Unique across closing/reopening drafts; late answers cannot edit a new form.
+    let actions = buttons.iter().copied().collect::<Vec<_>>();
+    if actions.contains(&Action::Generate) {
+        editor.request_id = editor.request_id.wrapping_add(1);
+    }
+    let request_id = editor.request_id;
     let Some(form) = editor.form.as_mut() else {
         return;
     };
     if !keys.window_focused() || keys.editing_script() || form.pending.is_some() {
         return;
     }
-    let actions = buttons.iter().copied().collect::<Vec<_>>();
     if actions.contains(&Action::Cancel) || keys.input.just_pressed(KeyCode::Escape) {
         editor.form = None;
         return;
     }
     for action in actions {
-        match action {
-            Action::Name => form.typing = true,
-            Action::Race(id) => form.draft.race(id),
-            Action::Class(id) => form.draft.class(id),
-            Action::Gender(id) => form.draft.character.gender = id,
-            Action::Face(next) => {
-                form.draft.character.face =
-                    (form.draft.character.face + if next { 1 } else { 7 }) % 8;
-            }
-            Action::Deity(id) => form.draft.deity(id),
-            Action::City(id) => form.draft.character.start_zone = id,
-            Action::Point(index, add) => form.draft.point(index, add),
-            Action::Allocate => form.draft.allocate(),
-            Action::Reset => form.draft.reset_stats(),
-            Action::Page(page) => {
-                form.page = page;
-                form.typing = false;
-            }
-            Action::Submit => form.submit(&online, &outbox),
-            Action::Cancel => (),
-        }
-        if !matches!(action, Action::Submit) {
-            form.message.clear();
-        }
+        act(form, action, request_id, &online, &outbox, &mut preview);
         if form.pending.is_some() {
             break;
         }
@@ -251,6 +310,7 @@ pub(super) fn input(
         }
         for key in typing {
             if key.logical_key == Key::Backspace || key.logical_key == Key::Delete {
+                form.generating = None;
                 if form.select_all {
                     form.draft.name.clear();
                     form.select_all = false;
@@ -270,6 +330,7 @@ pub(super) fn input(
                         form.select_all = false;
                     }
                     if form.draft.name.chars().count() < 30 {
+                        form.generating = None;
                         form.draft.name.push(character);
                     }
                 }
@@ -278,7 +339,7 @@ pub(super) fn input(
         }
     }
     if keys.input.just_pressed(KeyCode::Enter) || keys.input.just_pressed(KeyCode::NumpadEnter) {
-        if form.page < 2 {
+        if form.page < 3 {
             form.page += 1;
             form.typing = false;
         } else {
@@ -287,16 +348,71 @@ pub(super) fn input(
     }
 }
 
+fn act(
+    form: &mut Form,
+    action: Action,
+    request_id: u64,
+    online: &OnlineState,
+    outbox: &Outbox,
+    preview: &mut crate::creation_preview::Preview,
+) {
+    match action {
+        Action::Name => form.typing = true,
+        Action::Race(id) => {
+            form.generating = None;
+            form.draft.race(id);
+        }
+        Action::Class(id) => form.draft.class(id),
+        Action::Gender(id) => {
+            form.generating = None;
+            form.draft.character.gender = id;
+            form.draft.reconcile();
+        }
+        Action::Feature(feature, next) => {
+            let c = &mut form.draft.character;
+            form.draft
+                .rules
+                .appearance(c.race, c.gender)
+                .step(c, feature, next);
+        }
+        Action::Generate => form.generate(request_id, online, outbox),
+        Action::RandomizeAppearance => {
+            let c = &mut form.draft.character;
+            form.draft.rules.appearance(c.race, c.gender).randomize(c);
+        }
+        Action::Turn(right) => preview.angle += if right { 0.35 } else { -0.35 },
+        Action::Zoom => preview.close = !preview.close,
+        Action::Deity(id) => form.draft.deity(id),
+        Action::City(id) => form.draft.character.start_zone = id,
+        Action::Tutorial(start) => {
+            form.draft.character.tutorial = start && form.draft.rules.offers_tutorial();
+        }
+        Action::Point(index, add) => form.draft.point(index, add),
+        Action::Allocate => form.draft.allocate(),
+        Action::Reset => form.draft.reset_stats(),
+        Action::Page(page) => {
+            form.page = page;
+            form.typing = false;
+        }
+        Action::Submit => form.submit(online, outbox),
+        Action::Cancel => (),
+    }
+    if !matches!(action, Action::Submit | Action::Generate) {
+        form.message.clear();
+    }
+}
+
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn present(
     mut commands: Commands,
     editor: Res<Editor>,
+    preview: Res<crate::creation_preview::Preview>,
     roots: Query<Entity, With<Root>>,
     panels: Query<&ScrollPosition, With<Panel>>,
     mut previous: Local<String>,
     mut previous_page: Local<Option<u8>>,
 ) {
-    let signature = format!("{:?}", editor.form);
+    let signature = format!("{:?} {:?} {}", editor.form, preview.status, preview.close);
     if *previous == signature {
         return;
     }
@@ -323,7 +439,7 @@ pub(super) fn present(
             }, BackgroundColor(theme::TITLE_BAR))).with_children(|panel| {
                 theme::label(panel, "CREATE CHARACTER", Size::Display);
                 row(panel, |row| {
-                    for (page, title) in [(0, "1  Identity"), (1, "2  Attributes"), (2, "3  Home & review")] {
+                    for (page, title) in [(0, "1  Identity"), (1, "2  Appearance"), (2, "3  Attributes"), (3, "4  Home & review")] {
                         button(row, Action::Page(page), title, form.pending.is_none(), form.page == page);
                     }
                 });
@@ -335,7 +451,8 @@ pub(super) fn present(
                 }
                 match form.page {
                     0 => identity(panel, form),
-                    1 => attributes(panel, form),
+                    1 => appearance(panel, form, &preview),
+                    2 => attributes(panel, form),
                     _ => home(panel, form),
                 }
                 let reason = form.draft.request().err();
@@ -344,7 +461,7 @@ pub(super) fn present(
                 row(panel, |row| {
                     button(row, Action::Cancel, "Cancel", true, false);
                     if form.page > 0 { button(row, Action::Page(form.page - 1), "Back", true, false); }
-                    if form.page < 2 { button(row, Action::Page(form.page + 1), "Next", true, true); }
+                    if form.page < 3 { button(row, Action::Page(form.page + 1), "Next", true, true); }
                     else { button(row, Action::Submit, "Create Character", reason.is_none(), true); }
                 });
             });
@@ -379,7 +496,27 @@ fn identity(panel: &mut ChildSpawnerCommands, form: &Form) {
     } else {
         format!("{}{}", draft.name, if form.typing { " |" } else { "" })
     };
-    button(panel, Action::Name, &name, true, form.typing);
+    row(panel, |row| {
+        button(row, Action::Name, &name, true, form.typing);
+        button(
+            row,
+            Action::Generate,
+            if form.generating.is_some() {
+                "Generating..."
+            } else {
+                "Generate name"
+            },
+            form.generator_enabled && form.generating.is_none(),
+            false,
+        );
+    });
+    if !form.generator_enabled {
+        theme::label(
+            panel,
+            "This server has disabled name generation.",
+            Size::Label,
+        );
+    }
     theme::label(panel, "Race", Size::Label);
     row(panel, |row| {
         for (id, name) in draft.rules.races(draft.expansions) {
@@ -414,14 +551,99 @@ fn identity(panel: &mut ChildSpawnerCommands, form: &Form) {
                 draft.character.gender == id,
             );
         }
-        button(row, Action::Face(false), "< Face", true, false);
-        theme::label(
-            row,
-            &format!("{} / 8", draft.character.face + 1),
-            Size::Label,
-        );
-        button(row, Action::Face(true), "Face >", true, false);
     });
+}
+
+fn appearance(
+    panel: &mut ChildSpawnerCommands,
+    form: &Form,
+    preview: &crate::creation_preview::Preview,
+) {
+    row(panel, |columns| {
+        columns
+            .spawn(Node {
+                width: px(340),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(10),
+                ..default()
+            })
+            .with_children(|panel| {
+                appearance_controls(panel, form);
+                button(
+                    panel,
+                    Action::RandomizeAppearance,
+                    "Randomize appearance",
+                    true,
+                    false,
+                );
+            });
+        columns
+            .spawn(Node {
+                width: px(300),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
+                ..default()
+            })
+            .with_children(|panel| {
+                if preview.status.is_empty() {
+                    panel.spawn((
+                        ImageNode::new(preview.image.clone()),
+                        Node {
+                            width: px(280),
+                            height: px(345),
+                            ..default()
+                        },
+                    ));
+                } else {
+                    theme::label(panel, &preview.status, Size::Label);
+                }
+                row(panel, |row| {
+                    button(row, Action::Turn(false), "Turn left", true, false);
+                    button(row, Action::Turn(true), "Turn right", true, false);
+                    button(
+                        row,
+                        Action::Zoom,
+                        if preview.close {
+                            "Full body"
+                        } else {
+                            "Face close-up"
+                        },
+                        true,
+                        false,
+                    );
+                });
+            });
+    });
+}
+
+fn appearance_controls(panel: &mut ChildSpawnerCommands, form: &Form) {
+    let c = &form.draft.character;
+    for (feature, values) in form.draft.rules.appearance(c.race, c.gender).fields() {
+        row(panel, |row| {
+            row.spawn(Node {
+                width: px(170),
+                ..default()
+            })
+            .with_children(|row| {
+                theme::label(row, feature.label(), Size::Label);
+            });
+            button(row, Action::Feature(feature, false), "<", true, false);
+            theme::label(
+                row,
+                &if feature.get(c) == 255 {
+                    "None".to_owned()
+                } else {
+                    let index = values
+                        .iter()
+                        .position(|value| *value == feature.get(c))
+                        .unwrap_or(0);
+                    format!("{} / {}", index + 1, values.len())
+                },
+                Size::Label,
+            );
+            button(row, Action::Feature(feature, true), ">", true, false);
+        });
+    }
 }
 
 fn attributes(panel: &mut ChildSpawnerCommands, form: &Form) {
@@ -488,6 +710,24 @@ fn home(panel: &mut ChildSpawnerCommands, form: &Form) {
             );
         }
     });
+    if draft.rules.offers_tutorial() {
+        row(panel, |row| {
+            button(
+                row,
+                Action::Tutorial(false),
+                "Start in home city",
+                true,
+                !c.tutorial,
+            );
+            button(
+                row,
+                Action::Tutorial(true),
+                "Start in tutorial",
+                true,
+                c.tutorial,
+            );
+        });
+    }
     let label = |choices: &[(u32, &'static str)], id| {
         choices
             .iter()
@@ -518,9 +758,23 @@ fn home(panel: &mut ChildSpawnerCommands, form: &Form) {
     theme::label(
         panel,
         &format!(
-            "{} · Face {} · Default hair and eyes",
+            "{} · {}",
             if c.gender == 0 { "Male" } else { "Female" },
-            c.face + 1
+            draft
+                .rules
+                .appearance(c.race, c.gender)
+                .fields()
+                .map(|(feature, values)| {
+                    let value = feature.get(c);
+                    let choice = if value == 255 {
+                        "None".into()
+                    } else {
+                        (values.iter().position(|v| *v == value).unwrap_or(0) + 1).to_string()
+                    };
+                    format!("{} {choice}", feature.label())
+                })
+                .collect::<Vec<_>>()
+                .join(" · ")
         ),
         Size::Label,
     );
@@ -542,6 +796,87 @@ mod tests {
         form.draft.allocate();
         let (tx, rx) = sync_channel(1);
         (editor, online, Outbox::new(Some(tx)), rx)
+    }
+
+    #[test]
+    fn name_generation_obeys_policy_and_never_creates_a_character() {
+        let (mut editor, mut online, outbox, rx) = setup();
+        let form = editor.form.as_mut().unwrap();
+        form.generate(1, &online, &outbox);
+        assert_ne!(form.draft.name, "testhero");
+        assert!(form.generating.is_none());
+        assert!(rx.try_recv().is_err());
+        form.draft.rules = Rules::Titanium;
+        form.generate(2, &online, &outbox);
+        form.generate(3, &online, &outbox);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ClientCommand::GenerateName {
+                selection_id: 7,
+                request_id: 2,
+                race: 1,
+                gender: 0
+            }
+        ));
+        assert!(rx.try_recv().is_err());
+        crate::online::testing::news(
+            &mut online,
+            [WorldEvent::NameSuggestion {
+                selection_id: 7,
+                request_id: 1,
+                name: Some("Stalehero".into()),
+            }],
+        );
+        editor.refresh(&mut online);
+        assert_eq!(editor.form.as_ref().unwrap().generating, Some(2));
+        crate::online::testing::news(
+            &mut online,
+            [WorldEvent::NameSuggestion {
+                selection_id: 7,
+                request_id: 2,
+                name: Some("Freshhero".into()),
+            }],
+        );
+        editor.refresh(&mut online);
+        let form = editor.form.as_mut().unwrap();
+        assert_eq!(form.draft.name, "Freshhero");
+        assert!(form.generating.is_none());
+        form.generate(4, &online, &outbox);
+        rx.try_recv().unwrap();
+        form.submit(&online, &outbox);
+        assert!(
+            matches!(rx.try_recv().unwrap(), ClientCommand::CreateCharacter { character, .. } if character.name == "Freshhero")
+        );
+        crate::online::testing::news(
+            &mut online,
+            [WorldEvent::NameSuggestion {
+                selection_id: 7,
+                request_id: 4,
+                name: Some("Latehero".into()),
+            }],
+        );
+        editor.refresh(&mut online);
+        assert_eq!(editor.form.as_ref().unwrap().draft.name, "Freshhero");
+    }
+
+    #[test]
+    fn a_disabled_generator_and_full_queue_preserve_the_players_name() {
+        let (mut editor, online, outbox, rx) = setup();
+        let form = editor.form.as_mut().unwrap();
+        form.generator_enabled = false;
+        form.generate(1, &online, &outbox);
+        assert_eq!(form.draft.name, "testhero");
+        form.generator_enabled = true;
+        form.draft.rules = Rules::Classic;
+        form.generate(2, &online, &outbox);
+        form.generating = None; // Manual editing cancels attribution of the reply.
+        form.draft.name = "Chosenhero".into();
+        form.generate(3, &online, &outbox);
+        assert!(form.generating.is_none());
+        assert_eq!(form.draft.name, "Chosenhero");
+        assert!(rx.try_recv().is_ok());
+        form.generate(4, &online, &outbox);
+        assert_eq!(form.generating, Some(4));
     }
 
     #[test]
@@ -677,6 +1012,7 @@ mod tests {
         let (mut editor, online, outbox, rx) = setup();
         editor.form.as_mut().unwrap().draft.name.clear();
         let mut app = crate::testing::app();
+        app.init_resource::<crate::creation_preview::Preview>();
         app.insert_resource(editor)
             .insert_resource(online)
             .insert_resource(outbox)
@@ -731,7 +1067,7 @@ mod tests {
                 .resource::<crate::keys::Typing>()
                 .creating_character
         );
-        for page in [1, 2] {
+        for page in [1, 2, 3] {
             app.world_mut()
                 .resource_mut::<ButtonInput<KeyCode>>()
                 .press(KeyCode::Enter);
@@ -769,6 +1105,7 @@ mod tests {
     fn escape_cancels_locally_and_keeps_the_frame_claimed() {
         let (editor, online, outbox, rx) = setup();
         let mut app = crate::testing::app();
+        app.init_resource::<crate::creation_preview::Preview>();
         app.insert_resource(editor)
             .insert_resource(online)
             .insert_resource(outbox)

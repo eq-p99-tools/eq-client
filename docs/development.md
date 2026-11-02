@@ -93,12 +93,29 @@ syntax highlighting and reference pages together when extending the language.
 
 The offline example loads a user-owned Titanium installation and captures a
 hidden-window form with a synthetic name. It contacts no server. Run once per
-page (0 identity, 1 attributes, 2 home/review), keeping output outside Git:
+page (0 identity, 1 appearance, 2 attributes, 3 home/review), keeping output outside Git:
 
 ```console
 cargo run -p eq-client-render --example character_creation -- "/path/to/EverQuest" "/private/output/creation.png" 0
 ```
 
+Append `classic`, `titanium` or `eqmac`, a race ID, gender (0/1), and optionally
+`last` to inspect the last offered cosmetic choices. For example, append
+`eqmac 8 1 last` for a female dwarf. The synthetic draft opens in face close-up.
+
 The review page deliberately retains unspent points so its validation and
 disabled Create button can be inspected. State tests cover valid submission,
 refusal/retry, success, full accounts, cancellation and stale lists separately.
+
+The asset probe checks all 30 playable race/gender models, their standing
+animations, standing bounds, layered materials and creation attachments without
+opening a window:
+
+```console
+cargo run -p eq-client-assets --example inspect_creation -- "/path/to/EverQuest"
+```
+
+Appearance policy and packet tests exercise each offered cosmetic value for
+Classic, Titanium and EQMac. Name tests cover stale identities, single-flight
+requests, late replies, malformed responses and local generation. Offline
+render checks and synthetic wire tests do not establish live-server acceptance.

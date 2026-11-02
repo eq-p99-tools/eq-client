@@ -398,6 +398,7 @@ pub(super) fn install_overlays(app: &mut App) {
     );
     windows::register_layout(app);
     paperdoll::register(app);
+    crate::creation_preview::register(app);
     app.add_systems(
         Update,
         profile_files::follow
