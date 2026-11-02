@@ -625,6 +625,8 @@ pub(crate) struct Typing {
     pub logging_in: bool,
     /// A key assignment is being edited, including its finishing frame.
     pub rebinding: bool,
+    /// A script document or path field owns the keyboard.
+    pub editing_script: bool,
     /// This frame's Escape closed the chat line or left the quantity
     /// window's number, so nothing else takes it.
     pub escape_consumed: bool,
@@ -660,6 +662,7 @@ impl Keys<'_, '_> {
     /// Whether the game has the keyboard.
     pub(crate) fn focused(&self) -> bool {
         !self.typing.composing
+            && !self.typing.editing_script
             && !self.typing.counting
             && !self.typing.logging_in
             && !self.typing.rebinding
@@ -679,6 +682,16 @@ impl Keys<'_, '_> {
     /// Whether this frame's Escape belongs to the game, not to closing the chat.
     pub(crate) fn escape_free(&self) -> bool {
         self.focused() && !self.typing.escape_consumed
+    }
+
+    /// A separate text editor owns keys, including on the login screens.
+    pub(crate) fn editing_script(&self) -> bool {
+        self.typing.editing_script
+    }
+
+    /// A text field already used this frame's Escape press.
+    pub(crate) fn escape_claimed(&self) -> bool {
+        self.typing.escape_consumed || self.typing.editing_script
     }
 
     /// A fresh press of the action, while the game has the keyboard.

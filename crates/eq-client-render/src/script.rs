@@ -10,9 +10,18 @@
 //! script keeps reading complete lines appended to its file, under the same limits.
 //! `gm` steps send `#` commands only to a local `EQEmu` server, and `chat`
 //! steps speak only there.
+mod execution;
 mod parse;
 pub(crate) mod pointer;
+mod program;
 mod report;
+
+use execution::RunMode;
+pub use execution::{Phase, RunEvent, RunStatus};
+pub(crate) use execution::{Request, RunControl};
+pub use program::{Instruction, MAX_SOURCE_BYTES, ParseError, Program};
+mod source;
+pub use source::read_source;
 
 pub use parse::{
     AbilityPage, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step, TradeClick,
@@ -55,8 +64,10 @@ const SLOW_ROUTE_CALL: Duration = Duration::from_millis(5);
 /// Remaining steps and the one in progress.
 #[derive(Resource)]
 pub struct Script {
-    steps: VecDeque<Step>,
+    steps: VecDeque<QueuedStep>,
     current: Option<(Step, Duration)>,
+    progress: RunStatus,
+    mode: RunMode,
     held: Vec<KeyCode>,
     /// The movement commands a moving step holds itself, as the key map
     /// resolves a held key to them, so the step moves under any key table.
@@ -128,6 +139,13 @@ pub struct Script {
     created_before: Option<u64>,
 }
 
+/// A source location travels with its action rather than a parallel queue.
+#[derive(Clone, Debug, PartialEq)]
+struct QueuedStep {
+    step: Step,
+    line: Option<usize>,
+}
+
 /// A walk's frames while its route searches.
 #[derive(Clone, Copy)]
 struct SearchFrames {
@@ -151,7 +169,12 @@ impl Script {
     pub fn new(steps: Vec<Step>) -> Self {
         Self {
             accepted: steps.len(),
-            steps: steps.into(),
+            progress: RunStatus::queued(steps.len(), std::sync::Arc::from("")),
+            mode: RunMode::Continuous,
+            steps: steps
+                .into_iter()
+                .map(|step| QueuedStep { step, line: None })
+                .collect(),
             current: None,
             held: Vec::new(),
             acts: Vec::new(),
@@ -183,19 +206,48 @@ impl Script {
         }
     }
 
+    /// Queues a source snapshot, retaining line numbers for progress and errors.
+    #[must_use]
+    pub fn from_program(program: Program) -> Self {
+        let (source, instructions) = program.into_parts();
+        let total = instructions.len();
+        Self {
+            steps: instructions
+                .into_iter()
+                .map(|instruction| QueuedStep {
+                    step: instruction.step,
+                    line: Some(instruction.line),
+                })
+                .collect(),
+            accepted: total,
+            progress: RunStatus::queued(total, source),
+            ..Self::new(Vec::new())
+        }
+    }
+
+    /// The current run's typed progress, including its immutable source snapshot.
+    #[must_use]
+    pub const fn status(&self) -> &RunStatus {
+        &self.progress
+    }
+
     /// Queues validated steps, then keeps reading complete lines appended to `path`
     /// after the first `offset` bytes.
     #[must_use]
     pub fn following(steps: Vec<Step>, path: PathBuf, offset: usize) -> Self {
-        Self {
-            follow: Some(Follow {
-                path,
-                offset,
-                next_poll: Duration::ZERO,
-                idle: false,
-            }),
-            ..Self::new(steps)
-        }
+        Self::new(steps).with_follow(path, offset)
+    }
+
+    /// Continues this snapshot with complete lines appended after `offset` bytes.
+    #[must_use]
+    pub fn with_follow(mut self, path: PathBuf, offset: usize) -> Self {
+        self.follow = Some(Follow {
+            path,
+            offset,
+            next_poll: Duration::ZERO,
+            idle: false,
+        });
+        self
     }
 
     /// Marks the session local-only (see [`Script::local`]); set only when the
@@ -244,9 +296,21 @@ impl Script {
             return;
         }
         follow.next_poll = now + FOLLOW_POLL;
-        let Ok(bytes) = std::fs::read(&follow.path) else {
-            return;
+        let bytes = match source::read_bytes(&follow.path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                self.progress.finish(Phase::Failed, error.to_string());
+                self.follow = None;
+                return;
+            }
+            Err(_) => return,
         };
+        #[allow(clippy::naive_bytecount)]
+        // Bounded 128 KiB source; no SIMD dependency for line labels.
+        let first_line = bytes[..follow.offset.min(bytes.len())]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count();
         let Some(fresh) = bytes.get(follow.offset..) else {
             return;
         };
@@ -263,10 +327,19 @@ impl Script {
             .path
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        match parse(&text, &base) {
-            Ok(steps) if self.accepted + steps.len() <= MAX_STEPS => {
-                self.accepted += steps.len();
-                self.steps.extend(steps);
+        match Program::parse(&text, &base) {
+            Ok(program) if self.accepted + program.instructions().len() <= MAX_STEPS => {
+                let (_, instructions) = program.into_parts();
+                self.accepted += instructions.len();
+                self.steps
+                    .extend(instructions.into_iter().map(|instruction| QueuedStep {
+                        step: instruction.step,
+                        line: Some(first_line + instruction.line),
+                    }));
+                self.progress.total = self.accepted;
+                let source = String::from_utf8_lossy(&bytes[..follow.offset]);
+                self.progress.source =
+                    std::sync::Arc::from(source.strip_prefix('\u{feff}').unwrap_or(&source));
             }
             Ok(_) => warn!("Ignored appended steps beyond the {MAX_STEPS}-step limit"),
             Err(error) => warn!("Ignored appended script lines: {error}"),
@@ -296,7 +369,61 @@ impl Script {
         self.notch = None;
         self.awaited = None;
         self.approached = None;
+        self.progress.finish(Phase::Failed, reason);
         info!("Script stopped: {reason}");
+    }
+
+    /// Retains the outcome after releasing the active executor resource.
+    fn retire(&self, commands: &mut Commands) {
+        commands.insert_resource(self.progress.clone());
+        commands.remove_resource::<Self>();
+    }
+
+    /// Resumes without charging an explicit boundary pause against the run limit.
+    fn resume(&mut self, now: Duration, mode: RunMode) {
+        if let RunMode::Paused(since) = self.mode {
+            if let Some(started) = &mut self.started {
+                *started += now.saturating_sub(since);
+            }
+            self.progress.event("Resumed");
+        }
+        self.mode = mode;
+        self.progress.phase = Phase::Running;
+    }
+
+    /// Returns whether another action may start; every caller has released input.
+    fn advance(&mut self, now: Duration) -> bool {
+        match self.mode {
+            RunMode::Continuous => true,
+            RunMode::OneStep => {
+                self.mode = RunMode::PauseRequested;
+                true
+            }
+            RunMode::PauseRequested => {
+                self.mode = RunMode::Paused(now);
+                self.progress.phase = Phase::Paused;
+                self.progress.event("Paused between actions");
+                false
+            }
+            RunMode::Paused(_) => false,
+        }
+    }
+}
+
+/// Copies observable progress without requiring the editor to inspect executor internals.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn observe(script: Option<Res<Script>>, mut status: ResMut<RunStatus>) {
+    if let Some(script) = script {
+        // The source identifies the run; revisions identify history changes.
+        if !std::sync::Arc::ptr_eq(&status.source, &script.progress.source)
+            || status.revision != script.progress.revision
+        {
+            *status = script.progress.clone();
+        } else {
+            status.phase = script.progress.phase;
+            status.elapsed = script.progress.elapsed;
+            status.total = script.progress.total;
+        }
     }
 }
 
@@ -386,6 +513,12 @@ type Observed<'w> = (
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
 
+type DriverContext<'w, 's> = (
+    Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    Option<Res<'w, super::ViewerSettings>>,
+    Option<ResMut<'w, RunControl>>,
+);
+
 /// The keyboard as a script presses it: each press and release sets the
 /// key's state and sends the typed key the window would, so what reads
 /// typed keys (the chat line, the login boxes) takes a scripted key as it
@@ -465,10 +598,7 @@ pub(super) fn drive(
         Query<&crate::outbox::Needs>,
         pointer::Aim,
     ),
-    (windows, settings): (
-        Query<&Window, With<PrimaryWindow>>,
-        Option<Res<super::ViewerSettings>>,
-    ),
+    (windows, settings, mut control): DriverContext,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -484,6 +614,52 @@ pub(super) fn drive(
     }
     let (mut keys, mut mouse) = input;
     let now = time.elapsed();
+    if !script.progress.phase.active() {
+        script.retire(&mut commands);
+        return;
+    }
+    if let Some(request) = control.as_mut().and_then(|control| control.take()) {
+        match request {
+            Request::Stop => {
+                if let Some(entity) = script.pressed
+                    && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+                {
+                    *interaction = Interaction::None;
+                }
+                // Releasing a cancelled synthetic press must not become a click.
+                commands.queue(|world: &mut World| {
+                    if let Some(mut button) = world.get_resource_mut::<crate::clicks::LeftButton>()
+                    {
+                        button.cancel();
+                    }
+                    if let Some(mut presses) =
+                        world.get_resource_mut::<crate::hud::hotbar::carry::Presses>()
+                    {
+                        *presses = crate::hud::hotbar::carry::Presses::default();
+                    }
+                });
+                script.stop(&mut keys, &mut mouse, "Stopped by user");
+                script.progress.phase = Phase::Stopped;
+                script.retire(&mut commands);
+                return;
+            }
+            Request::Pause => {
+                if !matches!(script.mode, RunMode::Paused(_)) {
+                    script.mode = RunMode::PauseRequested;
+                    script.progress.phase = Phase::Pausing;
+                }
+            }
+            Request::Resume => script.resume(now, RunMode::Continuous),
+            Request::Step if matches!(script.mode, RunMode::Paused(_)) => {
+                script.resume(now, RunMode::OneStep);
+            }
+            Request::Step => (),
+        }
+    }
+    if matches!(script.mode, RunMode::Paused(_)) {
+        script.last_frame = Some(now);
+        return;
+    }
     if let Some(last) = script.last_frame.replace(now)
         && now.saturating_sub(last) >= SLOW_FRAME
     {
@@ -499,19 +675,38 @@ pub(super) fn drive(
         info!(ms, walking, searching, ?search_frame, "Script slow frame");
     }
     let started = *script.started.get_or_insert(now);
+    script.progress.elapsed = now.saturating_sub(started);
     if now.saturating_sub(started) > MAX_RUNTIME {
         script.stop(&mut keys, &mut mouse, "maximum runtime reached");
-        commands.remove_resource::<Script>();
+        script.retire(&mut commands);
         return;
     }
+    if script.current.is_none() {
+        script.progress.complete_step();
+        if script.follow.is_some() && script.mode == RunMode::PauseRequested {
+            script.advance(now);
+            return;
+        }
+    }
+    script.progress.phase = if script.mode == RunMode::PauseRequested {
+        Phase::Pausing
+    } else {
+        Phase::Running
+    };
     if script.current.is_none() && script.steps.is_empty() {
         if script.follow.is_none() {
-            commands.remove_resource::<Script>();
+            script.progress.finish(Phase::Completed, "Script finished");
+            script.retire(&mut commands);
             info!("Script finished");
             return;
         }
         script.poll(now);
+        if !script.progress.phase.active() {
+            script.retire(&mut commands);
+            return;
+        }
         if script.steps.is_empty() {
+            script.progress.phase = Phase::Following;
             return;
         }
     }
@@ -527,13 +722,17 @@ pub(super) fn drive(
                 &mut mouse,
                 "window lost focus while holding keys",
             );
-        } else if !script.paused {
+        } else {
+            if !script.paused {
+                info!("Script paused until the client window is focused");
+            }
             script.paused = true;
-            info!("Script paused until the client window is focused");
+            script.progress.phase = Phase::WaitingForFocus;
         }
         return;
     }
     if std::mem::take(&mut script.paused) {
+        script.progress.phase = Phase::Running;
         info!("Script resumed");
     }
     // The focus system clears a hover no pointer is over; a hovered control
@@ -966,6 +1165,7 @@ pub(super) fn drive(
                     return;
                 }
                 if window.is_some_and(|window| window.cursor_position().is_some()) {
+                    script.progress.phase = Phase::WaitingForPointer;
                     return;
                 }
                 let entity = match aim_click(
@@ -1002,6 +1202,7 @@ pub(super) fn drive(
                         return;
                     }
                     if window.is_some_and(|window| window.cursor_position().is_some()) {
+                        script.progress.phase = Phase::WaitingForPointer;
                         return;
                     }
                     let entity = match aim_click(
@@ -1103,9 +1304,14 @@ pub(super) fn drive(
         script.awaited = None;
         script.approached = None;
     }
-    let Some(step) = script.steps.pop_front() else {
+    script.progress.complete_step();
+    if !script.advance(now) {
+        return;
+    }
+    let Some(QueuedStep { step, line }) = script.steps.pop_front() else {
         return;
     };
+    script.progress.begin(line);
     info!(?step, "Script step");
     match &step {
         Step::Create(character) => {
@@ -1313,6 +1519,8 @@ pub(super) fn drive(
         }
         Step::Quit => {
             script.stop(&mut keys, &mut mouse, "quit requested");
+            script.progress.phase = Phase::Stopped;
+            script.retire(&mut commands);
             exit.write(AppExit::Success);
             return;
         }
@@ -3318,6 +3526,84 @@ mod tests {
         app.update();
     }
 
+    #[test]
+    fn pausing_and_single_stepping_release_input_between_actions() {
+        let mut app = pointing(vec![
+            Step::Hold(vec![KeyCode::KeyW], Duration::from_millis(100)),
+            Step::Press(vec![KeyCode::KeyA]),
+            Step::Wait(Duration::from_millis(10)),
+        ]);
+        app.init_resource::<RunControl>()
+            .init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        frame_at(&mut app, 0);
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Pause);
+        frame_at(&mut app, 50);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Pausing);
+        frame_at(&mut app, 100);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Paused);
+        assert_eq!(app.world().resource::<RunStatus>().progress(), (1, 3));
+
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Step);
+        frame_at(&mut app, 5_000);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+        frame_at(&mut app, 5_010);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Paused);
+        assert_eq!(status.progress(), (2, 3));
+        assert_eq!(status.elapsed(), Duration::from_millis(110));
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, 5_020);
+        assert!(!app.world().contains_resource::<Script>());
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Stopped);
+        assert_eq!(status.progress(), (2, 3));
+    }
+
+    #[test]
+    fn a_source_error_retains_its_line_after_the_executor_is_removed() {
+        let mut app = pointing(Vec::new());
+        let program = Program::parse("# needs a target\n\nface\n", Path::new(".")).unwrap();
+        app.insert_resource(Script::from_program(program).offline_preview(true));
+        frame_at(&mut app, 0);
+        assert_eq!(
+            app.world().resource::<Script>().status().phase(),
+            Phase::Failed
+        );
+        frame_at(&mut app, 10);
+        assert!(!app.world().contains_resource::<Script>());
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.line(), Some(3));
+        assert_eq!(status.phase(), Phase::Failed);
+        assert!(status.events().back().unwrap().message.contains("target"));
+    }
+
     /// A node laid out square around `middle`, `side` across and `stack`
     /// high in the stack.
     fn laid_out(middle: Vec2, side: f32, stack: u32) -> impl Bundle {
@@ -3753,14 +4039,22 @@ mod tests {
         assert!(script.steps.is_empty());
         std::fs::write(&path, "wait 10\nreport a\nwait 2").unwrap();
         script.poll(Duration::from_secs(1));
-        assert_eq!(script.steps, [Step::Report("a".into())]);
+        assert_eq!(
+            script.steps.front().map(|queued| &queued.step),
+            Some(&Step::Report("a".into()))
+        );
+        assert_eq!(script.steps.front().unwrap().line, Some(2));
         // An invalid batch is skipped whole; later batches still run.
         std::fs::write(&path, "wait 10\nreport a\nwait 20\nbogus\n").unwrap();
         script.poll(Duration::from_secs(2));
         assert_eq!(script.steps.len(), 1);
         std::fs::write(&path, "wait 10\nreport a\nwait 20\nbogus\nquit\n").unwrap();
         script.poll(Duration::from_secs(3));
-        assert_eq!(script.steps.back(), Some(&Step::Quit));
+        assert_eq!(
+            script.steps.back().map(|queued| &queued.step),
+            Some(&Step::Quit)
+        );
+        assert_eq!(script.steps.back().unwrap().line, Some(5));
         let _ = std::fs::remove_file(&path);
     }
 
