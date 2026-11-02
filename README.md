@@ -26,6 +26,11 @@ See [support and validation](SUPPORT.md) for the difference between implemented,
 offered and live-tested behavior, and [architecture contracts](ARCHITECTURE.md)
 before extending a feature.
 
+The built-in [script workbench](docs/scripts/README.md) lets you edit and run
+action sequences while playing your character, and watch their execution. Its
+Help tab renders the same linked Markdown guide available here. Open **Scripts**
+in the client or pass `--script-editor` at launch.
+
 ## Offline East Commonlands demo
 
 Install current stable Rust, then point the viewer at your own EQ directory:
@@ -58,6 +63,20 @@ hotbuttons, Alt+1 to Alt+8 spells), with strafing and the camera-relative moves
 unbound; a Mac-era installation takes this client's own, the keys listed below.
 The Options window's Keys page lists them. Add `--camera
 orthographic` for a locked isometric-style projection.
+
+Press **F9** to detach the camera and press it again to snap back to the
+character. While detached, movement keys fly the camera through walls and
+terrain; turn keys and right-drag change its direction. Page Up or Jump raises
+it, and Page Down lowers it. The character's movement keys and autorun are
+stopped while the camera is free; falls and server updates still affect the
+character. A status line shows the key that returns to the character.
+
+To choose a different toggle, open Options (Alt+O), select Keyboard and filter
+to Camera, then click the primary or alternate key beside **Toggle Free
+Camera** and press the desired key or chord. The same page edits the other
+assignments: Escape cancels and Delete clears a key. Assigning a chord already
+used elsewhere moves it to the chosen action. Keys are saved per character in
+the settings directory (`keys.txt` seeds characters without their own file).
 
 To validate asset loading without opening a graphics window:
 
@@ -723,6 +742,11 @@ focus. Escape used to close the chat editor does not also clear the target.
 
 Item links are preserved in chat and displayed as clickable purple names inline within each message. Selecting one requests the definition from the current P99 zone session and opens a read-only stats panel. Results are cached within that session; reconnects clear them. Inspection never equips or activates the item. Quest say-links are rejected. Quarm item inspection is not implemented.
 
+HTTP and HTTPS addresses in chat are underlined links that open in the system's
+default browser. Links can wrap across lines and appear alongside item links.
+Other schemes, email addresses, and addresses without `http://` or `https://`
+remain plain text.
+
 Mouse selection intersects the current posed model triangles, including child
 transforms and scale, and chooses the nearest body under the cursor. A gold ground
 ring follows the selected rendered entity (or self), respects scene depth, and
@@ -976,35 +1000,17 @@ official client. These paths have synthetic tests; live verification is pending.
 
 ## Attended scripts
 
-`--script <file>` runs a bounded key script through the ordinary input paths, for
-repeatable live or offline checks. One step per line, `#` starts a comment:
-`login` (types `EQ_ACCOUNT` and `EQ_PASSWORD` from the environment into the
-login screen and connects; a script with it opens on the login screen),
-`wait_servers`, `server <name>` (plays on a world of the login server's list),
-`wait_select`, `select <name>`, `wait_online`, `wait_zone <short name>`,
-`wait_dead <ms>` (waits until the spawn targeted as it starts is an NPC's corpse or has left the zone; past the time, or with nothing targeted, the script stops; a player who dies leaves a player's corpse, so a wait on a player runs out its time),
-`press <keys>`, `hold <keys> <ms>`, `wait <ms>`, `camera <heading> <pitch> [<distance>]` (the camera looks along an EQ heading, at a pitch in degrees from 0 (level) to -89 (looking down) and, where given, at a distance from the player; the view then holds both within its own ranges, as it holds the mouse's),
-`move forward|back|strafe_left|strafe_right|turn_left|turn_right <ms>` (holds the movement command itself, whatever keys the key table gives it, so it moves the same under the Titanium program's table and this client's own; traced as `hold` is),
-`face <heading>` (turns the player to an EQ heading, whatever the camera does, at the turn keys' rate, and ends once the server has it; the script stops if it has not within 5 s), `face` (turns the camera toward the target),
-`approach object <kind> <range> <ms>` (moves forward the way the camera looks toward the zone's nearest world container of one tradeskill container type, such as `21`, chosen as the step starts, until it is within the range; with none of that type in the zone, or out of time short of the range, the script stops),
-`walk object <kind> <range> <ms>` (the same container, chosen the same way, reached along `walk`'s searched path around walls, ledges and closed doors instead of a straight line; with none of that type in the zone, no route, a route that ends short of the range, or out of time, the script stops and the log gives where the player stood and how far was left),
-`camera player <offset> <pitch> [<distance>]`, `trace <ms>`, `click slot|scribe|store|book|memorize|loot|loot_all|loot_done|buy|sell|shop_done|give ...` (`click loot <place>` takes the item at a place on the corpse, from 0), `click merchant_row <slot>`, `click buy_chosen` and `click sell_chosen` (the skin's merchant window),
-`click character <1-8>`, `click enter_world` and `click quit_game` (the skin's character list), `click chat_tab <tab>` (a chat tab by its label, such as `say` or `ooc`), `click book_place <0-15>`, `right_click book_place <0-15>` and `click book_page next|back` (the skin's spellbook: a place on its open pages and its arrows), `click spell_gem <1-8>` (a gem of the skin's spell bar), `click hot_button <1-10>` (a hotbutton of the action bar, the client's own or the skin's), `press delete`,
-`give` (asks the target to take the cursor item, as clicking it does),
-`click coins purse|bank|give platinum|gold|silver|copper`, `click pick less|more|min|max|confirm|cancel|amount` (`amount` is the skin's quantity window's number box, which takes typed keys once clicked),
-`click slider clip_plane|max_fps|mouse_sensitivity|quantity <percent>` (an Options window slider, or the quantity window's, pressed that far along),
-`click actions` (opens the skin's Actions window), `click tab <n>`, `click ability combat|abilities <n>`, `click attack`,
-`click buff <n>` and `click song <n>` (a button of the skin's effects windows, the lasting one or the short one, counted from 1; with `hover`, a buff's tooltip),
-`click window <key>` (a button that opens and closes the window, or hides and shows it, such as its selector button or the inventory's Skills button, by the window's key such as `skills`), `click close_box <window>` and `click minimize_box <window>` (a skinned window's title-bar boxes), `click done <window>` (the Done or Close button in a skinned window's own body, such as the bank's or a tradeskill container's, which closes it as a player's click does; the script stops if the open window has none), `click button <window> <screen id>` (any button of a skinned window, by its window's key and the `ScreenID` the installed skin's file gives it, spelled exactly, such as `click button bank DoneButton`; it does what a player's click on it does, and the script stops with the button's hover reason if the button is greyed out), `click scroll_up <window>` and `click scroll_down <window>` (a skinned window's scrollbar arrows),
-`right_click` with the same targets (a bag's slot opens its window),
-`hover` with the same targets (rests the pointer there, so its tooltip shows and what rides the cursor hangs there, until the next click or hover),
-`hold_click <ms>` with the same targets (holds the left button there that long, then lets it go there; held long enough, a gem, hotbutton, Actions window button or clicky item puts its hotkey on the cursor),
-`slash camp|sit|stand`, `report <label>`, `sound <file.wav>` (plays one of the installation's sound files by name, to check that sounds are heard), `screenshot <file.png>` and `quit`.
-The steps that move toward something (`approach`, `chase`, `walk` and their object forms) hold the camera-relative forward command the same way, never a key.
-Keys combine with `+` (for example `alt+1`); besides letters, digits and `f1` to `f12`, they are named `space`, `escape`, `enter`, `backspace`, `delete`, `tab`, `slash`, `up`, `down`, `left`, `right`, `shift`, `ctrl`, `alt`, `numlock`, `insert`, `home`, `end`, `pageup`, `pagedown`, `numpad0` to `numpad9`, `numpad_add`, `numpad_subtract`, `numpad_multiply`, `numpad_divide`, `numpad_decimal` and `numpad_enter`. Scripts only run while the client
-window is focused (except offline, or on a local `EQEmu` or TAKP server), stop if focus is lost while a key is held, cap each hold, wait
-and the whole run, inject clicks only while the real pointer is outside the
-window, never send chat, and save screenshots beside the script file.
+The built-in [script workbench](docs/scripts/README.md) and `--script <file>`
+share one bounded scenario executor. Open Scripts in the client to edit a file,
+run its current buffer, follow execution, or read the same help pages as on GitHub.
+Add `--script-editor` to open the workbench at launch.
+
+See the [examples](docs/scripts/examples.md),
+[command reference](docs/scripts/reference.md),
+[UI targets](docs/scripts/targets.md), and
+[run controls and limits](docs/scripts/running.md).
+Loading a file never executes it. Public-server runs remain attended, with the
+existing focus, pointer ownership and local-only command restrictions.
 
 The P99 lifecycle decodes own-character death, pauses old-zone actions, acknowledges server-directed zoning/bind offers, and returns through world with the zoning flag before admitting the destination session. The new admission supplies the zone, position and character resources; Freeport is not hard-coded. Packet-layout and presentation tests cover these paths, but live death/respawn, granted movement, and client-generated boundary transfers remain unverified. Movement bounds are optional; timing, stale-session and speed validation remain required.
 

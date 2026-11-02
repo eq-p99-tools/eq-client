@@ -47,6 +47,22 @@ and world-to-label and gauge updates in
 `skinned::presentation`. The crate root composes startup and the shared scene.
 These modules keep their helpers internal rather than expanding the public API.
 
+The script workbench is a client feature over the existing scenario executor.
+`script::Program` owns validated source and line locations; `Script` owns the
+active run; `RunStatus` retains progress and the terminal outcome after that run
+is removed. CLI and UI launches share these types. Pause and single-step operate
+at action boundaries; Stop releases synthetic input without committing a pending
+click. The source snapshot never changes during a workbench run.
+
+`script_workbench::document` owns editable text, disk snapshots and bounded file
+operations. File jobs run off the frame thread, use document generations rather
+than game admissions, and preserve the buffer on failure. `view` owns chrome,
+`syntax` owns presentation-only token colors, and `help` renders the Markdown
+pages in `docs/scripts` that GitHub also displays. Executable help examples are
+tested with the real parser. The workbench clears text focus before injected
+input and uses the shared typing gate to keep editor input out of gameplay and
+login. The existing local-session restrictions and pointer ownership still apply.
+
 The frame stages run receive, scene, typing, routing, gameplay input, then
 presentation. Text entry must consume keys before gameplay acts on them; scene
 reconciliation must see the reduced world. Existing chains also order focus and
