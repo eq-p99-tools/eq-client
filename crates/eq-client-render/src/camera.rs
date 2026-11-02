@@ -712,16 +712,18 @@ mod tests {
             .set(eq_client_core::qol::Fix::FreeCamera, false);
         app.update();
         assert!(app.world().get::<FreeCamera>(camera).is_none());
-        let before = *app.world().get::<Transform>(camera).unwrap();
         press(&mut app, KeyCode::F9);
         assert!(app.world().get::<FreeCamera>(camera).is_none());
+        // A fly key leaves the camera on its orbit around the player.
         press(&mut app, KeyCode::KeyW);
+        assert!(app.world().get::<FreeCamera>(camera).is_none());
+        let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(
             app.world()
                 .get::<Transform>(camera)
                 .unwrap()
                 .translation
-                .abs_diff_eq(before.translation, 1e-5)
+                .abs_diff_eq(orbit_transform(orbit).translation, 1e-5)
         );
     }
 

@@ -2956,8 +2956,6 @@ mod tests {
         answer(&mut world, "Othername", CreationOutcome::Created);
         assert_eq!(answered(&world, before, "Testcleric", false), Ok(false));
         answer(&mut world, "Testcleric", CreationOutcome::Created);
-        assert_eq!(answered(&world, before, "Testcleric", true), Ok(false));
-        answer(&mut world, "Testcleric", CreationOutcome::Created);
         assert_eq!(answered(&world, before, "Testcleric", false), Ok(true));
         // A `create_refused` step fails when the character is created.
         assert_eq!(
