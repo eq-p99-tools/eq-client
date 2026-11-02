@@ -216,7 +216,7 @@ pub(super) fn spawn(commands: &mut Commands) {
                 position_type: PositionType::Absolute,
                 left: px(0),
                 top: px(0),
-                right: px(20),
+                right: px(72),
                 bottom: px(16),
                 justify_content: JustifyContent::FlexEnd,
                 align_items: AlignItems::FlexEnd,
@@ -229,7 +229,6 @@ pub(super) fn spawn(commands: &mut Commands) {
         .id();
 
     super::chat::spawn(commands);
-    super::windows::spawn_selector(commands);
     super::target::spawn(commands);
     super::items::spawn(commands);
     super::inventory::spawn(commands);

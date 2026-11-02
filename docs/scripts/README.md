@@ -1,6 +1,6 @@
 # Script workbench
 
-The script workbench lets you edit and run sequences of actions while playing your character. Log in normally, open Scripts from the button at the top right, and write a script or load one from disk. Run uses your current character, zone, target, inventory and spell setup. You do not need login commands, a character name in the script, or a special launch mode.
+The script workbench lets you edit and run sequences of actions while playing your character. Log in normally, click the EQ menu at the bottom right, choose **Scripts**, and write a script or load one from disk. Scripts starts closed unless you explicitly request `--script-editor`. Run uses your current character, zone, target, inventory and spell setup. You do not need login commands, a character name in the script, or a special launch mode.
 
 The movable window has Editor, Execution and Help tabs. Edit your script, choose Run, and watch the current line in Execution. Stop returns control so you can revise and run it again. You can keep playing with the workbench minimized and reopen it when needed.
 

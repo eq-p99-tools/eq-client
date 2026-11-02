@@ -36,7 +36,7 @@ automatic login. Keep credentials and private settings outside Git.
 
 ## Explore the client
 
-- **Scripts:** open the button in-game to edit, load, run and watch scripts using
+- **Scripts:** choose Scripts from the bottom-right EQ menu to edit, load, run and watch scripts using
   your current character. The Help tab renders the same
   [script guide](docs/scripts/README.md) available on GitHub.
 - **Map:** Ctrl+M opens known entity positions on every server. Search, inspect

@@ -38,6 +38,15 @@ same assignments; their semantic `move` command is independent of the key map.
 
 ## Camera and windows
 
+The **EQ menu** at the bottom right opens and hides windows, including Map,
+Options and Scripts. Lit squares mark windows currently shown; each entry also
+shows its assigned shortcut. Choose an entry, click outside, or press Escape to
+close the menu. Escape closes this menu before another window. Scripts starts
+closed and remains available from this menu before login. The EQ button artwork
+comes from your installed skin; a text button is used if it is unavailable.
+The button is semi-transparent and stays behind movable windows, so a window
+dragged over it receives the pointer instead. Its popup opens above the windows.
+
 Right-drag changes the view and the wheel zooms unless a UI surface owns the
 wheel. `--camera orthographic` selects the isometric-style projection. The chase
 camera pulls in before collidable roofs or walls obscure the character and

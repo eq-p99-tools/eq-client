@@ -30,7 +30,6 @@ pub(super) enum Field {
 
 #[derive(Component, Clone, Copy)]
 pub(super) enum Action {
-    Toggle,
     ToggleLibrary,
     New,
     Open,
@@ -148,17 +147,6 @@ pub(super) fn spawn(
     state: Res<Workbench>,
 ) {
     let mono = Mono(fonts.add(Font::from_bytes(bevy::text::DEFAULT_FONT_DATA.to_vec())));
-    let toggle = button(&mut commands, "Scripts", Action::Toggle);
-    commands.entity(toggle).insert((
-        Node {
-            position_type: PositionType::Absolute,
-            right: px(12),
-            top: px(8),
-            padding: UiRect::axes(px(12), px(5)),
-            ..default()
-        },
-        GlobalZIndex(850),
-    ));
     let frame = windows::frame(
         &mut commands,
         WindowId::Scripts,

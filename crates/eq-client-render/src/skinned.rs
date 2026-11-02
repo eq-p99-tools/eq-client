@@ -213,7 +213,7 @@ impl Screens {
 
     /// A screen of this skin's file, if the file defines it: a window's, or
     /// one that is no window, as the cursor's attachment.
-    fn screen(
+    pub(crate) fn screen(
         &mut self,
         directory: &std::path::Path,
         skin: &str,
@@ -2402,7 +2402,7 @@ mod tests {
         let node = app.world().get::<Node>(status).unwrap();
         assert_eq!(
             (node.left, node.top, node.right, node.bottom),
-            (Val::Auto, Val::Auto, px(0.0), px(0.0))
+            (Val::Auto, Val::Auto, px(64.0), px(0.0))
         );
     }
 

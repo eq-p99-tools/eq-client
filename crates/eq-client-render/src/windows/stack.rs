@@ -3,7 +3,7 @@
 //! one, and the windows the player opens and closes do so from the selector
 //! or their key, the same way for each.
 use super::registry::{Layer, Toggle, WindowId};
-use crate::theme::{self, Size};
+use crate::theme;
 use bevy::{prelude::*, window::PrimaryWindow};
 use std::collections::BTreeSet;
 
@@ -130,7 +130,7 @@ pub(crate) struct SelectorButton(pub WindowId);
 
 /// A selector button's label: the window's name and its key.
 #[derive(Component, Clone, Copy)]
-pub(crate) struct SelectorLabel(WindowId);
+pub(super) struct SelectorLabel(pub(super) WindowId);
 
 /// Brings the window under a fresh click to the front: the frontmost of the
 /// open floating windows the pointer is over.
@@ -261,55 +261,11 @@ pub(crate) fn hide(
     }
 }
 
-/// Builds the selector: one button for each window the player opens and
-/// closes, named as the official client names it, with its key. It is a
-/// frame without chrome of its own, so the skin draws it where the skin is
-/// installed.
-pub(crate) fn spawn_selector(commands: &mut Commands) {
-    let id = WindowId::Selector;
-    let mut node = Node {
-        column_gap: px(4),
-        ..default()
-    };
-    id.describe().placement.apply(&mut node);
-    commands
-        .spawn((
-            crate::hud::HudRoot,
-            id,
-            node,
-            BackgroundColor(Color::NONE),
-            BorderColor::all(Color::NONE),
-            super::Frame::default(),
-            GlobalZIndex(id.describe().layer.base()),
-        ))
-        .with_children(|row| {
-            for window in WindowId::ALL
-                .into_iter()
-                .filter(|window| window.describe().toggle == Toggle::Opens)
-            {
-                let mut button = row.spawn((
-                    Button,
-                    SelectorButton(window),
-                    crate::tooltip::Tooltip(format!(
-                        "Open or close the {}",
-                        name(window).to_lowercase()
-                    )),
-                    Node {
-                        padding: UiRect::axes(px(10), px(5)),
-                        ..default()
-                    },
-                    BackgroundColor(theme::BUTTON),
-                ));
-                button.with_child((
-                    SelectorLabel(window),
-                    theme::text(name(window), Size::Label, theme::INK_BRIGHT),
-                ));
-            }
-        });
-}
-
 /// A window's name as the selector shows it: "Inventory" for "INVENTORY".
-fn name(window: WindowId) -> String {
+pub(super) fn name(window: WindowId) -> String {
+    if window == WindowId::ShortEffects {
+        return "Short effects".into();
+    }
     let title = window.describe().title.to_lowercase();
     let mut letters = title.chars();
     letters.next().map_or_else(String::new, |first| {

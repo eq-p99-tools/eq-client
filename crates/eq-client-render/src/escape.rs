@@ -43,12 +43,14 @@ pub(super) fn route(
     (stack, frames): (Res<Stack>, Frames),
     (online, front): (Res<super::online::OnlineState>, Res<super::login::FrontEnd>),
     mut escape: ResMut<Escape>,
+    menu: Res<super::windows::menu::Menu>,
 ) {
     use super::login::Screen;
     let screen = front.screen(&online);
     let key = keys.input.just_pressed(KeyCode::Escape);
     *escape = match screen {
         _ if !key || keys.escape_claimed() || !keys.window_focused() => Escape::Unused,
+        _ if menu.open => Escape::Close(WindowId::Selector),
         _ if frames
             .iter()
             .any(|(id, node)| *id == WindowId::Scripts && node.display != Display::None) =>
@@ -126,6 +128,20 @@ mod tests {
         app.world_mut()
             .spawn((id, Node::default(), super::super::windows::Frame::default()))
             .id()
+    }
+
+    #[test]
+    fn the_corner_menu_consumes_escape_before_an_open_workbench() {
+        let mut app = app();
+        window(&mut app, WindowId::Scripts);
+        app.world_mut()
+            .resource_mut::<super::super::windows::menu::Menu>()
+            .open = true;
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Selector));
+        app.world_mut()
+            .resource_mut::<super::super::windows::menu::Menu>()
+            .open = false;
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Scripts));
     }
 
     #[test]

@@ -806,6 +806,7 @@ pub(crate) mod testing {
         crate::clicks::testing::install(app);
         app.init_resource::<crate::inventory::InventoryState>()
             .init_resource::<crate::windows::Stack>()
+            .init_resource::<crate::windows::menu::Menu>()
             .init_resource::<crate::escape::Escape>()
             .add_systems(PreUpdate, crate::escape::route.after(crate::clicks::track));
     }

@@ -5,6 +5,7 @@
 use crate::theme::{self, Size};
 use bevy::{prelude::*, ui::FocusPolicy, window::PrimaryWindow};
 mod layout;
+pub(super) mod menu;
 pub(super) mod pointer;
 mod registry;
 mod stack;
@@ -13,7 +14,7 @@ pub(super) use layout::Layouts;
 pub(crate) use registry::{Layer, Opening, Placement, Toggle, WindowId};
 #[cfg(test)]
 pub(crate) use stack::toggle;
-pub(crate) use stack::{SelectorButton, Shown, Stack, spawn_selector};
+pub(crate) use stack::{SelectorButton, Shown, Stack};
 
 /// A part of a window a press lands on and stays on, though it is no button
 /// and reacts to no pointer: a list, so a press on its rows or headings never
@@ -29,6 +30,7 @@ pub(crate) struct PositionLocked;
 /// placements persist between runs per character. Orders the floating windows,
 /// opens and closes the toggled ones and hides the ones the player hid.
 pub(super) fn register_layout(app: &mut App) {
+    menu::install(app);
     app.add_systems(
         Update,
         (

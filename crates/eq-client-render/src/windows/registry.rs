@@ -86,7 +86,7 @@ pub(crate) enum WindowId {
     WorldContainer,
     /// The local map and known entities, available on every server.
     Map,
-    /// The buttons that open the other windows.
+    /// The corner EQ menu that opens the other windows.
     Selector,
     /// The character list.
     CharacterSelect,
@@ -527,7 +527,11 @@ impl WindowId {
                 )
             },
             Self::Chat => hud("CHAT", Placement::BottomLeft(20.0, 16.0), &["CHAT"]),
-            Self::Selector => hud("", Placement::TopRight(16.0, 16.0), &[]),
+            Self::Selector => Description {
+                persists: false,
+                opening: Opening::Own,
+                ..hud("", Placement::BottomRight(12.0, 12.0), &[])
+            },
             // The official client leaves the effects window up; Escape does
             // not close it.
             Self::Effects => Description {
@@ -668,10 +672,10 @@ impl WindowId {
     /// player nor the official client's UI file placed it, in place of where
     /// the skin puts it: the spell gems in the top left corner, the player
     /// window beside them with the group and pet windows below it, the
-    /// selector and the target window at the top centre, the effects windows
+    /// target window at the top centre, the effects windows
     /// down the right edge, the hotbar in the bottom left corner, the chat at
     /// the bottom centre with the casting window above it, and the client's
-    /// own Status panel in the bottom right corner. Each place follows from
+    /// own Status panel beside the EQ menu in the bottom right corner. Each place follows from
     /// the sizes the windows are drawn at (`size`, zero for a window the skin
     /// hides), so that none covers another on a screen with room for the
     /// windows along each edge; a panel keeps its place while it is closed.
@@ -685,12 +689,9 @@ impl WindowId {
                 size(Self::Spells).x,
                 size(Self::Player).y + size(Self::Group).y,
             ),
-            Self::Selector => Placement::TopCentre {
-                top: 0.0,
-                width: size(Self::Selector).x,
-            },
+            Self::Selector => Placement::BottomRight(12.0, 12.0),
             Self::Target => Placement::TopCentre {
-                top: size(Self::Selector).y,
+                top: 0.0,
                 width: size(Self::Target).x,
             },
             Self::Effects => Placement::TopRight(0.0, 0.0),
@@ -704,7 +705,7 @@ impl WindowId {
                 bottom: size(Self::Chat).y,
                 width: size(Self::CastBar).x,
             },
-            Self::Status => Placement::BottomRight(0.0, 0.0),
+            Self::Status => Placement::BottomRight(64.0, 0.0),
             _ => return None,
         })
     }
@@ -803,14 +804,14 @@ mod tests {
     fn the_arranged_panels_cover_nothing_and_stay_on_screen() {
         use WindowId as W;
         // Sizes made up to the shapes of the default skin's narrow panels,
-        // and of Velious's wide ones, which hides its selector, short effects
-        // and casting windows; the Status panel is the client's own.
+        // and of Velious's wide ones, which hides short effects and casting
+        // windows; the Status panel and corner menu are the client's own.
         let narrow = [
             (W::Spells, (50.0, 300.0)),
             (W::Player, (150.0, 90.0)),
             (W::Group, (150.0, 200.0)),
             (W::PetInfo, (155.0, 140.0)),
-            (W::Selector, (480.0, 50.0)),
+            (W::Selector, (42.0, 42.0)),
             (W::Target, (150.0, 50.0)),
             (W::Effects, (105.0, 400.0)),
             (W::ShortEffects, (105.0, 160.0)),
@@ -824,7 +825,7 @@ mod tests {
             (W::Player, (270.0, 70.0)),
             (W::Group, (260.0, 220.0)),
             (W::PetInfo, (145.0, 140.0)),
-            (W::Selector, (0.0, 0.0)),
+            (W::Selector, (42.0, 42.0)),
             (W::Target, (270.0, 70.0)),
             (W::Effects, (200.0, 380.0)),
             (W::ShortEffects, (0.0, 0.0)),

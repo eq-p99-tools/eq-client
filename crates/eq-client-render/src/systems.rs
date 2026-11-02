@@ -65,6 +65,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::Layouts>()
         .init_resource::<windows::Shown>()
         .init_resource::<windows::Stack>()
+        .init_resource::<windows::menu::Menu>()
         .init_resource::<keys::Typing>()
         .init_resource::<character_create::Editor>()
         .init_resource::<keys::bindings::Bindings>()

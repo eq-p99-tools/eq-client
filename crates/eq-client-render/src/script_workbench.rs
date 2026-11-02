@@ -260,7 +260,6 @@ fn controls(
     mut commands: Commands,
     buttons: crate::clicks::Clicks<view::Action>,
     mut state: ResMut<Workbench>,
-    mut shown: ResMut<Shown>,
     (status, mut control): (Res<RunStatus>, ResMut<RunControl>),
     script: Option<Res<Script>>,
     settings: Res<crate::ViewerSettings>,
@@ -270,13 +269,6 @@ fn controls(
     for action in buttons.iter() {
         use view::Action;
         match action {
-            Action::Toggle => {
-                if shown.displayed(WindowId::Scripts) {
-                    shown.close(WindowId::Scripts);
-                } else {
-                    shown.open(WindowId::Scripts);
-                }
-            }
             Action::Tab(Tab::Editor) if script.is_some() => {
                 state.tab = Tab::Execution;
                 state.message = "Stop the current run before editing its source.".into();
