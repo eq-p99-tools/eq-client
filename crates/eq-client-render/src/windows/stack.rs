@@ -3,7 +3,7 @@
 //! one, and the windows the player opens and closes do so from the selector
 //! or their key, the same way for each.
 use super::registry::{Layer, Toggle, WindowId};
-use crate::theme::{self, Size};
+use crate::theme;
 use bevy::{prelude::*, window::PrimaryWindow};
 use std::collections::BTreeSet;
 
@@ -16,7 +16,7 @@ impl Default for Stack {
         Self(
             WindowId::ALL
                 .into_iter()
-                .filter(|id| id.describe().layer == Layer::Floating)
+                .filter(|id| id.describe().layer.stacked())
                 .collect(),
         )
     }
@@ -130,7 +130,7 @@ pub(crate) struct SelectorButton(pub WindowId);
 
 /// A selector button's label: the window's name and its key.
 #[derive(Component, Clone, Copy)]
-pub(crate) struct SelectorLabel(WindowId);
+pub(super) struct SelectorLabel(pub(super) WindowId);
 
 /// Brings the window under a fresh click to the front: the frontmost of the
 /// open floating windows the pointer is over.
@@ -138,7 +138,16 @@ pub(crate) struct SelectorLabel(WindowId);
 pub(crate) fn raise(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    frames: Query<(&WindowId, &Node, &UiGlobalTransform, &ComputedNode), With<super::Frame>>,
+    frames: Query<
+        (
+            &WindowId,
+            &Node,
+            &UiGlobalTransform,
+            &ComputedNode,
+            &GlobalZIndex,
+        ),
+        With<super::Frame>,
+    >,
     mut stack: ResMut<Stack>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
@@ -152,16 +161,15 @@ pub(crate) fn raise(
     else {
         return;
     };
-    let under: Vec<WindowId> = frames
+    let front = frames
         .iter()
-        .filter(|(id, node, transform, computed)| {
-            id.describe().layer == Layer::Floating
+        .filter(|(id, node, transform, computed, _)| {
+            id.describe().layer.stacked()
                 && node.display != Display::None
                 && super::contains(cursor, transform, computed)
         })
-        .map(|(id, ..)| *id)
-        .collect();
-    let front = stack.front_to_back().find(|id| under.contains(id));
+        .max_by_key(|(_, _, _, _, z)| z.0)
+        .map(|(id, ..)| *id);
     if let Some(front) = front {
         stack.raise(front);
     }
@@ -181,7 +189,7 @@ pub(crate) fn raise_opened(
     mut stack: ResMut<Stack>,
 ) {
     for (id, node) in &frames {
-        if id.describe().layer != Layer::Floating {
+        if !id.describe().layer.stacked() {
             continue;
         }
         if node.display == Display::None {
@@ -194,12 +202,24 @@ pub(crate) fn raise_opened(
 
 /// Draws each floating window at its place in the stack.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn restack(stack: Res<Stack>, mut frames: Query<(&WindowId, &mut GlobalZIndex)>) {
+pub(crate) fn restack(
+    stack: Res<Stack>,
+    front: Res<crate::login::FrontEnd>,
+    online: Res<crate::online::OnlineState>,
+    mut frames: Query<(&WindowId, &mut GlobalZIndex)>,
+) {
+    let in_world = front.screen(&online) == crate::login::Screen::World;
     for (id, mut z) in &mut frames {
-        if id.describe().layer != Layer::Floating {
+        let layer = id.describe().layer;
+        if !layer.stacked() {
             continue;
         }
-        let wanted = stack.z(*id);
+        let wanted = stack.z(*id)
+            + if layer == Layer::Tool && !in_world {
+                Layer::Tool.base() - Layer::Floating.base()
+            } else {
+                0
+            };
         if z.0 != wanted {
             z.0 = wanted;
         }
@@ -216,7 +236,6 @@ pub(crate) fn toggle(
     (escape, mut chat): (Res<crate::escape::Escape>, ResMut<crate::chat::ChatState>),
     buttons: crate::clicks::Clicks<SelectorButton>,
     (mut shown, mut stack): (ResMut<Shown>, ResMut<Stack>),
-    online: Res<crate::online::OnlineState>,
 ) {
     if let crate::escape::Escape::Close(id) = *escape
         && id.describe().toggle == Toggle::Opens
@@ -226,10 +245,6 @@ pub(crate) fn toggle(
     let typed = chat.toggled.take();
     let pressed = WindowId::ALL.into_iter().filter(|id| {
         id.describe().toggle != Toggle::Never
-            // A window the session does not offer stays shut.
-            && id
-                .needs()
-                .is_none_or(|needs| crate::outbox::offered(online.world(), needs))
             && (keys.pressed(crate::keys::Act::Toggle(*id))
                 || typed == Some(*id)
                 || buttons.iter().any(|button| button.0 == *id))
@@ -266,59 +281,11 @@ pub(crate) fn hide(
     }
 }
 
-/// Builds the selector: one button for each window the player opens and
-/// closes, named as the official client names it, with its key. It is a
-/// frame without chrome of its own, so the skin draws it where the skin is
-/// installed.
-pub(crate) fn spawn_selector(commands: &mut Commands) {
-    let id = WindowId::Selector;
-    let mut node = Node {
-        column_gap: px(4),
-        ..default()
-    };
-    id.describe().placement.apply(&mut node);
-    commands
-        .spawn((
-            crate::hud::HudRoot,
-            id,
-            node,
-            BackgroundColor(Color::NONE),
-            BorderColor::all(Color::NONE),
-            super::Frame::default(),
-            GlobalZIndex(id.describe().layer.base()),
-        ))
-        .with_children(|row| {
-            for window in WindowId::ALL
-                .into_iter()
-                .filter(|window| window.describe().toggle == Toggle::Opens)
-            {
-                let mut button = row.spawn((
-                    Button,
-                    SelectorButton(window),
-                    crate::tooltip::Tooltip(format!(
-                        "Open or close the {}",
-                        name(window).to_lowercase()
-                    )),
-                    Node {
-                        padding: UiRect::axes(px(10), px(5)),
-                        ..default()
-                    },
-                    BackgroundColor(theme::BUTTON),
-                ));
-                button.with_child((
-                    SelectorLabel(window),
-                    theme::text(name(window), Size::Label, theme::INK_BRIGHT),
-                ));
-                // Greyed where the session does not offer the window.
-                if let Some(needs) = window.needs() {
-                    button.insert(crate::outbox::Needs::Capability(needs));
-                }
-            }
-        });
-}
-
 /// A window's name as the selector shows it: "Inventory" for "INVENTORY".
-fn name(window: WindowId) -> String {
+pub(super) fn name(window: WindowId) -> String {
+    if window == WindowId::ShortEffects {
+        return "Short effects".into();
+    }
     let title = window.describe().title.to_lowercase();
     let mut letters = title.chars();
     letters.next().map_or_else(String::new, |first| {
@@ -414,7 +381,48 @@ mod tests {
     }
 
     #[test]
-    fn the_map_opens_only_where_the_session_offers_it() {
+    fn tools_share_the_world_stack_but_stay_above_the_front_end() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, (raise_opened, restack).chain());
+        let scripts = app
+            .world_mut()
+            .spawn((
+                super::super::Frame::default(),
+                WindowId::Scripts,
+                Node::default(),
+                GlobalZIndex(0),
+            ))
+            .id();
+        app.update();
+        let options = app
+            .world_mut()
+            .spawn((
+                super::super::Frame::default(),
+                WindowId::Options,
+                Node::default(),
+                GlobalZIndex(0),
+            ))
+            .id();
+        app.update();
+        let z = |app: &App, entity| app.world().get::<GlobalZIndex>(entity).unwrap().0;
+        assert!(z(&app, options) > z(&app, scripts));
+        app.world_mut()
+            .resource_mut::<Stack>()
+            .raise(WindowId::Scripts);
+        app.update();
+        assert!(z(&app, scripts) > z(&app, options));
+        assert!(z(&app, scripts) < Layer::Popup.base());
+        // With an online run still at login, the tool clears the full-screen UI.
+        app.insert_resource(crate::online::OnlineState::new(true));
+        app.update();
+        assert!(z(&app, scripts) > Layer::Screen.base());
+        app.insert_resource(crate::online::OnlineState::new(false));
+        app.update();
+        assert!(z(&app, scripts) < Layer::Popup.base());
+    }
+
+    #[test]
+    fn the_map_opens_without_a_server_capability() {
         use eq_client_core::{Capability, WorldEvent};
         let mut app = crate::testing::app();
         app.add_systems(Update, toggle);
@@ -441,8 +449,11 @@ mod tests {
             .spawn((SelectorButton(WindowId::Map), Interaction::None))
             .id();
         crate::clicks::testing::click(&mut app, button);
+        assert!(app.world().resource::<Shown>().is_open(WindowId::Map));
+        // A second click closes it, without changing server capabilities.
+        crate::clicks::testing::click(&mut app, button);
         assert!(!app.world().resource::<Shown>().is_open(WindowId::Map));
-        // Offered, it opens.
+        // Offered, it opens just the same.
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
         app.insert_resource(online);

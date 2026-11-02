@@ -533,27 +533,17 @@ mod tests {
 
     #[test]
     fn what_the_session_leaves_to_the_player_waits_for_their_setting() {
-        use eq_client_core::{
-            options::Toggle,
-            qol::{Fix, Settings},
-        };
+        use eq_client_core::{options::Toggle, qol::Fix};
         let mut world = admitted_with(vec![Capability::Talking], vec![Capability::Map]);
-        // The map is greyed, with the setting that turns it on named.
+        // The transport's optional capabilities still need a choice. The
+        // local map UI no longer needs or requests that capability.
         let map = Needs::Capability(Capability::Map);
         assert!(!map.offered(&world));
-        assert_eq!(
-            map.reason(&world),
-            "Turn on \"Use the Map Where It's Off\" on the Options window's QoL page"
-        );
         // The setting itself is offered where the session leaves the map to
         // the player.
-        let setting = Needs::of(Toggle::Qol(Fix::MapWhereOff));
-        assert_eq!(setting, Some(Needs::Choice(Capability::Map)));
-        assert!(setting.is_some_and(|needs| needs.offered(&world)));
-        // Turned on, the map is the player's.
-        let mut settings = Settings::default();
-        settings.set(Fix::MapWhereOff, true);
-        world.choose(settings.unlocked());
+        assert_eq!(Needs::of(Toggle::Qol(Fix::MapEverywhere)), None);
+        assert!(Needs::Choice(Capability::Map).offered(&world));
+        world.choose(vec![Capability::Map]);
         assert!(map.offered(&world));
         // Where the session offers the map, or nothing, the setting is
         // greyed, with its own reason.

@@ -88,7 +88,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Map => "EQUI_MapViewWnd.xml",
         WindowId::Actions => "EQUI_HotButtonWnd.xml",
         WindowId::Chat => "EQUI_ChatWindow.xml",
-        WindowId::Status => return None,
+        WindowId::Status | WindowId::Scripts => return None,
     };
     Some((file, id.official()?))
 }
@@ -213,7 +213,7 @@ impl Screens {
 
     /// A screen of this skin's file, if the file defines it: a window's, or
     /// one that is no window, as the cursor's attachment.
-    fn screen(
+    pub(crate) fn screen(
         &mut self,
         directory: &std::path::Path,
         skin: &str,
@@ -409,6 +409,7 @@ type Frames<'w, 's> = Query<
         Option<&'static Drawn>,
         &'static mut super::windows::Frame,
     ),
+    Without<crate::map::FallbackMap>,
 >;
 
 /// The skin a window is drawn from: the player's, or the default skin where
@@ -455,7 +456,12 @@ pub(crate) fn apply(
         .qol
         .on(eq_client_core::qol::Fix::HiddenWindows);
     for (frame, id, mut node, mut background, mut border, drawn, mut state) in &mut frames {
-        let from = drawn_from(&mut screens, directory, (&skin.0, *id), hidden_too);
+        let from = drawn_from(
+            &mut screens,
+            directory,
+            (&skin.0, *id),
+            hidden_too || *id == WindowId::Map,
+        );
         let places = online
             .as_deref()
             .and_then(|online| fit::places(online.world(), *id));
@@ -1154,12 +1160,7 @@ fn behave(
     let skin = || SkinButton(button.look.clone());
     match does {
         Does::Toggles(toggles) => {
-            drawn.insert((Button, super::windows::SelectorButton(toggles), skin()));
-            // Greyed where the session does not offer the window.
-            match toggles.needs() {
-                Some(needs) => drawn.insert(crate::outbox::Needs::Capability(needs)),
-                None => drawn,
-            }
+            drawn.insert((Button, super::windows::SelectorButton(toggles), skin()))
         }
         Does::Closes => drawn.insert((Button, items::Closes(owner), skin())),
         Does::Gives => drawn.insert((Button, super::give::GiveButton)),
@@ -2401,7 +2402,7 @@ mod tests {
         let node = app.world().get::<Node>(status).unwrap();
         assert_eq!(
             (node.left, node.top, node.right, node.bottom),
-            (Val::Auto, Val::Auto, px(0.0), px(0.0))
+            (Val::Auto, Val::Auto, px(64.0), px(0.0))
         );
     }
 

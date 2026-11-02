@@ -29,6 +29,8 @@ pub struct Preview {
     pub spellbook: bool,
     /// Character selection with synthetic names.
     pub character_select: bool,
+    /// A synthetic creation draft for offline visual checks.
+    pub creation: Option<eq_client_core::character_creation::Draft>,
     /// Loot and merchant windows with synthetic items.
     pub trade: bool,
 }
@@ -40,7 +42,7 @@ impl Preview {
     }
 
     const fn any(&self) -> bool {
-        self.admits() || self.character_select
+        self.admits() || self.character_select || self.creation.is_some()
     }
 }
 
@@ -80,8 +82,15 @@ pub(crate) fn install(app: &mut App, preview: Preview) -> Option<Receiver<WorldU
     if preview.admits() {
         app.add_systems(Startup, admit.after(setup_scene));
     }
-    if preview.character_select {
+    if preview.character_select || preview.creation.is_some() {
         app.add_systems(Startup, characters);
+        app.add_systems(
+            Update,
+            creation
+                .in_set(Stage::Input)
+                .after(super::character_create::input)
+                .before(super::character_create::present),
+        );
     }
     if preview.inventory {
         app.add_systems(Update, inventory.in_set(Shows))
@@ -104,6 +113,27 @@ pub(crate) fn install(app: &mut App, preview: Preview) -> Option<Receiver<WorldU
     }
     app.insert_resource(Switches(preview));
     Some(receiver)
+}
+
+/// Opens a synthetic draft only after the offline list has reached the frontend.
+#[allow(clippy::needless_pass_by_value)]
+fn creation(
+    switches: Res<Switches>,
+    online: Res<super::online::OnlineState>,
+    mut editor: ResMut<super::character_create::Editor>,
+    mut preview: ResMut<super::creation_preview::Preview>,
+    mut done: Local<bool>,
+) {
+    if *done {
+        return;
+    }
+    if let Some(draft) = &switches.0.creation
+        && let Some(selection) = &online.selection
+    {
+        editor.open_preview(selection, online.world(), draft.clone());
+        preview.close = true;
+        *done = true;
+    }
 }
 
 /// True on one frame: the first on which the world has the preview's player.
@@ -179,7 +209,7 @@ fn admit(news: Res<News>, scene: Res<SceneInfo>, players: Query<&Transform, With
 /// Offers two synthetic characters to choose from, each with a synthetic
 /// look, so the select screen shows them in their zones.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-fn characters(news: Res<News>) {
+fn characters(news: Res<News>, settings: Res<super::ViewerSettings>, switches: Res<Switches>) {
     // Chain on the body (material 2) or plate (3), and a held model number.
     let look = |race, gender, class, material, held| {
         let mut materials = [material; 9];
@@ -198,6 +228,17 @@ fn characters(news: Res<News>) {
         }
     };
     news.game(WorldEvent::CharacterSelection {
+        creation: Some(switches.0.creation.as_ref().map_or_else(
+            || match settings.0.installed_client {
+                eq_client_assets::ui::InstalledClient::Titanium => {
+                    eq_client_core::creation::Rules::Titanium
+                }
+                eq_client_assets::ui::InstalledClient::EqMac => {
+                    eq_client_core::creation::Rules::EqMac
+                }
+            },
+            |draft| draft.rules,
+        )),
         selection_id: 1,
         characters: vec![
             CharacterChoice {

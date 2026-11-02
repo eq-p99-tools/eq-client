@@ -315,9 +315,9 @@ pub(super) fn own_button(id: &str, owner: WindowId) -> Option<Does> {
 
 /// What a button of the skin's character list does: its eight character
 /// buttons show the slots of the server's list in order, Enter World enters
-/// with the chosen one and Quit leaves the game. Creating, deleting and
-/// rotating characters, the tutorial, exploring and returning home are not
-/// in this client yet.
+/// with the chosen one and Quit leaves the game. Empty slots open creation.
+/// Deleting and rotating characters, the tutorial, exploring and returning
+/// home are not in this client yet.
 pub(super) fn character_button(id: &str) -> Does {
     match id {
         "Enter_World_Button" => Does::EntersWorld,

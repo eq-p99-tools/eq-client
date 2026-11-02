@@ -43,12 +43,21 @@ pub(super) fn route(
     (stack, frames): (Res<Stack>, Frames),
     (online, front): (Res<super::online::OnlineState>, Res<super::login::FrontEnd>),
     mut escape: ResMut<Escape>,
+    menu: Res<super::windows::menu::Menu>,
 ) {
     use super::login::Screen;
     let screen = front.screen(&online);
     let key = keys.input.just_pressed(KeyCode::Escape);
     *escape = match screen {
-        _ if !key => Escape::Unused,
+        _ if !key || keys.escape_claimed() || !keys.window_focused() => Escape::Unused,
+        _ if menu.open => Escape::Close(WindowId::Selector),
+        _ if screen != Screen::World
+            && frames
+                .iter()
+                .any(|(id, node)| *id == WindowId::Scripts && node.display != Display::None) =>
+        {
+            Escape::Close(WindowId::Scripts)
+        }
         Screen::Login | Screen::Servers if !front.has_login() || !keys.window_focused() => {
             Escape::Unused
         }
@@ -123,6 +132,20 @@ mod tests {
     }
 
     #[test]
+    fn the_corner_menu_consumes_escape_before_an_open_workbench() {
+        let mut app = app();
+        window(&mut app, WindowId::Scripts);
+        app.world_mut()
+            .resource_mut::<super::super::windows::menu::Menu>()
+            .open = true;
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Selector));
+        app.world_mut()
+            .resource_mut::<super::super::windows::menu::Menu>()
+            .open = false;
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Scripts));
+    }
+
+    #[test]
     fn escape_closes_the_frontmost_open_window_first_then_the_target() {
         let mut app = app();
         let inventory = window(&mut app, WindowId::Inventory);
@@ -142,6 +165,25 @@ mod tests {
         // An inspected item sits above the rest and closes first.
         window(&mut app, WindowId::Item);
         assert_eq!(press(&mut app), Escape::Close(WindowId::Item));
+    }
+
+    #[test]
+    fn scripts_follow_the_same_escape_order_as_other_world_windows() {
+        let mut app = app();
+        window(&mut app, WindowId::Scripts);
+        window(&mut app, WindowId::Options);
+        app.world_mut()
+            .resource_mut::<Stack>()
+            .raise(WindowId::Options);
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Options));
+        app.world_mut()
+            .resource_mut::<Stack>()
+            .raise(WindowId::Scripts);
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Scripts));
+        window(&mut app, WindowId::Item);
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Item));
+        app.insert_resource(crate::online::OnlineState::new(true));
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Scripts));
     }
 
     #[test]

@@ -84,13 +84,14 @@ pub(crate) enum WindowId {
     /// The skin's container window for the world container open for the
     /// player, such as a forge.
     WorldContainer,
-    /// The skin's Map window: the zone's map and the player on it, where the
-    /// server type offers the map.
+    /// The local map and known entities, available on every server.
     Map,
-    /// The buttons that open the other windows.
+    /// The corner EQ menu that opens the other windows.
     Selector,
     /// The character list.
     CharacterSelect,
+    /// The scenario editor and execution monitor, also available before login.
+    Scripts,
 }
 
 /// Where a window opens before the player moves it.
@@ -202,9 +203,16 @@ pub(crate) enum Layer {
     Popup,
     /// Screens that replace the game, such as the character list.
     Screen,
+    /// Floating tools raised above the login and character screens before play.
+    Tool,
 }
 
 impl Layer {
+    /// Windows whose order follows the player's clicks and opens.
+    pub(crate) const fn stacked(self) -> bool {
+        matches!(self, Self::Floating | Self::Tool)
+    }
+
     /// The first global z-index of the layer.
     pub(crate) const fn base(self) -> i32 {
         match self {
@@ -212,6 +220,7 @@ impl Layer {
             Self::Floating => 20,
             Self::Popup => 60,
             Self::Screen => 500,
+            Self::Tool => 800,
         }
     }
 }
@@ -323,10 +332,15 @@ const fn floating(
 }
 
 impl WindowId {
+    /// Scripts has open/close states only; other titled windows may collapse.
+    pub(crate) const fn can_minimize(self) -> bool {
+        !matches!(self, Self::Scripts)
+    }
+
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 32] = [
+    pub(crate) const ALL: [Self; 33] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -359,6 +373,7 @@ impl WindowId {
         Self::Map,
         Self::Selector,
         Self::CharacterSelect,
+        Self::Scripts,
     ];
 
     /// The windows of the bags in the slots that hold one: carried, then
@@ -403,7 +418,7 @@ impl WindowId {
             Self::Map => Some("MapViewWnd"),
             Self::Selector => Some("SelectorWindow"),
             Self::CharacterSelect => Some("CharacterSelectWindow"),
-            Self::Status => None,
+            Self::Status | Self::Scripts => None,
         }
     }
 
@@ -463,16 +478,8 @@ impl WindowId {
             Self::Map => "map",
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
+            Self::Scripts => "scripts",
         })
-    }
-
-    /// What the session must offer for the window to open, if anything: the
-    /// map opens only where the server type offers it.
-    pub(crate) const fn needs(self) -> Option<eq_client_core::Capability> {
-        match self {
-            Self::Map => Some(eq_client_core::Capability::Map),
-            _ => None,
-        }
     }
 
     /// The window whose placement is saved under this name, now or before
@@ -493,6 +500,11 @@ impl WindowId {
     pub(crate) const fn describe(self) -> Description {
         match self {
             // Clear of the skin's spell gems along the left edge.
+            Self::Scripts => Description {
+                layer: Layer::Tool,
+                opening: Opening::Own,
+                ..floating("SCRIPTS", Placement::TopLeft(80.0, 48.0), true, &[])
+            },
             Self::Status => hud("", Placement::TopLeft(56.0, 16.0), &["POSITION"]),
             Self::Target => hud(
                 "",
@@ -525,7 +537,11 @@ impl WindowId {
                 )
             },
             Self::Chat => hud("CHAT", Placement::BottomLeft(20.0, 16.0), &["CHAT"]),
-            Self::Selector => hud("", Placement::TopRight(16.0, 16.0), &[]),
+            Self::Selector => Description {
+                persists: false,
+                opening: Opening::Own,
+                ..hud("", Placement::BottomRight(12.0, 12.0), &[])
+            },
             // The official client leaves the effects window up; Escape does
             // not close it.
             Self::Effects => Description {
@@ -666,10 +682,10 @@ impl WindowId {
     /// player nor the official client's UI file placed it, in place of where
     /// the skin puts it: the spell gems in the top left corner, the player
     /// window beside them with the group and pet windows below it, the
-    /// selector and the target window at the top centre, the effects windows
+    /// target window at the top centre, the effects windows
     /// down the right edge, the hotbar in the bottom left corner, the chat at
     /// the bottom centre with the casting window above it, and the client's
-    /// own Status panel in the bottom right corner. Each place follows from
+    /// own Status panel beside the EQ menu in the bottom right corner. Each place follows from
     /// the sizes the windows are drawn at (`size`, zero for a window the skin
     /// hides), so that none covers another on a screen with room for the
     /// windows along each edge; a panel keeps its place while it is closed.
@@ -683,12 +699,9 @@ impl WindowId {
                 size(Self::Spells).x,
                 size(Self::Player).y + size(Self::Group).y,
             ),
-            Self::Selector => Placement::TopCentre {
-                top: 0.0,
-                width: size(Self::Selector).x,
-            },
+            Self::Selector => Placement::BottomRight(12.0, 12.0),
             Self::Target => Placement::TopCentre {
-                top: size(Self::Selector).y,
+                top: 0.0,
                 width: size(Self::Target).x,
             },
             Self::Effects => Placement::TopRight(0.0, 0.0),
@@ -702,7 +715,7 @@ impl WindowId {
                 bottom: size(Self::Chat).y,
                 width: size(Self::CastBar).x,
             },
-            Self::Status => Placement::BottomRight(0.0, 0.0),
+            Self::Status => Placement::BottomRight(64.0, 0.0),
             _ => return None,
         })
     }
@@ -801,14 +814,14 @@ mod tests {
     fn the_arranged_panels_cover_nothing_and_stay_on_screen() {
         use WindowId as W;
         // Sizes made up to the shapes of the default skin's narrow panels,
-        // and of Velious's wide ones, which hides its selector, short effects
-        // and casting windows; the Status panel is the client's own.
+        // and of Velious's wide ones, which hides short effects and casting
+        // windows; the Status panel and corner menu are the client's own.
         let narrow = [
             (W::Spells, (50.0, 300.0)),
             (W::Player, (150.0, 90.0)),
             (W::Group, (150.0, 200.0)),
             (W::PetInfo, (155.0, 140.0)),
-            (W::Selector, (480.0, 50.0)),
+            (W::Selector, (42.0, 42.0)),
             (W::Target, (150.0, 50.0)),
             (W::Effects, (105.0, 400.0)),
             (W::ShortEffects, (105.0, 160.0)),
@@ -822,7 +835,7 @@ mod tests {
             (W::Player, (270.0, 70.0)),
             (W::Group, (260.0, 220.0)),
             (W::PetInfo, (145.0, 140.0)),
-            (W::Selector, (0.0, 0.0)),
+            (W::Selector, (42.0, 42.0)),
             (W::Target, (270.0, 70.0)),
             (W::Effects, (200.0, 380.0)),
             (W::ShortEffects, (0.0, 0.0)),

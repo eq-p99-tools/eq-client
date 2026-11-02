@@ -2,7 +2,8 @@
 
 mod model;
 pub use model::{
-    Attachment, CharacterAsset, CharacterPose, Piece, STANDING_CLIP, SkinBind, load_character,
+    Attachment, CharacterAsset, CharacterPose, CreationAppearance, Piece, STANDING_CLIP, SkinBind,
+    load_character, load_creation_character,
 };
 
 use std::{

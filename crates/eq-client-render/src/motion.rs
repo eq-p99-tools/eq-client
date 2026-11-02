@@ -444,7 +444,7 @@ pub(super) fn input(
     options: Res<crate::options::OptionsState>,
     mut controls: ResMut<Controls>,
     players: Query<&PlayerBody, With<Player>>,
-    cameras: Query<&OrbitCamera>,
+    cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
     (settings, messages, mut chat): (
         Res<crate::ViewerSettings>,
         Res<crate::hud::messages::Messages>,
@@ -458,12 +458,19 @@ pub(super) fn input(
         controls.held = Some(Held::Withdrawn);
         return;
     }
+    let detached = cameras.single().is_ok_and(|(_, free)| free);
+    if detached {
+        controls.autorun = false;
+        controls.taps = TapBuffer::default();
+        controls.jump = None;
+        controls.facing = None;
+    }
     let Some(_) = controls.speed else {
         controls.held = Some(Held::Withdrawn);
         return;
     };
-    let focused = keys.focused();
-    if keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
+    let focused = keys.focused() && !detached;
+    if focused && keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
     let standing = online
@@ -471,7 +478,7 @@ pub(super) fn input(
         .player()
         .and_then(|player| online.world().posture(player.spawn_id))
         .is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
-    if keys.pressed(Act::Autorun) {
+    if focused && keys.pressed(Act::Autorun) {
         controls.autorun = !controls.autorun;
     } else if keys.pressed(Act::Forward) || keys.pressed(Act::Back) || !standing {
         controls.autorun = false;
@@ -480,7 +487,8 @@ pub(super) fn input(
     // Held until the next sample; jumps rise and fall like falls, so only
     // where the session takes both, and no sooner after the last than the
     // installed client allows.
-    if keys.pressed(Act::Jump)
+    if focused
+        && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
         && controls.crouch.is_none()
         && online.world().can(Capability::Jumping)
@@ -500,7 +508,7 @@ pub(super) fn input(
         controls.crouch = None;
         match post_posture(&outbox, online.world(), Posture::Standing) {
             Ok(()) => {
-                controls.jump = Some(due);
+                controls.jump = (!detached).then_some(due);
                 controls.crouch = Some(Crouch::Over);
             }
             Err(reason) => {
@@ -537,7 +545,7 @@ pub(super) fn input(
             return;
         }
     }
-    let (Ok(body), Ok(camera), Some(world), Some(accepted)) = (
+    let (Ok(body), Ok((camera, _)), Some(world), Some(accepted)) = (
         players.single(),
         cameras.single(),
         collision.0.as_ref(),
@@ -2800,6 +2808,73 @@ mod tests {
             panic!("expected stop")
         };
         assert!((request.position.x).abs() < 0.0001 && request.position.y.abs() < 0.0001);
+    }
+
+    #[test]
+    fn free_camera_stops_autorun_and_sends_no_character_input() {
+        let (mut app, receiver) = app();
+        let world = app.world_mut();
+        let mut cameras = world.query::<(Entity, &OrbitCamera)>();
+        let (entity, orbit) = cameras.single(world).unwrap();
+        let pose = crate::camera::orbit_transform(orbit);
+        world.entity_mut(entity).insert(pose);
+        app.add_systems(Update, crate::camera::toggle_free.before(input));
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.autorun = true;
+            controls.moving = true;
+            controls.jump = Some(Instant::now());
+            controls.facing = Some(128.0);
+        }
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            for key in [
+                KeyCode::F9,
+                KeyCode::KeyW,
+                KeyCode::ArrowUp,
+                KeyCode::KeyE,
+                KeyCode::Space,
+                KeyCode::NumLock,
+            ] {
+                keys.press(key);
+            }
+        }
+        app.update();
+        assert!(
+            app.world()
+                .get::<crate::camera::FreeCamera>(entity)
+                .is_some()
+        );
+        let ClientCommand::Move(stop) = receiver.try_recv().unwrap() else {
+            panic!("expected a stop")
+        };
+        assert!(
+            Vec3::from_array(eq_client_core::render_position(stop.position))
+                .abs_diff_eq(Vec3::new(0.0, 3.0, 0.0), 1e-5)
+        );
+        assert!(stop.position.heading.abs() < 1e-5);
+        assert!(receiver.try_recv().is_err());
+        assert!(!app.world().resource::<Controls>().autorun);
+        assert!(app.world().resource::<Controls>().jump.is_none());
+        accept(&mut app, &stop);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        // With every key released, returning does not resurrect autorun or a tap.
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::F9);
+        }
+        app.update();
+        assert!(
+            app.world()
+                .get::<crate::camera::FreeCamera>(entity)
+                .is_none()
+        );
+        assert!(receiver.try_recv().is_err());
     }
 
     /// The app of [`app`], standing still with the player a step above its

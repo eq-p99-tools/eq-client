@@ -91,7 +91,7 @@ pub(crate) fn worlds(
 ) {
     let visible = front.screen(&online) == Screen::Servers;
     let official = look.is_some_and(|look| look.official());
-    if visible && keys.window_focused() {
+    if visible && keys.window_focused() && !keys.editing_script() {
         let asked = online
             .world()
             .servers()
@@ -674,6 +674,7 @@ mod tests {
         crate::online::testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [WorldEvent::CharacterSelection {
+                creation: Some(eq_client_core::creation::Rules::Titanium),
                 selection_id: 1,
                 characters: Vec::new(),
             }],

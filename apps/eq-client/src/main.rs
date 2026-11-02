@@ -1,4 +1,4 @@
-#![doc = "Command-line entry point for the offline EQ zone viewer."]
+#![doc = "Native EQ client entry point: login, online play and offline asset previews."]
 
 mod logins;
 mod presets;
@@ -32,7 +32,7 @@ struct Arguments {
     #[arg(long, default_value = "ecommons")]
     zone: String,
 
-    /// Camera projection used by the offline viewer.
+    /// Camera projection used by the client.
     #[arg(long, value_enum, default_value_t = CameraStyle::Perspective)]
     camera: CameraStyle,
 
@@ -90,9 +90,8 @@ struct Arguments {
     #[arg(long)]
     debug_overlay: bool,
 
-    /// Build each zone's navigation mesh at entry, off the frame, and keep it
-    /// under the settings directory; for probes, scripts and looks. Nothing
-    /// plans routes over it yet.
+    /// Build and cache each zone's navigation mesh in background work. Script
+    /// walks use a ready mesh for the character's size, otherwise grid search.
     #[arg(long, env = "EQ_CLIENT_NAVMESH")]
     navmesh: bool,
 
@@ -173,12 +172,22 @@ struct Arguments {
     #[arg(long)]
     terrain_only: bool,
 
-    /// Attended key script (press/hold/wait/report/screenshot/quit), run only
+    /// Start a scenario file through the same executor as the in-game Scripts
+    /// workbench. Runs only
     /// while the client window is focused, except offline or on a local
     /// `EQEmu` or TAKP server.
     /// Screenshots are saved beside it.
     #[arg(long, conflicts_with = "screenshot")]
     script: Option<PathBuf>,
+
+    /// Open the in-client script editor; opening it never starts a script.
+    #[arg(long)]
+    script_editor: bool,
+
+    /// Constrain an online stock EQEmu/TAKP session to the local network,
+    /// allowing local-only workbench commands without a CLI script.
+    #[arg(long, requires = "online")]
+    local_test: bool,
 
     /// Keep running steps appended to the script file until it quits or reaches
     /// the runtime limit.
@@ -374,6 +383,20 @@ fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
     script && protocol.is_some_and(ServerProtocol::is_stock)
 }
 
+/// Establish the network constraint before either CLI or workbench actions run.
+fn script_session(
+    steps: Option<&[Step]>,
+    local_test: bool,
+    protocol: Option<ServerProtocol>,
+) -> Result<bool, &'static str> {
+    let local = local_session(steps.is_some() || local_test, protocol);
+    if local_test && !local {
+        return Err("--local-test requires an EQEmu or TAKP server preset");
+    }
+    check_local_steps(steps, local)?;
+    Ok(local)
+}
+
 /// The command line, and the installation it names itself, which a launch
 /// naming its preset names for it; `EQ_CLIENT_DIR`, which launchers set on
 /// every run, names none (see [`start_point`]).
@@ -431,7 +454,8 @@ fn main() {
     let (mut arguments, typed_installation) = parse_arguments();
     // Validate every local input before the session logs in.
     let (script, script_follow) = script_input(&arguments);
-    let mode = mode(&arguments, script.as_deref()).unwrap_or_else(|error| {
+    let steps = script.as_ref().map(|program| program.clone().into_steps());
+    let mode = mode(&arguments, steps.as_deref()).unwrap_or_else(|error| {
         eprintln!("error: {error}");
         std::process::exit(2);
     });
@@ -454,11 +478,11 @@ fn main() {
     let protocol = start
         .as_ref()
         .map(|(presets, launch)| presets.list[launch.preset].protocol);
-    let local = local_session(script.is_some(), protocol);
-    if let Err(error) = check_local_steps(script.as_deref(), local) {
-        eprintln!("error: {error}");
-        std::process::exit(2);
-    }
+    let local =
+        script_session(steps.as_deref(), arguments.local_test, protocol).unwrap_or_else(|error| {
+            eprintln!("error: {error}");
+            std::process::exit(2);
+        });
     let eq_directory = eq_directory(arguments.eq_dir.take(), start.as_ref());
     let client = start
         .as_ref()
@@ -487,6 +511,7 @@ fn main() {
         }
     };
     let preview = Preview {
+        creation: None,
         entities: arguments.demo_entities,
         inventory: arguments.demo_inventory,
         bank: arguments.demo_bank,
@@ -695,6 +720,8 @@ fn viewer_config(
         },
         script,
         script_follow,
+        script_editor: arguments.script_editor,
+        script_path: arguments.script.clone(),
         hide_script_pointer: arguments.hide_script_pointer,
         local_session: local,
         ui_skin: arguments.ui_skin,
@@ -731,7 +758,7 @@ fn run_client(
 
 /// The validated script and, when following, where to keep reading it.
 type ScriptInput = (
-    Option<Vec<eq_client_render::script::Step>>,
+    Option<eq_client_render::script::Program>,
     Option<(PathBuf, usize)>,
 );
 
@@ -750,11 +777,8 @@ fn script_input(arguments: &Arguments) -> ScriptInput {
 /// also returns how many bytes were read, where following resumes. A followed
 /// script is read only through its last complete line, since its writer may be
 /// partway through the next.
-fn load_script(
-    path: &std::path::Path,
-    follow: bool,
-) -> (Vec<eq_client_render::script::Step>, usize) {
-    std::fs::read_to_string(path)
+fn load_script(path: &std::path::Path, follow: bool) -> (eq_client_render::script::Program, usize) {
+    eq_client_render::script::read_source(path)
         .map_err(|error| error.to_string())
         .and_then(|text| {
             let read = if follow {
@@ -764,11 +788,12 @@ fn load_script(
             };
             // Windows editors may save UTF-8 with a byte-order mark.
             let complete = &text[..read];
-            eq_client_render::script::parse(
+            eq_client_render::script::Program::parse(
                 complete.strip_prefix('\u{feff}').unwrap_or(complete),
                 path.parent().unwrap_or_else(|| std::path::Path::new(".")),
             )
             .map(|steps| (steps, read))
+            .map_err(|error| error.to_string())
         })
         .unwrap_or_else(|error| {
             eprintln!("Invalid script: {error}");
@@ -827,6 +852,21 @@ mod tests {
         parse_window_size, presets, run_client, seconds,
     };
     use clap::Parser;
+
+    #[test]
+    fn workbench_local_mode_requires_a_stock_server_and_an_online_launch() {
+        assert!(Arguments::try_parse_from(["eq-client", "--local-test"]).is_err());
+        let args =
+            Arguments::try_parse_from(["eq-client", "--online", "--local-test", "--script-editor"])
+                .unwrap();
+        assert!(args.local_test && args.script_editor && args.script.is_none());
+        assert!(super::script_session(None, true, Some(ServerProtocol::Project1999)).is_err());
+        assert!(super::script_session(None, true, Some(ServerProtocol::Quarm)).is_err());
+        assert_eq!(
+            super::script_session(None, true, Some(ServerProtocol::EqEmu)),
+            Ok(true)
+        );
+    }
 
     #[test]
     fn an_online_run_holds_its_presets_client_and_a_login_screen_its_installations() {
@@ -939,8 +979,11 @@ mod tests {
         std::fs::write(&path, "\u{feff}wait 10\n").unwrap();
         let (whole, _) = load_script(&path, false);
         std::fs::remove_file(&path).unwrap();
-        assert_eq!((followed.len(), read), (1, "\u{feff}wait 10\n".len()));
-        assert_eq!(whole.len(), 1);
+        assert_eq!(
+            (followed.instructions().len(), read),
+            (1, "\u{feff}wait 10\n".len())
+        );
+        assert_eq!(whole.instructions().len(), 1);
     }
 
     #[test]

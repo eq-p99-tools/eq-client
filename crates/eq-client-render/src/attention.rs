@@ -14,6 +14,8 @@ use eq_client_core::{
 pub(crate) struct Attention {
     /// The newest chat line looked at.
     seen: u64,
+    /// The newest local map-watch appearance notice looked at.
+    map_seen: u64,
     /// Whether the client asked for attention and has not been focused
     /// since.
     asked: bool,
@@ -40,7 +42,11 @@ pub(crate) fn watch(
     ),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut attention: ResMut<Attention>,
+    map: Option<Res<crate::map::WatchState>>,
 ) {
+    let map_revision = map.as_ref().map_or(0, |state| state.revision);
+    let map_alert = map_revision != attention.map_seen;
+    attention.map_seen = map_revision;
     let revision = chat.history.revision();
     let told = revision > attention.seen
         && chat
@@ -55,7 +61,7 @@ pub(crate) fn watch(
             attention.asked = false;
             attention.request = Some(false);
         }
-    } else if told && options.options.qol.on(Fix::FlashOnTells) {
+    } else if map_alert || (told && options.options.qol.on(Fix::FlashOnTells)) {
         attention.asked = true;
         attention.request = Some(true);
     }
@@ -167,6 +173,33 @@ mod tests {
         })
         .add_systems(Update, request);
         app.world_mut().spawn((Window::default(), PrimaryWindow));
+        app.update();
+        assert_eq!(app.world().resource::<Attention>().request, None);
+    }
+
+    #[test]
+    fn a_map_watch_alert_requests_attention_without_repeating() {
+        let mut app = App::new();
+        app.init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::options::OptionsState>()
+            .init_resource::<crate::map::WatchState>()
+            .init_resource::<Attention>()
+            .add_systems(Update, watch);
+        app.world_mut().spawn((
+            Window {
+                focused: false,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.world_mut()
+            .resource_mut::<crate::map::WatchState>()
+            .revision = 1;
+        app.update();
+        assert_eq!(
+            app.world_mut().resource_mut::<Attention>().request.take(),
+            Some(true)
+        );
         app.update();
         assert_eq!(app.world().resource::<Attention>().request, None);
     }

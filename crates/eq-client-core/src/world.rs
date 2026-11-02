@@ -55,6 +55,8 @@ pub struct CharacterList {
     pub selection_id: u64,
     /// The characters, in their server slots.
     pub characters: Vec<CharacterChoice>,
+    /// Creation policy supplied by the session with this list.
+    pub creation: Option<crate::creation::Rules>,
 }
 
 /// The world's last answer to a character the player asked for.
@@ -66,6 +68,17 @@ pub struct Creation {
     pub name: String,
     /// How the world took it.
     pub outcome: crate::creation::CreationOutcome,
+}
+
+/// A generation request's answer, scoped to its character list and editor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NameSuggestion {
+    /// Character list identity.
+    pub selection_id: u64,
+    /// Frontend request identity.
+    pub request_id: u64,
+    /// Valid suggestion, or no suggestion on failure.
+    pub name: Option<String>,
 }
 
 /// The worlds the login server listed for the player to choose from.
@@ -167,6 +180,10 @@ pub struct ClientWorld {
     /// The world's answers to the player's character creations, counted, and
     /// the last of them.
     creation: Option<Creation>,
+    name_suggestion: Option<NameSuggestion>,
+    name_generator: Option<bool>,
+    /// The world's expansion mask, when it reported one.
+    expansions: Option<crate::rules::Expansions>,
     /// The last revision given to a spawn, which never repeats.
     revision: u64,
     /// The last count given to a spawn's motion, which never repeats.
@@ -525,7 +542,8 @@ impl ClientWorld {
             WorldEvent::CharacterSelection {
                 selection_id,
                 characters,
-            } => self.offered(*selection_id, characters, news),
+                creation,
+            } => self.offered(*selection_id, characters, *creation, news),
             WorldEvent::Entered {
                 capabilities,
                 choices,
@@ -584,9 +602,16 @@ impl ClientWorld {
             }
 
             // The world's player-versus-player ruleset decides names' colours.
-            WorldEvent::Rules(rules) => self.pvp_rule = rules.pvp,
+            WorldEvent::Rules(rules) => {
+                self.pvp_rule = rules.pvp;
+                if let Some(enabled) = rules.name_generator { self.name_generator = Some(enabled); }
+            }
+            WorldEvent::NameSuggestion { selection_id, request_id, name } => {
+                self.name_suggestion = Some(NameSuggestion { selection_id: *selection_id, request_id: *request_id, name: name.clone() });
+            }
+            WorldEvent::Expansions(expansions) => self.expansions = Some(*expansions),
 
-            // Nothing here shows the world's other rules, the expansions it allows,
+            // Nothing here shows the world's other rules,
             // its chat server, a zone it says is down, the zone's weather or
             // its header beyond the sky and the clip yet, nor stops the
             // player while stunned, charmed, held by the server or berserk,
@@ -611,8 +636,7 @@ impl ClientWorld {
             // wait for a window to choose one from, and what a game master did
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
-            WorldEvent::Expansions(_)
-            | WorldEvent::ChatServer(_)
+            WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::Weather(_)
             | WorldEvent::ServerTick(_)

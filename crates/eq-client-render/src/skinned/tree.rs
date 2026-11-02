@@ -42,6 +42,9 @@ pub(super) fn draw(
     // the skin's setting wins (inferred, as is what the setting means).
     if !screen.transparent {
         let mut backdrop = window.spawn((looks::Backdrop(context.id), at(0.0, 0.0, width, height)));
+        if context.id == WindowId::Map {
+            backdrop.insert(crate::map::Backdrop::Artwork);
+        }
         if let Some(image) = screen
             .template
             .as_ref()
@@ -117,6 +120,9 @@ pub(super) fn pieces(
                 );
                 if let Some(image) = art.cut(piece) {
                     let mut picture = window.spawn((image, node));
+                    if context.id == WindowId::Map {
+                        picture.insert(crate::map::Backdrop::Artwork);
+                    }
                     if id.as_deref() == Some("A_AttackIndicatorAnim") {
                         picture.insert((Shows::Attacking, Visibility::Hidden));
                     }
@@ -175,6 +181,7 @@ pub(super) fn pieces(
                 });
                 window.spawn((
                     crate::map::MapCanvas,
+                    crate::windows::KeepsPress,
                     ImageNode::default(),
                     ZIndex(1),
                     Node {

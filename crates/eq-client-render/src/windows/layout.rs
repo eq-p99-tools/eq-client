@@ -80,7 +80,7 @@ pub(crate) fn remember(
             node.margin = saved.margin;
             node.position_type = saved.position_type;
             frame.placed |= saved.placed;
-            if saved.minimized {
+            if saved.minimized && key.0.can_minimize() {
                 frame.minimized = true;
                 collapse(
                     &mut node,
@@ -289,6 +289,39 @@ mod tests {
             .entity_mut(frame)
             .add_children(&[title, body]);
         (frame, body)
+    }
+
+    #[test]
+    fn scripts_restore_position_without_an_old_minimized_state() {
+        let mut app = App::new();
+        app.init_resource::<Layouts>().add_systems(Update, remember);
+        let (frame, body) = window(&mut app, 240.0);
+        let world = app.world_mut();
+        world.query::<&mut LayoutKey>().single_mut(world).unwrap().0 =
+            super::super::WindowId::Scripts;
+        world.resource_mut::<Layouts>().0.insert(
+            super::super::WindowId::Scripts,
+            Saved {
+                entity: Entity::PLACEHOLDER,
+                edges: [px(41), px(63), Val::Auto, Val::Auto],
+                margin: UiRect::ZERO,
+                position_type: PositionType::Absolute,
+                minimized: true,
+                placed: true,
+            },
+        );
+        app.update();
+        let node = app.world().get::<Node>(frame).unwrap();
+        assert_eq!(
+            (node.left, node.top, node.height),
+            (px(41), px(63), px(240))
+        );
+        assert_eq!(
+            app.world().get::<Node>(body).unwrap().display,
+            Display::Grid
+        );
+        assert!(!app.world().get::<Frame>(frame).unwrap().minimized);
+        assert!(!app.world().resource::<Layouts>().0[&super::super::WindowId::Scripts].minimized);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Tabbed receive-only chat, with mobile palette colors and independent scroll positions.
+//! Tabbed chat, with mobile palette colors and independent scroll positions.
 use crate::theme::{self, Size};
 use bevy::{
     input::keyboard::{Key, KeyboardInput},
@@ -11,6 +11,9 @@ use eq_client_core::{
     qol::Fix,
 };
 use std::collections::{BTreeMap, HashSet};
+
+pub(super) mod links;
+mod paste;
 
 /// Words the client says in the chat, and whose they are: the official
 /// client's, read from its string table, or this client's own, which the
@@ -486,6 +489,9 @@ pub(super) fn input(
     outbox: Res<crate::outbox::Outbox>,
     mut typing: ResMut<crate::keys::Typing>,
     (mut keyboard, mouse): (MessageReader<KeyboardInput>, Res<ButtonInput<MouseButton>>),
+    keys: Option<Res<ButtonInput<Key>>>,
+    mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
+    mut paste: Local<paste::Paste>,
     windows: Query<&Window, With<PrimaryWindow>>,
     panels: Query<(Entity, &UiGlobalTransform, &ComputedNode), With<Panel>>,
     wheel: Res<super::windows::pointer::Wheel>,
@@ -498,8 +504,16 @@ pub(super) fn input(
     viewport: Query<&ComputedNode, With<Viewport>>,
 ) {
     typing.escape_consumed = false;
+    if typing.editing_script {
+        paste.clear();
+        keyboard.clear();
+        typing.composing = false;
+        state.hovered = false;
+        return;
+    }
     // Character selection owns keyboard input until the zone admits the player.
     if online.enabled && online.world().session_id().is_none() {
+        paste.clear();
         keyboard.clear();
         typing.composing = false;
         state.hovered = false;
@@ -532,50 +546,23 @@ pub(super) fn input(
         typing.counting = false;
     }
     // The quantity window's number has the keyboard: its keys are its own.
-    if typing.counting {
+    if typing.counting || typing.map_search {
         keyboard.clear();
+        paste.clear();
     }
-    let mut submit = send.any();
-    for event in keyboard.read() {
-        if !event.state.is_pressed() {
-            continue;
-        }
-        match &event.logical_key {
-            Key::Enter => {
-                if typing.composing {
-                    submit = true;
-                } else {
-                    typing.composing = true;
-                }
-            }
-            Key::Escape if typing.composing => {
-                typing.composing = false;
-                typing.escape_consumed = true;
-            }
-            Key::Backspace if typing.composing => {
-                state.draft.pop();
-            }
-            // A slash opens the line with only itself typed, so a command is
-            // one keystroke away, as in the official client (Titanium checked;
-            // EQMac inferred, recording checklist 6.241). A line left with
-            // Escape gives way to it, as Enter alone brings that line back.
-            Key::Character(value) if !typing.composing && value.as_str() == "/" => {
-                typing.composing = true;
-                "/".clone_into(&mut state.draft);
-            }
-            // The line types what the key types, as the window reports it:
-            // the space bar is a named key, not a character, and a Ctrl
-            // chord types only a control character, which is dropped.
-            _ if typing.composing && state.draft.len() < 512 => {
-                let text = event.text.as_deref().unwrap_or_default();
-                state.draft.extend(text.chars().filter(|c| !c.is_control()));
-                let boundary = state.draft.floor_char_boundary(512);
-                state.draft.truncate(boundary);
-            }
-            _ => (),
-        }
-    }
+    let events: Vec<_> = keyboard.read().cloned().collect();
+    let empty = ButtonInput::default();
+    let submit = compose(
+        &mut state,
+        &mut typing,
+        &events,
+        keys.as_deref().unwrap_or(&empty),
+        clipboard.as_deref_mut(),
+        &mut paste,
+        online.world().session_id(),
+    ) || send.any();
     if submit {
+        paste.clear();
         if state.draft.trim().is_empty() {
             // Enter on an empty line closes the input, as in the official client.
             typing.composing = false;
@@ -605,6 +592,78 @@ pub(super) fn input(
         view.offset = (view.offset - wheel.pixels).clamp(0.0, maximum);
         view.follow = view.offset >= maximum - 1.0;
     }
+}
+
+/// Edit one chat draft with ordered modifier snapshots; clipboard input never submits.
+fn compose(
+    state: &mut ChatState,
+    typing: &mut crate::keys::Typing,
+    events: &[KeyboardInput],
+    keys: &ButtonInput<Key>,
+    mut clipboard: Option<&mut bevy::clipboard::Clipboard>,
+    paste: &mut paste::Paste,
+    session: Option<u64>,
+) -> bool {
+    let mut submit = false;
+    let modifiers = crate::keys::modifiers::snapshots(events, keys);
+    for (event, held) in events.iter().zip(modifiers) {
+        if !event.state.is_pressed() {
+            continue;
+        }
+        if held[0] || held[2] || held[3] {
+            if typing.composing
+                && held[0]
+                && !held[2]
+                && !held[3]
+                && matches!(&event.logical_key, Key::Character(key) if key.eq_ignore_ascii_case("v"))
+                && let Some(clipboard) = clipboard.as_mut()
+            {
+                paste.request(clipboard.fetch_text(), session, &state.draft);
+            }
+            continue;
+        }
+        match &event.logical_key {
+            Key::Enter => {
+                if typing.composing {
+                    submit = true;
+                } else {
+                    typing.composing = true;
+                }
+            }
+            Key::Escape if typing.composing => {
+                typing.composing = false;
+                typing.escape_consumed = true;
+            }
+            Key::Backspace if typing.composing => {
+                state.draft.pop();
+            }
+            // A slash opens the line with only itself typed, so a command is
+            // one keystroke away, as in the official client (Titanium checked;
+            // EQMac inferred, recording checklist 6.241). A line left with
+            // Escape gives way to it, as Enter alone brings that line back.
+            Key::Character(value) if !typing.composing && value.as_str() == "/" => {
+                typing.composing = true;
+                "/".clone_into(&mut state.draft);
+            }
+            // The line types what the key types, as the window reports it:
+            // the space bar is a named key, not a character. Chords are
+            // handled above using their event-time modifiers.
+            _ if typing.composing && state.draft.len() < 512 => {
+                let text = event.text.as_deref().unwrap_or_default();
+                state.draft.extend(text.chars().filter(|c| !c.is_control()));
+                let boundary = state.draft.floor_char_boundary(512);
+                state.draft.truncate(boundary);
+            }
+            _ => (),
+        }
+    }
+    if paste
+        .apply(&mut state.draft, typing.composing, session)
+        .is_err()
+    {
+        state.refuse("Could not read clipboard text.");
+    }
+    submit
 }
 
 /// The chat's colours for its kinds of text, and its font, as the player
@@ -864,7 +923,7 @@ fn sync_lines(
 
 /// Appends one chat line in the official client's words, as its log
 /// writes it without the time (`logs::shown`) unless the player wants the
-/// time ([`Fix::ShowTimesInChat`]), with item links clickable; in its
+/// time ([`Fix::ShowTimesInChat`]), with item and web links clickable; in its
 /// channel's colour, the player's and in the player's font where the chat
 /// has them.
 fn spawn_line(
@@ -887,7 +946,7 @@ fn spawn_line(
     if times {
         stamp(&mut message, at);
     }
-    if message.item_links.is_empty() {
+    if message.item_links.is_empty() && !links::contains_url(&message.text) {
         parent.spawn((
             LineId(id),
             Text::new(message.text),
@@ -1933,6 +1992,39 @@ mod tests {
         app.world_mut().write_message(enter);
         app.update();
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_complete_paste_chord_in_one_frame_never_types_v_or_submits() {
+        let (mut app, receiver) = slash_app(true);
+        app.world_mut().resource_mut::<ChatState>().draft = "kept".into();
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        for (key, state) in [
+            (Key::Control, bevy::input::ButtonState::Pressed),
+            (
+                Key::Character("v".into()),
+                bevy::input::ButtonState::Pressed,
+            ),
+            (
+                Key::Character("v".into()),
+                bevy::input::ButtonState::Released,
+            ),
+            (Key::Control, bevy::input::ButtonState::Released),
+        ] {
+            app.world_mut().write_message(KeyboardInput {
+                key_code: KeyCode::KeyV,
+                text: Some("v".into()),
+                logical_key: key,
+                state,
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            });
+        }
+        app.update();
+        assert_eq!(app.world().resource::<ChatState>().draft, "kept");
         assert!(receiver.try_recv().is_err());
     }
 

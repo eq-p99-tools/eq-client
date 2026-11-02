@@ -354,7 +354,7 @@ fn mask(bits: u32, labels: &[&str]) -> String {
     }
 }
 
-/// Renders links as purple text spans within the same wrapping text paragraph,
+/// Renders item and web links within the same wrapping text paragraph,
 /// returning the paragraph.
 pub(super) fn spawn_message(
     parent: &mut ChildSpawnerCommands,
@@ -382,11 +382,12 @@ pub(super) fn spawn_message(
                 {
                     continue;
                 }
-                text.spawn((
-                    TextSpan::new(&message.text[end..link.text_start]),
-                    theme::font(size),
-                    TextColor(color),
-                ));
+                super::chat::links::spawn_text(
+                    text,
+                    &message.text[end..link.text_start],
+                    color,
+                    size,
+                );
                 text.spawn((
                     TextSpan::new(&message.text[link.text_start..link.text_end]),
                     theme::font(size),
@@ -396,11 +397,7 @@ pub(super) fn spawn_message(
                 ));
                 end = link.text_end;
             }
-            text.spawn((
-                TextSpan::new(&message.text[end..]),
-                theme::font(size),
-                TextColor(color),
-            ));
+            super::chat::links::spawn_text(text, &message.text[end..], color, size);
         })
         .id()
 }
@@ -418,8 +415,15 @@ pub(super) fn link_input(
         &InheritedVisibility,
         Option<&bevy::ui::CalculatedClip>,
     )>,
-    mut links: Query<&mut Interaction, With<ItemButton>>,
-    viewports: Query<&Interaction, (With<super::chat::Viewport>, Without<ItemButton>)>,
+    mut links: Query<&mut Interaction, Or<(With<ItemButton>, With<super::chat::links::WebLink>)>>,
+    viewports: Query<
+        &Interaction,
+        (
+            With<super::chat::Viewport>,
+            Without<ItemButton>,
+            Without<super::chat::links::WebLink>,
+        ),
+    >,
 ) {
     for mut interaction in &mut links {
         if *interaction != Interaction::None {

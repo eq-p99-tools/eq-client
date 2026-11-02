@@ -76,6 +76,21 @@ impl ClientWorld {
         self.characters.as_ref()
     }
 
+    /// Expansions the world lets this account use; unknown until reported.
+    pub const fn expansions(&self) -> Option<crate::rules::Expansions> {
+        self.expansions
+    }
+
+    /// Last name suggestion, scoped to a frontend request.
+    pub const fn name_suggestion(&self) -> Option<&super::NameSuggestion> {
+        self.name_suggestion.as_ref()
+    }
+
+    /// Whether the world enables its generation UI (unknown means allowed).
+    pub const fn name_generator(&self) -> bool {
+        !matches!(self.name_generator, Some(false))
+    }
+
     /// The world's last answer to a character the player asked for.
     #[must_use]
     pub const fn creation(&self) -> Option<&super::Creation> {

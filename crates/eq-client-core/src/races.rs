@@ -7,7 +7,7 @@
 /// Per race: its male, female and neuter models, empty where it has none.
 /// Covers the playable races and the creatures of the classic, Kunark and
 /// Velious zones.
-const MODELS: [(u32, [&str; 3]); 179] = [
+const MODELS: [(u32, [&str; 3]); 181] = [
     (1, ["HUM", "HUF", ""]),
     (2, ["BAM", "BAF", ""]),
     (3, ["ERM", "ERF", ""]),
@@ -128,6 +128,7 @@ const MODELS: [(u32, [&str; 3]); 179] = [
     (126, ["", "", "DJI"]),       // Djinn
     (128, ["IKM", "IKF", ""]),    // Iksar
     (129, ["", "", "SCR"]),       // Scorpion
+    (130, ["KEM", "KEF", ""]),    // Vah Shir
     (131, ["", "", "SRW"]),       // Sarnak
     (133, ["", "", "LYC"]),       // Lycanthrope
     (134, ["", "", "MOS"]),       // Mosquito
@@ -186,6 +187,7 @@ const MODELS: [(u32, [&str; 3]); 179] = [
     (195, ["", "", "BWD"]),       // Black and white dragon
     (196, ["", "", "GDR"]),       // Ghost dragon
     (198, ["", "", "PRI"]),       // Prismatic dragon
+    (330, ["FRM", "FRF", ""]),    // Froglok (player)
     // A later skeleton, which classic clients draw as the original.
     (367, ["", "", "SKE"]),
 ];

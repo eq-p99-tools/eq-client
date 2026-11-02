@@ -6,6 +6,8 @@ use bevy::prelude::*;
 use eq_client_assets::{sidl::Piece, ui::texture};
 use std::collections::BTreeMap;
 
+type CutKey = (String, String, [u32; 4]);
+
 /// Sheets read so far, by skin and file. A sheet that could not be read is
 /// remembered as missing, so it is not read again every frame.
 #[derive(Resource, Default)]
@@ -14,6 +16,8 @@ pub(crate) struct Sheets {
     /// The skin a window is being drawn from, where it is not the player's:
     /// the default skin, for a window the player's skin hides.
     drawing: Option<String>,
+    /// Whether an optional icon's region contains any visible pixels.
+    visible: BTreeMap<CutKey, bool>,
 }
 
 /// Cuts icons out of the skin's sheets.
@@ -26,6 +30,23 @@ pub(crate) struct Art<'w> {
 }
 
 impl Art<'_> {
+    /// An optional icon, falling back when an installation retains its XML but
+    /// blanks the texture region. Cache that check without retaining CPU sheets.
+    pub(crate) fn visible_cut(&mut self, piece: &Piece) -> Option<ImageNode> {
+        let skin = self.sheets.drawing.as_ref().unwrap_or(&self.skin.0).clone();
+        let key = (
+            skin.clone(),
+            piece.texture.clone(),
+            [piece.x, piece.y, piece.width, piece.height],
+        );
+        let directory = self.settings.0.eq_directory.as_deref()?;
+        let visible = *self.sheets.visible.entry(key).or_insert_with(|| {
+            texture(directory, &skin, &piece.texture)
+                .is_ok_and(|pixels| visible_pixels(&pixels, piece))
+        });
+        visible.then(|| self.cut(piece)).flatten()
+    }
+
     /// An item's icon.
     pub(crate) fn item(&mut self, icon: u32) -> Option<ImageNode> {
         let (sheet, rect) = item_cell(icon)?;
@@ -84,6 +105,25 @@ impl Art<'_> {
             ..default()
         })
     }
+}
+
+/// Transparent or out-of-bounds artwork must not hide a functional fallback.
+fn visible_pixels(pixels: &image::RgbaImage, piece: &Piece) -> bool {
+    let Some(right) = piece
+        .x
+        .checked_add(piece.width)
+        .filter(|right| *right <= pixels.width())
+    else {
+        return false;
+    };
+    let Some(bottom) = piece
+        .y
+        .checked_add(piece.height)
+        .filter(|bottom| *bottom <= pixels.height())
+    else {
+        return false;
+    };
+    (piece.y..bottom).any(|y| (piece.x..right).any(|x| pixels.get_pixel(x, y)[3] != 0))
 }
 
 pub(crate) fn image(pixels: image::RgbaImage) -> Image {
@@ -149,6 +189,26 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_icon_regions_preserve_the_fallback_even_on_nonempty_sheets() {
+        let mut pixels = image::RgbaImage::new(4, 4);
+        pixels.put_pixel(0, 0, image::Rgba([255; 4]));
+        let mut piece = Piece {
+            texture: "synthetic.tga".into(),
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 2,
+        };
+        assert!(!visible_pixels(&pixels, &piece));
+        pixels.put_pixel(2, 2, image::Rgba([0, 0, 0, 128]));
+        assert!(visible_pixels(&pixels, &piece));
+        piece.x = u32::MAX;
+        assert!(!visible_pixels(&pixels, &piece));
+        piece.x = 3;
+        assert!(!visible_pixels(&pixels, &piece));
+    }
 
     #[test]
     fn item_cells_follow_columns_and_advance_sheets() {

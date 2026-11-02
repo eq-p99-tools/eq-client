@@ -11,11 +11,16 @@ rust-version.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
 bevy.workspace = true
+bevy_egui = { version = "0.42", default-features = false, features = ["render", "default_fonts", "manage_clipboard"] }
+egui_code_editor = "0.4.2"
 eq-client-assets.workspace = true
 eq-client-core.workspace = true
 image.workspace = true
 rodio.workspace = true
 zeroize.workspace = true
+linkify = "0.11.0"
+webbrowser = { version = "1.2.6", features = ["hardened"] }
+url = "2.5.8"
 
 [dev-dependencies]
 eq-client-assets = { workspace = true, features = ["testing"] }

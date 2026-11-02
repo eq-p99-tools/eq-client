@@ -47,12 +47,14 @@ impl LeftButton {
     /// rule takes a press on a control a hold picks up from.
     pub(crate) fn claim(&mut self, control: Entity) {
         self.pressed_on.retain(|pressed| *pressed != control);
+        self.let_go_on.retain(|released| *released != control);
     }
 
-    /// Ends the press under way without a click, as when it put a hotkey down
-    /// from the cursor and so does nothing else.
+    /// Ends the press and any release in this frame without a click, as when
+    /// it put a hotkey down or completed a drag between rendered frames.
     pub(crate) fn cancel(&mut self) {
         self.pressed_on.clear();
+        self.let_go_on.clear();
     }
 }
 

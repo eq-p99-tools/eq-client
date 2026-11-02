@@ -10,6 +10,10 @@ use super::windows::WindowId;
 use bevy::{prelude::*, window::PrimaryWindow};
 use std::collections::BTreeMap;
 
+pub(crate) mod bindings;
+pub(crate) mod modifiers;
+pub(crate) mod presses;
+
 /// Something a key press asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Act {
@@ -46,6 +50,10 @@ pub(crate) enum Act {
     CameraBack,
     CameraLeft,
     CameraRight,
+    /// Detaches the view, or returns it to the player.
+    FreeCamera,
+    CameraUp,
+    CameraDown,
     TurnLeft,
     TurnRight,
     Jump,
@@ -103,6 +111,9 @@ impl Act {
             Self::CameraBack => "Back, Facing the Camera",
             Self::CameraLeft => "Left, Facing the Camera",
             Self::CameraRight => "Right, Facing the Camera",
+            Self::FreeCamera => "Toggle Free Camera",
+            Self::CameraUp => "Free Camera Up",
+            Self::CameraDown => "Free Camera Down",
             Self::TurnLeft => "Turn Left",
             Self::TurnRight => "Turn Right",
             Self::Jump => "Jump",
@@ -122,6 +133,7 @@ impl Act {
             }
             Self::Gem(_) => KeyGroup::SpellCasting,
             Self::Slot(_) | Self::BindSlot(_) | Self::ClearSlot(_) => KeyGroup::Hotbar(1),
+            Self::FreeCamera | Self::CameraUp | Self::CameraDown => KeyGroup::Camera,
             Self::Sit
             | Self::Duck
             | Self::Stand
@@ -258,6 +270,7 @@ impl Default for KeyMap {
             &[Chord::key(KeyCode::KeyB)],
         );
         bind(Act::Toggle(WindowId::Options), &[Chord::alt(KeyCode::KeyO)]);
+        bind(Act::Toggle(WindowId::Map), &[Chord::ctrl(KeyCode::KeyM)]);
         // As the official client's notes on raids say (`raidsdoc.txt`).
         bind(Act::Toggle(WindowId::Raid), &[Chord::alt(KeyCode::KeyR)]);
         bind(Act::TargetSelf, &[Chord::key(KeyCode::F1)]);
@@ -288,6 +301,9 @@ impl Default for KeyMap {
         bind(Act::CameraBack, &[Chord::key(KeyCode::KeyS)]);
         bind(Act::CameraLeft, &[Chord::key(KeyCode::KeyA)]);
         bind(Act::CameraRight, &[Chord::key(KeyCode::KeyD)]);
+        bind(Act::FreeCamera, &[Chord::key(KeyCode::F9)]);
+        bind(Act::CameraUp, &[Chord::key(KeyCode::PageUp)]);
+        bind(Act::CameraDown, &[Chord::key(KeyCode::PageDown)]);
         bind(Act::TurnLeft, &[Chord::key(KeyCode::KeyQ)]);
         bind(Act::TurnRight, &[Chord::key(KeyCode::KeyE)]);
         bind(Act::Jump, &[Chord::key(KeyCode::Space)]);
@@ -523,10 +539,15 @@ impl KeyMap {
 
     /// Whether a fresh press of one of the action's chords, with exactly its
     /// modifiers, is in these keys.
-    pub(crate) fn just_pressed(&self, keys: &ButtonInput<KeyCode>, act: Act) -> bool {
+    pub(crate) fn just_pressed(
+        &self,
+        keys: &ButtonInput<KeyCode>,
+        act: Act,
+        presses: &presses::Presses,
+    ) -> bool {
         self.chords(act)
             .iter()
-            .any(|chord| keys.just_pressed(chord.key) && chord.modifiers_held(keys))
+            .any(|chord| presses.matches(*chord, keys))
     }
 
     /// Whether one of the action's keys is held, whatever is held with it.
@@ -610,6 +631,14 @@ pub(crate) struct Typing {
     /// A login screen is up: the login window or the login server's list,
     /// whose boxes and keys are their own.
     pub logging_in: bool,
+    /// The map's local entity search owns text input.
+    pub map_search: bool,
+    /// A key assignment is being edited, including its finishing frame.
+    pub rebinding: bool,
+    /// A script document or path field owns the keyboard.
+    pub editing_script: bool,
+    /// The character creation form owns the keyboard.
+    pub creating_character: bool,
     /// This frame's Escape closed the chat line or left the quantity
     /// window's number, so nothing else takes it.
     pub escape_consumed: bool,
@@ -624,6 +653,7 @@ pub(crate) struct Keys<'w, 's> {
     /// The raw keyboard, for keys outside the map such as Escape and Shift-click.
     pub(crate) input: Res<'w, ButtonInput<KeyCode>>,
     pub(crate) map: Res<'w, KeyMap>,
+    presses: Res<'w, presses::Presses>,
     typing: Res<'w, Typing>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     script: Option<Res<'w, crate::script::Script>>,
@@ -645,8 +675,12 @@ impl Keys<'_, '_> {
     /// Whether the game has the keyboard.
     pub(crate) fn focused(&self) -> bool {
         !self.typing.composing
+            && !self.typing.creating_character
+            && !self.typing.editing_script
             && !self.typing.counting
             && !self.typing.logging_in
+            && !self.typing.map_search
+            && !self.typing.rebinding
             && self.window_focused()
     }
 
@@ -665,9 +699,19 @@ impl Keys<'_, '_> {
         self.focused() && !self.typing.escape_consumed
     }
 
+    /// A separate text editor owns keys, including on the login screens.
+    pub(crate) fn editing_script(&self) -> bool {
+        self.typing.editing_script
+    }
+
+    /// A text field already used this frame's Escape press.
+    pub(crate) fn escape_claimed(&self) -> bool {
+        self.typing.escape_consumed || self.typing.editing_script
+    }
+
     /// A fresh press of the action, while the game has the keyboard.
     pub(crate) fn pressed(&self, act: Act) -> bool {
-        self.focused() && self.map.just_pressed(&self.input, act)
+        self.focused() && self.map.just_pressed(&self.input, act, &self.presses)
     }
 
     /// The first of these actions freshly pressed, while the game has the
@@ -686,6 +730,7 @@ pub(crate) mod testing {
     /// keyboard, which every system that takes keys reads.
     pub(crate) fn install(app: &mut App) {
         app.init_resource::<super::KeyMap>()
+            .init_resource::<super::presses::Presses>()
             .init_resource::<super::Typing>();
     }
 }
@@ -735,6 +780,12 @@ mod tests {
         }
         // The Mac-era client's table is unread: this client's own keys.
         let mac = KeyMap::for_client(InstalledClient::EqMac);
+        for client in [&map, &mac] {
+            assert_eq!(
+                client.chords(Act::Toggle(WindowId::Map)),
+                [Chord::ctrl(KeyCode::KeyM)]
+            );
+        }
         assert_eq!(mac.chords(Act::Attack), [Chord::key(KeyCode::KeyG)]);
         assert_eq!(mac.chords(Act::Autorun), [Chord::key(KeyCode::NumLock)]);
     }
@@ -781,20 +832,41 @@ mod tests {
     #[test]
     fn a_chord_matches_only_with_exactly_its_modifiers() {
         let map = KeyMap::default();
+        let presses = presses::Presses::default();
         let one = keys(&[], KeyCode::Digit1);
         let alt_one = keys(&[KeyCode::AltLeft], KeyCode::Digit1);
         let ctrl_one = keys(&[KeyCode::ControlRight], KeyCode::Digit1);
         let ctrl_shift_one = keys(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], KeyCode::Digit1);
-        assert!(map.just_pressed(&one, Act::Slot(0)));
-        assert!(!map.just_pressed(&one, Act::Gem(0)));
-        assert!(map.just_pressed(&alt_one, Act::Gem(0)));
-        assert!(!map.just_pressed(&alt_one, Act::Slot(0)));
-        assert!(map.just_pressed(&ctrl_one, Act::BindSlot(0)));
-        assert!(!map.just_pressed(&ctrl_shift_one, Act::BindSlot(0)));
-        assert!(map.just_pressed(&ctrl_shift_one, Act::ClearSlot(0)));
+        assert!(map.just_pressed(&one, Act::Slot(0), &presses));
+        assert!(!map.just_pressed(&one, Act::Gem(0), &presses));
+        assert!(map.just_pressed(&alt_one, Act::Gem(0), &presses));
+        assert!(!map.just_pressed(&alt_one, Act::Slot(0), &presses));
+        assert!(map.just_pressed(&ctrl_one, Act::BindSlot(0), &presses));
+        assert!(!map.just_pressed(&ctrl_shift_one, Act::BindSlot(0), &presses));
+        assert!(map.just_pressed(&ctrl_shift_one, Act::ClearSlot(0), &presses));
         let tab = keys(&[KeyCode::ShiftRight], KeyCode::Tab);
-        assert!(map.just_pressed(&tab, Act::TargetPrevious));
-        assert!(!map.just_pressed(&tab, Act::TargetNext));
+        assert!(map.just_pressed(&tab, Act::TargetPrevious, &presses));
+        assert!(!map.just_pressed(&tab, Act::TargetNext, &presses));
+    }
+
+    #[test]
+    fn typing_in_map_search_blocks_gameplay_bindings() {
+        #[derive(Resource, Default)]
+        struct Seen(bool);
+        let mut app = crate::testing::app();
+        app.init_resource::<Seen>()
+            .add_systems(Update, |keys: Keys, mut seen: ResMut<Seen>| {
+                seen.0 = keys.pressed(Act::Attack);
+            });
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyG);
+        app.world_mut().resource_mut::<Typing>().map_search = true;
+        app.update();
+        assert!(!app.world().resource::<Seen>().0);
+        app.world_mut().resource_mut::<Typing>().map_search = false;
+        app.update();
+        assert!(app.world().resource::<Seen>().0);
     }
 
     #[test]

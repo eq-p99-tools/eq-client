@@ -1,13 +1,13 @@
 //! Presentation resources and explicit frame-order contracts.
 //! Keep shared-input and deferred-entity ordering visible at this composition boundary.
 use crate::{
-    abilities, buffs, character, character_select, chat, clicks, coins, combat, confirm, daylight,
-    doors, entities, escape, exit_after_screenshot, give, ground, group, hud, interact, inventory,
-    item_models, items, keys, login, logs, map, motion, move_player, names, navigation,
-    navmesh_prebuild, notices, online, options, orbit_camera, outbox, outfit, paperdoll, pet,
-    profile_files, raid, reading, resources, schedule_screenshot, select_preview, sheets, skills,
-    skin, skinned, sounds, speed, spell_effects, spell_icons, spellbook, target, tooltip, trade,
-    tradeskills, training, translocate, update_hud, whereabouts, who, windows,
+    abilities, buffs, character, character_create, character_select, chat, clicks, coins, combat,
+    confirm, daylight, doors, entities, escape, exit_after_screenshot, give, ground, group, hud,
+    interact, inventory, item_models, items, keys, login, logs, map, motion, move_player, names,
+    navigation, navmesh_prebuild, notices, online, options, orbit_camera, outbox, outfit,
+    paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot, select_preview,
+    sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons, spellbook, target,
+    tooltip, trade, tradeskills, training, translocate, update_hud, whereabouts, who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -65,12 +65,19 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::Layouts>()
         .init_resource::<windows::Shown>()
         .init_resource::<windows::Stack>()
+        .init_resource::<windows::menu::Menu>()
         .init_resource::<keys::Typing>()
+        .init_resource::<keys::presses::Presses>()
+        .init_resource::<character_create::Editor>()
+        .init_resource::<keys::bindings::Bindings>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()
         .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
         .init_resource::<map::MapView>()
+        .init_resource::<map::Presentation>()
+        .init_resource::<map::WatchState>()
+        .init_resource::<map::MapMotion>()
         .init_resource::<login::FrontEnd>()
         .init_resource::<login::LoginLook>();
 }
@@ -85,6 +92,12 @@ pub(super) fn init_presentation(app: &mut App) {
     reason = "one declarative listing of every system in its stage"
 )]
 pub(super) fn schedule(app: &mut App) {
+    app.add_systems(
+        PreUpdate,
+        keys::presses::capture
+            .after(bevy::input::InputSystems)
+            .after(crate::script::drive),
+    );
     app.configure_sets(
         Update,
         (
@@ -127,24 +140,31 @@ pub(super) fn schedule(app: &mut App) {
                 .chain()
                 .in_set(Stage::Scene),
             (
+                keys::bindings::persist,
+                keys::bindings::capture,
                 login::claim,
+                character_create::claim,
+                character_create::input,
                 windows::pointer::wheel,
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
                 navigation::update,
+                map::search_focus,
                 chat::input,
                 skinned::type_amount,
+                map::search_input,
             )
                 .chain()
                 .in_set(Stage::Typing),
-            (escape::route, hud::hotbar::carry::route).in_set(Stage::Route),
+            (escape::route, hud::hotbar::carry::route, map::navigate)
+                .chain()
+                .in_set(Stage::Route),
         ),
     )
     .add_systems(
         Update,
         (
-            items::link_input,
-            items::input,
+            (items::input, chat::links::input).chain(),
             inventory::input,
             coins::input,
             inventory::colors::input,
@@ -166,7 +186,15 @@ pub(super) fn schedule(app: &mut App) {
                 confirm::buttons,
                 reading::buttons,
                 tradeskills::buttons,
-                map::buttons,
+                (
+                    map::buttons,
+                    map::presentation_actions,
+                    map::inspect,
+                    map::control_actions,
+                    map::target_input,
+                    map::scroll_watches,
+                )
+                    .chain(),
                 raid::buttons,
             ),
             (abilities::input, skinned::slash),
@@ -195,11 +223,13 @@ pub(super) fn schedule(app: &mut App) {
                     character_select::update,
                     character_select::names,
                     login::quit,
-                ),
+                    character_create::present,
+                    character_create::scroll,
+                )
+                    .chain(),
             ),
             windows::input,
-            move_player,
-            motion::input,
+            (crate::camera::toggle_free, move_player, motion::input).chain(),
         )
             .chain()
             .in_set(Stage::Input),
@@ -222,6 +252,7 @@ pub(super) fn schedule(app: &mut App) {
                 (login::login_screen, login::worlds_screen, login::scroll).chain(),
                 skinned::scroll_lists,
                 motion::interpolate,
+                crate::camera::fly_camera,
                 orbit_camera,
                 update_hud,
                 // Opens the give, quantity and training windows before their
@@ -233,7 +264,9 @@ pub(super) fn schedule(app: &mut App) {
                     (translocate::decline_unasked, confirm::window).chain(),
                     reading::window,
                     tradeskills::world_window,
-                    map::load,
+                    (map::sample_movement, map::load).chain(),
+                    (map::persist_watches, map::watch_alert).chain(),
+                    map::persist_presentation,
                 ),
             )
                 .chain(),
@@ -264,6 +297,7 @@ pub(super) fn schedule(app: &mut App) {
                 skinned::frames,
                 (
                     skinned::apply,
+                    map::ensure_window,
                     skinned::place_own,
                     skinned::looks::load,
                     skinned::looks::dress,
@@ -297,7 +331,16 @@ pub(super) fn schedule(app: &mut App) {
                         confirm::show,
                         reading::show,
                         tradeskills::show,
-                        map::draw,
+                        (
+                            map::draw,
+                            map::update_entities,
+                            map::update_items,
+                            map::draw_movement,
+                            map::update_controls,
+                            map::show_target,
+                            map::present,
+                        )
+                            .chain(),
                         skinned::scrollbar::place,
                         skinned::rewind,
                     ),
@@ -353,9 +396,14 @@ pub(crate) enum Stage {
 /// Registers the startup work of the overlays and the windows' shared systems.
 pub(super) fn install_overlays(app: &mut App) {
     app.add_systems(Startup, tooltip::spawn);
-    // A click is read once Bevy has marked the controls the pointer is over,
-    // and a script's pointer has pressed or let go.
-    app.add_systems(PreUpdate, clicks::track.after(bevy::ui::UiSystems::Focus));
+    // Text spans need their shaped-run hit test before the click tracker,
+    // just as controls need Bevy's focus and the script's pointer first.
+    app.add_systems(
+        PreUpdate,
+        (items::link_input, clicks::track)
+            .chain()
+            .after(bevy::ui::UiSystems::Focus),
+    );
     // The right button's look takes the mouse before the windows see it.
     app.add_systems(
         PreUpdate,
@@ -365,6 +413,7 @@ pub(super) fn install_overlays(app: &mut App) {
     );
     windows::register_layout(app);
     paperdoll::register(app);
+    crate::creation_preview::register(app);
     app.add_systems(
         Update,
         profile_files::follow
