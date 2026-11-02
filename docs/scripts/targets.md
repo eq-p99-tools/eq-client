@@ -36,7 +36,7 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 
 ## Windows and lists
 
-- `window key`: click a window toggle, such as `inventory`, `spellbook`, `options` or `scripts`. The toggles live in the EQ menu; while it is closed the step first clicks the menu's own button (`button selector EQButton`), then the entry, and the script ends if the menu does not open. Keyboard shortcuts such as `press CTRL+M` do not require the menu.
+- `window key`: click a window toggle, such as `inventory`, `spellbook`, `options` or `scripts`. The toggles live in the EQ menu; while it is closed the step first clicks the menu's own button (`button selector EQButton`), waits for the menu to open (up to a second), then clicks the entry; the script ends if the menu stays closed. Keyboard shortcuts such as `press CTRL+M` do not require the menu.
 - `close_box key` or `minimize_box key`: the window's titlebar control.
 - `done key`: a window's Done button.
 - `button key ScreenID`: a named button in the installed skin's window.

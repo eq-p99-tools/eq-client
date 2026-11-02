@@ -137,10 +137,11 @@ pub struct Script {
     /// The count of the world's creation answers when a `create` step sent
     /// its request, so the step waits for the next.
     created_before: Option<u64>,
-    /// The menu entry the step at the front of the queue names, once the EQ
-    /// menu's button was clicked for it, so a menu that stays closed ends
-    /// the script instead of clicking its button forever.
-    menu_opened_for: Option<ClickTarget>,
+    /// The menu entry the step at the front of the queue names and when the
+    /// EQ menu's button was clicked for it: the entry waits for the menu to
+    /// open, and a menu that stays closed ends the script instead of
+    /// clicking its button forever.
+    menu_opened_for: Option<(ClickTarget, Duration)>,
 }
 
 /// Login and offline scripts need no admission; admitted runs end with the session.
@@ -1353,13 +1354,21 @@ pub(super) fn drive(
     };
     // An entry of the closed EQ menu: the script opens the menu with its own
     // button first, as a player would, then comes back to the entry.
-    let step = match opens_menu_first(&step, menu.open, script.menu_opened_for.is_some()) {
-        Ok(true) => {
-            script.menu_opened_for = entry_target(&step);
+    let waited = script
+        .menu_opened_for
+        .map(|(_, since)| now.saturating_sub(since));
+    let step = match opens_menu_first(&step, menu.open, waited) {
+        Ok(MenuWait::OpenFirst) => {
+            script.menu_opened_for = entry_target(&step).map(|target| (target, now));
             script.steps.push_front(QueuedStep { step, line });
             Step::Click(ClickTarget::Button("selector", "EQButton"))
         }
-        Ok(false) => {
+        Ok(MenuWait::Opening) => {
+            // The menu opens a frame or more after the button's release.
+            script.steps.push_front(QueuedStep { step, line });
+            return;
+        }
+        Ok(MenuWait::Go) => {
             script.menu_opened_for = None;
             step
         }
@@ -1677,18 +1686,41 @@ pub(super) fn drive(
     script.current = Some((step, now));
 }
 
+/// What a step does about the EQ menu before it runs.
+#[derive(Debug, PartialEq, Eq)]
+enum MenuWait {
+    /// The step runs as it is.
+    Go,
+    /// The step names an entry of the closed menu: the menu's button is
+    /// clicked first.
+    OpenFirst,
+    /// The button was clicked and the menu has not opened yet.
+    Opening,
+}
+
+/// How long an entry waits for the EQ menu to open after its button was
+/// clicked before the script ends.
+const MENU_OPEN_WAIT: Duration = Duration::from_secs(1);
+
 /// Whether a click step's target is an entry of the EQ menu that a pointer
 /// cannot reach while the menu is closed (`click window <key>`, `click
-/// actions`), so the menu's own button is clicked first; an error when that
-/// click already happened and the menu is still closed.
-fn opens_menu_first(step: &Step, menu_open: bool, opened_before: bool) -> Result<bool, String> {
+/// actions`), so the menu's own button is clicked first. `waited` is how
+/// long ago that click was started, if it was; the menu opens a frame or
+/// more after the button's release, so the entry waits up to
+/// [`MENU_OPEN_WAIT`] and the script ends only when the menu stays closed.
+fn opens_menu_first(
+    step: &Step,
+    menu_open: bool,
+    waited: Option<Duration>,
+) -> Result<MenuWait, String> {
     if entry_target(step).is_none() || menu_open {
-        return Ok(false);
+        return Ok(MenuWait::Go);
     }
-    if opened_before {
-        return Err("the EQ menu did not open for the click".into());
+    match waited {
+        None => Ok(MenuWait::OpenFirst),
+        Some(waited) if waited < MENU_OPEN_WAIT => Ok(MenuWait::Opening),
+        Some(_) => Err("the EQ menu did not open for the click".into()),
     }
-    Ok(true)
 }
 
 /// The EQ menu entry a click step names, if any.
@@ -2967,24 +2999,35 @@ mod tests {
     }
 
     #[test]
-    fn a_menu_entry_click_opens_the_closed_menu_first_and_gives_up_once() {
+    fn a_menu_entry_click_opens_the_closed_menu_first_and_waits_for_it_once() {
         let entry = Step::Click(ClickTarget::Toggle("inventory"));
         let actions = Step::HoldClick(ClickTarget::ActionsWindow, Duration::from_millis(300));
         let button = Step::Click(ClickTarget::Button("selector", "EQButton"));
-        // Closed menu: the entry waits for the menu's button, once.
-        assert_eq!(opens_menu_first(&entry, false, false), Ok(true));
-        assert_eq!(opens_menu_first(&actions, false, false), Ok(true));
+        let soon = Some(Duration::from_millis(300));
+        let late = Some(Duration::from_millis(1_500));
+        // Closed menu: the entry has the menu's button clicked, then waits
+        // for the menu, and gives up only past the limit.
         assert_eq!(
-            opens_menu_first(&entry, false, true),
+            opens_menu_first(&entry, false, None),
+            Ok(MenuWait::OpenFirst)
+        );
+        assert_eq!(
+            opens_menu_first(&actions, false, None),
+            Ok(MenuWait::OpenFirst)
+        );
+        assert_eq!(opens_menu_first(&entry, false, soon), Ok(MenuWait::Opening));
+        assert_eq!(
+            opens_menu_first(&entry, false, late),
             Err("the EQ menu did not open for the click".into())
         );
         // Open menu, or another target: the step runs as it is.
-        assert_eq!(opens_menu_first(&entry, true, false), Ok(false));
-        assert_eq!(opens_menu_first(&entry, true, true), Ok(false));
-        assert_eq!(opens_menu_first(&button, false, false), Ok(false));
+        assert_eq!(opens_menu_first(&entry, true, None), Ok(MenuWait::Go));
+        assert_eq!(opens_menu_first(&entry, true, soon), Ok(MenuWait::Go));
+        assert_eq!(opens_menu_first(&entry, true, late), Ok(MenuWait::Go));
+        assert_eq!(opens_menu_first(&button, false, None), Ok(MenuWait::Go));
         assert_eq!(
-            opens_menu_first(&Step::Wait(Duration::ZERO), false, true),
-            Ok(false)
+            opens_menu_first(&Step::Wait(Duration::ZERO), false, late),
+            Ok(MenuWait::Go)
         );
     }
 
