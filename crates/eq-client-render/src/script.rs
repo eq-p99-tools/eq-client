@@ -137,10 +137,10 @@ pub struct Script {
     /// The count of the world's creation answers when a `create` step sent
     /// its request, so the step waits for the next.
     created_before: Option<u64>,
-    /// Whether the step at the front of the queue already had the EQ menu
-    /// opened for it, so a menu that stays closed ends the script instead
-    /// of clicking its button forever.
-    opened_menu: bool,
+    /// The menu entry the step at the front of the queue names, once the EQ
+    /// menu's button was clicked for it, so a menu that stays closed ends
+    /// the script instead of clicking its button forever.
+    menu_opened_for: Option<ClickTarget>,
 }
 
 /// Login and offline scripts need no admission; admitted runs end with the session.
@@ -214,7 +214,7 @@ impl Script {
             approached: None,
             chase_seen: None,
             created_before: None,
-            opened_menu: false,
+            menu_opened_for: None,
         }
     }
 
@@ -530,6 +530,16 @@ type Pointers<'w, 's> = Query<'w, 's, &'static mut bevy::ui::RelativeCursorPosit
 /// the layout, so its buttons keep their visibility.
 type Layout<'w, 's> = Query<'w, 's, (&'static Node, Option<&'static ChildOf>)>;
 
+/// What a step drives besides the world: chat, window moves, the front end,
+/// sounds and the EQ menu's state.
+type Services<'w> = (
+    ResMut<'w, super::chat::ChatState>,
+    ResMut<'w, super::windows::Moves>,
+    ResMut<'w, super::login::FrontEnd>,
+    ResMut<'w, super::sounds::Sounds>,
+    Res<'w, super::windows::menu::Menu>,
+);
+
 type Observed<'w> = (
     Res<'w, super::hud::HudState>,
     Res<'w, crate::outbox::Outbox>,
@@ -611,13 +621,7 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    (mut chat, mut moves, mut front, mut sounds, menu): (
-        ResMut<super::chat::ChatState>,
-        ResMut<super::windows::Moves>,
-        ResMut<super::login::FrontEnd>,
-        ResMut<super::sounds::Sounds>,
-        Res<super::windows::menu::Menu>,
-    ),
+    (mut chat, mut moves, mut front, mut sounds, menu): Services,
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
     bodies: Query<&super::PlayerBody, With<super::Player>>,
@@ -1349,14 +1353,14 @@ pub(super) fn drive(
     };
     // An entry of the closed EQ menu: the script opens the menu with its own
     // button first, as a player would, then comes back to the entry.
-    let step = match opens_menu_first(&step, menu.open, script.opened_menu) {
+    let step = match opens_menu_first(&step, menu.open, script.menu_opened_for.is_some()) {
         Ok(true) => {
-            script.opened_menu = true;
+            script.menu_opened_for = entry_target(&step);
             script.steps.push_front(QueuedStep { step, line });
             Step::Click(ClickTarget::Button("selector", "EQButton"))
         }
         Ok(false) => {
-            script.opened_menu = false;
+            script.menu_opened_for = None;
             step
         }
         Err(reason) => {
@@ -1678,19 +1682,25 @@ pub(super) fn drive(
 /// actions`), so the menu's own button is clicked first; an error when that
 /// click already happened and the menu is still closed.
 fn opens_menu_first(step: &Step, menu_open: bool, opened_before: bool) -> Result<bool, String> {
-    let entry = match step {
-        Step::Click(target) | Step::RightClick(target) | Step::HoldClick(target, _) => {
-            matches!(target, ClickTarget::Toggle(_) | ClickTarget::ActionsWindow)
-        }
-        _ => false,
-    };
-    if !entry || menu_open {
+    if entry_target(step).is_none() || menu_open {
         return Ok(false);
     }
     if opened_before {
         return Err("the EQ menu did not open for the click".into());
     }
     Ok(true)
+}
+
+/// The EQ menu entry a click step names, if any.
+fn entry_target(step: &Step) -> Option<ClickTarget> {
+    match step {
+        Step::Click(target) | Step::RightClick(target) | Step::HoldClick(target, _)
+            if matches!(target, ClickTarget::Toggle(_) | ClickTarget::ActionsWindow) =>
+        {
+            Some(*target)
+        }
+        _ => None,
+    }
 }
 
 /// Whether the world answered a `create` step's request since it was sent:
