@@ -37,3 +37,23 @@ pub(crate) fn snapshots(events: &[KeyboardInput], final_keys: &ButtonInput<Key>)
         })
         .collect()
 }
+
+#[cfg(test)]
+mod chord_tests {
+    use super::chorded;
+
+    #[test]
+    fn alt_gr_types_while_other_modifiers_chord() {
+        // [Control, Shift, Alt, Super].
+        assert!(!chorded([false, false, false, false]));
+        assert!(!chorded([false, true, false, false]));
+        assert!(chorded([true, false, false, false]));
+        assert!(chorded([false, false, true, false]));
+        assert!(chorded([false, false, false, true]));
+        // Control and Alt together are AltGr, with or without Shift.
+        assert!(!chorded([true, false, true, false]));
+        assert!(!chorded([true, true, true, false]));
+        // Super alongside them is a chord again.
+        assert!(chorded([true, false, true, true]));
+    }
+}
