@@ -18,11 +18,6 @@ struct Launcher;
 struct Fallback;
 #[derive(Component)]
 struct Panel;
-/// The menu's panel: a script's `click window <key>` or `click actions`
-/// reaches its entries while it is closed, as it reached the HUD's buttons
-/// before the menu held them; the player opens the menu by hand.
-#[derive(Component)]
-pub(crate) struct ScriptReach;
 #[derive(Component)]
 struct Dismiss;
 #[derive(Component)]
@@ -63,7 +58,6 @@ fn spawn(mut commands: Commands) {
     commands
         .spawn((
             Panel,
-            ScriptReach,
             super::KeepsPress,
             TakesWheel,
             ScrollPosition::default(),

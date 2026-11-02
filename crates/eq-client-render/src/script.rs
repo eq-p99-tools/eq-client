@@ -137,6 +137,10 @@ pub struct Script {
     /// The count of the world's creation answers when a `create` step sent
     /// its request, so the step waits for the next.
     created_before: Option<u64>,
+    /// Whether the step at the front of the queue already had the EQ menu
+    /// opened for it, so a menu that stays closed ends the script instead
+    /// of clicking its button forever.
+    opened_menu: bool,
 }
 
 /// Login and offline scripts need no admission; admitted runs end with the session.
@@ -210,6 +214,7 @@ impl Script {
             approached: None,
             chase_seen: None,
             created_before: None,
+            opened_menu: false,
         }
     }
 
@@ -523,15 +528,7 @@ type Pointers<'w, 's> = Query<'w, 's, &'static mut bevy::ui::RelativeCursorPosit
 
 /// Every UI node's display and parent: a closed window is only left out of
 /// the layout, so its buttons keep their visibility.
-type Layout<'w, 's> = Query<
-    'w,
-    's,
-    (
-        &'static Node,
-        Option<&'static ChildOf>,
-        Has<super::windows::menu::ScriptReach>,
-    ),
->;
+type Layout<'w, 's> = Query<'w, 's, (&'static Node, Option<&'static ChildOf>)>;
 
 type Observed<'w> = (
     Res<'w, super::hud::HudState>,
@@ -614,11 +611,12 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    (mut chat, mut moves, mut front, mut sounds): (
+    (mut chat, mut moves, mut front, mut sounds, menu): (
         ResMut<super::chat::ChatState>,
         ResMut<super::windows::Moves>,
         ResMut<super::login::FrontEnd>,
         ResMut<super::sounds::Sounds>,
+        Res<super::windows::menu::Menu>,
     ),
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
@@ -1349,6 +1347,23 @@ pub(super) fn drive(
     let Some(QueuedStep { step, line }) = script.steps.pop_front() else {
         return;
     };
+    // An entry of the closed EQ menu: the script opens the menu with its own
+    // button first, as a player would, then comes back to the entry.
+    let step = match opens_menu_first(&step, menu.open, script.opened_menu) {
+        Ok(true) => {
+            script.opened_menu = true;
+            script.steps.push_front(QueuedStep { step, line });
+            Step::Click(ClickTarget::Button("selector", "EQButton"))
+        }
+        Ok(false) => {
+            script.opened_menu = false;
+            step
+        }
+        Err(reason) => {
+            script.stop(&mut keys, &mut mouse, &reason);
+            return;
+        }
+    };
     script.progress.begin(line);
     info!(?step, "Script step");
     match &step {
@@ -1656,6 +1671,26 @@ pub(super) fn drive(
         | Step::Trace(_) => (),
     }
     script.current = Some((step, now));
+}
+
+/// Whether a click step's target is an entry of the EQ menu that a pointer
+/// cannot reach while the menu is closed (`click window <key>`, `click
+/// actions`), so the menu's own button is clicked first; an error when that
+/// click already happened and the menu is still closed.
+fn opens_menu_first(step: &Step, menu_open: bool, opened_before: bool) -> Result<bool, String> {
+    let entry = match step {
+        Step::Click(target) | Step::RightClick(target) | Step::HoldClick(target, _) => {
+            matches!(target, ClickTarget::Toggle(_) | ClickTarget::ActionsWindow)
+        }
+        _ => false,
+    };
+    if !entry || menu_open {
+        return Ok(false);
+    }
+    if opened_before {
+        return Err("the EQ menu did not open for the click".into());
+    }
+    Ok(true)
 }
 
 /// Whether the world answered a `create` step's request since it was sent:
@@ -2187,9 +2222,8 @@ fn press(
 /// to reach it.
 fn displayed(entity: Entity, layout: &Layout) -> bool {
     let mut next = Some(entity);
-    while let Some((node, parent, reach)) = next.and_then(|entity| layout.get(entity).ok()) {
-        // The EQ menu's closed panel still lets a script press its entries.
-        if node.display == Display::None && !reach {
+    while let Some((node, parent)) = next.and_then(|entity| layout.get(entity).ok()) {
+        if node.display == Display::None {
             return false;
         }
         next = parent.map(ChildOf::parent);
@@ -2919,6 +2953,28 @@ mod tests {
         assert_eq!(
             goal,
             Vec3::from_array(eq_client_core::render_position(base))
+        );
+    }
+
+    #[test]
+    fn a_menu_entry_click_opens_the_closed_menu_first_and_gives_up_once() {
+        let entry = Step::Click(ClickTarget::Toggle("inventory"));
+        let actions = Step::HoldClick(ClickTarget::ActionsWindow, Duration::from_millis(300));
+        let button = Step::Click(ClickTarget::Button("selector", "EQButton"));
+        // Closed menu: the entry waits for the menu's button, once.
+        assert_eq!(opens_menu_first(&entry, false, false), Ok(true));
+        assert_eq!(opens_menu_first(&actions, false, false), Ok(true));
+        assert_eq!(
+            opens_menu_first(&entry, false, true),
+            Err("the EQ menu did not open for the click".into())
+        );
+        // Open menu, or another target: the step runs as it is.
+        assert_eq!(opens_menu_first(&entry, true, false), Ok(false));
+        assert_eq!(opens_menu_first(&entry, true, true), Ok(false));
+        assert_eq!(opens_menu_first(&button, false, false), Ok(false));
+        assert_eq!(
+            opens_menu_first(&Step::Wait(Duration::ZERO), false, true),
+            Ok(false)
         );
     }
 

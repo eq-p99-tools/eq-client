@@ -36,7 +36,7 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 
 ## Windows and lists
 
-- `window key`: click a window toggle, such as `inventory`, `spellbook`, `options` or `scripts`. The toggles live in the EQ menu; a script reaches them whether or not the menu is open (`click button selector EQButton` opens it). Keyboard shortcuts such as `press CTRL+M` do not require the menu.
+- `window key`: click a window toggle, such as `inventory`, `spellbook`, `options` or `scripts`. The toggles live in the EQ menu; while it is closed the step first clicks the menu's own button (`button selector EQButton`), then the entry, and the script ends if the menu does not open. Keyboard shortcuts such as `press CTRL+M` do not require the menu.
 - `close_box key` or `minimize_box key`: the window's titlebar control.
 - `done key`: a window's Done button.
 - `button key ScreenID`: a named button in the installed skin's window.
@@ -52,7 +52,7 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 
 - `character number`: character slot 1 to 8.
 - `enter_world` or `quit_game`: character selection buttons.
-- `actions`: open the Actions window, through its EQ menu entry, whether or not the menu is open.
+- `actions`: open the Actions window through its EQ menu entry, opening the menu first when it is closed, as `window key` does.
 - `attack`: the attack control.
 - `ability combat number` or `ability abilities number`: a button counted from 1 on an Actions page.
 - `training row`: a training row counted from 1.
