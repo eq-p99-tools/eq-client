@@ -15,8 +15,9 @@ cargo build -p eq-client --release --locked
 cargo run -p eq-client --locked -- --help
 ```
 
-`Cargo.toml` pins the `eq-network` creation prerequisite by Git revision;
-`Cargo.lock` resolves the same commit. See eq-p99-tools/eq-network#164.
+`Cargo.toml` pins the reviewed `eq-network` integration by Git revision;
+`Cargo.lock` resolves the same commit. [Support](../SUPPORT.md) identifies that
+revision and its server policies and validation coverage.
 The asset decoder uses a pinned fork of `libeq`. A normal build needs neither a
 sibling networking checkout nor unpublished local patches. Inspect resolved
 sources with `cargo metadata --locked --format-version 1`. `--offline` is useful
