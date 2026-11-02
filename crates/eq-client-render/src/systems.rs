@@ -67,6 +67,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::Stack>()
         .init_resource::<windows::menu::Menu>()
         .init_resource::<keys::Typing>()
+        .init_resource::<keys::presses::Presses>()
         .init_resource::<character_create::Editor>()
         .init_resource::<keys::bindings::Bindings>()
         .init_resource::<training::Chosen>()
@@ -91,6 +92,12 @@ pub(super) fn init_presentation(app: &mut App) {
     reason = "one declarative listing of every system in its stage"
 )]
 pub(super) fn schedule(app: &mut App) {
+    app.add_systems(
+        PreUpdate,
+        keys::presses::capture
+            .after(bevy::input::InputSystems)
+            .after(crate::script::drive),
+    );
     app.configure_sets(
         Update,
         (

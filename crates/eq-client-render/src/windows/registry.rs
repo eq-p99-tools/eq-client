@@ -327,6 +327,11 @@ const fn floating(
 }
 
 impl WindowId {
+    /// Scripts has open/close states only; other titled windows may collapse.
+    pub(crate) const fn can_minimize(self) -> bool {
+        !matches!(self, Self::Scripts)
+    }
+
     /// Every window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.

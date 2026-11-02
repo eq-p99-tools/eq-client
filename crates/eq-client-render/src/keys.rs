@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 
 pub(crate) mod bindings;
 pub(crate) mod modifiers;
+pub(crate) mod presses;
 
 /// Something a key press asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -538,10 +539,15 @@ impl KeyMap {
 
     /// Whether a fresh press of one of the action's chords, with exactly its
     /// modifiers, is in these keys.
-    pub(crate) fn just_pressed(&self, keys: &ButtonInput<KeyCode>, act: Act) -> bool {
+    pub(crate) fn just_pressed(
+        &self,
+        keys: &ButtonInput<KeyCode>,
+        act: Act,
+        presses: &presses::Presses,
+    ) -> bool {
         self.chords(act)
             .iter()
-            .any(|chord| keys.just_pressed(chord.key) && chord.modifiers_held(keys))
+            .any(|chord| presses.matches(*chord, keys))
     }
 
     /// Whether one of the action's keys is held, whatever is held with it.
@@ -647,6 +653,7 @@ pub(crate) struct Keys<'w, 's> {
     /// The raw keyboard, for keys outside the map such as Escape and Shift-click.
     pub(crate) input: Res<'w, ButtonInput<KeyCode>>,
     pub(crate) map: Res<'w, KeyMap>,
+    presses: Res<'w, presses::Presses>,
     typing: Res<'w, Typing>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     script: Option<Res<'w, crate::script::Script>>,
@@ -704,7 +711,7 @@ impl Keys<'_, '_> {
 
     /// A fresh press of the action, while the game has the keyboard.
     pub(crate) fn pressed(&self, act: Act) -> bool {
-        self.focused() && self.map.just_pressed(&self.input, act)
+        self.focused() && self.map.just_pressed(&self.input, act, &self.presses)
     }
 
     /// The first of these actions freshly pressed, while the game has the
@@ -723,6 +730,7 @@ pub(crate) mod testing {
     /// keyboard, which every system that takes keys reads.
     pub(crate) fn install(app: &mut App) {
         app.init_resource::<super::KeyMap>()
+            .init_resource::<super::presses::Presses>()
             .init_resource::<super::Typing>();
     }
 }
@@ -824,20 +832,21 @@ mod tests {
     #[test]
     fn a_chord_matches_only_with_exactly_its_modifiers() {
         let map = KeyMap::default();
+        let presses = presses::Presses::default();
         let one = keys(&[], KeyCode::Digit1);
         let alt_one = keys(&[KeyCode::AltLeft], KeyCode::Digit1);
         let ctrl_one = keys(&[KeyCode::ControlRight], KeyCode::Digit1);
         let ctrl_shift_one = keys(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], KeyCode::Digit1);
-        assert!(map.just_pressed(&one, Act::Slot(0)));
-        assert!(!map.just_pressed(&one, Act::Gem(0)));
-        assert!(map.just_pressed(&alt_one, Act::Gem(0)));
-        assert!(!map.just_pressed(&alt_one, Act::Slot(0)));
-        assert!(map.just_pressed(&ctrl_one, Act::BindSlot(0)));
-        assert!(!map.just_pressed(&ctrl_shift_one, Act::BindSlot(0)));
-        assert!(map.just_pressed(&ctrl_shift_one, Act::ClearSlot(0)));
+        assert!(map.just_pressed(&one, Act::Slot(0), &presses));
+        assert!(!map.just_pressed(&one, Act::Gem(0), &presses));
+        assert!(map.just_pressed(&alt_one, Act::Gem(0), &presses));
+        assert!(!map.just_pressed(&alt_one, Act::Slot(0), &presses));
+        assert!(map.just_pressed(&ctrl_one, Act::BindSlot(0), &presses));
+        assert!(!map.just_pressed(&ctrl_shift_one, Act::BindSlot(0), &presses));
+        assert!(map.just_pressed(&ctrl_shift_one, Act::ClearSlot(0), &presses));
         let tab = keys(&[KeyCode::ShiftRight], KeyCode::Tab);
-        assert!(map.just_pressed(&tab, Act::TargetPrevious));
-        assert!(!map.just_pressed(&tab, Act::TargetNext));
+        assert!(map.just_pressed(&tab, Act::TargetPrevious, &presses));
+        assert!(!map.just_pressed(&tab, Act::TargetNext, &presses));
     }
 
     #[test]

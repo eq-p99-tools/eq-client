@@ -48,8 +48,9 @@ automatic login. Keep credentials and private settings outside Git.
   by default. Saved character bindings take precedence.
 - **Chat:** Enter opens composition. Item links open item details where supported;
   explicit HTTP(S) links open the system browser.
-- **Windows:** move titlebars and minimize framed windows. Passive panels move by
-  dragging their surface. Layouts are saved per character.
+- **Windows:** move titlebars and minimize framed windows where offered. Scripts
+  opens and closes without minimizing. Passive panels move by dragging their
+  surface. Layouts are saved per character.
 
 See the [documentation index](docs/README.md) for
 [controls, maps and chat](docs/controls.md), [gameplay](docs/gameplay.md),

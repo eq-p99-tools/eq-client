@@ -170,6 +170,7 @@ pub(crate) fn capture(
     mut map: ResMut<KeyMap>,
     mut typing: ResMut<Typing>,
     mut input: ResMut<ButtonInput<KeyCode>>,
+    presses: Res<super::presses::Presses>,
     mut events: Option<ResMut<Messages<KeyboardInput>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     shown: Res<crate::windows::Shown>,
@@ -204,12 +205,7 @@ pub(crate) fn capture(
         bindings.active = None;
         input.reset_all();
     } else if let Some(key) = bindable().find(|key| input.just_pressed(*key)) {
-        let chord = Chord {
-            key,
-            ctrl: input.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
-            shift: input.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
-            alt: input.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
-        };
+        let chord = presses.chord(key, &input);
         map.assign(cell, Some(chord));
         bindings.active = None;
         input.reset_all();
@@ -300,6 +296,38 @@ mod tests {
             .press(KeyCode::Delete);
         app.update();
         assert_eq!(app.world().resource::<KeyMap>().chords(Act::FreeCamera), []);
+    }
+
+    #[test]
+    fn a_complete_native_chord_is_assigned_with_its_original_modifiers() {
+        let mut app = crate::testing::app();
+        app.add_message::<KeyboardInput>()
+            .add_systems(Update, (super::super::presses::capture, capture).chain());
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Options);
+        app.world_mut().resource_mut::<Bindings>().active = Some(cell());
+        app.world_mut()
+            .write_message_batch(super::super::presses::tests::chord_events(
+                KeyCode::KeyK,
+                "k",
+            ));
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::KeyK);
+            keys.release(KeyCode::KeyK);
+        }
+        app.update();
+        assert_eq!(
+            app.world().resource::<KeyMap>().label(Act::FreeCamera),
+            "Ctrl+K"
+        );
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::KeyK)
+        );
+        assert!(app.world().resource::<Typing>().rebinding);
     }
 
     #[test]

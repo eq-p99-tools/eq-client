@@ -2,7 +2,7 @@
 
 The script workbench lets you edit and run sequences of actions while playing your character. Log in normally, click the EQ menu at the bottom right, choose **Scripts**, and write a script or load one from disk. Scripts starts closed unless you explicitly request `--script-editor`. Run uses your current character, zone, target, inventory and spell setup. You do not need login commands, a character name in the script, or a special launch mode.
 
-The movable window has Editor, Execution and Help tabs. Edit your script, choose Run, and watch the current line in Execution. Stop returns control so you can revise and run it again. You can keep playing with the workbench minimized and reopen it when needed.
+The movable window has Editor, Execution and Help tabs. Edit your script, choose Run, and watch the current line in Execution. Stop returns control so you can revise and run it again. Close the workbench with its titlebar × and reopen it from the EQ menu when needed; your document and run remain available.
 
 Scripts are small UTF-8 text files in the client's own language, with one action per line. They use the normal client controls. Loading a file never executes it. This help is also available on GitHub: both views use these Markdown files.
 
@@ -34,7 +34,7 @@ Run executes the current buffer without saving it. The Execution tab follows the
 
 Actions use the state that exists when they execute. Select a target yourself before a script that acts on that target, and have the relevant spell, item or window available. The script does not choose another character or log you in automatically.
 
-Pause finishes the current action, then pauses with held inputs released. Step executes one action from a pause. Resume continues; Stop immediately releases synthetic input and stops the scenario. Closing or minimizing the window does not stop a run.
+Pause finishes the current action, then pauses with held inputs released. Step executes one action from a pause. Resume continues; Stop immediately releases synthetic input and stops the scenario. Closing the window does not stop a run. Scripts has no minimized state.
 
 Scripts on P99 and Quarm remain attended: keep the client focused. The existing runtime bounds and local-only command restrictions still apply. See Run controls for pointer ownership and time limits.
 

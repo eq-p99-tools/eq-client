@@ -8,9 +8,12 @@ use crate::{
     theme::{self, Size},
 };
 use bevy::{
+    clipboard::{Clipboard, ClipboardRead},
     input::keyboard::{Key, KeyboardInput},
     prelude::*,
 };
+
+mod name;
 use eq_client_core::{
     ClientCommand,
     character_creation::{Draft, STATS},
@@ -31,6 +34,7 @@ struct Form {
     page: u8,
     typing: bool,
     select_all: bool,
+    paste: Option<ClipboardRead>,
     pending: Option<(String, Option<u64>)>,
     generating: Option<u64>,
     generator_enabled: bool,
@@ -61,6 +65,7 @@ impl Editor {
             page: 0,
             typing: true,
             select_all: false,
+            paste: None,
             pending: None,
             generating: None,
             generator_enabled: world.name_generator(),
@@ -265,11 +270,10 @@ pub(super) fn input(
     keys: crate::keys::Keys,
     buttons: crate::clicks::Clicks<Action>,
     mut typed: MessageReader<KeyboardInput>,
+    logical: Res<ButtonInput<Key>>,
+    mut clipboard: Option<ResMut<Clipboard>>,
 ) {
-    let typing = typed
-        .read()
-        .filter(|key| key.state.is_pressed())
-        .collect::<Vec<_>>();
+    let events = typed.read().cloned().collect::<Vec<_>>();
     editor.refresh(&mut online);
     if front.screen(&online) != login::Screen::Characters {
         editor.form = None;
@@ -284,6 +288,7 @@ pub(super) fn input(
         return;
     };
     if !keys.window_focused() || keys.editing_script() || form.pending.is_some() {
+        form.paste = None;
         return;
     }
     if actions.contains(&Action::Cancel) || keys.input.just_pressed(KeyCode::Escape) {
@@ -302,42 +307,7 @@ pub(super) fn input(
     if keys.input.just_pressed(KeyCode::Tab) {
         form.typing = form.page == 0 && !form.typing;
     }
-    if form.typing {
-        let control =
-            keys.input.pressed(KeyCode::ControlLeft) || keys.input.pressed(KeyCode::ControlRight);
-        if control && keys.input.just_pressed(KeyCode::KeyA) {
-            form.select_all = true;
-        }
-        for key in typing {
-            if key.logical_key == Key::Backspace || key.logical_key == Key::Delete {
-                form.generating = None;
-                if form.select_all {
-                    form.draft.name.clear();
-                    form.select_all = false;
-                } else {
-                    form.draft.name.pop();
-                }
-                form.message.clear();
-                continue;
-            }
-            if control {
-                continue;
-            }
-            if let Some(text) = &key.text {
-                for character in text.chars().filter(|c| !c.is_control()) {
-                    if form.select_all {
-                        form.draft.name.clear();
-                        form.select_all = false;
-                    }
-                    if form.draft.name.chars().count() < 30 {
-                        form.generating = None;
-                        form.draft.name.push(character);
-                    }
-                }
-                form.message.clear();
-            }
-        }
-    }
+    form.edit_name(&events, &logical, clipboard.as_deref_mut());
     if keys.input.just_pressed(KeyCode::Enter) || keys.input.just_pressed(KeyCode::NumpadEnter) {
         if form.page < 3 {
             form.page += 1;
@@ -585,18 +555,30 @@ fn appearance(
                 ..default()
             })
             .with_children(|panel| {
-                if preview.status.is_empty() {
-                    panel.spawn((
-                        ImageNode::new(preview.image.clone()),
-                        Node {
-                            width: px(280),
-                            height: px(345),
-                            ..default()
-                        },
-                    ));
-                } else {
-                    theme::label(panel, &preview.status, Size::Label);
-                }
+                // Loading a new appearance must not move the form's controls.
+                panel
+                    .spawn(Node {
+                        width: px(280),
+                        height: px(345),
+                        flex_shrink: 0.0,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_children(|preview_panel| {
+                        if preview.status.is_empty() {
+                            preview_panel.spawn((
+                                ImageNode::new(preview.image.clone()),
+                                Node {
+                                    width: percent(100),
+                                    height: percent(100),
+                                    ..default()
+                                },
+                            ));
+                        } else {
+                            theme::label(preview_panel, &preview.status, Size::Label);
+                        }
+                    });
                 row(panel, |row| {
                     button(row, Action::Turn(false), "Turn left", true, false);
                     button(row, Action::Turn(true), "Turn right", true, false);
@@ -786,7 +768,7 @@ mod tests {
     use eq_client_core::{CharacterChoice, WorldEvent, creation::Rules};
     use std::sync::mpsc::{Receiver, sync_channel};
 
-    fn setup() -> (Editor, OnlineState, Outbox, Receiver<ClientCommand>) {
+    pub(super) fn setup() -> (Editor, OnlineState, Outbox, Receiver<ClientCommand>) {
         let mut online = OnlineState::new(true);
         online.selection = Some(Selection::new(7, vec![]).with_creation(Some(Rules::EqMac)));
         let mut editor = Editor::default();

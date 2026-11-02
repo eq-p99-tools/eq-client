@@ -372,8 +372,12 @@ mod tests {
             .init_resource::<Assets<Font>>()
             .init_resource::<RunStatus>()
             .init_resource::<RunControl>()
+            .init_resource::<crate::escape::Escape>()
             .add_systems(Startup, view::spawn)
-            .add_systems(Update, (controls, view::refresh, view::scroll).chain());
+            .add_systems(
+                Update,
+                (crate::skinned::close, controls, view::refresh, view::scroll).chain(),
+            );
         app.world_mut()
             .resource_mut::<Shown>()
             .open(WindowId::Scripts);
@@ -418,6 +422,29 @@ mod tests {
         app.world_mut().resource_mut::<Workbench>().tab = Tab::Help;
         app.update();
         assert!(app.world().contains_resource::<Script>());
+        let close = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::skinned::Closes>>()
+            .single(app.world())
+            .unwrap();
+        assert!(app.world().get::<crate::windows::Minimize>(close).is_none());
+        crate::clicks::testing::click(&mut app, close);
+        assert!(!app.world().resource::<Shown>().displayed(WindowId::Scripts));
+        assert_eq!(app.world().resource::<Script>().status().source(), source);
+        assert_eq!(
+            app.world().resource::<Workbench>().document.text,
+            "wait 10\n"
+        );
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
+        app.update();
+        let root = app
+            .world_mut()
+            .query_filtered::<&Node, With<view::Root>>()
+            .single(app.world())
+            .unwrap();
+        assert_eq!(root.display, Display::Flex);
     }
 
     #[test]

@@ -424,6 +424,7 @@ pub(crate) mod testing {
             .init_resource::<hud::messages::Messages>()
             .init_resource::<Assets<Image>>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<bevy::input::keyboard::Key>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<Time>()
             .insert_resource(online::OnlineState::new(false))

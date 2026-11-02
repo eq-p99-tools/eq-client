@@ -65,6 +65,8 @@ Drag a framed window's titlebar to move it; use its minimize/restore button when
 present. Passive panels move by dragging their surface. Layouts are constrained
 to the viewport and saved per character. A newly opened window uses saved
 positions, compatible installed-client positions, or its default layout.
+The Scripts window has a Close button instead of minimize/restore. Closing it
+preserves the document and any running script; use Stop to end execution.
 
 ## Map
 

@@ -248,7 +248,7 @@ pub(super) fn titled(commands: &mut Commands, entity: Entity, id: WindowId) {
         .with_children(|parent| title_bar(parent, entity, id));
 }
 
-/// Adds a compact drag bar, with the window's title, and a minimize button.
+/// Adds a compact drag bar and its minimize or close control.
 pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: WindowId) {
     let title = id.describe().title;
     parent
@@ -270,9 +270,12 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: Wi
         ))
         .with_children(|bar| {
             bar.spawn(theme::text(title, Size::Small, theme::INK));
-            bar.spawn((
+            let mut button = bar.spawn((
                 Button,
-                Minimize(frame),
+                crate::skinned::TitleBox {
+                    window: id,
+                    close: !id.can_minimize(),
+                },
                 Node {
                     width: px(20),
                     height: px(18),
@@ -281,13 +284,24 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: Wi
                     ..default()
                 },
                 BackgroundColor(theme::BUTTON),
-            ))
-            .with_children(|button| {
-                button.spawn((
-                    MinimizeLabel(frame),
-                    theme::text("_", Size::Body, theme::INK_BRIGHT),
-                ));
-            });
+            ));
+            if id.can_minimize() {
+                button.insert(Minimize(frame)).with_children(|button| {
+                    button.spawn((
+                        MinimizeLabel(frame),
+                        theme::text("_", Size::Body, theme::INK_BRIGHT),
+                    ));
+                });
+            } else {
+                button
+                    .insert((
+                        crate::skinned::Closes(id),
+                        crate::tooltip::Tooltip("Close; a running script continues.".into()),
+                    ))
+                    .with_children(|button| {
+                        button.spawn(theme::text("×", Size::Body, theme::INK_BRIGHT));
+                    });
+            }
         });
 }
 
