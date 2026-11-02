@@ -203,11 +203,16 @@ pub(crate) enum Layer {
     Popup,
     /// Screens that replace the game, such as the character list.
     Screen,
-    /// Tools that remain accessible above the login and character screens.
+    /// Floating tools raised above the login and character screens before play.
     Tool,
 }
 
 impl Layer {
+    /// Windows whose order follows the player's clicks and opens.
+    pub(crate) const fn stacked(self) -> bool {
+        matches!(self, Self::Floating | Self::Tool)
+    }
+
     /// The first global z-index of the layer.
     pub(crate) const fn base(self) -> i32 {
         match self {

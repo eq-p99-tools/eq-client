@@ -16,7 +16,7 @@ impl Default for Stack {
         Self(
             WindowId::ALL
                 .into_iter()
-                .filter(|id| id.describe().layer == Layer::Floating)
+                .filter(|id| id.describe().layer.stacked())
                 .collect(),
         )
     }
@@ -138,7 +138,16 @@ pub(super) struct SelectorLabel(pub(super) WindowId);
 pub(crate) fn raise(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    frames: Query<(&WindowId, &Node, &UiGlobalTransform, &ComputedNode), With<super::Frame>>,
+    frames: Query<
+        (
+            &WindowId,
+            &Node,
+            &UiGlobalTransform,
+            &ComputedNode,
+            &GlobalZIndex,
+        ),
+        With<super::Frame>,
+    >,
     mut stack: ResMut<Stack>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
@@ -152,16 +161,15 @@ pub(crate) fn raise(
     else {
         return;
     };
-    let under: Vec<WindowId> = frames
+    let front = frames
         .iter()
-        .filter(|(id, node, transform, computed)| {
-            id.describe().layer == Layer::Floating
+        .filter(|(id, node, transform, computed, _)| {
+            id.describe().layer.stacked()
                 && node.display != Display::None
                 && super::contains(cursor, transform, computed)
         })
-        .map(|(id, ..)| *id)
-        .collect();
-    let front = stack.front_to_back().find(|id| under.contains(id));
+        .max_by_key(|(_, _, _, _, z)| z.0)
+        .map(|(id, ..)| *id);
     if let Some(front) = front {
         stack.raise(front);
     }
@@ -181,7 +189,7 @@ pub(crate) fn raise_opened(
     mut stack: ResMut<Stack>,
 ) {
     for (id, node) in &frames {
-        if id.describe().layer != Layer::Floating {
+        if !id.describe().layer.stacked() {
             continue;
         }
         if node.display == Display::None {
@@ -194,12 +202,24 @@ pub(crate) fn raise_opened(
 
 /// Draws each floating window at its place in the stack.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn restack(stack: Res<Stack>, mut frames: Query<(&WindowId, &mut GlobalZIndex)>) {
+pub(crate) fn restack(
+    stack: Res<Stack>,
+    front: Res<crate::login::FrontEnd>,
+    online: Res<crate::online::OnlineState>,
+    mut frames: Query<(&WindowId, &mut GlobalZIndex)>,
+) {
+    let in_world = front.screen(&online) == crate::login::Screen::World;
     for (id, mut z) in &mut frames {
-        if id.describe().layer != Layer::Floating {
+        let layer = id.describe().layer;
+        if !layer.stacked() {
             continue;
         }
-        let wanted = stack.z(*id);
+        let wanted = stack.z(*id)
+            + if layer == Layer::Tool && !in_world {
+                Layer::Tool.base() - Layer::Floating.base()
+            } else {
+                0
+            };
         if z.0 != wanted {
             z.0 = wanted;
         }
@@ -358,6 +378,47 @@ mod tests {
         );
         app.update();
         assert_eq!(front(&app), Some(WindowId::Merchant));
+    }
+
+    #[test]
+    fn tools_share_the_world_stack_but_stay_above_the_front_end() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, (raise_opened, restack).chain());
+        let scripts = app
+            .world_mut()
+            .spawn((
+                super::super::Frame::default(),
+                WindowId::Scripts,
+                Node::default(),
+                GlobalZIndex(0),
+            ))
+            .id();
+        app.update();
+        let options = app
+            .world_mut()
+            .spawn((
+                super::super::Frame::default(),
+                WindowId::Options,
+                Node::default(),
+                GlobalZIndex(0),
+            ))
+            .id();
+        app.update();
+        let z = |app: &App, entity| app.world().get::<GlobalZIndex>(entity).unwrap().0;
+        assert!(z(&app, options) > z(&app, scripts));
+        app.world_mut()
+            .resource_mut::<Stack>()
+            .raise(WindowId::Scripts);
+        app.update();
+        assert!(z(&app, scripts) > z(&app, options));
+        assert!(z(&app, scripts) < Layer::Popup.base());
+        // With an online run still at login, the tool clears the full-screen UI.
+        app.insert_resource(crate::online::OnlineState::new(true));
+        app.update();
+        assert!(z(&app, scripts) > Layer::Screen.base());
+        app.insert_resource(crate::online::OnlineState::new(false));
+        app.update();
+        assert!(z(&app, scripts) < Layer::Popup.base());
     }
 
     #[test]

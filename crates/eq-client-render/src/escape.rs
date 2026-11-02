@@ -51,9 +51,10 @@ pub(super) fn route(
     *escape = match screen {
         _ if !key || keys.escape_claimed() || !keys.window_focused() => Escape::Unused,
         _ if menu.open => Escape::Close(WindowId::Selector),
-        _ if frames
-            .iter()
-            .any(|(id, node)| *id == WindowId::Scripts && node.display != Display::None) =>
+        _ if screen != Screen::World
+            && frames
+                .iter()
+                .any(|(id, node)| *id == WindowId::Scripts && node.display != Display::None) =>
         {
             Escape::Close(WindowId::Scripts)
         }
@@ -164,6 +165,25 @@ mod tests {
         // An inspected item sits above the rest and closes first.
         window(&mut app, WindowId::Item);
         assert_eq!(press(&mut app), Escape::Close(WindowId::Item));
+    }
+
+    #[test]
+    fn scripts_follow_the_same_escape_order_as_other_world_windows() {
+        let mut app = app();
+        window(&mut app, WindowId::Scripts);
+        window(&mut app, WindowId::Options);
+        app.world_mut()
+            .resource_mut::<Stack>()
+            .raise(WindowId::Options);
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Options));
+        app.world_mut()
+            .resource_mut::<Stack>()
+            .raise(WindowId::Scripts);
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Scripts));
+        window(&mut app, WindowId::Item);
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Item));
+        app.insert_resource(crate::online::OnlineState::new(true));
+        assert_eq!(press(&mut app), Escape::Close(WindowId::Scripts));
     }
 
     #[test]
