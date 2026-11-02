@@ -451,6 +451,137 @@ fn inspect_stuck() {
     println!("refused_directions={refused}/16");
 }
 
+/// Replays the player's own steps where a climb stopped, as `motion` makes
+/// them on a Titanium install: the server's position `EQ_PROBE_SPOT` (EQ
+/// X,Y,Z, as a `#goto` puts it), the feet `EQ_PROBE_OFFSET` under it (the
+/// admission line's; half the model's height when unset), moving toward EQ
+/// heading `EQ_PROBE_HEADING` at a run and at a walk (`EQ_PROBE_SPEEDS`,
+/// units a second, default 32 and 12.8) in 0.1 s samples through the
+/// player's fall step. Prints each sample, then every collision triangle
+/// within 6 units across and 10 up or down of the start's feet, relative to
+/// them in the renderer's frame (Y up), with its unit normal and its part
+/// (the terrain or an object's index), so the spot replays as a test. No
+/// zone name or world coordinate of the triangles is printed.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_MODEL, EQ_PROBE_SPOT and EQ_PROBE_HEADING"]
+fn inspect_slope_stop() {
+    use eq_client_core::movement::AirborneController;
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone =
+        eq_client_assets::load_zone(&install, &std::env::var("EQ_PROBE_ZONE").unwrap()).unwrap();
+    let height = eq_client_assets::characters::load_character(
+        &install.join("global_chr.s3d"),
+        &std::env::var("EQ_PROBE_MODEL").unwrap(),
+    )
+    .unwrap()
+    .height();
+    let world = build_collision(&zone).unwrap();
+    let offset: f32 = std::env::var("EQ_PROBE_OFFSET")
+        .map_or(height * 0.5, |offset| offset.parse().unwrap());
+    let spot = Vec3::from_array(eq_client_core::render_vector(
+        probe_point("EQ_PROBE_SPOT").to_array(),
+    ));
+    let start = spot - Vec3::Y * offset;
+    let heading: f32 = std::env::var("EQ_PROBE_HEADING").unwrap().parse().unwrap();
+    let radians = heading / 512.0 * std::f32::consts::TAU;
+    let toward = Vec3::from_array(eq_client_core::render_vector([
+        radians.sin(),
+        radians.cos(),
+        0.0,
+    ]));
+    let toward = Vec3::new(toward.x, 0.0, toward.z).normalize();
+    let speeds: Vec<f32> = std::env::var("EQ_PROBE_SPEEDS")
+        .map_or_else(|_| "32,12.8".into(), |speeds| speeds)
+        .split(',')
+        .map(|speed| speed.parse().unwrap())
+        .collect();
+    let body = PlayerBody {
+        feet_offset: offset,
+        height,
+        size: height,
+    };
+    let titanium = motion::climbing(
+        motion::physics(eq_client_assets::ui::InstalledClient::Titanium, None),
+        eq_client_assets::ui::InstalledClient::Titanium,
+        &body,
+    );
+    println!(
+        "height={height} feet_offset={offset} climb={} clearance={:?} support={:?} \
+         floor_within_climb={:?} ground_below={:?}",
+        titanium.climb,
+        world.clearance(start, height, 2.0),
+        world.support(start),
+        world.ground(start, titanium.climb, 0.0),
+        world.ground(start, 0.0, 20.0),
+    );
+    for speed in speeds {
+        let mut airborne = AirborneController::default();
+        let mut feet = start;
+        for sample in 0..20 {
+            let next = motion::fall_step(
+                &mut airborne,
+                &world,
+                titanium,
+                Some(titanium.climb),
+                feet,
+                toward * speed * 0.1,
+                0.1,
+                height,
+                false,
+            );
+            let moved = next - feet;
+            println!(
+                "speed={speed} sample={sample} across={:.3} rise={:.3} velocity={:.2} \
+                 clearance={:?} support={:?} from_start=({:.3},{:.3},{:.3})",
+                Vec3::new(moved.x, 0.0, moved.z).length(),
+                moved.y,
+                airborne.velocity(),
+                world.clearance(next, height, 1.0),
+                world.support(next).map(|floor| floor - next.y),
+                next.x - start.x,
+                next.y - start.y,
+                next.z - start.z,
+            );
+            feet = next;
+        }
+    }
+    let near = |p: &[f32; 3]| {
+        let d = Vec3::from_array(*p) - start;
+        Vec3::new(d.x, 0.0, d.z).length() <= 6.0 && d.y.abs() <= 10.0
+    };
+    let mut parts = vec![("terrain".to_string(), zone.collision.clone())];
+    for (index, object) in zone.objects.iter().enumerate() {
+        let Some(model) = zone.models.get(object.model) else {
+            continue;
+        };
+        let transform = object_transform(object).to_matrix();
+        parts.push((
+            format!("object{index}"),
+            model
+                .collision
+                .iter()
+                .map(|triangle| {
+                    triangle.map(|p| transform.transform_point3(Vec3::from_array(p)).to_array())
+                })
+                .collect(),
+        ));
+    }
+    let mut count = 0;
+    for (part, triangles) in parts {
+        for triangle in triangles.iter().filter(|triangle| triangle.iter().any(near)) {
+            let [a, b, c] = triangle.map(|p| Vec3::from_array(p) - start);
+            let normal = (b - a).cross(c - a).normalize_or_zero();
+            println!(
+                "triangle part={part} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3}) \
+                 c=({:.3},{:.3},{:.3}) normal=({:.3},{:.3},{:.3})",
+                a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, normal.x, normal.y, normal.z
+            );
+            count += 1;
+        }
+    }
+    println!("triangles={count}");
+}
+
 /// Walks a route offline exactly as a script's walk step does online: the route
 /// searched from `EQ_PROBE_FEET` to `EQ_PROBE_GOAL` (renderer feet points),
 /// followed with the online stepper in 150 ms samples of 3.1 units, printing
