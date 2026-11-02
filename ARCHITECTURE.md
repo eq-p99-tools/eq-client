@@ -51,6 +51,15 @@ Search claims the shared `keys::Typing` state before chat and gameplay input.
 remote travel arrows use the existing dialect movement calculation and expire
 when reports go stale. This presentation state never writes to `ClientWorld`.
 
+Character creation is scoped to the world server's character list, before any
+zone admission. `eq-network` offers `creation::Rules` on that list and owns name
+approval, encoding, completion and timeout recovery. `eq-client-core::character_creation`
+keeps the editable draft, point budget and dependent choices. The renderer's
+`character_create` owns pages, focus and the pending presentation; only final
+submission sends `CreateCharacter` through `Outbox`. Refusals retain the draft,
+new lists invalidate it, and success selects the confirmed character without
+entering. Creation claims `keys::Typing` before chat, Escape and gameplay input.
+
 ## Ordered work and asynchronous outcomes
 
 The renderer keeps its resource registration and frame graph in `systems`,

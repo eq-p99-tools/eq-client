@@ -257,6 +257,7 @@ impl Panels<'_> {
         if changes.characters {
             state.selection = state.world.characters().map(|list| {
                 super::character_select::Selection::new(list.selection_id, list.characters.clone())
+                    .with_creation(list.creation)
             });
         }
         if let Some(selection) = state.selection.as_mut() {

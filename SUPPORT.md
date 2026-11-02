@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `95fedb15c1994d09ab6871446fd564a656ead106`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/95fedb15c1994d09ab6871446fd564a656ead106/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `652179282165579ab935ab89cfb91f48e6b7baa5`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/652179282165579ab935ab89cfb91f48e6b7baa5/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -38,7 +38,7 @@ certification, and individual operations still validate their prerequisites.
 | Raids, training, reading and tradeskills | No | Yes | No | No |
 | Pets and corpse commands | Yes | Yes | No | No |
 | Resurrection / translocate answers | No / No | Yes / Yes | No / No | No / Yes |
-| Character creation via script | Yes | Yes | No | Yes |
+| Character creation UI and script | Yes | Yes | Yes | Yes |
 
 Quarm admission, incoming character/entity state and chat have been exercised;
 that does not grant the richer actions implemented for TAKP. Quarm currently
@@ -62,9 +62,16 @@ server either fully tested or wholly untested based on one of them.
 
 The native client still has incomplete model/UI coverage, swimming, client-side
 same-zone teleporter detection and some cooldown/resource information. Character
-creation is available through the scenario path where supported; the character
-selection screen does not implement create/delete controls. [Gameplay](docs/gameplay.md)
-and [Assets](docs/assets.md) describe practical limitations.
+creation has UI and scenario paths on all four policies; deletion is unavailable.
+The creation form includes classic face selection, with other cosmetics using
+defaults and no creation model preview. [Gameplay](docs/gameplay.md) and
+[Assets](docs/assets.md) describe practical limitations.
+
+Creation choices were checked against the installed clients' functional rules.
+Synthetic tests cover all offered race/class combinations, deity/city choices,
+expansion limits, both packet generations, refusals, repeated submissions and
+stale lists. Quarm creation was checked against its own published world handlers
+and record layout. These checks add no live-server creation certification.
 
 For live checks, record the client and network commits, server policy, steps,
 duration and result. Test initial admission, continued connection, movement,
@@ -78,8 +85,8 @@ coverage; their PR descriptions distinguish that from live/manual validation.
 
 ## Dependency integration and CI
 
-Cargo.toml follows networking's Git `main`, but Cargo.lock selects the exact
-commit. Use `cargo metadata --locked --format-version 1` to inspect it. A newer
+Cargo.toml pins networking's creation prerequisite, and Cargo.lock selects that
+exact commit. Use `cargo metadata --locked --format-version 1` to inspect it. A newer
 network README may describe work this client has not integrated. For an intentional
 update, review old/new revisions and lockfile changes, run local checks, then
 validate affected server scenarios with authorization.

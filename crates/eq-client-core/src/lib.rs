@@ -40,6 +40,8 @@ pub use eq_network_game::command::Posture;
 pub use eq_network_game::confirmations;
 pub use eq_network_game::corpses;
 pub use eq_network_game::creation;
+pub use eq_network_game::rules;
+pub mod character_creation;
 pub use eq_network_game::effects;
 pub use eq_network_game::exchange;
 pub use eq_network_game::food;

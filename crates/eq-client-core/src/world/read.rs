@@ -76,6 +76,11 @@ impl ClientWorld {
         self.characters.as_ref()
     }
 
+    /// Expansions the world lets this account use; unknown until reported.
+    pub const fn expansions(&self) -> Option<crate::rules::Expansions> {
+        self.expansions
+    }
+
     /// The world's last answer to a character the player asked for.
     #[must_use]
     pub const fn creation(&self) -> Option<&super::Creation> {

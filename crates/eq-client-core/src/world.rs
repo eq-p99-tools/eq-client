@@ -55,6 +55,8 @@ pub struct CharacterList {
     pub selection_id: u64,
     /// The characters, in their server slots.
     pub characters: Vec<CharacterChoice>,
+    /// Creation policy supplied by the session with this list.
+    pub creation: Option<crate::creation::Rules>,
 }
 
 /// The world's last answer to a character the player asked for.
@@ -167,6 +169,8 @@ pub struct ClientWorld {
     /// The world's answers to the player's character creations, counted, and
     /// the last of them.
     creation: Option<Creation>,
+    /// The world's expansion mask, when it reported one.
+    expansions: Option<crate::rules::Expansions>,
     /// The last revision given to a spawn, which never repeats.
     revision: u64,
     /// The last count given to a spawn's motion, which never repeats.
@@ -525,7 +529,8 @@ impl ClientWorld {
             WorldEvent::CharacterSelection {
                 selection_id,
                 characters,
-            } => self.offered(*selection_id, characters, news),
+                creation,
+            } => self.offered(*selection_id, characters, *creation, news),
             WorldEvent::Entered {
                 capabilities,
                 choices,
@@ -585,8 +590,9 @@ impl ClientWorld {
 
             // The world's player-versus-player ruleset decides names' colours.
             WorldEvent::Rules(rules) => self.pvp_rule = rules.pvp,
+            WorldEvent::Expansions(expansions) => self.expansions = Some(*expansions),
 
-            // Nothing here shows the world's other rules, the expansions it allows,
+            // Nothing here shows the world's other rules,
             // its chat server, a zone it says is down, the zone's weather or
             // its header beyond the sky and the clip yet, nor stops the
             // player while stunned, charmed, held by the server or berserk,
@@ -611,8 +617,7 @@ impl ClientWorld {
             // wait for a window to choose one from, and what a game master did
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
-            WorldEvent::Expansions(_)
-            | WorldEvent::ChatServer(_)
+            WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::Weather(_)
             | WorldEvent::ServerTick(_)

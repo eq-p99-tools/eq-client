@@ -630,6 +630,8 @@ pub(crate) struct Typing {
     pub rebinding: bool,
     /// A script document or path field owns the keyboard.
     pub editing_script: bool,
+    /// The character creation form owns the keyboard.
+    pub creating_character: bool,
     /// This frame's Escape closed the chat line or left the quantity
     /// window's number, so nothing else takes it.
     pub escape_consumed: bool,
@@ -665,6 +667,7 @@ impl Keys<'_, '_> {
     /// Whether the game has the keyboard.
     pub(crate) fn focused(&self) -> bool {
         !self.typing.composing
+            && !self.typing.creating_character
             && !self.typing.editing_script
             && !self.typing.counting
             && !self.typing.logging_in

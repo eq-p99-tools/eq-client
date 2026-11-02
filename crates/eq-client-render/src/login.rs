@@ -572,6 +572,7 @@ pub(super) fn quit(
     mut online: ResMut<OnlineState>,
     mut link: Link,
     keys: crate::keys::Keys,
+    editor: Option<Res<crate::character_create::Editor>>,
     buttons: crate::clicks::Clicks<super::character_select::Action>,
     (escape, mut exit): (Res<super::escape::Escape>, MessageWriter<AppExit>),
 ) {
@@ -579,7 +580,11 @@ pub(super) fn quit(
         .iter()
         .any(|action| matches!(action, super::character_select::Action::Quit))
         || *escape == super::escape::Escape::Back;
-    if !pressed || !keys.focused() || front.screen(&online) != Screen::Characters {
+    if !pressed
+        || !(keys.focused()
+            || editor.is_some_and(|editor| editor.active()) && keys.window_focused())
+        || front.screen(&online) != Screen::Characters
+    {
         return;
     }
     if front.has_login() {

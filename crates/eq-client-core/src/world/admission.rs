@@ -53,12 +53,14 @@ impl ClientWorld {
         &mut self,
         selection_id: u64,
         characters: &[CharacterChoice],
+        creation: Option<crate::creation::Rules>,
         changes: &mut Changes,
     ) {
         self.servers = None;
         self.characters = Some(CharacterList {
             selection_id,
             characters: characters.to_vec(),
+            creation,
         });
         changes.characters = true;
     }

@@ -32,9 +32,34 @@ retained. Login failures leave their reason visible for another attempt.
 
 The character list only previews a dressed model where the server policy exposes
 appearance data (currently EQEmu and TAKP). A dark background on P99 or Quarm is
-not a failed login. Empty slots do not create characters from this screen; the
-create/delete controls are unavailable. The optional scripting `create` command
-is a separate path, available only where the networking policy supports creation.
+not a failed login.
+
+## Create a character
+
+Choose **Create Character**, click an empty slot, or press **C** at character
+selection. Creation is offered on P99, Titanium EQEmu, Quarm and TAKP when fewer
+than eight slots are occupied.
+
+1. Choose a name, race, class, gender and classic face.
+2. Distribute the stat points using +/-, or choose Suggested allocation.
+3. Choose a deity and starting city, review the choices, then Create Character.
+
+Race/class choices follow the session's era policy and reported expansion mask.
+Changing race or class resets the stat allocation and reconciles deity/city
+choices. The form enforces base stats, the point budget and each stat's limit;
+it sends the correct city index or zone ID for the protocol generation. Hair,
+eye and other cosmetic fields currently use their defaults; faces are numbered
+without a model preview. The server can refuse names or custom combinations.
+
+Enter advances pages and submits on the final page. Tab toggles name editing;
+Ctrl+A replaces the name. Cancel or Escape discards an unsent draft. A refusal
+keeps the draft editable. While waiting, editing and duplicate submission are
+blocked; Disconnect leaves the session. After a 60-second timeout, reconnect and
+check the character list before retrying. Success returns to the refreshed list
+with the new character selected; Enter World remains a separate action.
+
+Character deletion is not implemented. The optional scripting `create` command
+remains available through the same networking policies.
 
 ## Login presets
 

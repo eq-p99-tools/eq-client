@@ -6,7 +6,7 @@ viewer, and online gameplay through the
 user-supplied EverQuest installation. Game assets are not included in this
 repository or its builds.
 
-The client includes character selection, chat, inventory and equipment, spellbook
+The client includes character selection and creation, chat, inventory and equipment, spellbook
 and hotbar controls, movement, targeting, combat and zone transfers. Online
 availability depends on the server: P99, EQEmu, Quarm and TAKP do not offer identical
 features. See [support and validation](SUPPORT.md) for the current policy and the
@@ -29,7 +29,8 @@ cargo run -p eq-client --release --locked -- --eq-dir "C:\Program Files (x86)\So
 ```
 
 Choose a login preset, enter your credentials, select a world, then select a
-character and enter the game. A character name in configuration is optional.
+character and enter the game, or choose Create Character to make one. A character
+name in configuration is optional.
 The [login guide](docs/login.md) covers installations, custom servers and optional
 automatic login. Keep credentials and private settings outside Git.
 

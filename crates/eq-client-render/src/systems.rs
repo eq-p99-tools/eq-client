@@ -1,13 +1,13 @@
 //! Presentation resources and explicit frame-order contracts.
 //! Keep shared-input and deferred-entity ordering visible at this composition boundary.
 use crate::{
-    abilities, buffs, character, character_select, chat, clicks, coins, combat, confirm, daylight,
-    doors, entities, escape, exit_after_screenshot, give, ground, group, hud, interact, inventory,
-    item_models, items, keys, login, logs, map, motion, move_player, names, navigation,
-    navmesh_prebuild, notices, online, options, orbit_camera, outbox, outfit, paperdoll, pet,
-    profile_files, raid, reading, resources, schedule_screenshot, select_preview, sheets, skills,
-    skin, skinned, sounds, speed, spell_effects, spell_icons, spellbook, target, tooltip, trade,
-    tradeskills, training, translocate, update_hud, whereabouts, who, windows,
+    abilities, buffs, character, character_create, character_select, chat, clicks, coins, combat,
+    confirm, daylight, doors, entities, escape, exit_after_screenshot, give, ground, group, hud,
+    interact, inventory, item_models, items, keys, login, logs, map, motion, move_player, names,
+    navigation, navmesh_prebuild, notices, online, options, orbit_camera, outbox, outfit,
+    paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot, select_preview,
+    sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons, spellbook, target,
+    tooltip, trade, tradeskills, training, translocate, update_hud, whereabouts, who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -66,6 +66,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::Shown>()
         .init_resource::<windows::Stack>()
         .init_resource::<keys::Typing>()
+        .init_resource::<character_create::Editor>()
         .init_resource::<keys::bindings::Bindings>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()
@@ -133,6 +134,8 @@ pub(super) fn schedule(app: &mut App) {
                 keys::bindings::persist,
                 keys::bindings::capture,
                 login::claim,
+                character_create::claim,
+                character_create::input,
                 windows::pointer::wheel,
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
@@ -208,7 +211,10 @@ pub(super) fn schedule(app: &mut App) {
                     character_select::update,
                     character_select::names,
                     login::quit,
-                ),
+                    character_create::present,
+                    character_create::scroll,
+                )
+                    .chain(),
             ),
             windows::input,
             (crate::camera::toggle_free, move_player, motion::input).chain(),

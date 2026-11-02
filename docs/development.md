@@ -15,7 +15,8 @@ cargo build -p eq-client --release --locked
 cargo run -p eq-client --locked -- --help
 ```
 
-`Cargo.toml` follows `eq-network` Git `main`; `Cargo.lock` pins the actual commit.
+`Cargo.toml` pins the `eq-network` creation prerequisite by Git revision;
+`Cargo.lock` resolves the same commit. See eq-p99-tools/eq-network#164.
 The asset decoder uses a pinned fork of `libeq`. A normal build needs neither a
 sibling networking checkout nor unpublished local patches. Inspect resolved
 sources with `cargo metadata --locked --format-version 1`. `--offline` is useful
@@ -87,3 +88,17 @@ fences and standalone links to those help pages. Do not assume it is a full
 Markdown browser. Keep shared help within that subset; use `eqscript` fences
 for executable examples, which the real parser tests. Update parser/targets,
 syntax highlighting and reference pages together when extending the language.
+
+## Character creation render check
+
+The offline example loads a user-owned Titanium installation and captures a
+hidden-window form with a synthetic name. It contacts no server. Run once per
+page (0 identity, 1 attributes, 2 home/review), keeping output outside Git:
+
+```console
+cargo run -p eq-client-render --example character_creation -- "/path/to/EverQuest" "/private/output/creation.png" 0
+```
+
+The review page deliberately retains unspent points so its validation and
+disabled Create button can be inspected. State tests cover valid submission,
+refusal/retry, success, full accounts, cancellation and stale lists separately.

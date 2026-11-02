@@ -3438,12 +3438,17 @@ fn the_login_servers_list_lasts_until_the_chosen_world_lists_characters() {
     let changes = game(
         &mut world,
         WorldEvent::CharacterSelection {
+            creation: Some(crate::creation::Rules::Titanium),
             selection_id: 9,
             characters: Vec::new(),
         },
     );
     assert!(changes.characters);
     assert!(world.servers().is_none());
+    assert_eq!(
+        world.characters().unwrap().creation,
+        Some(crate::creation::Rules::Titanium)
+    );
 }
 
 #[test]
@@ -3456,7 +3461,13 @@ fn a_session_that_ends_forgets_the_list_and_a_new_one_keeps_only_the_players_cho
     assert!(world.ended());
     assert!(world.servers().is_none());
     game(&mut world, worlds(2));
+    game(
+        &mut world,
+        WorldEvent::Expansions(crate::rules::Expansions(7)),
+    );
+    assert_eq!(world.expansions(), Some(crate::rules::Expansions(7)));
     world.restart();
+    assert_eq!(world.expansions(), None);
     assert!(!world.ended() && world.servers().is_none());
     // What the player turned on still counts once an admission leaves it to
     // them.

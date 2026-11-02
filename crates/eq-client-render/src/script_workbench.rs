@@ -127,6 +127,7 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(
             Update,
             claim_keyboard
+                .before(crate::character_create::input)
                 .before(crate::chat::input)
                 .in_set(crate::Stage::Typing),
         )

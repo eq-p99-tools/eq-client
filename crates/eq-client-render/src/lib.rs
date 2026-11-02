@@ -34,6 +34,7 @@ mod background;
 mod book_delete;
 mod buffs;
 mod character;
+mod character_create;
 mod character_select;
 mod chat;
 mod clicks;

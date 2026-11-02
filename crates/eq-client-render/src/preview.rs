@@ -179,7 +179,7 @@ fn admit(news: Res<News>, scene: Res<SceneInfo>, players: Query<&Transform, With
 /// Offers two synthetic characters to choose from, each with a synthetic
 /// look, so the select screen shows them in their zones.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-fn characters(news: Res<News>) {
+fn characters(news: Res<News>, settings: Res<super::ViewerSettings>) {
     // Chain on the body (material 2) or plate (3), and a held model number.
     let look = |race, gender, class, material, held| {
         let mut materials = [material; 9];
@@ -198,6 +198,12 @@ fn characters(news: Res<News>) {
         }
     };
     news.game(WorldEvent::CharacterSelection {
+        creation: Some(match settings.0.installed_client {
+            eq_client_assets::ui::InstalledClient::Titanium => {
+                eq_client_core::creation::Rules::Titanium
+            }
+            eq_client_assets::ui::InstalledClient::EqMac => eq_client_core::creation::Rules::EqMac,
+        }),
         selection_id: 1,
         characters: vec![
             CharacterChoice {
