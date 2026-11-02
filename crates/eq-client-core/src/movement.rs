@@ -488,9 +488,18 @@ impl CollisionWorld {
                         ground
                     }
                 }
-                Support::Optional { drop, climb } => self
-                    .support_height(probe, climb, drop)
-                    .unwrap_or(position.y),
+                Support::Optional { drop, climb } => {
+                    match self.support_height(probe, climb, drop) {
+                        Some(ground) => ground,
+                        // Ground under the stride's end that rises past the
+                        // step's climb stops it as a wall does: no stride walks
+                        // the feet into a face (6.344).
+                        None if self.ground(probe, height, 0.0).is_some() => break,
+                        // Past the drop, across at the feet's height, the fall
+                        // to follow.
+                        None => position.y,
+                    }
+                }
                 Support::Airborne => position.y,
             };
             let target = Vec3::new(position.x + remaining.x, ground, position.z + remaining.z);

@@ -476,8 +476,8 @@ fn inspect_slope_stop() {
     .unwrap()
     .height();
     let world = build_collision(&zone).unwrap();
-    let offset: f32 = std::env::var("EQ_PROBE_OFFSET")
-        .map_or(height * 0.5, |offset| offset.parse().unwrap());
+    let offset: f32 =
+        std::env::var("EQ_PROBE_OFFSET").map_or(height * 0.5, |offset| offset.parse().unwrap());
     let spot = Vec3::from_array(eq_client_core::render_vector(
         probe_point("EQ_PROBE_SPOT").to_array(),
     ));
@@ -491,7 +491,7 @@ fn inspect_slope_stop() {
     ]));
     let toward = Vec3::new(toward.x, 0.0, toward.z).normalize();
     let speeds: Vec<f32> = std::env::var("EQ_PROBE_SPEEDS")
-        .map_or_else(|_| "32,12.8".into(), |speeds| speeds)
+        .unwrap_or_else(|_| "32,12.8".into())
         .split(',')
         .map(|speed| speed.parse().unwrap())
         .collect();
@@ -545,6 +545,12 @@ fn inspect_slope_stop() {
             feet = next;
         }
     }
+    print_triangles_near(&zone, start);
+}
+
+/// Every collision triangle within 6 units across and 10 up or down of
+/// `start`, relative to it, with its unit normal and its part.
+fn print_triangles_near(zone: &ZoneAsset, start: Vec3) {
     let near = |p: &[f32; 3]| {
         let d = Vec3::from_array(*p) - start;
         Vec3::new(d.x, 0.0, d.z).length() <= 6.0 && d.y.abs() <= 10.0
@@ -568,7 +574,10 @@ fn inspect_slope_stop() {
     }
     let mut count = 0;
     for (part, triangles) in parts {
-        for triangle in triangles.iter().filter(|triangle| triangle.iter().any(near)) {
+        for triangle in triangles
+            .iter()
+            .filter(|triangle| triangle.iter().any(near))
+        {
             let [a, b, c] = triangle.map(|p| Vec3::from_array(p) - start);
             let normal = (b - a).cross(c - a).normalize_or_zero();
             println!(

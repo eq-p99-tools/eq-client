@@ -209,12 +209,19 @@ impl AirborneController {
         // server's move left under a floor within the body's reach stand on
         // it at once (6.344, R-s); deeper, it starts under the floor, meets
         // nothing and the body falls.
+        let start = feet;
         let feet = match risen_floor(world, feet, physics.climb)
             .or_else(|| buried_floor(world, feet, input.height))
         {
             Some(floor) if self.velocity <= 0.0 => Vec3::new(feet.x, floor, feet.z),
             _ => feet,
         };
+        // That one sweep is the whole step's rise: a step that stands up
+        // walks on only by the reach the lift left it, so it never rises
+        // more than its climb from where it started. Its move goes as far
+        // up as that allows (inferred, checklist 6.366: the program's
+        // horizontal sphere against the face is unread).
+        let climb = (physics.climb - (feet.y - start.y)).max(0.0);
         let floor = world.support(feet);
         let grounded = self.velocity <= 0.0 && floor.is_some();
         if grounded {
@@ -250,7 +257,7 @@ impl AirborneController {
         let support = if grounded && !input.jump {
             Support::Optional {
                 drop: physics.ground_tolerance,
-                climb: physics.climb,
+                climb,
             }
         } else {
             Support::Airborne
@@ -1035,6 +1042,61 @@ mod tests {
             feet = state.step(&world, feet, PROGRAM, run);
         }
         assert!(feet.y <= surface - 3.5 + 0.001, "{feet}");
+    }
+
+    #[test]
+    fn a_step_that_stands_up_under_a_steep_face_climbs_only_by_the_reach_left() {
+        // Live's look (11-01, 85b9d33d): a goto 1 u over a 50° face left a
+        // human's feet 2.75 under it, and every run and walk moved nothing.
+        // The stand-up and the walk each took the whole 3.15, so the step
+        // rose past the reach and the player's step threw it all away, the
+        // stand-up too, every time. One step's rise from where it started
+        // stays within the climb (6.344): the walk after a stand-up gets
+        // what the lift left (6.366), and the next steps climb at pace.
+        let height = 200.0_f32;
+        for degrees in [40.0_f32, 50.0, 55.0, 60.0] {
+            for pace in [1.6_f32, 0.64] {
+                let (world, foot) = face(height, degrees);
+                let slope = degrees.to_radians().tan();
+                let surface = |x: f32| height - x.clamp(0.0, foot) * slope;
+                let start = foot * 0.7;
+                let mut feet = Vec3::new(start, surface(start) + 1.0 - 3.75, 0.0);
+                let mut state = AirborneController::default();
+                let step = MotionStep {
+                    horizontal: -Vec3::X * pace,
+                    jump: false,
+                    seconds: 0.05,
+                    height: 6.0,
+                };
+                let mut moved = Vec::new();
+                for _ in 0..20 {
+                    let next = state.step(&world, feet, PROGRAM, step);
+                    let case = format!("{degrees}° at {pace}: {feet} to {next}");
+                    assert!(next.y - feet.y <= PROGRAM.climb + 0.001, "{case}");
+                    // On the face under the footprint, never under it.
+                    let under = surface(next.x + crate::movement::SUPPORT_SPREAD);
+                    assert!(next.y >= under - 0.01, "{case}");
+                    moved.push(feet.x - next.x);
+                    feet = next;
+                }
+                let case = format!("{degrees}° at {pace}: {moved:?}");
+                // Every step moves, the first by what the stand-up left,
+                // and from the third at pace where the reach allows it.
+                assert!(moved.iter().all(|x| *x > 0.1), "{case}");
+                if pace * slope <= PROGRAM.climb {
+                    assert!(
+                        moved[2..].iter().all(|x| (x - pace).abs() < 0.001),
+                        "{case}"
+                    );
+                }
+                assert!(
+                    state
+                        .take_landing()
+                        .is_none_or(|landing| landing.impact_speed * STEP <= 2.5),
+                    "{case}"
+                );
+            }
+        }
     }
 
     #[test]
