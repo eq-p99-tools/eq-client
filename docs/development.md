@@ -81,7 +81,7 @@ When behavior changes, check:
    parsing, offered commands and actual scenario evidence.
 5. Relative links, anchors and examples after moving a section or renaming a file.
 
-The five `docs/scripts` pages are embedded by
+The six `docs/scripts` pages are embedded by
 [`script_workbench::help`](../crates/eq-client-render/src/script_workbench/help.rs).
 Its lightweight renderer supports headings, paragraphs, bullets, inline code,
 fences and standalone links to those help pages. Do not assume it is a full

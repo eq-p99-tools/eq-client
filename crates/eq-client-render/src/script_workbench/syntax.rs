@@ -9,6 +9,19 @@ pub(super) enum Kind {
     Comment,
 }
 
+impl Kind {
+    pub(super) fn color(self) -> bevy::prelude::Color {
+        use crate::theme;
+        match self {
+            Self::Command => theme::FOCUS,
+            Self::Comment => theme::INK_DIM,
+            Self::Number => theme::INK_WARM,
+            Self::Key => theme::AGREED,
+            Self::Argument => theme::INK_BRIGHT,
+        }
+    }
+}
+
 /// Keep every byte, including whitespace, while styling a line of the DSL.
 pub(super) fn tokens(line: &str) -> Vec<(&str, Kind)> {
     let (code, comment) = line

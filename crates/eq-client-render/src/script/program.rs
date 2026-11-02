@@ -45,22 +45,39 @@ impl Program {
     /// # Errors
     /// Returns the first malformed line or a source/step limit violation.
     pub fn parse(text: &str, base: &Path) -> Result<Self, ParseError> {
+        Self::compile(text, base).map_err(|errors| errors[0].clone())
+    }
+
+    /// Check every source line with the executor's parser, without running it.
+    #[must_use]
+    pub fn diagnostics(text: &str, base: &Path) -> Vec<ParseError> {
+        Self::compile(text, base).err().unwrap_or_default()
+    }
+
+    fn compile(text: &str, base: &Path) -> Result<Self, Vec<ParseError>> {
         if text.len() > MAX_SOURCE_BYTES {
-            return Err(ParseError::document(format!(
+            return Err(vec![ParseError::document(format!(
                 "script exceeds the {MAX_SOURCE_BYTES}-byte source limit"
-            )));
+            ))]);
         }
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let mut instructions = Vec::new();
+        let mut errors = Vec::new();
         for (index, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or_default().trim();
             if line.is_empty() {
                 continue;
             }
-            let step = parse_step(line).map_err(|message| ParseError {
-                line: Some(index + 1),
-                message,
-            })?;
+            let step = match parse_step(line) {
+                Ok(step) => step,
+                Err(message) => {
+                    errors.push(ParseError {
+                        line: Some(index + 1),
+                        message,
+                    });
+                    continue;
+                }
+            };
             let step = match step {
                 Step::Screenshot(path) => Step::Screenshot(base.join(path)),
                 step => step,
@@ -70,10 +87,14 @@ impl Program {
                 step,
             });
             if instructions.len() > MAX_STEPS {
-                return Err(ParseError::document(format!(
+                errors.push(ParseError::document(format!(
                     "script has more than {MAX_STEPS} steps"
                 )));
+                break;
             }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
         }
         Ok(Self {
             source: Arc::from(text),
@@ -165,6 +186,21 @@ mod tests {
         let error = Program::parse("# scenario\n\nnot_a_command\n", Path::new(".")).unwrap_err();
         assert_eq!(error.line, Some(3));
         assert!(error.to_string().starts_with("script line 3: "));
+    }
+
+    #[test]
+    fn diagnostics_find_every_bad_line_and_keep_execution_atomic() {
+        let source = "# note\nwait invalid\nreport valid\npress UNKNOWN\n\nno_command\n";
+        let errors = Program::diagnostics(source, Path::new("."));
+        assert_eq!(
+            errors.iter().map(|error| error.line).collect::<Vec<_>>(),
+            [Some(2), Some(4), Some(6)]
+        );
+        assert_eq!(
+            Program::parse(source, Path::new(".")).unwrap_err(),
+            errors[0]
+        );
+        assert_eq!(Program::diagnostics("wait 1\n", Path::new(".")), []);
     }
 
     #[test]

@@ -64,7 +64,12 @@ impl Document {
     }
 
     pub fn loaded(path: PathBuf, raw: String) -> Self {
-        let text = raw.strip_prefix('\u{feff}').unwrap_or(&raw).to_owned();
+        // Parley's editor treats CR and LF independently. Keep one visual line
+        // per Windows newline while retaining the raw disk snapshot for saves.
+        let text = raw
+            .strip_prefix('\u{feff}')
+            .unwrap_or(&raw)
+            .replace("\r\n", "\n");
         Self {
             saved: text.clone(),
             text,
@@ -210,6 +215,18 @@ mod tests {
         assert_eq!(
             program.instructions()[0].step(),
             &crate::script::Step::Screenshot("scenarios/look.png".into())
+        );
+    }
+
+    #[test]
+    fn windows_newlines_display_once_and_keep_the_original_disk_snapshot() {
+        let raw = "\u{feff}report first\r\nwait 1\r\n";
+        let doc = Document::loaded("windows.eqscript".into(), raw.into());
+        assert_eq!(doc.text, "report first\nwait 1\n");
+        assert!(!doc.dirty());
+        assert_eq!(
+            doc.save("windows.eqscript".into()).expected.as_deref(),
+            Some(raw)
         );
     }
 }

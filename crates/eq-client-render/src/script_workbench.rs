@@ -2,8 +2,10 @@
 //! separate; the command-line runner and this window use the same `Script`.
 
 mod document;
+mod editor;
 mod help;
 mod input;
+mod library;
 mod syntax;
 mod view;
 
@@ -39,6 +41,8 @@ enum FileResult {
 
 #[derive(Resource, Default)]
 struct Workbench {
+    library: library::Library,
+    library_collapsed: bool,
     document: Document,
     path: String,
     tab: Tab,
@@ -77,8 +81,14 @@ impl Workbench {
             }
             Replace::Open(path) => {
                 self.message = "Reading script…".into();
+                let root = self.library.root.clone();
                 self.job.start(self.generation, move || {
-                    FileResult::Open(document::read(&path).map(|text| (path, text)))
+                    FileResult::Open((|| {
+                        if let Some(root) = root.filter(|root| path.starts_with(root)) {
+                            library::prepare(&root, &path, false)?;
+                        }
+                        document::read(&path).map(|text| (path, text))
+                    })())
                 });
             }
         }
@@ -86,14 +96,25 @@ impl Workbench {
 
     fn save(&mut self) {
         if self.path.trim().is_empty() {
-            self.message = "Enter a file path first.".into();
+            self.message = "Enter a script name, such as tests/camera.eqscript.".into();
             return;
         }
-        let save = self.document.save(PathBuf::from(self.path.trim()));
+        let path = match self.library.path(&self.path) {
+            Ok(path) => path,
+            Err(error) => {
+                self.message = error;
+                return;
+            }
+        };
+        let Some(root) = self.library.root.clone() else {
+            return;
+        };
+        let save = self.document.save(path.clone());
         self.generation = self.generation.wrapping_add(1);
         self.message = "Saving script…".into();
-        self.job
-            .start(self.generation, move || FileResult::Save(save.write()));
+        self.job.start(self.generation, move || {
+            FileResult::Save(library::prepare(&root, &path, true).and_then(|()| save.write()))
+        });
     }
 }
 
@@ -101,12 +122,16 @@ impl Workbench {
 pub(crate) fn install(app: &mut App) {
     let config = &app.world().resource::<crate::ViewerSettings>().0;
     let mut workbench = Workbench::default();
+    workbench.library.root = config
+        .eq_directory
+        .as_ref()
+        .map(|directory| directory.join("Scripts"));
     if let Some(program) = &config.script {
         workbench.document = Document::new(program.source().to_owned(), config.script_path.clone());
         workbench.path = config
             .script_path
             .as_ref()
-            .map_or_else(String::new, |path| path.display().to_string());
+            .map_or_else(String::new, |path| workbench.library.relative(path));
         workbench.tab = Tab::Execution;
     }
     if config.script_editor {
@@ -114,6 +139,7 @@ pub(crate) fn install(app: &mut App) {
             .resource_mut::<Shown>()
             .open(WindowId::Scripts);
     }
+    editor::install(app);
     app.insert_resource(workbench)
         .add_systems(Startup, view::spawn)
         .add_systems(
@@ -133,13 +159,21 @@ pub(crate) fn install(app: &mut App) {
         )
         .add_systems(
             PostUpdate,
-            (read_fields, controls)
+            (read_fields, library::actions, controls)
                 .chain()
-                .after(bevy::text::EditableTextSystems),
+                .after(bevy::text::EditableTextSystems)
+                .after(bevy_egui::EguiPostUpdateSet::EndPass),
         )
         .add_systems(
             Update,
-            (poll, view::refresh, view::scroll)
+            (
+                library::poll,
+                poll,
+                library::draw,
+                view::refresh,
+                view::scroll,
+                library::scroll,
+            )
                 .chain()
                 .in_set(crate::Stage::Present),
         );
@@ -183,7 +217,7 @@ fn read_fields(
 fn claim_keyboard(
     mut typing: ResMut<crate::keys::Typing>,
     mut focus: ResMut<InputFocus>,
-    fields: Query<&Interaction, With<view::Field>>,
+    fields: Query<(&view::Field, &Interaction)>,
     frames: Query<&crate::windows::Frame, With<view::Root>>,
     shown: Res<Shown>,
     state: Res<Workbench>,
@@ -194,10 +228,18 @@ fn claim_keyboard(
     let hidden = !shown.displayed(WindowId::Scripts)
         || state.tab != Tab::Editor
         || frames.iter().any(crate::windows::Frame::minimized);
-    let outside = mouse.just_pressed(MouseButton::Left)
+    // The source editor routes ordered pointer events itself, including a
+    // complete click between frames. Bevy may already report Hovered here.
+    let source = focus.get().is_some_and(|entity| {
+        fields
+            .get(entity)
+            .is_ok_and(|(field, _)| matches!(field, view::Field::Source))
+    });
+    let outside = !source
+        && mouse.just_pressed(MouseButton::Left)
         && !fields
             .iter()
-            .any(|interaction| *interaction == Interaction::Pressed);
+            .any(|(_, interaction)| *interaction == Interaction::Pressed);
     if ours && (hidden || outside || script.is_some() || state.busy()) {
         focus.clear();
     }
@@ -240,6 +282,7 @@ fn controls(
                 state.message = "Stop the current run before editing its source.".into();
             }
             Action::Tab(tab) => state.tab = *tab,
+            Action::ToggleLibrary => state.library_collapsed = !state.library_collapsed,
             Action::Help(page) => {
                 state.help_page = *page;
                 state.tab = Tab::Help;
@@ -259,14 +302,10 @@ fn controls(
                 }
             }
             Action::New => state.replace(Replace::New),
-            Action::Open => {
-                if state.path.trim().is_empty() {
-                    state.message = "Enter a file path first.".into();
-                } else {
-                    let path = PathBuf::from(state.path.trim());
-                    state.replace(Replace::Open(path));
-                }
-            }
+            Action::Open => match state.library.path(&state.path) {
+                Ok(path) => state.replace(Replace::Open(path)),
+                Err(error) => state.message = error,
+            },
             Action::Reload => {
                 if let Some(path) = state.document.path.clone() {
                     state.replace(Replace::Open(path));
@@ -314,13 +353,14 @@ fn poll(mut state: ResMut<Workbench>) {
     };
     match result {
         FileResult::Open(Ok((path, text))) => {
-            state.path = path.display().to_string();
+            state.path = state.library.relative(&path);
             state.document = Document::loaded(path, text);
             state.revision = state.revision.wrapping_add(1);
             state.message = "Loaded. Run starts the scenario.".into();
         }
         FileResult::Save(Ok((path, text))) => {
             state.document.saved(path, text);
+            state.library.invalidate();
             state.message = "Saved.".into();
         }
         FileResult::Open(Err(error)) | FileResult::Save(Err(error)) => state.message = error,
@@ -346,6 +386,32 @@ mod tests {
             .resource_mut::<Shown>()
             .open(WindowId::Scripts);
         app.update();
+        let files = app
+            .world_mut()
+            .query::<(Entity, &view::Action)>()
+            .iter(app.world())
+            .find_map(|(entity, action)| {
+                matches!(action, view::Action::ToggleLibrary).then_some(entity)
+            })
+            .unwrap();
+        crate::clicks::testing::click(&mut app, files);
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<&Node, With<view::LibraryPane>>()
+                .single(app.world())
+                .unwrap()
+                .display,
+            Display::None
+        );
+        crate::clicks::testing::click(&mut app, files);
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<&Node, With<view::LibraryPane>>()
+                .single(app.world())
+                .unwrap()
+                .display,
+            Display::Flex
+        );
         let run = app
             .world_mut()
             .query::<(Entity, &view::Action)>()
@@ -419,6 +485,14 @@ mod tests {
         app.world_mut()
             .resource_mut::<InputFocus>()
             .set(field, FocusCause::Pressed);
+        app.update();
+        assert!(app.world().resource::<crate::keys::Typing>().editing_script);
+        *app.world_mut().get_mut::<Interaction>(field).unwrap() = Interaction::Hovered;
+        {
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.press(MouseButton::Left);
+            mouse.release(MouseButton::Left);
+        }
         app.update();
         assert!(app.world().resource::<crate::keys::Typing>().editing_script);
         app.world_mut()

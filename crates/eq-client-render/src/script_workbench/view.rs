@@ -2,13 +2,13 @@
 
 use bevy::{
     prelude::*,
-    text::{EditableText, TextCursorStyle},
+    text::{EditableText, TextCursorStyle, TextEdit},
     ui::widget::TextScroll,
 };
 
 use super::{Tab, Workbench, help, syntax};
 use crate::{
-    script::{MAX_SOURCE_BYTES, Phase, RunStatus},
+    script::{Phase, RunStatus},
     theme,
     windows::{
         self, Shown, WindowId,
@@ -20,6 +20,9 @@ use crate::{
 pub(super) struct Root;
 
 #[derive(Component)]
+pub(super) struct LibraryPane;
+
+#[derive(Component)]
 pub(super) enum Field {
     Path,
     Source,
@@ -28,6 +31,7 @@ pub(super) enum Field {
 #[derive(Component, Clone, Copy)]
 pub(super) enum Action {
     Toggle,
+    ToggleLibrary,
     New,
     Open,
     Reload,
@@ -57,6 +61,10 @@ pub(super) struct SourceLines;
 pub(super) struct History;
 #[derive(Component)]
 pub(super) struct HelpBody;
+#[derive(Component)]
+pub(super) struct Breadcrumbs;
+#[derive(Component)]
+pub(super) struct HelpScroll;
 #[derive(Component)]
 pub(super) struct Validation;
 #[derive(Resource)]
@@ -155,7 +163,8 @@ pub(super) fn spawn(
         &mut commands,
         WindowId::Scripts,
         Node {
-            width: px(780),
+            display: Display::None,
+            width: px(1040),
             max_width: percent(94),
             max_height: percent(92),
             flex_direction: FlexDirection::Column,
@@ -199,8 +208,7 @@ pub(super) fn spawn(
         .spawn((
             Page(Tab::Editor),
             Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: px(8),
+                column_gap: px(10),
                 ..default()
             },
         ))
@@ -231,13 +239,14 @@ pub(super) fn spawn(
         .id();
     let path_label = label(
         &mut commands,
-        "File path  ·  Open / Save As",
+        "Name in Scripts  ·  Save As (folders allowed)",
         12.0,
         theme::INK_DIM,
     );
     let file_controls = row(
         &mut commands,
         &[
+            ("Files", Action::ToggleLibrary),
             ("New", Action::New),
             ("Open", Action::Open),
             ("Save", Action::Save),
@@ -250,32 +259,32 @@ pub(super) fn spawn(
             Interaction::default(),
             windows::KeepsPress,
             TakesWheel,
-            EditableText {
-                allow_newlines: true,
-                max_characters: Some(MAX_SOURCE_BYTES),
-                visible_lines: Some(14.0),
-                ..EditableText::new(&state.document.text)
-            },
+            super::editor::Surface,
             Node {
                 height: px(280),
                 width: percent(100),
-                padding: UiRect::all(px(8)),
                 border: UiRect::all(px(1)),
                 ..default()
             },
-            font(&mono, 14.0),
-            TextColor(theme::INK_BRIGHT),
-            TextCursorStyle::default(),
-            TextLayout::no_wrap(),
             BackgroundColor(theme::WELL),
             BorderColor::all(theme::EDGE),
         ))
         .id();
     let validation = label(&mut commands, "", 12.0, theme::INK_DIM);
     commands.entity(validation).insert(Validation);
-    commands
-        .entity(editor)
-        .add_children(&[path_label, path, file_controls, source, validation]);
+    let document = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(8),
+            min_width: px(0),
+            flex_grow: 1.0,
+            ..default()
+        })
+        .add_children(&[path_label, path, file_controls, source, validation])
+        .id();
+    let library = super::library::spawn(&mut commands);
+    commands.entity(library).insert(LibraryPane);
+    commands.entity(editor).add_children(&[library, document]);
     let execution = commands
         .spawn((
             Page(Tab::Execution),
@@ -311,6 +320,28 @@ pub(super) fn spawn(
     let help_page = commands
         .spawn((
             Page(Tab::Help),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
+                ..default()
+            },
+        ))
+        .id();
+    let breadcrumbs = commands
+        .spawn((
+            Breadcrumbs,
+            Node {
+                column_gap: px(5),
+                row_gap: px(5),
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .id();
+    let help_scroll = commands
+        .spawn((
+            HelpScroll,
             TakesWheel,
             ScrollPosition::default(),
             Node {
@@ -333,7 +364,10 @@ pub(super) fn spawn(
             },
         ))
         .id();
-    commands.entity(help_page).add_child(help_body);
+    commands.entity(help_scroll).add_child(help_body);
+    commands
+        .entity(help_page)
+        .add_children(&[breadcrumbs, help_scroll]);
     let message = label(&mut commands, "", 12.0, theme::INK_WARM);
     commands.entity(message).insert(Message);
     let confirmation = row(
@@ -387,8 +421,19 @@ pub(super) fn refresh(
     shown: Res<Shown>,
     mono: Res<Mono>,
     mut nodes: Query<
-        (&mut Node, Option<&Page>, Has<Root>, Has<Confirmation>),
-        Or<(With<Page>, With<Root>, With<Confirmation>)>,
+        (
+            &mut Node,
+            Option<&Page>,
+            Has<Root>,
+            Has<Confirmation>,
+            Has<LibraryPane>,
+        ),
+        Or<(
+            With<Page>,
+            With<Root>,
+            With<Confirmation>,
+            With<LibraryPane>,
+        )>,
     >,
     mut texts: Query<
         (
@@ -400,20 +445,22 @@ pub(super) fn refresh(
         ),
         Or<(With<Status>, With<Message>, With<History>, With<Validation>)>,
     >,
-    mut fields: Query<(&Field, &mut EditableText, &mut BorderColor)>,
+    mut fields: Query<(&Field, &mut EditableText, &mut BorderColor, &mut TextScroll)>,
     focus: Res<bevy::input_focus::InputFocus>,
     field_ids: Query<(Entity, &Field)>,
     mut buttons: Query<(&Action, &Interaction, &mut BackgroundColor)>,
     lines: Query<Entity, With<SourceLines>>,
-    help_body: Query<Entity, With<HelpBody>>,
+    help_body: Query<(Entity, Has<Breadcrumbs>), Or<(With<HelpBody>, With<Breadcrumbs>)>>,
     mut previous: Local<Cache>,
 ) {
     let active = status.phase().active();
-    for (mut node, page, root, confirmation) in &mut nodes {
+    for (mut node, page, root, confirmation, library) in &mut nodes {
         let visible = if root {
             shown.displayed(WindowId::Scripts)
         } else if confirmation {
             state.confirm.is_some()
+        } else if library {
+            !state.library_collapsed
         } else if let Some(Page(tab)) = page {
             *tab == state.tab && (*tab != Tab::Editor || !active)
         } else {
@@ -440,7 +487,14 @@ pub(super) fn refresh(
                 program.instructions().len(),
                 state.document.text.lines().count()
             ),
-            Err(error) => error.to_string(),
+            Err(error) => {
+                let count = crate::script::Program::diagnostics(
+                    &state.document.text,
+                    std::path::Path::new("."),
+                )
+                .len();
+                format!("{count} error(s) · {error} · Hover an underlined line for details")
+            }
         };
         previous.validation = Some((
             state.document.text.clone(),
@@ -495,20 +549,17 @@ pub(super) fn refresh(
         }
     }
     let revision_changed = previous.document_revision != Some(state.revision);
-    for (field, mut editor, mut border) in &mut fields {
+    for (field, mut editor, mut border, mut scroll) in &mut fields {
         if revision_changed {
-            *editor = EditableText {
-                allow_newlines: matches!(field, Field::Source),
-                max_characters: Some(if matches!(field, Field::Source) {
-                    MAX_SOURCE_BYTES
-                } else {
-                    2048
-                }),
-                ..EditableText::new(match field {
-                    Field::Path => &state.path,
-                    Field::Source => &state.document.text,
-                })
-            };
+            // Preserve Bevy's resolved font, width and layout generation. A fresh
+            // editor loses those while the unchanged style components are cached.
+            editor.clear();
+            editor.editor_mut().set_text(match field {
+                Field::Path => &state.path,
+                Field::Source => &state.document.text,
+            });
+            editor.queue_edit(TextEdit::TextStart(false));
+            scroll.0 = Vec2::ZERO;
         }
         let focused = focus.get().is_some_and(|entity| {
             field_ids.get(entity).is_ok_and(|(_, other)| {
@@ -531,7 +582,9 @@ pub(super) fn refresh(
             Action::Stop => active,
             _ => true,
         };
-        let on = matches!(action, Action::Tab(tab) if *tab == state.tab);
+        let on = matches!(action, Action::Tab(tab) if *tab == state.tab)
+            || matches!(action, Action::Help(page) if *page == state.help_page)
+            || matches!(action, Action::ToggleLibrary) && !state.library_collapsed;
         *color = BackgroundColor(theme::button(usable, on, *interaction));
     }
     // Rebuild at action boundaries, not at frame rate or every elapsed-time tick.
@@ -555,11 +608,15 @@ pub(super) fn refresh(
         }
         previous.run = Some((status.line(), status.phase(), status.source().to_owned()));
     }
-    if previous.help_page != Some(state.help_page)
-        && let Ok(parent) = help_body.single()
-    {
-        commands.entity(parent).despawn_children();
-        help::draw(&mut commands, parent, state.help_page, &mono);
+    if previous.help_page != Some(state.help_page) {
+        for (parent, breadcrumbs) in &help_body {
+            commands.entity(parent).despawn_children();
+            if breadcrumbs {
+                help::breadcrumbs(&mut commands, parent, state.help_page);
+            } else {
+                help::draw(&mut commands, parent, state.help_page, &mono);
+            }
+        }
         previous.help_page = Some(state.help_page);
     }
 }
@@ -599,13 +656,7 @@ pub(super) fn source_line(
         ))
         .id();
     for (token, kind) in syntax::tokens(source) {
-        let color = match kind {
-            syntax::Kind::Command => theme::FOCUS,
-            syntax::Kind::Comment => theme::INK_DIM,
-            syntax::Kind::Number => theme::INK_WARM,
-            syntax::Kind::Key => theme::AGREED,
-            syntax::Kind::Argument => theme::INK_BRIGHT,
-        };
+        let color = kind.color();
         let span = commands
             .spawn((TextSpan::new(token), font(mono, 13.0), TextColor(color)))
             .id();
@@ -621,7 +672,7 @@ pub(super) fn scroll(
     wheel: Res<Wheel>,
     state: Res<Workbench>,
     mut page: Local<Option<usize>>,
-    mut panels: Query<(Entity, &ComputedNode, &mut ScrollPosition), With<Page>>,
+    mut panels: Query<(Entity, &ComputedNode, &mut ScrollPosition), With<HelpScroll>>,
     mut editors: Query<
         (
             Entity,

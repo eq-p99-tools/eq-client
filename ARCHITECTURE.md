@@ -91,9 +91,15 @@ click. The source snapshot never changes during a workbench run.
 `script_workbench::document` owns editable text, disk snapshots and bounded file
 operations. File jobs run off the frame thread, use document generations rather
 than game admissions, and preserve the buffer on failure. `view` owns chrome,
-`syntax` owns presentation-only token colors, and `help` renders the Markdown
+`syntax` owns presentation-only token colors for execution/help, and `help` renders the Markdown
 pages in `docs/scripts` that GitHub also displays. Executable help examples are
-tested with the real parser. `input` adapts editor keyboard/clipboard events.
+tested with the real parser. The editable source uses `egui_code_editor` through
+`bevy_egui`, rendered once into a texture in the native workbench. `editor::buffer`
+enforces the source byte limit; `editor::input` maps pointer coordinates and
+ordered keyboard events into its isolated context; `editor::surface` handles
+size, scale and IME placement. Error markers use the editor's own line geometry
+and `Program::diagnostics`, which shares the executor's parser. `input` adapts
+the native path field's keyboard/clipboard events.
 The workbench clears text focus before injected
 input and uses the shared typing gate to keep editor input out of gameplay and
 login. The existing local-session restrictions and pointer ownership still apply.

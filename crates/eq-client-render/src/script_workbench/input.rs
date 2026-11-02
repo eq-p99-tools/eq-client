@@ -12,29 +12,7 @@ use bevy::{
     prelude::*,
 };
 
-const MODIFIERS: [Key; 4] = [Key::Control, Key::Shift, Key::Alt, Key::Super];
-
-/// Infer the modifier state before this batch from its final state, then
-/// associate each event with the state at that point in the batch.
-fn snapshots(events: &[KeyboardInput], final_keys: &ButtonInput<Key>) -> Vec<[bool; 4]> {
-    let mut held = MODIFIERS
-        .each_ref()
-        .map(|key| final_keys.pressed(key.clone()));
-    for event in events.iter().rev().filter(|event| !event.repeat) {
-        if let Some(index) = MODIFIERS.iter().position(|key| *key == event.logical_key) {
-            held[index] = !event.state.is_pressed();
-        }
-    }
-    events
-        .iter()
-        .map(|event| {
-            if let Some(index) = MODIFIERS.iter().position(|key| *key == event.logical_key) {
-                held[index] = event.state.is_pressed();
-            }
-            held
-        })
-        .collect()
-}
+use crate::keys::modifiers::{MODIFIERS, snapshots};
 
 /// Consume this editor's raw messages before the standard focused dispatcher.
 #[allow(clippy::needless_pass_by_value)]
@@ -43,7 +21,7 @@ pub(super) fn forward(
     mut cursor: Local<MessageCursor<KeyboardInput>>,
     mut messages: ResMut<Messages<KeyboardInput>>,
     focus: Res<InputFocus>,
-    fields: Query<(), With<super::view::Field>>,
+    fields: Query<(), (With<super::view::Field>, With<bevy::text::EditableText>)>,
     keys: Res<ButtonInput<Key>>,
 ) {
     if !focus.get().is_some_and(|entity| fields.contains(entity)) {
@@ -121,7 +99,10 @@ mod tests {
             .id();
         let field = app
             .world_mut()
-            .spawn(super::super::view::Field::Source)
+            .spawn((
+                super::super::view::Field::Path,
+                bevy::text::EditableText::default(),
+            ))
             .id();
         app.world_mut()
             .resource_mut::<InputFocus>()

@@ -14,13 +14,19 @@ Scripts are small UTF-8 text files in the client's own language, with one action
 
 [Run controls and troubleshooting](running.md)
 
+[Vim and Neovim syntax plugin](vim.md)
+
+The in-game Help tab keeps a clickable breadcrumb above the article as you scroll. The links inside each document remain available in both the game and GitHub.
+
 ## Files and editing
 
-Enter a path and choose Open to load an existing script. Edit it in the client or any external editor. Save writes the buffer; entering a new path and choosing Save creates a separate file. Reload reads the current document again. Unsaved edits require an explicit Discard edits confirmation before New, Open or Reload. Save before exiting the client; unsaved buffers live only for the current session.
+Keep scripts in the `Scripts` folder inside your EQ installation. The Editor's library lists folders and `.eqscript`, `.script`, and `.txt` files. The `.eqscript` suffix is hidden in the list; actual filenames are unchanged. Click a folder to browse it, Up to return, and a file to load it. Refresh picks up files added or renamed in an external editor. Nested folders are supported; no full path is needed. **Files** collapses or restores the library panel to give the editor more room without losing your folder or document.
+
+New starts a blank buffer. Give it a name relative to Scripts, such as `practice/camera.eqscript`, then Save. Missing folders are created on save; an installation you cannot write to reports an error and preserves the buffer. Save writes the buffer; a different name creates a separate file. Reload reads the current document again. Unsaved edits require an explicit Discard edits confirmation before New, opening another file, or Reload. Save before exiting the client; unsaved buffers live only for the current session.
 
 If the file changed externally, Save refuses to replace it. Save your buffer to a new path or Reload.
 
-The editor supports selection, multiline entry, clipboard copy/cut/paste, cursor navigation, and scrolling. Execution shows highlighted commands, numbers, key names and comments. The editable field uses uniform text styling; undo/redo and autocomplete are not implemented yet.
+The editor includes syntax highlighting, line numbers, selection, multiline entry, clipboard copy/cut/paste, undo/redo, cursor navigation, and scrolling. Invalid lines are underlined in red; hover one for the parser's explanation. The validation summary reports the error count and first error even when that line is out of view. Execution also shows highlighted source and follows the running line. Autocomplete is not enabled.
 
 ## Running
 
@@ -34,4 +40,4 @@ Scripts on P99 and Quarm remain attended: keep the client focused. The existing 
 
 ## Other entry points
 
-Offline previews and command-line scripts use the same workbench and executor. `--script-editor` opens the window at launch; `--script` starts a file. These are optional tools for testing and repeatable startup, not prerequisites for in-game scripting. A file supplied with `--script` starts from its validated snapshot; Open or Reload it before saving over it in the workbench.
+Offline previews and command-line scripts use the same workbench and executor. `--script-editor` opens the window at launch; `--script` can still start a file from an explicit path. These are optional tools for testing and repeatable startup, not prerequisites for in-game scripting. A file supplied with `--script` starts from its validated snapshot; Reload it before replacing it, or save a copy under Scripts with a relative name.

@@ -10,30 +10,72 @@ use bevy::prelude::*;
 struct Page {
     name: &'static str,
     source: &'static str,
+    parent: Option<usize>,
 }
 
-const PAGES: [Page; 5] = [
+const PAGES: [Page; 6] = [
     Page {
         name: "README.md",
         source: include_str!("../../../../docs/scripts/README.md"),
+        parent: None,
     },
     Page {
         name: "examples.md",
         source: include_str!("../../../../docs/scripts/examples.md"),
+        parent: Some(0),
     },
     Page {
         name: "reference.md",
         source: include_str!("../../../../docs/scripts/reference.md"),
+        parent: Some(0),
     },
     Page {
         name: "running.md",
         source: include_str!("../../../../docs/scripts/running.md"),
+        parent: Some(0),
     },
     Page {
         name: "targets.md",
         source: include_str!("../../../../docs/scripts/targets.md"),
+        parent: Some(2),
+    },
+    Page {
+        name: "vim.md",
+        source: include_str!("../../../../docs/scripts/vim.md"),
+        parent: Some(0),
     },
 ];
+
+fn path(mut page: usize) -> Vec<usize> {
+    let mut result = Vec::new();
+    while let Some(entry) = PAGES.get(page) {
+        result.push(page);
+        let Some(parent) = entry.parent else {
+            break;
+        };
+        page = parent;
+    }
+    result.reverse();
+    result
+}
+
+/// Fixed above the scrolling article; links in the Markdown remain available.
+pub(super) fn breadcrumbs(commands: &mut Commands, parent: Entity, page: usize) {
+    for (depth, index) in path(page).into_iter().enumerate() {
+        if depth > 0 {
+            let divider = view::label(commands, "/", 13.0, theme::INK_DIM);
+            commands.entity(parent).add_child(divider);
+        }
+        let title = PAGES[index]
+            .source
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("# "))
+            .unwrap_or(PAGES[index].name);
+        let button = view::button(commands, title, Action::Help(index));
+        commands.entity(parent).add_child(button);
+    }
+}
 
 fn link(line: &str) -> Option<(&str, &str)> {
     let line = line.strip_prefix('[')?.strip_suffix(')')?;
@@ -116,6 +158,17 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn breadcrumb_paths_have_a_stable_home_and_target_parent() {
+        assert_eq!(path(0), [0]);
+        assert_eq!(path(4), [0, 2, 4]);
+        for (index, page) in PAGES.iter().enumerate() {
+            assert!(page.parent.is_none_or(|parent| parent < index));
+            assert_eq!(path(index).first(), Some(&0));
+            assert_eq!(path(index).last(), Some(&index));
         }
     }
 
