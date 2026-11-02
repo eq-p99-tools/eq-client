@@ -11,6 +11,10 @@
 //! pitch is held within a quarter turn either way (0x4bfe0f). Program read
 //! N2 of 11-01.
 //!
+//! How far behind the player the chase camera may go is the player's
+//! choice of [`ChaseLeash`]: this client's own long range by default, a
+//! quality-of-life setting, or the program's limit.
+//!
 //! How far it draws is its [`FarPlane`]: the Titanium program draws the
 //! zone, and every spawn in it, out to its camera's far plane and to no
 //! other distance (program read N7 of 11-01).
@@ -29,6 +33,38 @@ pub struct CameraLimits {
     pub chase_distance: (f32, f32),
     /// How far the camera draws.
     pub far_plane: FarPlane,
+}
+
+/// How far behind the player the chase camera may go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChaseLeash {
+    /// This client's own range, [`LONG_CHASE_DISTANCE`]: the player's
+    /// quality-of-life choice, on unless they turn it off.
+    Long,
+    /// The installed client's program's own limit, the generation's
+    /// [`CameraLimits::chase_distance`] as read.
+    Program,
+}
+
+/// The distance behind the player, least and most, this client's chase
+/// camera may go on a [`ChaseLeash::Long`]: the range every camera had
+/// before the chase camera took the program's limits.
+pub const LONG_CHASE_DISTANCE: (f32, f32) = (2.0, 20_000.0);
+
+impl CameraLimits {
+    /// The limits with the chase camera's distance on `leash`: the program's
+    /// as read, or this client's long range. The height and everything else
+    /// stay the generation's.
+    #[must_use]
+    pub const fn on_leash(self, leash: ChaseLeash) -> Self {
+        match leash {
+            ChaseLeash::Program => self,
+            ChaseLeash::Long => Self {
+                chase_distance: LONG_CHASE_DISTANCE,
+                ..self
+            },
+        }
+    }
 }
 
 /// How a client generation's camera sets how far it draws, from the zone
@@ -97,7 +133,20 @@ pub const EQMAC: CameraLimits = CameraLimits {
 
 #[cfg(test)]
 mod tests {
-    use super::FarPlane;
+    use super::{ChaseLeash, EQMAC, FarPlane, LONG_CHASE_DISTANCE, TITANIUM};
+
+    #[test]
+    fn the_leash_chooses_only_the_chase_distance() {
+        for program in [TITANIUM, EQMAC] {
+            assert_eq!(program.on_leash(ChaseLeash::Program), program);
+            let long = program.on_leash(ChaseLeash::Long);
+            assert_eq!(long.chase_distance, LONG_CHASE_DISTANCE);
+            assert_eq!(long.chase_height, program.chase_height);
+            assert_eq!(long.look_pitch_degrees, program.look_pitch_degrees);
+            assert_eq!(long.far_plane, program.far_plane);
+        }
+        assert_eq!(TITANIUM.chase_distance, (2.0, 200.0));
+    }
 
     #[test]
     fn titanium_draws_from_the_zones_minimum_clip_to_its_maximum() {

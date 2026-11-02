@@ -81,6 +81,11 @@ pub enum Fix {
     /// hillside ([`crate::corpse_tilt`]). Adam's choice (10-20); what the
     /// official client does is inferred, checklist item 6.282.
     CorpsesAlongGround,
+    /// Lets the chase camera zoom out far past the 200 units behind the
+    /// player the Titanium program allows (program read N2 of 11-01); turned
+    /// off, the camera keeps to the program's limit. Its height above the
+    /// player stays the program's either way. Adam's choice (11-01).
+    LongChaseCamera,
     /// Starts the Options window's Max FPS at 60 frames a second rather than
     /// as fast as vsync allows; the slider and the installation's
     /// `eqclient.ini` still set another cap. What the official client does
@@ -116,7 +121,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::MapWhereOff,
@@ -125,6 +130,7 @@ impl Fix {
         Self::FlashOnTells,
         Self::TakeEnvironmentalDamage,
         Self::CorpsesAlongGround,
+        Self::LongChaseCamera,
         Self::FrameCap,
         Self::GreyedControls,
         Self::CampCountdown,
@@ -147,6 +153,7 @@ impl Fix {
             Self::FlashOnTells => "flash_on_tells",
             Self::TakeEnvironmentalDamage => "take_environmental_damage",
             Self::CorpsesAlongGround => "corpses_along_ground",
+            Self::LongChaseCamera => "long_chase_camera",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -177,6 +184,7 @@ impl Fix {
             Self::FlashOnTells => "Flash on Tells",
             Self::TakeEnvironmentalDamage => "Take Environmental Damage (unsafe)",
             Self::CorpsesAlongGround => "Corpses Lie Along the Ground",
+            Self::LongChaseCamera => "Long Chase Camera",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -216,6 +224,9 @@ impl Fix {
             Self::CorpsesAlongGround => {
                 "Lay each corpse along the slope of the ground under it, instead of level with its feet."
             }
+            Self::LongChaseCamera => {
+                "Let the mouse wheel zoom the chase camera out far past the 200 units the Titanium client allows. Turn it off to keep the Titanium client's limit."
+            }
             Self::FrameCap => {
                 "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
             }
@@ -249,6 +260,7 @@ impl Fix {
             | Self::ShowTimesInChat
             | Self::FlashOnTells
             | Self::CorpsesAlongGround
+            | Self::LongChaseCamera
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -278,6 +290,7 @@ impl Fix {
             Self::HiddenWindows
             | Self::ShowTimesInChat
             | Self::CorpsesAlongGround
+            | Self::LongChaseCamera
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -313,7 +326,8 @@ impl Fix {
     /// chat lines read as the official client's do until the player asks
     /// for their times; the world's damage is taken until the player turns
     /// it off, as Adam chose; corpses lie along the ground until the player
-    /// turns it off, as Adam chose; windows open apart, as Adam asked; and what
+    /// turns it off, as Adam chose; the chase camera goes far until the
+    /// player turns it off, as Adam asked; windows open apart, as Adam asked; and what
     /// only adds what the player could work out, or stops a plain mistake,
     /// is always on.
     #[must_use]
@@ -323,7 +337,8 @@ impl Fix {
             | Self::AskBeforeDeletingSpells
             | Self::FlashOnTells
             | Self::TakeEnvironmentalDamage
-            | Self::CorpsesAlongGround => Availability::Setting { default: true },
+            | Self::CorpsesAlongGround
+            | Self::LongChaseCamera => Availability::Setting { default: true },
             Self::HiddenWindows | Self::MapWhereOff | Self::ShowTimesInChat => {
                 Availability::Setting { default: false }
             }
@@ -459,7 +474,8 @@ mod tests {
                 Fix::ShowTimesInChat,
                 Fix::FlashOnTells,
                 Fix::TakeEnvironmentalDamage,
-                Fix::CorpsesAlongGround
+                Fix::CorpsesAlongGround,
+                Fix::LongChaseCamera
             ]
         );
         // A fix that is always on stays on whatever is asked.
