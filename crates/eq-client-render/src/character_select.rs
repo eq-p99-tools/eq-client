@@ -55,6 +55,12 @@ impl Selection {
                 .is_some_and(|rules| usize::from(slot) < rules.slots())
     }
 
+    /// Whether every slot the list's policy offers is occupied.
+    fn full(&self) -> bool {
+        self.creation
+            .is_some_and(|rules| self.entries.len() >= rules.slots())
+    }
+
     pub(super) fn created(&mut self, name: &str) {
         self.choose_named(name);
         self.message = format!("{name} was created. Select Enter World when ready.");
@@ -512,7 +518,7 @@ fn spawn(
                         button(panel, Action::Choose(slot), "Create New Character", false);
                     }
                 }
-            } else if selection.creation.is_some() && selection.entries.len() >= 8 {
+            } else if selection.full() {
                 theme::label(panel, "All character slots are occupied.", Size::Label);
             }
             if selection.selected.is_some() && !selection.submitted {

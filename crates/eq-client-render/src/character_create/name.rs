@@ -26,7 +26,7 @@ impl Form {
             if !event.state.is_pressed() {
                 continue;
             }
-            if held[0] || held[2] || held[3] {
+            if crate::keys::modifiers::chorded(held) {
                 if held[0] && !held[2] && !held[3] {
                     match &event.logical_key {
                         Key::Character(key) if key.eq_ignore_ascii_case("a") => {

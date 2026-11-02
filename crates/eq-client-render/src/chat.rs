@@ -610,7 +610,7 @@ fn compose(
         if !event.state.is_pressed() {
             continue;
         }
-        if held[0] || held[2] || held[3] {
+        if crate::keys::modifiers::chorded(held) {
             if typing.composing
                 && held[0]
                 && !held[2]

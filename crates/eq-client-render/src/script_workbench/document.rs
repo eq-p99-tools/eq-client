@@ -17,6 +17,8 @@ pub(super) struct Document {
     pub path: Option<PathBuf>,
     saved: String,
     disk: Option<String>,
+    /// The file came with Windows newlines, which a save writes back.
+    crlf: bool,
 }
 
 impl Default for Document {
@@ -32,6 +34,7 @@ impl Document {
             text,
             path,
             disk: None,
+            crlf: false,
         }
     }
 
@@ -53,6 +56,7 @@ impl Document {
     /// Prepare a save against the snapshot of this path, or a new-file save.
     pub fn save(&self, path: PathBuf) -> Save {
         Save {
+            crlf: self.crlf,
             expected: if self.path.as_ref() == Some(&path) {
                 self.disk.clone()
             } else {
@@ -66,6 +70,7 @@ impl Document {
     pub fn loaded(path: PathBuf, raw: String) -> Self {
         // Parley's editor treats CR and LF independently. Keep one visual line
         // per Windows newline while retaining the raw disk snapshot for saves.
+        let crlf = raw.contains("\r\n");
         let text = raw
             .strip_prefix('\u{feff}')
             .unwrap_or(&raw)
@@ -75,14 +80,24 @@ impl Document {
             text,
             path: Some(path),
             disk: Some(raw),
+            crlf,
+        }
+    }
+
+    /// The bytes a save writes for this buffer: its newlines as the file had them.
+    fn on_disk(crlf: bool, text: &str) -> String {
+        if crlf {
+            text.replace('\n', "\r\n")
+        } else {
+            text.to_owned()
         }
     }
 
     /// A save may finish after more typing; those newer edits remain dirty.
     pub fn saved(&mut self, path: PathBuf, text: String) {
         self.path = Some(path);
-        self.saved.clone_from(&text);
-        self.disk = Some(text);
+        self.disk = Some(Self::on_disk(self.crlf, &text));
+        self.saved = text;
     }
 }
 
@@ -90,6 +105,7 @@ pub(super) struct Save {
     path: PathBuf,
     text: String,
     expected: Option<String>,
+    crlf: bool,
 }
 
 /// Read at most the source limit, including files that grow while being read.
@@ -114,7 +130,7 @@ impl Save {
             // the original intact. Recheck after writing, before replacement.
             let (temporary, mut file) = temporary(&self.path)?;
             let result = (|| {
-                file.write_all(self.text.as_bytes())
+                file.write_all(Document::on_disk(self.crlf, &self.text).as_bytes())
                     .map_err(|error| error.to_string())?;
                 file.sync_all().map_err(|error| error.to_string())?;
                 drop(file);
@@ -140,7 +156,7 @@ impl Save {
                     )
                 })?;
             let written = file
-                .write_all(self.text.as_bytes())
+                .write_all(Document::on_disk(self.crlf, &self.text).as_bytes())
                 .and_then(|()| file.sync_all());
             drop(file);
             if let Err(error) = written {
@@ -228,5 +244,33 @@ mod tests {
             doc.save("windows.eqscript".into()).expected.as_deref(),
             Some(raw)
         );
+    }
+
+    #[test]
+    fn a_windows_file_keeps_its_newlines_through_a_save() {
+        let path = std::env::temp_dir().join(format!(
+            "eq-client-crlf-{}-{}.eqscript",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, "wait 1\r\nwait 2\r\n").unwrap();
+        let mut doc = Document::loaded(path.clone(), read(&path).unwrap());
+        assert_eq!(doc.text, "wait 1\nwait 2\n");
+        doc.text.push_str("wait 3\n");
+        let (saved_path, text) = doc.save(path.clone()).write().unwrap();
+        doc.saved(saved_path, text);
+        assert_eq!(read(&path).unwrap(), "wait 1\r\nwait 2\r\nwait 3\r\n");
+        assert!(!doc.dirty());
+        // The snapshot matches the disk, so the next save sees no outside change.
+        doc.text.push_str("wait 4\n");
+        doc.save(path.clone()).write().unwrap();
+        assert_eq!(
+            read(&path).unwrap(),
+            "wait 1\r\nwait 2\r\nwait 3\r\nwait 4\r\n"
+        );
+        fs::remove_file(path).unwrap();
     }
 }

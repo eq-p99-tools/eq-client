@@ -96,7 +96,7 @@ pub(crate) fn input(
         if !typing.map_search {
             break;
         }
-        if held[0] || held[2] || held[3] {
+        if crate::keys::modifiers::chorded(held) {
             if held[0]
                 && !held[2]
                 && !held[3]

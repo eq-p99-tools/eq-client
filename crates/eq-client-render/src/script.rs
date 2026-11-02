@@ -137,6 +137,11 @@ pub struct Script {
     /// The count of the world's creation answers when a `create` step sent
     /// its request, so the step waits for the next.
     created_before: Option<u64>,
+    /// The menu entry the step at the front of the queue names and when the
+    /// EQ menu's button was clicked for it: the entry waits for the menu to
+    /// open, and a menu that stays closed ends the script instead of
+    /// clicking its button forever.
+    menu_opened_for: Option<(ClickTarget, Duration)>,
 }
 
 /// Login and offline scripts need no admission; admitted runs end with the session.
@@ -210,6 +215,7 @@ impl Script {
             approached: None,
             chase_seen: None,
             created_before: None,
+            menu_opened_for: None,
         }
     }
 
@@ -525,6 +531,16 @@ type Pointers<'w, 's> = Query<'w, 's, &'static mut bevy::ui::RelativeCursorPosit
 /// the layout, so its buttons keep their visibility.
 type Layout<'w, 's> = Query<'w, 's, (&'static Node, Option<&'static ChildOf>)>;
 
+/// What a step drives besides the world: chat, window moves, the front end,
+/// sounds and the EQ menu's state.
+type Services<'w> = (
+    ResMut<'w, super::chat::ChatState>,
+    ResMut<'w, super::windows::Moves>,
+    ResMut<'w, super::login::FrontEnd>,
+    ResMut<'w, super::sounds::Sounds>,
+    Res<'w, super::windows::menu::Menu>,
+);
+
 type Observed<'w> = (
     Res<'w, super::hud::HudState>,
     Res<'w, crate::outbox::Outbox>,
@@ -606,12 +622,7 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    (mut chat, mut moves, mut front, mut sounds): (
-        ResMut<super::chat::ChatState>,
-        ResMut<super::windows::Moves>,
-        ResMut<super::login::FrontEnd>,
-        ResMut<super::sounds::Sounds>,
-    ),
+    (mut chat, mut moves, mut front, mut sounds, menu): Services,
     observed: Observed,
     players: Query<&Transform, With<super::Player>>,
     bodies: Query<&super::PlayerBody, With<super::Player>>,
@@ -789,8 +800,14 @@ pub(super) fn drive(
         let elapsed = now.saturating_sub(since);
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
-            Step::Create(character) => {
-                match answered(online.world(), script.created_before, &character.name) {
+            Step::Create(character) | Step::CreateRefused(character) => {
+                let refusal_expected = matches!(step, Step::CreateRefused(_));
+                match answered(
+                    online.world(),
+                    script.created_before,
+                    &character.name,
+                    refusal_expected,
+                ) {
                     Ok(done) => done,
                     Err(reason) => {
                         script.stop(&mut keys, &mut mouse, &reason);
@@ -1335,10 +1352,35 @@ pub(super) fn drive(
     let Some(QueuedStep { step, line }) = script.steps.pop_front() else {
         return;
     };
+    // An entry of the closed EQ menu: the script opens the menu with its own
+    // button first, as a player would, then comes back to the entry.
+    let waited = script
+        .menu_opened_for
+        .map(|(_, since)| now.saturating_sub(since));
+    let step = match opens_menu_first(&step, menu.open, waited) {
+        Ok(MenuWait::OpenFirst) => {
+            script.menu_opened_for = entry_target(&step).map(|target| (target, now));
+            script.steps.push_front(QueuedStep { step, line });
+            Step::Click(ClickTarget::Button("selector", "EQButton"))
+        }
+        Ok(MenuWait::Opening) => {
+            // The menu opens a frame or more after the button's release.
+            script.steps.push_front(QueuedStep { step, line });
+            return;
+        }
+        Ok(MenuWait::Go) => {
+            script.menu_opened_for = None;
+            step
+        }
+        Err(reason) => {
+            script.stop(&mut keys, &mut mouse, &reason);
+            return;
+        }
+    };
     script.progress.begin(line);
     info!(?step, "Script step");
     match &step {
-        Step::Create(character) => {
+        Step::Create(character) | Step::CreateRefused(character) => {
             let sent = online.selection.as_ref().is_some_and(|selection| {
                 observed
                     .1
@@ -1644,6 +1686,55 @@ pub(super) fn drive(
     script.current = Some((step, now));
 }
 
+/// What a step does about the EQ menu before it runs.
+#[derive(Debug, PartialEq, Eq)]
+enum MenuWait {
+    /// The step runs as it is.
+    Go,
+    /// The step names an entry of the closed menu: the menu's button is
+    /// clicked first.
+    OpenFirst,
+    /// The button was clicked and the menu has not opened yet.
+    Opening,
+}
+
+/// How long an entry waits for the EQ menu to open after its button was
+/// clicked before the script ends.
+const MENU_OPEN_WAIT: Duration = Duration::from_secs(1);
+
+/// Whether a click step's target is an entry of the EQ menu that a pointer
+/// cannot reach while the menu is closed (`click window <key>`, `click
+/// actions`), so the menu's own button is clicked first. `waited` is how
+/// long ago that click was started, if it was; the menu opens a frame or
+/// more after the button's release, so the entry waits up to
+/// [`MENU_OPEN_WAIT`] and the script ends only when the menu stays closed.
+fn opens_menu_first(
+    step: &Step,
+    menu_open: bool,
+    waited: Option<Duration>,
+) -> Result<MenuWait, String> {
+    if entry_target(step).is_none() || menu_open {
+        return Ok(MenuWait::Go);
+    }
+    match waited {
+        None => Ok(MenuWait::OpenFirst),
+        Some(waited) if waited < MENU_OPEN_WAIT => Ok(MenuWait::Opening),
+        Some(_) => Err("the EQ menu did not open for the click".into()),
+    }
+}
+
+/// The EQ menu entry a click step names, if any.
+fn entry_target(step: &Step) -> Option<ClickTarget> {
+    match step {
+        Step::Click(target) | Step::RightClick(target) | Step::HoldClick(target, _)
+            if matches!(target, ClickTarget::Toggle(_) | ClickTarget::ActionsWindow) =>
+        {
+            Some(*target)
+        }
+        _ => None,
+    }
+}
+
 /// Whether the world answered a `create` step's request since it was sent:
 /// done once it created the character, and the step's failure when it
 /// refused it.
@@ -1651,6 +1742,7 @@ fn answered(
     world: &eq_client_core::world::ClientWorld,
     before: Option<u64>,
     name: &str,
+    refusal_expected: bool,
 ) -> Result<bool, String> {
     use eq_client_core::creation::CreationOutcome;
     let Some(answer) = world
@@ -1659,9 +1751,16 @@ fn answered(
     else {
         return Ok(false);
     };
-    match answer.outcome {
-        CreationOutcome::Created => Ok(true),
-        refused => Err(format!("character creation refused: {refused:?}")),
+    match (answer.outcome, refusal_expected) {
+        (CreationOutcome::Created, false) => Ok(true),
+        (CreationOutcome::Created, true) => Err(format!(
+            "character {name} was created where a refusal was expected"
+        )),
+        (refused, false) => Err(format!("character creation refused: {refused:?}")),
+        (refused, true) => {
+            info!(?refused, name, "Script saw the expected creation refusal");
+            Ok(true)
+        }
     }
 }
 
@@ -2900,6 +2999,39 @@ mod tests {
     }
 
     #[test]
+    fn a_menu_entry_click_opens_the_closed_menu_first_and_waits_for_it_once() {
+        let entry = Step::Click(ClickTarget::Toggle("inventory"));
+        let actions = Step::HoldClick(ClickTarget::ActionsWindow, Duration::from_millis(300));
+        let button = Step::Click(ClickTarget::Button("selector", "EQButton"));
+        let soon = Some(Duration::from_millis(300));
+        let late = Some(Duration::from_millis(1_500));
+        // Closed menu: the entry has the menu's button clicked, then waits
+        // for the menu, and gives up only past the limit.
+        assert_eq!(
+            opens_menu_first(&entry, false, None),
+            Ok(MenuWait::OpenFirst)
+        );
+        assert_eq!(
+            opens_menu_first(&actions, false, None),
+            Ok(MenuWait::OpenFirst)
+        );
+        assert_eq!(opens_menu_first(&entry, false, soon), Ok(MenuWait::Opening));
+        assert_eq!(
+            opens_menu_first(&entry, false, late),
+            Err("the EQ menu did not open for the click".into())
+        );
+        // Open menu, or another target: the step runs as it is.
+        assert_eq!(opens_menu_first(&entry, true, None), Ok(MenuWait::Go));
+        assert_eq!(opens_menu_first(&entry, true, soon), Ok(MenuWait::Go));
+        assert_eq!(opens_menu_first(&entry, true, late), Ok(MenuWait::Go));
+        assert_eq!(opens_menu_first(&button, false, None), Ok(MenuWait::Go));
+        assert_eq!(
+            opens_menu_first(&Step::Wait(Duration::ZERO), false, late),
+            Ok(MenuWait::Go)
+        );
+    }
+
+    #[test]
     fn a_create_step_waits_for_the_worlds_answer_and_fails_on_a_refusal() {
         use eq_client_core::{
             WorldEvent, WorldUpdate,
@@ -2918,20 +3050,27 @@ mod tests {
             );
         };
         // No answer yet, then a refusal: the step fails, naming it.
-        assert_eq!(answered(&world, None, "Testcleric"), Ok(false));
+        assert_eq!(answered(&world, None, "Testcleric", false), Ok(false));
         answer(&mut world, "Testcleric", CreationOutcome::CreationRefused);
         assert_eq!(
-            answered(&world, None, "Testcleric"),
+            answered(&world, None, "Testcleric", false),
             Err("character creation refused: CreationRefused".into())
         );
+        // A `create_refused` step passes on that same refusal.
+        assert_eq!(answered(&world, None, "Testcleric", true), Ok(true));
         // A later step waits past the answer it saw sent, and past another
         // name's, then finishes on its own character's creation.
         let before = world.creation().map(|last| last.count);
-        assert_eq!(answered(&world, before, "Testcleric"), Ok(false));
+        assert_eq!(answered(&world, before, "Testcleric", false), Ok(false));
         answer(&mut world, "Othername", CreationOutcome::Created);
-        assert_eq!(answered(&world, before, "Testcleric"), Ok(false));
+        assert_eq!(answered(&world, before, "Testcleric", false), Ok(false));
         answer(&mut world, "Testcleric", CreationOutcome::Created);
-        assert_eq!(answered(&world, before, "Testcleric"), Ok(true));
+        assert_eq!(answered(&world, before, "Testcleric", false), Ok(true));
+        // A `create_refused` step fails when the character is created.
+        assert_eq!(
+            answered(&world, before, "Testcleric", true),
+            Err("character Testcleric was created where a refusal was expected".into())
+        );
     }
 
     #[test]
