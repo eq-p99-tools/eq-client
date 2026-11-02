@@ -1,6 +1,6 @@
-//! Pre-zone character selection uses occupied server slots, never typed
-//! names: in the skin's character list where the installation has one, or
-//! else in the client's own list.
+//! Pre-zone character selection uses server slots, never typed names.
+//! Occupied slots select a character; available empty slots start creation
+//! in the installed skin's list or the client's fallback list.
 use super::{online::OnlineState, outbox::Outbox, windows::WindowId};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
@@ -45,6 +45,14 @@ impl Selection {
     pub(super) fn can_create(&self) -> Option<eq_client_core::creation::Rules> {
         self.creation
             .filter(|rules| !self.submitted && self.entries.len() < rules.slots())
+    }
+
+    /// Whether this empty slot can start a character draft under the list's policy.
+    fn can_create_at(&self, slot: u8) -> bool {
+        self.entry(slot).is_none()
+            && self
+                .can_create()
+                .is_some_and(|rules| usize::from(slot) < rules.slots())
     }
 
     pub(super) fn created(&mut self, name: &str) {
@@ -142,7 +150,6 @@ pub(super) struct Root;
 #[derive(Component)]
 pub(super) enum Action {
     Choose(u8),
-    Create,
     Enter,
     /// The skin's Quit: back to the login screen, or out of the game in a
     /// run without one (`login::quit`).
@@ -211,11 +218,10 @@ pub(super) fn update(
                     selection.message.clear();
                     if selection.entries.iter().any(|entry| entry.slot == *slot) {
                         selection.selected = Some(*slot);
-                    } else if *slot < 8 {
+                    } else if selection.can_create_at(*slot) {
                         editor.open(selection, world);
                     }
                 }
-                Action::Create => editor.open(selection, world),
                 Action::Enter => selection.enter(&outbox, world),
                 Action::Quit => (),
             }
@@ -290,8 +296,8 @@ pub(super) fn update(
 }
 
 /// Writes each character's name on the skin's character buttons, and the
-/// skin's own words, dimmed, on empty slots. Hovering names the character's
-/// level or explains that an empty slot can start creation.
+/// skin's own words on empty slots, dimmed only when creation is unavailable.
+/// Hovering names the character's level or explains the empty slot's action.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn names(
     online: Res<OnlineState>,
@@ -304,10 +310,18 @@ pub(super) fn names(
         .map_or(&[][..], |selection| &selection.entries[..]);
     let entry = |slot: u8| entries.iter().find(|entry| entry.slot == slot);
     for (name, mut text, mut color) in &mut words {
-        let (wanted, ink) = entry(name.slot)
-            .map_or((name.empty.as_str(), theme::INK_DIM), |entry| {
-                (entry.name.as_str(), name.ink)
-            });
+        let empty_ink = if online
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.can_create_at(name.slot))
+        {
+            name.ink
+        } else {
+            theme::INK_DIM
+        };
+        let (wanted, ink) = entry(name.slot).map_or((name.empty.as_str(), empty_ink), |entry| {
+            (entry.name.as_str(), name.ink)
+        });
         if text.0 != wanted {
             wanted.clone_into(&mut text.0);
         }
@@ -323,7 +337,7 @@ pub(super) fn names(
             (_, Some(entry)) => entry
                 .level
                 .map_or_else(String::new, |level| format!("Level {level}")),
-            (Some(selection), None) if selection.can_create().is_some() => {
+            (Some(selection), None) if selection.can_create_at(*slot) => {
                 "Create a character".to_owned()
             }
             (Some(_), None) => "No character available in this slot".to_owned(),
@@ -343,7 +357,7 @@ fn guidance<'a>(selection: Option<&'a Selection>, status: &'a str) -> &'a str {
         Some(selection) if !selection.message.is_empty() => &selection.message,
         Some(selection) if selection.entries.is_empty() => {
             if selection.can_create().is_some() {
-                "No characters yet. Choose Create Character to begin."
+                "Choose an empty character slot to create a character."
             } else {
                 "No characters available on this server."
             }
@@ -434,9 +448,6 @@ fn spawn(
             root.insert(Button);
         }
         root.with_children(|root| {
-            if selection.is_some_and(|selection| selection.can_create().is_some()) {
-                button(root, Action::Create, "Create Character", false);
-            }
             if let Some(line) = line {
                 theme::label(root, line, Size::Label);
             }
@@ -495,13 +506,17 @@ fn spawn(
                     selection.selected == Some(entry.slot),
                 );
             }
-            if selection.selected.is_some() && !selection.submitted {
-                button(panel, Action::Enter, "Enter World", true);
-            }
-            if selection.can_create().is_some() {
-                button(panel, Action::Create, "Create Character", false);
+            if let Some(rules) = selection.can_create() {
+                for slot in (0..=u8::MAX).take(rules.slots()) {
+                    if selection.can_create_at(slot) {
+                        button(panel, Action::Choose(slot), "Create New Character", false);
+                    }
+                }
             } else if selection.creation.is_some() && selection.entries.len() >= 8 {
                 theme::label(panel, "All character slots are occupied.", Size::Label);
+            }
+            if selection.selected.is_some() && !selection.submitted {
+                button(panel, Action::Enter, "Enter World", true);
             }
             if let Some(line) = line {
                 theme::label(panel, line, Size::Label);
@@ -808,6 +823,21 @@ mod tests {
             world.get::<crate::tooltip::Tooltip>(tips[1]).unwrap().0,
             "No character available in this slot"
         );
+        app.world_mut()
+            .resource_mut::<OnlineState>()
+            .selection
+            .as_mut()
+            .unwrap()
+            .creation = Some(eq_client_core::creation::Rules::Titanium);
+        app.update();
+        assert_eq!(app.world().get::<TextColor>(empty).unwrap().0, ink);
+        assert_eq!(
+            app.world()
+                .get::<crate::tooltip::Tooltip>(tips[1])
+                .unwrap()
+                .0,
+            "Create a character"
+        );
         app.world_mut().resource_mut::<OnlineState>().selection = None;
         app.update();
         assert_eq!(
@@ -817,6 +847,70 @@ mod tests {
                 .0,
             ""
         );
+    }
+
+    #[test]
+    fn empty_slots_open_creation_in_both_lists_without_a_separate_button() {
+        use eq_client_core::creation::Rules;
+        for rules in [Rules::Titanium, Rules::EqMac] {
+            for skinned in [false, true] {
+                let (tx, rx) = std::sync::mpsc::sync_channel(4);
+                let mut state = OnlineState::new(true);
+                state.selection = Some(
+                    Selection::new(7, vec![listed(0, "Example", Some(4))])
+                        .with_creation(Some(rules)),
+                );
+                let mut app = screen_app(
+                    state,
+                    crate::login::testing::past_login(),
+                    Outbox::new(Some(tx)),
+                );
+                crate::clicks::testing::install(&mut app);
+                if skinned {
+                    app.insert_resource(crate::skinned::Skinned::of(&[WindowId::CharacterSelect]));
+                }
+                app.update();
+                let empty = if skinned {
+                    assert_eq!(
+                        app.world_mut().query::<&Action>().iter(app.world()).count(),
+                        0,
+                        "The installed list must not gain a separate create button"
+                    );
+                    app.world_mut()
+                        .spawn((Action::Choose(1), Interaction::None))
+                        .id()
+                } else {
+                    let mut choices = app.world_mut().query::<(Entity, &Action)>();
+                    let slots = choices
+                        .iter(app.world())
+                        .filter(|(_, action)| matches!(action, Action::Choose(_)))
+                        .count();
+                    assert_eq!(slots, rules.slots());
+                    choices
+                        .iter(app.world())
+                        .find_map(|(entity, action)| {
+                            matches!(action, Action::Choose(1)).then_some(entity)
+                        })
+                        .unwrap()
+                };
+                crate::clicks::testing::click(&mut app, empty);
+                assert!(
+                    app.world()
+                        .resource::<crate::character_create::Editor>()
+                        .active()
+                );
+                assert!(rx.try_recv().is_err(), "Opening a draft sends no request");
+                assert_eq!(
+                    app.world()
+                        .resource::<OnlineState>()
+                        .selection
+                        .as_ref()
+                        .unwrap()
+                        .chosen(),
+                    Some(0)
+                );
+            }
+        }
     }
 
     #[test]

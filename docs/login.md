@@ -36,7 +36,7 @@ not a failed login.
 
 ## Create a character
 
-Choose **Create Character**, click an empty slot, or press **C** at character
+Click an empty **Create New Character** slot, or press **C** at character
 selection. Creation is offered on P99, Titanium EQEmu, Quarm and TAKP when fewer
 than eight slots are occupied.
 
