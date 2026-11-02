@@ -1535,6 +1535,72 @@ mod tests {
     }
 
     #[test]
+    fn a_goto_just_over_a_steep_face_stands_up_and_climbs_it() {
+        // Live's look (11-01, 85b9d33d): a goto 1 u over a 50° face, then
+        // a run and a walk up it, moved 0.0 on every sample. Each sample
+        // now stands up and climbs, and never rises past the reach the
+        // session's guard allows it.
+        use eq_client_core::movement::{
+            AirborneController, CollisionWorld, climb_reach, program_steps,
+        };
+        let titanium = climbing(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &HUMAN,
+        );
+        for degrees in [50.0_f32, 55.0] {
+            let slope = degrees.to_radians().tan();
+            let world = CollisionWorld::new([
+                [
+                    [40.0, -40.0 * slope, -40.0],
+                    [-40.0, 40.0 * slope, -40.0],
+                    [-40.0, 40.0 * slope, 40.0],
+                ],
+                [
+                    [40.0, -40.0 * slope, -40.0],
+                    [-40.0, 40.0 * slope, 40.0],
+                    [40.0, -40.0 * slope, 40.0],
+                ],
+            ])
+            .unwrap();
+            for speed in [32.0_f32, 12.8] {
+                let mut feet = Vec3::new(0.0, 1.0 - HUMAN.feet_offset, 0.0);
+                let mut airborne = AirborneController::default();
+                let mut moved = 0.0;
+                for _ in 0..10 {
+                    let next = fall_step(
+                        &mut airborne,
+                        &world,
+                        titanium,
+                        Some(titanium.climb),
+                        feet,
+                        -Vec3::X * speed * 0.1,
+                        0.1,
+                        HUMAN.height,
+                        false,
+                    );
+                    let case = format!("{degrees}° at {speed}: {feet} to {next}");
+                    assert!(
+                        next.y - feet.y <= climb_reach(titanium.climb, program_steps(0.1)) + 0.001,
+                        "{case}"
+                    );
+                    assert!(next.y >= -next.x * slope - 0.01, "{case}");
+                    moved += feet.x - next.x;
+                    feet = next;
+                }
+                // A walk keeps its pace up both; a run up them goes as far as the reach lets it.
+                assert!(moved > 0.5 * speed, "{degrees}° at {speed}: moved {moved}");
+                if speed < 20.0 {
+                    assert!(
+                        moved > 0.95 * speed - 0.7,
+                        "{degrees}° at {speed}: moved {moved}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_titanium_jump_rises_at_its_own_speed_within_the_guards_allowance() {
         use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
         let world = CollisionWorld::new([
