@@ -8,6 +8,7 @@ use crate::{
     windows::{self, Shown, WindowId},
 };
 use bevy::{
+    clipboard::{Clipboard, ClipboardRead},
     input::keyboard::{Key, KeyboardInput},
     prelude::*,
     window::PrimaryWindow,
@@ -70,12 +71,42 @@ pub(crate) fn input(
     mut keyboard: MessageReader<KeyboardInput>,
     mut typing: ResMut<Typing>,
     mut view: ResMut<MapView>,
+    keys: Res<ButtonInput<Key>>,
+    mut clipboard: Option<ResMut<Clipboard>>,
+    mut pending: Local<Option<ClipboardRead>>,
 ) {
     if !typing.map_search {
         keyboard.clear();
+        *pending = None;
         return;
     }
-    for event in keyboard.read().filter(|event| event.state.is_pressed()) {
+    if let Some(result) = pending.as_mut().and_then(ClipboardRead::poll_result) {
+        if let Ok(text) = result {
+            append_search(&mut view.query, &text);
+        }
+        *pending = None;
+    }
+    let events: Vec<_> = keyboard.read().cloned().collect();
+    let modifiers = crate::keys::modifiers::snapshots(&events, &keys);
+    for (event, held) in events
+        .iter()
+        .zip(modifiers)
+        .filter(|(event, _)| event.state.is_pressed())
+    {
+        if !typing.map_search {
+            break;
+        }
+        if held[0] || held[2] || held[3] {
+            if held[0]
+                && !held[2]
+                && !held[3]
+                && matches!(&event.logical_key, Key::Character(text) if text.eq_ignore_ascii_case("v"))
+                && let Some(clipboard) = clipboard.as_mut()
+            {
+                *pending = Some(clipboard.fetch_text());
+            }
+            continue;
+        }
         match event.logical_key {
             Key::Escape => {
                 typing.map_search = false;
@@ -87,19 +118,20 @@ pub(crate) fn input(
             }
             Key::Delete => view.query.clear(),
             _ if typing.map_search => {
-                view.query.extend(
-                    event
-                        .text
-                        .as_deref()
-                        .unwrap_or_default()
-                        .chars()
-                        .filter(|c| !c.is_control()),
-                );
-                let boundary = view.query.floor_char_boundary(128);
-                view.query.truncate(boundary);
+                append_search(&mut view.query, event.text.as_deref().unwrap_or_default());
             }
             _ => (),
         }
+    }
+}
+
+/// Bound search input on UTF-8 boundaries and ignore multiline/control content.
+fn append_search(query: &mut String, text: &str) {
+    for c in text.chars().filter(|c| !c.is_control()) {
+        if query.len() + c.len_utf8() > 128 {
+            break;
+        }
+        query.push(c);
     }
 }
 
@@ -249,6 +281,7 @@ pub(super) fn button(label: &str) -> impl Bundle {
 }
 
 pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
+    super::presentation::chrome(parent);
     parent.spawn((Node { position_type: PositionType::Absolute, left: px(6), right: px(6), top: px(6),
         column_gap: px(4), padding: UiRect::all(px(4)), ..default() },
         windows::KeepsPress, BackgroundColor(theme::SCRIM), ZIndex(10))).with_children(|row| {
@@ -267,7 +300,7 @@ pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
         Node {
             position_type: PositionType::Absolute,
             right: px(6),
-            top: px(44),
+            top: px(74),
             width: px(260),
             max_height: percent(50),
             flex_direction: FlexDirection::Column,
@@ -288,7 +321,7 @@ pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
             position_type: PositionType::Absolute,
             left: px(6),
             right: px(6),
-            top: px(92),
+            top: px(122),
             padding: UiRect::all(px(3)),
             ..default()
         },
@@ -300,7 +333,7 @@ pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
             Node {
                 position_type: PositionType::Absolute,
                 left: px(6),
-                top: px(77),
+                top: px(107),
                 column_gap: px(6),
                 ..default()
             },
@@ -327,9 +360,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn same_frame_paste_shortcut_never_inserts_a_literal_v() {
+        use bevy::input::ButtonState;
+        let mut app = crate::testing::app();
+        app.add_message::<KeyboardInput>()
+            .init_resource::<ButtonInput<Key>>()
+            .add_systems(Update, input);
+        app.world_mut().resource_mut::<Typing>().map_search = true;
+        for (logical_key, state, text) in [
+            (Key::Control, ButtonState::Pressed, None),
+            (Key::Character("v".into()), ButtonState::Pressed, Some("v")),
+            (Key::Control, ButtonState::Released, None),
+        ] {
+            app.world_mut().write_message(KeyboardInput {
+                logical_key,
+                state,
+                text: text.map(Into::into),
+                key_code: KeyCode::KeyV,
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            });
+        }
+        app.update();
+        assert_eq!(app.world().resource::<MapView>().query, "");
+        let mut query = "x".repeat(126);
+        append_search(&mut query, "\n\ré雪");
+        assert_eq!(query.len(), 128);
+        assert!(query.ends_with('é'));
+    }
+
+    #[test]
     fn search_owns_text_and_escape_without_starting_chat_or_game_actions() {
         let mut app = crate::testing::app();
         app.add_message::<KeyboardInput>()
+            .init_resource::<ButtonInput<Key>>()
             .add_systems(Update, (crate::chat::input, input).chain());
         app.world_mut().resource_mut::<Typing>().map_search = true;
         let event = |logical_key, text: Option<&str>| KeyboardInput {

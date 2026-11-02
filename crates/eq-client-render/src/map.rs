@@ -3,6 +3,8 @@
 mod controls;
 mod entities;
 mod motion;
+mod navigation;
+mod presentation;
 #[cfg(test)]
 mod preview;
 mod target;
@@ -15,6 +17,11 @@ pub(crate) use controls::{
 pub(crate) use controls::{input as search_input, update as update_controls};
 pub(crate) use entities::{inspect, update as update_entities};
 pub(crate) use motion::{MapMotion, draw as draw_movement, sample as sample_movement};
+pub(crate) use navigation::input as navigate;
+pub(crate) use presentation::{
+    Backdrop, Presentation, actions as presentation_actions, persist as persist_presentation,
+    update as present,
+};
 pub(crate) use target::{input as target_input, show as show_target};
 pub(crate) use watch::{WatchState, alert as watch_alert, persist as persist_watches};
 pub(crate) use window::{FallbackMap, ensure_window};
@@ -29,6 +36,7 @@ use eq_client_assets::maps::ZoneMap;
 
 /// The skin's area the map draws in.
 #[derive(Component)]
+#[require(Button, crate::windows::pointer::TakesWheel)]
 pub(crate) struct MapCanvas;
 
 /// The arrow that shows where the player is and the way they face.
@@ -61,8 +69,10 @@ pub enum MapButton {
     ZoomOut,
     /// Moves the view a quarter of the way up, down, left or right.
     Pan(i8, i8),
-    /// Shows the whole map again.
+    /// Fits the geometry and every reported position, including remote helpers.
     Reset,
+    /// Centers a useful local view on the player.
+    Nearby,
     /// Shows or hides the labels.
     Labels,
     /// Shows or hides one of the layers, 1 to 3.
@@ -79,7 +89,7 @@ impl MapButton {
             "MVW_PanDownButton" => Self::Pan(0, 1),
             "MVW_PanLeftButton" => Self::Pan(-1, 0),
             "MVW_PanRightButton" => Self::Pan(1, 0),
-            "MVW_PanResetButton" => Self::Reset,
+            "MVW_PanResetButton" => Self::Nearby,
             "MVW_LabelsToggleButton" => Self::Labels,
             "MVW_Layer1Button" => Self::Layer(1),
             "MVW_Layer2Button" => Self::Layer(2),
@@ -101,7 +111,7 @@ pub(crate) struct MapView {
     zone: Option<(String, Option<ZoneMap>)>,
     /// Zone admission, so reconnecting to the same zone drops old selections.
     admission: Option<u64>,
-    /// Stable fit of geometry and known entities, independent of 3D culling.
+    /// Stable extent chosen by Nearby or Fit all, independent of moving spawns.
     bounds: Option<(Vec2, Vec2)>,
     /// The transform actually used by the current canvas.
     projection: Option<Projection>,
@@ -191,7 +201,7 @@ impl Projection {
         pan: Vec2,
         inspecting: bool,
     ) -> Option<Self> {
-        let top = 112.0_f32.min(size.y * 0.3);
+        let top = 142.0_f32.min(size.y * 0.4);
         let bottom = if inspecting {
             96.0_f32.min(size.y * 0.3)
         } else {
@@ -216,9 +226,8 @@ fn map_point(position: eq_client_core::WorldPosition) -> Vec2 {
     Vec2::new(-position.x, -position.y)
 }
 
-/// Loads local geometry on admission and fits every known position, even
-/// when the installation has no map file. The view expands at its default
-/// zoom, but remains stable while the player pans or zooms in.
+/// Loads geometry on admission and starts near the player. Remote server helpers
+/// remain inspectable but cannot shrink the default view or rescale it mid-drag.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn load(
     settings: Res<crate::ViewerSettings>,
@@ -247,21 +256,15 @@ pub(crate) fn load(
         };
     }
     if view.bounds.is_none() {
-        view.bounds = view
-            .zone
-            .as_ref()
-            .and_then(|(_, map)| map.as_ref())
-            .and_then(map_bounds);
-    }
-    if view.zoom == 0 && view.pan == Vec2::ZERO {
-        for position in motion
+        view.bounds = motion
             .player(world)
-            .into_iter()
-            .chain(world.spawns().values().map(|spawn| spawn.state.position))
-        {
-            expand(&mut view.bounds, map_point(position));
-        }
+            .map(|position| nearby_bounds(map_point(position)));
     }
+}
+
+/// A 1,200-unit neighborhood is readable without depending on zone size.
+fn nearby_bounds(centre: Vec2) -> (Vec2, Vec2) {
+    (centre - Vec2::splat(600.0), centre + Vec2::splat(600.0))
 }
 
 /// Finite map bounds, in the same coordinate frame as entity markers.
@@ -293,6 +296,8 @@ fn expand(bounds: &mut Option<(Vec2, Vec2)>, point: Vec2) {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
     mut view: ResMut<MapView>,
+    online: Res<OnlineState>,
+    motion: Res<MapMotion>,
     buttons: crate::clicks::Clicks<MapButton>,
     canvases: Query<&ComputedNode, With<MapCanvas>>,
 ) {
@@ -318,7 +323,27 @@ pub(crate) fn buttons(
             MapButton::Reset => {
                 view.zoom = 0;
                 view.pan = Vec2::ZERO;
-                view.bounds = None;
+                view.bounds = view
+                    .zone
+                    .as_ref()
+                    .and_then(|(_, map)| map.as_ref())
+                    .and_then(map_bounds);
+                for position in motion.player(online.world()).into_iter().chain(
+                    online
+                        .world()
+                        .spawns()
+                        .values()
+                        .map(|spawn| spawn.state.position),
+                ) {
+                    expand(&mut view.bounds, map_point(position));
+                }
+            }
+            MapButton::Nearby => {
+                view.zoom = 0;
+                view.pan = Vec2::ZERO;
+                view.bounds = motion
+                    .player(online.world())
+                    .map(|position| nearby_bounds(map_point(position)));
             }
             MapButton::Labels => view.labels = !view.labels,
             MapButton::Layer(layer) => {
@@ -681,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_map_files_fit_all_entities_and_readmission_resets_the_view() {
+    fn remote_helpers_do_not_shrink_default_view_and_readmission_resets_it() {
         use crate::online::testing as session;
         let mut app = App::new();
         let mut online = OnlineState::new(true);
@@ -697,7 +722,10 @@ mod tests {
         app.update();
         let view = app.world().resource::<MapView>();
         let bounds = view.bounds.unwrap();
-        assert!(bounds.0.x < -10000.0 && bounds.1.x > 0.0);
+        assert_eq!(
+            bounds,
+            nearby_bounds(map_point(session::player(1).position))
+        );
         assert!(Projection::new(bounds, Vec2::splat(500.0), 0, Vec2::ZERO).is_some());
         app.world_mut().resource_mut::<MapView>().query = "old zone".into();
         session::admit(
@@ -707,6 +735,6 @@ mod tests {
         );
         app.update();
         assert_eq!(app.world().resource::<MapView>().query, "");
-        assert!(app.world().resource::<MapView>().bounds.unwrap().0.x > -100.0);
+        assert_eq!(app.world().resource::<MapView>().bounds.unwrap(), bounds);
     }
 }

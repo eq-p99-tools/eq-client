@@ -535,7 +535,7 @@ fn chrome(commands: &mut Commands, canvas: Entity) {
             Node {
                 position_type: PositionType::Absolute,
                 left: px(6),
-                top: px(47),
+                top: px(77),
                 padding: UiRect::all(px(5)),
                 ..default()
             },

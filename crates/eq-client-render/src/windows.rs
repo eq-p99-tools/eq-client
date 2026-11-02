@@ -21,6 +21,10 @@ pub(crate) use stack::{SelectorButton, Shown, Stack, spawn_selector};
 #[derive(Component)]
 pub(crate) struct KeepsPress;
 
+/// Prevents pointer dragging without disabling the window's contents.
+#[derive(Component)]
+pub(crate) struct PositionLocked;
+
 /// Restores saved positions before layout and constrains measured frames afterward;
 /// placements persist between runs per character. Orders the floating windows,
 /// opens and closes the toggled ones and hides the ones the player hid.
@@ -298,6 +302,7 @@ pub(super) fn input(
     mut child_nodes: Query<&mut Node, Without<Frame>>,
     mut labels: Query<(&MinimizeLabel, &mut Text)>,
     mut drag: ResMut<DragState>,
+    locked: Query<(), With<PositionLocked>>,
 ) {
     let Ok(window) = windows.single() else {
         drag.active = None;
@@ -338,6 +343,7 @@ pub(super) fn input(
             .find(|(interaction, _)| **interaction == Interaction::Pressed)
             .map(|(_, handle)| handle.0)
         && let Ok((_, computed, transform, _)) = frames.get(frame)
+        && !locked.contains(frame)
     {
         drag.active = Some(ActiveDrag {
             frame,
@@ -350,6 +356,10 @@ pub(super) fn input(
     let Some(active) = drag.active.as_ref() else {
         return;
     };
+    if locked.contains(active.frame) {
+        drag.active = None;
+        return;
+    }
     let Some(cursor) = cursor else {
         return;
     };
@@ -459,6 +469,51 @@ fn collapse_skinned(node: &mut Node, state: &mut Frame) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn position_lock_rejects_new_drags_and_cancels_active_drags() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, input);
+        let root = app
+            .world_mut()
+            .spawn((
+                Node {
+                    left: px(100),
+                    top: px(100),
+                    ..default()
+                },
+                Frame::default(),
+                ComputedNode {
+                    size: Vec2::splat(200.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                UiGlobalTransform::default(),
+                PositionLocked,
+            ))
+            .id();
+        app.world_mut()
+            .spawn((DragHandle(root), Interaction::Pressed));
+        app.world_mut()
+            .query::<&mut Window>()
+            .single_mut(app.world_mut())
+            .unwrap()
+            .set_cursor_position(Some(Vec2::splat(150.0)));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        assert!(app.world().resource::<DragState>().active.is_none());
+        app.world_mut().resource_mut::<DragState>().active = Some(ActiveDrag {
+            frame: root,
+            cursor: Vec2::ZERO,
+            origin: Vec2::ZERO,
+            inverse_scale: 1.0,
+        });
+        app.update();
+        assert!(app.world().resource::<DragState>().active.is_none());
+        assert_eq!(app.world().get::<Node>(root).unwrap().left, px(100));
+    }
 
     #[test]
     fn a_skinned_window_minimizes_to_its_title_bar_and_back() {

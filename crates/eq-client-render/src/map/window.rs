@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 /// Keeps the skin loader from replacing the locally supplied map window.
 #[derive(Component)]
-pub(crate) struct FallbackMap;
+pub(crate) struct FallbackMap(bool);
 
 /// Skins from older clients can omit the map entirely. Preserve a usable
 /// skin canvas, otherwise supply the same map and controls in a native frame.
@@ -16,6 +16,7 @@ pub(crate) struct FallbackMap;
 pub(crate) fn ensure_window(
     mut commands: Commands,
     shown: Res<Shown>,
+    presentation: Res<super::Presentation>,
     frames: Query<(Entity, &WindowId, &Node, Option<&FallbackMap>)>,
     canvases: Query<&Node, With<MapCanvas>>,
 ) {
@@ -26,8 +27,18 @@ pub(crate) fn ensure_window(
         }
         return;
     }
-    if frame.is_some_and(|(_, _, _, fallback)| fallback.is_some())
-        || (frame.is_some_and(|(_, _, node, _)| usable(node.width) && usable(node.height))
+    if let Some((entity, _, _, Some(fallback))) = frame {
+        if fallback.0 == presentation.plain() {
+            return;
+        }
+        if !presentation.plain() {
+            // Let the normal skin loader recreate its frame on the next update.
+            commands.entity(entity).despawn();
+            return;
+        }
+    }
+    if !presentation.plain()
+        && (frame.is_some_and(|(_, _, node, _)| usable(node.width) && usable(node.height))
             && canvases
                 .iter()
                 .any(|node| usable(node.width) && usable(node.height)))
@@ -51,7 +62,10 @@ pub(crate) fn ensure_window(
     );
     commands
         .entity(root)
-        .insert(FallbackMap)
+        .insert((
+            FallbackMap(presentation.plain()),
+            super::Backdrop::Fill(Color::NONE),
+        ))
         .with_children(|window| {
             window
                 .spawn(Node {
@@ -70,7 +84,6 @@ pub(crate) fn ensure_window(
                         (">", MapButton::Pan(1, 0)),
                         ("^", MapButton::Pan(0, -1)),
                         ("v", MapButton::Pan(0, 1)),
-                        ("Fit", MapButton::Reset),
                         ("Labels", MapButton::Labels),
                         ("1", MapButton::Layer(1)),
                         ("2", MapButton::Layer(2)),
@@ -85,6 +98,11 @@ pub(crate) fn ensure_window(
                 windows::KeepsPress,
                 ImageNode::default(),
                 BackgroundColor(Color::srgb(0.86, 0.83, 0.73)),
+                super::Backdrop::Fill(if presentation.plain() {
+                    Color::srgb(0.80, 0.82, 0.84)
+                } else {
+                    Color::srgb(0.86, 0.83, 0.73)
+                }),
                 Node {
                     flex_grow: 1.0,
                     min_height: px(0),
@@ -121,6 +139,7 @@ mod tests {
         for hidden in [false, true] {
             let mut app = App::new();
             app.init_resource::<Shown>()
+                .init_resource::<super::super::Presentation>()
                 .add_systems(Update, ensure_window);
             app.world_mut().resource_mut::<Shown>().open(WindowId::Map);
             if hidden {
@@ -171,6 +190,7 @@ mod tests {
     fn usable_skin_canvas_is_preserved() {
         let mut app = App::new();
         app.init_resource::<Shown>()
+            .init_resource::<super::super::Presentation>()
             .add_systems(Update, ensure_window);
         app.world_mut().resource_mut::<Shown>().open(WindowId::Map);
         let root = app

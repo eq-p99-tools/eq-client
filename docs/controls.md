@@ -62,6 +62,10 @@ positions, compatible installed-client positions, or its default layout.
 **Ctrl+M** opens the map on every server, including P99 and Quarm. It uses the
 installed map window when usable and a movable, minimizable fallback otherwise.
 Local map files add lines and labels; entity positions work without them.
+The initial view covers a 1,200-unit neighborhood around your character, so a
+distant invisible server helper cannot squeeze the playable area into a corner.
+**Nearby** recenters that view. **Fit all** deliberately includes every reported
+position and all local map geometry, including outliers.
 
 The map shows all server-reported entities with known positions, independently
 of 3D render distance. Purple markers are players; NPCs use level-relative con
@@ -80,7 +84,17 @@ list matches also count as spotted; they cannot be distinguished from new spawns
 Hover, pin, search and track are local. Only **Target** asks to change the gameplay
 target, through the same visibility, range and capability checks as scene
 targeting. It does not attack, cast or move. **Unpin** closes the inspector without
-clearing the gameplay target. Pan/zoom explore the map; **Fit** restores the view.
+clearing the gameplay target. Drag the map to pan; the wheel zooms around the
+pointer without changing the game camera. Toolbar pan/zoom buttons also work.
+Dragging a marker pans rather than selecting it.
+
+**Skin / Plain** switches to a plain overlay without the parchment artwork.
+**BG − / +** adjusts background opacity, including a fully transparent background;
+map lines, text and markers remain readable. **Lock** prevents moving the window
+by its frame; it does not disable map panning, zooming or controls. Use **Unlock**
+to reposition it. Appearance and lock settings persist per character and world,
+alongside the existing saved window placement. Search supports **Ctrl+V** paste;
+**Delete** clears it and **Enter** finishes editing.
 The map cannot reveal entities the server has not sent. An old false
 `map_where_off` setting no longer disables this local feature.
 

@@ -13,6 +13,11 @@ For example, `keys.txt` seeds `keys-<world>-<character>.txt`; file-name componen
 are sanitized. `login-servers.txt` holds [login presets](login.md). These files can
 contain account/character identifiers and should not be committed.
 
+Map background opacity, plain/skin style and position lock use
+`map-view-<world>-<character>.txt`, seeded from `map-view.txt`. Change them with
+the [map's controls](controls.md#map); window coordinates remain in the normal
+window-layout file.
+
 ## Display and audio
 
 Options provides Max FPS, Far Clip Plane and Mouselook Sensitivity controls.

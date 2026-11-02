@@ -11,6 +11,7 @@ use bevy::{prelude::*, window::PrimaryWindow};
 use std::collections::BTreeMap;
 
 pub(crate) mod bindings;
+pub(crate) mod modifiers;
 
 /// Something a key press asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

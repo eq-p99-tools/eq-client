@@ -73,6 +73,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<confirm::Asked>()
         .init_resource::<reading::Page>()
         .init_resource::<map::MapView>()
+        .init_resource::<map::Presentation>()
         .init_resource::<map::WatchState>()
         .init_resource::<map::MapMotion>()
         .init_resource::<login::FrontEnd>()
@@ -177,6 +178,8 @@ pub(super) fn schedule(app: &mut App) {
                 tradeskills::buttons,
                 (
                     map::buttons,
+                    map::navigate,
+                    map::presentation_actions,
                     map::inspect,
                     map::control_actions,
                     map::target_input,
@@ -254,6 +257,7 @@ pub(super) fn schedule(app: &mut App) {
                     tradeskills::world_window,
                     (map::sample_movement, map::load).chain(),
                     (map::persist_watches, map::watch_alert).chain(),
+                    map::persist_presentation,
                 ),
             )
                 .chain(),
@@ -324,6 +328,7 @@ pub(super) fn schedule(app: &mut App) {
                             map::draw_movement,
                             map::update_controls,
                             map::show_target,
+                            map::present,
                         )
                             .chain(),
                         skinned::scrollbar::place,
