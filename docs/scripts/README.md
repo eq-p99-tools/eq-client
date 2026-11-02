@@ -1,6 +1,6 @@
 # Script workbench
 
-The script workbench lets you edit and run sequences of actions while playing your character. Log in normally, click the EQ menu at the bottom right, choose **Scripts**, and write a script or load one from disk. Scripts starts closed unless you explicitly request `--script-editor`. Run uses your current character, zone, target, inventory and spell setup. You do not need login commands, a character name in the script, or a special launch mode.
+The script workbench lets you edit and run sequences of actions while playing your character. Log in normally, click the EQ menu at the bottom right, choose `Scripts`, and write a script or load one from disk. Scripts starts closed unless you explicitly request `--script-editor`. Run uses your current character, zone, target, inventory and spell setup. You do not need login commands, a character name in the script, or a special launch mode.
 
 The movable window has Editor, Execution and Help tabs. Edit your script, choose Run, and watch the current line in Execution. Stop returns control so you can revise and run it again. Close the workbench with its titlebar × and reopen it from the EQ menu when needed; your document and run remain available.
 
@@ -20,7 +20,7 @@ The in-game Help tab keeps a clickable breadcrumb above the article as you scrol
 
 ## Files and editing
 
-Keep scripts in the `Scripts` folder inside your EQ installation. The Editor's library lists folders and `.eqscript`, `.script`, and `.txt` files. The `.eqscript` suffix is hidden in the list; actual filenames are unchanged. Click a folder to browse it, Up to return, and a file to load it. Refresh picks up files added or renamed in an external editor. Nested folders are supported; no full path is needed. **Files** collapses or restores the library panel to give the editor more room without losing your folder or document.
+Keep scripts in the `Scripts` folder inside your EQ installation. The Editor's library lists folders and `.eqscript`, `.script`, and `.txt` files. The `.eqscript` suffix is hidden in the list; actual filenames are unchanged. Click a folder to browse it, Up to return, and a file to load it. Refresh picks up files added or renamed in an external editor. Nested folders are supported; no full path is needed. `Files` collapses or restores the library panel to give the editor more room without losing your folder or document.
 
 New starts a blank buffer. Give it a name relative to Scripts, such as `practice/camera.eqscript`, then Save. Missing folders are created on save; an installation you cannot write to reports an error and preserves the buffer. Save writes the buffer; a different name creates a separate file. Reload reads the current document again. Unsaved edits require an explicit Discard edits confirmation before New, opening another file, or Reload. Save before exiting the client; unsaved buffers live only for the current session.
 

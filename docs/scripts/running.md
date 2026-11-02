@@ -10,6 +10,8 @@ The current line is highlighted in an immutable snapshot of the running script. 
 
 Pause waits for an action boundary. A long wait, held key or navigation action finishes before the pause takes effect. Stop is immediate and releases synthetic input. Step is available while paused and executes one complete action before pausing again. Explicit pause time does not count toward the overall run limit.
 
+If the connection ends after a run has entered the world, the run fails with `Session ended` and releases its synthetic input. A normal zone handoff does not end the run; use `wait_zone` before actions that require the destination zone.
+
 ## Focus and pointer ownership
 
 P99 and Quarm runs are attended. Bring the client to the foreground if it is waiting for focus.

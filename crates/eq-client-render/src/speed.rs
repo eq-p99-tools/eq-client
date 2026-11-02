@@ -134,13 +134,16 @@ pub(crate) fn report(
     if *sent == Some((session, inputs)) {
         return;
     }
-    let posted = outbox.post(world, |stamp| ClientCommand::SpeedInputs {
-        session_id: stamp.session_id,
-        rate: inputs.rate,
-        weight: inputs.weight,
-        capacity: inputs.capacity,
-    });
-    if posted.is_ok() {
+    let posted = outbox.tell(
+        world,
+        ClientCommand::SpeedInputs {
+            session_id: session,
+            rate: inputs.rate,
+            weight: inputs.weight,
+            capacity: inputs.capacity,
+        },
+    );
+    if posted {
         *sent = Some((session, inputs));
     }
 }
@@ -285,6 +288,60 @@ mod tests {
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::SpeedInputs { session_id: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn automatic_reports_stay_quiet_when_unavailable_and_retry_a_full_queue() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut app = crate::testing::app();
+        app.insert_resource(Outbox::new(Some(tx)))
+            .add_systems(Update, report);
+        let mut online = OnlineState::new(true);
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities: vec![eq_client_core::Capability::Talking],
+                choices: Vec::new(),
+                session_id: 1,
+                zone: "qeynos".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        testing::connect(&mut online, true);
+        app.insert_resource(online);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            app.world().resource::<Outbox>().take_refused(),
+            Vec::<crate::outbox::Refusal>::new()
+        );
+
+        for session in [2, 3] {
+            testing::admit(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                session,
+                testing::player(7),
+            );
+            app.update();
+        }
+        // Admission 3 must retry after the queued admission 2 report is read.
+        assert_eq!(
+            app.world().resource::<Outbox>().take_refused(),
+            Vec::<crate::outbox::Refusal>::new()
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::SpeedInputs { session_id: 2, .. })
+        ));
+        app.update();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::SpeedInputs { session_id: 3, .. })
         ));
     }
 }

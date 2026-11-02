@@ -84,7 +84,9 @@ direction, including while stopped. NPCs are circles with level-relative con
 colors, with received consider results preferred over estimates. Corpses and
 unknown entities are gray. Small gold squares are ground items; hover to see
 their model and position. World fixtures such as forges are excluded, and map
-item markers do not pick up or target anything. Your arrow follows the displayed
+item markers do not pick up or target anything. The current TAKP and Quarm adapters
+do not expose ground items, so those servers have no ground-item markers.
+Your arrow follows the displayed
 character and its facing; smaller travel arrows beside you and NPCs disappear
 on stops/stale reports. Remote positions remain the last ones reported by the server.
 

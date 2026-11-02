@@ -29,7 +29,7 @@ cargo run -p eq-client --release --locked -- --eq-dir "C:\Program Files (x86)\So
 ```
 
 Choose a login preset, enter your credentials, select a world, then select a
-character and enter the game, or choose Create Character to make one. A character
+character and enter the game, or click an empty Create New Character slot to make one. A character
 name in configuration is optional.
 The [login guide](docs/login.md) covers installations, custom servers and optional
 automatic login. Keep credentials and private settings outside Git.

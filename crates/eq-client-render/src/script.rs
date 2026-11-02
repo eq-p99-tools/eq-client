@@ -80,6 +80,8 @@ pub struct Script {
     /// the button is let go.
     pressed: Option<Entity>,
     started: Option<Duration>,
+    /// Whether this run has entered a live session that must remain connected.
+    session: RunSession,
     paused: bool,
     /// Newest chat line already included in a report.
     chat_seen: u64,
@@ -93,8 +95,6 @@ pub struct Script {
     /// The preview runs offline: no step can reach a server, so steps run
     /// without anyone watching the window, but `gm` steps stay refused.
     offline: bool,
-    /// The window focus winit last reported; None until it reports any.
-    focus: Option<bool>,
     /// The route a `walk` step is searching for or following.
     route: Option<eq_client_core::movement::Route>,
     /// The closed door the walk is opening, if any.
@@ -137,6 +137,13 @@ pub struct Script {
     /// The count of the world's creation answers when a `create` step sent
     /// its request, so the step waits for the next.
     created_before: Option<u64>,
+}
+
+/// Login and offline scripts need no admission; admitted runs end with the session.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunSession {
+    BeforeAdmission,
+    Admitted,
 }
 
 /// A source location travels with its action rather than a parallel queue.
@@ -182,12 +189,12 @@ impl Script {
             clicked: None,
             pressed: None,
             started: None,
+            session: RunSession::BeforeAdmission,
             paused: false,
             chat_seen: 0,
             follow: None,
             local: false,
             offline: false,
-            focus: None,
             route: None,
             door_wait: None,
             following: None,
@@ -356,6 +363,25 @@ impl Script {
             mouse.release(button);
         }
         self.pressed = None;
+    }
+
+    /// Cancels a synthetic press before releasing it, so cancellation cannot click.
+    fn cancel_press(&self, buttons: &mut Buttons, commands: &mut Commands) {
+        if let Some(entity) = self.pressed
+            && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+        {
+            *interaction = Interaction::None;
+        }
+        commands.queue(|world: &mut World| {
+            if let Some(mut button) = world.get_resource_mut::<crate::clicks::LeftButton>() {
+                button.cancel();
+            }
+            if let Some(mut presses) =
+                world.get_resource_mut::<crate::hud::hotbar::carry::Presses>()
+            {
+                *presses = crate::hud::hotbar::carry::Presses::default();
+            }
+        });
     }
 
     fn stop(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>, reason: &str) {
@@ -600,8 +626,14 @@ pub(super) fn drive(
     ),
     (windows, settings, mut control): DriverContext,
     mut focus: MessageReader<bevy::window::WindowFocused>,
+    mut reported_focus: Local<Option<(Entity, bool)>>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    // Observe focus even between runs. A script started from the workbench
+    // must not wait for another focus event from an already focused window.
+    for event in focus.read().filter(|event| windows.contains(event.window)) {
+        *reported_focus = Some((event.window, event.focused));
+    }
     let Some(mut script) = script else {
         return;
     };
@@ -609,35 +641,25 @@ pub(super) fn drive(
     // Plain borrows of the fields, so a walk can hold its route and note
     // where it heads at once.
     let script = &mut *script;
-    if let Some(event) = focus.read().last() {
-        script.focus = Some(event.focused);
-    }
     let (mut keys, mut mouse) = input;
     let now = time.elapsed();
     if !script.progress.phase.active() {
         script.retire(&mut commands);
         return;
     }
+    if online.enabled && online.world().connected() {
+        script.session = RunSession::Admitted;
+    }
+    if script.session == RunSession::Admitted && online.world().ended() {
+        script.cancel_press(&mut buttons, &mut commands);
+        script.stop(&mut keys, &mut mouse, "Session ended");
+        script.retire(&mut commands);
+        return;
+    }
     if let Some(request) = control.as_mut().and_then(|control| control.take()) {
         match request {
             Request::Stop => {
-                if let Some(entity) = script.pressed
-                    && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
-                {
-                    *interaction = Interaction::None;
-                }
-                // Releasing a cancelled synthetic press must not become a click.
-                commands.queue(|world: &mut World| {
-                    if let Some(mut button) = world.get_resource_mut::<crate::clicks::LeftButton>()
-                    {
-                        button.cancel();
-                    }
-                    if let Some(mut presses) =
-                        world.get_resource_mut::<crate::hud::hotbar::carry::Presses>()
-                    {
-                        *presses = crate::hud::hotbar::carry::Presses::default();
-                    }
-                });
+                script.cancel_press(&mut buttons, &mut commands);
                 script.stop(&mut keys, &mut mouse, "Stopped by user");
                 script.progress.phase = Phase::Stopped;
                 script.retire(&mut commands);
@@ -713,7 +735,9 @@ pub(super) fn drive(
     let window = windows.single().ok();
     if !may_run(
         script.unattended(),
-        script.focus,
+        reported_focus
+            .filter(|(window, _)| windows.contains(*window))
+            .map(|(_, focused)| focused),
         window.is_some_and(|window| window.focused),
     ) {
         if script.holding() {
@@ -3587,6 +3611,46 @@ mod tests {
     }
 
     #[test]
+    fn terminal_disconnect_releases_a_hold_but_zoning_does_not_end_the_run() {
+        use crate::online::testing as session;
+        use eq_client_core::world::Link;
+
+        let mut app = pointing(vec![
+            Step::Hold(vec![KeyCode::KeyW], Duration::from_secs(10)),
+            Step::Press(vec![KeyCode::KeyA]),
+        ]);
+        {
+            let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+            online.enabled = true;
+            session::admit(&mut online, 1, session::player(7));
+        }
+        frame_at(&mut app, 0);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+        session::link(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            Link::Zoning,
+        );
+        frame_at(&mut app, 10);
+        assert!(app.world().contains_resource::<Script>());
+        session::link(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            Link::Ended,
+        );
+        frame_at(&mut app, 20);
+        assert!(!app.world().contains_resource::<Script>());
+        let keys = app.world().resource::<ButtonInput<KeyCode>>();
+        assert!(!keys.pressed(KeyCode::KeyW));
+        assert!(!keys.pressed(KeyCode::KeyA));
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Failed);
+        assert_eq!(status.events().back().unwrap().message, "Session ended");
+    }
+
+    #[test]
     fn a_source_error_retains_its_line_after_the_executor_is_removed() {
         let mut app = pointing(Vec::new());
         let program = Program::parse("# needs a target\n\nface\n", Path::new(".")).unwrap();
@@ -4027,6 +4091,69 @@ mod tests {
         assert!(!may_run(false, Some(false), false));
         assert!(may_run(false, Some(true), true));
         assert!(may_run(true, None, true) && may_run(true, Some(false), false));
+    }
+
+    #[test]
+    fn workbench_runs_keep_focus_observed_before_the_script_existed() {
+        use bevy::window::WindowFocused;
+
+        let mut app = pointing(Vec::new());
+        app.world_mut().remove_resource::<Script>();
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().write_message(WindowFocused {
+            window,
+            focused: true,
+        });
+        // Let the startup event expire before Run creates its first script.
+        for ms in [0, 10, 20] {
+            frame_at(&mut app, ms);
+        }
+        for ms in [30, 40] {
+            app.insert_resource(Script::new(vec![Step::Wait(Duration::from_secs(1))]));
+            frame_at(&mut app, ms);
+            assert_eq!(
+                app.world().resource::<Script>().status().phase,
+                Phase::Running
+            );
+        }
+
+        app.world_mut().remove_resource::<Script>();
+        app.world_mut().write_message(WindowFocused {
+            window,
+            focused: false,
+        });
+        frame_at(&mut app, 50);
+        app.insert_resource(Script::new(vec![Step::Wait(Duration::from_secs(1))]));
+        frame_at(&mut app, 60);
+        assert_eq!(
+            app.world().resource::<Script>().status().phase,
+            Phase::WaitingForFocus
+        );
+
+        // A different window cannot satisfy the attended-run requirement.
+        let other = app.world_mut().spawn_empty().id();
+        app.world_mut().write_message(WindowFocused {
+            window: other,
+            focused: true,
+        });
+        frame_at(&mut app, 70);
+        assert_eq!(
+            app.world().resource::<Script>().status().phase,
+            Phase::WaitingForFocus
+        );
+        app.world_mut().write_message(WindowFocused {
+            window,
+            focused: true,
+        });
+        frame_at(&mut app, 80);
+        assert_eq!(
+            app.world().resource::<Script>().status().phase,
+            Phase::Running
+        );
     }
 
     #[test]
