@@ -797,8 +797,14 @@ pub(super) fn drive(
         let elapsed = now.saturating_sub(since);
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
-            Step::Create(character) => {
-                match answered(online.world(), script.created_before, &character.name) {
+            Step::Create(character) | Step::CreateRefused(character) => {
+                let refusal_expected = matches!(step, Step::CreateRefused(_));
+                match answered(
+                    online.world(),
+                    script.created_before,
+                    &character.name,
+                    refusal_expected,
+                ) {
                     Ok(done) => done,
                     Err(reason) => {
                         script.stop(&mut keys, &mut mouse, &reason);
@@ -1346,7 +1352,7 @@ pub(super) fn drive(
     script.progress.begin(line);
     info!(?step, "Script step");
     match &step {
-        Step::Create(character) => {
+        Step::Create(character) | Step::CreateRefused(character) => {
             let sent = online.selection.as_ref().is_some_and(|selection| {
                 observed
                     .1
@@ -1659,6 +1665,7 @@ fn answered(
     world: &eq_client_core::world::ClientWorld,
     before: Option<u64>,
     name: &str,
+    refusal_expected: bool,
 ) -> Result<bool, String> {
     use eq_client_core::creation::CreationOutcome;
     let Some(answer) = world
@@ -1667,9 +1674,16 @@ fn answered(
     else {
         return Ok(false);
     };
-    match answer.outcome {
-        CreationOutcome::Created => Ok(true),
-        refused => Err(format!("character creation refused: {refused:?}")),
+    match (answer.outcome, refusal_expected) {
+        (CreationOutcome::Created, false) => Ok(true),
+        (CreationOutcome::Created, true) => Err(format!(
+            "character {name} was created where a refusal was expected"
+        )),
+        (refused, false) => Err(format!("character creation refused: {refused:?}")),
+        (refused, true) => {
+            info!(?refused, name, "Script saw the expected creation refusal");
+            Ok(true)
+        }
     }
 }
 
@@ -2927,20 +2941,29 @@ mod tests {
             );
         };
         // No answer yet, then a refusal: the step fails, naming it.
-        assert_eq!(answered(&world, None, "Testcleric"), Ok(false));
+        assert_eq!(answered(&world, None, "Testcleric", false), Ok(false));
         answer(&mut world, "Testcleric", CreationOutcome::CreationRefused);
         assert_eq!(
-            answered(&world, None, "Testcleric"),
+            answered(&world, None, "Testcleric", false),
             Err("character creation refused: CreationRefused".into())
         );
+        // A `create_refused` step passes on that same refusal.
+        assert_eq!(answered(&world, None, "Testcleric", true), Ok(true));
         // A later step waits past the answer it saw sent, and past another
         // name's, then finishes on its own character's creation.
         let before = world.creation().map(|last| last.count);
-        assert_eq!(answered(&world, before, "Testcleric"), Ok(false));
+        assert_eq!(answered(&world, before, "Testcleric", false), Ok(false));
         answer(&mut world, "Othername", CreationOutcome::Created);
-        assert_eq!(answered(&world, before, "Testcleric"), Ok(false));
+        assert_eq!(answered(&world, before, "Testcleric", false), Ok(false));
         answer(&mut world, "Testcleric", CreationOutcome::Created);
-        assert_eq!(answered(&world, before, "Testcleric"), Ok(true));
+        assert_eq!(answered(&world, before, "Testcleric", true), Ok(false));
+        answer(&mut world, "Testcleric", CreationOutcome::Created);
+        assert_eq!(answered(&world, before, "Testcleric", false), Ok(true));
+        // A `create_refused` step fails when the character is created.
+        assert_eq!(
+            answered(&world, before, "Testcleric", true),
+            Err("character Testcleric was created where a refusal was expected".into())
+        );
     }
 
     #[test]

@@ -13,7 +13,10 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 33] = [
+const GM_COMMANDS: [&str; 34] = [
+    // The server's own view of the player's stats, weight and coins among
+    // them, said back in chat; reads only.
+    "showstats",
     // GM mode on or off: off, the server lets the player go hungry. On, the
     // book and gem commands below act on a player target instead of the GM.
     "gm",
@@ -90,6 +93,9 @@ pub enum Step {
     Select(String),
     /// Creates a character from the selection screen (local test servers).
     Create(eq_client_core::creation::NewCharacter),
+    /// Asks for a character the server is expected to refuse, a taken name
+    /// for one: the step passes on the refusal and fails on a creation.
+    CreateRefused(eq_client_core::creation::NewCharacter),
     /// Waits until the zone is admitted with a player present.
     WaitOnline,
     /// Waits until the named zone is admitted with a player present.
@@ -503,7 +509,8 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
         ("server", name) if !name.is_empty() => Step::Server(name.join(" ")),
         ("wait_select", []) => Step::WaitSelect,
         ("select", [name]) => Step::Select((*name).to_owned()),
-        ("create", arguments) => parse_create(arguments)?,
+        ("create", arguments) => Step::Create(parse_create(arguments)?),
+        ("create_refused", arguments) => Step::CreateRefused(parse_create(arguments)?),
         ("wait_online", []) => Step::WaitOnline,
         ("wait_zone", [zone]) => Step::WaitZone(zone.to_ascii_lowercase()),
         ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
@@ -1030,8 +1037,9 @@ fn parse_chat(words: &[&str]) -> Result<Step, String> {
     }))
 }
 
-/// `create <Name> <race> <class> <gender> <deity> <start zone> <stat for free points>`.
-fn parse_create(arguments: &[&str]) -> Result<Step, String> {
+/// `create <Name> <race> <class> <gender> <deity> <start zone> <stat for free points>`,
+/// and `create_refused` with the same words.
+fn parse_create(arguments: &[&str]) -> Result<eq_client_core::creation::NewCharacter, String> {
     let [name, race, class, gender, deity, zone, primary] = arguments else {
         return Err("create takes a name and six numbers".into());
     };
@@ -1047,7 +1055,7 @@ fn parse_create(arguments: &[&str]) -> Result<Step, String> {
     )
     .map_err(|error| error.to_string())?;
     character.validate().map_err(|error| error.to_string())?;
-    Ok(Step::Create(character))
+    Ok(character)
 }
 
 fn keys_from(text: &str) -> Option<Vec<KeyCode>> {
@@ -1283,7 +1291,7 @@ mod tests {
     fn parses_bounded_steps_and_rejects_unsafe_input() {
         let base = Path::new("private");
         let steps = parse(
-            "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
+            "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\ncreate_refused Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
              gm summon\ngm damage 10000\ngm givemoney 0 0 5 0\npress F1 # self\n\
              press alt+1\nhold W 1500\nwait 250\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\nhover close_box chat\n\
              click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 0\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\ngive\nclick give\nreport after cast\nscreenshot a.png\nquit\n",
@@ -1296,6 +1304,15 @@ mod tests {
                 Step::WaitSelect,
                 Step::Select("Someone".into()),
                 Step::Create(
+                    eq_client_core::creation::NewCharacter::with_points_in(
+                        "Testcleric",
+                        (1, 2, 0),
+                        (212, 1),
+                        4
+                    )
+                    .unwrap()
+                ),
+                Step::CreateRefused(
                     eq_client_core::creation::NewCharacter::with_points_in(
                         "Testcleric",
                         (1, 2, 0),
