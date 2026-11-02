@@ -35,6 +35,7 @@ fn app() -> App {
     app.init_resource::<crate::ViewerSettings>()
         .init_resource::<super::super::WatchState>();
     app.init_resource::<super::super::MapMotion>();
+    app.init_resource::<Assets<Image>>();
     app.insert_resource(online())
         .insert_resource(MapView {
             admission: Some(1),
@@ -78,6 +79,54 @@ fn markers(app: &mut App) -> std::collections::BTreeMap<u16, Entity> {
         .iter(world)
         .map(|(entity, marker)| (marker.0, entity))
         .collect()
+}
+
+#[test]
+fn npc_circles_and_stationary_player_arrows_keep_heading_and_search_opacity() {
+    let mut app = app();
+    let mut player = spawn(2, 10.0, SpawnKind::Player);
+    player.position.heading = 128.0;
+    session::spawns(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        vec![player, spawn(3, 20.0, SpawnKind::Npc)],
+    );
+    app.update();
+    let drawn = markers(&mut app);
+    let player = drawn[&2];
+    let npc = drawn[&3];
+    assert_eq!(
+        app.world().get::<Node>(npc).unwrap().border_radius,
+        BorderRadius::all(percent(50))
+    );
+    assert_eq!(
+        app.world().get::<ImageNode>(npc).unwrap().color,
+        Color::NONE
+    );
+    assert_eq!(
+        app.world().get::<BackgroundColor>(player).unwrap().0,
+        Color::NONE
+    );
+    assert_eq!(app.world().get::<ImageNode>(player).unwrap().color, PLAYER);
+    let facing = app.world().get::<UiTransform>(player).unwrap().rotation * Vec2::NEG_Y;
+    assert!((facing - Vec2::NEG_X).length() < 0.001);
+    session::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::Position {
+            spawn_id: 2,
+            position: WorldPosition {
+                heading: 256.0,
+                ..default()
+            },
+            velocity: [0.0; 3],
+            forward: 0.0,
+        }],
+    );
+    app.world_mut().resource_mut::<MapView>().query = "nonmatching".into();
+    app.update();
+    assert_eq!(markers(&mut app), drawn);
+    let facing = app.world().get::<UiTransform>(player).unwrap().rotation * Vec2::NEG_Y;
+    assert!((facing - Vec2::Y).length() < 0.001);
+    assert!(app.world().get::<ImageNode>(player).unwrap().color.alpha() < 0.3);
 }
 
 #[test]

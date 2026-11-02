@@ -77,11 +77,14 @@ distant invisible server helper cannot squeeze the playable area into a corner.
 position and all local map geometry, including outliers.
 
 The map shows all server-reported entities with known positions, independently
-of 3D render distance. Purple markers are players; NPCs use level-relative con
+of 3D render distance. Purple arrows are players and point in their facing
+direction, including while stopped. NPCs are circles with level-relative con
 colors, with received consider results preferred over estimates. Corpses and
-unknown entities are gray. Your arrow follows the displayed character and its
-facing; smaller arrows show travel direction and disappear on stops/stale reports.
-Remote positions remain the last ones reported by the server.
+unknown entities are gray. Small gold squares are ground items; hover to see
+their model and position. World fixtures such as forges are excluded, and map
+item markers do not pick up or target anything. Your arrow follows the displayed
+character and its facing; smaller travel arrows beside you and NPCs disappear
+on stops/stale reports. Remote positions remain the last ones reported by the server.
 
 Hover for details or click to pin an inspector; repeated clicks cycle overlapping
 markers. Search matches part of a displayed name. **Track** saves an exact name;
@@ -97,7 +100,8 @@ clearing the gameplay target. Drag the map to pan; the wheel zooms around the
 pointer without changing the game camera. Toolbar pan/zoom buttons also work.
 Dragging a marker pans rather than selecting it.
 
-**Skin / Plain** switches to a plain overlay without the parchment artwork.
+**Skin / Plain** switches to a dark overlay without the parchment artwork, with
+lighter lines and labels for contrast over the world.
 **BG − / +** adjusts background opacity, including a fully transparent background;
 map lines, text and markers remain readable. **Lock** prevents moving the window
 by its frame; it does not disable map panning, zooming or controls. Use **Unlock**

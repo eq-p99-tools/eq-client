@@ -286,6 +286,8 @@ type Markers<'w, 's> = Query<
         &'static mut Tooltip,
         &'static Interaction,
         &'static mut ZIndex,
+        &'static mut ImageNode,
+        &'static mut UiTransform,
     ),
 >;
 
@@ -304,6 +306,8 @@ pub(crate) fn update(
     mut legends: Query<&mut Text, (With<Legend>, Without<Details>)>,
     mut details: Query<&mut Text, (With<Details>, Without<Legend>)>,
     mut inspectors: Query<&mut Node, (With<Inspector>, Without<Marker>)>,
+    mut images: ResMut<Assets<Image>>,
+    mut arrow: Local<Option<Handle<Image>>>,
 ) {
     let Ok(canvas) = canvases.single() else {
         return;
@@ -312,6 +316,8 @@ pub(crate) fn update(
         return;
     };
     let world = online.world();
+    let arrow =
+        arrow.get_or_insert_with(|| images.add(super::arrow_picture([255; 4], [0, 0, 0, 255])));
     let mac = settings.0.installed_client == eq_client_assets::ui::InstalledClient::EqMac;
     let selected = selected(world, &view).map(|entity| entity.shown(world, &motion));
     if selected.is_none() {
@@ -327,6 +333,8 @@ pub(crate) fn update(
         mut tooltip,
         interaction,
         mut depth,
+        mut image,
+        mut transform,
     ) in &mut markers
     {
         let Some(entity) = entity(world, marker.0) else {
@@ -347,6 +355,16 @@ pub(crate) fn update(
         place(&mut node, at, projection.size, look.diameter);
         background.set_if_neq(BackgroundColor(look.fill));
         border.set_if_neq(BorderColor::all(look.border));
+        shape(
+            &mut node,
+            &mut background,
+            &mut border,
+            &mut image,
+            &mut transform,
+            entity,
+            look,
+            arrow,
+        );
         depth.set_if_neq(ZIndex(look.depth));
         if *interaction != Interaction::None {
             let text = describe(entity, world, &motion);
@@ -373,6 +391,7 @@ pub(crate) fn update(
             entity,
             projection,
             look(entity, world, &view, &watches.names, mac, false),
+            arrow,
         );
     }
     if legends.is_empty() {
@@ -385,7 +404,16 @@ pub(crate) fn update(
         }
     }
     let shown = selected.map(|selected| describe(selected, world, &motion));
-    for mut node in &mut inspectors {
+    show_inspector(shown.as_deref(), &mut inspectors, &mut details);
+}
+
+/// Keep the pinned details visible only while their entity is still known.
+fn show_inspector(
+    shown: Option<&str>,
+    inspectors: &mut Query<&mut Node, (With<Inspector>, Without<Marker>)>,
+    details: &mut Query<&mut Text, (With<Details>, Without<Legend>)>,
+) {
+    for mut node in inspectors.iter_mut() {
         let display = if shown.is_some() {
             Display::Flex
         } else {
@@ -395,8 +423,8 @@ pub(crate) fn update(
             node.display = display;
         }
     }
-    for mut text in &mut details {
-        let wanted = shown.as_deref().unwrap_or_default();
+    for mut text in details.iter_mut() {
+        let wanted = shown.unwrap_or_default();
         if text.0 != wanted {
             wanted.clone_into(&mut text.0);
         }
@@ -409,6 +437,7 @@ fn add_marker(
     entity: Known<'_>,
     projection: super::Projection,
     look: Look,
+    arrow: &Handle<Image>,
 ) {
     let at = projection.place(map_point(entity.position));
     let mut node = Node {
@@ -419,6 +448,20 @@ fn add_marker(
         ..default()
     };
     place(&mut node, at, projection.size, look.diameter);
+    let mut background = BackgroundColor(look.fill);
+    let mut border = BorderColor::all(look.border);
+    let mut image = ImageNode::default();
+    let mut transform = UiTransform::default();
+    shape(
+        &mut node,
+        &mut background,
+        &mut border,
+        &mut image,
+        &mut transform,
+        entity,
+        look,
+        arrow,
+    );
     commands.entity(canvas).with_children(|parent| {
         parent
             .spawn((
@@ -426,13 +469,52 @@ fn add_marker(
                 Marker(entity.id),
                 Action::Select(entity.id),
                 node,
-                BackgroundColor(look.fill),
-                BorderColor::all(look.border),
+                background,
+                border,
+                image,
+                transform,
                 Tooltip::default(),
                 ZIndex(look.depth),
             ))
             .with_child(super::motion::arrow());
     });
+}
+
+/// Players face their reported heading even while stationary; NPCs are circles.
+/// The local player's existing arrow remains responsible for its predicted pose.
+#[allow(clippy::too_many_arguments)]
+fn shape(
+    node: &mut Node,
+    background: &mut BackgroundColor,
+    border: &mut BorderColor,
+    image: &mut ImageNode,
+    transform: &mut UiTransform,
+    entity: Known<'_>,
+    look: Look,
+    arrow: &Handle<Image>,
+) {
+    node.border_radius = if entity.kind == SpawnKind::Npc {
+        BorderRadius::all(percent(50))
+    } else {
+        BorderRadius::ZERO
+    };
+    if entity.kind == SpawnKind::Player && !entity.own {
+        background.0 = Color::NONE;
+        image.image = arrow.clone();
+        image.color = look.fill;
+        transform.rotation = if entity.position.heading.is_finite() {
+            super::facing(entity.position.heading)
+        } else {
+            Rot2::IDENTITY
+        };
+        // Only an emphasized player needs an extra selection outline.
+        if look.diameter == MARKER_SIZE {
+            *border = BorderColor::all(Color::NONE);
+        }
+    } else {
+        image.color = Color::NONE;
+        transform.rotation = Rot2::IDENTITY;
+    }
 }
 
 fn legend_text(view: &MapView, counts: [usize; 3]) -> String {
@@ -490,7 +572,7 @@ fn known_player(player: &eq_client_core::PlayerState) -> Option<Known<'_>> {
     })
 }
 
-fn finite(position: WorldPosition) -> bool {
+pub(super) fn finite(position: WorldPosition) -> bool {
     [position.x, position.y, position.z]
         .into_iter()
         .all(f32::is_finite)
@@ -498,7 +580,7 @@ fn finite(position: WorldPosition) -> bool {
 
 /// Clip markers to the map; off-screen dots remain
 /// tracked and reappear when panned back without reloading a model.
-fn place(node: &mut Node, at: Vec2, size: Vec2, diameter: f32) {
+pub(super) fn place(node: &mut Node, at: Vec2, size: Vec2, diameter: f32) {
     if node.width != px(diameter) {
         node.width = px(diameter);
     }

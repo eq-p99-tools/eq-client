@@ -171,6 +171,8 @@ pub(crate) fn draw(
             .is_some_and(|player| player.spawn_id == marker.0);
         let direction = if own {
             motion.direction
+        } else if world.is_player(marker.0) {
+            None // A player's marker already shows facing, including at rest.
         } else {
             travel(world, marker.0, dialect, now)
         };

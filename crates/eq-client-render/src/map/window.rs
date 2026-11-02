@@ -97,9 +97,9 @@ pub(crate) fn ensure_window(
                 MapCanvas,
                 windows::KeepsPress,
                 ImageNode::default(),
-                BackgroundColor(Color::srgb(0.86, 0.83, 0.73)),
+                BackgroundColor(Color::NONE),
                 super::Backdrop::Fill(if presentation.plain() {
-                    Color::srgb(0.80, 0.82, 0.84)
+                    super::presentation::OVERLAY
                 } else {
                     Color::srgb(0.86, 0.83, 0.73)
                 }),

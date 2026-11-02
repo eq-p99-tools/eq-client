@@ -2,6 +2,7 @@
 //! known entities. Entity inspection never sends a game command.
 mod controls;
 mod entities;
+mod items;
 mod motion;
 mod navigation;
 mod presentation;
@@ -16,6 +17,7 @@ pub(crate) use controls::{
 };
 pub(crate) use controls::{input as search_input, update as update_controls};
 pub(crate) use entities::{inspect, update as update_entities};
+pub(crate) use items::update as update_items;
 pub(crate) use motion::{MapMotion, draw as draw_movement, sample as sample_movement};
 pub(crate) use navigation::input as navigate;
 pub(crate) use presentation::{
@@ -161,6 +163,7 @@ struct Drawn {
     layers: [bool; 3],
     bounds: (Vec2, Vec2),
     inspecting: bool,
+    plain: bool,
 }
 
 /// How map units reach the canvas: its scale and the map point at its
@@ -360,7 +363,7 @@ pub(crate) fn buttons(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn draw(
     mut commands: Commands,
-    (online, motion): (Res<OnlineState>, Res<MapMotion>),
+    (online, motion, presentation): (Res<OnlineState>, Res<MapMotion>, Res<Presentation>),
     mut view: ResMut<MapView>,
     mut images: ResMut<Assets<Image>>,
     mut canvases: Query<(Entity, &ComputedNode, &mut ImageNode), With<MapCanvas>>,
@@ -401,14 +404,28 @@ pub(crate) fn draw(
         layers: view.layers,
         bounds,
         inspecting: view.selected.is_some(),
+        plain: presentation.plain(),
     };
     if view.drawn.as_ref() != Some(&wanted) {
-        image.image = images.add(picture(map, projection, view.layers, wanted.size));
+        image.image = images.add(picture(
+            map,
+            projection,
+            view.layers,
+            wanted.size,
+            wanted.plain,
+        ));
         for label in &labels {
             commands.entity(label).despawn();
         }
         if view.labels {
-            draw_labels(&mut commands, canvas, map, projection, view.layers);
+            draw_labels(
+                &mut commands,
+                canvas,
+                map,
+                projection,
+                view.layers,
+                wanted.plain,
+            );
         }
         view.drawn = Some(wanted);
     }
@@ -460,6 +477,7 @@ fn draw_labels(
     map: &ZoneMap,
     projection: Projection,
     layers: [bool; 3],
+    plain: bool,
 ) {
     commands.entity(canvas).with_children(|canvas| {
         for label in &map.labels {
@@ -470,7 +488,7 @@ fn draw_labels(
             if !at.is_finite() || at.cmplt(Vec2::ZERO).any() || at.cmpgt(projection.size).any() {
                 continue;
             }
-            let [r, g, b] = label.color;
+            let [r, g, b] = presentation::ink(label.color, plain);
             canvas.spawn((
                 LabelText,
                 Text::new(label.text.clone()),
@@ -549,7 +567,13 @@ fn arrow_picture(fill: [u8; 4], edge: [u8; 4]) -> Image {
 
 /// The map's lines drawn into a picture of the canvas's size, on a clear
 /// background so the skin's parchment shows through.
-fn picture(map: &ZoneMap, projection: Projection, layers: [bool; 3], size: UVec2) -> Image {
+fn picture(
+    map: &ZoneMap,
+    projection: Projection,
+    layers: [bool; 3],
+    size: UVec2,
+    plain: bool,
+) -> Image {
     let (width, height) = (size.x.max(1), size.y.max(1));
     let mut pixels = vec![0u8; (width * height * 4) as usize];
     for line in &map.lines {
@@ -558,7 +582,7 @@ fn picture(map: &ZoneMap, projection: Projection, layers: [bool; 3], size: UVec2
         }
         let from = projection.place(Vec2::new(line.from[0], line.from[1]));
         let to = projection.place(Vec2::new(line.to[0], line.to[1]));
-        let [r, g, b] = line.color;
+        let [r, g, b] = presentation::ink(line.color, plain);
         stroke(&mut pixels, (width, height), from, to, [r, g, b, 255]);
     }
     Image::new(
@@ -680,7 +704,7 @@ mod tests {
         )
         .unwrap();
         let drawn = |layers| {
-            picture(&square(), projection, layers, size)
+            picture(&square(), projection, layers, size, false)
                 .data
                 .unwrap()
                 .chunks(4)

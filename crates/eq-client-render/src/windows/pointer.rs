@@ -92,8 +92,9 @@ type Surfaces<'w, 's> = Query<
         &'static UiGlobalTransform,
         &'static ComputedNode,
         Option<&'static InheritedVisibility>,
+        Option<&'static ComputedStackIndex>,
     ),
-    super::PointerSurface,
+    Or<(super::PointerSurface, With<super::KeepsPress>)>,
 >;
 
 #[derive(SystemParam)]
@@ -114,14 +115,27 @@ pub(crate) struct PointerUi<'w, 's> {
 impl PointerUi<'_, '_> {
     /// Matches UI hit testing, including rounded corners and ancestor scroll clipping.
     pub fn contains(&self, cursor: Vec2) -> bool {
+        self.top_at(cursor).is_some()
+    }
+
+    /// The frontmost control or blocking panel at an event's original position.
+    /// This also works when several pointer events arrive in one rendered frame.
+    pub(crate) fn top_at(&self, cursor: Vec2) -> Option<Entity> {
         self.surfaces
             .iter()
-            .any(|(entity, transform, node, visibility)| {
+            .filter(|(entity, transform, node, visibility, _)| {
                 visibility.is_none_or(|visibility| visibility.get())
                     && node.size().cmpgt(Vec2::ZERO).all()
-                    && node.contains_point(*transform, cursor)
-                    && bevy::ui::clip_check_recursive(cursor, entity, &self.clipping, &self.parents)
+                    && node.contains_point(**transform, cursor)
+                    && bevy::ui::clip_check_recursive(
+                        cursor,
+                        *entity,
+                        &self.clipping,
+                        &self.parents,
+                    )
             })
+            .max_by_key(|(.., stack)| stack.map_or(0, |stack| stack.0))
+            .map(|(entity, ..)| entity)
     }
 }
 

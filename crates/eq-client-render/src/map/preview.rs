@@ -38,6 +38,7 @@ fn capture() {
     .init_resource::<crate::keys::Typing>()
     .init_resource::<WatchState>()
     .init_resource::<MapMotion>()
+    .init_resource::<Presentation>()
     .init_resource::<Shown>();
     app.world_mut().resource_mut::<Shown>().open(WindowId::Map);
     install_scene(&mut app);
@@ -76,9 +77,11 @@ fn capture() {
             ensure_window,
             draw,
             entities::update,
+            update_items,
             draw_movement,
             controls::update,
             show_target,
+            present,
         )
             .chain(),
     );
@@ -155,6 +158,7 @@ fn snapshot() -> OnlineState {
         spawn.position.y = y;
         if id == 7 || id == 8 {
             spawn.kind = SpawnKind::Player;
+            spawn.position.heading = if id == 7 { 128.0 } else { 256.0 };
         }
         if id == 3 || id == 7 {
             spawn.velocity = [4.0, 0.0, 0.0];
@@ -166,6 +170,21 @@ fn snapshot() -> OnlineState {
     })
     .collect();
     session::spawns(&mut online, spawns);
+    session::news(
+        &mut online,
+        [eq_client_core::WorldEvent::Objects(
+            eq_client_core::ground::ObjectUpdate::Spawn(eq_client_core::ground::GroundObject {
+                drop_id: 70_000,
+                model: "IT63_ACTORDEF".into(),
+                position: eq_client_core::WorldPosition {
+                    x: 100.0,
+                    y: 140.0,
+                    ..default()
+                },
+                object_type: 0,
+            }),
+        )],
+    );
     online
 }
 

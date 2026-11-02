@@ -8,6 +8,17 @@ use bevy::prelude::*;
 use std::time::Instant;
 
 const SHARED: &str = "map-view.txt";
+/// Neutral dark backing for a map left over the world, faded by the BG control.
+pub(super) const OVERLAY: Color = Color::srgb_u8(16, 20, 26);
+
+/// Lift map-file ink for the dark overlay while retaining each line's hue.
+pub(super) fn ink(color: [u8; 3], plain: bool) -> [u8; 3] {
+    if plain {
+        color.map(|channel| 128 + channel / 2)
+    } else {
+        color
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Options {

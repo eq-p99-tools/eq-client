@@ -149,7 +149,9 @@ pub(super) fn schedule(app: &mut App) {
             )
                 .chain()
                 .in_set(Stage::Typing),
-            (escape::route, hud::hotbar::carry::route).in_set(Stage::Route),
+            (escape::route, hud::hotbar::carry::route, map::navigate)
+                .chain()
+                .in_set(Stage::Route),
         ),
     )
     .add_systems(
@@ -179,7 +181,6 @@ pub(super) fn schedule(app: &mut App) {
                 tradeskills::buttons,
                 (
                     map::buttons,
-                    map::navigate,
                     map::presentation_actions,
                     map::inspect,
                     map::control_actions,
@@ -326,6 +327,7 @@ pub(super) fn schedule(app: &mut App) {
                         (
                             map::draw,
                             map::update_entities,
+                            map::update_items,
                             map::draw_movement,
                             map::update_controls,
                             map::show_target,
