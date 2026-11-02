@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `2a348c5cd6ad39968fb97af8ac2d8ad5090975ba`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/2a348c5cd6ad39968fb97af8ac2d8ad5090975ba/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `6ae8956068415fa30934485ccdae1a102757b50c`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/6ae8956068415fa30934485ccdae1a102757b50c/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 

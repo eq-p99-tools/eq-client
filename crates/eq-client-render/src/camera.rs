@@ -31,6 +31,7 @@ pub(crate) fn toggle_free(
     mut commands: Commands,
     keys: crate::keys::Keys,
     online: Res<online::OnlineState>,
+    options: Res<options::OptionsState>,
     players: Query<&Transform, (With<Player>, Without<OrbitCamera>)>,
     mut cameras: Query<
         (
@@ -43,7 +44,11 @@ pub(crate) fn toggle_free(
     >,
 ) {
     let admission = online.world().session_id();
-    let playing = !online.enabled || (admission.is_some() && online.world().connected());
+    // A QoL setting ([`eq_client_core::qol::Fix::FreeCamera`]): off, the key
+    // does nothing and a detached camera returns at once.
+    let offered = options.options.qol.on(eq_client_core::qol::Fix::FreeCamera);
+    let playing =
+        offered && (!online.enabled || (admission.is_some() && online.world().connected()));
     let pressed = keys.pressed(crate::keys::Act::FreeCamera);
     for (entity, mut orbit, mut transform, free) in &mut cameras {
         let expired = free.is_some_and(|free| free.admission != admission || !playing);
@@ -693,6 +698,31 @@ mod tests {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .clear();
+    }
+
+    #[test]
+    fn the_free_camera_setting_off_leaves_the_key_dead_and_returns_a_detached_camera() {
+        let (mut app, camera, _) = free_app();
+        press(&mut app, KeyCode::F9);
+        assert!(app.world().get::<FreeCamera>(camera).is_some());
+        app.world_mut()
+            .resource_mut::<options::OptionsState>()
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::FreeCamera, false);
+        app.update();
+        assert!(app.world().get::<FreeCamera>(camera).is_none());
+        let before = *app.world().get::<Transform>(camera).unwrap();
+        press(&mut app, KeyCode::F9);
+        assert!(app.world().get::<FreeCamera>(camera).is_none());
+        press(&mut app, KeyCode::KeyW);
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .translation
+                .abs_diff_eq(before.translation, 1e-5)
+        );
     }
 
     #[test]

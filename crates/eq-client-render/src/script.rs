@@ -523,7 +523,15 @@ type Pointers<'w, 's> = Query<'w, 's, &'static mut bevy::ui::RelativeCursorPosit
 
 /// Every UI node's display and parent: a closed window is only left out of
 /// the layout, so its buttons keep their visibility.
-type Layout<'w, 's> = Query<'w, 's, (&'static Node, Option<&'static ChildOf>)>;
+type Layout<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Node,
+        Option<&'static ChildOf>,
+        Has<super::windows::menu::ScriptReach>,
+    ),
+>;
 
 type Observed<'w> = (
     Res<'w, super::hud::HudState>,
@@ -2165,8 +2173,9 @@ fn press(
 /// to reach it.
 fn displayed(entity: Entity, layout: &Layout) -> bool {
     let mut next = Some(entity);
-    while let Some((node, parent)) = next.and_then(|entity| layout.get(entity).ok()) {
-        if node.display == Display::None {
+    while let Some((node, parent, reach)) = next.and_then(|entity| layout.get(entity).ok()) {
+        // The EQ menu's closed panel still lets a script press its entries.
+        if node.display == Display::None && !reach {
             return false;
         }
         next = parent.map(ChildOf::parent);

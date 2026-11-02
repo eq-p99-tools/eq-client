@@ -81,6 +81,11 @@ pub enum Fix {
     /// off, the camera keeps to the program's limit. Its height above the
     /// player stays the program's either way. Adam's choice (11-01).
     LongChaseCamera,
+    /// Offers the free camera: a key (F9 by default) detaches the camera from
+    /// the character to fly it anywhere, through walls and terrain, until the
+    /// key returns it; the character never moves and nothing is sent. The
+    /// official client has no such camera. Adam's choice (11-01).
+    FreeCamera,
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
     MapEverywhere,
@@ -119,7 +124,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -128,6 +133,7 @@ impl Fix {
         Self::TakeEnvironmentalDamage,
         Self::CorpsesAlongGround,
         Self::LongChaseCamera,
+        Self::FreeCamera,
         Self::MapEverywhere,
         Self::FrameCap,
         Self::GreyedControls,
@@ -154,6 +160,7 @@ impl Fix {
             Self::TakeEnvironmentalDamage => "take_environmental_damage",
             Self::CorpsesAlongGround => "corpses_along_ground",
             Self::LongChaseCamera => "long_chase_camera",
+            Self::FreeCamera => "free_camera",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -184,6 +191,7 @@ impl Fix {
             Self::TakeEnvironmentalDamage => "Take Environmental Damage (unsafe)",
             Self::CorpsesAlongGround => "Corpses Lie Along the Ground",
             Self::LongChaseCamera => "Long Chase Camera",
+            Self::FreeCamera => "Free Camera",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -226,6 +234,9 @@ impl Fix {
             Self::LongChaseCamera => {
                 "Let the mouse wheel zoom the chase camera out far past the 200 units the Titanium client allows. Turn it off to keep the Titanium client's limit."
             }
+            Self::FreeCamera => {
+                "Let the Toggle Free Camera key detach the camera from your character and fly it anywhere until the key returns it. Your character never moves. Turn it off to keep the camera on your character."
+            }
             Self::FrameCap => {
                 "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
             }
@@ -261,6 +272,7 @@ impl Fix {
             | Self::FlashOnTells
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
+            | Self::FreeCamera
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -290,6 +302,7 @@ impl Fix {
             | Self::ShowTimesInChat
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
+            | Self::FreeCamera
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -336,7 +349,8 @@ impl Fix {
             | Self::FlashOnTells
             | Self::TakeEnvironmentalDamage
             | Self::CorpsesAlongGround
-            | Self::LongChaseCamera => Availability::Setting { default: true },
+            | Self::LongChaseCamera
+            | Self::FreeCamera => Availability::Setting { default: true },
             Self::HiddenWindows | Self::ShowTimesInChat => Availability::Setting { default: false },
             Self::MapEverywhere
             | Self::FrameCap
@@ -471,7 +485,8 @@ mod tests {
                 Fix::FlashOnTells,
                 Fix::TakeEnvironmentalDamage,
                 Fix::CorpsesAlongGround,
-                Fix::LongChaseCamera
+                Fix::LongChaseCamera,
+                Fix::FreeCamera
             ]
         );
         // A fix that is always on stays on whatever is asked.
