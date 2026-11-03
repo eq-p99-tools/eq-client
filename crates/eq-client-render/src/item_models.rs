@@ -130,6 +130,7 @@ fn build(model: eq_client_assets::items::ItemModel, (images, meshes, materials):
         // start: data moved to the render world doesn't come back.
         primitives: super::create_render_primitives(
             model.primitives,
+            &[],
             &textures,
             meshes,
             materials,

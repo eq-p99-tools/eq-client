@@ -278,6 +278,7 @@ pub(super) fn prepare(
             .iter()
             .map(|index| asset.primitives[*index].clone())
             .collect(),
+        &[],
         &textures,
         meshes,
         materials,

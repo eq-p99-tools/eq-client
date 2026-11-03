@@ -86,7 +86,12 @@ fn words(words: &[u32]) -> Vec<u8> {
 
 /// A 0x30 material with no texture and the given render method.
 pub(crate) fn material(name: i32, render_method: u32) -> Vec<u8> {
-    let mut body = words(&[name.cast_unsigned(), 0, render_method, 0]);
+    material_with_flags(name, render_method, 0)
+}
+
+/// A material whose authored flags are independent of its render method.
+pub(crate) fn material_with_flags(name: i32, render_method: u32, flags: u32) -> Vec<u8> {
+    let mut body = words(&[name.cast_unsigned(), flags, render_method, 0]);
     body.extend(1.0_f32.to_le_bytes());
     body.extend(1.0_f32.to_le_bytes());
     body.extend(0_u32.to_le_bytes());

@@ -5,6 +5,8 @@ use theme::Size;
 
 mod camera;
 mod gpu_assets;
+#[cfg(test)]
+mod object_material_tests;
 mod scene_collision;
 mod spell_provider;
 mod static_batch;
@@ -662,11 +664,13 @@ fn spawn_static_zone(
         .map(|model| {
             let drawn: Vec<_> = model
                 .primitives
-                .into_iter()
-                .filter(gpu_assets::drawn)
+                .iter()
+                .filter(|primitive| gpu_assets::drawn(primitive))
+                .cloned()
                 .collect();
             let primitives = create_render_primitives(
-                drawn.clone(),
+                model.primitives,
+                &model.materials,
                 &texture_images,
                 meshes,
                 materials,
@@ -700,6 +704,7 @@ fn spawn_static_zone(
             })
             .collect::<Vec<_>>(),
     );
+    let mut mirrored_materials = std::collections::HashMap::new();
     commands.spawn_batch(
         batched
             .apart
@@ -707,9 +712,15 @@ fn spawn_static_zone(
             .map(|(object, primitive)| {
                 let object = &zone.objects[object];
                 let (mesh, material) = models[object.model][primitive].clone();
+                let transform = object_transform(object);
+                let material = if transform.to_matrix().determinant() < 0.0 {
+                    gpu_assets::mirrored_material(&material, materials, &mut mirrored_materials)
+                } else {
+                    material
+                };
                 (
                     SceneEntity,
-                    object_transform(object),
+                    transform,
                     Mesh3d(mesh),
                     MeshMaterial3d(material),
                 )

@@ -24,6 +24,20 @@ a frame is missing, a bitmap reference contains multiple image layers, or
 the texture specifies a current frame that the pinned parser cannot retain.
 It does not manufacture a rate or flatten image layers into animation.
 
+## Placed object materials
+
+Static and rest-posed hierarchical object meshes retain each material's
+authored sidedness independently of its texture and alpha mode. Empty draw
+calls do not shift that metadata. Missing material metadata keeps the previous
+two-sided fallback; character and item rendering retain that fallback too.
+
+Opaque and masked placements keep the batching path's existing correction
+for mirrored triangle winding. Blended and additive placements remain separate
+for transparency sorting. A reflected instance of a one-sided material uses a
+shared material variant with the opposite cull face, without changing the
+original material, its alpha mode or its geometry. Explicit two-sided
+materials stay two-sided. Collision and object animation are unchanged.
+
 ## Evidence and limits
 
 - Sidedness and frame layout are source-derived from libeq at
