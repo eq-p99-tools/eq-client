@@ -17,6 +17,14 @@ impl ClientWorld {
         self.speed_input_revision
     }
 
+    /// The local session's receipt for ready inputs in this admission/revision.
+    /// It does not grant movement. Frontends must match the exact posted report
+    /// identity and inputs; requirements, withdrawal and resets invalidate it.
+    #[must_use]
+    pub const fn accepted_speed_inputs(&self) -> Option<crate::SpeedInputAcceptance> {
+        self.accepted_speed_inputs
+    }
+
     /// Complete carried load, in tenths. Unknown inventory/coins never become zero.
     /// Predictions are usable only when they preserve the authoritative item weight.
     ///

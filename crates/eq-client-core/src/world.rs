@@ -264,6 +264,7 @@ pub struct ClientWorld {
     target: Target,
     motion: Option<MotionGrant>,
     speed_input_revision: Option<u64>,
+    accepted_speed_inputs: Option<crate::SpeedInputAcceptance>,
     camp: Option<Camp>,
     /// Where the camp the player last asked for ends, until the session
     /// says it began, or it ends.
@@ -566,6 +567,17 @@ impl ClientWorld {
             WorldEvent::SpeedInputsRequired { session_id, revision } => {
                 if self.session_id == Some(*session_id) {
                     self.speed_input_revision = Some(*revision);
+                    self.accepted_speed_inputs = None;
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::SpeedInputsAccepted(accepted) => {
+                if self.in_world()
+                    && self.session_id == Some(accepted.session_id)
+                    && self.speed_input_revision == Some(accepted.revision)
+                {
+                    self.accepted_speed_inputs = Some(*accepted);
                 } else {
                     news.ignored = true;
                 }
@@ -1172,6 +1184,7 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        self.accepted_speed_inputs = None;
         // A refused transfer resumes this same admission. Retain its revision
         // while suspended so later input changes can still be reported.
         if !matches!(

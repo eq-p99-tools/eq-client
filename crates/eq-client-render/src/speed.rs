@@ -212,6 +212,29 @@ fn inputs(world: &ClientWorld, spells: &crate::spellbook::SpellNames) -> SpeedIn
     }
 }
 
+/// Explain the actual calculation failure without changing its prerequisites.
+/// A complete snapshot can still lack affecting item/spell details, which a
+/// later server report does not necessarily repair. Cursor receipt matters;
+/// knowledge of the bank balance does not.
+fn readiness_reason(world: &ClientWorld, reason: Missing) -> &'static str {
+    match reason {
+        Missing::Attributes => "Movement paused: waiting for character information.",
+        Missing::Inventory if !world.inventory().received() || world.inventory().stale() => {
+            "Movement paused: waiting for inventory information."
+        }
+        Missing::Inventory => "Movement paused: item details are unavailable.",
+        Missing::Coins if world.coins().is_none() => {
+            "Movement paused: waiting for carried coin information."
+        }
+        Missing::Coins => "Movement paused: waiting for cursor coin information.",
+        Missing::Prediction => "Movement paused: waiting for item changes to be confirmed.",
+        Missing::Effects if world.buffs().slots().is_none() => {
+            "Movement paused: waiting for buff information."
+        }
+        Missing::Effects => "Movement paused: spell or item effect details are unavailable.",
+    }
+}
+
 /// A displayable load only when its inputs are established.
 pub(crate) fn load(
     world: &ClientWorld,
@@ -223,34 +246,108 @@ pub(crate) fn load(
     }
 }
 
-/// Respond to each session revision and every local mechanics/state change.
-/// A full queue retries; absence never leaves a previous numeric grant in place.
+/// Automatic report identity and queue retry state for the current admission.
+#[derive(Default)]
+pub(crate) struct Reports {
+    next_id: u64,
+    current: Option<Report>,
+}
+
+/// One logical report, retained across queue retries. Its id also distinguishes
+/// recovery to identical values from an earlier report still in flight.
+struct Report {
+    session_id: u64,
+    revision: u64,
+    id: u64,
+    state: SpeedInputState,
+    posted: bool,
+}
+
+impl Reports {
+    fn prepare(&mut self, session_id: u64, revision: u64, state: SpeedInputState) -> &mut Report {
+        if self.current.as_ref().is_none_or(|report| {
+            (report.session_id, report.revision, report.state) != (session_id, revision, state)
+        }) {
+            self.next_id = self.next_id.wrapping_add(1);
+            self.current = Some(Report {
+                session_id,
+                revision,
+                id: self.next_id,
+                state,
+                posted: false,
+            });
+        }
+        self.current.as_mut().expect("current report was prepared")
+    }
+}
+
+impl Report {
+    /// A receipt can clear only its exact posted ready report. An old cached or
+    /// in-flight receipt cannot clear a replacement wait. Withdrawal invalidates
+    /// the receipt even if its inputs are unchanged.
+    fn granted(&self, world: &ClientWorld) -> bool {
+        let (true, SpeedInputState::Ready(inputs), Some(accepted), Some(motion)) = (
+            self.posted,
+            self.state,
+            world.accepted_speed_inputs(),
+            world.motion(),
+        ) else {
+            return false;
+        };
+        accepted.granted
+            && (
+                accepted.session_id,
+                accepted.revision,
+                accepted.report_id,
+                accepted.inputs,
+            ) == (self.session_id, self.revision, self.id, inputs)
+            && motion
+                .units_per_second
+                .is_some_and(|speed| speed.is_finite() && speed > 0.0)
+    }
+}
+
+/// Recalculate, show the current prerequisite, and report through the normal
+/// outbox. Only the session's exact accepted positive grant clears the wait.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn report(
     online: Res<OnlineState>,
     outbox: Res<Outbox>,
     spells: Res<crate::spellbook::SpellNames>,
-    mut sent: Local<Option<(u64, u64, SpeedInputState)>>,
+    mut notices: ResMut<crate::notices::Lines>,
+    mut reports: Local<Reports>,
 ) {
     let world = online.world();
     let (Some(session_id), Some(revision)) = (world.session_id(), world.speed_input_revision())
     else {
-        *sent = None;
+        reports.current = None;
+        notices.movement.set("");
         return;
     };
-    let state = inputs(world, &spells);
-    if *sent == Some((session_id, revision, state)) {
+    if !online.enabled || !online.in_world() {
+        reports.current = None;
+        notices.movement.set("");
         return;
     }
-    if outbox.tell(
-        world,
-        ClientCommand::SpeedInputs {
-            session_id,
-            revision,
-            state,
-        },
-    ) {
-        *sent = Some((session_id, revision, state));
+    let state = inputs(world, &spells);
+    let report = reports.prepare(session_id, revision, state);
+    // The reason can change within one unavailable category (for example,
+    // purse receipt leaves only cursor coins missing), even with no new report.
+    notices.movement.set(match state {
+        SpeedInputState::Unavailable(reason) => readiness_reason(world, reason),
+        SpeedInputState::Ready(_) if report.granted(world) => "",
+        SpeedInputState::Ready(_) => "Movement paused: waiting for movement to be ready.",
+    });
+    if !report.posted {
+        report.posted = outbox.tell(
+            world,
+            ClientCommand::SpeedInputs {
+                session_id,
+                revision,
+                report_id: report.id,
+                state,
+            },
+        );
     }
 }
 

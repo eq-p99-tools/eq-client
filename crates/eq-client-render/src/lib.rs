@@ -919,7 +919,7 @@ fn update_hud(
     else {
         return;
     };
-    let mut lines = vec![notices.status.text().to_owned()];
+    let mut lines = vec![notices.hud_status().to_owned()];
     if !free.is_empty() {
         lines.push(map.named(keys::Act::FreeCamera, "Free camera - return to character"));
     }
@@ -1082,6 +1082,68 @@ mod tests {
         let (text, visibility) = shown(&mut app);
         assert!(text.starts_with("qeytoqrg\n"), "{text}");
         assert_eq!(visibility, Visibility::Inherited);
+    }
+
+    #[test]
+    fn movement_readiness_uses_the_hud_without_replacing_session_status() {
+        use super::*;
+        let mut app = testing::app();
+        app.insert_resource(SceneInfo {
+            zone_name: "qeytoqrg".into(),
+        })
+        .add_systems(Update, update_hud);
+        app.world_mut().spawn((Player, Transform::default()));
+        let status = app
+            .world_mut()
+            .spawn((HudText, Text::new(""), Visibility::Hidden))
+            .id();
+        let shown = |app: &mut App| {
+            app.update();
+            (
+                app.world().get::<Text>(status).unwrap().0.clone(),
+                *app.world().get::<Visibility>(status).unwrap(),
+            )
+        };
+        let waiting = "Movement paused: waiting for character information.";
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .movement
+            .set(waiting);
+        // Readiness is visible with the normal HUD, without debug readings.
+        assert_eq!(shown(&mut app), (waiting.into(), Visibility::Inherited));
+        for session_status in ["Zoning", "Dead - awaiting respawn", "Disconnected"] {
+            app.world_mut()
+                .resource_mut::<notices::Lines>()
+                .status
+                .set(session_status);
+            assert_eq!(
+                shown(&mut app),
+                (session_status.into(), Visibility::Inherited)
+            );
+            // Clearing readiness never clears a notice written by the session.
+            app.world_mut()
+                .resource_mut::<notices::Lines>()
+                .movement
+                .set("");
+            assert_eq!(
+                shown(&mut app),
+                (session_status.into(), Visibility::Inherited)
+            );
+            app.world_mut()
+                .resource_mut::<notices::Lines>()
+                .movement
+                .set(waiting);
+        }
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .status
+            .set("");
+        assert_eq!(shown(&mut app), (waiting.into(), Visibility::Inherited));
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .movement
+            .set("");
+        assert_eq!(shown(&mut app), (String::new(), Visibility::Hidden));
     }
 
     #[test]

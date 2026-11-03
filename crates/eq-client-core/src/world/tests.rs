@@ -493,6 +493,84 @@ fn a_transfer_holds_the_player_and_a_refusal_lets_them_go() {
 }
 
 #[test]
+fn input_acceptance_is_current_and_never_supplies_movement_permission() {
+    let mut world = admitted();
+    let accepted = crate::SpeedInputAcceptance {
+        session_id: 1,
+        revision: 7,
+        report_id: 19,
+        inputs: crate::SpeedInputs {
+            rate: 0,
+            weight: 0,
+            capacity: 90,
+        },
+        granted: true,
+    };
+    game(
+        &mut world,
+        WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 7,
+        },
+    );
+    for stale in [
+        crate::SpeedInputAcceptance {
+            session_id: 2,
+            ..accepted
+        },
+        crate::SpeedInputAcceptance {
+            revision: 6,
+            ..accepted
+        },
+    ] {
+        assert!(game(&mut world, WorldEvent::SpeedInputsAccepted(stale)).ignored);
+        assert_eq!(world.accepted_speed_inputs(), None);
+    }
+    let changes = game(&mut world, WorldEvent::SpeedInputsAccepted(accepted));
+    assert!(!changes.motion);
+    assert_eq!(
+        world.motion(),
+        None,
+        "a receipt never creates a movement grant"
+    );
+    assert_eq!(world.accepted_speed_inputs(), Some(accepted));
+    game(
+        &mut world,
+        WorldEvent::MotionState {
+            session_id: 1,
+            units_per_second: None,
+            backward_units_per_second: None,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            falls: true,
+        },
+    );
+    assert_eq!(world.accepted_speed_inputs(), None);
+    game(&mut world, WorldEvent::SpeedInputsAccepted(accepted));
+    game(
+        &mut world,
+        WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 8,
+        },
+    );
+    assert_eq!(world.accepted_speed_inputs(), None);
+    assert!(game(&mut world, WorldEvent::SpeedInputsAccepted(accepted)).ignored);
+    let current = crate::SpeedInputAcceptance {
+        revision: 8,
+        ..accepted
+    };
+    game(&mut world, WorldEvent::SpeedInputsAccepted(current));
+    connection(&mut world, false, false);
+    assert_eq!(world.accepted_speed_inputs(), None);
+    assert!(game(&mut world, WorldEvent::SpeedInputsAccepted(current)).ignored);
+    game(&mut world, entered(2));
+    connection(&mut world, true, false);
+    assert!(game(&mut world, WorldEvent::SpeedInputsAccepted(current)).ignored);
+    assert_eq!(world.accepted_speed_inputs(), None);
+}
+
+#[test]
 fn a_dropped_connection_keeps_the_zone_until_the_session_ends() {
     let mut world = admitted();
     let changes = connection(&mut world, false, false);
