@@ -82,9 +82,9 @@ uncertain move. No application-level retry silently repeats inventory actions.
 
 The spellbook supports scribing from a cursor scroll, memorizing into eight gems,
 and forgetting. Moving book entries and deleting spells are separate capabilities:
-P99 offers moving entries but not deleting them; EQEmu offers both. TAKP's policy
-offers basic spellbook operations but not those edits. Quarm's policy does not
-offer casting or spellbook commands.
+P99 offers moving entries but not deleting them; EQEmu offers both. TAKP and
+Quarm offer casting and basic spellbook operations but not those edits. Quarm's
+spell actions are source-checked and tested offline; public validation is pending.
 
 Select a spell and destination gem to memorize; click a populated gem or use its
 binding to cast. Shift-click forgetting is separate from casting. Casts use the
@@ -109,10 +109,9 @@ input to presentation and validation, not authority over the server.
 Titanium spell-bar refreshes drive local recovery/recast displays; admission can
 restore remaining per-gem timers. A refreshed gem is not proof that the spell
 landed. Missing timing data stays unavailable rather than inventing a countdown.
-Linked reuse groups remain incomplete. Quarm saved gem cooldowns are decoded,
-but its casting and spellbook actions remain disabled by policy. Duplicate-cast
-guards and item-use click guards are not a statement about server cooldown
-enforcement.
+Linked reuse groups remain incomplete. Quarm saved gem cooldowns are decoded.
+Duplicate-cast guards and item-use click guards are not a statement about
+server cooldown enforcement.
 
 Buff icons and resource calculations share the core buff tracker: explicit slot
 updates/removals take priority over locally inferred unslotted effects. Known

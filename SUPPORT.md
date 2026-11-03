@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `2e104165490d36cf65e5fc7b43b2d7053c30452f`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/2e104165490d36cf65e5fc7b43b2d7053c30452f/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `182e99dd2b40e3e58feaacdbff415f9797def76d`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/182e99dd2b40e3e58feaacdbff415f9797def76d/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -29,7 +29,7 @@ certification, and individual operations still validate their prerequisites.
 | Movement and falling | Yes | Yes | Yes | Yes |
 | Jumping | Yes | Yes | Yes | Yes |
 | Sitting, standing and ducking | Yes | Yes | Yes | Yes |
-| Casting and basic spellbook | Yes | Yes | No | Yes |
+| Casting and basic spellbook | Yes | Yes | Yes | Yes |
 | Move / delete book entries | Yes / No | Yes / Yes | No / No | No / No |
 | Inventory, trading and giving | Yes | Yes | No | Yes |
 | Targeting | Yes | Yes | Yes | Yes |
@@ -43,21 +43,21 @@ certification, and individual operations still validate their prerequisites.
 | Character creation UI and script | Yes | Yes | Yes | Yes |
 
 Quarm additionally offers ground movement, jumps, falls, posture, camping and
-zone transfers through the shared EQMac path, plus target selection/clearing.
-Its authoritative inventory and
-coins are observed for carried weight; item/coin/merchant actions remain disabled.
+zone transfers through the shared EQMac path, plus target selection/clearing,
+gem and item-effect casting, scribing, memorizing and forgetting.
+Its authoritative inventory and coins are observed for carried weight and item
+clicks; item/coin moves and merchant actions remain disabled.
 Posture controls use `Capability::Posture`, independently of `Moving`. The newly
 enabled public-server paths are source/capture-backed and regression-tested;
 their live validation is tracked separately. Swimming, boats and client-reported
 bleed-out remain gaps. P99 still does not offer deletion of spellbook entries.
 
-See the networking [P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/2e104165490d36cf65e5fc7b43b2d7053c30452f/docs/public-server-gaps.md)
+See the networking [P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/182e99dd2b40e3e58feaacdbff415f9797def76d/docs/public-server-gaps.md)
 for missing, disabled, unverified and server-restricted behavior.
 
 ### Public-parity checks, 2026-11-02
 
-Against networking `d713d0b4` and the desktop changes based on `9be679a` (the
-current dependency pin adds only the networking report update):
+Against networking `d713d0b4` and the desktop changes based on `9be679a`:
 
 - Local TAKP with Quarm policy: character selection and a rendered appearance
   preview passed. Further local testing was interrupted by Docker shutdown.
@@ -79,6 +79,14 @@ Native Windows formatting, strict workspace/all-target Clippy and 1,299 tests
 passed. The 32 ignored asset/live probes were not counted as passes. The
 networking stack separately passed 791 tests and warnings-as-errors API docs.
 Private scripts, screenshots, logs and credentials are not published.
+
+The subsequent networking pin `182e99dd` adds Quarm casting and basic spellbook
+support. All 797 networking tests pass, including six new synthetic Quarm
+assembly checks, alongside strict Clippy, formatting and API docs. These new
+spell actions have not been tested on public Quarm; the earlier session does
+not validate them. The desktop was rebuilt and rechecked against this exact pin:
+1,299 tests passed (32 ignored probes excluded), alongside strict Clippy and
+formatting.
 
 Maps, free camera, key editing, chat-link presentation and the script editor are
 local client features. The map shows received entity positions on every server
