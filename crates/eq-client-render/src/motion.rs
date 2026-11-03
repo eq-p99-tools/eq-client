@@ -771,7 +771,7 @@ pub(super) fn input(
         debug!(
             fall_distance = fall.fall_distance,
             impact_speed = fall.impact_speed,
-            carried_weight = online.world().carried_weight(),
+            carried_weight = online.world().fall_weight(),
             damage = cost.damage,
             safe_fall = cost.safe_fall,
             "Landing"
@@ -930,13 +930,14 @@ fn post_posture(
     })
 }
 
-/// Whether a jump now comes sooner after the last than the installed
-/// client allows.
+/// Whether a jump now comes no later after the last take-off than the
+/// installed client's spacing, which the programs refuse (they take a jump
+/// only when more than the spacing has passed).
 fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -> bool {
     client
         .jump_spacing()
         .zip(last)
-        .is_some_and(|(spacing, last)| now.saturating_duration_since(last) < spacing)
+        .is_some_and(|(spacing, last)| now.saturating_duration_since(last) <= spacing)
 }
 
 /// What a landing with the feet here costs the player: nothing in water or
@@ -962,7 +963,7 @@ fn landing_cost(
     match client.falls() {
         Some(falls) => falls.landing_cost(FallLanding {
             impact_speed: landing.impact_speed,
-            carried_weight: world.carried_weight(),
+            carried_weight: world.fall_weight(),
             safe_fall: skill,
             safe_fall_ranks: 0,
             zone: eq_client_core::zones::number(world.zone()).unwrap_or(0),
@@ -1835,12 +1836,12 @@ mod tests {
         );
         let now = Instant::now();
         let ago = |ms| now.checked_sub(Duration::from_millis(ms));
-        assert!(jump_too_soon(InstalledClient::Titanium, ago(499), now));
-        assert!(!jump_too_soon(InstalledClient::Titanium, ago(500), now));
+        assert!(jump_too_soon(InstalledClient::Titanium, ago(1500), now));
+        assert!(!jump_too_soon(InstalledClient::Titanium, ago(1501), now));
         assert!(!jump_too_soon(InstalledClient::Titanium, None, now));
         // The Mac-era client waits 1.5 s.
-        assert!(jump_too_soon(InstalledClient::EqMac, ago(1499), now));
-        assert!(!jump_too_soon(InstalledClient::EqMac, ago(1500), now));
+        assert!(jump_too_soon(InstalledClient::EqMac, ago(1500), now));
+        assert!(!jump_too_soon(InstalledClient::EqMac, ago(1501), now));
     }
 
     /// The app of [`app`] for this installed client, the player standing

@@ -50,6 +50,21 @@ impl ClientWorld {
             })
     }
 
+    /// The weight a landing's cost takes, in the program's units: the
+    /// programs' sum ([`Self::movement_weight`]; their fall cost reads the
+    /// same weight as their speeds, Titanium's from the field the stat
+    /// recompute 0x4212b3 fills with 0x41bb06 and `EQMac`'s fall 0x4bfe16
+    /// calling 0x4bbb78) where it can be established, else this client's
+    /// own larger reading ([`Self::carried_weight`]), which overstates the
+    /// weight and so the damage: the safe side where the client reports
+    /// its falls.
+    #[must_use]
+    pub fn fall_weight(&self) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        self.movement_weight()
+            .map_or_else(|_| self.carried_weight(), |tenths| tenths as f32 / 10.0)
+    }
+
     /// Changes when the player's skills or their admission are replaced.
     /// Unrelated movement, chat and resource updates leave it unchanged.
     #[must_use]
