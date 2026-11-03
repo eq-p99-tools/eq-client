@@ -79,6 +79,7 @@ fn robe(base: &str, set: u32) -> Option<String> {
 struct MaterialName<'a> {
     model: &'a str,
     part: &'a str,
+    material: &'a str,
     piece: &'a str,
 }
 
@@ -91,6 +92,7 @@ fn parse(name: &str) -> Option<MaterialName<'_>> {
     Some(MaterialName {
         model: &stem[..3],
         part: &stem[3..5],
+        material: &stem[5..7],
         piece: &stem[7..],
     })
 }
@@ -111,9 +113,11 @@ fn slot(part: &str) -> Option<TextureSlot> {
 
 /// The material a primitive draws with for this appearance, from the one it
 /// uses in the base look. Armor swaps the two material digits (`HUMCH0201_MDF`
-/// for a chain tunic); a head swaps its face digit (`HUMHE0031_MDF` for face 3);
-/// a robe swaps its set (`CLK0701_MDF` for robe 13); anything else keeps its
-/// base material.
+/// for a chain tunic); a head in material 00 swaps its face digit
+/// (`HUMHE0031_MDF` for face 3). Other head materials keep their authored
+/// identity. A robe swaps its set (`CLK0701_MDF` for robe 13); anything else
+/// keeps its base material. Use [`material`] to also select a helm texture
+/// where the model supplies one.
 #[must_use]
 pub fn dressed(base: &str, appearance: &Appearance) -> String {
     let base = base.to_ascii_uppercase();
@@ -124,11 +128,12 @@ pub fn dressed(base: &str, appearance: &Appearance) -> String {
         return base;
     };
     match slot(name.part) {
-        Some(TextureSlot::Head) => {
+        Some(TextureSlot::Head) if name.material == "00" => {
             // Face pieces: the first digit is the face, the second the piece.
             let piece = &name.piece[1..];
             format!("{}HE00{}{piece}_MDF", name.model, appearance.face.min(9))
         }
+        Some(TextureSlot::Head) => base,
         Some(slot) if DRAWN_MATERIALS.contains(&appearance.material(slot)) => format!(
             "{}{}{:02}{}_MDF",
             name.model,
@@ -137,6 +142,39 @@ pub fn dressed(base: &str, appearance: &Appearance) -> String {
             name.piece
         ),
         _ => base,
+    }
+}
+
+/// Selects an available material for a primitive. A helmed head can supply
+/// its own `HE` texture family, using the head slot's material number and
+/// the face piece's final digit. Prefer that family when present; models
+/// with separately named helmet surfaces still select the exposed face.
+/// Missing replacements keep the original material.
+#[must_use]
+pub fn material(
+    base: &str,
+    helm: bool,
+    appearance: &Appearance,
+    has_material: impl Fn(&str) -> bool,
+) -> String {
+    let base = base.to_ascii_uppercase();
+    let head = appearance.material(TextureSlot::Head);
+    if helm
+        && DRAWN_MATERIALS.contains(&head)
+        && let Some(name) = parse(&base)
+        && name.part == "HE"
+        && name.material == "00"
+    {
+        let helmet = format!("{}HE{head:02}0{}_MDF", name.model, &name.piece[1..]);
+        if has_material(&helmet) {
+            return helmet;
+        }
+    }
+    let dressed = dressed(&base, appearance);
+    if has_material(&dressed) {
+        dressed
+    } else {
+        base
     }
 }
 
@@ -230,6 +268,58 @@ mod tests {
         // A helm does not change the face texture.
         look.materials[TextureSlot::Head.index()] = 2;
         assert_eq!(dressed("HUMHE0002_MDF", &look), "HUMHE0032_MDF");
+    }
+
+    #[test]
+    fn authored_head_materials_are_not_faces() {
+        let mut look = wearing(TextureSlot::Head, 3);
+        for face in [0, 3, u8::MAX] {
+            look.face = face;
+            for name in ["SYNHE0101_MDF", "SYNHE0202_MDF", "SYNHE0401_MDF"] {
+                assert_eq!(dressed(name, &look), name);
+                assert_eq!(material(name, true, &look, |_| true), name);
+            }
+        }
+        assert_eq!(dressed("synhe0101_mdf", &look), "SYNHE0101_MDF");
+    }
+
+    #[test]
+    fn a_helmed_piece_prefers_its_available_head_texture_family() {
+        let mut look = wearing(TextureSlot::Head, 1);
+        look.face = 3;
+        let catalog = ["SYNHE0101_MDF", "SYNHE0031_MDF", "SYNHE0032_MDF"];
+        let has = |name: &str| catalog.contains(&name);
+        assert_eq!(material("SYNHE0001_MDF", true, &look, has), "SYNHE0101_MDF");
+        // Hiding the helm keeps face selection even if the helm texture exists.
+        assert_eq!(
+            material("SYNHE0001_MDF", false, &look, has),
+            "SYNHE0031_MDF"
+        );
+        // A separate face surface still follows the face when no helm family
+        // exists for its piece.
+        assert_eq!(material("SYNHE0002_MDF", true, &look, has), "SYNHE0032_MDF");
+        look.materials[TextureSlot::Head.index()] = 2;
+        assert_eq!(
+            material("SYNHE0001_MDF", true, &look, |name| name == "SYNHE0201_MDF"),
+            "SYNHE0201_MDF"
+        );
+    }
+
+    #[test]
+    fn missing_helm_textures_keep_exposed_faces_and_missing_faces_keep_the_base() {
+        let mut look = wearing(TextureSlot::Head, 3);
+        look.face = 3;
+        let has = |name: &str| name == "SYNHE0031_MDF";
+        assert_eq!(material("SYNHE0001_MDF", true, &look, has), "SYNHE0031_MDF");
+        assert_eq!(
+            material("synhe0001_mdf", true, &look, |_| false),
+            "SYNHE0001_MDF"
+        );
+        assert_eq!(material("HELM14_MDF", true, &look, has), "HELM14_MDF");
+        for head in [0, 10, 99] {
+            look.materials[TextureSlot::Head.index()] = head;
+            assert_eq!(material("SYNHE0001_MDF", true, &look, has), "SYNHE0031_MDF");
+        }
     }
 
     #[test]
