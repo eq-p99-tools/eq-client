@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add `--spots` to the selection proposal example for explicit full-document
+  output preserving audit headers, comments and existing reviewed rows. Default
+  output remains row snippets; every generated row stays unreviewed.
 - Forward typed local loot results with their original admission, action and
   available creation time. Release only the matching refused opening or item
   request, show its reason once, and retain unlooted rows and authoritative

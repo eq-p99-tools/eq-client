@@ -9,8 +9,11 @@ use glam::Vec3;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+mod document;
+pub use document::rewrite_proposals;
+
 /// The spots file, as built into the client.
-const BUILT_IN: &str = include_str!("../data/select-spots.txt");
+pub const BUILT_IN: &str = include_str!("../data/select-spots.txt");
 
 /// The camera's distance from the character where a spot names none it can
 /// use, in world units.
