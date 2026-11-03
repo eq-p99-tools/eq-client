@@ -411,6 +411,13 @@ fn a_corpse_seen_dying_is_named_as_one_first_seen_dead() {
 #[test]
 fn a_transfer_holds_the_player_and_a_refusal_lets_them_go() {
     let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 7,
+        },
+    );
     let offer = ZoneOffer {
         zone_id: 2,
         instance_id: 0,
@@ -431,6 +438,7 @@ fn a_transfer_holds_the_player_and_a_refusal_lets_them_go() {
     assert!(!game(&mut world, refusal(1)).ignored);
     assert!(world.in_world());
     assert!(world.spawn(5).is_some());
+    assert_eq!(world.speed_input_revision(), Some(7));
 }
 
 #[test]
@@ -1830,6 +1838,7 @@ fn the_player_hears_what_they_could_not_eat_or_drink() {
     use crate::food::{Nourishment, Shortage};
     let mut world = admitted();
     let fed = Nourishment {
+        fatigue: None,
         food: 2500,
         water: 6000,
     };
@@ -4080,6 +4089,37 @@ fn merchant_revisions_include_stock_removal_and_local_closure() {
     assert_eq!(world.merchant_revision(), closed);
     game(&mut world, WorldEvent::Camp(CampStatus::Camped));
     assert!(world.merchant_revision() > closed);
+}
+
+#[test]
+fn movement_weight_requires_cursor_receipt_but_never_a_bank_balance() {
+    let mut world = admitted();
+    game(&mut world, inventory(vec![]));
+    game(&mut world, WorldEvent::Coins(Coins::default()));
+    assert_eq!(
+        world.movement_weight(),
+        Err(crate::SpeedInputUnavailable::Coins)
+    );
+    game(
+        &mut world,
+        WorldEvent::CoinsElsewhere {
+            cursor: coins(0, 0, 0, 8),
+            bank: coins(1000, 1000, 1000, 1000),
+            given: Coins::default(),
+            offered: Coins::default(),
+        },
+    );
+    assert_eq!(world.movement_weight(), Ok(2));
+    // Losing only the irrelevant bank balance must not withdraw a known cursor.
+    world.wallet.bank = None;
+    assert_eq!(world.movement_weight(), Ok(2));
+    game(&mut world, entered(2));
+    game(&mut world, inventory(vec![]));
+    game(&mut world, WorldEvent::Coins(Coins::default()));
+    assert_eq!(
+        world.movement_weight(),
+        Err(crate::SpeedInputUnavailable::Coins)
+    );
 }
 
 #[test]

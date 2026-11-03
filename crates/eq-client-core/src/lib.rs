@@ -53,8 +53,8 @@ pub use eq_network_game::loot;
 pub use eq_network_game::merchant;
 pub use eq_network_game::money;
 pub use eq_network_game::movement::{
-    BackwardCalibration, MotionCalibration, MovementMode, MovementRequest, StrafeCalibration,
-    WalkCalibration,
+    BackwardCalibration, MotionCalibration, MovementMode, MovementRequest, SpeedInputState,
+    SpeedInputUnavailable, SpeedInputs, StrafeCalibration, WalkCalibration,
 };
 pub use eq_network_game::pets;
 pub use eq_network_game::raid;

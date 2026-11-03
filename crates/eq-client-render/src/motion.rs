@@ -465,11 +465,11 @@ pub(super) fn input(
         controls.jump = None;
         controls.facing = None;
     }
-    let Some(_) = controls.speed else {
+    if controls.speed.is_none() && controls.airborne.is_none() {
         controls.held = Some(Held::Withdrawn);
         return;
-    };
-    let focused = keys.focused() && !detached;
+    }
+    let focused = keys.focused() && !detached && controls.speed.is_some();
     if focused && keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
@@ -2737,6 +2737,41 @@ mod tests {
         };
         assert_eq!(request.mode, MovementMode::Fall);
         assert!(request.position.z < 53.0, "{request:?}");
+    }
+
+    #[test]
+    fn withdrawn_player_input_clears_taps_and_autorun_but_keeps_falling() {
+        let (mut app, receiver) = app();
+        let mut state = app.world_mut().resource_mut::<online::OnlineState>();
+        let mut player = state.world().player().unwrap().clone();
+        player.position = world_position([0.0, 53.0, 0.0], 0.0);
+        crate::online::testing::admit(&mut state, 11, player);
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.autorun = true;
+        controls.jump = Some(Instant::now());
+        controls.grant(eq_client_core::world::MotionGrant {
+            units_per_second: None,
+            backward_units_per_second: None,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            falls: true,
+        });
+        assert!(!controls.autorun && controls.jump.is_none());
+        controls.last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(150))
+            .unwrap();
+        app.update();
+        // A withdrawn grant resets the climb advertisement as well as input.
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::ClimbReach { .. })
+        ));
+        let Ok(ClientCommand::Move(request)) = receiver.try_recv() else {
+            panic!("passive fall missing");
+        };
+        assert_eq!(request.mode, MovementMode::Fall);
+        assert!(request.position.x.abs() < f32::EPSILON && request.position.y.abs() < f32::EPSILON);
+        assert!(request.position.z < 53.0);
     }
 
     #[test]

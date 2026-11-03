@@ -263,6 +263,7 @@ pub struct ClientWorld {
     // Until any reset: the target, the motion granted and camping.
     target: Target,
     motion: Option<MotionGrant>,
+    speed_input_revision: Option<u64>,
     camp: Option<Camp>,
     /// Where the camp the player last asked for ends, until the session
     /// says it began, or it ends.
@@ -277,6 +278,8 @@ pub struct ClientWorld {
     inventory: Inventory,
     /// Where the player's coins are, as the session keeps and tells them.
     wallet: crate::money::Wallet,
+    /// Cursor receipt is independent of the bank balance, which is not carried.
+    known_cursor_coins: Option<crate::Coins>,
     /// How fed and watered the player is, as the server last said.
     nourishment: Option<crate::food::Nourishment>,
     casting: Casting,
@@ -559,6 +562,13 @@ impl ClientWorld {
                     player,
                     now,
                 );
+            }
+            WorldEvent::SpeedInputsRequired { session_id, revision } => {
+                if self.session_id == Some(*session_id) {
+                    self.speed_input_revision = Some(*revision);
+                } else {
+                    news.ignored = true;
+                }
             }
             WorldEvent::MotionState {
                 session_id,
@@ -851,6 +861,7 @@ impl ClientWorld {
                 given,
                 offered,
             } => {
+                self.known_cursor_coins = Some(*cursor);
                 let before = self.offering();
                 self.wallet.cursor = *cursor;
                 self.wallet.bank = Some(*bank);
@@ -1149,6 +1160,18 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        // A refused transfer resumes this same admission. Retain its revision
+        // while suspended so later input changes can still be reported.
+        if !matches!(
+            reason,
+            Reset::Zoning { .. }
+                | Reset::Lost {
+                    ended: false,
+                    transferring: true
+                }
+        ) {
+            self.speed_input_revision = None;
+        }
         // Reset invalidates projections even when it retains part of the old world.
         self.skills_revision = self.skills_revision.wrapping_add(1);
         self.training_revision = self.training_revision.wrapping_add(1);
@@ -1165,6 +1188,9 @@ impl ClientWorld {
         match reason {
             Reset::Entered => {
                 self.forget_admission();
+                self.wallet = crate::money::Wallet::default();
+                self.known_cursor_coins = None;
+                self.nourishment = None;
                 // The server sends the inventory again after each admission.
                 self.inventory = Inventory::default();
                 self.spell_book = None;
@@ -1179,6 +1205,7 @@ impl ClientWorld {
                 self.vitals = Vitals::default();
                 self.inventory = Inventory::default();
                 self.wallet = crate::money::Wallet::default();
+                self.known_cursor_coins = None;
                 self.ability_timers.clear();
                 self.offered_abilities = None;
                 self.nourishment = None;

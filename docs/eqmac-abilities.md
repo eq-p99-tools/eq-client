@@ -1,9 +1,10 @@
 # EQMac ability menus and recovery
 
-The client pins networking commit
+Ability support was introduced with networking commit
 [`988e193b368a09d9aeb3f2b7e43857e09b2c61b3`](https://github.com/eq-p99-tools/eq-network/pull/176),
 which adds 15 supported abilities for TAKP and Quarm on top of the spell
-workstream. The existing spell behavior and documentation remain in place.
+workstream. The current combined pin is listed in [support](../SUPPORT.md).
+The existing spell behavior and documentation remain in place.
 
 The ability list uses the networking library's EQMac eligibility rules:
 profile skill sentinels, class requirements and racial Bash exceptions.

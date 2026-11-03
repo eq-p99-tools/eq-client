@@ -15,6 +15,13 @@ steps. The display interpolates accepted movement instead of waiting for each
 remote position update. Speed, elapsed time and admission checks constrain the
 outgoing requests; corrections replace the predicted position.
 
+Movement waits for usable inventory, coin, attribute and buff state. Unknown
+load or effects never become a zero-weight speed grant. Weight-preserving
+ordinary cursor moves can keep movement available; unresolved weight/equipment
+changes withdraw input until recovery. Withdrawal clears autorun, taps and
+queued jumps while supported passive falls continue. The [readiness guide](movement-input-readiness.md)
+records supported calculations, conservative limits and deferred live checks.
+
 Use the current [key bindings](controls.md#keyboard). Autorun stops on the relevant
 movement/posture input or when free camera takes control. Losing focus or typing
 suppresses new movement input; an existing fall continues. The viewer does not
@@ -77,6 +84,14 @@ be predicted, but server corrections override them. Contradictory or unsupported
 updates can mark inventory stale and stop further moves/autoinventory. If the
 server cannot restore a coherent snapshot, reconnect instead of retrying an
 uncertain move. No application-level retry silently repeats inventory actions.
+
+On Quarm, the pacing delay does not confirm an item move: prediction labels and
+origins persist until covering authoritative updates or a full snapshot. A
+contradiction requires a complete snapshot. Quarm item/coin moves and personal
+banking are offered independently of merchants, meals and exchanges, which
+remain disabled. Coin moves use a local ledger because ordinary transfers have
+no acceptance reply; compare authoritative balances after re-admission when
+uncertain, rather than resending a transfer.
 
 ## Spells, buffs and the hotbar
 
