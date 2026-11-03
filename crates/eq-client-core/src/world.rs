@@ -706,6 +706,12 @@ impl ClientWorld {
             WorldEvent::Consideration(consideration) => {
                 news.notices.push(self.zone.consider(consideration));
             }
+            WorldEvent::LootRequest {
+                session_id,
+                created,
+                request,
+                status,
+            } => self.loot_request_result(*session_id, *created, *request, status, news),
             WorldEvent::CombatRequest {
                 session_id, status, ..
             } => {

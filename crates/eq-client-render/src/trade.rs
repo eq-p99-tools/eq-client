@@ -9,7 +9,9 @@ use eq_client_core::{ClientCommand, SpawnKind, inventory::InventoryItem, world::
 
 use super::windows;
 
+mod loot_requests;
 mod merchant;
+use loot_requests::PendingLoot;
 pub(crate) use merchant::{ChosenPicture, MerchantRows, chosen, fill as fill_wares, picture};
 
 /// The NPC class that answers ordinary shop requests; servers ignore other classes.
@@ -32,8 +34,10 @@ pub(super) struct TradeState {
 
 struct LootWindow {
     name: String,
-    /// The corpse's place asked for and not yet answered.
-    pending: Option<u16>,
+    /// The opening action awaiting a local disposition.
+    opening: Option<PendingLoot>,
+    /// The item action awaiting its local disposition or the server's reply.
+    pending: Option<PendingLoot>,
     loot_all: bool,
 }
 
@@ -125,6 +129,7 @@ impl TradeState {
     pub(crate) fn preview(&mut self, corpse: &str, merchant: &str) {
         self.loot = Some(LootWindow {
             name: corpse.into(),
+            opening: None,
             pending: None,
             loot_all: false,
         });
@@ -164,7 +169,7 @@ impl TradeState {
     /// The server answered a request for a place on the corpse.
     pub(super) fn taken(&mut self, place: u16, accepted: bool) {
         if let Some(window) = self.loot.as_mut() {
-            if window.pending == Some(place) {
+            if window.pending.and_then(PendingLoot::place) == Some(place) {
                 window.pending = None;
             }
             if !accepted {
@@ -178,7 +183,7 @@ impl TradeState {
     /// delivery or driving another automatic request.
     pub(super) fn received(&mut self, place: u16) {
         if let Some(window) = self.loot.as_mut() {
-            if window.pending == Some(place) {
+            if window.pending.and_then(PendingLoot::place) == Some(place) {
                 window.pending = None;
             }
             window.loot_all = false;
@@ -363,6 +368,10 @@ pub(super) fn input(
                 online.open_loot(corpse_id);
                 trade.loot = Some(LootWindow {
                     name,
+                    opening: Some(PendingLoot::new(
+                        stamp,
+                        eq_client_core::loot::LootRequest::Open { corpse_id },
+                    )),
                     pending: None,
                     loot_all: false,
                 });
@@ -485,7 +494,15 @@ pub(super) fn input(
                         },
                     )
                 {
-                    window.pending = Some(place);
+                    window.pending = Some(PendingLoot::new(
+                        stamp,
+                        eq_client_core::loot::LootRequest::Item {
+                            corpse_id,
+                            own_id,
+                            place,
+                            auto: true,
+                        },
+                    ));
                 }
             }
             Action::TakeAll => {
@@ -630,7 +647,15 @@ pub(super) fn input(
                 },
             ) && let Some(window) = trade.loot.as_mut()
             {
-                window.pending = Some(place);
+                window.pending = Some(PendingLoot::new(
+                    stamp,
+                    eq_client_core::loot::LootRequest::Item {
+                        corpse_id,
+                        own_id,
+                        place,
+                        auto: true,
+                    },
+                ));
             }
         }
         Some((corpse_id, None))
@@ -941,18 +966,42 @@ mod tests {
     use eq_client_core::{loot::LootUpdate, merchant::MerchantUpdate};
     use std::collections::BTreeMap;
 
+    fn pending(place: u16) -> PendingLoot {
+        PendingLoot::new(
+            crate::outbox::Stamp {
+                session_id: 5,
+                created: std::time::Instant::now(),
+            },
+            eq_client_core::loot::LootRequest::Item {
+                corpse_id: 9,
+                own_id: 7,
+                place,
+                auto: true,
+            },
+        )
+    }
+
     #[test]
     fn loot_receipt_releases_only_matching_manual_pending_and_stops_auto() {
         let mut trade = TradeState {
             loot: Some(LootWindow {
                 name: "Corpse".into(),
-                pending: Some(0),
+                opening: None,
+                pending: Some(pending(0)),
                 loot_all: true,
             }),
             ..TradeState::default()
         };
         trade.received(1);
-        assert_eq!(trade.loot.as_ref().unwrap().pending, Some(0));
+        assert_eq!(
+            trade
+                .loot
+                .as_ref()
+                .unwrap()
+                .pending
+                .and_then(PendingLoot::place),
+            Some(0)
+        );
         assert!(!trade.loot.as_ref().unwrap().loot_all);
         trade.received(0);
         assert_eq!(trade.loot.as_ref().unwrap().pending, None);
@@ -988,6 +1037,7 @@ mod tests {
         app.insert_resource(TradeState {
             loot: Some(LootWindow {
                 name: "Corpse".into(),
+                opening: None,
                 pending: None,
                 loot_all: false,
             }),
@@ -1054,7 +1104,8 @@ mod tests {
                 .loot
                 .as_ref()
                 .unwrap()
-                .pending,
+                .pending
+                .and_then(PendingLoot::place),
             Some(0)
         );
         assert!(receiver.try_recv().is_err());
@@ -1101,6 +1152,7 @@ mod tests {
         app.insert_resource(TradeState {
             loot: Some(LootWindow {
                 name: "Corpse".into(),
+                opening: None,
                 pending: None,
                 loot_all: false,
             }),
@@ -1316,13 +1368,22 @@ mod tests {
         let mut trade = TradeState {
             loot: Some(LootWindow {
                 name: "a rat".into(),
-                pending: Some(0),
+                opening: None,
+                pending: Some(pending(0)),
                 loot_all: true,
             }),
             ..TradeState::default()
         };
         trade.taken(1, true);
-        assert_eq!(trade.loot.as_ref().unwrap().pending, Some(0));
+        assert_eq!(
+            trade
+                .loot
+                .as_ref()
+                .unwrap()
+                .pending
+                .and_then(PendingLoot::place),
+            Some(0)
+        );
         trade.taken(0, false);
         let window = trade.loot.as_ref().unwrap();
         assert_eq!(window.pending, None);
@@ -1376,6 +1437,7 @@ mod tests {
             .insert_resource(TradeState {
                 loot: Some(LootWindow {
                     name: "a rat".into(),
+                    opening: None,
                     pending: None,
                     loot_all: false,
                 }),

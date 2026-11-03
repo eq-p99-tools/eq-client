@@ -1,3 +1,5 @@
+mod loot_requests;
+
 use super::*;
 mod inventory_moves;
 use crate::{

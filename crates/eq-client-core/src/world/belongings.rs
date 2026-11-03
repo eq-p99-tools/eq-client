@@ -41,6 +41,28 @@ impl ClientWorld {
         }
     }
 
+    /// Preserves local request context for the front end that owns its pending
+    /// action. It decides whether this result still matches before showing it.
+    pub(super) fn loot_request_result(
+        &self,
+        session_id: u64,
+        created: Option<std::time::Instant>,
+        request: crate::loot::LootRequest,
+        status: &crate::loot::LootRequestStatus,
+        changes: &mut Changes,
+    ) {
+        if self.accepts_reply(session_id) {
+            changes.replies.push(Reply::LootRequest {
+                session_id,
+                created,
+                request,
+                status: status.clone(),
+            });
+        } else {
+            changes.ignored = true;
+        }
+    }
+
     /// News of the corpse being looted.
     pub(super) fn loot_news(&mut self, update: &LootUpdate, changes: &mut Changes) {
         if self.zone.trade.loot(update) {

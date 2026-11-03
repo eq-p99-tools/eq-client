@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Forward typed local loot results with their original admission, action and
+  available creation time. Release only the matching refused opening or item
+  request, show its reason once, and retain unlooted rows and authoritative
+  holdings. Local submission continues to await separate server loot news.
+- Keep close refusals informational: existing close commands have no creation
+  time and cannot identify a newer window or pending item. Diagnostics remain
+  log-only. `world::Reply` gains an exhaustive `LootRequest` variant for consumers
+  of the matching network API.
+
 - Offer no door where the server policy only receives door state: the HUD
   hint and F skip doors on such servers (TAKP) instead of offering a use the
   server refuses.

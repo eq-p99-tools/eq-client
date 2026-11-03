@@ -312,6 +312,19 @@ impl Panels<'_> {
                     error.clone(),
                     state.world.inventory(),
                 ),
+                Reply::LootRequest {
+                    session_id,
+                    created,
+                    request,
+                    status,
+                } => {
+                    if let Some(reason) =
+                        self.trade
+                            .loot_result(state, *session_id, *created, *request, status)
+                    {
+                        chat.refuse(reason);
+                    }
+                }
                 Reply::LootTaken { place, accepted } => self.trade.taken(*place, *accepted),
                 Reply::LootReceived { place } => self.trade.received(*place),
                 // The refused crossing no longer holds the player's motion.
