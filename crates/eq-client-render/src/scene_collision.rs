@@ -68,6 +68,67 @@ pub fn zone_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Coll
     build_collision(zone)
 }
 
+/// Proposes a selection spot using the same drawn terrain that stands the
+/// preview, while retaining solid boundaries and objects for clearance.
+/// Collision-only shells cannot stand a preview; passable liquid surfaces
+/// can, and must therefore participate in the floor and liquid tests.
+#[must_use]
+pub fn propose_select_spot(zone: &ZoneAsset) -> Option<eq_client_core::select_spots::Spot> {
+    let world = zone_collision(zone)?;
+    let surfaces = eq_client_core::movement::CollisionWorld::new(
+        TerrainSurface::from_primitives(&zone.primitives)
+            .0
+            .into_iter()
+            .map(|triangle| triangle.map(|point| point.to_array())),
+    )
+    .ok()?;
+    let floors =
+        eq_client_core::movement::CollisionWorld::new(upward_triangles(&zone.primitives)).ok()?;
+    let (min, max) = zone.bounds()?;
+    eq_client_core::select_spots::propose(
+        &world,
+        &surfaces,
+        &floors,
+        (Vec3::from_array(min), Vec3::from_array(max)),
+        |point| zone.regions.liquid_at(point.to_array()).is_some(),
+    )
+}
+
+/// Faces whose transformed triangle winding points upward can stand a selection
+/// character; a room's downward ceiling cannot, even though ordinary collision
+/// rays hit both. Retain every face in `TerrainSurface` for placement and
+/// enclosure tests.
+fn upward_triangles(primitives: &[ZonePrimitive]) -> Vec<[[f32; 3]; 3]> {
+    primitives
+        .iter()
+        .flat_map(|primitive| {
+            primitive
+                .indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter_map(|indices| {
+                    let [a, b, c] =
+                        indices.map(|index| primitive.positions.get(index as usize).copied());
+                    let triangle = [
+                        Vec3::from_array(a?),
+                        Vec3::from_array(b?),
+                        Vec3::from_array(c?),
+                    ];
+                    // The asset loader has already transformed WLD positions
+                    // and winding through eq-client-axes. Shading normals are
+                    // not an authority for which side of a floor is visible.
+                    let normal = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]);
+                    (normal.y > 0.0).then(|| triangle.map(|point| point.to_array()))
+                })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "selection_geometry_tests.rs"]
+mod selection_geometry_tests;
+
 pub(super) fn build_collision(
     zone: &ZoneAsset,
 ) -> Option<eq_client_core::movement::CollisionWorld> {

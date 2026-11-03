@@ -14,8 +14,8 @@ use camera::{
     OrbitCamera, behind, camera_relative_direction, orbit_camera, spawn_camera, start_behind,
 };
 use gpu_assets::{create_material, create_render_primitives, create_texture_images};
-pub use scene_collision::zone_collision;
 use scene_collision::{TerrainSurface, collision_triangles, collision_world, object_transform};
+pub use scene_collision::{propose_select_spot, zone_collision};
 pub(crate) use systems::Stage;
 use systems::{init_presentation, install_overlays, schedule};
 
@@ -138,7 +138,7 @@ pub enum ValidationAction {
 }
 
 pub use login::{Availability, Connection, LoginServer, Logins, Session, Worker};
-pub use preview::Preview;
+pub use preview::{Preview, SelectionCapture, SelectionPreview};
 
 /// Where the viewer's world comes from.
 pub enum Source {
@@ -785,16 +785,25 @@ fn spawn_lighting(commands: &mut Commands, ambient_light: &mut GlobalAmbientLigh
     *ambient_light = daylight::launch_ambient();
 }
 
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Bevy system parameters are value wrappers.
 fn schedule_screenshot(
     mut commands: Commands,
     time: Res<Time>,
     request: Option<ResMut<CaptureRequest>>,
     (online, front): (Res<online::OnlineState>, Res<login::FrontEnd>),
     loading: Option<Res<loading::Loading>>,
+    offline: Option<Res<preview::Switches>>,
+    selection: Res<select_preview::Preview>,
+    audit: Option<Res<select_preview::AuditCaptures>>,
+    scene: Res<SceneInfo>,
+    players: Query<(&Transform, &PlayerBody), With<Player>>,
+    cameras: Query<(&OrbitCamera, &Transform), Without<Player>>,
 ) {
     let covered = loading.is_some_and(|loading| loading.covered());
-    if !screenshot_ready(&front, &online, covered) {
+    let auditing = offline
+        .as_ref()
+        .is_some_and(|switches| switches.0.selection.is_some());
+    if (auditing && !selection.showing()) || !screenshot_ready(&front, &online, covered) {
         return;
     }
     let Some(mut request) = request else {
@@ -805,6 +814,27 @@ fn schedule_screenshot(
     }
 
     let path = request.path.clone();
+    if let Some(offline) = offline
+        .as_ref()
+        .and_then(|switches| switches.0.selection.as_ref())
+        && let Ok((player, body)) = players.single()
+        && let Ok((camera, transform)) = cameras.single()
+    {
+        let orbit = audit.as_ref().map_or(offline.orbit, |audit| audit.orbit());
+        let feet = player.translation - Vec3::Y * body.feet_offset;
+        let metadata = format!(
+            "zone={}\norbit_radians={orbit:.8}\nfeet={feet:.6}\ncamera={:.6}\nfocus={:.6}\nyaw={:.8}\npitch={:.8}\nradius={:.6}\n",
+            scene.zone_name,
+            transform.translation,
+            camera.focus,
+            camera.yaw,
+            camera.pitch,
+            camera.radius,
+        );
+        if let Err(error) = std::fs::write(path.with_extension("pose.txt"), metadata) {
+            warn!("Selection capture pose metadata could not be saved: {error}");
+        }
+    }
     commands
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
@@ -826,13 +856,14 @@ fn exit_after_screenshot(
     mut app_exit: MessageWriter<AppExit>,
     online: Res<online::OnlineState>,
     settings: Res<ViewerSettings>,
+    audit: Option<Res<select_preview::AuditCaptures>>,
 ) {
     if online.world().ended() && settings.0.screenshot.is_some() {
         info!("The session ended before the screenshot, so the client is ending");
         app_exit.write(AppExit::error());
     }
     // Scripted screenshots keep the session running; only `--screenshot` is one-shot.
-    if !captured.is_empty() && settings.0.screenshot.is_some() {
+    if !captured.is_empty() && settings.0.screenshot.is_some() && audit.is_none() {
         info!("The screenshot is taken, so the client is ending");
         app_exit.write(AppExit::Success);
     }
@@ -848,7 +879,9 @@ fn move_player(
     mut players: Query<(&mut Transform, &PlayerBody), With<Player>>,
     mut cameras: Query<(&mut OrbitCamera, Has<camera::FreeCamera>)>,
 ) {
-    if online.enabled {
+    // A selection preview is placed by its spot, including on passable
+    // drawn surfaces. The offline free viewer must not walk or drop it.
+    if online.enabled || online.selection.is_some() {
         airborne.reset();
         return;
     }
@@ -1670,7 +1703,7 @@ mod tests {
         clippy::float_cmp,
         reason = "Exact equality verifies unchanged or explicitly assigned state"
     )]
-    fn offline_falling_continues_without_input_but_never_runs_for_online_players() {
+    fn offline_falling_pauses_for_character_selection_and_online_players() {
         use super::*;
         let geometry = [
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
@@ -1721,11 +1754,25 @@ mod tests {
         assert!(first < 10.0 && second < first);
         app.world_mut()
             .resource_mut::<online::OnlineState>()
-            .enabled = true;
+            .selection = Some(character_select::Selection::new(1, Vec::new()));
         app.update();
         assert_eq!(
             app.world().get::<Transform>(player).unwrap().translation.y,
             second
+        );
+        app.world_mut()
+            .resource_mut::<online::OnlineState>()
+            .selection = None;
+        app.update();
+        let resumed = app.world().get::<Transform>(player).unwrap().translation.y;
+        assert!(resumed < second);
+        app.world_mut()
+            .resource_mut::<online::OnlineState>()
+            .enabled = true;
+        app.update();
+        assert_eq!(
+            app.world().get::<Transform>(player).unwrap().translation.y,
+            resumed
         );
     }
 

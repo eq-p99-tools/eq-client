@@ -16,6 +16,9 @@ const BUILT_IN: &str = include_str!("../data/select-spots.txt");
 /// use, in world units.
 pub const DISTANCE: f32 = 25.0;
 
+/// The nearest distance the selection preview permits its camera.
+pub const MIN_DISTANCE: f32 = 20.0;
+
 /// How far the camera looks down at the character where a spot names
 /// nothing else, in degrees.
 pub const PITCH: f32 = 10.0;
@@ -178,15 +181,24 @@ struct Floor {
 /// looks back across the zone. In a zone where at least
 /// half the floors are covered (a dungeon) only covered floors count, so the outside
 /// of its shell is never chosen; elsewhere only open ones. `bounds` is the
-/// zone's in the renderer's frame, and `wet` says whether a point is in
-/// water or lava. None when no floor qualifies.
+/// zone's in the renderer's frame. `surfaces` contains the drawn terrain
+/// used to stand the preview, independently of `world`'s solid boundaries
+/// and objects. A collision-only shell must never nominate a floor that
+/// the preview then drops through onto a different, possibly wet, surface.
+/// `floor_surfaces` contains only upward-authored drawn faces: a downward
+/// ceiling cannot nominate a spot even though the collision ray hits it.
+/// `wet` says whether a point is in water or lava. The standing floor,
+/// camera orbit and some visible background must be dry. None when no
+/// floor qualifies. A proposal remains unreviewed until visually inspected.
 #[must_use]
 pub fn propose(
     world: &CollisionWorld,
+    surfaces: &CollisionWorld,
+    floor_surfaces: &CollisionWorld,
     (min, max): (Vec3, Vec3),
     wet: impl Fn(Vec3) -> bool,
 ) -> Option<Spot> {
-    let floors = floors(world, (min, max), &wet);
+    let floors = floors(world, surfaces, floor_surfaces, (min, max), &wet);
     let covered = floors.iter().filter(|floor| floor.covered).count();
     // A dungeon's shell gives each column one open floor on top of at least
     // one covered floor inside, so covered floors at least match open ones.
@@ -203,15 +215,18 @@ pub fn propose(
     let reach = (max - min).length().max(1.0);
     floors
         .iter()
-        .filter(|floor| flat(world, floor.feet))
+        .filter(|floor| flat(world, surfaces, floor_surfaces, floor.feet, &wet))
         .filter_map(|floor| {
             let views = views(world, floor.feet);
             #[allow(clippy::cast_precision_loss)] // Sixteen directions.
             let open = views.iter().sum::<f32>() / DIRECTIONS as f32;
             let outward = (floor.feet - middle).with_y(0.0).normalize_or_zero();
-            let (front, behind) = facing(&views, outward)?;
+            let (front, room) = facing(&views, outward, |front, distance| {
+                dry_orbit(surfaces, floor.feet, distance, &wet)
+                    && dry_background(surfaces, floor.feet, front, &views, &wet)
+            })?;
             let away = floor.feet.distance(middle) / reach;
-            Some((open * (1.0 - away), floor.feet, front, behind))
+            Some((open * (1.0 - away), floor.feet, front, room))
         })
         .max_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, feet, front, room)| {
@@ -220,7 +235,7 @@ pub fn propose(
             Spot {
                 loc: [world_feet.y, world_feet.x, world_feet.z],
                 heading: eq_client_axes::world_heading(direction.x.atan2(direction.z)),
-                distance: DISTANCE.min(room - 2.0),
+                distance: camera_distance(room),
                 pitch: PITCH,
                 reviewed: false,
             }
@@ -231,6 +246,8 @@ pub fn propose(
 /// column with headroom over it, out of the water.
 fn floors(
     world: &CollisionWorld,
+    surfaces: &CollisionWorld,
+    floor_surfaces: &CollisionWorld,
     (min, max): (Vec3, Vec3),
     wet: &impl Fn(Vec3) -> bool,
 ) -> Vec<Floor> {
@@ -245,23 +262,31 @@ fn floors(
             let mut top = max.y + 1.0;
             for _ in 0..LAYERS {
                 let origin = Vec3::new(x, top, z);
-                let Some(hit) = world.ray_distance(origin, Vec3::NEG_Y, top - min.y + 1.0) else {
+                let Some(hit) = floor_surfaces.ray_distance(origin, Vec3::NEG_Y, top - min.y + 1.0)
+                else {
                     break;
                 };
                 let point = origin - Vec3::Y * hit;
                 top = point.y - 0.05;
-                let Some(floor) = world.ground(point, 0.1, 0.1) else {
+                // Resolve exactly the first drawn surface the preview picks
+                // below authored z+5, including a nearby upper layer.
+                let Some(floor) = surfaces.ground(point, ABOVE_FLOOR, ABOVE_FLOOR) else {
                     continue;
                 };
+                if (floor - point.y).abs() > 0.1 {
+                    continue;
+                }
                 let feet = Vec3::new(x, floor, z);
                 let lifted = feet + Vec3::Y * 0.5;
                 let over = world.ray_distance(lifted, Vec3::Y, VIEW);
-                if over.is_some_and(|over| over < HEADROOM) || wet(feet + Vec3::Y) {
+                if over.is_some_and(|over| over < HEADROOM) || !dry_floor(feet, wet) {
                     continue;
                 }
                 floors.push(Floor {
                     feet,
-                    covered: over.is_some(),
+                    // Hidden collision ceilings constrain headroom, but do
+                    // not make the outside of a dungeon's drawn roof inside.
+                    covered: surfaces.ray_distance(lifted, Vec3::Y, VIEW).is_some(),
                 });
             }
             z += step;
@@ -273,14 +298,26 @@ fn floors(
 
 /// Whether the floor around the feet is level enough to stand a character
 /// and nothing stands in its body.
-fn flat(world: &CollisionWorld, feet: Vec3) -> bool {
+fn flat(
+    world: &CollisionWorld,
+    surfaces: &CollisionWorld,
+    floor_surfaces: &CollisionWorld,
+    feet: Vec3,
+    wet: &impl Fn(Vec3) -> bool,
+) -> bool {
     const AROUND: f32 = 4.0;
     const STEP: f32 = 1.5;
     (0..8).all(|index| {
         #[allow(clippy::cast_precision_loss)] // Eight directions.
         let angle = index as f32 * std::f32::consts::TAU / 8.0;
         let point = feet + Vec3::new(angle.sin(), 0.0, angle.cos()) * AROUND;
-        world.ground(point, STEP, STEP).is_some()
+        surfaces.ground(point, STEP, STEP).is_some_and(|height| {
+            dry_floor(point.with_y(height), wet)
+                && floor_surfaces
+                    .ground(point.with_y(height), 0.1, 0.1)
+                    .is_some()
+                && world.ground(point.with_y(height), 0.1, 0.1).is_some()
+        })
     }) && world
         .clearance(feet, HEADROOM, 1.0)
         .is_none_or(|gap| gap > 0.5)
@@ -300,10 +337,15 @@ fn views(world: &CollisionWorld, feet: Vec3) -> [f32; DIRECTIONS] {
 /// direction whose opposite view is longest, among those with room for the
 /// camera in front, and between views equally long (in the open every view
 /// reaches its limit) the one nearest `outward`, away from the zone's middle.
-fn facing(views: &[f32; DIRECTIONS], outward: Vec3) -> Option<(usize, f32)> {
+fn facing(
+    views: &[f32; DIRECTIONS],
+    outward: Vec3,
+    suitable: impl Fn(usize, f32) -> bool,
+) -> Option<(usize, f32)> {
     let behind = |front: usize| views[(front + DIRECTIONS / 2) % DIRECTIONS];
     (0..DIRECTIONS)
-        .filter(|front| views[*front] >= DISTANCE * 0.6 + 2.0)
+        .filter(|front| views[*front] >= MIN_DISTANCE + 2.0)
+        .filter(|front| suitable(*front, camera_distance(views[*front])))
         .max_by(|a, b| {
             behind(*a).total_cmp(&behind(*b)).then_with(|| {
                 direction(*a)
@@ -312,6 +354,67 @@ fn facing(views: &[f32; DIRECTIONS], outward: Vec3) -> Option<(usize, f32)> {
             })
         })
         .map(|front| (front, views[front]))
+}
+
+fn camera_distance(room: f32) -> f32 {
+    DISTANCE.min(room - 2.0)
+}
+
+/// A liquid's top can be a dry BSP boundary, or lie just below the floor
+/// point. Testing only feet+1 misses that surface. A small margin on both
+/// sides also avoids relying on an exact split-plane classification.
+fn dry_floor(feet: Vec3, wet: &impl Fn(Vec3) -> bool) -> bool {
+    [-1.0, -0.1, 0.0, 0.1, 1.0]
+        .into_iter()
+        .all(|rise| !wet(feet + Vec3::Y * rise))
+}
+
+/// The camera starts in front and then orbits: every sampled camera point
+/// and the first visible floor below it must be dry. Looking down from dry
+/// air above a harbour is not a dry camera placement.
+fn dry_orbit(
+    surfaces: &CollisionWorld,
+    feet: Vec3,
+    distance: f32,
+    wet: &impl Fn(Vec3) -> bool,
+) -> bool {
+    let pitch = PITCH.to_radians();
+    (0..DIRECTIONS).all(|index| {
+        let camera = feet
+            + direction(index) * (distance * pitch.cos())
+            + Vec3::Y * (EYE + distance * pitch.sin());
+        !wet(camera)
+            && surfaces
+                .ground(camera, 0.0, VIEW)
+                .is_some_and(|floor| dry_floor(camera.with_y(floor), wet))
+    })
+}
+
+/// At least one of three background rays must have visible dry ground
+/// beyond the character. An unobstructed horizontal ray over nothing but
+/// water is not a useful long view for character selection.
+fn dry_background(
+    surfaces: &CollisionWorld,
+    feet: Vec3,
+    front: usize,
+    views: &[f32; DIRECTIONS],
+    wet: &impl Fn(Vec3) -> bool,
+) -> bool {
+    let behind = (front + DIRECTIONS / 2) % DIRECTIONS;
+    [
+        (behind + DIRECTIONS - 1) % DIRECTIONS,
+        behind,
+        (behind + 1) % DIRECTIONS,
+    ]
+    .into_iter()
+    .any(|index| {
+        [0.25, 0.5, 0.75].into_iter().any(|share| {
+            let sample = feet + direction(index) * (views[index] * share);
+            surfaces
+                .ground(sample, EYE, VIEW)
+                .is_some_and(|floor| dry_floor(sample.with_y(floor), wet))
+        })
+    })
 }
 
 /// One of the compass directions, in the renderer's frame.
@@ -411,6 +514,8 @@ mod tests {
         let world = CollisionWorld::new(triangles).unwrap();
         let spot = propose(
             &world,
+            &world,
+            &world,
             (Vec3::new(-80.0, 0.0, -200.0), Vec3::new(80.0, 40.0, 60.0)),
             |_| false,
         )
@@ -429,15 +534,24 @@ mod tests {
     fn in_the_open_the_character_faces_away_from_the_zones_middle() {
         // Every view reaches its limit, so only the way out from the middle
         // tells the directions apart: a quarter turn from the first.
-        assert_eq!(facing(&[VIEW; DIRECTIONS], Vec3::X), Some((4, VIEW)));
-        assert_eq!(facing(&[VIEW; DIRECTIONS], Vec3::NEG_Z), Some((8, VIEW)));
+        assert_eq!(
+            facing(&[VIEW; DIRECTIONS], Vec3::X, |_, _| true),
+            Some((4, VIEW))
+        );
+        assert_eq!(
+            facing(&[VIEW; DIRECTIONS], Vec3::NEG_Z, |_, _| true),
+            Some((8, VIEW))
+        );
         // A longer view behind still comes first.
         let mut views = [100.0; DIRECTIONS];
         views[12] = VIEW;
-        assert_eq!(facing(&views, Vec3::X), Some((4, 100.0)));
+        assert_eq!(facing(&views, Vec3::X, |_, _| true), Some((4, 100.0)));
         views[12] = 100.0;
         views[0] = VIEW;
-        assert_eq!(facing(&views, Vec3::Z).map(|(front, _)| front), Some(8));
+        assert_eq!(
+            facing(&views, Vec3::Z, |_, _| true).map(|(front, _)| front),
+            Some(8)
+        );
     }
 
     #[test]
@@ -455,6 +569,8 @@ mod tests {
         let world = CollisionWorld::new(triangles).unwrap();
         let spot = propose(
             &world,
+            &world,
+            &world,
             (Vec3::new(-50.0, 0.0, -50.0), Vec3::new(50.0, 30.0, 50.0)),
             |_| false,
         )
@@ -469,7 +585,120 @@ mod tests {
             Vec3::new(-100.0, 0.0, -100.0),
             Vec3::new(100.0, 10.0, 100.0),
         );
-        assert!(propose(&world, bounds, |_| true).is_none());
-        assert!(propose(&world, bounds, |_| false).is_some());
+        assert!(propose(&world, &world, &world, bounds, |_| true).is_none());
+        assert!(propose(&world, &world, &world, bounds, |_| false).is_some());
+    }
+
+    #[test]
+    fn a_hidden_collision_shell_cannot_nominate_the_water_below_it() {
+        // The proposer used to stand on a hidden collision shell, query dry
+        // air there, and write its height. The preview has no drawn shell
+        // and stands instead on the passable water surface below it.
+        let mut solids = floor(100.0, 60.0);
+        solids.extend(floor(100.0, -30.0));
+        let world = CollisionWorld::new(solids).unwrap();
+        let mut drawn = floor(100.0, 0.0);
+        drawn.extend(floor(100.0, -30.0));
+        let surfaces = CollisionWorld::new(drawn).unwrap();
+        let bounds = (
+            Vec3::new(-100.0, -30.0, -100.0),
+            Vec3::new(100.0, 60.0, 100.0),
+        );
+        let wet = |point: Vec3| point.y <= 0.0 && point.y > -30.0;
+        assert!(
+            propose(&world, &world, &world, bounds, wet).is_some(),
+            "the old geometry would choose the shell"
+        );
+        assert!(propose(&world, &surfaces, &surfaces, bounds, wet).is_none());
+    }
+
+    #[test]
+    fn a_hidden_outer_ceiling_does_not_make_a_dungeons_roof_an_interior() {
+        let mut drawn = floor(50.0, 0.0);
+        drawn.extend(floor(50.0, 30.0));
+        for (from, to) in [
+            ([-50.0, -50.0], [50.0, -50.0]),
+            ([50.0, -50.0], [50.0, 50.0]),
+            ([50.0, 50.0], [-50.0, 50.0]),
+            ([-50.0, 50.0], [-50.0, -50.0]),
+        ] {
+            drawn.extend(wall(from, to, 30.0));
+        }
+        let surfaces = CollisionWorld::new(drawn.clone()).unwrap();
+        drawn.extend(floor(50.0, 60.0));
+        let solids = CollisionWorld::new(drawn).unwrap();
+        let spot = propose(
+            &solids,
+            &surfaces,
+            &surfaces,
+            (Vec3::new(-50.0, 0.0, -50.0), Vec3::new(50.0, 60.0, 50.0)),
+            |_| false,
+        )
+        .unwrap();
+        assert!(
+            spot.loc[2].abs() < 0.01,
+            "inside the room, not on its roof: {spot:?}"
+        );
+    }
+
+    #[test]
+    fn dry_air_above_the_liquid_surface_does_not_make_a_dry_floor() {
+        let world = CollisionWorld::new(floor(100.0, 0.0)).unwrap();
+        let bounds = (
+            Vec3::new(-100.0, 0.0, -100.0),
+            Vec3::new(100.0, 10.0, 100.0),
+        );
+        // Model an exact BSP plane that reports neither kind, with liquid
+        // immediately under it. The old feet+1 check sees only dry air.
+        assert!(propose(&world, &world, &world, bounds, |point| point.y < 0.0).is_none());
+    }
+
+    #[test]
+    fn the_first_drawn_floor_below_z_plus_five_is_the_one_checked() {
+        let mut triangles = floor(100.0, 0.0);
+        triangles.extend(floor(100.0, 3.0));
+        let world = CollisionWorld::new(triangles).unwrap();
+        let bounds = (
+            Vec3::new(-100.0, 0.0, -100.0),
+            Vec3::new(100.0, 15.0, 100.0),
+        );
+        assert!(propose(&world, &world, &world, bounds, |point| point.y > 1.5).is_none());
+    }
+
+    #[test]
+    fn a_dry_standing_patch_needs_a_dry_camera_orbit() {
+        let world = CollisionWorld::new(floor(100.0, 0.0)).unwrap();
+        let bounds = (
+            Vec3::new(-100.0, 0.0, -100.0),
+            Vec3::new(100.0, 10.0, 100.0),
+        );
+        let wet = |point: Vec3| point.with_y(0.0).length() > 12.0 && point.y <= 0.0;
+        assert!(propose(&world, &world, &world, bounds, wet).is_none());
+    }
+
+    #[test]
+    fn an_open_view_over_only_liquid_is_rejected() {
+        let world = CollisionWorld::new(floor(200.0, 0.0)).unwrap();
+        let wet = |point: Vec3| point.with_y(0.0).length() > 40.0 && point.y <= 0.0;
+        assert!(dry_orbit(&world, Vec3::ZERO, DISTANCE, &wet));
+        assert!(!dry_background(
+            &world,
+            Vec3::ZERO,
+            0,
+            &[VIEW; DIRECTIONS],
+            &wet
+        ));
+        let bounds = (
+            Vec3::new(-200.0, 0.0, -200.0),
+            Vec3::new(200.0, 10.0, 200.0),
+        );
+        assert!(propose(&world, &world, &world, bounds, wet).is_none());
+    }
+
+    #[test]
+    fn the_proposal_never_relies_on_a_distance_the_preview_clamps_outward() {
+        assert!(facing(&[MIN_DISTANCE + 1.0; DIRECTIONS], Vec3::X, |_, _| true).is_none());
+        let (_, room) = facing(&[MIN_DISTANCE + 2.0; DIRECTIONS], Vec3::X, |_, _| true).unwrap();
+        assert!((camera_distance(room) - MIN_DISTANCE).abs() < f32::EPSILON);
     }
 }

@@ -368,7 +368,7 @@ pub(super) fn schedule(app: &mut App) {
                 sounds::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
-                schedule_screenshot,
+                (schedule_screenshot, select_preview::next_capture).chain(),
                 exit_after_screenshot,
             )
                 .chain(),
