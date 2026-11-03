@@ -42,6 +42,21 @@ impl Line {
 pub(crate) struct Lines {
     /// The status line: the connection, death and camping.
     pub status: Line,
+    /// Movement prerequisites, shown while the session has no status to report.
+    pub movement: Line,
+}
+
+impl Lines {
+    /// One HUD line, with connection, death and camping taking priority over
+    /// movement readiness. Keeping the lines separate lets readiness recover
+    /// without erasing a newer session notice.
+    pub(crate) fn hud_status(&self) -> &str {
+        if self.status.text().is_empty() {
+            self.movement.text()
+        } else {
+            self.status.text()
+        }
+    }
 }
 
 /// Where a notice shows.
@@ -316,6 +331,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
         Notice::TradeRefused(reason)
+        | Notice::CombatRefused(reason)
         | Notice::TrainingRefused(reason)
         | Notice::ResurrectionRefused(reason)
         | Notice::ReadRefused(reason) => chat(reason.as_str().into()),

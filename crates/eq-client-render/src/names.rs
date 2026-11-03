@@ -425,6 +425,24 @@ mod tests {
         );
         app.update();
         assert_eq!(colour(&mut app, "Examplar\n"), Color::srgb_u8(133, 72, 156));
+        // The Mac-era program uses the same supported categories. Guildmates
+        // retain their player colour; corpses and pets are non-players.
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = eq_client_assets::ui::InstalledClient::EqMac;
+        let mut pet = testing::pet(5, 1);
+        pet.name = "Synthetic_pet001".into();
+        testing::spawn_entry(&mut app.world_mut().resource_mut::<OnlineState>(), 5, pet);
+        app.update();
+        assert_eq!(colour(&mut app, "Examplar\n"), Color::srgb_u8(133, 72, 156));
+        assert_eq!(colour(&mut app, "Example\n"), Color::srgb_u8(61, 107, 220));
+        assert_eq!(colour(&mut app, "Examplar's"), Color::srgb_u8(23, 184, 173));
+        assert_eq!(colour(&mut app, "a gnoll"), Color::srgb_u8(23, 184, 173));
+        assert_eq!(
+            colour(&mut app, "Synthetic pet"),
+            Color::srgb_u8(23, 184, 173)
+        );
     }
 
     #[test]

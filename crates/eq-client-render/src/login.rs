@@ -90,6 +90,8 @@ pub enum Connection {
 /// A session running on its own thread: its news, the queue for the
 /// player's requests, and the thread.
 pub struct Session {
+    /// The immutable spell-provider binding allocated with this producer.
+    pub spell_provider: eq_client_core::spell_tables::Binding,
     /// What the session tells the client.
     pub updates: Receiver<WorldUpdate>,
     /// What the player asks the session to send.
@@ -403,6 +405,8 @@ impl FrontEnd {
         link: &mut Link,
     ) {
         online.restart();
+        link.spells.bind(session.spell_provider);
+        link.outbox.set_spell_ready(link.spells.ready());
         link.attach(Some(session.updates), Some(session.commands));
         self.session = Some(Running {
             worker: session.worker,
@@ -482,6 +486,7 @@ pub(crate) enum Connected {
 pub(crate) struct Link<'w> {
     updates: Res<'w, Updates>,
     outbox: ResMut<'w, Outbox>,
+    spells: ResMut<'w, crate::spellbook::SpellNames>,
 }
 
 impl Link<'_> {
@@ -780,6 +785,9 @@ pub(crate) mod testing {
             let thread = Thread::default();
             heard.sessions.push((updates, queue, thread.clone()));
             Ok(Connection::Session(Session {
+                spell_provider: eq_client_core::spell_tables::Binding::new(
+                    eq_client_core::spell_tables::Policy::Installed,
+                ),
                 updates: receive,
                 commands,
                 worker: Box::new(thread),
@@ -805,6 +813,7 @@ pub(crate) mod testing {
     pub(crate) fn front_end_input(app: &mut App) {
         crate::clicks::testing::install(app);
         app.init_resource::<crate::inventory::InventoryState>()
+            .init_resource::<crate::spellbook::SpellNames>()
             .init_resource::<crate::windows::Stack>()
             .init_resource::<crate::windows::menu::Menu>()
             .init_resource::<crate::escape::Escape>()
@@ -880,6 +889,9 @@ mod tests {
         let (mut front, updates, commands) = FrontEnd::launched(
             Box::new(fake),
             Some(Session {
+                spell_provider: eq_client_core::spell_tables::Binding::new(
+                    eq_client_core::spell_tables::Policy::Installed,
+                ),
                 updates,
                 commands,
                 worker: Box::new(thread.clone()),
@@ -925,6 +937,9 @@ mod tests {
         let (mut front, updates, commands) = FrontEnd::launched(
             Box::new(fake),
             Some(Session {
+                spell_provider: eq_client_core::spell_tables::Binding::new(
+                    eq_client_core::spell_tables::Policy::Installed,
+                ),
                 updates,
                 commands,
                 worker: Box::new(thread.clone()),

@@ -80,6 +80,57 @@ fn game(world: &mut ClientWorld, event: WorldEvent) -> Changes {
     world.apply(&WorldUpdate::Game(event), Instant::now(), &NoSpells)
 }
 
+#[test]
+fn combat_submission_and_refusal_do_not_fabricate_server_results() {
+    use crate::combat::{CombatRequest, CombatRequestStatus};
+    let mut world = admitted();
+    let original_player = world.player().cloned();
+    let original_target = *world.target();
+    for request in [
+        CombatRequest::AutoAttack { enabled: true },
+        CombatRequest::AutoAttack { enabled: false },
+        CombatRequest::Consider { target_id: 5 },
+    ] {
+        let sent = game(
+            &mut world,
+            WorldEvent::CombatRequest {
+                session_id: 1,
+                request,
+                status: CombatRequestStatus::Sent,
+            },
+        );
+        assert_eq!(sent.notices, []);
+        assert_eq!(sent.replies, []);
+        assert!(sent.reset.is_none());
+        let refused = game(
+            &mut world,
+            WorldEvent::CombatRequest {
+                session_id: 1,
+                request,
+                status: CombatRequestStatus::Refused("Synthetic refusal".into()),
+            },
+        );
+        assert_eq!(
+            refused.notices,
+            [Notice::CombatRefused("Synthetic refusal".into())]
+        );
+        assert_eq!(refused.replies, []);
+        assert!(refused.reset.is_none());
+        let stale = game(
+            &mut world,
+            WorldEvent::CombatRequest {
+                session_id: 2,
+                request,
+                status: CombatRequestStatus::Refused("Old request".into()),
+            },
+        );
+        assert!(stale.ignored);
+        assert_eq!(stale.notices, []);
+    }
+    assert_eq!(world.player(), original_player.as_ref());
+    assert_eq!(*world.target(), original_target);
+}
+
 fn connection(world: &mut ClientWorld, connected: bool, terminal: bool) -> Changes {
     world.apply(
         &WorldUpdate::Connection(match (connected, terminal) {
@@ -439,6 +490,84 @@ fn a_transfer_holds_the_player_and_a_refusal_lets_them_go() {
     assert!(world.in_world());
     assert!(world.spawn(5).is_some());
     assert_eq!(world.speed_input_revision(), Some(7));
+}
+
+#[test]
+fn input_acceptance_is_current_and_never_supplies_movement_permission() {
+    let mut world = admitted();
+    let accepted = crate::SpeedInputAcceptance {
+        session_id: 1,
+        revision: 7,
+        report_id: 19,
+        inputs: crate::SpeedInputs {
+            rate: 0,
+            weight: 0,
+            capacity: 90,
+        },
+        granted: true,
+    };
+    game(
+        &mut world,
+        WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 7,
+        },
+    );
+    for stale in [
+        crate::SpeedInputAcceptance {
+            session_id: 2,
+            ..accepted
+        },
+        crate::SpeedInputAcceptance {
+            revision: 6,
+            ..accepted
+        },
+    ] {
+        assert!(game(&mut world, WorldEvent::SpeedInputsAccepted(stale)).ignored);
+        assert_eq!(world.accepted_speed_inputs(), None);
+    }
+    let changes = game(&mut world, WorldEvent::SpeedInputsAccepted(accepted));
+    assert!(!changes.motion);
+    assert_eq!(
+        world.motion(),
+        None,
+        "a receipt never creates a movement grant"
+    );
+    assert_eq!(world.accepted_speed_inputs(), Some(accepted));
+    game(
+        &mut world,
+        WorldEvent::MotionState {
+            session_id: 1,
+            units_per_second: None,
+            backward_units_per_second: None,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            falls: true,
+        },
+    );
+    assert_eq!(world.accepted_speed_inputs(), None);
+    game(&mut world, WorldEvent::SpeedInputsAccepted(accepted));
+    game(
+        &mut world,
+        WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 8,
+        },
+    );
+    assert_eq!(world.accepted_speed_inputs(), None);
+    assert!(game(&mut world, WorldEvent::SpeedInputsAccepted(accepted)).ignored);
+    let current = crate::SpeedInputAcceptance {
+        revision: 8,
+        ..accepted
+    };
+    game(&mut world, WorldEvent::SpeedInputsAccepted(current));
+    connection(&mut world, false, false);
+    assert_eq!(world.accepted_speed_inputs(), None);
+    assert!(game(&mut world, WorldEvent::SpeedInputsAccepted(current)).ignored);
+    game(&mut world, entered(2));
+    connection(&mut world, true, false);
+    assert!(game(&mut world, WorldEvent::SpeedInputsAccepted(current)).ignored);
+    assert_eq!(world.accepted_speed_inputs(), None);
 }
 
 #[test]
@@ -1377,6 +1506,90 @@ fn a_corpse_fills_while_open_and_closes_when_the_server_says() {
     world.open_loot(9);
     game(&mut world, entered(2));
     assert!(world.loot().is_none());
+}
+
+#[test]
+fn loot_receipt_then_refusal_never_reports_delivery() {
+    use crate::loot::LootUpdate;
+    let mut world = admitted();
+    game(&mut world, inventory(Vec::new()));
+    world.open_loot(9);
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Item {
+            place: 0,
+            item: Box::new(chest()),
+        }),
+    );
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Listed { corpse_id: 9 }),
+    );
+    let changes = game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Acknowledged { place: 0 }),
+    );
+    assert!(matches!(
+        changes.replies[..],
+        [Reply::LootReceived { place: 0 }]
+    ));
+    assert!(world.loot().unwrap().items.is_empty());
+    assert!(world.inventory().items().is_empty());
+    let changes = game(&mut world, WorldEvent::Loot(LootUpdate::Closed));
+    assert_eq!(changes.replies, [] as [Reply; 0]);
+    assert!(world.loot().is_none());
+    assert!(world.inventory().items().is_empty());
+}
+
+#[test]
+fn loot_items_arrive_only_through_inventory_even_after_close() {
+    use crate::{
+        inventory::{InventorySlot, InventoryUpdate},
+        loot::LootUpdate,
+    };
+    let mut world = admitted();
+    game(&mut world, inventory(Vec::new()));
+    world.open_loot(9);
+    let mut item = chest();
+    item.slot = InventorySlot::CURSOR;
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Item {
+            place: 0,
+            item: Box::new(item.clone()),
+        }),
+    );
+    let receipt = game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Acknowledged { place: 0 }),
+    );
+    assert!(matches!(
+        receipt.replies[..],
+        [Reply::LootReceived { place: 0 }]
+    ));
+    assert!(world.inventory().items().is_empty());
+    game(&mut world, WorldEvent::Loot(LootUpdate::Closed));
+    let delivery = game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Cursor(vec![item])),
+    );
+    assert_eq!(
+        world.inventory().items()[&InventorySlot::CURSOR].details.id,
+        chest().details.id
+    );
+    assert_eq!(delivery.replies, [] as [Reply; 0]);
+    assert!(world.loot().is_none());
+}
+
+#[test]
+fn automatic_loot_continuation_follows_the_generation_policy() {
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    assert_eq!(world.loot_continuation(), LootContinuation::Manual);
+    assert!(!world.loot_continuation().automatic());
+    world.carry_as(crate::GameDialect::Titanium);
+    assert_eq!(world.loot_continuation(), LootContinuation::TakenReply);
+    assert!(world.loot_continuation().automatic());
 }
 
 #[test]

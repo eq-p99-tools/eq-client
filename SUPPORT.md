@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `ba81b4216195851a53cbb8b729f3037172edcb31`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/ba81b4216195851a53cbb8b729f3037172edcb31/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `92ea679a9664c3c00b7609ecfcb8e709b3871d1c`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/92ea679a9664c3c00b7609ecfcb8e709b3871d1c/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -32,11 +32,14 @@ certification, and individual operations still validate their prerequisites.
 | Casting and basic spellbook | Yes | Yes | Yes | Yes |
 | Move / delete book entries | Yes / No | Yes / Yes | No / No | No / No |
 | Item/coin moves and personal banking | Yes | Yes | Yes | Yes |
-| Merchants and exchanges/giving | Yes | Yes | No | Yes |
+| Merchants | Yes | Yes | No | No |
+| Exchanges/giving | Yes | Yes | No | Yes |
 | Supported abilities | Yes | Yes | Yes | Yes |
 | Targeting | Yes | Yes | Yes | Yes |
-| Combat and considering | Yes | Yes | No | Yes |
-| Looting, doors and ground-object features | Yes | Yes | No | No |
+| Combat and considering | Yes | Yes | Yes | Yes |
+| Corpse looting | Yes | Yes | Yes (manual) | No |
+| Door interaction | Yes | Yes | No | No |
+| Ground-item state and pickup | Yes | Yes | Yes | Yes |
 | Camping and zone transfers | Yes | Yes | Yes | Yes |
 | Groups | No | Yes | No | Yes |
 | Raids, training, reading and tradeskills | No | Yes | No | No |
@@ -47,24 +50,52 @@ certification, and individual operations still validate their prerequisites.
 Quarm additionally offers ground movement, jumps, falls, posture, camping and
 zone transfers through the shared EQMac path, plus target selection/clearing.
 It also offers casting, basic spellbook actions, the supported EQMac abilities,
-and guarded item/coin moves. Quarm merchants, meals and exchanges remain disabled.
-Item predictions remain unconfirmed after pacing delays; contradictory updates
-require a complete snapshot. Coin transfers remain a local ledger until server
-updates replace it. These confirmation limits also govern movement readiness.
+and guarded item/coin moves. Normal attack toggles and considering are now offered;
+local submission/refusal is not an authoritative combat outcome. Quarm merchants,
+meals and exchanges remain disabled. Valid item moves send immediately in order,
+without a pending-move hold or pacing timer; predictions retain their uncertainty
+until server evidence resolves it. Contradictory updates require a complete
+snapshot. Coin transfers remain a local ledger until server updates replace it.
+These confirmation limits also govern movement readiness.
 Posture controls use `Capability::Posture`, independently of `Moving`. The newly
-enabled public-server paths are source/capture-backed and regression-tested;
-their live validation is tracked separately. Swimming, boats and client-reported
-bleed-out remain gaps. P99 still does not offer deletion of spellbook entries.
+enabled combat, loot and ground-item paths are source-derived and tested with
+synthetic fixtures; their live validation is tracked separately. Swimming, boats
+and client-reported bleed-out remain Quarm gaps. P99 still does not offer deletion
+of spellbook entries.
+
+Quarm offers individual corpse-item requests; TAKP looting remains unavailable.
+An EQMac receipt retires only the corpse-view row and matching manual pending
+request. Ordinary inventory/coin updates alone establish holdings, including
+delivery after the loot window closes. Automatic EQMac loot-all is unsupported;
+Titanium retains its existing automatic path. See
+[EQMac loot receipts](docs/eqmac-loot-receipts.md).
+
+Both EQMac policies offer ground-item state and guarded pickup. An object removal
+or an unrelated inventory change does not establish delivery. Door definitions
+and state updates are receive-only on Quarm and TAKP: neither policy offers door
+interaction, and no EQMac door sender is activated.
 
 Current movement requires complete load/STR/buff inputs. Unknown state withdraws
 player input without inventing a zero load or a root, and bounded passive falls
 remain available. Supported spell values scale by caster level. Equipment, food,
 bag reduction, coins and EQMac fatigue contribute where established; unsupported
-effects and unresolved predictions remain unavailable. See [movement limits and
-the deferred live matrix](docs/movement-input-readiness.md).
+effects and unresolved predictions remain unavailable. The HUD explains movement
+waits; clearing one requires current local input acceptance and a positive grant,
+not a server acknowledgement. See
+[movement limits and the deferred live matrix](docs/movement-input-readiness.md).
 
-See the networking [P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/ba81b4216195851a53cbb8b729f3037172edcb31/docs/public-server-gaps.md)
-for missing, disabled, unverified and server-restricted behavior.
+P99 spell mechanics use effective definitions from the installed base and the
+current server registration/replay. Incomplete or invalid provider state keeps
+affected mechanics unavailable while chat remains usable. See [installed spell
+providers](docs/spell-providers.md). These source and synthetic checks add no live
+compatibility certification.
+
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/92ea679a9664c3c00b7609ecfcb8e709b3871d1c/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/92ea679a9664c3c00b7609ecfcb8e709b3871d1c/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/92ea679a9664c3c00b7609ecfcb8e709b3871d1c/docs/eqmac-world-objects.md)
+contracts record their limits and controlled live checklists. The dated
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/92ea679a9664c3c00b7609ecfcb8e709b3871d1c/docs/public-server-gaps.md)
+retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02
 
@@ -162,7 +193,8 @@ passed native Windows checks against local EQEmu and TAKP. Live coverage include
   actual HTTP(S) browser launches and item-link coexistence.
 - Map pan/zoom/opacity, target eligibility, tracking with the map closed,
   reconnect persistence, and real remote-player heading changes. A real EQEmu
-  pickup removed its ground-item marker; TAKP exposes no ground-item state.
+  pickup removed its ground-item marker; TAKP exposed no ground-item state at
+  that pin (EQMac ground objects are decoded since the 2026-11-03 stack).
 - Terminal disconnects during held input: both protocols retained a failed run
   with `Session ended` and skipped the remaining actions.
 

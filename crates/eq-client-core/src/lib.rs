@@ -23,6 +23,7 @@ pub mod reading;
 pub mod resources;
 pub mod select_spots;
 pub mod skills;
+pub mod spell_tables;
 pub mod targeting;
 pub mod whereabouts;
 pub mod who;
@@ -53,8 +54,8 @@ pub use eq_network_game::loot;
 pub use eq_network_game::merchant;
 pub use eq_network_game::money;
 pub use eq_network_game::movement::{
-    BackwardCalibration, MotionCalibration, MovementMode, MovementRequest, SpeedInputState,
-    SpeedInputUnavailable, SpeedInputs, StrafeCalibration, WalkCalibration,
+    BackwardCalibration, MotionCalibration, MovementMode, MovementRequest, SpeedInputAcceptance,
+    SpeedInputState, SpeedInputUnavailable, SpeedInputs, StrafeCalibration, WalkCalibration,
 };
 pub use eq_network_game::pets;
 pub use eq_network_game::raid;
@@ -82,6 +83,8 @@ pub use eq_network_game::world::{
 /// Messages crossing the worker/presentation boundary. Queues are bounded by the host.
 #[derive(Clone, Debug)]
 pub enum WorldUpdate {
+    /// A producer-bound installed-spell provider fact, independent of admission.
+    SpellTable(spell_tables::Envelope),
     /// A typed game-state change.
     Game(WorldEvent),
     /// Where the connection stands; anything but connected disables local

@@ -33,6 +33,8 @@ Typing in the workbench belongs to the editor, not movement or chat. While a scr
 
 A parse error prevents a run from starting. Runtime failure retains its explanation and source line. A file error leaves the editor buffer intact. If Save reports an external change, save to a new path to preserve both versions, or explicitly reload the disk version.
 
+Inventory clicks use the ordinary item controller and current inventory revision. Each valid move sends immediately after the preceding local result is available; scripts need no fixed wait for earlier server replies. The displayed placement remains a prediction until server evidence resolves it. A correction can require a fresh inventory snapshot. An explicit `wait` step still pauses for the requested duration.
+
 ## Privacy
 
 Use fake names in shared examples. Keep credentials, private character names, screenshots, packet captures and live-test scripts in your own private files. The workbench saves only when asked and does not publish scripts.

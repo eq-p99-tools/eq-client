@@ -93,6 +93,10 @@ pub(super) fn init_presentation(app: &mut App) {
 )]
 pub(super) fn schedule(app: &mut App) {
     app.add_systems(
+        Update,
+        crate::gpu_assets::animate_terrain.in_set(Stage::Present),
+    );
+    app.add_systems(
         PreUpdate,
         keys::presses::capture
             .after(bevy::input::InputSystems)
@@ -134,6 +138,7 @@ pub(super) fn schedule(app: &mut App) {
                 character::lie,
                 doors::reconcile,
                 ground::reconcile,
+                hud::spell_visibility,
                 select_preview::show,
                 select_preview::turn,
             )
@@ -313,6 +318,7 @@ pub(super) fn schedule(app: &mut App) {
                         trade::fill_wares,
                         trade::picture,
                         items::icon,
+                        spellbook::book_frames,
                         spellbook::book_present,
                     ),
                     skinned::tabs,
@@ -362,7 +368,7 @@ pub(super) fn schedule(app: &mut App) {
                 sounds::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
-                schedule_screenshot,
+                (schedule_screenshot, select_preview::next_capture).chain(),
                 exit_after_screenshot,
             )
                 .chain(),

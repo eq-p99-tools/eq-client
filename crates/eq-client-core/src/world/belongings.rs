@@ -51,6 +51,9 @@ impl ClientWorld {
                     accepted: *accepted,
                 });
             }
+            if let LootUpdate::Acknowledged { place } = update {
+                changes.replies.push(Reply::LootReceived { place: *place });
+            }
         } else {
             changes.ignored = true;
         }

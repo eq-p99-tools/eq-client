@@ -45,6 +45,7 @@ fn spawn(mut commands: Commands) {
     commands.spawn((
         Button,
         Dismiss,
+        Name::new("EQ menu outside-click shield"),
         TakesWheel,
         Node {
             display: Display::None,
@@ -58,6 +59,7 @@ fn spawn(mut commands: Commands) {
     commands
         .spawn((
             Panel,
+            Name::new("EQ menu panel"),
             super::KeepsPress,
             TakesWheel,
             ScrollPosition::default(),

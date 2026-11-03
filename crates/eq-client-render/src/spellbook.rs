@@ -14,7 +14,8 @@ pub(super) use seat::seat;
 pub(crate) use skinned::Entry;
 pub(crate) use skinned::{BookHand, BookPlace, ChosenMark, PLACES, TurnsPages};
 pub(super) use skinned::{
-    clicks as book_clicks, memorize as memorize_held, present as book_present,
+    clicks as book_clicks, frames as book_frames, memorize as memorize_held,
+    present as book_present,
 };
 
 /// Keeps an open book above the bottom HUD at the default viewport size.
@@ -111,14 +112,39 @@ impl eq_client_core::world::SpellCatalog for SpellNames {
 }
 
 /// The installed client's spells, with the client's words for them.
-#[derive(Resource, Default)]
-pub(super) struct SpellNames(eq_client_assets::spells::Definitions);
+#[derive(Resource)]
+pub(super) struct SpellNames(super::spell_provider::Provider);
+
+impl Default for SpellNames {
+    fn default() -> Self {
+        Self::from_definitions(eq_client_assets::spells::Definitions::default())
+    }
+}
 
 impl SpellNames {
+    fn from_definitions(definitions: eq_client_assets::spells::Definitions) -> Self {
+        use eq_client_core::spell_tables::{Binding, Policy};
+        Self(super::spell_provider::Provider::new(
+            Binding::new(Policy::Installed),
+            definitions,
+        ))
+    }
+
+    pub(super) fn bind(&mut self, binding: eq_client_core::spell_tables::Binding) {
+        self.0.bind(binding);
+    }
+
+    pub(super) fn receive(&mut self, fact: &eq_client_core::spell_tables::Envelope) {
+        self.0.receive(fact);
+    }
+
+    pub(super) fn ready(&self) -> bool {
+        self.0.ready()
+    }
     /// Loads labels and timing from the user's installation; assets are never bundled.
     pub fn load(config: &crate::ViewerConfig) -> Self {
         let layout = config.installed_client.spell_file();
-        Self(
+        Self::from_definitions(
             config
                 .eq_directory
                 .as_deref()
@@ -130,9 +156,15 @@ impl SpellNames {
     /// Spells from the text of a spell file.
     #[cfg(test)]
     pub(super) fn parse(text: &str) -> Self {
-        Self(eq_client_assets::spells::Definitions::parse(
+        Self::parse_for(text, eq_client_assets::ui::InstalledClient::Titanium)
+    }
+
+    /// Synthetic spell data through the same generation layout as loading.
+    #[cfg(test)]
+    pub(super) fn parse_for(text: &str, client: eq_client_assets::ui::InstalledClient) -> Self {
+        Self::from_definitions(eq_client_assets::spells::Definitions::parse(
             text,
-            &eq_client_assets::spells::Layout::TITANIUM,
+            &client.spell_file(),
         ))
     }
 
@@ -165,16 +197,21 @@ impl SpellNames {
 
     /// What the client says when the spell fades from the player.
     pub(super) fn fades(&self, id: u32) -> Option<&str> {
-        self.spell(id)?.fades.as_deref()
+        self.0.text(id)?.fades.as_deref()
     }
 
-    /// Unmodified installation mana cost.
+    /// Effective mana cost after the selected policy's complete replay.
     pub(super) fn mana(&self, id: u32) -> Option<u32> {
         self.spell(id)?.mana
     }
 
     pub(super) fn icon(&self, id: u32) -> Option<u32> {
         self.spell(id)?.icon
+    }
+
+    /// Which of the book's two occupied-slot backgrounds the spell uses.
+    pub(super) fn beneficial(&self, id: u32) -> Option<bool> {
+        self.spell(id)?.beneficial
     }
 
     /// The spell's cell in the skin's gem icons.
@@ -201,18 +238,34 @@ impl SpellNames {
     }
 
     pub fn label(&self, id: u32) -> String {
-        self.spell(id)
+        self.0
+            .text(id)
             .and_then(|spell| spell.name.clone())
             .unwrap_or_else(|| format!("Spell {id}"))
     }
 
-    /// Unmodified installation values, not server-adjusted costs or cast times.
+    /// Effective local values; other server adjustments can still apply.
     pub(super) fn details(&self, id: u32) -> String {
         let Some(spell) = self.spell(id) else {
+            use super::spell_provider::Readiness;
+            match self.0.readiness() {
+                Readiness::AwaitingRegistration => return "Awaiting spell registration".into(),
+                Readiness::AwaitingReplay => return "Awaiting this zone's spell replay".into(),
+                Readiness::Unavailable(_) => return "Server spell data unavailable".into(),
+                Readiness::Installed | Readiness::Ready { .. } => (),
+            }
             return "Local spell details unavailable".into();
         };
+        let basis = if matches!(
+            self.0.readiness(),
+            super::spell_provider::Readiness::Installed
+        ) {
+            "Base"
+        } else {
+            "Effective"
+        };
         format!(
-            "Base: {} mana | {}s cast | {} range",
+            "{basis}: {} mana | {}s cast | {} range",
             spell
                 .mana
                 .map_or_else(|| "--".into(), |value| value.to_string()),

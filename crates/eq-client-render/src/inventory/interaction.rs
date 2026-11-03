@@ -202,9 +202,8 @@ impl InventoryState {
         } else if to_cursor || inventory.items().contains_key(&InventorySlot::CURSOR) {
             self.actions.message = "Item is on the cursor; choose a destination".into();
         } else {
-            // Servers acknowledge only refused moves, so the placement
-            // settles without a later message; claim nothing more.
-            self.actions.message = "Item placed".into();
+            // The worker reports its send, not the server's acceptance.
+            self.actions.message = "Move sent; placement is a local prediction".into();
         }
         self.revision = self.revision.wrapping_add(1);
     }
@@ -415,7 +414,8 @@ impl InventoryState {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Whether no item move waits for the session's answer.
+    /// Whether the worker has answered the local move submission. This says
+    /// nothing about server acceptance or unresolved inventory predictions.
     pub(crate) const fn settled(&self) -> bool {
         self.actions.pending.is_none()
     }

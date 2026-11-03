@@ -511,13 +511,13 @@ fn main() {
         }
     };
     let preview = Preview {
-        creation: None,
         entities: arguments.demo_entities,
         inventory: arguments.demo_inventory,
         bank: arguments.demo_bank,
         spellbook: arguments.demo_spellbook,
         character_select: arguments.demo_character_select,
         trade: arguments.demo_trade,
+        ..Preview::default()
     };
     // The window's display, kept by the viewer for the session's weekly
     // machine report, which is made off the window's thread.

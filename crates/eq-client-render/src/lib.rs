@@ -6,6 +6,7 @@ use theme::Size;
 mod camera;
 mod gpu_assets;
 mod scene_collision;
+mod spell_provider;
 mod static_batch;
 mod systems;
 
@@ -13,8 +14,8 @@ use camera::{
     OrbitCamera, behind, camera_relative_direction, orbit_camera, spawn_camera, start_behind,
 };
 use gpu_assets::{create_material, create_render_primitives, create_texture_images};
-pub use scene_collision::zone_collision;
 use scene_collision::{TerrainSurface, collision_triangles, collision_world, object_transform};
+pub use scene_collision::{propose_select_spot, zone_collision};
 pub(crate) use systems::Stage;
 use systems::{init_presentation, install_overlays, schedule};
 
@@ -137,7 +138,7 @@ pub enum ValidationAction {
 }
 
 pub use login::{Availability, Connection, LoginServer, Logins, Session, Worker};
-pub use preview::Preview;
+pub use preview::{Preview, SelectionCapture, SelectionPreview};
 
 /// Where the viewer's world comes from.
 pub enum Source {
@@ -343,6 +344,13 @@ pub fn run(
         window_size,
     );
     let mut app = App::new();
+    let spell_binding = match &source {
+        Source::Online {
+            session: Some(session),
+            ..
+        } => Some(session.spell_provider),
+        _ => None,
+    };
     let (front, updates, commands) = match source {
         Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
         Source::Offline(preview) => (
@@ -353,7 +361,13 @@ pub fn run(
     };
     app.insert_resource(front);
     app.insert_resource(login::LoginStrings::load(config.eq_directory.as_deref()));
-    app.insert_resource(spellbook::SpellNames::load(&config));
+    let mut spells = spellbook::SpellNames::load(&config);
+    if let Some(binding) = spell_binding {
+        spells.bind(binding);
+    }
+    let outbox = outbox::Outbox::new(commands);
+    outbox.set_spell_ready(spells.ready());
+    app.insert_resource(spells);
     app.insert_resource(hud::messages::Messages::load(
         config.eq_directory.as_deref(),
         config.installed_client,
@@ -365,7 +379,7 @@ pub fn run(
     .insert_resource(ViewerSettings(config))
     .insert_resource(online::OnlineState::new(online))
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
-    .insert_resource(outbox::Outbox::new(commands));
+    .insert_resource(outbox);
     init_presentation(&mut app);
     app.insert_resource(options::OptionsState::new(option_defaults));
     app.add_plugins(
@@ -617,19 +631,23 @@ fn spawn_static_zone(
     materials: &mut Assets<StandardMaterial>,
 ) {
     let texture_images = create_texture_images(zone.textures, images);
-    let terrain = create_render_primitives(
+    let terrain = gpu_assets::create_terrain_primitives(
         zone.primitives,
+        &zone.terrain_materials,
         &texture_images,
         meshes,
         materials,
-        true,
-        RenderAssetUsages::RENDER_WORLD,
     );
-    commands.spawn_batch(
-        terrain
-            .into_iter()
-            .map(|(mesh, material)| (SceneEntity, Mesh3d(mesh), MeshMaterial3d(material))),
-    );
+    for draw in terrain {
+        let mut entity = commands.spawn((
+            SceneEntity,
+            Mesh3d(draw.mesh),
+            MeshMaterial3d(draw.material),
+        ));
+        if let Some(animation) = draw.animation {
+            entity.insert(animation);
+        }
+    }
 
     if terrain_only {
         commands.insert_resource(doors::Models::default());
@@ -767,16 +785,25 @@ fn spawn_lighting(commands: &mut Commands, ambient_light: &mut GlobalAmbientLigh
     *ambient_light = daylight::launch_ambient();
 }
 
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Bevy system parameters are value wrappers.
 fn schedule_screenshot(
     mut commands: Commands,
     time: Res<Time>,
     request: Option<ResMut<CaptureRequest>>,
     (online, front): (Res<online::OnlineState>, Res<login::FrontEnd>),
     loading: Option<Res<loading::Loading>>,
+    offline: Option<Res<preview::Switches>>,
+    selection: Res<select_preview::Preview>,
+    audit: Option<Res<select_preview::AuditCaptures>>,
+    scene: Res<SceneInfo>,
+    players: Query<(&Transform, &PlayerBody), With<Player>>,
+    cameras: Query<(&OrbitCamera, &Transform), Without<Player>>,
 ) {
     let covered = loading.is_some_and(|loading| loading.covered());
-    if !screenshot_ready(&front, &online, covered) {
+    let auditing = offline
+        .as_ref()
+        .is_some_and(|switches| switches.0.selection.is_some());
+    if (auditing && !selection.showing()) || !screenshot_ready(&front, &online, covered) {
         return;
     }
     let Some(mut request) = request else {
@@ -787,6 +814,27 @@ fn schedule_screenshot(
     }
 
     let path = request.path.clone();
+    if let Some(offline) = offline
+        .as_ref()
+        .and_then(|switches| switches.0.selection.as_ref())
+        && let Ok((player, body)) = players.single()
+        && let Ok((camera, transform)) = cameras.single()
+    {
+        let orbit = audit.as_ref().map_or(offline.orbit, |audit| audit.orbit());
+        let feet = player.translation - Vec3::Y * body.feet_offset;
+        let metadata = format!(
+            "zone={}\norbit_radians={orbit:.8}\nfeet={feet:.6}\ncamera={:.6}\nfocus={:.6}\nyaw={:.8}\npitch={:.8}\nradius={:.6}\n",
+            scene.zone_name,
+            transform.translation,
+            camera.focus,
+            camera.yaw,
+            camera.pitch,
+            camera.radius,
+        );
+        if let Err(error) = std::fs::write(path.with_extension("pose.txt"), metadata) {
+            warn!("Selection capture pose metadata could not be saved: {error}");
+        }
+    }
     commands
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
@@ -808,13 +856,14 @@ fn exit_after_screenshot(
     mut app_exit: MessageWriter<AppExit>,
     online: Res<online::OnlineState>,
     settings: Res<ViewerSettings>,
+    audit: Option<Res<select_preview::AuditCaptures>>,
 ) {
     if online.world().ended() && settings.0.screenshot.is_some() {
         info!("The session ended before the screenshot, so the client is ending");
         app_exit.write(AppExit::error());
     }
     // Scripted screenshots keep the session running; only `--screenshot` is one-shot.
-    if !captured.is_empty() && settings.0.screenshot.is_some() {
+    if !captured.is_empty() && settings.0.screenshot.is_some() && audit.is_none() {
         info!("The screenshot is taken, so the client is ending");
         app_exit.write(AppExit::Success);
     }
@@ -830,7 +879,9 @@ fn move_player(
     mut players: Query<(&mut Transform, &PlayerBody), With<Player>>,
     mut cameras: Query<(&mut OrbitCamera, Has<camera::FreeCamera>)>,
 ) {
-    if online.enabled {
+    // A selection preview is placed by its spot, including on passable
+    // drawn surfaces. The offline free viewer must not walk or drop it.
+    if online.enabled || online.selection.is_some() {
         airborne.reset();
         return;
     }
@@ -915,7 +966,7 @@ fn update_hud(
     else {
         return;
     };
-    let mut lines = vec![notices.status.text().to_owned()];
+    let mut lines = vec![notices.hud_status().to_owned()];
     if !free.is_empty() {
         lines.push(map.named(keys::Act::FreeCamera, "Free camera - return to character"));
     }
@@ -1021,6 +1072,9 @@ mod tests {
                 heard: std::sync::Arc::default(),
             }),
             Some(login::Session {
+                spell_provider: eq_client_core::spell_tables::Binding::new(
+                    eq_client_core::spell_tables::Policy::Installed,
+                ),
                 updates: receive,
                 commands,
                 worker: Box::new(login::testing::Thread::default()),
@@ -1078,6 +1132,68 @@ mod tests {
         let (text, visibility) = shown(&mut app);
         assert!(text.starts_with("qeytoqrg\n"), "{text}");
         assert_eq!(visibility, Visibility::Inherited);
+    }
+
+    #[test]
+    fn movement_readiness_uses_the_hud_without_replacing_session_status() {
+        use super::*;
+        let mut app = testing::app();
+        app.insert_resource(SceneInfo {
+            zone_name: "qeytoqrg".into(),
+        })
+        .add_systems(Update, update_hud);
+        app.world_mut().spawn((Player, Transform::default()));
+        let status = app
+            .world_mut()
+            .spawn((HudText, Text::new(""), Visibility::Hidden))
+            .id();
+        let shown = |app: &mut App| {
+            app.update();
+            (
+                app.world().get::<Text>(status).unwrap().0.clone(),
+                *app.world().get::<Visibility>(status).unwrap(),
+            )
+        };
+        let waiting = "Movement paused: waiting for character information.";
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .movement
+            .set(waiting);
+        // Readiness is visible with the normal HUD, without debug readings.
+        assert_eq!(shown(&mut app), (waiting.into(), Visibility::Inherited));
+        for session_status in ["Zoning", "Dead - awaiting respawn", "Disconnected"] {
+            app.world_mut()
+                .resource_mut::<notices::Lines>()
+                .status
+                .set(session_status);
+            assert_eq!(
+                shown(&mut app),
+                (session_status.into(), Visibility::Inherited)
+            );
+            // Clearing readiness never clears a notice written by the session.
+            app.world_mut()
+                .resource_mut::<notices::Lines>()
+                .movement
+                .set("");
+            assert_eq!(
+                shown(&mut app),
+                (session_status.into(), Visibility::Inherited)
+            );
+            app.world_mut()
+                .resource_mut::<notices::Lines>()
+                .movement
+                .set(waiting);
+        }
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .status
+            .set("");
+        assert_eq!(shown(&mut app), (waiting.into(), Visibility::Inherited));
+        app.world_mut()
+            .resource_mut::<notices::Lines>()
+            .movement
+            .set("");
+        assert_eq!(shown(&mut app), (String::new(), Visibility::Hidden));
     }
 
     #[test]
@@ -1320,6 +1436,7 @@ mod tests {
                     regions: eq_client_assets::regions::ZoneRegions::default(),
                     short_name: "test".to_owned(),
                     primitives: Vec::new(),
+                    terrain_materials: Vec::new(),
                     textures: Vec::new(),
                     models: Vec::new(),
                     objects: Vec::new(),
@@ -1586,7 +1703,7 @@ mod tests {
         clippy::float_cmp,
         reason = "Exact equality verifies unchanged or explicitly assigned state"
     )]
-    fn offline_falling_continues_without_input_but_never_runs_for_online_players() {
+    fn offline_falling_pauses_for_character_selection_and_online_players() {
         use super::*;
         let geometry = [
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
@@ -1637,11 +1754,25 @@ mod tests {
         assert!(first < 10.0 && second < first);
         app.world_mut()
             .resource_mut::<online::OnlineState>()
-            .enabled = true;
+            .selection = Some(character_select::Selection::new(1, Vec::new()));
         app.update();
         assert_eq!(
             app.world().get::<Transform>(player).unwrap().translation.y,
             second
+        );
+        app.world_mut()
+            .resource_mut::<online::OnlineState>()
+            .selection = None;
+        app.update();
+        let resumed = app.world().get::<Transform>(player).unwrap().translation.y;
+        assert!(resumed < second);
+        app.world_mut()
+            .resource_mut::<online::OnlineState>()
+            .enabled = true;
+        app.update();
+        assert_eq!(
+            app.world().get::<Transform>(player).unwrap().translation.y,
+            resumed
         );
     }
 

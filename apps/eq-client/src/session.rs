@@ -130,6 +130,13 @@ impl SessionWorker {
     /// account too long for the server type.
     pub fn start(login: Login, options: &SessionOptions) -> Result<eq_client_render::Session> {
         let protocol = login.protocol;
+        let spell_provider = eq_client_core::spell_tables::Binding::new(
+            if protocol == ServerProtocol::Project1999 {
+                eq_client_core::spell_tables::Policy::Project1999
+            } else {
+                eq_client_core::spell_tables::Policy::Installed
+            },
+        );
         let client = client(login, options)?;
         let install = options.install.clone();
         let settings = options.settings.clone();
@@ -150,6 +157,7 @@ impl SessionWorker {
         let (sender, receiver) = mpsc::sync_channel(1024);
         let (commands, command_queue) = mpsc::sync_channel(32);
         let worker = thread::spawn(move || {
+            let mut spell_bridge = SpellBridge::new(spell_provider);
             let mut options = RunOptions::default();
             options.reconnect = false;
             let result = (|| {
@@ -160,7 +168,11 @@ impl SessionWorker {
                     client
                 };
                 client.run_with_commands(&worker_cancel, options, &command_queue, |event| {
+                    if let Some(fact) = spell_bridge.capture(&event)? {
+                        enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
+                    }
                     let update = match event {
+                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
                         ClientEvent::World(event) => {
                             // The machine's account went out: keep its
                             // date in this client's own settings, so the
@@ -193,13 +205,7 @@ impl SessionWorker {
                         }
                     };
                     if let Some(update) = update {
-                        match sender.try_send(update) {
-                            Ok(()) => (),
-                            Err(mpsc::TrySendError::Disconnected(_)) => worker_cancel.cancel(),
-                            Err(mpsc::TrySendError::Full(_)) => {
-                                anyhow::bail!("viewer event queue full")
-                            }
-                        }
+                        enqueue(&sender, &worker_cancel, update)?;
                     }
                     Ok(())
                 })
@@ -218,6 +224,7 @@ impl SessionWorker {
             }
         });
         Ok(eq_client_render::Session {
+            spell_provider,
             updates: receiver,
             commands,
             worker: Box::new(Self {
@@ -227,6 +234,86 @@ impl SessionWorker {
                 closed,
             }),
         })
+    }
+}
+
+/// Captures provider identity and start ordering in the actual producer,
+/// before queueing. No renderer drain can relabel these as a newer provider.
+struct SpellBridge {
+    binding: eq_client_core::spell_tables::Binding,
+    run_id: Option<u64>,
+    attempt: u64,
+}
+
+impl SpellBridge {
+    const fn new(binding: eq_client_core::spell_tables::Binding) -> Self {
+        Self {
+            binding,
+            run_id: None,
+            attempt: 0,
+        }
+    }
+
+    fn capture(
+        &mut self,
+        event: &ClientEvent,
+    ) -> Result<Option<eq_client_core::spell_tables::Envelope>> {
+        use eq_client_core::spell_tables::{Fact, Policy};
+        use eq_network::client::ConnectionStage;
+        if self.binding.policy() != Policy::Project1999 {
+            return Ok(None);
+        }
+        let fact = match event {
+            ClientEvent::Status(status) if status.state == ConnectionState::Connecting => {
+                // Events.reset creates this ID immediately before the actual
+                // login attempt. World/zone handoffs do not call that reset.
+                let run_id = u64::from_str_radix(&status.session_id, 16)?;
+                self.attempt = self
+                    .attempt
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("spell provider attempt sequence exhausted"))?;
+                self.run_id = Some(run_id);
+                Fact::RunStarted {
+                    run_id,
+                    attempt: self.attempt,
+                }
+            }
+            ClientEvent::Progress(ConnectionStage::ConnectingZone) => {
+                let Some(run_id) = self.run_id else {
+                    return Ok(None);
+                };
+                Fact::ZonePending { run_id }
+            }
+            ClientEvent::World(WorldEvent::Entered { session_id, .. }) => {
+                let Some(run_id) = self.run_id else {
+                    return Ok(None);
+                };
+                Fact::ZoneEntered {
+                    run_id,
+                    session_id: *session_id,
+                }
+            }
+            ClientEvent::World(WorldEvent::SpellTable(event)) => Fact::Table(event.clone()),
+            _ => return Ok(None),
+        };
+        Ok(Some(self.binding.envelope(fact)))
+    }
+}
+
+/// Losing a provider fact to overload is a session error, just as for the
+/// other ordered game updates. A closed renderer cancels the producer.
+fn enqueue(
+    sender: &mpsc::SyncSender<WorldUpdate>,
+    cancel: &CancellationToken,
+    update: WorldUpdate,
+) -> Result<()> {
+    match sender.try_send(update) {
+        Ok(()) => Ok(()),
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            cancel.cancel();
+            Ok(())
+        }
+        Err(mpsc::TrySendError::Full(_)) => anyhow::bail!("viewer event queue full"),
     }
 }
 
@@ -374,6 +461,78 @@ fn end_updates(sender: mpsc::SyncSender<WorldUpdate>, closed: &AtomicBool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spell_bridge_captures_creation_binding_and_actual_attempt_order_before_enqueue() {
+        use eq_client_core::spell_tables::{Binding, Fact, Policy};
+        use eq_network::client::SessionStatus;
+        let binding = Binding::new(Policy::Project1999);
+        let mut bridge = SpellBridge::new(binding);
+        let first = bridge
+            .capture(&ClientEvent::Status(SessionStatus::new(
+                ConnectionState::Connecting,
+                "0000000000000007",
+            )))
+            .unwrap()
+            .unwrap();
+        let second = bridge
+            .capture(&ClientEvent::Status(SessionStatus::new(
+                ConnectionState::Connecting,
+                "0000000000000008",
+            )))
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.binding(), binding);
+        assert_eq!(second.binding(), binding);
+        assert!(matches!(
+            first.fact(),
+            Fact::RunStarted {
+                run_id: 7,
+                attempt: 1
+            }
+        ));
+        assert!(matches!(
+            second.fact(),
+            Fact::RunStarted {
+                run_id: 8,
+                attempt: 2
+            }
+        ));
+        let other = Binding::new(Policy::Project1999);
+        assert_ne!(first.binding(), other);
+        let mut installed = SpellBridge::new(Binding::new(Policy::Installed));
+        assert!(
+            installed
+                .capture(&ClientEvent::Status(SessionStatus::new(
+                    ConnectionState::Connecting,
+                    "uninterpreted"
+                )))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_overloaded_spell_event_bridge_fails_instead_of_dropping_ordered_facts() {
+        use eq_client_core::spell_tables::{Binding, Fact, Policy};
+        let binding = Binding::new(Policy::Project1999);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let cancel = CancellationToken::default();
+        enqueue(&sender, &cancel, WorldUpdate::Connection(Link::LoggingIn)).unwrap();
+        let fact = binding.envelope(Fact::RunStarted {
+            run_id: 7,
+            attempt: 1,
+        });
+        assert!(enqueue(&sender, &cancel, WorldUpdate::SpellTable(fact.clone())).is_err());
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(WorldUpdate::Connection(Link::LoggingIn))
+        ));
+        assert!(receiver.try_recv().is_err());
+        drop(receiver);
+        enqueue(&sender, &cancel, WorldUpdate::SpellTable(fact)).unwrap();
+        assert!(cancel.is_cancelled());
+    }
 
     #[test]
     fn full_event_queue_does_not_block_worker_shutdown() {

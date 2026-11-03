@@ -10,9 +10,15 @@ use std::{collections::BTreeMap, io, path::Path};
 pub struct Definition {
     /// The spell's name, if the line has one.
     pub name: Option<String>,
-    /// The cell in the default UI's spell icon sheets (Titanium field 144;
-    /// unread on the Mac-era client).
+    /// The cell in the skin's `A_SpellIcons` (Titanium field 144;
+    /// Mac-era field 131, parser 0x4d6ee6 and book update 0x435425).
     pub icon: Option<u32>,
+    /// Whether the book uses the beneficial background: Titanium field 83,
+    /// Mac-era field 71. Zero selects the detrimental background; every
+    /// other value selects the beneficial one (Mac-era 0x409520; the
+    /// Titanium book's use of its field is inferred, recording checklist
+    /// 6.376).
+    pub beneficial: Option<bool>,
     /// The cell in the skin's gem icons (`A_SpellGems`) that a gem shows
     /// in place of [`Definition::icon`], on a client whose program draws
     /// its gems from a column of their own: the Mac-era client's field 131.
@@ -126,6 +132,7 @@ impl Definitions {
                     .filter(|name| !name.is_empty())
                     .map(str::to_owned),
                 icon: layout.icon.and_then(number),
+                beneficial: number(layout.beneficial).map(|value: u32| value != 0),
                 gem_icon: layout.gem_icon.and_then(number),
                 gem_tint: layout
                     .gem_tint
@@ -255,7 +262,8 @@ mod tests {
         assert_eq!(spell.name.as_deref(), Some("Synthetic snare"));
         assert_eq!((spell.cast_ms, spell.mana), (Some(1500), Some(25)));
         assert_eq!(spell.gem_icon, Some(17));
-        assert_eq!(spell.icon, None);
+        assert_eq!(spell.icon, Some(17));
+        assert_eq!(spell.beneficial, Some(false));
         assert_eq!(spell.casting_animation, None);
         assert_eq!(spell.effect, None);
         let mechanics = spell.mechanics.as_ref().expect("mechanics");
@@ -308,6 +316,24 @@ mod tests {
                     assert!(spells.get(42).unwrap().mechanics.is_none());
                 }
                 fields[column] = "0";
+            }
+        }
+    }
+
+    #[test]
+    fn book_backgrounds_use_each_generations_beneficial_field() {
+        for (layout, column) in [(Layout::TITANIUM, 83), (Layout::EQMAC, 71)] {
+            let mut fields = vec!["0"; 145];
+            fields[0] = "42";
+            for (value, expected) in [
+                ("0", Some(false)),
+                ("1", Some(true)),
+                ("2", Some(true)),
+                ("bad", None),
+            ] {
+                fields[column] = value;
+                let spells = Definitions::parse(&fields.join("^"), &layout);
+                assert_eq!(spells.get(42).unwrap().beneficial, expected);
             }
         }
     }

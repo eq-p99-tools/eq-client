@@ -15,6 +15,75 @@ use eq_client_core::{outfit::Appearance, select_spots::Spots};
 /// starts again when another character is highlighted.
 const TURN: f32 = std::f32::consts::TAU / 20.0;
 
+/// A serial offline screenshot queue. The one-shot screenshot path remains
+/// unchanged unless an offline selection explicitly supplies further views.
+#[derive(Resource)]
+pub(super) struct AuditCaptures {
+    remaining: std::collections::VecDeque<super::preview::SelectionCapture>,
+    pending: Option<super::preview::SelectionCapture>,
+    wait_frames: u8,
+    orbit: f32,
+}
+
+impl AuditCaptures {
+    pub(super) fn new(selection: &super::preview::SelectionPreview) -> Self {
+        Self {
+            remaining: selection.additional_captures.iter().cloned().collect(),
+            pending: None,
+            wait_frames: 0,
+            orbit: selection.orbit,
+        }
+    }
+
+    pub(super) const fn orbit(&self) -> f32 {
+        self.orbit
+    }
+}
+
+/// Advances only after Bevy has completed the preceding capture. A camera
+/// frame is applied by the normal selection system, then at least two actual
+/// updates and a second of collision-camera settling precede the next image.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+pub(super) fn next_capture(
+    mut commands: Commands,
+    mut captured: RemovedComponents<super::Captured>,
+    audit: Option<ResMut<AuditCaptures>>,
+    mut preview: ResMut<Preview>,
+    cameras: Query<&OrbitCamera>,
+    request: Option<Res<super::CaptureRequest>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(mut audit) = audit else { return };
+    if audit.pending.is_some() {
+        if audit.wait_frames > 0 {
+            audit.wait_frames -= 1;
+            return;
+        }
+        if request.is_none()
+            && let Some(view) = audit.pending.take()
+        {
+            commands.insert_resource(super::CaptureRequest {
+                path: view.output,
+                settle_timer: Timer::from_seconds(1.0, TimerMode::Once),
+            });
+        }
+        return;
+    }
+    if captured.read().next().is_none() {
+        return;
+    }
+    let Some(view) = audit.remaining.pop_front() else {
+        exit.write(AppExit::Success);
+        return;
+    };
+    let Ok(camera) = cameras.single() else { return };
+    let base = camera.yaw - audit.orbit;
+    preview.frame = Some((base + view.orbit, camera.pitch, camera.radius));
+    audit.orbit = view.orbit;
+    audit.pending = Some(view);
+    audit.wait_frames = 2;
+}
+
 /// The look a character shown at select is dressed in, from its list.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub(super) struct Look {
@@ -64,6 +133,7 @@ pub(super) fn show(
     mut preview: ResMut<Preview>,
     mut online: ResMut<OnlineState>,
     (front, settings): (Res<super::login::FrontEnd>, Res<ViewerSettings>),
+    offline: Option<Res<super::preview::Switches>>,
     mut scene: super::zone::Scene,
 ) {
     let wanted = wanted(&front, &online, settings.0.eq_directory.as_deref());
@@ -97,7 +167,12 @@ pub(super) fn show(
     };
     match result {
         Ok((mut entry, look, zone)) => {
-            let spot = Spots::built_in().get(&zone);
+            let audit = offline
+                .as_ref()
+                .and_then(|switches| switches.0.selection.as_ref());
+            let spot = audit
+                .map(|audit| &audit.spot)
+                .or_else(|| Spots::built_in().get(&zone));
             entry.stand(spot);
             let facing = entry.facing();
             scene.leave(&mut commands, &mut online.regions);
@@ -116,9 +191,13 @@ pub(super) fn show(
                 |spot| (spot.distance, spot.pitch),
             );
             // In front of the character, looking at its face.
-            preview.frame = Some((facing, -pitch.to_radians(), distance));
+            preview.frame = Some((
+                facing + audit.map_or(0.0, |audit| audit.orbit),
+                -pitch.to_radians(),
+                distance,
+            ));
             preview.shown = preview.wanted;
-            preview.turning = true;
+            preview.turning = audit.is_none();
         }
         Err(text) => warn!("Character select preview: {text}"),
     }
@@ -173,7 +252,7 @@ pub(super) fn turn(
         // player didn't.
         camera.yaw = yaw;
         camera.pitch = pitch.clamp(-1.45, -0.15);
-        camera.radius = distance.clamp(20.0, 20_000.0);
+        camera.radius = distance.clamp(eq_client_core::select_spots::MIN_DISTANCE, 20_000.0);
         preview.seen = Some((camera.yaw, camera.pitch, camera.radius));
         return;
     }
@@ -332,6 +411,79 @@ mod tests {
 
     fn camera_yaw(app: &App, camera: Entity) -> f32 {
         app.world().get::<OrbitCamera>(camera).unwrap().yaw
+    }
+
+    #[test]
+    fn serial_captures_wait_for_completion_then_apply_the_real_camera_before_the_next_request() {
+        let (mut app, camera, _) = turning_app();
+        {
+            let mut preview = app.world_mut().resource_mut::<Preview>();
+            preview.frame = None;
+            preview.turning = false;
+        }
+        {
+            let mut orbit = app.world_mut().get_mut::<OrbitCamera>(camera).unwrap();
+            orbit.yaw = 1.0;
+            orbit.pitch = -0.2;
+            orbit.radius = 25.0;
+        }
+        app.add_message::<AppExit>()
+            .insert_resource(AuditCaptures {
+                remaining: [super::super::preview::SelectionCapture {
+                    orbit: std::f32::consts::FRAC_PI_2,
+                    output: "next.png".into(),
+                }]
+                .into_iter()
+                .collect(),
+                pending: None,
+                wait_frames: 0,
+                orbit: 0.0,
+            })
+            .add_systems(Update, next_capture.after(turn));
+        app.update();
+        assert!(
+            app.world()
+                .get_resource::<super::super::CaptureRequest>()
+                .is_none()
+        );
+        assert!((camera_yaw(&app, camera) - 1.0).abs() < f32::EPSILON);
+        let captured = app.world_mut().spawn(super::super::Captured).id();
+        app.world_mut()
+            .entity_mut(captured)
+            .remove::<super::super::Captured>();
+        app.update();
+        // Completion schedules a frame, not an immediate screenshot with
+        // the old camera transform. The normal turn system applies it.
+        assert!(
+            app.world()
+                .get_resource::<super::super::CaptureRequest>()
+                .is_none()
+        );
+        for _ in 0..2 {
+            app.update();
+            assert!(
+                app.world()
+                    .get_resource::<super::super::CaptureRequest>()
+                    .is_none()
+            );
+        }
+        assert!((camera_yaw(&app, camera) - (1.0 + std::f32::consts::FRAC_PI_2)).abs() < 1e-5);
+        app.update();
+        let request = app.world().resource::<super::super::CaptureRequest>();
+        assert_eq!(request.path, std::path::PathBuf::from("next.png"));
+        assert_eq!(
+            request.settle_timer.duration(),
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+        app.world_mut()
+            .remove_resource::<super::super::CaptureRequest>();
+        let captured = app.world_mut().spawn(super::super::Captured).id();
+        app.world_mut()
+            .entity_mut(captured)
+            .remove::<super::super::Captured>();
+        app.update();
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 1);
     }
 
     #[test]

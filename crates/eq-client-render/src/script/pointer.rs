@@ -103,6 +103,14 @@ pub(crate) struct Aim<'w, 's> {
     parents: Query<'w, 's, &'static ChildOf, Without<bevy::ui::OverrideClip>>,
     ancestors: Query<'w, 's, &'static ChildOf>,
     lists: Query<'w, 's, Option<&'static ScrollPosition>, With<TakesWheel>>,
+    owners: Query<
+        'w,
+        's,
+        (
+            Option<&'static crate::windows::WindowId>,
+            Option<&'static Name>,
+        ),
+    >,
 }
 
 impl Aim<'_, '_> {
@@ -171,6 +179,32 @@ impl Aim<'_, '_> {
     /// under it. The geometry is the one [`crate::windows::pointer::PointerUi`]
     /// tests: visibility, rounded corners and the clipping of the nodes above.
     pub(super) fn under(&self, at: Vec2) -> Option<Entity> {
+        self.top(at)
+            .filter(|(_, interactive)| *interactive)
+            .map(|(entity, _)| entity)
+    }
+
+    /// Records UI identities and geometry when a click is refused. The
+    /// outside-click shield and a window's frame can otherwise both look
+    /// like an unexplained invisible blocker in a screenshot.
+    pub(super) fn report_cover(&self, wanted: Entity) {
+        let at = self.at();
+        let blocker = self.top(at).map(|(entity, _)| entity);
+        let owner = |entity| {
+            std::iter::once(entity)
+                .chain(self.ancestors.iter_ancestors(entity))
+                .find_map(|entity| self.owners.get(entity).ok()?.0.copied())
+        };
+        let blocker_name = blocker
+            .and_then(|entity| self.owners.get(entity).ok()?.1)
+            .map(Name::as_str);
+        debug!(?wanted, wanted_window = ?owner(wanted), wanted_rect = ?self.rect(wanted),
+            ?blocker, blocker_window = ?blocker.and_then(owner), blocker_name,
+            blocker_rect = ?blocker.and_then(|entity| self.rect(entity)), ?at,
+            "Script click refused by UI hit test");
+    }
+
+    fn top(&self, at: Vec2) -> Option<(Entity, bool)> {
         let point = at * self.scale();
         self.nodes
             .iter()
@@ -189,8 +223,7 @@ impl Aim<'_, '_> {
                 },
             )
             .max_by_key(|(_, _, _, stack, ..)| stack.map_or(0, |stack| stack.0))
-            .filter(|(.., interactive)| *interactive)
-            .map(|(entity, ..)| entity)
+            .map(|(entity, .., interactive)| (entity, interactive))
     }
 }
 

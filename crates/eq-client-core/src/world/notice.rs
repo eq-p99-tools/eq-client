@@ -118,6 +118,8 @@ pub enum Notice {
     Arrived(String),
     /// A target request was refused, and why.
     TargetRefused(String),
+    /// A normal attack or consider request was refused locally, and why.
+    CombatRefused(String),
     /// An ability was not used, and why: in the official client's own words
     /// where the session names its string, else in the session's.
     AbilityRefused {

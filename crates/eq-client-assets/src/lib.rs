@@ -17,6 +17,8 @@ pub mod sounds;
 pub mod spells;
 pub mod strings;
 #[cfg(test)]
+mod terrain_material_tests;
+#[cfg(test)]
 mod test_world;
 pub mod ui;
 
@@ -120,6 +122,8 @@ pub struct ZoneAsset {
     pub short_name: String,
     /// Geometry grouped by WLD material.
     pub primitives: Vec<ZonePrimitive>,
+    /// Authored terrain material properties, in the order of `primitives`.
+    pub terrain_materials: Vec<TerrainMaterial>,
     /// Deduplicated diffuse textures used by `primitives`.
     pub textures: Vec<ZoneTexture>,
     /// Reusable static models referenced by placed objects.
@@ -134,6 +138,26 @@ pub struct ZoneAsset {
     pub object_skins_skipped: usize,
     /// Solid terrain triangles independent of material visibility.
     pub collision: Vec<[[f32; 3]; 3]>,
+}
+
+/// Authored properties of one terrain draw call, independent of its blend mode.
+#[derive(Clone, Debug)]
+pub struct TerrainMaterial {
+    /// Whether material fragment 0x30 permits drawing its back face.
+    pub double_sided: bool,
+    /// Texture fragment 0x04's complete animation, when its timing is known.
+    pub animation: Option<TextureAnimation>,
+}
+
+/// An ordered WLD texture sequence. Texture indexes refer to [`ZoneAsset::textures`].
+#[derive(Clone, Debug)]
+pub struct TextureAnimation {
+    /// Every frame in authored order, including repeated bitmap references.
+    pub frames: Vec<usize>,
+    /// The nonzero interval stored in the texture fragment, in milliseconds.
+    pub frame_millis: std::num::NonZeroU32,
+    /// Whether the texture permits skipping frames after a delayed update.
+    pub skip_frames: bool,
 }
 
 impl ZoneAsset {
@@ -299,10 +323,18 @@ fn read_zone(
     let mut textures = Vec::new();
     let mut texture_indices = HashMap::<String, usize>::new();
     let mut primitives = Vec::new();
+    let mut terrain_materials = Vec::new();
 
     if textures_read == Textures::Realize {
         for mesh in world.meshes() {
             for staged in stage_mesh(&mesh) {
+                terrain_materials.push(terrain_material(
+                    &doc,
+                    staged.material.as_deref(),
+                    &mut archive,
+                    &mut textures,
+                    &mut texture_indices,
+                )?);
                 primitives.push(staged.realize(
                     &mut archive,
                     &mut textures,
@@ -329,6 +361,7 @@ fn read_zone(
         regions,
         short_name: short_name.to_owned(),
         primitives,
+        terrain_materials,
         textures,
         models,
         objects,
@@ -336,6 +369,77 @@ fn read_zone(
         object_skins_skipped: report.skins_skipped,
         collision,
     })
+}
+
+/// Reads the material's sidedness and the 0x30 -> 0x05 -> 0x04 -> 0x03
+/// texture graph. Never flatten layered bitmap entries into animation frames,
+/// invent a delay, or play a partial sequence with missing bitmaps.
+fn terrain_material(
+    doc: &libeq::wld::parser::WldDoc,
+    name: Option<&str>,
+    archive: &mut PfsReader<File>,
+    textures: &mut Vec<ZoneTexture>,
+    texture_indices: &mut HashMap<String, usize>,
+) -> Result<TerrainMaterial, LoadError> {
+    use libeq::wld::parser::MaterialDef;
+    let mut result = TerrainMaterial {
+        // Keep the previous rendering when the source material cannot be found.
+        double_sided: true,
+        animation: None,
+    };
+    let Some(material) = doc.fragment_iter::<MaterialDef>().find(|material| {
+        name.is_some_and(|name| {
+            doc.get_string(material.name_reference)
+                .is_some_and(|source| source.eq_ignore_ascii_case(name))
+        })
+    }) else {
+        return Ok(result);
+    };
+    result.double_sided = material.flags.is_two_sided();
+    let Some(texture) = doc
+        .get(&material.reference)
+        .and_then(|reference| doc.get(&reference.reference))
+    else {
+        return Ok(result);
+    };
+    // libeq does not retain an explicitly selected current frame yet. Such a
+    // sequence keeps its original still image instead of guessing its start.
+    let flags = u32::from(texture.flags);
+    if !texture.flags.is_animated() || flags & 0x04 != 0 || texture.flags.has_current_frame() {
+        return Ok(result);
+    }
+    let Some(frame_millis) = texture.sleep.and_then(std::num::NonZeroU32::new) else {
+        return Ok(result);
+    };
+    let names: Option<Vec<String>> = texture
+        .frame_references
+        .iter()
+        .map(|reference| {
+            let bitmap = doc.get(reference)?;
+            if bitmap.entries.len() != 1 {
+                return None;
+            }
+            Some(bitmap.entries[0].file_name.to_ascii_lowercase())
+        })
+        .collect();
+    let Some(names) = names.filter(|names| names.len() > 1) else {
+        return Ok(result);
+    };
+    let mut frames = Vec::with_capacity(names.len());
+    for name in names {
+        let Some(index) = load_texture(archive, &name, textures, texture_indices)? else {
+            return Ok(result);
+        };
+        frames.push(index);
+    }
+    result.animation = Some(TextureAnimation {
+        frames,
+        frame_millis,
+        // The WLD readers at EQGfx_Dx8.dll 0x1001a280 (Titanium) and
+        // eqgfx_dx8.dll 0x1002b4e0 (EQMac) pass bit6 to the sprite's skip flag.
+        skip_frames: flags & 0x40 != 0,
+    });
+    Ok(result)
 }
 
 fn material_mode(method: RenderMethod) -> Option<MaterialMode> {

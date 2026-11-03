@@ -16,7 +16,7 @@ use eq_client_core::{
 use std::sync::mpsc::{Receiver, SyncSender};
 
 /// What the offline preview shows.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Independent preview switches.
 pub struct Preview {
     /// Synthetic moving entities, with synthetic chat.
@@ -29,10 +29,36 @@ pub struct Preview {
     pub spellbook: bool,
     /// Character selection with synthetic names.
     pub character_select: bool,
+    /// A particular selection spot and frozen orbit angle to inspect offline.
+    /// Uses the normal selection loader, placement and camera framing.
+    pub selection: Option<SelectionPreview>,
     /// A synthetic creation draft for offline visual checks.
     pub creation: Option<eq_client_core::character_creation::Draft>,
     /// Loot and merchant windows with synthetic items.
     pub trade: bool,
+}
+
+/// An offline selection audit. A rendered image never marks its spot reviewed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectionPreview {
+    /// Zone number for the synthetic character's list entry.
+    pub zone_id: u16,
+    /// The proposed or hand-authored spot to inspect.
+    pub spot: eq_client_core::select_spots::Spot,
+    /// Offset around the normal orbit in radians; frozen for repeatable images.
+    pub orbit: f32,
+    /// Further frozen views to capture serially after the first screenshot.
+    /// Each waits for the preceding capture and the new camera pose to settle.
+    pub additional_captures: Vec<SelectionCapture>,
+}
+
+/// An additional offline selection image from a real updated camera pose.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectionCapture {
+    /// Absolute offset around the character's initial facing, in radians.
+    pub orbit: f32,
+    /// Private screenshot destination.
+    pub output: std::path::PathBuf,
 }
 
 impl Preview {
@@ -42,7 +68,10 @@ impl Preview {
     }
 
     const fn any(&self) -> bool {
-        self.admits() || self.character_select || self.creation.is_some()
+        self.admits()
+            || self.character_select
+            || self.selection.is_some()
+            || self.creation.is_some()
     }
 }
 
@@ -63,7 +92,7 @@ impl News {
 
 /// The preview's switches, for its systems.
 #[derive(Resource)]
-struct Switches(Preview);
+pub(super) struct Switches(pub(super) Preview);
 
 /// What the preview shows once its player is admitted: an admission
 /// starts the windows over, as a session's does, so they fill after it.
@@ -77,12 +106,19 @@ pub(crate) fn install(app: &mut App, preview: Preview) -> Option<Receiver<WorldU
         return None;
     }
     let (sender, receiver) = std::sync::mpsc::sync_channel(4096);
+    if let Some(selection) = preview
+        .selection
+        .as_ref()
+        .filter(|selection| !selection.additional_captures.is_empty())
+    {
+        app.insert_resource(super::select_preview::AuditCaptures::new(selection));
+    }
     app.insert_resource(News(sender))
         .configure_sets(Update, Shows.run_if(admitted).in_set(Stage::Scene));
     if preview.admits() {
         app.add_systems(Startup, admit.after(setup_scene));
     }
-    if preview.character_select || preview.creation.is_some() {
+    if preview.character_select || preview.selection.is_some() || preview.creation.is_some() {
         app.add_systems(Startup, characters);
         app.add_systems(
             Update,
@@ -240,22 +276,35 @@ fn characters(news: Res<News>, settings: Res<super::ViewerSettings>, switches: R
             |draft| draft.rules,
         )),
         selection_id: 1,
-        characters: vec![
-            CharacterChoice {
-                slot: 0,
-                name: "Examplewarrior".into(),
-                level: Some(12),
-                zone_id: Some(22),
-                look: Some(look(1, 0, 1, 2, 1)),
+        characters: switches.0.selection.as_ref().map_or_else(
+            || {
+                vec![
+                    CharacterChoice {
+                        slot: 0,
+                        name: "Examplewarrior".into(),
+                        level: Some(12),
+                        zone_id: Some(22),
+                        look: Some(look(1, 0, 1, 2, 1)),
+                    },
+                    CharacterChoice {
+                        slot: 3,
+                        name: "Examplecleric".into(),
+                        level: Some(5),
+                        zone_id: Some(9),
+                        look: Some(look(8, 1, 2, 3, 0)),
+                    },
+                ]
             },
-            CharacterChoice {
-                slot: 3,
-                name: "Examplecleric".into(),
-                level: Some(5),
-                zone_id: Some(9),
-                look: Some(look(8, 1, 2, 3, 0)),
+            |selection| {
+                vec![CharacterChoice {
+                    slot: 0,
+                    name: "Examplewarrior".into(),
+                    level: Some(12),
+                    zone_id: Some(u32::from(selection.zone_id)),
+                    look: Some(look(1, 0, 1, 0, 0)),
+                }]
             },
-        ],
+        ),
     });
 }
 

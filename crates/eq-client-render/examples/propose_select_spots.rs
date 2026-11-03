@@ -7,8 +7,7 @@
 //!
 //! Without zones named, it tries every zone in the zone table whose files
 //! the installation has. Zones it can't load or place are said on stderr.
-use bevy::math::Vec3;
-use eq_client_core::select_spots::{self, Spots};
+use eq_client_core::select_spots::Spots;
 use std::path::PathBuf;
 
 fn main() {
@@ -36,17 +35,7 @@ fn main() {
                 continue;
             }
         };
-        let Some(world) = eq_client_render::zone_collision(&asset) else {
-            eprintln!("{zone}: no collision");
-            continue;
-        };
-        let Some((min, max)) = asset.bounds() else {
-            eprintln!("{zone}: no geometry");
-            continue;
-        };
-        let regions = &asset.regions;
-        let wet = |point: Vec3| regions.liquid_at(point.to_array()).is_some();
-        match select_spots::propose(&world, (Vec3::from_array(min), Vec3::from_array(max)), wet) {
+        match eq_client_render::propose_select_spot(&asset) {
             Some(spot) => println!("{}", spot.line(&zone)),
             None => eprintln!("{zone}: no floor qualifies"),
         }

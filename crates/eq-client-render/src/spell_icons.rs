@@ -151,7 +151,11 @@ pub(super) fn update(
                     .copied()
             }),
         };
-        if artwork.initialized && artwork.shown == spell {
+        if artwork.initialized
+            && artwork.shown == spell
+            && !art.skin_changed()
+            && !names.is_changed()
+        {
             continue;
         }
         artwork.initialized = true;
@@ -213,6 +217,81 @@ fn report_gem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mac_book_icons_use_the_shared_book_and_gem_column_and_clear_on_page_turn() {
+        let mut app = crate::testing::app();
+        crate::sheets::testing::blank(&mut app);
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .eq_directory = Some("synthetic-install".into());
+        let mut fields = vec!["0"; 147];
+        fields[0] = "42";
+        fields[131] = "7";
+        // A different value in Titanium's column must not select that icon.
+        fields[144] = "20";
+        app.insert_resource(crate::spellbook::SpellNames::parse_for(
+            &fields.join("^"),
+            eq_client_assets::ui::InstalledClient::EqMac,
+        ));
+        let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+        crate::online::testing::admit(&mut online, 7, crate::online::testing::player(1));
+        let mut book = eq_client_core::SpellBook::default();
+        book.apply(&eq_client_core::SpellUpdate::Slot {
+            slot: 1,
+            spell_id: 42,
+            mode: 0,
+        });
+        crate::online::testing::news(&mut online, [eq_client_core::WorldEvent::SpellBook(book)]);
+        let occupied = app
+            .world_mut()
+            .spawn(artwork(Source::BookPlace(1), 40.0))
+            .id();
+        let empty = app
+            .world_mut()
+            .spawn(artwork(Source::BookPlace(0), 40.0))
+            .id();
+        app.add_systems(Update, update);
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(occupied).unwrap().display,
+            Display::Flex
+        );
+        assert_eq!(
+            app.world().get::<ImageNode>(occupied).unwrap().rect,
+            Some(Rect::new(40.0, 40.0, 80.0, 80.0))
+        );
+        assert_eq!(
+            app.world().get::<Node>(empty).unwrap().display,
+            Display::None
+        );
+        // Keeping the same spell while selecting another skin must resolve
+        // its declared cell again, rather than retain the old rectangle.
+        app.world_mut().resource_mut::<crate::skin::UiSkin>().0 = "synthetic".into();
+        crate::sheets::testing::blank(&mut app);
+        crate::sheets::testing::definitions(
+            &mut app,
+            "<XML><Ui2DAnimation item=\"A_SpellIcons\">\
+            <Grid>true</Grid><Vertical>true</Vertical><CellWidth>40</CellWidth><CellHeight>40</CellHeight>\
+            <Frames><Texture>spells01.tga</Texture><Location><X>0</X><Y>0</Y></Location>\
+            <Size><CX>80</CX><CY>160</CY></Size></Frames></Ui2DAnimation></XML>",
+        );
+        app.update();
+        assert_eq!(
+            app.world().get::<ImageNode>(occupied).unwrap().rect,
+            Some(Rect::new(40.0, 120.0, 80.0, 160.0))
+        );
+        app.world_mut()
+            .resource_mut::<crate::spellbook::BookView>()
+            .spread = 1;
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(occupied).unwrap().display,
+            Display::None
+        );
+    }
+
     #[test]
     fn clearing_a_gem_removes_previous_artwork() {
         let mut fields = vec!["0"; 145];

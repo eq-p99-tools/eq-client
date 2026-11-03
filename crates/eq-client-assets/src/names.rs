@@ -2,9 +2,13 @@
 //! program. A client generation's rule is its [`NameColours`], from
 //! [`crate::ui::InstalledClient::name_colours`].
 //!
-//! The Titanium program picks each name's colour from constants in its code
-//! (0x47aa0b): no colour setting of the player's changes them. Program read
-//! N4 of 11-01, and its follow-up on the zone rule. The byte order is
+//! Both programs pick the supported base colours from constants in their
+//! code (Titanium 0x47aa0b; Mac-era 0x4b114d). The Mac-era routine reaches
+//! `s3dSetStringSpriteTint` at 0x4b1427. No guild comparison or pet-owner
+//! lookup changes these base colours: guildmates are players, pets and
+//! corpses are non-players. Unresolved flag branches stay unapplied.
+//! Titanium program read N4 of 11-01 and its follow-up on the zone rule.
+//! The byte order is
 //! inferred from the default player colour reading blue, as players
 //! remember it (recording checklist 6.354).
 
@@ -43,8 +47,8 @@ pub const TITANIUM: NameColours = NameColours {
     generation: Generation::Titanium,
 };
 
-/// The Mac-era client's colours: not yet read, so every name stays white
-/// as this client drew them before (recording checklist 6.355).
+/// The Mac-era client's directly read base colours (0x4b114d), resolving
+/// the earlier white fallback recorded in checklist 6.355.
 pub const EQMAC: NameColours = NameColours {
     generation: Generation::EqMac,
 };
@@ -56,8 +60,8 @@ const FIRST_OBJECT_RACE: u32 = 0x8cd;
 impl NameColours {
     /// The colour a name is drawn in.
     ///
-    /// Titanium: players blue, and purple while roleplaying where the
-    /// world's ruleset is 0 or 4; every other spawn teal; objects green.
+    /// Both generations: players blue, and purple while roleplaying where
+    /// the world's ruleset is 0 or 4; NPCs, pets and corpses teal; objects green.
     /// Not applied, as their meanings are unread (recording checklist
     /// 6.353): a red and a cyan the program gives some players, a green it
     /// gives some spawns by a flag, ruleset 2's colours by a group value,
@@ -65,8 +69,7 @@ impl NameColours {
     #[must_use]
     pub const fn colour(self, named: Named) -> Rgb {
         match self.generation {
-            Generation::EqMac => [255, 255, 255],
-            Generation::Titanium => {
+            Generation::Titanium | Generation::EqMac => {
                 if named.race >= FIRST_OBJECT_RACE {
                     [102, 255, 0]
                 } else if !named.player {
@@ -83,10 +86,9 @@ impl NameColours {
     /// The colour of the player's target's name at `step` of the program's
     /// eleven (0 to 10): white at 0, and a tenth of the way to its own
     /// colour more each step, each channel 255 − ((255 − c) / 10) × step in
-    /// whole numbers. The program steps it each time it draws the name, so
-    /// the name pulses (0x47aa0b); how fast is this client's (recording
-    /// checklist 6.354). The Mac-era client's names are white, so its
-    /// target's stays white.
+    /// whole numbers. Both programs step it each time they draw the name
+    /// (Titanium 0x47aa0b, Mac-era 0x4b1380); how fast is this client's
+    /// (recording checklist 6.354).
     #[must_use]
     pub const fn target(self, colour: Rgb, step: u8) -> Rgb {
         const fn channel(c: u8, step: u8) -> u8 {
@@ -148,9 +150,22 @@ mod tests {
     }
 
     #[test]
-    fn the_mac_era_client_keeps_names_white() {
-        assert_eq!(EQMAC.colour(player()), [255, 255, 255]);
-        assert_eq!(EQMAC.target([255, 255, 255], 4), [255, 255, 255]);
+    fn the_mac_era_program_defines_the_same_supported_base_colours() {
+        assert_eq!(EQMAC.colour(player()), [61, 107, 220]);
+        let npc = Named {
+            player: false,
+            ..player()
+        };
+        assert_eq!(EQMAC.colour(npc), [23, 184, 173]);
+        assert_eq!(
+            EQMAC.colour(Named {
+                roleplaying: true,
+                ..player()
+            }),
+            [133, 72, 156]
+        );
+        assert_eq!(EQMAC.colour(Named { race: 0x8cd, ..npc }), [102, 255, 0]);
+        assert_eq!(EQMAC.target([61, 107, 220], 4), [179, 199, 243]);
     }
 
     #[test]

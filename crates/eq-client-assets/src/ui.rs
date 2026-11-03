@@ -327,6 +327,19 @@ pub struct GemDraw {
 }
 
 impl InstalledClient {
+    /// Whether this generation gives a player class a spellbook and gems.
+    /// The class checks are Titanium 0x417daf and Mac-era 0x4b8ea1; neither
+    /// reads mana, the book contents, memorized slots or the player's level.
+    /// The two lists coincide: Titanium refuses classes 1, 7, 9 and 16, and
+    /// the Mac-era client, which defines no class 16, refuses 1, 7 and 9, so
+    /// one match serves both generations.
+    #[must_use]
+    pub const fn spellbook_class(self, class: u32) -> bool {
+        match self {
+            Self::Titanium | Self::EqMac => matches!(class, 2..=6 | 8 | 10..=15),
+        }
+    }
+
     /// The top-level files only this client's installation has, by name in
     /// lower case, and the extension of files only it has: the Mac-era
     /// client's own program files; Titanium's spell file and its newer
@@ -604,8 +617,9 @@ impl InstalledClient {
     }
 
     /// The colours this client draws names over heads in, from the program
-    /// where read (Titanium, program read N4 of 11-01). The Mac-era
-    /// client's are not yet read (recording checklist 6.355).
+    /// where read (Titanium, program read N4 of 11-01; Mac-era 0x4b114d,
+    /// resolving checklist 6.355). The supported base categories match;
+    /// no server-specific guildmate or pet override is evidenced.
     #[must_use]
     pub const fn name_colours(self) -> crate::names::NameColours {
         match self {
@@ -1516,6 +1530,21 @@ fn set_ini_value(text: &str, section: &str, key: &str, value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_spellbook_classes_have_spell_gems() {
+        use super::InstalledClient;
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            for class in 1..=16 {
+                assert_eq!(
+                    client.spellbook_class(class),
+                    !matches!(class, 1 | 7 | 9 | 16)
+                );
+            }
+            assert!(!client.spellbook_class(0));
+            assert!(!client.spellbook_class(17));
+        }
+    }
+
     #[test]
     fn an_installation_is_marked_by_files_only_its_generation_has() {
         let root = std::env::temp_dir().join(format!("install-markers-{}", std::process::id()));

@@ -135,6 +135,626 @@ fn absent_empty_invalidated_and_recovered_state_are_distinct() {
     assert_eq!(state.world().speed_input_revision(), None);
 }
 
+fn movement_notice(app: &App) -> &str {
+    app.world()
+        .resource::<crate::notices::Lines>()
+        .movement
+        .text()
+}
+
+#[test]
+fn readiness_tracks_receipts_even_when_the_unavailable_report_is_unchanged() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let mut app = crate::testing::app();
+    app.insert_resource(online())
+        .insert_resource(Outbox::new(Some(tx)))
+        .add_systems(Update, report);
+    app.update();
+    assert_eq!(
+        movement_notice(&app),
+        "Movement paused: waiting for inventory information."
+    );
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Unavailable(Missing::Inventory),
+            ..
+        })
+    ));
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![]))],
+    );
+    app.update();
+    assert_eq!(
+        movement_notice(&app),
+        "Movement paused: waiting for carried coin information."
+    );
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Unavailable(Missing::Coins),
+            ..
+        })
+    ));
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::Coins(Coins::default())],
+    );
+    for _ in 0..3 {
+        app.update();
+        assert_eq!(
+            movement_notice(&app),
+            "Movement paused: waiting for cursor coin information."
+        );
+        // The more useful wording does not send duplicate unavailable reports.
+        assert!(rx.try_recv().is_err());
+    }
+    assert_eq!(
+        app.world()
+            .resource::<crate::chat::ChatState>()
+            .history
+            .lines(eq_client_core::chat::ChatTab::System)
+            .len(),
+        0
+    );
+    ready(&mut app.world_mut().resource_mut::<OnlineState>());
+    app.update();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Ready(_),
+            ..
+        })
+    ));
+    // Local readiness and successful enqueue do not clear a pending notice.
+    assert_eq!(
+        movement_notice(&app),
+        "Movement paused: waiting for the session to accept the movement inputs."
+    );
+}
+
+fn reporting_ready() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
+    let mut state = online();
+    ready(&mut state);
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let mut app = crate::testing::app();
+    app.insert_resource(state)
+        .insert_resource(Outbox::new(Some(tx)))
+        .add_systems(Update, report);
+    app.update();
+    (app, rx)
+}
+
+fn ready_spell_provider(
+    names: &mut crate::spellbook::SpellNames,
+    binding: eq_client_core::spell_tables::Binding,
+) {
+    use eq_client_core::spell_tables::{Context, Event, Fact, SpellId, Stage, Table, Update};
+    names.bind(binding);
+    for fact in [
+        Fact::RunStarted {
+            run_id: 7,
+            attempt: 1,
+        },
+        Fact::Table(Event::new(
+            Context::new(7, 1, Stage::World),
+            Update::Table(Table::Registration(vec![SpellId::new(1).unwrap()])),
+        )),
+        Fact::ZonePending { run_id: 7 },
+        Fact::Table(Event::new(
+            Context::new(7, 2, Stage::Zone { session_id: 1 }),
+            Update::Table(Table::Replay(Vec::new())),
+        )),
+        Fact::ZoneEntered {
+            run_id: 7,
+            session_id: 1,
+        },
+    ] {
+        names.receive(&binding.envelope(fact));
+    }
+}
+
+#[test]
+fn spell_provider_recovery_requires_a_fresh_matching_movement_receipt() {
+    use eq_client_core::spell_tables::{Binding, Context, Event, Fact, Policy, Stage, Update};
+    use eq_network_game::spell_tables::{DecodeError, Kind, Unavailable};
+    let (mut app, rx) = reporting_ready();
+    let original = receipt(&rx.try_recv().unwrap(), true);
+    let mut fields = vec!["0"; 183];
+    fields[0] = "1";
+    fields[1] = "Synthetic affecting spell";
+    fields[86..98].fill("254");
+    let binding = Binding::new(Policy::Project1999);
+    let mut names = crate::spellbook::SpellNames::parse(&fields.join("^"));
+    ready_spell_provider(&mut names, binding);
+    app.insert_resource(names);
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [buff(0, 1)],
+    );
+    app.update();
+    // The known non-speed spell retains the previous numeric inputs, so the
+    // receipt owner may retain the already-posted report identity.
+    assert!(rx.try_recv().is_err());
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [
+            motion_state(Some(6.0)),
+            WorldEvent::SpeedInputsAccepted(original),
+        ],
+    );
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+    let failed = Event::new(
+        Context::new(7, 3, Stage::Zone { session_id: 1 }),
+        Update::Unavailable {
+            kind: Kind::Replay,
+            reason: Unavailable::Malformed(DecodeError::MissingCount),
+        },
+    );
+    app.world_mut()
+        .resource_mut::<crate::spellbook::SpellNames>()
+        .receive(&binding.envelope(Fact::Table(failed)));
+    app.update();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Unavailable(Missing::Effects),
+            ..
+        })
+    ));
+    assert_ne!(movement_notice(&app), "");
+    // Provider replacement and real registration/replay restore the same input
+    // values without changing this report owner's admission or revision.
+    ready_spell_provider(
+        &mut app
+            .world_mut()
+            .resource_mut::<crate::spellbook::SpellNames>(),
+        Binding::new(Policy::Project1999),
+    );
+    app.update();
+    let recovered = receipt(&rx.try_recv().unwrap(), true);
+    assert_eq!(
+        (recovered.revision, recovered.inputs),
+        (original.revision, original.inputs)
+    );
+    assert_ne!(recovered.report_id, original.report_id);
+    assert_ne!(movement_notice(&app), "");
+    for accepted in [original, recovered] {
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::SpeedInputsAccepted(accepted)],
+        );
+        app.update();
+        assert_eq!(movement_notice(&app).is_empty(), accepted == recovered);
+    }
+}
+
+fn receipt(command: &ClientCommand, granted: bool) -> eq_client_core::SpeedInputAcceptance {
+    let ClientCommand::SpeedInputs {
+        session_id,
+        revision,
+        report_id,
+        state: SpeedInputState::Ready(inputs),
+    } = *command
+    else {
+        panic!("expected the actual ready report")
+    };
+    eq_client_core::SpeedInputAcceptance {
+        session_id,
+        revision,
+        report_id,
+        inputs,
+        granted,
+    }
+}
+
+fn motion_state(speed: Option<f32>) -> WorldEvent {
+    WorldEvent::MotionState {
+        session_id: 1,
+        units_per_second: speed,
+        backward_units_per_second: None,
+        walk_units_per_second: None,
+        strafe_units_per_second: None,
+        falls: true,
+    }
+}
+
+#[test]
+fn only_the_exact_posted_ready_report_with_a_positive_grant_clears_the_wait() {
+    let (mut app, rx) = reporting_ready();
+    let command = rx.try_recv().unwrap();
+    let accepted = receipt(&command, true);
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [motion_state(Some(6.0))],
+    );
+    app.update();
+    assert!(
+        !movement_notice(&app).is_empty(),
+        "cached speed is insufficient"
+    );
+    let mut different_inputs = accepted.inputs;
+    different_inputs.weight += 1;
+    for stale in [
+        eq_client_core::SpeedInputAcceptance {
+            session_id: 2,
+            ..accepted
+        },
+        eq_client_core::SpeedInputAcceptance {
+            revision: 2,
+            ..accepted
+        },
+        eq_client_core::SpeedInputAcceptance {
+            report_id: accepted.report_id.wrapping_sub(1),
+            ..accepted
+        },
+        eq_client_core::SpeedInputAcceptance {
+            inputs: different_inputs,
+            ..accepted
+        },
+        eq_client_core::SpeedInputAcceptance {
+            granted: false,
+            ..accepted
+        },
+    ] {
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::SpeedInputsAccepted(stale)],
+        );
+        app.update();
+        assert_ne!(movement_notice(&app), "");
+    }
+    app.world_mut()
+        .resource_mut::<crate::notices::Lines>()
+        .status
+        .set("Zoning");
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::SpeedInputsAccepted(accepted)],
+    );
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+    assert_eq!(
+        app.world()
+            .resource::<crate::notices::Lines>()
+            .status
+            .text(),
+        "Zoning"
+    );
+}
+
+#[test]
+fn identical_value_recovery_uses_a_fresh_identity_and_rejects_the_old_receipt() {
+    let (mut app, rx) = reporting_ready();
+    let original = receipt(&rx.try_recv().unwrap(), true);
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [
+            motion_state(Some(6.0)),
+            WorldEvent::SpeedInputsAccepted(original),
+        ],
+    );
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::Inventory(InventoryUpdate::Invalidated)],
+    );
+    app.update();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Unavailable(_),
+            ..
+        })
+    ));
+    assert_ne!(movement_notice(&app), "");
+    ready(&mut app.world_mut().resource_mut::<OnlineState>());
+    app.update();
+    let recovered = receipt(&rx.try_recv().unwrap(), true);
+    assert_eq!(
+        (recovered.revision, recovered.inputs),
+        (original.revision, original.inputs)
+    );
+    assert_ne!(recovered.report_id, original.report_id);
+    assert!(!movement_notice(&app).is_empty(), "cached receipt is stale");
+    for accepted in [original, recovered] {
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::SpeedInputsAccepted(accepted)],
+        );
+        app.update();
+        assert_eq!(movement_notice(&app).is_empty(), accepted == recovered);
+    }
+}
+
+#[test]
+fn withdrawal_and_new_input_requirements_invalidate_the_previous_acceptance() {
+    let (mut app, rx) = reporting_ready();
+    let original = receipt(&rx.try_recv().unwrap(), true);
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [
+            motion_state(Some(6.0)),
+            WorldEvent::SpeedInputsAccepted(original),
+        ],
+    );
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [motion_state(None), motion_state(Some(6.0))],
+    );
+    app.update();
+    assert!(
+        !movement_notice(&app).is_empty(),
+        "an unacknowledged regrant is insufficient"
+    );
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 2,
+        }],
+    );
+    app.update();
+    let current = receipt(&rx.try_recv().unwrap(), true);
+    assert_ne!(current.report_id, original.report_id);
+    for accepted in [original, current] {
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::SpeedInputsAccepted(accepted)],
+        );
+        app.update();
+        assert_eq!(movement_notice(&app).is_empty(), accepted == current);
+    }
+}
+
+#[test]
+fn a_full_queue_retries_one_identity_and_new_states_supersede_it() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let mut app = crate::testing::app();
+    app.insert_resource(online())
+        .insert_resource(Outbox::new(Some(tx)))
+        .add_systems(Update, report);
+    app.update();
+    ready(&mut app.world_mut().resource_mut::<OnlineState>());
+    app.update();
+    let ClientCommand::SpeedInputs {
+        report_id: missing_id,
+        ..
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("expected the queued unavailable report")
+    };
+    app.update();
+    let accepted = receipt(&rx.try_recv().unwrap(), true);
+    assert_ne!(accepted.report_id, missing_id);
+    for _ in 0..3 {
+        app.update();
+        assert!(rx.try_recv().is_err());
+        assert_ne!(movement_notice(&app), "");
+    }
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [
+            motion_state(Some(6.0)),
+            WorldEvent::SpeedInputsAccepted(accepted),
+        ],
+    );
+    app.update();
+    assert!(
+        movement_notice(&app).is_empty(),
+        "the retry retained its identity"
+    );
+}
+
+#[test]
+fn report_identity_wrap_and_admission_changes_do_not_match_the_previous_report() {
+    let mut reports = Reports {
+        next_id: u64::MAX - 1,
+        current: None,
+    };
+    let state = SpeedInputState::Ready(SpeedInputs {
+        rate: 0,
+        weight: 0,
+        capacity: 90,
+    });
+    let previous_id = reports.prepare(1, 1, state).id;
+    assert_eq!(previous_id, u64::MAX);
+    reports.prepare(1, 1, SpeedInputState::Unavailable(Missing::Effects));
+    let recovered = reports.prepare(1, 1, state);
+    assert_ne!(recovered.id, previous_id);
+    let recovered_id = recovered.id;
+    assert_eq!(reports.prepare(1, 1, state).id, recovered_id);
+    let new_admission = reports.prepare(2, 1, state);
+    assert_ne!(
+        (new_admission.session_id, new_admission.id),
+        (1, recovered_id)
+    );
+    assert!(!new_admission.posted);
+}
+
+#[test]
+fn readiness_explains_missing_profile_buffs_spells_and_item_details() {
+    let run = |state| {
+        let mut app = crate::testing::app();
+        app.insert_resource(state).add_systems(Update, report);
+        app.update();
+        movement_notice(&app).to_owned()
+    };
+    let mut state = online();
+    let mut player = testing::player(7);
+    player.base_attributes = None;
+    testing::admit(&mut state, 1, player);
+    ready(&mut state);
+    testing::news(
+        &mut state,
+        [WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 1,
+        }],
+    );
+    assert_eq!(
+        run(state),
+        "Movement paused: waiting for character information."
+    );
+
+    let mut state = online();
+    let player = state.world().player().unwrap().clone();
+    testing::admit(&mut state, 1, player);
+    ready(&mut state);
+    testing::news(
+        &mut state,
+        [WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 1,
+        }],
+    );
+    assert_eq!(run(state), "Movement paused: waiting for buff information.");
+
+    let mut state = online();
+    ready(&mut state);
+    testing::news(&mut state, [buff(0, 999)]);
+    assert_eq!(
+        run(state),
+        "Movement paused: spell or item effect details are unavailable."
+    );
+
+    let mut state = online();
+    ready(&mut state);
+    let mut food = item(22, 10, 5);
+    food.rules.item_type = 14;
+    food.details.equipment = None;
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![food]))],
+    );
+    assert_eq!(run(state), "Movement paused: item details are unavailable.");
+}
+
+#[test]
+fn unresolved_strength_and_predicted_load_keep_their_actual_refusal() {
+    let mut state = online();
+    ready(&mut state);
+    let mut fields = vec!["0"; 183];
+    fields[0] = "42";
+    fields[1] = "Synthetic strength spell";
+    fields[20] = "5";
+    fields[70] = "100";
+    fields[86] = "4";
+    let names = crate::spellbook::SpellNames::parse(&fields.join("^"));
+    testing::news(
+        &mut state,
+        [WorldEvent::SpellEffect(eq_client_core::SpellEffect {
+            spell_id: 42,
+            caster_level: 20,
+            effect_flag: 4,
+            instrument_modifier: 10,
+            target_id: 7,
+            caster_id: 7,
+            spell_level: 1,
+            push: None,
+        })],
+    );
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let mut app = crate::testing::app();
+    app.insert_resource(state)
+        .insert_resource(names)
+        .insert_resource(Outbox::new(Some(tx)))
+        .add_systems(Update, report);
+    app.update();
+    assert_eq!(
+        movement_notice(&app),
+        "Movement paused: spell or item effect details are unavailable."
+    );
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Unavailable(Missing::Effects),
+            ..
+        })
+    ));
+
+    let mut state = online();
+    ready(&mut state);
+    let mut carried = item(22, 70, 0);
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            carried.clone(),
+        ]))],
+    );
+    carried.slot = InventorySlot(2000);
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Prediction(vec![
+            carried,
+        ]))],
+    );
+    app.insert_resource(state);
+    app.update();
+    assert_eq!(
+        movement_notice(&app),
+        "Movement paused: waiting for item changes to be confirmed."
+    );
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Unavailable(Missing::Prediction),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn a_wait_is_admission_scoped_and_hidden_outside_the_connected_world() {
+    let mut app = crate::testing::app();
+    app.insert_resource(online()).add_systems(Update, report);
+    app.update();
+    assert_ne!(movement_notice(&app), "");
+    app.world_mut().resource_mut::<OnlineState>().enabled = false;
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+    app.world_mut().resource_mut::<OnlineState>().enabled = true;
+    app.update();
+    assert_ne!(movement_notice(&app), "");
+
+    testing::admit(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        2,
+        testing::player(7),
+    );
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 99,
+        }],
+    );
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::SpeedInputsRequired {
+            session_id: 2,
+            revision: 1,
+        }],
+    );
+    app.update();
+    assert_eq!(
+        movement_notice(&app),
+        "Movement paused: waiting for inventory information."
+    );
+    testing::connect(&mut app.world_mut().resource_mut::<OnlineState>(), false);
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+}
+
 #[test]
 fn worn_strength_coin_changes_and_weight_preserving_predictions_recalculate() {
     let mut state = online();

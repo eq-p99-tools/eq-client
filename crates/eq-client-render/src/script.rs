@@ -529,7 +529,15 @@ type Pointers<'w, 's> = Query<'w, 's, &'static mut bevy::ui::RelativeCursorPosit
 
 /// Every UI node's display and parent: a closed window is only left out of
 /// the layout, so its buttons keep their visibility.
-type Layout<'w, 's> = Query<'w, 's, (&'static Node, Option<&'static ChildOf>)>;
+type Layout<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Node,
+        Option<&'static ChildOf>,
+        Option<&'static bevy::ui::ComputedStackIndex>,
+    ),
+>;
 
 /// What a step drives besides the world: chat, window moves, the front end,
 /// sounds and the EQ menu's state.
@@ -559,6 +567,7 @@ type DriverContext<'w, 's> = (
     Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     Option<Res<'w, super::ViewerSettings>>,
     Option<ResMut<'w, RunControl>>,
+    Option<Res<'w, super::inventory::InventoryState>>,
 );
 
 /// The keyboard as a script presses it: each press and release sets the
@@ -635,7 +644,7 @@ pub(super) fn drive(
         Query<&crate::outbox::Needs>,
         pointer::Aim,
     ),
-    (windows, settings, mut control): DriverContext,
+    (windows, settings, mut control, inventory): DriverContext,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut reported_focus: Local<Option<(Entity, bool)>>,
     mut exit: MessageWriter<AppExit>,
@@ -798,6 +807,28 @@ pub(super) fn drive(
     }
     if let Some((step, since)) = script.current.clone() {
         let elapsed = now.saturating_sub(since);
+        // A second inventory click must select from the worker's latest
+        // projection. Wait only for that local submission result, never for
+        // remote move acceptance or an arbitrary pacing timer.
+        if matches!(
+            step,
+            Step::Click(
+                ClickTarget::Slot(_)
+                    | ClickTarget::Store
+                    | ClickTarget::Scribe
+                    | ClickTarget::Pick(_)
+            ) | Step::RightClick(ClickTarget::Slot(_))
+                | Step::HoldClick(ClickTarget::Slot(_), _)
+        ) && inventory
+            .as_ref()
+            .is_some_and(|inventory| !inventory.settled())
+            && script.clicked.is_none()
+        {
+            if elapsed > MAX_WAIT {
+                script.stop(&mut keys, &mut mouse, "queued item move did not finish");
+            }
+            return;
+        }
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
             Step::Create(character) | Step::CreateRefused(character) => {
@@ -1920,9 +1951,12 @@ fn reach(
     }
 }
 
-/// The first visible matching control in an open window, as a click or a
-/// hover reaches it.
+/// The frontmost visible matching control in an open window. A semantic
+/// action can have more than one button, such as the spellbook entry in
+/// the EQ menu and the spellbook button beside the gems. Query iteration
+/// order must not send the pointer to a copy under the menu's dismiss shield.
 fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entity> {
+    let mut found = None;
     for (
         entity,
         _,
@@ -2015,10 +2049,13 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Pick(button) => pick.is_some_and(|action| Some(*action) == picks(button)),
         };
         if matches && visibility.get() && displayed(entity, layout) {
-            return Some(entity);
+            let stack = layout.get(entity).map_or(0, |(.., z)| z.map_or(0, |z| z.0));
+            if found.is_none_or(|(front, _)| stack > front) {
+                found = Some((stack, entity));
+            }
         }
     }
-    None
+    found.map(|(_, entity)| entity)
 }
 
 /// Whether a control is this button of the skin's effects windows: the
@@ -2210,7 +2247,7 @@ fn point(
 fn aim_click(
     script: &mut Script,
     (target, now): (ClickTarget, Duration),
-    aim: (&mut pointer::Aim, &mut Commands),
+    (aim, commands): (&mut pointer::Aim, &mut Commands),
     (buttons, layout, needs): (&mut Buttons, &Layout, &Query<&crate::outbox::Needs>),
     world: &eq_client_core::world::ClientWorld,
 ) -> Result<Option<Entity>, String> {
@@ -2218,12 +2255,13 @@ fn aim_click(
         glide.target
     } else {
         let entity = reach(target, buttons, layout, needs, world)?;
-        if !scroll_to(script, (entity, now), (&mut *aim.0, &mut *aim.1), buttons)? {
+        if !scroll_to(script, (entity, now), (&mut *aim, &mut *commands), buttons)? {
             return Ok(None);
         }
         entity
     };
-    let Glided::Over(over) = glide(script, (heading, now), aim, buttons) else {
+    let Glided::Over(over) = glide(script, (heading, now), (&mut *aim, &mut *commands), buttons)
+    else {
         return Ok(None);
     };
     // The click lands as it did without a pointer to glide, on the control
@@ -2232,6 +2270,7 @@ fn aim_click(
     if over == Some(entity) {
         Ok(Some(entity))
     } else {
+        aim.report_cover(entity);
         Err("the click target is covered".to_owned())
     }
 }
@@ -2264,7 +2303,7 @@ fn press(
 /// to reach it.
 fn displayed(entity: Entity, layout: &Layout) -> bool {
     let mut next = Some(entity);
-    while let Some((node, parent)) = next.and_then(|entity| layout.get(entity).ok()) {
+    while let Some((node, parent, _)) = next.and_then(|entity| layout.get(entity).ok()) {
         if node.display == Display::None {
             return false;
         }
@@ -3852,6 +3891,97 @@ mod tests {
     }
 
     #[test]
+    fn inventory_click_waits_for_local_send_result_then_uses_unconfirmed_projection() {
+        use crate::{inventory::InventoryState, online::testing};
+        use bevy::ecs::system::RunSystemOnce;
+        use eq_client_core::inventory::{InventoryActor, InventorySlot, InventoryUpdate};
+        let mut online = crate::online::OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(7));
+        testing::inventory(
+            &mut online,
+            InventoryUpdate::Snapshot(
+                crate::preview::items()
+                    .into_iter()
+                    .filter(|item| item.slot != InventorySlot::CURSOR)
+                    .collect(),
+            ),
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(2);
+        let mut app = pointing(vec![Step::Click(ClickTarget::Slot(24))]);
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)));
+        let first = app
+            .world_mut()
+            .spawn((
+                Button,
+                Interaction::Pressed,
+                crate::inventory::SlotButton(InventorySlot(251)),
+                crate::clicks::OnPress,
+            ))
+            .id();
+        app.world_mut()
+            .run_system_once(crate::inventory::input)
+            .unwrap();
+        app.world_mut().despawn(first);
+        let eq_client_core::ClientCommand::MoveInventory(request) = rx.try_recv().unwrap() else {
+            panic!("expected item move")
+        };
+        assert!(!app.world().resource::<InventoryState>().settled());
+        let target = app
+            .world_mut()
+            .spawn((
+                Button,
+                crate::inventory::SlotButton(InventorySlot(24)),
+                laid_out(Vec2::new(640.0, 360.0), 40.0, 1),
+            ))
+            .id();
+        for ms in [0, 10, 1300] {
+            frame_at(&mut app, ms);
+            assert_ne!(interaction(&app, target), Interaction::Pressed);
+        }
+        let mut online = app
+            .world_mut()
+            .remove_resource::<crate::online::OnlineState>()
+            .unwrap();
+        let update = online
+            .world()
+            .inventory()
+            .plan_move(
+                &request,
+                InventoryActor {
+                    bank_access: false,
+                    class: Some(1),
+                    deity: None,
+                    dual_wield: None,
+                    race: 1,
+                    level: 10,
+                    trade_slots: 0,
+                    trade_no_drop: false,
+                    world_container: false,
+                },
+            )
+            .unwrap();
+        testing::inventory(&mut online, update);
+        app.world_mut()
+            .resource_mut::<InventoryState>()
+            .action_result(
+                request.session_id,
+                request.revision,
+                None,
+                online.world().inventory(),
+            );
+        assert!(online.world().inventory().predicted());
+        app.insert_resource(online);
+        for ms in (1310..=2000).step_by(10) {
+            frame_at(&mut app, ms);
+            if interaction(&app, target) == Interaction::Pressed {
+                return;
+            }
+        }
+        panic!("the next click never used the local projection");
+    }
+
+    #[test]
     fn a_click_glides_the_pointer_hovering_what_it_crosses_then_presses_its_control() {
         let mut app = pointing(vec![Step::Click(ClickTarget::Give)]);
         let (give, attack) = give_and_attack(&mut app);
@@ -3933,6 +4063,52 @@ mod tests {
         frame_at(&mut app, 400);
         assert_eq!(app.world().resource::<Script>().hovering, Some(give));
         assert_eq!(interaction(&app, give), Interaction::Hovered);
+    }
+
+    #[test]
+    fn a_window_click_prefers_the_menu_entry_over_the_same_action_in_the_hud() {
+        for covered in [false, true] {
+            let mut app = pointing(vec![Step::Click(ClickTarget::Toggle("spellbook"))]);
+            app.world_mut()
+                .resource_mut::<crate::windows::menu::Menu>()
+                .open = true;
+            let spawn = |app: &mut App, at, stack| {
+                app.world_mut()
+                    .spawn((
+                        Button,
+                        crate::windows::SelectorButton(crate::windows::WindowId::Spellbook),
+                        laid_out(at, 40.0, stack),
+                    ))
+                    .id()
+            };
+            let hud = spawn(&mut app, Vec2::new(80.0, 80.0), 1);
+            let menu = spawn(&mut app, Vec2::new(400.0, 300.0), 10);
+            // The menu's outside-click shield legitimately covers the HUD copy.
+            app.world_mut()
+                .spawn((Button, laid_out(Vec2::new(250.0, 250.0), 600.0, 5)));
+            if covered {
+                app.world_mut().spawn((
+                    Node::default(),
+                    bevy::ui::FocusPolicy::Block,
+                    laid_out(Vec2::new(400.0, 300.0), 40.0, 11),
+                ));
+            }
+            for ms in [0, 0, 125, 250] {
+                frame_at(&mut app, ms);
+            }
+            assert_eq!(interaction(&app, hud), Interaction::None);
+            assert_eq!(
+                interaction(&app, menu),
+                if covered {
+                    Interaction::None
+                } else {
+                    Interaction::Pressed
+                }
+            );
+            if !covered {
+                assert_eq!(script_pointer(&app), Some(Vec2::new(400.0, 300.0)));
+            }
+        }
     }
 
     #[test]

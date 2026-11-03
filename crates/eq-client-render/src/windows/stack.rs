@@ -53,6 +53,8 @@ pub(crate) struct Shown {
     /// Windows something else opens that the player hid ([`Toggle::Hides`]):
     /// hidden, open or not, until the player shows them again.
     hidden: BTreeSet<WindowId>,
+    /// Windows the active character cannot use, independent of saved choices.
+    unavailable: BTreeSet<WindowId>,
 }
 
 impl Default for Shown {
@@ -62,6 +64,7 @@ impl Default for Shown {
         Self {
             open: [WindowId::Effects, WindowId::Spells, WindowId::Actions].into(),
             hidden: BTreeSet::new(),
+            unavailable: BTreeSet::new(),
         }
     }
 }
@@ -73,7 +76,17 @@ impl Shown {
 
     /// Whether the window shows: open, and not hidden by the player.
     pub(crate) fn displayed(&self, id: WindowId) -> bool {
-        self.is_open(id) && !self.hidden.contains(&id)
+        self.is_open(id) && !self.hidden.contains(&id) && !self.unavailable.contains(&id)
+    }
+
+    /// Re-evaluates character eligibility without changing the player's
+    /// saved show/hide choice. Returns whether the eligibility changed.
+    pub(crate) fn available(&mut self, id: WindowId, available: bool) -> bool {
+        if available {
+            self.unavailable.remove(&id)
+        } else {
+            self.unavailable.insert(id)
+        }
     }
 
     pub(crate) fn open(&mut self, id: WindowId) {
@@ -541,6 +554,75 @@ mod tests {
         assert!(!app.world().resource::<Shown>().displayed(WindowId::PetInfo));
         press(&mut app, WindowId::PetInfo);
         assert!(app.world().resource::<Shown>().displayed(WindowId::PetInfo));
+    }
+
+    #[test]
+    fn spell_gem_frames_follow_the_profile_without_overwriting_saved_choices() {
+        for client in [
+            eq_client_assets::ui::InstalledClient::Titanium,
+            eq_client_assets::ui::InstalledClient::EqMac,
+        ] {
+            let mut app = crate::testing::app();
+            app.world_mut()
+                .resource_mut::<crate::ViewerSettings>()
+                .0
+                .installed_client = client;
+            app.add_systems(Update, (crate::hud::spell_visibility, hide).chain());
+            // Both kinds of HUD frame share the same window visibility owner.
+            let frames: Vec<_> = (0..2)
+                .map(|_| {
+                    app.world_mut()
+                        .spawn((
+                            WindowId::Spells,
+                            super::super::Frame::default(),
+                            Node::default(),
+                        ))
+                        .id()
+                })
+                .collect();
+            let enter = |app: &mut App, class| {
+                let mut player = crate::online::testing::player(1);
+                player.class = Some(class);
+                player.level = 65;
+                // Contradictory mana/gems on melee classes must not expose the UI.
+                let caster = !matches!(class, 1 | 7 | 9 | 16);
+                player.mana = if caster { 0 } else { 100 };
+                player.memorized_spells = if caster { [None; 8] } else { [Some(42); 8] };
+                crate::online::testing::admit(
+                    &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                    7,
+                    player,
+                );
+                app.update();
+            };
+            let display = |app: &App, wanted| {
+                for frame in &frames {
+                    assert_eq!(app.world().get::<Node>(*frame).unwrap().display, wanted);
+                }
+            };
+            for class in 1..=16 {
+                enter(&mut app, class);
+                display(
+                    &app,
+                    if matches!(class, 1 | 7 | 9 | 16) {
+                        Display::None
+                    } else {
+                        Display::Flex
+                    },
+                );
+            }
+            app.world_mut()
+                .resource_mut::<Shown>()
+                .hide(WindowId::Spells, true);
+            enter(&mut app, 1);
+            enter(&mut app, 2);
+            display(&app, Display::None);
+            app.world_mut()
+                .resource_mut::<Shown>()
+                .hide(WindowId::Spells, false);
+            app.update();
+            display(&app, Display::Flex);
+        }
     }
 
     #[test]

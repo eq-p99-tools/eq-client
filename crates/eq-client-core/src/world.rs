@@ -38,7 +38,7 @@ pub use motions::{CastDone, Motion};
 pub use notice::{ListingNotice, Notice, Party};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
-pub use trade::{Asker, Exchange, Loot, Merchant};
+pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
 pub use vitals::{ReportedHp, Vitals};
 pub use who::ZonePlayer;
 
@@ -264,6 +264,7 @@ pub struct ClientWorld {
     target: Target,
     motion: Option<MotionGrant>,
     speed_input_revision: Option<u64>,
+    accepted_speed_inputs: Option<crate::SpeedInputAcceptance>,
     camp: Option<Camp>,
     /// Where the camp the player last asked for ends, until the session
     /// says it began, or it ends.
@@ -328,7 +329,7 @@ impl ClientWorld {
                 }],
                 ..Changes::default()
             },
-            WorldUpdate::Chat(_) => Changes::default(),
+            WorldUpdate::Chat(_) | WorldUpdate::SpellTable(_) => Changes::default(),
         }
     }
 
@@ -566,6 +567,17 @@ impl ClientWorld {
             WorldEvent::SpeedInputsRequired { session_id, revision } => {
                 if self.session_id == Some(*session_id) {
                     self.speed_input_revision = Some(*revision);
+                    self.accepted_speed_inputs = None;
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::SpeedInputsAccepted(accepted) => {
+                if self.in_world()
+                    && self.session_id == Some(accepted.session_id)
+                    && self.speed_input_revision == Some(accepted.revision)
+                {
+                    self.accepted_speed_inputs = Some(*accepted);
                 } else {
                     news.ignored = true;
                 }
@@ -646,7 +658,9 @@ impl ClientWorld {
             // wait for a window to choose one from, and what a game master did
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
-            WorldEvent::ChatServer(_)
+            // Installed spell providers consume table facts before admission staging.
+            WorldEvent::SpellTable(_)
+            | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::Weather(_)
             | WorldEvent::ServerTick(_)
@@ -689,6 +703,18 @@ impl ClientWorld {
             WorldEvent::Despawn(id) => self.zone.vanish(*id),
             WorldEvent::Consideration(consideration) => {
                 news.notices.push(self.zone.consider(consideration));
+            }
+            WorldEvent::CombatRequest {
+                session_id, status, ..
+            } => {
+                if self.session_id != Some(*session_id) {
+                    news.ignored = true;
+                } else if let crate::combat::CombatRequestStatus::Refused(reason) = status {
+                    news.notices.push(Notice::CombatRefused(reason.clone()));
+                }
+                // Submission does not change authoritative world state. The
+                // renderer's toggle remains a local intention; server results
+                // arrive independently as consideration, damage and animation.
             }
             WorldEvent::Damage(damage) => self.damage(damage, news),
             WorldEvent::Animation(animation) => self.motion_news(*animation, news),
@@ -1160,6 +1186,7 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        self.accepted_speed_inputs = None;
         // A refused transfer resumes this same admission. Retain its revision
         // while suspended so later input changes can still be reported.
         if !matches!(

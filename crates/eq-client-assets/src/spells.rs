@@ -5,9 +5,11 @@
 mod definitions;
 pub mod effects;
 mod magnitude;
+mod projection;
 pub mod resources;
 
 pub use definitions::{Definition, Definitions, Timing};
+pub use projection::ReplayProjection;
 
 /// Where a client generation's spell file keeps the fields this client
 /// reads: the file's name in the installation and the first column of each
@@ -23,6 +25,7 @@ pub struct Layout {
     formula: usize,
     effects: usize,
     icon: Option<usize>,
+    beneficial: usize,
     gem_icon: Option<usize>,
     gem_tint: Option<(usize, &'static [u8])>,
     casting_animation: Option<usize>,
@@ -44,6 +47,7 @@ impl Layout {
         formula: 70,
         effects: 86,
         icon: Some(144),
+        beneficial: 83,
         gem_icon: None,
         gem_tint: Some((98, definitions::TITANIUM_GEM_TINTS)),
         casting_animation: Some(120),
@@ -57,8 +61,9 @@ impl Layout {
     /// (spell-file column report of 10-31, 03:25Z): the name (1), the fade
     /// text (8), the bases (20-31), maximums (32-43), formulas (58-69) and
     /// effect ids (74-85), the gem tint (86, with 18 as AE duration) and the
-    /// gem's cell in the skin's gem icons (131). The book icon's column is
-    /// not found yet, and the casting gesture, particle effect (132, not
+    /// gem's cell in the skin's gem icons (131). The book uses the same
+    /// column (parser 0x4d6ee6, book update 0x435425). The casting gesture,
+    /// particle effect (132, not
     /// used yet) and alternate duration are unavailable. Range (9), cast,
     /// recovery and recast times (13-15), duration (16, 17) and mana (19)
     /// are `EQEmu`'s names by position: the program reads their width and
@@ -70,7 +75,8 @@ impl Layout {
         maximum: 32,
         formula: 58,
         effects: 74,
-        icon: None,
+        icon: Some(131),
+        beneficial: 71,
         gem_icon: Some(131),
         gem_tint: Some((86, definitions::EQMAC_GEM_TINTS)),
         casting_animation: None,

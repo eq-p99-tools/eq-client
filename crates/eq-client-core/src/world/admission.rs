@@ -148,6 +148,9 @@ impl ClientWorld {
         changes: &mut Changes,
     ) {
         if self.session_id == Some(session_id) {
+            if grant.units_per_second.is_none() {
+                self.accepted_speed_inputs = None;
+            }
             self.motion = Some(grant);
             changes.motion = true;
         } else {
