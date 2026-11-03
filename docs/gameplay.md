@@ -20,13 +20,14 @@ movement/posture input or when free camera takes control. Losing focus or typing
 suppresses new movement input; an existing fall continues. The viewer does not
 impose a fixed safe-area bounding box.
 
-Falling and jumping are separate capabilities. The locked P99 policy enables
-falls and environmental-damage reports but does not enable jumping. EQEmu and
-TAKP enable both; Quarm currently enables neither. Physics uses installed-client
+Falling and jumping are separate capabilities, both offered by all four server
+policies. P99 jump notices are capture-backed; Quarm's movement and transfers
+reuse the source-checked EQMac path. New public-server scenarios still need live
+verification. Physics uses installed-client
 rules and zone gravity where available, with an explicit provisional fallback
 when those data cannot be read. Swimming is incomplete: the water/lava guard
 prevents entering deep water or lava while allowing escape from an existing
-hazard. A jump key binding alone does not enable jumping on P99.
+hazard. The server remains authoritative over corrections and zone admission.
 
 Installed WLD boundary regions supply zone-line detection. Numbered boundaries
 resolve through the server's destination table; older absolute boundaries carry
@@ -108,7 +109,8 @@ input to presentation and validation, not authority over the server.
 Titanium spell-bar refreshes drive local recovery/recast displays; admission can
 restore remaining per-gem timers. A refreshed gem is not proof that the spell
 landed. Missing timing data stays unavailable rather than inventing a countdown.
-Linked reuse groups and Quarm profile cooldowns remain incomplete. Duplicate-cast
+Linked reuse groups remain incomplete. Quarm saved gem cooldowns are decoded,
+but its casting and spellbook actions remain disabled by policy. Duplicate-cast
 guards and item-use click guards are not a statement about server cooldown
 enforcement.
 

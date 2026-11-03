@@ -573,7 +573,7 @@ pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
     use eq_client_core::Capability;
     match action {
         None => Needs::Nothing,
-        Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Moving),
+        Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Posture),
         Some(Action::Ability(ability)) => Needs::Ability(ability),
         Some(Action::Gem(_) | Action::Item { .. }) => Needs::Capability(Capability::Casting),
         Some(Action::Attack) => Needs::Capability(Capability::Combat),
@@ -652,17 +652,16 @@ mod tests {
         use eq_client_core::{Capability, ClientCommand, Posture};
         assert_eq!(need(None), Needs::Nothing);
         for action in [Action::Sit, Action::Stand] {
-            assert_eq!(need(Some(action)), Needs::Capability(Capability::Moving));
+            assert_eq!(need(Some(action)), Needs::Capability(Capability::Posture));
         }
-        // Sitting and standing go as a posture, which the session takes with
-        // moving.
+        // Sitting and standing use the independent posture capability.
         let posture = ClientCommand::SetPosture {
             session_id: 1,
             spawn_id: 1,
             posture: Posture::Sitting,
             created: std::time::Instant::now(),
         };
-        assert_eq!(posture.capability(), Some(Capability::Moving));
+        assert_eq!(posture.capability(), Some(Capability::Posture));
         let item = Action::Item {
             slot: eq_client_core::inventory::InventorySlot(22),
             id: 9,
