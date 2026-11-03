@@ -1,4 +1,4 @@
-# EQMac (TAKP) eqgame.exe skill constructor 0x4d0e88, classes 0-16. train_level = +0xc+class (byte); class_cap = +0x4c+class*2 (short; usable iff nonzero); name_eqstr = +0
+# EQMac (TAKP) eqgame.exe skill constructor 0x4d0e88, classes 0-16. train_level = +0xc+class (byte); class_cap = +0x4c+class*2 (short; usable iff nonzero); name_eqstr = +0 Class 16 does not exist in this generation: its rows are the adjacent memory after the sixteen class entries, kept only so both files share one layout, and the loader never reads them for EQMac.
 skill,class,train_level,class_cap,name_eqstr
 0,0,0,255,13855
 0,1,1,200,13855

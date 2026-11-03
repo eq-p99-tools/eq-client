@@ -236,6 +236,13 @@ fn readiness_reason(world: &ClientWorld, reason: Missing) -> &'static str {
             "Movement paused: waiting for carried coin information."
         }
         Missing::Coins => "Movement paused: waiting for cursor coin information.",
+        // An affecting equipment history with no live prediction left to
+        // confirm ends only with a full inventory snapshot or a settlement.
+        Missing::Prediction
+            if world.inventory().equipment_stats_uncertain() && !world.inventory().predicted() =>
+        {
+            "Movement paused: equipment changes need a full inventory refresh."
+        }
         Missing::Prediction => "Movement paused: waiting for item changes to be confirmed.",
         Missing::Effects if world.buffs().slots().is_none() => {
             "Movement paused: waiting for buff information."

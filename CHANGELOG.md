@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Apply item moves to a local projection and send them in order without
+  waiting for the worker between clicks; scribing waits for queued moves. A
+  refusal rolls the projection back to the server's state and refuses the
+  moves queued behind it. API: `ClientWorld::inventory()` returns the projection
+  and is no longer `const`; new `queue_inventory_move` and
+  `inventory_moves_pending`; `InventoryState::settled()` removed; `click_slot`
+  returns `bool` and takes `&mut OnlineState`.
+- Show the Skills window by the generation's own list, rank and value rules
+  from per-generation tables shipped as data (numbers only), list languages,
+  and name language zero from the received selector; the Mac-era selector is
+  unread, so its row keeps a placeholder name. API: new `eq_client_assets::skills`,
+  `InstalledClient::skill_rules()`, `ClientWorld::language_zero_selector()`;
+  `skills_revision` also advances on level and language changes.
+- Honour authored material sidedness for placed objects, mirroring one-sided
+  materials of reflected placements. API: `ZoneModel` gains a public
+  `materials: Vec<ObjectMaterial>` field; new `ObjectMaterial`.
+- Select an available helmet texture family instead of treating every head
+  material as the face. API: new `outfit::material()`; `dressed()` swaps only
+  the `00` head materials.
+- Start a script's menu-entry wait when the opener's click is released, not when
+  the pointer wait begins.
+- Drop held network events when a session restarts, so an old session's events
+  cannot enter its replacement. `select_spots::BUILT_IN` is now public.
 - Keep movement input calculation available for provably stat-neutral equipment
   histories without confirming their placement. Affecting or unknown equipment
   histories remain pending even after a local round trip. Report pending equipment
