@@ -1413,13 +1413,18 @@ pub(super) fn drive(
     match &step {
         Step::Create(character) | Step::CreateRefused(character) => {
             let sent = online.selection.as_ref().is_some_and(|selection| {
+                let mut character = character.clone();
+                if let Some(rules) = selection.can_create() {
+                    character.start_zone =
+                        start_zone_for(rules, &character, online.world().pvp_rule());
+                }
                 observed
                     .1
                     .send(
                         online.world(),
                         eq_client_core::ClientCommand::CreateCharacter {
                             selection_id: selection.id(),
-                            character: character.clone(),
+                            character,
                         },
                     )
                     .is_ok()
@@ -1769,6 +1774,33 @@ fn entry_target(step: &Step) -> Option<ClickTarget> {
 /// Whether the world answered a `create` step's request since it was sent:
 /// done once it created the character, and the step's failure when it
 /// refused it.
+/// The value this selection's generation sends for the script's starting
+/// city. Scripts name the city by its Titanium choice number; a generation
+/// that sends its own value for the same city (the Mac-era start-zone IDs)
+/// gets that value, found through the city's name in the generation's own
+/// list for this race, class and deity. A number naming no city, or a city
+/// the generation does not offer this combination, goes out as written, so
+/// the server's refusal is what the script sees.
+fn start_zone_for(
+    rules: eq_client_core::creation::Rules,
+    character: &eq_client_core::creation::NewCharacter,
+    pvp: u32,
+) -> u32 {
+    let (race, class, deity) = (character.race, character.class, character.deity);
+    let named = eq_client_core::creation::Rules::Titanium
+        .cities(race, class, deity, pvp)
+        .into_iter()
+        .find(|city| city.start_zone == character.start_zone);
+    named
+        .and_then(|wanted| {
+            rules
+                .cities(race, class, deity, pvp)
+                .into_iter()
+                .find(|city| city.name == wanted.name)
+        })
+        .map_or(character.start_zone, |city| city.start_zone)
+}
+
 fn answered(
     world: &eq_client_core::world::ClientWorld,
     before: Option<u64>,
@@ -2913,6 +2945,28 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 mod tests {
     use super::*;
     use eq_client_assets::ui::InstalledClient;
+
+    /// Scripts name the starting city by its Titanium number: Titanium sends
+    /// it as written, the Mac-era generation sends its own value for the same
+    /// city, and a number naming no city goes out unchanged.
+    #[test]
+    fn a_scripts_starting_city_is_sent_as_the_generation_sends_it() {
+        use eq_client_core::creation::{NewCharacter, Rules};
+        // A human paladin of Rodcet Nife, from Qeynos (Titanium city 1).
+        let qeynos = |start_zone| {
+            NewCharacter::with_points_in("Scripted", (1, 3, 0), (212, start_zone), 0).unwrap()
+        };
+        assert_eq!(start_zone_for(Rules::Titanium, &qeynos(1), 0), 1);
+        let mac = Rules::EqMac
+            .cities(1, 3, 212, 0)
+            .into_iter()
+            .find(|city| city.name == "Qeynos")
+            .expect("the Mac-era rules offer Qeynos to this paladin")
+            .start_zone;
+        assert_ne!(mac, 1);
+        assert_eq!(start_zone_for(Rules::EqMac, &qeynos(1), 0), mac);
+        assert_eq!(start_zone_for(Rules::EqMac, &qeynos(77), 0), 77);
+    }
 
     /// A flat floor at height 0, 40 across, as a collision world and its
     /// triangles.

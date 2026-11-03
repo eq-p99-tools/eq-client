@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Offer no door where the server policy only receives door state: the HUD
+  hint and F skip doors on such servers (TAKP) instead of offering a use the
+  server refuses.
+- Send a script's `create` starting city as the selection's generation sends
+  it: the Titanium choice number named in the script is translated through the
+  city's name in the generation's own list, so a Mac-era server receives its
+  start-zone ID instead of a refusal.
 - Correct character-select proposals against drawn floors, upward triangle
   winding, dry supports and camera limits; review zone placements while keeping
   unresolved cases explicit.
