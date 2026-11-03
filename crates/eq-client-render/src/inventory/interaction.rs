@@ -409,10 +409,11 @@ impl InventoryState {
             self.actions.auto_store = false;
             return;
         }
-        let result = self.actor(online).and_then(|actor| {
-            let destination = inventory.auto_store_destination(actor)?;
-            self.try_click(destination, None, online, sender)
-        });
+        let destination = self
+            .actor(online)
+            .and_then(|actor| inventory.auto_store_destination(actor));
+        let result =
+            destination.and_then(|destination| self.try_click(destination, None, online, sender));
         if let Err(error) = result {
             self.actions.auto_store = false;
             self.refuse(crate::outbox::window_line(&error));
