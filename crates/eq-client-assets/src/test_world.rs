@@ -95,6 +95,10 @@ pub(crate) fn material_with_flags(name: i32, render_method: u32, flags: u32) -> 
     body.extend(1.0_f32.to_le_bytes());
     body.extend(1.0_f32.to_le_bytes());
     body.extend(0_u32.to_le_bytes());
+    if flags & 0x02 != 0 {
+        body.extend(0_u32.to_le_bytes());
+        body.extend(0.0_f32.to_le_bytes());
+    }
     body
 }
 
