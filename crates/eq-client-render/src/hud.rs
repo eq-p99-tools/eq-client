@@ -507,8 +507,17 @@ pub(super) fn actions(
     if let Some(command) = bar_action.and_then(hotbar::command) {
         super::chat::run_game_command(command, &online, &outbox, &mut chat);
     }
+    // The duck key toggles, as both programs' key dispatchers do (Titanium
+    // 0x4619cd case 0x4623b1, EQMac 0x54050c): standing ducks, ducking
+    // stands, and any other stance leaves the key alone.
     let posture = if keys.pressed(Act::Duck) {
-        Some(eq_client_core::Posture::Ducking)
+        match online.world().posture(player.spawn_id) {
+            Some(eq_client_core::PostureState::Ducking) => Some(eq_client_core::Posture::Standing),
+            None | Some(eq_client_core::PostureState::Standing) => {
+                Some(eq_client_core::Posture::Ducking)
+            }
+            Some(_) => None,
+        }
     } else if keys.pressed(Act::Sit) {
         Some(eq_client_core::Posture::Sitting)
     } else if keys.pressed(Act::Stand) {

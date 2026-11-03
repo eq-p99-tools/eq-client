@@ -1,347 +1,258 @@
-//! What the player's speeds depend on that only the host sees, which it
-//! reports to the session on admission and whenever it changes: the
-//! movement rate the buffs give, what the player carries and what they can
-//! carry. The session works out the speeds from them with the generation's
-//! rule, and grants no movement there before the first report.
+//! Recalculate authoritative movement prerequisites; absence is never a zero load.
 use crate::{online::OnlineState, outbox::Outbox};
 use bevy::prelude::*;
-use eq_client_core::ClientCommand;
+use eq_client_assets::spells::Effect;
+use eq_client_core::{ClientCommand, world::ClientWorld};
+use eq_client_core::{SpeedInputState, SpeedInputUnavailable as Missing, SpeedInputs};
 
-/// The spell effect that changes how fast the player moves.
-const MOVEMENT_SPEED: u32 = 3;
-/// The spell effect that changes strength.
-const STRENGTH: u32 = 4;
-/// The spell effect that roots the player.
-const ROOT: u32 = 99;
-/// The movement rate the host reports for a rooted player: the program's
-/// root marker, at or below which the forward input is 0.
-const ROOTED: i16 = -1000;
-/// The most carried weight the host reports.
-const MOST_WEIGHT: f32 = 32_766.0;
+/// Evaluated direct spell contributions, before combining active effects.
+#[derive(Clone, Copy, Default)]
+struct Modifiers {
+    rate: i64,
+    strength: i64,
+    stamina: i64,
+    rooted: bool,
+}
 
-/// The player's movement rate: the sum of the movement-speed effect's (3)
-/// base values over the player's buffs, held to 16 bits, as the program's
-/// signed total (TAKP speeds read, writer 0x4caaba; that the total is the
-/// buffs' effect 3 was read at 0x4c6b6d's entry only, so it is labelled).
-/// A buff that roots (effect 99) makes it the root marker, -1000 (inferred
-/// from the 0x4cb30d path, recording checklist item 6.288). `spells` are
-/// the player's buffs' spells, slotted or not
-/// ([`eq_client_core::buffs::BuffTracker::spells`]); `effects` gives a
-/// spell's effects as (id, base value); a buff whose spell the installed
-/// data lacks counts as none.
-pub(crate) fn movement_rate(
-    spells: impl IntoIterator<Item = u32>,
-    effects: impl Fn(u32) -> Option<Vec<(u32, i32)>>,
-) -> i16 {
-    let mut total = 0i64;
-    for spell in spells {
-        for (id, base) in effects(spell).unwrap_or_default() {
-            match id {
-                ROOT => return ROOTED,
-                MOVEMENT_SPEED => total += i64::from(base),
-                _ => (),
+impl Modifiers {
+    /// The programs' rule for the movement effect (3): the strongest snare
+    /// wins; otherwise the fastest positive modifier wins, each evaluated at
+    /// its buff's caster level (Titanium totaller 0x4106a3 / 0x4107e4 over
+    /// the cache 0x41002f builds, writer 0x410fdb; `EQMac` 0x4c6b6d, writer
+    /// 0x4caaba; program reads 11-03). STR sums and an actual root dominates.
+    fn add(&mut self, other: Self) {
+        self.rate = if self.rate < 0 || other.rate < 0 {
+            self.rate.min(other.rate)
+        } else {
+            self.rate.max(other.rate)
+        };
+        self.strength += other.strength;
+        self.stamina += other.stamina;
+        self.rooted |= other.rooted;
+    }
+}
+
+/// Evaluate only effects that influence these inputs. Unread spell data and
+/// unsupported affecting formulas never silently become zero. Reuse the asset
+/// layer's level/cap evaluation instead of treating a scaling base as its value.
+fn project(effects: &[Effect], level: u16, instrument: u32) -> Result<Modifiers, Missing> {
+    let mut modifiers = Modifiers::default();
+    for effect in effects {
+        match effect.id {
+            99 => modifiers.rooted = true,
+            3 | 4 | 7 | 159 => {
+                if level == 0 || !matches!(instrument, 0 | 10) || matches!(effect.formula, 60 | 70)
+                {
+                    return Err(Missing::Effects);
+                }
+                let value = effect.base_magnitude(level).ok_or(Missing::Effects)?;
+                if effect.id == 3 {
+                    modifiers.add(Modifiers {
+                        rate: value,
+                        ..Modifiers::default()
+                    });
+                } else {
+                    if effect.id != 7 {
+                        modifiers.strength += value;
+                    }
+                    if matches!(effect.id, 7 | 159) {
+                        modifiers.stamina += value;
+                    }
+                }
             }
+            // Classic effects that do not directly change strength or ground speed.
+            0..=158 | 160..=254 => (),
+            _ => return Err(Missing::Effects),
         }
     }
-    i16::try_from(total.clamp(i64::from(i16::MIN), i64::from(i16::MAX))).expect("held to 16 bits")
+    Ok(modifiers)
 }
 
-/// What the player carries, in the program's weight units, whole and held
-/// to 0 through 32,766 ([`eq_client_core::world::ClientWorld::carried_weight`]).
-pub(crate) fn carried_weight(world: &eq_client_core::world::ClientWorld) -> u16 {
-    // Held to the range first.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let weight = world.carried_weight().clamp(0.0, MOST_WEIGHT) as u16;
-    weight
+/// First food and drink in general-slot order, including each bag's contents.
+/// Pending changes to stat food cannot be mistaken for confirmed removal.
+fn food(
+    inventory: &eq_client_core::inventory::Inventory,
+    level: u16,
+) -> Result<Modifiers, Missing> {
+    let mut modifiers = Modifiers::default();
+    let mut meals = [false; 2];
+    for slot in (22..=29).flat_map(|root| {
+        let slot = eq_client_core::inventory::InventorySlot(root);
+        std::iter::once(slot).chain((0..10).filter_map(move |index| slot.child(index)))
+    }) {
+        let Some(item) = inventory.items().get(&slot) else {
+            continue;
+        };
+        if !matches!(item.rules.item_type, 14 | 15) {
+            continue;
+        }
+        let index = usize::from(item.rules.item_type - 14);
+        if meals[index] {
+            continue;
+        }
+        meals[index] = true;
+        let bonus = eq_client_core::resources::eqemu_equipment_by_level(&item.details, level)
+            .ok_or(Missing::Inventory)?;
+        modifiers.strength += i64::from(bonus.bonuses.strength);
+        modifiers.stamina += i64::from(bonus.bonuses.stamina);
+        if bonus.worn.is_some() {
+            return Err(Missing::Effects);
+        }
+    }
+    if inventory.prediction_origins().any(|(_, item)| {
+        item.is_some_and(|item| {
+            matches!(item.rules.item_type, 14 | 15)
+                && item
+                    .details
+                    .bonuses
+                    .is_none_or(|b| b.strength != 0 || b.stamina != 0)
+        })
+    }) {
+        return Err(Missing::Prediction);
+    }
+    Ok(modifiers)
 }
 
-/// What the player can carry before it slows them: the profile's strength
-/// plus the strength effect's (4) base values over the player's buffs, so a
-/// debuff lowers it, from 0. Unsure STR: the program's total also adds worn
-/// items, and its level and ability terms are unread; leaving them out
-/// never puts it above the program's, so it errs slow. `spells` and
-/// `effects` are as [`movement_rate`]'s.
-pub(crate) fn capacity(
-    player: &eq_client_core::PlayerState,
-    spells: impl IntoIterator<Item = u32>,
-    effects: impl Fn(u32) -> Option<Vec<(u32, i32)>>,
-) -> Option<u32> {
-    let base = i64::from(player.base_attributes?.strength);
-    let buffs: i64 = spells
-        .into_iter()
-        .flat_map(|spell| effects(spell).unwrap_or_default())
-        .filter(|(id, _)| *id == STRENGTH)
-        .map(|(_, base)| i64::from(base))
-        .sum();
-    Some(u32::try_from((base + buffs).max(0)).unwrap_or(u32::MAX))
-}
-
-/// A spell's effects as the speed inputs count them: each id with its base.
-fn buff_effects(spells: &crate::spellbook::SpellNames, spell: u32) -> Option<Vec<(u32, i32)>> {
-    spells.mechanics(spell).map(|mechanics| {
-        mechanics
-            .effects
-            .iter()
-            .map(|effect| (effect.id, effect.base))
-            .collect()
+/// Effective inputs from complete inventory, purse and buff membership.
+/// Equipment uses the decoded eligibility/required/recommended-level rules.
+/// Unsupported worn effects remain explicit; the base stat cap is 255
+/// (higher-level/AA increases are deliberately not granted).
+fn calculate(
+    world: &ClientWorld,
+    effects: impl Fn(u32) -> Option<Vec<Effect>>,
+) -> Result<SpeedInputs, Missing> {
+    let player = world.player().ok_or(Missing::Attributes)?;
+    let weight =
+        u16::try_from((world.movement_weight()? / 10).min(32_766)).expect("bounded weight");
+    let base = player.base_attributes.ok_or(Missing::Attributes)?;
+    let inventory = world.inventory();
+    let equipped = eq_client_core::resources::eqemu_equipped_modifiers(
+        inventory,
+        player.class.ok_or(Missing::Attributes)?,
+        player.race,
+        u16::from(player.level),
+    )
+    .map_err(|_| Missing::Inventory)?;
+    let mut modifiers = food(inventory, u16::from(player.level))?;
+    for (_, item) in equipped {
+        modifiers.strength += i64::from(item.bonuses.strength);
+        modifiers.stamina += i64::from(item.bonuses.stamina);
+        if let Some(worn) = item.worn {
+            if worn.effect_type != 2 {
+                return Err(Missing::Effects);
+            }
+            let level = if worn.level == 0 {
+                u16::from(player.level)
+            } else {
+                u16::try_from(worn.level).map_err(|_| Missing::Effects)?
+            };
+            modifiers.add(project(
+                &effects(worn.spell_id).ok_or(Missing::Effects)?,
+                level,
+                10,
+            )?);
+        }
+    }
+    let buffs = world.buffs();
+    for buff in buffs.slots().ok_or(Missing::Effects)?.values() {
+        modifiers.add(project(
+            &effects(buff.spell_id).ok_or(Missing::Effects)?,
+            u16::from(buff.caster_level),
+            u32::from(buff.bard_modifier),
+        )?);
+    }
+    for effect in buffs.effects().values() {
+        let projected = project(
+            &effects(u32::from(effect.spell_id)).ok_or(Missing::Effects)?,
+            effect.caster_level,
+            effect.instrument_modifier,
+        )?;
+        // An unslotted STR effect could replace an existing contributor. Speed
+        // extremum/root selection is safe across the union; additive STR isn't.
+        if projected.strength != 0 || projected.stamina != 0 {
+            return Err(Missing::Effects);
+        }
+        modifiers.add(projected);
+    }
+    let fatigue_penalty = if world.generation() == eq_client_core::GameDialect::EqMac {
+        let stamina = (i64::from(base.stamina) + modifiers.stamina).clamp(1, 255);
+        // Until fatigue arrives, its source-defined maximum penalty is a sound
+        // lower bound on STR. Do not turn the entire calculation into unknown.
+        world
+            .nourishment()
+            .and_then(|n| n.fatigue)
+            .map_or(10, |fatigue| (i64::from(fatigue) - stamina).clamp(0, 10))
+    } else {
+        0
+    };
+    Ok(SpeedInputs {
+        rate: if modifiers.rooted {
+            -1000
+        } else {
+            i16::try_from(
+                modifiers
+                    .rate
+                    // Reserve the formula's root sentinel for an actual root.
+                    .clamp(-999, i64::from(i16::MAX)),
+            )
+            .expect("bounded rate")
+        },
+        weight,
+        capacity: u32::try_from(
+            (i64::from(base.strength) + modifiers.strength - fatigue_penalty).clamp(1, 255),
+        )
+        .expect("bounded strength"),
     })
 }
 
-/// What the player carries and can carry, as the speed inputs count them
-/// ([`carried_weight`] and [`capacity`]); None before the player is in.
+fn inputs(world: &ClientWorld, spells: &crate::spellbook::SpellNames) -> SpeedInputState {
+    match calculate(world, |id| spells.mechanics(id).map(|m| m.effects.to_vec())) {
+        Ok(inputs) => SpeedInputState::Ready(inputs),
+        Err(reason) => SpeedInputState::Unavailable(reason),
+    }
+}
+
+/// A displayable load only when its inputs are established.
 pub(crate) fn load(
-    world: &eq_client_core::world::ClientWorld,
+    world: &ClientWorld,
     spells: &crate::spellbook::SpellNames,
 ) -> Option<(u16, Option<u32>)> {
-    let player = world.player()?;
-    let capacity = capacity(player, world.buffs().spells(), |spell| {
-        buff_effects(spells, spell)
-    });
-    Some((carried_weight(world), capacity))
+    match inputs(world, spells) {
+        SpeedInputState::Ready(inputs) => Some((inputs.weight, Some(inputs.capacity))),
+        SpeedInputState::Unavailable(_) => None,
+    }
 }
 
-/// What the speeds depend on that only the host sees: the movement rate,
-/// what the player carries and what they can carry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Inputs {
-    rate: i16,
-    weight: u16,
-    capacity: u32,
-}
-
-/// Reports the speed inputs to the session on admission and whenever they
-/// change: the buffs, the inventory, the coins or the profile. Capacity is
-/// 0 only before the profile is in, which the session takes as unknown.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+/// Respond to each session revision and every local mechanics/state change.
+/// A full queue retries; absence never leaves a previous numeric grant in place.
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn report(
     online: Res<OnlineState>,
     outbox: Res<Outbox>,
     spells: Res<crate::spellbook::SpellNames>,
-    mut sent: Local<Option<(u64, Inputs)>>,
+    mut sent: Local<Option<(u64, u64, SpeedInputState)>>,
 ) {
     let world = online.world();
-    let (Some(session), Some(player)) = (world.session_id(), world.player()) else {
+    let (Some(session_id), Some(revision)) = (world.session_id(), world.speed_input_revision())
+    else {
         *sent = None;
         return;
     };
-    let buffs = world.buffs();
-    let inputs = Inputs {
-        rate: movement_rate(buffs.spells(), |spell| buff_effects(&spells, spell)),
-        weight: carried_weight(world),
-        capacity: capacity(player, buffs.spells(), |spell| buff_effects(&spells, spell))
-            .unwrap_or(0),
-    };
-    if *sent == Some((session, inputs)) {
+    let state = inputs(world, &spells);
+    if *sent == Some((session_id, revision, state)) {
         return;
     }
-    let posted = outbox.tell(
+    if outbox.tell(
         world,
         ClientCommand::SpeedInputs {
-            session_id: session,
-            rate: inputs.rate,
-            weight: inputs.weight,
-            capacity: inputs.capacity,
+            session_id,
+            revision,
+            state,
         },
-    );
-    if posted {
-        *sent = Some((session, inputs));
+    ) {
+        *sent = Some((session_id, revision, state));
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::online::testing;
-    use eq_client_core::Buff;
-    use std::collections::BTreeMap;
-
-    fn buffs(spells: &[u32]) -> BTreeMap<u32, Buff> {
-        spells
-            .iter()
-            .enumerate()
-            .map(|(slot, &spell_id)| {
-                (
-                    u32::try_from(slot).unwrap(),
-                    Buff {
-                        spell_id,
-                        caster_level: 1,
-                        effect_type: 2,
-                        bard_modifier: 10,
-                        duration_ticks: 10,
-                        counters: 0,
-                        caster_id: 7,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    /// Spell 1 raises speed and strength, 2 slows it and lowers strength,
-    /// 3 does something else, 5 roots; 4 is not in the data.
-    fn effects(spell: u32) -> Option<Vec<(u32, i32)>> {
-        match spell {
-            1 => Some(vec![(MOVEMENT_SPEED, 40), (STRENGTH, 10)]),
-            2 => Some(vec![(0, -10), (MOVEMENT_SPEED, -35), (STRENGTH, -25)]),
-            3 => Some(vec![(0, -10)]),
-            5 => Some(vec![(ROOT, 0)]),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn the_rate_sums_the_buffs_speed_effects_and_a_root_marks_it() {
-        assert_eq!(movement_rate([], effects), 0);
-        assert_eq!(movement_rate([1, 3, 4], effects), 40);
-        assert_eq!(movement_rate([1, 2], effects), 5);
-        assert_eq!(movement_rate([1, 5], effects), -1000);
-        // Held to 16 bits.
-        let fast = |_| Some(vec![(MOVEMENT_SPEED, 40_000)]);
-        assert_eq!(movement_rate([1], fast), i16::MAX);
-    }
-
-    #[test]
-    fn a_buff_that_landed_with_no_slot_counts_until_it_fades() {
-        use eq_client_core::buffs::BuffTracker;
-        let now = std::time::Instant::now();
-        // Spell 1 is in a slot; the snare (2) landed with no slot given.
-        let mut held = BuffTracker::default();
-        held.replace_snapshot(buffs(&[1]), 15, now);
-        held.observe_effect(
-            eq_client_core::SpellEffect {
-                spell_id: 2,
-                caster_level: 1,
-                effect_flag: 4,
-                instrument_modifier: 10,
-                target_id: 7,
-                caster_id: 7,
-                spell_level: 1,
-                push: None,
-            },
-            now,
-        );
-        assert_eq!(movement_rate(held.spells(), effects), 5);
-        let mut player = testing::player(7);
-        player.base_attributes = Some(eq_client_core::BaseAttributes {
-            strength: 80,
-            ..eq_client_core::BaseAttributes::default()
-        });
-        assert_eq!(capacity(&player, held.spells(), effects), Some(65));
-        // Its fade, by spell alone as TAKP sends it, restores both.
-        held.apply(
-            eq_client_core::BuffUpdate {
-                entity_id: 7,
-                slot: 99,
-                spell_id: 2,
-                buff: None,
-            },
-            now,
-        );
-        assert_eq!(movement_rate(held.spells(), effects), 40);
-        assert_eq!(capacity(&player, held.spells(), effects), Some(90));
-    }
-
-    #[test]
-    fn capacity_is_the_profiles_strength_and_the_buffs() {
-        let mut player = testing::player(7);
-        assert_eq!(capacity(&player, [], effects), None);
-        player.base_attributes = Some(eq_client_core::BaseAttributes {
-            strength: 80,
-            ..eq_client_core::BaseAttributes::default()
-        });
-        assert_eq!(capacity(&player, [], effects), Some(80));
-        assert_eq!(capacity(&player, [1, 2], effects), Some(65));
-        player.base_attributes = Some(eq_client_core::BaseAttributes {
-            strength: 10,
-            ..eq_client_core::BaseAttributes::default()
-        });
-        assert_eq!(capacity(&player, [2], effects), Some(0));
-    }
-
-    #[test]
-    fn the_inputs_go_on_admission_and_again_only_when_they_change() {
-        let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        let mut app = crate::testing::app();
-        app.insert_resource(Outbox::new(Some(tx)))
-            .add_systems(Update, report);
-        let mut online = OnlineState::new(true);
-        testing::admit(&mut online, 1, testing::player(7));
-        app.insert_resource(online);
-        app.update();
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(ClientCommand::SpeedInputs {
-                session_id: 1,
-                rate: 0,
-                weight: 0,
-                capacity: 0
-            })
-        ));
-        app.update();
-        assert!(rx.try_recv().is_err());
-        // A new admission reports again.
-        testing::admit(
-            &mut app.world_mut().resource_mut::<OnlineState>(),
-            2,
-            testing::player(7),
-        );
-        app.update();
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(ClientCommand::SpeedInputs { session_id: 2, .. })
-        ));
-    }
-
-    #[test]
-    fn automatic_reports_stay_quiet_when_unavailable_and_retry_a_full_queue() {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let mut app = crate::testing::app();
-        app.insert_resource(Outbox::new(Some(tx)))
-            .add_systems(Update, report);
-        let mut online = OnlineState::new(true);
-        testing::news(
-            &mut online,
-            [eq_client_core::WorldEvent::Entered {
-                capabilities: vec![eq_client_core::Capability::Talking],
-                choices: Vec::new(),
-                session_id: 1,
-                zone: "qeynos".into(),
-                player: Box::new(testing::player(7)),
-                far_clip: None,
-                spell_landing_flag: None,
-            }],
-        );
-        testing::connect(&mut online, true);
-        app.insert_resource(online);
-        for _ in 0..3 {
-            app.update();
-        }
-        assert!(rx.try_recv().is_err());
-        assert_eq!(
-            app.world().resource::<Outbox>().take_refused(),
-            Vec::<crate::outbox::Refusal>::new()
-        );
-
-        for session in [2, 3] {
-            testing::admit(
-                &mut app.world_mut().resource_mut::<OnlineState>(),
-                session,
-                testing::player(7),
-            );
-            app.update();
-        }
-        // Admission 3 must retry after the queued admission 2 report is read.
-        assert_eq!(
-            app.world().resource::<Outbox>().take_refused(),
-            Vec::<crate::outbox::Refusal>::new()
-        );
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(ClientCommand::SpeedInputs { session_id: 2, .. })
-        ));
-        app.update();
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(ClientCommand::SpeedInputs { session_id: 3, .. })
-        ));
-    }
-}
+mod tests;

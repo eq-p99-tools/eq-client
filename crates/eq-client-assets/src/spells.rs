@@ -124,20 +124,23 @@ pub struct Mechanics {
     pub duration_cap: u32,
     /// Fields 181/182, if both are valid; never automatically replaces primary duration.
     pub alternate_duration: Option<AlternateDuration>,
+    /// Distinguishes fields absent by format from fields we could not read.
+    alternate_duration_in_layout: bool,
     /// All twelve slots in original order, including empty/unknown effects.
     pub effects: [Effect; 12],
 }
 
 impl Mechanics {
-    /// Whether the spell takes effect at once. Only an explicit zero
-    /// duration is instant; unknown duration rules stay unresolved.
+    /// Whether the spell takes effect at once. Every duration field the
+    /// format defines must be explicitly zero; unread fields stay unresolved.
     #[must_use]
     pub fn instant(&self) -> bool {
         self.duration_formula == 0
             && self.duration_cap == 0
-            && self
-                .alternate_duration
-                .is_some_and(|alternate| alternate.formula == 0 && alternate.duration == 0)
+            && (!self.alternate_duration_in_layout
+                || self
+                    .alternate_duration
+                    .is_some_and(|alternate| alternate.formula == 0 && alternate.duration == 0))
     }
 
     /// Parses a complete numeric projection from a Titanium line; see
@@ -174,6 +177,7 @@ impl Mechanics {
                 .alternate_duration
                 .and_then(|column| unsigned(column).zip(unsigned(column + 1)))
                 .map(|(formula, duration)| AlternateDuration { formula, duration }),
+            alternate_duration_in_layout: layout.alternate_duration.is_some(),
             effects: effects.try_into().ok()?,
         })
     }
@@ -217,6 +221,29 @@ impl Mechanics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn titanium_instant_spells_require_all_duration_fields_to_be_known_zero() {
+        let mut fields = vec!["0"; 183];
+        assert!(Mechanics::from_fields(&fields).unwrap().instant());
+        // Unlike a layout without alternate duration, a truncated Titanium
+        // row leaves its alternate duration unknown.
+        for length in [98, 145, 181, 182] {
+            let mechanics = Mechanics::from_fields(&fields[..length]).unwrap();
+            assert_eq!(mechanics.alternate_duration, None);
+            assert!(!mechanics.instant());
+        }
+        for column in [16, 17, 181, 182] {
+            for value in ["1", "999", "", "bad", "-1", "4294967296"] {
+                fields[column] = value;
+                assert!(
+                    !Mechanics::from_fields(&fields).is_some_and(|mechanics| mechanics.instant()),
+                    "column {column}: {value}"
+                );
+            }
+            fields[column] = "0";
+        }
+    }
+
     #[test]
     fn alternate_duration_is_optional_and_does_not_override_primary_rules() {
         let mut fields = vec!["0"; 183];

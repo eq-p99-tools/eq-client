@@ -277,6 +277,42 @@ mod tests {
     }
 
     #[test]
+    fn mac_instant_spells_do_not_require_fields_the_format_omits() {
+        for length in [139, 147] {
+            let mut fields = vec!["0"; length];
+            fields[0] = "42";
+            fields[1] = "Synthetic spell";
+            fields[74..86].fill("254");
+            fields[74] = "0";
+            fields[20] = "10";
+            for (formula, cap, instant) in [
+                ("0", "0", true),
+                ("11", "270", false),
+                ("0", "1", false),
+                ("50", "0", false),
+                ("99", "0", false),
+            ] {
+                fields[16] = formula;
+                fields[17] = cap;
+                let spells = Definitions::parse(&fields.join("^"), &Layout::EQMAC);
+                let mechanics = spells.get(42).unwrap().mechanics.as_ref().unwrap();
+                assert_eq!(mechanics.alternate_duration, None);
+                assert_eq!(mechanics.instant(), instant, "{length}: {formula}/{cap}");
+            }
+            fields[16] = "0";
+            fields[17] = "0";
+            for column in [16, 17] {
+                for invalid in ["", "bad", "-1", "4294967296"] {
+                    fields[column] = invalid;
+                    let spells = Definitions::parse(&fields.join("^"), &Layout::EQMAC);
+                    assert!(spells.get(42).unwrap().mechanics.is_none());
+                }
+                fields[column] = "0";
+            }
+        }
+    }
+
+    #[test]
     fn the_casting_animation_is_field_120_and_stays_unknown_when_malformed() {
         let mut fields = vec!["0"; 183];
         fields[0] = "7";

@@ -29,7 +29,12 @@ impl ClientWorld {
         let skills = player.skills.as_deref().unwrap_or_default();
         Ability::ALL
             .into_iter()
-            .filter(|ability| ability.known(skills, player.race))
+            .filter(|ability| match self.generation {
+                crate::GameDialect::EqMac => {
+                    crate::abilities::eqmac::known(*ability, skills, player.race, player.class)
+                }
+                _ => ability.known(skills, player.race),
+            })
             .collect()
     }
 
@@ -47,6 +52,20 @@ impl ClientWorld {
     pub fn ability_wait(&self, ability: Ability, now: Instant) -> Option<Duration> {
         let ready = self.ability_timers.get(&ability.recovery()?)?;
         Some(ready.saturating_duration_since(now)).filter(|wait| !wait.is_zero())
+    }
+
+    /// The server released the named skill's recovery group. Unknown skills
+    /// cannot release unrelated abilities. A reset does not imply success.
+    pub(super) fn skill_ready(&mut self, skill: u32) {
+        if let Some(recovery) = Ability::from_skill(skill)
+            .filter(|ability| {
+                self.generation != crate::GameDialect::EqMac
+                    || crate::abilities::eqmac::SUPPORTED.contains(ability)
+            })
+            .and_then(Ability::recovery)
+        {
+            self.ability_timers.remove(&recovery);
+        }
     }
 
     /// The session used an ability and started its timer.

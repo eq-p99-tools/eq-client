@@ -11,6 +11,60 @@ use crate::{
 use std::collections::BTreeMap;
 
 impl ClientWorld {
+    /// Latest session request for host-owned movement inputs; reset on admission.
+    #[must_use]
+    pub const fn speed_input_revision(&self) -> Option<u64> {
+        self.speed_input_revision
+    }
+
+    /// Complete carried load, in tenths. Unknown inventory/coins never become zero.
+    /// Predictions are usable only when they preserve the authoritative item weight.
+    ///
+    /// # Errors
+    /// Returns the input category requiring authoritative state.
+    pub fn movement_weight(&self) -> Result<u64, eq_network_game::movement::SpeedInputUnavailable> {
+        use eq_network_game::{
+            inventory::WeightUnavailable, movement::SpeedInputUnavailable as Missing,
+        };
+        if !self.inventory.received() || self.inventory.stale() {
+            return Err(Missing::Inventory);
+        }
+        let purse = self.wallet.purse.ok_or(Missing::Coins)?;
+        // CoinsElsewhere establishes the cursor. Its bank balance is irrelevant
+        // to carried weight and can become unknown independently.
+        let cursor = self.known_cursor_coins.ok_or(Missing::Coins)?;
+        let coins: u64 = [purse, cursor]
+            .iter()
+            .map(|c| {
+                [c.platinum, c.gold, c.silver, c.copper]
+                    .into_iter()
+                    .map(u64::from)
+                    .sum::<u64>()
+            })
+            .sum();
+        self.inventory
+            .carried_weight_tenths(self.generation(), coins)
+            .map_err(|reason| match reason {
+                WeightUnavailable::Prediction => Missing::Prediction,
+                WeightUnavailable::Inventory | WeightUnavailable::Container => Missing::Inventory,
+            })
+    }
+
+    /// The weight a landing's cost takes, in the program's units: the
+    /// programs' sum ([`Self::movement_weight`]; their fall cost reads the
+    /// same weight as their speeds, Titanium's from the field the stat
+    /// recompute 0x4212b3 fills with 0x41bb06 and `EQMac`'s fall 0x4bfe16
+    /// calling 0x4bbb78) where it can be established, else this client's
+    /// own larger reading ([`Self::carried_weight`]), which overstates the
+    /// weight and so the damage: the safe side where the client reports
+    /// its falls.
+    #[must_use]
+    pub fn fall_weight(&self) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        self.movement_weight()
+            .map_or_else(|_| self.carried_weight(), |tenths| tenths as f32 / 10.0)
+    }
+
     /// Changes when the player's skills or their admission are replaced.
     /// Unrelated movement, chat and resource updates leave it unchanged.
     #[must_use]

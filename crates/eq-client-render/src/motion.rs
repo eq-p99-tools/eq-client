@@ -465,11 +465,11 @@ pub(super) fn input(
         controls.jump = None;
         controls.facing = None;
     }
-    let Some(_) = controls.speed else {
+    if controls.speed.is_none() && controls.airborne.is_none() {
         controls.held = Some(Held::Withdrawn);
         return;
-    };
-    let focused = keys.focused() && !detached;
+    }
+    let focused = keys.focused() && !detached && controls.speed.is_some();
     if focused && keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
@@ -771,7 +771,7 @@ pub(super) fn input(
         debug!(
             fall_distance = fall.fall_distance,
             impact_speed = fall.impact_speed,
-            carried_weight = online.world().carried_weight(),
+            carried_weight = online.world().fall_weight(),
             damage = cost.damage,
             safe_fall = cost.safe_fall,
             "Landing"
@@ -930,13 +930,14 @@ fn post_posture(
     })
 }
 
-/// Whether a jump now comes sooner after the last than the installed
-/// client allows.
+/// Whether a jump now comes no later after the last take-off than the
+/// installed client's spacing, which the programs refuse (they take a jump
+/// only when more than the spacing has passed).
 fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -> bool {
     client
         .jump_spacing()
         .zip(last)
-        .is_some_and(|(spacing, last)| now.saturating_duration_since(last) < spacing)
+        .is_some_and(|(spacing, last)| now.saturating_duration_since(last) <= spacing)
 }
 
 /// What a landing with the feet here costs the player: nothing in water or
@@ -962,7 +963,7 @@ fn landing_cost(
     match client.falls() {
         Some(falls) => falls.landing_cost(FallLanding {
             impact_speed: landing.impact_speed,
-            carried_weight: world.carried_weight(),
+            carried_weight: world.fall_weight(),
             safe_fall: skill,
             safe_fall_ranks: 0,
             zone: eq_client_core::zones::number(world.zone()).unwrap_or(0),
@@ -1835,12 +1836,12 @@ mod tests {
         );
         let now = Instant::now();
         let ago = |ms| now.checked_sub(Duration::from_millis(ms));
-        assert!(jump_too_soon(InstalledClient::Titanium, ago(499), now));
-        assert!(!jump_too_soon(InstalledClient::Titanium, ago(500), now));
+        assert!(jump_too_soon(InstalledClient::Titanium, ago(1500), now));
+        assert!(!jump_too_soon(InstalledClient::Titanium, ago(1501), now));
         assert!(!jump_too_soon(InstalledClient::Titanium, None, now));
         // The Mac-era client waits 1.5 s.
-        assert!(jump_too_soon(InstalledClient::EqMac, ago(1499), now));
-        assert!(!jump_too_soon(InstalledClient::EqMac, ago(1500), now));
+        assert!(jump_too_soon(InstalledClient::EqMac, ago(1500), now));
+        assert!(!jump_too_soon(InstalledClient::EqMac, ago(1501), now));
     }
 
     /// The app of [`app`] for this installed client, the player standing
@@ -2737,6 +2738,41 @@ mod tests {
         };
         assert_eq!(request.mode, MovementMode::Fall);
         assert!(request.position.z < 53.0, "{request:?}");
+    }
+
+    #[test]
+    fn withdrawn_player_input_clears_taps_and_autorun_but_keeps_falling() {
+        let (mut app, receiver) = app();
+        let mut state = app.world_mut().resource_mut::<online::OnlineState>();
+        let mut player = state.world().player().unwrap().clone();
+        player.position = world_position([0.0, 53.0, 0.0], 0.0);
+        crate::online::testing::admit(&mut state, 11, player);
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.autorun = true;
+        controls.jump = Some(Instant::now());
+        controls.grant(eq_client_core::world::MotionGrant {
+            units_per_second: None,
+            backward_units_per_second: None,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            falls: true,
+        });
+        assert!(!controls.autorun && controls.jump.is_none());
+        controls.last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(150))
+            .unwrap();
+        app.update();
+        // A withdrawn grant resets the climb advertisement as well as input.
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::ClimbReach { .. })
+        ));
+        let Ok(ClientCommand::Move(request)) = receiver.try_recv() else {
+            panic!("passive fall missing");
+        };
+        assert_eq!(request.mode, MovementMode::Fall);
+        assert!(request.position.x.abs() < f32::EPSILON && request.position.y.abs() < f32::EPSILON);
+        assert!(request.position.z < 53.0);
     }
 
     #[test]

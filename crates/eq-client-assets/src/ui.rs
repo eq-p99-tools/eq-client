@@ -498,14 +498,17 @@ impl InstalledClient {
         }
     }
 
-    /// The least time between two jumps, from the program. The Titanium
-    /// client refuses a jump within 500 ms of the last (recording checklist
-    /// item 1.3); the Mac-era one within 1,500 ms (TAKP sitting 2, read).
+    /// How long after a take-off the program refuses the next jump: both
+    /// programs take a jump request only when more than 1,500 ms have
+    /// passed since the last take-off (Titanium key routine 0x4a1d74
+    /// against the last-jump time its loop 0x4aba14 sets at take-off;
+    /// `EQMac` request routine 0x53f337 and performer 0x53df6e; program reads
+    /// 11-03, replacing the 500 ms recording checklist item 1.3 gave
+    /// Titanium).
     #[must_use]
     pub const fn jump_spacing(self) -> Option<std::time::Duration> {
         match self {
-            Self::Titanium => Some(std::time::Duration::from_millis(500)),
-            Self::EqMac => Some(std::time::Duration::from_millis(1500)),
+            Self::Titanium | Self::EqMac => Some(std::time::Duration::from_millis(1500)),
         }
     }
 

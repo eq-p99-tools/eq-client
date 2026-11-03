@@ -411,6 +411,13 @@ fn a_corpse_seen_dying_is_named_as_one_first_seen_dead() {
 #[test]
 fn a_transfer_holds_the_player_and_a_refusal_lets_them_go() {
     let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::SpeedInputsRequired {
+            session_id: 1,
+            revision: 7,
+        },
+    );
     let offer = ZoneOffer {
         zone_id: 2,
         instance_id: 0,
@@ -431,6 +438,7 @@ fn a_transfer_holds_the_player_and_a_refusal_lets_them_go() {
     assert!(!game(&mut world, refusal(1)).ignored);
     assert!(world.in_world());
     assert!(world.spawn(5).is_some());
+    assert_eq!(world.speed_input_revision(), Some(7));
 }
 
 #[test]
@@ -1717,6 +1725,164 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
 }
 
 #[test]
+fn eqmac_profile_skills_reach_admission_and_follow_wire_updates() {
+    use crate::abilities::{Ability, eqmac};
+    use eq_network_game::message::{self, Message};
+    use eq_network_game::world::Capability;
+    // Synthetic 8460-byte profile: Example, human monk, level 25. The 100
+    // words at 2988 default to 255, except skills 0=0x1234, 25=254,
+    // 29=65535, 30=57, 32=0, 40=0, 42=12, 52=253 and 99=0xabcd.
+    // Adjacent words at 2986/3188 are 0xface/0xbeef. All other fields are
+    // zero. Encoded with zlib and the documented EQMac word cipher; never
+    // derived from a live profile, identity or capture.
+    let wire = [
+        0x6e, 0xe5, 0xd5, 0x59, 0xd0, 0x05, 0x94, 0x7d, 0xea, 0x59, 0x8b, 0x3d, 0x88, 0x86, 0x85,
+        0x4a, 0x4b, 0xa4, 0xad, 0xe7, 0x2a, 0x07, 0x35, 0x17, 0xb0, 0x04, 0x3e, 0x94, 0xb0, 0x5f,
+        0xbf, 0x53, 0x90, 0xce, 0x83, 0xbf, 0xce, 0x4a, 0x6d, 0xac, 0x90, 0xb9, 0xa8, 0xc2, 0xe9,
+        0xcb, 0xb0, 0x65, 0x0c, 0xcd, 0x0c, 0x82, 0xd3, 0xba, 0x21, 0xf7, 0x8f, 0xba, 0xb6, 0xee,
+        0x91, 0x18, 0xce, 0xbd, 0x26, 0xa1, 0x8e, 0x7c, 0x48, 0x80, 0x21, 0x05, 0xcb, 0xf8, 0xec,
+        0x19, 0x3a, 0xcf, 0x1d, 0x84, 0x28, 0x0c, 0x15, 0x62, 0x4e, 0xca, 0xde, 0x5e, 0x40, 0x65,
+        0xba, 0xb7, 0xab, 0xe5, 0x8a, 0x47, 0xbc, 0x6b, 0x07, 0x1e, 0x88, 0x67, 0x04,
+    ];
+    let mut profile = eq_network_game::quarm::profile(&wire, "Example").unwrap();
+    profile.spawn_id = 9; // The separate spawn announcement supplies this.
+    let entry = |session_id, profile| WorldEvent::Entered {
+        capabilities: vec![Capability::Abilities],
+        choices: vec![],
+        session_id,
+        zone: "SyntheticZone".into(),
+        player: Box::new(profile),
+        far_clip: None,
+        spell_landing_flag: None,
+    };
+    let mut world = ClientWorld::default();
+    world.carry_as(crate::GameDialect::EqMac);
+    let before = world.skills_revision();
+    game(&mut world, entry(1, profile.clone()));
+    connection(&mut world, true, false);
+    game(
+        &mut world,
+        WorldEvent::AbilitiesOffered(eqmac::SUPPORTED.to_vec()),
+    );
+    assert!(world.skills_revision() > before);
+    assert_eq!(world.player().unwrap().skills, profile.skills);
+    let skills = world.player().unwrap().skills.as_ref().unwrap();
+    assert_eq!(skills.len(), 100);
+    assert_eq!((skills[0], skills[30], skills[99]), (0x1234, 57, 0xabcd));
+    assert_eq!(
+        world.abilities(),
+        [
+            Ability::Kick,
+            Ability::Sneak,
+            Ability::Mend,
+            Ability::SenseHeading
+        ]
+    );
+    assert!(
+        world
+            .abilities()
+            .iter()
+            .all(|ability| world.ability_offered(*ability))
+    );
+    // A normal skill change reaches the same state and invalidates the UI.
+    let before = world.skills_revision();
+    for message in message::quarm(0x8941, &[25, 0, 0, 0, 1, 0, 0, 0]) {
+        let Message::Event(event) = message else {
+            panic!("skill event expected")
+        };
+        game(&mut world, event);
+    }
+    assert!(world.skills_revision() > before);
+    assert!(world.abilities().contains(&Ability::FeignDeath));
+    // Re-admission replaces the old table rather than carrying stale ranks.
+    game(&mut world, entry(2, profile.clone()));
+    assert!(!world.abilities().contains(&Ability::FeignDeath));
+    // A genuinely absent table still cannot fabricate learned abilities.
+    profile.skills = None;
+    game(&mut world, entry(3, profile));
+    assert_eq!(world.abilities(), Vec::<Ability>::new());
+}
+
+#[test]
+fn eqmac_ability_reset_releases_mend_and_shared_strikes_without_claiming_success() {
+    use crate::abilities::{Ability, eqmac::SkillReset};
+    use std::time::Duration;
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    let now = Instant::now();
+    for ability in [Ability::Mend, Ability::Kick, Ability::Hide] {
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::AbilityUsed {
+                session_id: 1,
+                ability,
+                ready_in: Duration::from_secs(360),
+            }),
+            now,
+            &NoSpells,
+        );
+    }
+    // The raw record alone supplies no established units or readiness.
+    game(
+        &mut world,
+        WorldEvent::SkillReset(SkillReset {
+            skill: 32,
+            padding: 0,
+            timer: 1,
+        }),
+    );
+    game(&mut world, WorldEvent::SkillReady(65535));
+    assert!(world.ability_wait(Ability::Mend, now).is_some());
+    let before = world.player().unwrap().clone();
+    let changes = game(&mut world, WorldEvent::SkillReady(32));
+    assert_eq!(changes.notices, Vec::<Notice>::new());
+    assert_eq!(world.ability_wait(Ability::Mend, now), None);
+    assert!(world.ability_wait(Ability::Kick, now).is_some());
+    game(&mut world, WorldEvent::SkillReady(10));
+    for ability in [Ability::Kick, Ability::Bash, Ability::FlyingKick] {
+        assert_eq!(world.ability_wait(ability, now), None);
+    }
+    assert!(world.ability_wait(Ability::Hide, now).is_some());
+    assert_eq!(world.player().unwrap(), &before);
+    // A late reset in a cleared admission cannot manufacture an ability use.
+    world.reset(Reset::Entered);
+    game(&mut world, WorldEvent::SkillReady(32));
+    assert_eq!(world.ability_wait(Ability::Mend, now), None);
+}
+
+#[test]
+fn eqmac_ability_list_uses_profile_sentinels_and_class_without_changing_titanium() {
+    use crate::abilities::Ability;
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    let player = world.player.as_mut().unwrap();
+    player.class = Some(7);
+    let mut skills = vec![255; 100];
+    skills[32] = 0; // Mend is practiced from zero.
+    skills[25] = 100;
+    skills[30] = 100;
+    skills[42] = 254; // Sneak still requires training.
+    player.skills = Some(skills);
+    assert_eq!(
+        world.abilities(),
+        [Ability::Kick, Ability::Mend, Ability::FeignDeath]
+    );
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 42,
+            value: 1,
+        },
+    );
+    assert!(world.abilities().contains(&Ability::Sneak));
+    world.player.as_mut().unwrap().class = Some(1);
+    assert!(!world.abilities().contains(&Ability::Mend));
+    assert!(!world.abilities().contains(&Ability::FeignDeath));
+    world.carry_as(crate::GameDialect::Titanium);
+    assert!(world.abilities().contains(&Ability::Fishing));
+    assert!(world.abilities().contains(&Ability::BindWound));
+}
+
+#[test]
 fn a_bandaging_that_ends_frees_bind_wound_and_the_player_hears_how_it_went() {
     use crate::{
         abilities::Ability,
@@ -1751,6 +1917,7 @@ fn the_player_hears_what_they_could_not_eat_or_drink() {
     use crate::food::{Nourishment, Shortage};
     let mut world = admitted();
     let fed = Nourishment {
+        fatigue: None,
         food: 2500,
         water: 6000,
     };
@@ -4001,6 +4168,45 @@ fn merchant_revisions_include_stock_removal_and_local_closure() {
     assert_eq!(world.merchant_revision(), closed);
     game(&mut world, WorldEvent::Camp(CampStatus::Camped));
     assert!(world.merchant_revision() > closed);
+}
+
+#[test]
+fn movement_weight_requires_cursor_receipt_but_never_a_bank_balance() {
+    let mut world = admitted();
+    game(&mut world, inventory(vec![]));
+    game(&mut world, WorldEvent::Coins(Coins::default()));
+    assert_eq!(
+        world.movement_weight(),
+        Err(crate::SpeedInputUnavailable::Coins)
+    );
+    // Until then a landing takes this client's own reading.
+    assert!((world.fall_weight() - world.carried_weight()).abs() < f32::EPSILON);
+    game(
+        &mut world,
+        WorldEvent::CoinsElsewhere {
+            cursor: coins(0, 0, 0, 8),
+            bank: coins(1000, 1000, 1000, 1000),
+            given: Coins::default(),
+            offered: Coins::default(),
+        },
+    );
+    assert_eq!(world.movement_weight(), Ok(2));
+    // A landing takes the programs' sum once it is established.
+    assert!(
+        (world.fall_weight() - 0.2).abs() < 0.001,
+        "{}",
+        world.fall_weight()
+    );
+    // Losing only the irrelevant bank balance must not withdraw a known cursor.
+    world.wallet.bank = None;
+    assert_eq!(world.movement_weight(), Ok(2));
+    game(&mut world, entered(2));
+    game(&mut world, inventory(vec![]));
+    game(&mut world, WorldEvent::Coins(Coins::default()));
+    assert_eq!(
+        world.movement_weight(),
+        Err(crate::SpeedInputUnavailable::Coins)
+    );
 }
 
 #[test]

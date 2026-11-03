@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `6ae8956068415fa30934485ccdae1a102757b50c`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/6ae8956068415fa30934485ccdae1a102757b50c/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `ba81b4216195851a53cbb8b729f3037172edcb31`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/ba81b4216195851a53cbb8b729f3037172edcb31/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -25,26 +25,91 @@ certification, and individual operations still validate their prerequisites.
 | --- | --- | --- | --- | --- |
 | Protocol / installation | Titanium | Titanium | EQMac / TAKP | EQMac / TAKP |
 | Login, character selection, world state and chat | Yes | Yes | Yes | Yes |
-| Character appearance preview at selection | No | Yes | No | Yes |
-| Movement and falling | Yes | Yes | No | Yes |
-| Jumping | No | Yes | No | Yes |
-| Casting and basic spellbook | Yes | Yes | No | Yes |
+| Character appearance preview at selection | Yes | Yes | Yes | Yes |
+| Movement and falling | Yes | Yes | Yes | Yes |
+| Jumping | Yes | Yes | Yes | Yes |
+| Sitting, standing and ducking | Yes | Yes | Yes | Yes |
+| Casting and basic spellbook | Yes | Yes | Yes | Yes |
 | Move / delete book entries | Yes / No | Yes / Yes | No / No | No / No |
-| Inventory, trading and giving | Yes | Yes | No | Yes |
-| Targeting and combat | Yes | Yes | No | Yes |
+| Item/coin moves and personal banking | Yes | Yes | Yes | Yes |
+| Merchants and exchanges/giving | Yes | Yes | No | Yes |
+| Supported abilities | Yes | Yes | Yes | Yes |
+| Targeting | Yes | Yes | Yes | Yes |
+| Combat and considering | Yes | Yes | No | Yes |
 | Looting, doors and ground-object features | Yes | Yes | No | No |
-| Camping and zone transfers | Yes | Yes | No | Yes |
+| Camping and zone transfers | Yes | Yes | Yes | Yes |
 | Groups | No | Yes | No | Yes |
 | Raids, training, reading and tradeskills | No | Yes | No | No |
 | Pets and corpse commands | Yes | Yes | No | No |
 | Resurrection / translocate answers | No / No | Yes / Yes | No / No | No / Yes |
 | Character creation UI and script | Yes | Yes | Yes | Yes |
 
-Quarm admission, incoming character/entity state and chat have been exercised;
-that does not grant the richer actions implemented for TAKP. Quarm currently
-advertises only `Talking` as an actionable capability. Conversely, P99 is not
-stationary-only: movement, falls, inventory, spells and other paths above are
-provided. P99 does not yet offer jumping or deletion of spellbook entries.
+Quarm additionally offers ground movement, jumps, falls, posture, camping and
+zone transfers through the shared EQMac path, plus target selection/clearing.
+It also offers casting, basic spellbook actions, the supported EQMac abilities,
+and guarded item/coin moves. Quarm merchants, meals and exchanges remain disabled.
+Item predictions remain unconfirmed after pacing delays; contradictory updates
+require a complete snapshot. Coin transfers remain a local ledger until server
+updates replace it. These confirmation limits also govern movement readiness.
+Posture controls use `Capability::Posture`, independently of `Moving`. The newly
+enabled public-server paths are source/capture-backed and regression-tested;
+their live validation is tracked separately. Swimming, boats and client-reported
+bleed-out remain gaps. P99 still does not offer deletion of spellbook entries.
+
+Current movement requires complete load/STR/buff inputs. Unknown state withdraws
+player input without inventing a zero load or a root, and bounded passive falls
+remain available. Supported spell values scale by caster level. Equipment, food,
+bag reduction, coins and EQMac fatigue contribute where established; unsupported
+effects and unresolved predictions remain unavailable. See [movement limits and
+the deferred live matrix](docs/movement-input-readiness.md).
+
+See the networking [P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/ba81b4216195851a53cbb8b729f3037172edcb31/docs/public-server-gaps.md)
+for missing, disabled, unverified and server-restricted behavior.
+
+### Public-parity checks, 2026-11-02
+
+Against networking `d713d0b4` and the desktop changes based on `9be679a`:
+these historical observations predate the current spell/ability/inventory/
+movement-input integration and do not validate those additions.
+
+- Local TAKP with Quarm policy: character selection and a rendered appearance
+  preview passed. Further local testing was interrupted by Docker shutdown.
+- Public Quarm: appearance preview, admission, authoritative inventory/coins,
+  self-targeting, brief forward/backward/left/right movement and jump/landing
+  were exercised while connected. HP increased during the recorded checks;
+  no movement-proposal rejection or stamina decoding error was logged. Guild
+  chat was received. Local acceptance is not an independent server-side speed
+  measurement or proof that position persisted after reconnecting.
+- The operator subsequently relocated the character to a safer area and closed
+  the client. NPC targeting/clear, walking/turning, camp cancellation, zone
+  handoffs and death/bind remain unverified at this head. P99 previews/jumping
+  still need the integrated-client live check.
+- The operator reported that `/camp desktop` appeared to return to selection.
+  The log records a desktop-camp exit followed by application status 0; the
+  visible transition remains a focused retest item, not a reproduced defect.
+
+Native Windows formatting, strict workspace/all-target Clippy and 1,299 tests
+passed. The 32 ignored asset/live probes were not counted as passes. The
+networking stack separately passed 791 tests and warnings-as-errors API docs.
+Private scripts, screenshots, logs and credentials are not published.
+
+The subsequent networking pin `182e99dd` adds Quarm casting and basic spellbook
+support. All 797 networking tests pass, including six new synthetic Quarm
+assembly checks, alongside strict Clippy, formatting and API docs. These new
+spell actions have not been tested on public Quarm; the earlier session does
+not validate them. The desktop was rebuilt and rechecked against this exact pin:
+1,299 tests passed (32 ignored probes excluded), alongside strict Clippy and
+formatting.
+
+The combined spell/ability/inventory/movement-input integration pins networking
+`ba81b4216195851a53cbb8b729f3037172edcb31`, the merge of that stack with the
+reviewer's fixes. All 1,308 offline client workspace
+tests pass (32 existing asset/live probes ignored), with strict workspace/all-target
+Clippy and formatting. The networking pin passes 850 tests and warnings-as-errors
+API documentation. Regression coverage includes unknown cursor coins versus a
+known empty cursor, irrelevant bank balances, prediction uncertainty, scaled
+buff values, fatigue, revision recovery and bounded passive falls. These are
+offline checks; the dedicated live batch remains pending.
 
 Maps, free camera, key editing, chat-link presentation and the script editor are
 local client features. The map shows received entity positions on every server
