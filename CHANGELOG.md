@@ -32,10 +32,10 @@
   actual attempt IDs from numeric status fields, without protocol-name checks
   or parsing display labels. Core's existing `spell_tables::Policy` name now
   reexports the network-owned provider policy.
-- Preserve the released display-only status constructor. A Connecting status
-  without a typed run ID leaves spell mechanics unavailable rather than
-  inventing identity or aborting the connection. The unreleased exhaustive
-  bridge `Fact` enum adds `RunUnavailable` for this case.
+- Preserve the released display-only status constructor. For the P99 provider,
+  a Connecting status without a typed run ID leaves spell mechanics unavailable
+  rather than inventing identity or aborting the connection. The unreleased
+  exhaustive bridge `Fact` enum adds `RunUnavailable` for this case.
 - Emit one chat notice when a provider first becomes unavailable. Repeated
   failures and reconnects in that failed lifetime do not spam notices; explicit
   provider replacement rearms the transition. Ordinary synchronization waits

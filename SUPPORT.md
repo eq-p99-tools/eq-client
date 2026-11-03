@@ -79,7 +79,9 @@ Current movement requires complete load/STR/buff inputs. Unknown state withdraws
 player input without inventing a zero load or a root, and bounded passive falls
 remain available. Supported spell values scale by caster level. Equipment, food,
 bag reduction, coins and EQMac fatigue contribute where established; unsupported
-effects and unresolved predictions remain unavailable. The HUD explains movement
+effects and affecting or unknown equipment histories remain unavailable.
+Provably stat-neutral equipment history can remain usable without confirming
+placement. The HUD explains movement
 waits; clearing one requires current local input acceptance and a positive grant,
 not a server acknowledgement. See
 [movement limits and the deferred live matrix](docs/movement-input-readiness.md).
