@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `4ff90bd464da8e049a4e4ba1398e8e8bd704e63b`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/4ff90bd464da8e049a4e4ba1398e8e8bd704e63b/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `ba81b4216195851a53cbb8b729f3037172edcb31`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/ba81b4216195851a53cbb8b729f3037172edcb31/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -63,7 +63,7 @@ bag reduction, coins and EQMac fatigue contribute where established; unsupported
 effects and unresolved predictions remain unavailable. See [movement limits and
 the deferred live matrix](docs/movement-input-readiness.md).
 
-See the networking [P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/4ff90bd464da8e049a4e4ba1398e8e8bd704e63b/docs/public-server-gaps.md)
+See the networking [P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/ba81b4216195851a53cbb8b729f3037172edcb31/docs/public-server-gaps.md)
 for missing, disabled, unverified and server-restricted behavior.
 
 ### Public-parity checks, 2026-11-02
@@ -102,9 +102,10 @@ not validate them. The desktop was rebuilt and rechecked against this exact pin:
 formatting.
 
 The combined spell/ability/inventory/movement-input integration pins networking
-`4ff90bd464da8e049a4e4ba1398e8e8bd704e63b`. All 1,304 offline client workspace
+`ba81b4216195851a53cbb8b729f3037172edcb31`, the merge of that stack with the
+reviewer's fixes. All 1,308 offline client workspace
 tests pass (32 existing asset/live probes ignored), with strict workspace/all-target
-Clippy and formatting. The networking pin passes 833 tests and warnings-as-errors
+Clippy and formatting. The networking pin passes 850 tests and warnings-as-errors
 API documentation. Regression coverage includes unknown cursor coins versus a
 known empty cursor, irrelevant bank balances, prediction uncertainty, scaled
 buff values, fatigue, revision recovery and bounded passive falls. These are

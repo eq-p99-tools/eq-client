@@ -1,7 +1,9 @@
 # EQMac ability menus and recovery
 
 The client pins networking commit
-[`4edb2a04ca62a3f68230e191555945026e149039`](https://github.com/eq-p99-tools/eq-network/pull/180).
+[`ba81b4216195851a53cbb8b729f3037172edcb31`](https://github.com/eq-p99-tools/eq-network/pull/182),
+which carries the abilities change of
+[#180](https://github.com/eq-p99-tools/eq-network/pull/180).
 It includes the 15 supported TAKP/Quarm abilities introduced in
 [#176](https://github.com/eq-p99-tools/eq-network/pull/176), the prior spell
 and movement work, and the idle world-session reliability fix in
@@ -37,7 +39,7 @@ ability listing, a decoded ordinary update, re-admission and an absent table.
 
 The [networking evidence and live-check matrix](https://github.com/eq-p99-tools/eq-network/blob/988e193b368a09d9aeb3f2b7e43857e09b2c61b3/docs/eqmac-abilities-parity.md)
 records pinned Quarm/TAKP sources, exact packets, recovery assumptions and
-remaining gaps. The [profile skill follow-up](https://github.com/eq-p99-tools/eq-network/blob/4edb2a04ca62a3f68230e191555945026e149039/docs/eqmac-profile-skills.md)
+remaining gaps. The [profile skill follow-up](https://github.com/eq-p99-tools/eq-network/blob/ba81b4216195851a53cbb8b729f3037172edcb31/docs/eqmac-profile-skills.md)
 records the missing-state defect and source layout; the separate silent
 `SkillUpdate2` remains unsupported. Private live findings motivated these
 fixes, but corrected live behavior remains unverified. The coordinated
