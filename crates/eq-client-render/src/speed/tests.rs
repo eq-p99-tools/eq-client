@@ -226,6 +226,111 @@ fn reporting_ready() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
     (app, rx)
 }
 
+fn ready_spell_provider(
+    names: &mut crate::spellbook::SpellNames,
+    binding: eq_client_core::spell_tables::Binding,
+) {
+    use eq_client_core::spell_tables::{Context, Event, Fact, SpellId, Stage, Table, Update};
+    names.bind(binding);
+    for fact in [
+        Fact::RunStarted {
+            run_id: 7,
+            attempt: 1,
+        },
+        Fact::Table(Event::new(
+            Context::new(7, 1, Stage::World),
+            Update::Table(Table::Registration(vec![SpellId::new(1).unwrap()])),
+        )),
+        Fact::ZonePending { run_id: 7 },
+        Fact::Table(Event::new(
+            Context::new(7, 2, Stage::Zone { session_id: 1 }),
+            Update::Table(Table::Replay(Vec::new())),
+        )),
+        Fact::ZoneEntered {
+            run_id: 7,
+            session_id: 1,
+        },
+    ] {
+        names.receive(&binding.envelope(fact));
+    }
+}
+
+#[test]
+fn spell_provider_recovery_requires_a_fresh_matching_movement_receipt() {
+    use eq_client_core::spell_tables::{Binding, Context, Event, Fact, Policy, Stage, Update};
+    use eq_network_game::spell_tables::{DecodeError, Kind, Unavailable};
+    let (mut app, rx) = reporting_ready();
+    let original = receipt(&rx.try_recv().unwrap(), true);
+    let mut fields = vec!["0"; 183];
+    fields[0] = "1";
+    fields[1] = "Synthetic affecting spell";
+    fields[86..98].fill("254");
+    let binding = Binding::new(Policy::Project1999);
+    let mut names = crate::spellbook::SpellNames::parse(&fields.join("^"));
+    ready_spell_provider(&mut names, binding);
+    app.insert_resource(names);
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [buff(0, 1)],
+    );
+    app.update();
+    // The known non-speed spell retains the previous numeric inputs, so the
+    // receipt owner may retain the already-posted report identity.
+    assert!(rx.try_recv().is_err());
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [
+            motion_state(Some(6.0)),
+            WorldEvent::SpeedInputsAccepted(original),
+        ],
+    );
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+    let failed = Event::new(
+        Context::new(7, 3, Stage::Zone { session_id: 1 }),
+        Update::Unavailable {
+            kind: Kind::Replay,
+            reason: Unavailable::Malformed(DecodeError::MissingCount),
+        },
+    );
+    app.world_mut()
+        .resource_mut::<crate::spellbook::SpellNames>()
+        .receive(&binding.envelope(Fact::Table(failed)));
+    app.update();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Unavailable(Missing::Effects),
+            ..
+        })
+    ));
+    assert_ne!(movement_notice(&app), "");
+    // Provider replacement and real registration/replay restore the same input
+    // values without changing this report owner's admission or revision.
+    ready_spell_provider(
+        &mut app
+            .world_mut()
+            .resource_mut::<crate::spellbook::SpellNames>(),
+        Binding::new(Policy::Project1999),
+    );
+    app.update();
+    let recovered = receipt(&rx.try_recv().unwrap(), true);
+    assert_eq!(
+        (recovered.revision, recovered.inputs),
+        (original.revision, original.inputs)
+    );
+    assert_ne!(recovered.report_id, original.report_id);
+    assert_ne!(movement_notice(&app), "");
+    for accepted in [original, recovered] {
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::SpeedInputsAccepted(accepted)],
+        );
+        app.update();
+        assert_eq!(movement_notice(&app).is_empty(), accepted == recovered);
+    }
+}
+
 fn receipt(command: &ClientCommand, granted: bool) -> eq_client_core::SpeedInputAcceptance {
     let ClientCommand::SpeedInputs {
         session_id,

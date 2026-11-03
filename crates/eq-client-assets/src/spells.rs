@@ -5,9 +5,11 @@
 mod definitions;
 pub mod effects;
 mod magnitude;
+mod projection;
 pub mod resources;
 
 pub use definitions::{Definition, Definitions, Timing};
+pub use projection::ReplayProjection;
 
 /// Where a client generation's spell file keeps the fields this client
 /// reads: the file's name in the installation and the first column of each

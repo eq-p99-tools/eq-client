@@ -12,6 +12,7 @@ use eq_client_core::{Capability, ClientCommand, world::ClientWorld};
 use std::{
     sync::{
         Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{SyncSender, TrySendError},
     },
     time::Instant,
@@ -37,6 +38,8 @@ pub(crate) enum Refusal {
     Dead,
     /// The session does not let the player do this on this server.
     Unavailable(Capability),
+    /// This provider has no complete, usable spell replay for the current zone.
+    SpellData,
     /// The queue to the session is full.
     Busy,
     /// The session has ended.
@@ -52,6 +55,7 @@ impl Refusal {
             Self::Away => "You can't do that right now",
             Self::Dead => "You can't do that while dead",
             Self::Unavailable(_) => UNAVAILABLE,
+            Self::SpellData => "Spell data is not ready for casting",
             Self::Busy => "Too many requests at once; try again",
             Self::Ended => "The connection has ended",
         }
@@ -91,6 +95,7 @@ pub(crate) const MISSING: &str = "Not in this client yet";
 #[derive(Resource)]
 pub(crate) struct Outbox {
     queue: Option<SyncSender<ClientCommand>>,
+    spell_ready: AtomicBool,
     refused: Mutex<Vec<Refusal>>,
 }
 
@@ -98,8 +103,13 @@ impl Outbox {
     pub(crate) fn new(queue: Option<SyncSender<ClientCommand>>) -> Self {
         Self {
             queue,
+            spell_ready: AtomicBool::new(true),
             refused: Mutex::new(Vec::new()),
         }
+    }
+
+    pub(crate) fn set_spell_ready(&self, ready: bool) {
+        self.spell_ready.store(ready, Ordering::Relaxed);
     }
 
     /// Sends to another session's queue from now on, or to none.
@@ -193,6 +203,13 @@ impl Outbox {
             }
             if !world.can(capability) {
                 return Err(Refusal::Unavailable(capability));
+            }
+            if matches!(
+                command,
+                ClientCommand::CastSpell { .. } | ClientCommand::UseItem(_)
+            ) && !self.spell_ready.load(Ordering::Relaxed)
+            {
+                return Err(Refusal::SpellData);
             }
         }
         Ok(queue)
@@ -402,6 +419,78 @@ mod tests {
 
     fn say() -> ClientCommand {
         ClientCommand::SendChat(OutboundChat::Say("Hail".into()))
+    }
+
+    #[test]
+    fn unavailable_spell_data_refuses_casting_while_chat_keeps_working() {
+        let (queue, received) = std::sync::mpsc::sync_channel(2);
+        let outbox = Outbox::new(Some(queue));
+        let world = admitted(vec![Capability::Casting, Capability::Talking]);
+        let cast = || ClientCommand::CastSpell {
+            session_id: 4,
+            gem: 0,
+            spell_id: 1,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        outbox.set_spell_ready(false);
+        assert_eq!(outbox.send(&world, cast()), Err(Refusal::SpellData));
+        outbox.send(&world, say()).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::SendChat(_))
+        ));
+        assert!(received.try_recv().is_err());
+        // Dropping an existing invisibility state needs no local spell cost,
+        // timing or projection, even though it shares the Casting capability.
+        outbox
+            .send(
+                &world,
+                ClientCommand::DropInvisibility {
+                    session_id: 4,
+                    steps: Vec::new(),
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::DropInvisibility { .. })
+        ));
+        outbox.set_spell_ready(true);
+        outbox.send(&world, cast()).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::CastSpell { .. })
+        ));
+    }
+
+    #[test]
+    fn unavailable_spell_data_preserves_existing_refusal_priority() {
+        let (queue, _received) = std::sync::mpsc::sync_channel(1);
+        let outbox = Outbox::new(Some(queue));
+        outbox.set_spell_ready(false);
+        let cast = || ClientCommand::CastSpell {
+            session_id: 4,
+            gem: 0,
+            spell_id: 1,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        assert_eq!(
+            outbox.send(&ClientWorld::default(), cast()),
+            Err(Refusal::NotAdmitted)
+        );
+        let mut zoning = admitted(vec![Capability::Casting]);
+        zoning.apply(
+            &WorldUpdate::Connection(eq_client_core::world::Link::Zoning),
+            Instant::now(),
+            &NoSpells,
+        );
+        assert_eq!(outbox.send(&zoning, cast()), Err(Refusal::Away));
+        assert_eq!(
+            outbox.send(&admitted(Vec::new()), cast()),
+            Err(Refusal::Unavailable(Capability::Casting))
+        );
     }
 
     #[test]

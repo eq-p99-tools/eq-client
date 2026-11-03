@@ -663,10 +663,10 @@ mod tests {
         fields[0] = "42";
         fields[71] = "1";
         fields[131] = "5";
-        let names = SpellNames(eq_client_assets::spells::Definitions::parse(
+        let names = SpellNames::parse_for(
             &fields.join("^"),
-            &eq_client_assets::spells::Layout::EQMAC,
-        ));
+            eq_client_assets::ui::InstalledClient::EqMac,
+        );
         app.insert_resource(online())
             .insert_resource(names)
             .init_resource::<BookView>()
@@ -705,10 +705,10 @@ mod tests {
         assert_eq!(rect(&app, occupied), Some(Rect::new(30.0, 0.0, 38.0, 8.0)));
         *app.world_mut().get_mut::<Interaction>(occupied).unwrap() = Interaction::None;
         fields[71] = "0";
-        app.insert_resource(SpellNames(eq_client_assets::spells::Definitions::parse(
+        app.insert_resource(SpellNames::parse_for(
             &fields.join("^"),
-            &eq_client_assets::spells::Layout::EQMAC,
-        )));
+            eq_client_assets::ui::InstalledClient::EqMac,
+        ));
         app.update();
         assert_eq!(rect(&app, occupied), Some(Rect::new(20.0, 0.0, 28.0, 8.0)));
         app.world_mut().resource_mut::<BookView>().spread = 1;

@@ -433,10 +433,14 @@ pub(super) fn carry_as(settings: Res<ViewerSettings>, mut state: ResMut<OnlineSt
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn receive(
     mut commands: Commands,
-    (updates, front): (Res<Updates>, Option<Res<super::login::FrontEnd>>),
+    (updates, front, outbox): (
+        Res<Updates>,
+        Option<Res<super::login::FrontEnd>>,
+        Option<Res<super::outbox::Outbox>>,
+    ),
     definitions: (
         Res<ViewerSettings>,
-        Option<Res<super::spellbook::SpellNames>>,
+        Option<ResMut<super::spellbook::SpellNames>>,
         Option<Res<hud::messages::Messages>>,
     ),
     mut state: ResMut<OnlineState>,
@@ -444,7 +448,7 @@ pub(super) fn receive(
     mut chat: ResMut<super::chat::ChatState>,
     (mut scene, loading): (super::zone::Scene, Option<Res<super::loading::Loading>>),
 ) {
-    let (settings, spell_names, messages) = definitions;
+    let (settings, mut spell_names, messages) = definitions;
     let Ok(receiver) = updates.0.lock() else {
         return;
     };
@@ -461,7 +465,26 @@ pub(super) fn receive(
         }
     })
     .take(256)
+    // Provider facts precede the admission/loading gate. The producer binding
+    // is retained verbatim, including for old queued Connecting notifications.
+    .filter(|update| {
+        if let WorldUpdate::SpellTable(fact) = update {
+            if let Some(spells) = spell_names.as_deref_mut() {
+                spells.receive(fact);
+            }
+            false
+        } else {
+            true
+        }
+    })
     .collect();
+    if let Some(outbox) = outbox {
+        outbox.set_spell_ready(
+            spell_names
+                .as_deref()
+                .is_none_or(super::spellbook::SpellNames::ready),
+        );
+    }
     // The installed client's spell data, when there is one.
     let spells: &dyn SpellCatalog = match spell_names.as_deref() {
         Some(names) => names,
@@ -1013,6 +1036,9 @@ mod tests {
                 heard: std::sync::Arc::default(),
             }),
             Some(Session {
+                spell_provider: eq_client_core::spell_tables::Binding::new(
+                    eq_client_core::spell_tables::Policy::Installed,
+                ),
                 updates,
                 commands,
                 worker: Box::new(thread.clone()),
@@ -1331,14 +1357,63 @@ mod tests {
         assert_eq!(world(&app).session_id(), Some(2));
     }
 
+    fn spell_provider_fixture() -> (crate::spellbook::SpellNames, Vec<WorldUpdate>) {
+        use eq_client_core::spell_tables::{
+            Assignment, Binding, Context, Event, Fact, Policy, SpellId, Stage, Table,
+            Update as SpellUpdate,
+        };
+        let binding = Binding::new(Policy::Project1999);
+        let mut fields = vec!["0"; 20];
+        fields[0] = "1";
+        fields[1] = "Source";
+        fields[19] = "10";
+        let source = fields.join("^");
+        fields[0] = "2";
+        fields[1] = "Destination";
+        fields[19] = "20";
+        let mut spells =
+            crate::spellbook::SpellNames::parse(&format!("{source}\n{}", fields.join("^")));
+        spells.bind(binding);
+        let source_id = SpellId::new(1).unwrap();
+        let destination_id = SpellId::new(2).unwrap();
+        let facts = [
+            Fact::RunStarted {
+                run_id: 7,
+                attempt: 1,
+            },
+            Fact::Table(Event::new(
+                Context::new(7, 1, Stage::World),
+                SpellUpdate::Table(Table::Registration(vec![source_id])),
+            )),
+            Fact::ZonePending { run_id: 7 },
+            Fact::Table(Event::new(
+                Context::new(7, 2, Stage::Zone { session_id: 2 }),
+                SpellUpdate::Table(Table::Replay(vec![Assignment::new(
+                    destination_id,
+                    source_id,
+                )])),
+            )),
+            Fact::ZoneEntered {
+                run_id: 7,
+                session_id: 2,
+            },
+        ]
+        .into_iter()
+        .map(|fact| WorldUpdate::SpellTable(binding.envelope(fact)))
+        .collect();
+        (spells, facts)
+    }
+
     #[test]
     fn a_new_admission_waits_while_the_players_casting_gesture_plays() {
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut state = OnlineState::new(true);
         testing::admit(&mut state, 1, testing::player(7));
         let missing = std::env::temp_dir().join("no-everquest-installed-here");
+        let (spells, facts) = spell_provider_fixture();
         let mut app = App::new();
         app.insert_resource(state)
+            .insert_resource(spells)
             .insert_resource(Updates(Mutex::new(Some(receiver))))
             .insert_resource(ViewerSettings(super::super::ViewerConfig {
                 eq_directory: Some(missing),
@@ -1380,6 +1455,11 @@ mod tests {
             }))
             .unwrap();
         sender.send(resources(6)).unwrap();
+        // These arrive after the admission in the queue but must reach the
+        // provider even while that admission is held by the casting gesture.
+        for fact in facts {
+            sender.send(fact).unwrap();
+        }
         // The news before the admission applies; the admission and what
         // follows it wait, and the zone being left stays drawn.
         app.update();
@@ -1387,6 +1467,18 @@ mod tests {
         app.update();
         assert_eq!(world(&app).session_id(), Some(1));
         assert_eq!(world(&app).vitals().mana, Some(5));
+        assert_eq!(
+            app.world()
+                .resource::<crate::spellbook::SpellNames>()
+                .mana(2),
+            Some(10)
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::spellbook::SpellNames>()
+                .label(2),
+            "Destination"
+        );
         assert!(app.world().get_entity(old).is_ok());
         // Once the gesture has played, the held news applies in its order.
         app.insert_resource(super::super::loading::Loading::waiting_for_gesture(false));

@@ -6,6 +6,7 @@ use theme::Size;
 mod camera;
 mod gpu_assets;
 mod scene_collision;
+mod spell_provider;
 mod static_batch;
 mod systems;
 
@@ -343,6 +344,13 @@ pub fn run(
         window_size,
     );
     let mut app = App::new();
+    let spell_binding = match &source {
+        Source::Online {
+            session: Some(session),
+            ..
+        } => Some(session.spell_provider),
+        _ => None,
+    };
     let (front, updates, commands) = match source {
         Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
         Source::Offline(preview) => (
@@ -353,7 +361,13 @@ pub fn run(
     };
     app.insert_resource(front);
     app.insert_resource(login::LoginStrings::load(config.eq_directory.as_deref()));
-    app.insert_resource(spellbook::SpellNames::load(&config));
+    let mut spells = spellbook::SpellNames::load(&config);
+    if let Some(binding) = spell_binding {
+        spells.bind(binding);
+    }
+    let outbox = outbox::Outbox::new(commands);
+    outbox.set_spell_ready(spells.ready());
+    app.insert_resource(spells);
     app.insert_resource(hud::messages::Messages::load(
         config.eq_directory.as_deref(),
         config.installed_client,
@@ -365,7 +379,7 @@ pub fn run(
     .insert_resource(ViewerSettings(config))
     .insert_resource(online::OnlineState::new(online))
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
-    .insert_resource(outbox::Outbox::new(commands));
+    .insert_resource(outbox);
     init_presentation(&mut app);
     app.insert_resource(options::OptionsState::new(option_defaults));
     app.add_plugins(
@@ -1025,6 +1039,9 @@ mod tests {
                 heard: std::sync::Arc::default(),
             }),
             Some(login::Session {
+                spell_provider: eq_client_core::spell_tables::Binding::new(
+                    eq_client_core::spell_tables::Policy::Installed,
+                ),
                 updates: receive,
                 commands,
                 worker: Box::new(login::testing::Thread::default()),

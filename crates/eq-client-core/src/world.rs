@@ -329,7 +329,7 @@ impl ClientWorld {
                 }],
                 ..Changes::default()
             },
-            WorldUpdate::Chat(_) => Changes::default(),
+            WorldUpdate::Chat(_) | WorldUpdate::SpellTable(_) => Changes::default(),
         }
     }
 
@@ -658,7 +658,9 @@ impl ClientWorld {
             // wait for a window to choose one from, and what a game master did
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
-            WorldEvent::ChatServer(_)
+            // Installed spell providers consume table facts before admission staging.
+            WorldEvent::SpellTable(_)
+            | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::Weather(_)
             | WorldEvent::ServerTick(_)

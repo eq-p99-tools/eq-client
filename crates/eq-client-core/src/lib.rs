@@ -23,6 +23,7 @@ pub mod reading;
 pub mod resources;
 pub mod select_spots;
 pub mod skills;
+pub mod spell_tables;
 pub mod targeting;
 pub mod whereabouts;
 pub mod who;
@@ -82,6 +83,8 @@ pub use eq_network_game::world::{
 /// Messages crossing the worker/presentation boundary. Queues are bounded by the host.
 #[derive(Clone, Debug)]
 pub enum WorldUpdate {
+    /// A producer-bound installed-spell provider fact, independent of admission.
+    SpellTable(spell_tables::Envelope),
     /// A typed game-state change.
     Game(WorldEvent),
     /// Where the connection stands; anything but connected disables local
