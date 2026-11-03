@@ -72,6 +72,6 @@ These commands support scripts that deliberately start before world entry. They 
 - `server name`: choose a listed server by its full name.
 - `wait_select`: wait for character selection.
 - `select name`: choose a character and enter the world.
-- `create name race class gender deity start_zone primary_stat`: request character creation from selection where the server policy supports it, using numeric identifiers; the final stat receives the free stat points. This command is not restricted to local servers by the script parser.
+- `create name race class gender deity start_zone primary_stat`: request character creation from selection where the server policy supports it, using numeric identifiers; the final stat receives the free stat points. `start_zone` is the city's Titanium choice number (1 Qeynos, 2 Halas, and so on); a generation that sends its own value for the same city, such as the Mac-era start-zone IDs, has it translated before sending. This command is not restricted to local servers by the script parser.
 - `create_refused name race class gender deity start_zone primary_stat`: the same request where the server is expected to refuse it (a name already taken, for one); the step passes on the refusal and ends the script if the character is created.
 - `wait_online`: wait for a zone admission and player before continuing.

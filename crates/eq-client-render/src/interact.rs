@@ -132,6 +132,35 @@ mod tests {
         assert_eq!(nearest(&state), None);
     }
 
+    /// A policy that only receives door state (TAKP) offers no door: neither
+    /// the hint nor F sees one, and the item beyond it is what F uses.
+    #[test]
+    fn a_policy_without_door_use_offers_no_door() {
+        let mut state = state();
+        let capabilities = eq_client_core::Capability::ALL
+            .iter()
+            .copied()
+            .filter(|capability| *capability != eq_client_core::Capability::Doors)
+            .collect();
+        let player = state.world().player().unwrap().clone();
+        crate::online::testing::news(
+            &mut state,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities,
+                choices: Vec::new(),
+                session_id: 12,
+                zone: "qeytoqrg".into(),
+                player: Box::new(player),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        crate::online::testing::doors(&mut state, &door_at(3.0), std::time::Instant::now());
+        assert_eq!(nearest(&state), None);
+        crate::online::testing::objects(&mut state, &item_at(9.0));
+        assert_eq!(nearest(&state), Some(Use::Object(71)));
+    }
+
     #[test]
     fn pressing_f_near_an_item_queues_a_pickup() {
         let mut state = state();

@@ -113,11 +113,15 @@ fn posed(door: &eq_client_core::doors::Door, swing: f32) -> Transform {
 }
 
 /// Nearest usable server definition in this admission with its distance, which
-/// is measured in all three axes.
+/// is measured in all three axes. Where the server policy only receives door
+/// state and offers no door use, no door is usable, so none is offered.
 pub(super) fn nearest(
     state: &super::online::OnlineState,
 ) -> Option<(f32, &eq_client_core::doors::Door)> {
-    if !state.world().connected() || state.world().death().is_some() {
+    if !state.world().connected()
+        || state.world().death().is_some()
+        || !crate::outbox::offered(state.world(), eq_client_core::Capability::Doors)
+    {
         return None;
     }
     let player = state.world().player()?;
