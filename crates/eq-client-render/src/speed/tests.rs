@@ -368,3 +368,124 @@ fn eqmac_fatigue_recalculates_effective_strength_from_reported_state() {
         assert_eq!(calculate(&world, effects).unwrap().capacity, strength);
     }
 }
+
+fn reported(
+    app: &mut App,
+    rx: &std::sync::mpsc::Receiver<ClientCommand>,
+    revision: u64,
+    updates: impl IntoIterator<Item = InventoryUpdate>,
+) -> SpeedInputState {
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        updates
+            .into_iter()
+            .map(WorldEvent::Inventory)
+            .chain([WorldEvent::SpeedInputsRequired {
+                session_id: 1,
+                revision,
+            }]),
+    );
+    app.update();
+    let Ok(ClientCommand::SpeedInputs {
+        revision: actual,
+        state,
+        ..
+    }) = rx.try_recv()
+    else {
+        panic!("inventory change must report the current input revision")
+    };
+    assert_eq!(actual, revision);
+    state
+}
+
+#[test]
+fn scribed_scroll_consumption_reports_known_load_without_hiding_an_unresolved_bank_move() {
+    for banked in [false, true] {
+        let mut state = online();
+        let player = state.world().player().unwrap().clone();
+        let mut world = ClientWorld::default();
+        world.carry_as(eq_client_core::GameDialect::EqMac);
+        testing::set_world(&mut state, world);
+        testing::admit(&mut state, 1, player);
+        ready(&mut state);
+        let mut scroll = item(22, 30, 0);
+        scroll.scroll_spell = Some(73);
+        let mut other = item(23, 70, 0);
+        other.details.id += 1;
+        testing::news(
+            &mut state,
+            [
+                WorldEvent::BuffSnapshot(vec![]),
+                WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+                    scroll.clone(),
+                    other.clone(),
+                ])),
+            ],
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let mut app = crate::testing::app();
+        app.insert_resource(state)
+            .insert_resource(Outbox::new(Some(tx)))
+            .add_systems(Update, report);
+        assert!(matches!(
+            reported(&mut app, &rx, 1, []),
+            SpeedInputState::Ready(SpeedInputs { weight: 10, .. })
+        ));
+        scroll.slot = InventorySlot::CURSOR;
+        assert!(matches!(
+            reported(
+                &mut app,
+                &rx,
+                2,
+                [InventoryUpdate::Prediction(vec![
+                    scroll.clone(),
+                    other.clone()
+                ])]
+            ),
+            SpeedInputState::Ready(SpeedInputs { weight: 10, .. })
+        ));
+        if banked {
+            other.slot = InventorySlot(2000);
+            testing::news(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                [WorldEvent::Inventory(InventoryUpdate::Prediction(vec![
+                    scroll, other,
+                ]))],
+            );
+        }
+        // These are the session's normalized events after its matched scribe reply.
+        let input = reported(
+            &mut app,
+            &rx,
+            3,
+            [InventoryUpdate::Consume {
+                slot: InventorySlot::CURSOR,
+                charge: false,
+            }],
+        );
+        let state = app.world().resource::<OnlineState>();
+        assert!(
+            !state
+                .world()
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot::CURSOR)
+        );
+        assert!(!state.world().inventory().stale());
+        assert_eq!(state.world().inventory().predicted(), banked);
+        let load = load(
+            state.world(),
+            app.world().resource::<crate::spellbook::SpellNames>(),
+        );
+        if banked {
+            assert_eq!(input, SpeedInputState::Unavailable(Missing::Prediction));
+            assert!(load.is_none());
+        } else {
+            assert!(matches!(
+                input,
+                SpeedInputState::Ready(SpeedInputs { weight: 7, .. })
+            ));
+            assert_eq!(load.map(|(weight, _)| weight), Some(7));
+        }
+    }
+}
