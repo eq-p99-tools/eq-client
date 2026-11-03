@@ -28,6 +28,20 @@ simulates passive descent where supported. The session independently rejects
 horizontal drift, turns and ascent during withdrawal. Death and transfer still
 suspend all movement.
 
+## Buff membership and diagnostic reports
+
+Script reports keep `slots` (spells in known server slots) separate from `effects`
+(spell landings awaiting a server slot). The Effects window reads both. A new
+profile replaces the slot table and clears the unslotted entries, so `effects=[]`
+does not mean that the player has no buffs; check `slots` as well.
+
+Known instant spell landings do not become unslotted buffs. EQMac's spell-file
+layout defines only the primary duration, so explicit zero primary duration
+fields establish an instant spell. Titanium also defines alternate duration
+fields: missing, malformed or nonzero values do not establish an instant spell.
+Unknown mechanics stay unresolved. Explicit server buff slots remain
+authoritative regardless of local instant classification.
+
 ## Deliberate limits
 
 - Unknown affecting formulas, formulas 60/70 with differing semantics, missing
