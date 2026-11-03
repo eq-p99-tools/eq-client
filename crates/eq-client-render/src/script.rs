@@ -137,11 +137,10 @@ pub struct Script {
     /// The count of the world's creation answers when a `create` step sent
     /// its request, so the step waits for the next.
     created_before: Option<u64>,
-    /// The menu entry the step at the front of the queue names and when the
-    /// EQ menu's button was clicked for it: the entry waits for the menu to
-    /// open, and a menu that stays closed ends the script instead of
-    /// clicking its button forever.
-    menu_opened_for: Option<(ClickTarget, Duration)>,
+    /// The queued menu entry's opener, first waiting for its guarded click
+    /// to finish, then for the menu's state after the local release. A
+    /// release does not establish that the menu's handler opened it.
+    menu_opening: Option<MenuOpening>,
 }
 
 /// Login and offline scripts need no admission; admitted runs end with the session.
@@ -215,7 +214,7 @@ impl Script {
             approached: None,
             chase_seen: None,
             created_before: None,
-            menu_opened_for: None,
+            menu_opening: None,
         }
     }
 
@@ -801,6 +800,16 @@ pub(super) fn drive(
         {
             interaction.set_if_neq(Interaction::Hovered);
         }
+        if matches!(
+            script.current,
+            Some((Step::Click(ClickTarget::Button("selector", "EQButton")), _))
+        ) && let Some(MenuOpening::Clicking(target)) = script.menu_opening
+        {
+            // The click's pointer wait and glide have their own bounds.
+            // The response budget starts only now, before this frame's
+            // ordinary click/menu handlers observe the release.
+            script.menu_opening = Some(MenuOpening::Released { target, since: now });
+        }
         script.release(&mut keys, &mut mouse);
         script.current = None;
     }
@@ -1374,12 +1383,9 @@ pub(super) fn drive(
     };
     // An entry of the closed EQ menu: the script opens the menu with its own
     // button first, as a player would, then comes back to the entry.
-    let waited = script
-        .menu_opened_for
-        .map(|(_, since)| now.saturating_sub(since));
-    let step = match opens_menu_first(&step, menu.open, waited) {
+    let step = match opens_menu_first(&step, menu.open, script.menu_opening, now) {
         Ok(MenuWait::OpenFirst) => {
-            script.menu_opened_for = entry_target(&step).map(|target| (target, now));
+            script.menu_opening = entry_target(&step).map(MenuOpening::Clicking);
             script.steps.push_front(QueuedStep { step, line });
             Step::Click(ClickTarget::Button("selector", "EQButton"))
         }
@@ -1389,7 +1395,7 @@ pub(super) fn drive(
             return;
         }
         Ok(MenuWait::Go) => {
-            script.menu_opened_for = None;
+            script.menu_opening = None;
             step
         }
         Err(reason) => {
@@ -1711,6 +1717,19 @@ pub(super) fn drive(
     script.current = Some((step, now));
 }
 
+/// A semantic menu entry's local opener lifecycle. The release is a local
+/// input fact; only a later observation of `Menu::open` establishes opening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuOpening {
+    /// The guarded opener click is waiting, gliding or pressed.
+    Clicking(ClickTarget),
+    /// The opener's local button was released; its handler still runs later.
+    Released {
+        target: ClickTarget,
+        since: Duration,
+    },
+}
+
 /// What a step does about the EQ menu before it runs.
 #[derive(Debug, PartialEq, Eq)]
 enum MenuWait {
@@ -1719,32 +1738,46 @@ enum MenuWait {
     /// The step names an entry of the closed menu: the menu's button is
     /// clicked first.
     OpenFirst,
-    /// The button was clicked and the menu has not opened yet.
+    /// The opener is in progress, or released but the menu has not opened yet.
     Opening,
 }
 
 /// How long an entry waits for the EQ menu to open after its button was
-/// clicked before the script ends.
+/// released before the script ends.
 const MENU_OPEN_WAIT: Duration = Duration::from_secs(1);
 
 /// Whether a click step's target is an entry of the EQ menu that a pointer
 /// cannot reach while the menu is closed (`click window <key>`, `click
-/// actions`), so the menu's own button is clicked first. `waited` is how
-/// long ago that click was started, if it was; the menu opens a frame or
-/// more after the button's release, so the entry waits up to
+/// actions`), so the menu's own button is clicked first. The opener's own
+/// pointer/focus/coverage rules still apply. Its queued time is not response
+/// time: the menu opens a frame or more after the button's release, so the
+/// matching entry waits from that local release up to
 /// [`MENU_OPEN_WAIT`] and the script ends only when the menu stays closed.
 fn opens_menu_first(
     step: &Step,
     menu_open: bool,
-    waited: Option<Duration>,
+    opening: Option<MenuOpening>,
+    now: Duration,
 ) -> Result<MenuWait, String> {
-    if entry_target(step).is_none() || menu_open {
+    let Some(target) = entry_target(step) else {
+        return Ok(MenuWait::Go);
+    };
+    if menu_open {
         return Ok(MenuWait::Go);
     }
-    match waited {
-        None => Ok(MenuWait::OpenFirst),
-        Some(waited) if waited < MENU_OPEN_WAIT => Ok(MenuWait::Opening),
-        Some(_) => Err("the EQ menu did not open for the click".into()),
+    match opening {
+        Some(MenuOpening::Clicking(for_entry)) if for_entry == target => Ok(MenuWait::Opening),
+        Some(MenuOpening::Released {
+            target: for_entry,
+            since,
+        }) if for_entry == target => {
+            if now.saturating_sub(since) < MENU_OPEN_WAIT {
+                Ok(MenuWait::Opening)
+            } else {
+                Err("the EQ menu did not open for the click".into())
+            }
+        }
+        _ => Ok(MenuWait::OpenFirst),
     }
 }
 
@@ -3085,30 +3118,60 @@ mod tests {
         let entry = Step::Click(ClickTarget::Toggle("inventory"));
         let actions = Step::HoldClick(ClickTarget::ActionsWindow, Duration::from_millis(300));
         let button = Step::Click(ClickTarget::Button("selector", "EQButton"));
-        let soon = Some(Duration::from_millis(300));
-        let late = Some(Duration::from_millis(1_500));
-        // Closed menu: the entry has the menu's button clicked, then waits
-        // for the menu, and gives up only past the limit.
+        let released_at = Duration::from_secs(40);
+        for step in [&entry, &actions] {
+            let target = entry_target(step).unwrap();
+            let clicking = Some(MenuOpening::Clicking(target));
+            let released = Some(MenuOpening::Released {
+                target,
+                since: released_at,
+            });
+            assert_eq!(
+                opens_menu_first(step, false, None, Duration::ZERO),
+                Ok(MenuWait::OpenFirst)
+            );
+            // Queuing or waiting for the pointer never spends response time.
+            assert_eq!(
+                opens_menu_first(step, false, clicking, released_at),
+                Ok(MenuWait::Opening)
+            );
+            assert_eq!(
+                opens_menu_first(step, false, released, released_at),
+                Ok(MenuWait::Opening)
+            );
+            assert_eq!(
+                opens_menu_first(
+                    step,
+                    false,
+                    released,
+                    released_at + Duration::from_millis(999)
+                ),
+                Ok(MenuWait::Opening)
+            );
+            assert_eq!(
+                opens_menu_first(step, false, released, released_at + MENU_OPEN_WAIT),
+                Err("the EQ menu did not open for the click".into())
+            );
+            assert_eq!(
+                opens_menu_first(step, true, released, released_at + MENU_OPEN_WAIT),
+                Ok(MenuWait::Go)
+            );
+        }
+        // A different entry does not inherit another entry's old deadline.
+        let another = Some(MenuOpening::Released {
+            target: ClickTarget::ActionsWindow,
+            since: Duration::ZERO,
+        });
         assert_eq!(
-            opens_menu_first(&entry, false, None),
+            opens_menu_first(&entry, false, another, released_at),
             Ok(MenuWait::OpenFirst)
         );
         assert_eq!(
-            opens_menu_first(&actions, false, None),
-            Ok(MenuWait::OpenFirst)
+            opens_menu_first(&button, false, None, released_at),
+            Ok(MenuWait::Go)
         );
-        assert_eq!(opens_menu_first(&entry, false, soon), Ok(MenuWait::Opening));
         assert_eq!(
-            opens_menu_first(&entry, false, late),
-            Err("the EQ menu did not open for the click".into())
-        );
-        // Open menu, or another target: the step runs as it is.
-        assert_eq!(opens_menu_first(&entry, true, None), Ok(MenuWait::Go));
-        assert_eq!(opens_menu_first(&entry, true, soon), Ok(MenuWait::Go));
-        assert_eq!(opens_menu_first(&entry, true, late), Ok(MenuWait::Go));
-        assert_eq!(opens_menu_first(&button, false, None), Ok(MenuWait::Go));
-        assert_eq!(
-            opens_menu_first(&Step::Wait(Duration::ZERO), false, late),
+            opens_menu_first(&Step::Wait(Duration::ZERO), false, another, released_at),
             Ok(MenuWait::Go)
         );
     }
