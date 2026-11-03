@@ -260,6 +260,9 @@ pub(crate) fn present(
 /// an empty slot uses `A_SpellBookSlot`; occupied slots use the beneficial
 /// or detrimental background (`EQMac` 0x4352ff, 0x409520). Skin-defined hover
 /// and disabled states still take precedence over that normal background.
+/// Only the Mac-era draw is read; that Titanium's book swaps the same two
+/// backgrounds by its file's column 83 is inferred from the shared skin
+/// pieces (recording checklist 6.376).
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(crate) fn frames(
     online: Res<crate::online::OnlineState>,
@@ -295,7 +298,11 @@ pub(crate) fn frames(
             .and_then(|piece| art.cut(piece))
             .or_else(|| normal.and_then(|name| art.named(name)))
             .or_else(|| look.normal.as_ref().and_then(|piece| art.cut(piece)));
-        if let Some(wanted) = wanted {
+        // Assign only on a change: a write every frame would mark every
+        // slot's node changed and redo its extraction.
+        if let Some(wanted) = wanted
+            && (image.image != wanted.image || image.rect != wanted.rect)
+        {
             *image = wanted;
         }
     }

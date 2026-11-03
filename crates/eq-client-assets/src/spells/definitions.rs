@@ -15,7 +15,9 @@ pub struct Definition {
     pub icon: Option<u32>,
     /// Whether the book uses the beneficial background: Titanium field 83,
     /// Mac-era field 71. Zero selects the detrimental background; every
-    /// other value selects the beneficial one (Mac-era 0x409520).
+    /// other value selects the beneficial one (Mac-era 0x409520; the
+    /// Titanium book's use of its field is inferred, recording checklist
+    /// 6.376).
     pub beneficial: Option<bool>,
     /// The cell in the skin's gem icons (`A_SpellGems`) that a gem shows
     /// in place of [`Definition::icon`], on a client whose program draws

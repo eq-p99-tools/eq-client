@@ -330,7 +330,9 @@ impl InstalledClient {
     /// Whether this generation gives a player class a spellbook and gems.
     /// The class checks are Titanium 0x417daf and Mac-era 0x4b8ea1; neither
     /// reads mana, the book contents, memorized slots or the player's level.
-    /// Only the generations' defined player classes are accepted here.
+    /// The two lists coincide: Titanium refuses classes 1, 7, 9 and 16, and
+    /// the Mac-era client, which defines no class 16, refuses 1, 7 and 9, so
+    /// one match serves both generations.
     #[must_use]
     pub const fn spellbook_class(self, class: u32) -> bool {
         match self {

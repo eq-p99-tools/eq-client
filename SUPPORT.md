@@ -32,7 +32,8 @@ certification, and individual operations still validate their prerequisites.
 | Casting and basic spellbook | Yes | Yes | Yes | Yes |
 | Move / delete book entries | Yes / No | Yes / Yes | No / No | No / No |
 | Item/coin moves and personal banking | Yes | Yes | Yes | Yes |
-| Merchants and exchanges/giving | Yes | Yes | No | Yes |
+| Merchants | Yes | Yes | No | No |
+| Exchanges/giving | Yes | Yes | No | Yes |
 | Supported abilities | Yes | Yes | Yes | Yes |
 | Targeting | Yes | Yes | Yes | Yes |
 | Combat and considering | Yes | Yes | Yes | Yes |
@@ -192,7 +193,8 @@ passed native Windows checks against local EQEmu and TAKP. Live coverage include
   actual HTTP(S) browser launches and item-link coexistence.
 - Map pan/zoom/opacity, target eligibility, tracking with the map closed,
   reconnect persistence, and real remote-player heading changes. A real EQEmu
-  pickup removed its ground-item marker; TAKP exposes no ground-item state.
+  pickup removed its ground-item marker; TAKP exposed no ground-item state at
+  that pin (EQMac ground objects are decoded since the 2026-11-03 stack).
 - Terminal disconnects during held input: both protocols retained a failed run
   with `Session ended` and skipped the remaining actions.
 

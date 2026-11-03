@@ -210,7 +210,7 @@ fn readiness_tracks_receipts_even_when_the_unavailable_report_is_unchanged() {
     // Local readiness and successful enqueue do not clear a pending notice.
     assert_eq!(
         movement_notice(&app),
-        "Movement paused: waiting for movement to be ready."
+        "Movement paused: waiting for the session to accept the movement inputs."
     );
 }
 

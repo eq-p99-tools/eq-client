@@ -34,6 +34,13 @@ name in configuration is optional.
 The [login guide](docs/login.md) covers installations, custom servers and optional
 automatic login. Keep credentials and private settings outside Git.
 
+On a server whose official client has been watched doing it (P99 today), the
+client tells the world what machine it was entered on, once a week, a few
+seconds after entering: processor, display adapter, memory and screen sizes
+as this machine reports them, the same record the official client sends. The
+date of the last report is kept in the client's own settings directory, never
+in the EverQuest installation, so the week's wait survives restarts.
+
 ## Explore the client
 
 - **Scripts:** choose Scripts from the bottom-right EQ menu to edit, load, run and watch scripts using

@@ -282,6 +282,22 @@ impl Reports {
 }
 
 impl Report {
+    /// Whether the session has accepted this exact posted report, granted or
+    /// not; the receipt's identity test is the one [`Self::granted`] applies.
+    fn accepted(&self, world: &ClientWorld) -> bool {
+        let (true, SpeedInputState::Ready(inputs), Some(accepted)) =
+            (self.posted, self.state, world.accepted_speed_inputs())
+        else {
+            return false;
+        };
+        (
+            accepted.session_id,
+            accepted.revision,
+            accepted.report_id,
+            accepted.inputs,
+        ) == (self.session_id, self.revision, self.id, inputs)
+    }
+
     /// A receipt can clear only its exact posted ready report. An old cached or
     /// in-flight receipt cannot clear a replacement wait. Withdrawal invalidates
     /// the receipt even if its inputs are unchanged.
@@ -336,7 +352,14 @@ pub(crate) fn report(
     notices.movement.set(match state {
         SpeedInputState::Unavailable(reason) => readiness_reason(world, reason),
         SpeedInputState::Ready(_) if report.granted(world) => "",
-        SpeedInputState::Ready(_) => "Movement paused: waiting for movement to be ready.",
+        // Say which step is outstanding: the session's acceptance of this
+        // exact report, or a positive movement grant after it.
+        SpeedInputState::Ready(_) if report.accepted(world) => {
+            "Movement paused: the movement inputs were accepted; waiting for a movement grant."
+        }
+        SpeedInputState::Ready(_) => {
+            "Movement paused: waiting for the session to accept the movement inputs."
+        }
     });
     if !report.posted {
         report.posted = outbox.tell(

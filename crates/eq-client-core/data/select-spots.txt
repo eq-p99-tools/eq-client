@@ -14,6 +14,12 @@
 # comment. A zone without a line uses the fallback: the highest surface at
 # the centre of the zone's bounds.
 #
+# 2026-11-03: 202 rows were marked reviewed after the offline four-angle
+# audit of every zone's proposal (812 stills, 50 replacements picked by
+# hand, evidence kept privately); the combined build was re-rendered for
+# eight of them. qrg and kedge stay unreviewed (pink tree backgrounds; no
+# dry sampled spot).
+#
 # zone          y         x         z       heading  distance  pitch  state
 acrylia        -576.54    -41.42    -18.50    256.0      25.0   10.0  reviewed
 airplane        -72.06    -17.59     -0.97    128.0      25.0   10.0  reviewed
