@@ -599,10 +599,7 @@ fn load_object_models(
             continue;
         };
         let staged = stage_mesh(&mesh);
-        let Some(RealizedObject {
-            primitives,
-            materials,
-        }) = realize_object(
+        let Some(realized) = realize_object(
             &doc,
             staged,
             textures_read,
@@ -616,8 +613,8 @@ fn load_object_models(
         model_indices.insert(name.to_owned(), models.len());
         models.push(ZoneModel {
             name: name.to_owned(),
-            primitives,
-            materials,
+            primitives: realized.primitives,
+            materials: realized.materials,
             collision: mesh_collision(&mesh),
         });
     }
@@ -636,10 +633,7 @@ fn load_object_models(
             continue;
         };
         report.skins_skipped += posed.skins_skipped;
-        let Some(RealizedObject {
-            primitives,
-            materials,
-        }) = realize_object(
+        let Some(realized) = realize_object(
             &doc,
             posed.staged,
             textures_read,
@@ -653,8 +647,8 @@ fn load_object_models(
         model_indices.insert(name.to_owned(), models.len());
         models.push(ZoneModel {
             name: name.to_owned(),
-            primitives,
-            materials,
+            primitives: realized.primitives,
+            materials: realized.materials,
             collision: posed.collision,
         });
     }
