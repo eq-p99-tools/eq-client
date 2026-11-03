@@ -1725,6 +1725,85 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
 }
 
 #[test]
+fn eqmac_profile_skills_reach_admission_and_follow_wire_updates() {
+    use crate::abilities::{Ability, eqmac};
+    use eq_network_game::message::{self, Message};
+    use eq_network_game::world::Capability;
+    // Synthetic 8460-byte profile: Example, human monk, level 25. The 100
+    // words at 2988 default to 255, except skills 0=0x1234, 25=254,
+    // 29=65535, 30=57, 32=0, 40=0, 42=12, 52=253 and 99=0xabcd.
+    // Adjacent words at 2986/3188 are 0xface/0xbeef. All other fields are
+    // zero. Encoded with zlib and the documented EQMac word cipher; never
+    // derived from a live profile, identity or capture.
+    let wire = [
+        0x6e, 0xe5, 0xd5, 0x59, 0xd0, 0x05, 0x94, 0x7d, 0xea, 0x59, 0x8b, 0x3d, 0x88, 0x86, 0x85,
+        0x4a, 0x4b, 0xa4, 0xad, 0xe7, 0x2a, 0x07, 0x35, 0x17, 0xb0, 0x04, 0x3e, 0x94, 0xb0, 0x5f,
+        0xbf, 0x53, 0x90, 0xce, 0x83, 0xbf, 0xce, 0x4a, 0x6d, 0xac, 0x90, 0xb9, 0xa8, 0xc2, 0xe9,
+        0xcb, 0xb0, 0x65, 0x0c, 0xcd, 0x0c, 0x82, 0xd3, 0xba, 0x21, 0xf7, 0x8f, 0xba, 0xb6, 0xee,
+        0x91, 0x18, 0xce, 0xbd, 0x26, 0xa1, 0x8e, 0x7c, 0x48, 0x80, 0x21, 0x05, 0xcb, 0xf8, 0xec,
+        0x19, 0x3a, 0xcf, 0x1d, 0x84, 0x28, 0x0c, 0x15, 0x62, 0x4e, 0xca, 0xde, 0x5e, 0x40, 0x65,
+        0xba, 0xb7, 0xab, 0xe5, 0x8a, 0x47, 0xbc, 0x6b, 0x07, 0x1e, 0x88, 0x67, 0x04,
+    ];
+    let mut profile = eq_network_game::quarm::profile(&wire, "Example").unwrap();
+    profile.spawn_id = 9; // The separate spawn announcement supplies this.
+    let entry = |session_id, profile| WorldEvent::Entered {
+        capabilities: vec![Capability::Abilities],
+        choices: vec![],
+        session_id,
+        zone: "SyntheticZone".into(),
+        player: Box::new(profile),
+        far_clip: None,
+        spell_landing_flag: None,
+    };
+    let mut world = ClientWorld::default();
+    world.carry_as(crate::GameDialect::EqMac);
+    let before = world.skills_revision();
+    game(&mut world, entry(1, profile.clone()));
+    connection(&mut world, true, false);
+    game(
+        &mut world,
+        WorldEvent::AbilitiesOffered(eqmac::SUPPORTED.to_vec()),
+    );
+    assert!(world.skills_revision() > before);
+    assert_eq!(world.player().unwrap().skills, profile.skills);
+    let skills = world.player().unwrap().skills.as_ref().unwrap();
+    assert_eq!(skills.len(), 100);
+    assert_eq!((skills[0], skills[30], skills[99]), (0x1234, 57, 0xabcd));
+    assert_eq!(
+        world.abilities(),
+        [
+            Ability::Kick,
+            Ability::Sneak,
+            Ability::Mend,
+            Ability::SenseHeading
+        ]
+    );
+    assert!(
+        world
+            .abilities()
+            .iter()
+            .all(|ability| world.ability_offered(*ability))
+    );
+    // A normal skill change reaches the same state and invalidates the UI.
+    let before = world.skills_revision();
+    for message in message::quarm(0x8941, &[25, 0, 0, 0, 1, 0, 0, 0]) {
+        let Message::Event(event) = message else {
+            panic!("skill event expected")
+        };
+        game(&mut world, event);
+    }
+    assert!(world.skills_revision() > before);
+    assert!(world.abilities().contains(&Ability::FeignDeath));
+    // Re-admission replaces the old table rather than carrying stale ranks.
+    game(&mut world, entry(2, profile.clone()));
+    assert!(!world.abilities().contains(&Ability::FeignDeath));
+    // A genuinely absent table still cannot fabricate learned abilities.
+    profile.skills = None;
+    game(&mut world, entry(3, profile));
+    assert_eq!(world.abilities(), Vec::<Ability>::new());
+}
+
+#[test]
 fn eqmac_ability_reset_releases_mend_and_shared_strikes_without_claiming_success() {
     use crate::abilities::{Ability, eqmac::SkillReset};
     use std::time::Duration;
