@@ -1431,6 +1431,90 @@ fn a_corpse_fills_while_open_and_closes_when_the_server_says() {
 }
 
 #[test]
+fn loot_receipt_then_refusal_never_reports_delivery() {
+    use crate::loot::LootUpdate;
+    let mut world = admitted();
+    game(&mut world, inventory(Vec::new()));
+    world.open_loot(9);
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Item {
+            place: 0,
+            item: Box::new(chest()),
+        }),
+    );
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Listed { corpse_id: 9 }),
+    );
+    let changes = game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Acknowledged { place: 0 }),
+    );
+    assert!(matches!(
+        changes.replies[..],
+        [Reply::LootReceived { place: 0 }]
+    ));
+    assert!(world.loot().unwrap().items.is_empty());
+    assert!(world.inventory().items().is_empty());
+    let changes = game(&mut world, WorldEvent::Loot(LootUpdate::Closed));
+    assert_eq!(changes.replies, [] as [Reply; 0]);
+    assert!(world.loot().is_none());
+    assert!(world.inventory().items().is_empty());
+}
+
+#[test]
+fn loot_items_arrive_only_through_inventory_even_after_close() {
+    use crate::{
+        inventory::{InventorySlot, InventoryUpdate},
+        loot::LootUpdate,
+    };
+    let mut world = admitted();
+    game(&mut world, inventory(Vec::new()));
+    world.open_loot(9);
+    let mut item = chest();
+    item.slot = InventorySlot::CURSOR;
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Item {
+            place: 0,
+            item: Box::new(item.clone()),
+        }),
+    );
+    let receipt = game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Acknowledged { place: 0 }),
+    );
+    assert!(matches!(
+        receipt.replies[..],
+        [Reply::LootReceived { place: 0 }]
+    ));
+    assert!(world.inventory().items().is_empty());
+    game(&mut world, WorldEvent::Loot(LootUpdate::Closed));
+    let delivery = game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Cursor(vec![item])),
+    );
+    assert_eq!(
+        world.inventory().items()[&InventorySlot::CURSOR].details.id,
+        chest().details.id
+    );
+    assert_eq!(delivery.replies, [] as [Reply; 0]);
+    assert!(world.loot().is_none());
+}
+
+#[test]
+fn automatic_loot_continuation_follows_the_generation_policy() {
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    assert_eq!(world.loot_continuation(), LootContinuation::Manual);
+    assert!(!world.loot_continuation().automatic());
+    world.carry_as(crate::GameDialect::Titanium);
+    assert_eq!(world.loot_continuation(), LootContinuation::TakenReply);
+    assert!(world.loot_continuation().automatic());
+}
+
+#[test]
 fn the_purse_is_what_the_session_says_whatever_loot_and_purchases_suggest() {
     use crate::{
         loot::{LootResponse, LootUpdate},

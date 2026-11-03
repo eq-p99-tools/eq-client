@@ -485,6 +485,12 @@ impl ClientWorld {
         self.zone.trade.loot.as_ref()
     }
 
+    /// The generation's reply boundary for automatic loot continuation.
+    #[must_use]
+    pub const fn loot_continuation(&self) -> super::LootContinuation {
+        super::LootContinuation::of(self.generation)
+    }
+
     /// The coins in a place, where the client knows them: a trade window's
     /// only while it is open.
     #[must_use]

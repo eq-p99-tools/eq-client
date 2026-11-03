@@ -58,7 +58,14 @@ pub enum Reply {
         /// Why it was refused.
         error: Option<String>,
     },
-    /// The server answered a request for an item on the corpse.
+    /// The server received a request and retired its corpse-view place.
+    /// This says nothing about delivery; ordinary inventory events alone
+    /// establish what the player holds.
+    LootReceived {
+        /// The requested place on the corpse, from 0.
+        place: u16,
+    },
+    /// The session's existing result for a request for an item on the corpse.
     LootTaken {
         /// The corpse's place asked for, from 0.
         place: u16,

@@ -38,7 +38,7 @@ pub use motions::{CastDone, Motion};
 pub use notice::{ListingNotice, Notice, Party};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
-pub use trade::{Asker, Exchange, Loot, Merchant};
+pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
 pub use vitals::{ReportedHp, Vitals};
 pub use who::ZonePlayer;
 

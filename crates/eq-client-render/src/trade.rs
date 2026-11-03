@@ -173,6 +173,18 @@ impl TradeState {
         }
         self.changed();
     }
+
+    /// Receipt retires the matching manual request, without claiming item
+    /// delivery or driving another automatic request.
+    pub(super) fn received(&mut self, place: u16) {
+        if let Some(window) = self.loot.as_mut() {
+            if window.pending == Some(place) {
+                window.pending = None;
+            }
+            window.loot_all = false;
+        }
+        self.changed();
+    }
 }
 
 /// How far the installed generation's program reaches a merchant, where
@@ -477,7 +489,11 @@ pub(super) fn input(
                 }
             }
             Action::TakeAll => {
-                if let Some(window) = trade.loot.as_mut() {
+                if !online.world().loot_continuation().automatic() {
+                    chat.history.push(super::chat::system_line(
+                        "Take items individually; automatic looting is unavailable here.",
+                    ));
+                } else if let Some(window) = trade.loot.as_mut() {
                     window.loot_all = true;
                 }
             }
@@ -591,11 +607,12 @@ pub(super) fn input(
             }
         }
     }
-    // Loot all takes one item at a time, waiting for each acknowledgement.
+    // Preserve the existing loop only where its reply boundary is supported.
     let next = trade
         .loot
         .as_ref()
         .filter(|window| window.loot_all && window.pending.is_none())
+        .filter(|_| online.world().loot_continuation().automatic())
         .and(online.world().loot())
         .filter(|loot| loot.listed)
         .map(|loot| (loot.corpse_id, loot.items.keys().next().copied()));
@@ -693,18 +710,23 @@ pub(super) fn present(
             .map(|(place, item)| (Action::Take(*place), item_label(item)))
             .collect();
         let status = if contents.listed && rows.is_empty() {
-            "Nothing left on this corpse"
+            "No items listed"
         } else if contents.listed {
             "Click an item to take it"
         } else {
             "Opening..."
+        };
+        let actions: &[(Action, &str)] = if online.world().loot_continuation().automatic() {
+            &[(Action::TakeAll, "Loot all"), (Action::EndLoot, "Done")]
+        } else {
+            &[(Action::EndLoot, "Done")]
         };
         show_panel(
             &mut commands,
             loot_frame,
             &format!("{}: {status}", window.name),
             (Rows::Loot, &rows, loot_offset),
-            &[(Action::TakeAll, "Loot all"), (Action::EndLoot, "Done")],
+            actions,
         );
     }
     // As the loot window, the skin's merchant window needs only its frame.
@@ -918,6 +940,125 @@ mod tests {
     use eq_client_core::merchant::MerchantItem;
     use eq_client_core::{loot::LootUpdate, merchant::MerchantUpdate};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn loot_receipt_releases_only_matching_manual_pending_and_stops_auto() {
+        let mut trade = TradeState {
+            loot: Some(LootWindow {
+                name: "Corpse".into(),
+                pending: Some(0),
+                loot_all: true,
+            }),
+            ..TradeState::default()
+        };
+        trade.received(1);
+        assert_eq!(trade.loot.as_ref().unwrap().pending, Some(0));
+        assert!(!trade.loot.as_ref().unwrap().loot_all);
+        trade.received(0);
+        assert_eq!(trade.loot.as_ref().unwrap().pending, None);
+        assert!(!trade.loot.as_ref().unwrap().loot_all);
+    }
+
+    #[test]
+    fn eqmac_loot_all_and_armed_auto_loop_send_nothing_but_manual_take_sends() {
+        use eq_client_core::{WorldEvent, WorldUpdate, world::NoSpells};
+        let mut online = super::super::online::OnlineState::new(false);
+        super::super::online::testing::admit(
+            &mut online,
+            5,
+            super::super::online::testing::player(7),
+        );
+        online.open_loot(9);
+        let item = crate::preview::items().remove(0);
+        for event in [
+            WorldEvent::Loot(LootUpdate::Item {
+                place: 0,
+                item: Box::new(item),
+            }),
+            WorldEvent::Loot(LootUpdate::Listed { corpse_id: 9 }),
+        ] {
+            online.tell(
+                &WorldUpdate::Game(event),
+                std::time::Instant::now(),
+                &NoSpells,
+            );
+        }
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        let mut app = App::new();
+        app.insert_resource(TradeState {
+            loot: Some(LootWindow {
+                name: "Corpse".into(),
+                pending: None,
+                loot_all: false,
+            }),
+            ..TradeState::default()
+        })
+        .insert_resource(online)
+        .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+        .init_resource::<windows::Shown>()
+        .init_resource::<crate::notices::Lines>()
+        .init_resource::<super::super::chat::ChatState>()
+        .init_resource::<crate::ViewerSettings>()
+        .init_resource::<crate::hud::messages::Messages>()
+        .init_resource::<super::super::escape::Escape>()
+        .init_resource::<ButtonInput<KeyCode>>()
+        .add_systems(Update, (super::super::online::carry_as, input).chain());
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = eq_client_assets::ui::InstalledClient::EqMac;
+        crate::keys::testing::install(&mut app);
+        crate::clicks::testing::install(&mut app);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        let all = app
+            .world_mut()
+            .spawn((Button, Action::TakeAll, Interaction::None))
+            .id();
+        crate::clicks::testing::click(&mut app, all);
+        assert!(receiver.try_recv().is_err());
+        assert!(
+            !app.world()
+                .resource::<TradeState>()
+                .loot
+                .as_ref()
+                .unwrap()
+                .loot_all
+        );
+        // Also refuse an already-armed loop, independently of the UI entry.
+        app.world_mut()
+            .resource_mut::<TradeState>()
+            .loot
+            .as_mut()
+            .unwrap()
+            .loot_all = true;
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        let one = app
+            .world_mut()
+            .spawn((Button, Action::Take(0), Interaction::None))
+            .id();
+        crate::clicks::testing::click(&mut app, one);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::LootItem { place: 0, .. })
+        ));
+        assert_eq!(
+            app.world()
+                .resource::<TradeState>()
+                .loot
+                .as_ref()
+                .unwrap()
+                .pending,
+            Some(0)
+        );
+        assert!(receiver.try_recv().is_err());
+    }
 
     /// A world where the player has this corpse and merchant open.
     fn trading(

@@ -20,6 +20,32 @@ pub struct Loot {
     pub listed: bool,
 }
 
+/// Which reply can advance the client's existing automatic loot loop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LootContinuation {
+    /// Preserve the Titanium path driven by its existing item result.
+    TakenReply,
+    /// Receipt retires a view only. Automatic continuation is not established.
+    Manual,
+}
+
+impl LootContinuation {
+    /// The client generation's established loot continuation policy.
+    pub(super) const fn of(generation: crate::GameDialect) -> Self {
+        match generation {
+            crate::GameDialect::Titanium => Self::TakenReply,
+            // Unknown generations have no established automatic boundary.
+            _ => Self::Manual,
+        }
+    }
+
+    /// Whether the existing automatic loop has a supported reply boundary.
+    #[must_use]
+    pub const fn automatic(self) -> bool {
+        matches!(self, Self::TakenReply)
+    }
+}
+
 /// A merchant the player is trading with.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Merchant {
@@ -177,6 +203,11 @@ impl Trade {
                 if *accepted {
                     loot.items.remove(place);
                 }
+            }
+            // Receipt retires the official client's view, not inventory or
+            // successful delivery. Refusal may still follow this echo.
+            LootUpdate::Acknowledged { place } => {
+                loot.items.remove(place);
             }
             LootUpdate::Closed => self.loot = None,
         }

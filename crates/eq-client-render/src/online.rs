@@ -294,6 +294,7 @@ impl Panels<'_> {
                     state.world.inventory(),
                 ),
                 Reply::LootTaken { place, accepted } => self.trade.taken(*place, *accepted),
+                Reply::LootReceived { place } => self.trade.received(*place),
                 // The refused crossing no longer holds the player's motion.
                 Reply::ZoneLineRefused => self.motion.accepted(),
             }
