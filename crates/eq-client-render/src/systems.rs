@@ -93,6 +93,10 @@ pub(super) fn init_presentation(app: &mut App) {
 )]
 pub(super) fn schedule(app: &mut App) {
     app.add_systems(
+        Update,
+        crate::gpu_assets::animate_terrain.in_set(Stage::Present),
+    );
+    app.add_systems(
         PreUpdate,
         keys::presses::capture
             .after(bevy::input::InputSystems)

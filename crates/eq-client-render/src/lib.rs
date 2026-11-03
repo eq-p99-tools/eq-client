@@ -617,19 +617,23 @@ fn spawn_static_zone(
     materials: &mut Assets<StandardMaterial>,
 ) {
     let texture_images = create_texture_images(zone.textures, images);
-    let terrain = create_render_primitives(
+    let terrain = gpu_assets::create_terrain_primitives(
         zone.primitives,
+        &zone.terrain_materials,
         &texture_images,
         meshes,
         materials,
-        true,
-        RenderAssetUsages::RENDER_WORLD,
     );
-    commands.spawn_batch(
-        terrain
-            .into_iter()
-            .map(|(mesh, material)| (SceneEntity, Mesh3d(mesh), MeshMaterial3d(material))),
-    );
+    for draw in terrain {
+        let mut entity = commands.spawn((
+            SceneEntity,
+            Mesh3d(draw.mesh),
+            MeshMaterial3d(draw.material),
+        ));
+        if let Some(animation) = draw.animation {
+            entity.insert(animation);
+        }
+    }
 
     if terrain_only {
         commands.insert_resource(doors::Models::default());
@@ -1320,6 +1324,7 @@ mod tests {
                     regions: eq_client_assets::regions::ZoneRegions::default(),
                     short_name: "test".to_owned(),
                     primitives: Vec::new(),
+                    terrain_materials: Vec::new(),
                     textures: Vec::new(),
                     models: Vec::new(),
                     objects: Vec::new(),
