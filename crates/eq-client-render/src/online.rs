@@ -10,6 +10,9 @@ use eq_client_core::{
 };
 use std::sync::{LazyLock, Mutex, mpsc::Receiver};
 
+const SPELL_DATA_UNAVAILABLE_NOTICE: &str =
+    "Spell data unavailable; spell-dependent actions are paused.";
+
 #[derive(Resource)]
 pub(super) struct Updates(pub Mutex<Option<Receiver<WorldUpdate>>>);
 
@@ -44,6 +47,22 @@ impl OnlineState {
         &self.world
     }
 
+    /// Queues and projects a move through the world's single inventory owner.
+    pub(crate) fn queue_inventory_move(
+        &mut self,
+        request: eq_client_core::inventory::InventoryMove,
+        actor: eq_client_core::inventory::InventoryActor,
+        sender: &crate::outbox::Outbox,
+    ) -> anyhow::Result<()> {
+        self.world
+            .queue_inventory_move(request, actor, |world, request| {
+                Ok(sender.send(
+                    world,
+                    eq_client_core::ClientCommand::MoveInventory(request.clone()),
+                )?)
+            })
+    }
+
     /// The player asked to camp, ending there.
     pub(super) fn camp_to(&mut self, to: eq_client_core::camp::CampTo) {
         self.world.camp_to(to);
@@ -66,6 +85,7 @@ impl OnlineState {
     pub(super) fn restart(&mut self) {
         self.world.restart();
         self.selection = None;
+        self.held.clear();
     }
 
     /// The player asked to play on a world of the login server's list.
@@ -293,6 +313,19 @@ impl Panels<'_> {
                     error.clone(),
                     state.world.inventory(),
                 ),
+                Reply::LootRequest {
+                    session_id,
+                    created,
+                    request,
+                    status,
+                } => {
+                    if let Some(reason) =
+                        self.trade
+                            .loot_result(state, *session_id, *created, *request, status)
+                    {
+                        chat.refuse(reason);
+                    }
+                }
                 Reply::LootTaken { place, accepted } => self.trade.taken(*place, *accepted),
                 Reply::LootReceived { place } => self.trade.received(*place),
                 // The refused crossing no longer holds the player's motion.
@@ -469,8 +502,12 @@ pub(super) fn receive(
     // is retained verbatim, including for old queued Connecting notifications.
     .filter(|update| {
         if let WorldUpdate::SpellTable(fact) = update {
-            if let Some(spells) = spell_names.as_deref_mut() {
-                spells.receive(fact);
+            if spell_names
+                .as_deref_mut()
+                .is_some_and(|spells| spells.receive(fact))
+            {
+                chat.history
+                    .push(super::chat::system_line(SPELL_DATA_UNAVAILABLE_NOTICE));
             }
             false
         } else {
@@ -992,6 +1029,8 @@ mod tests {
     use super::*;
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
     use eq_client_core::PlayerState;
+
+    mod spell_notices;
 
     #[test]
     fn a_camp_to_the_desktop_ends_the_program_once_camped_and_a_plain_one_does_not() {
@@ -1545,6 +1584,87 @@ mod tests {
         assert!(world(&app).ended());
         app.update();
         assert!(app.world().resource::<OnlineState>().held.is_empty());
+    }
+
+    fn held_rules_receiver() -> (App, std::sync::mpsc::Sender<WorldUpdate>) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut app = crate::testing::app();
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(crate::loading::Loading::waiting_for_gesture(true))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        (app, sender)
+    }
+
+    fn rules_update(pvp: u32) -> WorldUpdate {
+        WorldUpdate::Game(WorldEvent::Rules(eq_client_core::rules::WorldRules {
+            pvp,
+            ..default()
+        }))
+    }
+
+    fn held_entry(session_id: u64) -> WorldUpdate {
+        WorldUpdate::Game(WorldEvent::Entered {
+            capabilities: Vec::new(),
+            choices: Vec::new(),
+            session_id,
+            zone: "synthetic".into(),
+            player: Box::new(testing::player(7)),
+            far_clip: None,
+            spell_landing_flag: None,
+        })
+    }
+
+    #[test]
+    fn within_run_loading_keeps_held_admission_and_rules_in_order() {
+        let (mut app, sender) = held_rules_receiver();
+        sender.send(rules_update(1)).unwrap();
+        sender.send(held_entry(2)).unwrap();
+        sender.send(rules_update(4)).unwrap();
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(1));
+        assert_eq!(world(&app).pvp_rule(), 1);
+        app.insert_resource(crate::loading::Loading::waiting_for_gesture(false));
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(2));
+        assert_eq!(world(&app).pvp_rule(), 4);
+    }
+
+    #[test]
+    fn restart_discards_old_held_admission_and_rules_before_new_receiver_news() {
+        let (mut app, old_sender) = held_rules_receiver();
+        old_sender.send(rules_update(1)).unwrap();
+        old_sender.send(held_entry(2)).unwrap();
+        old_sender.send(rules_update(4)).unwrap();
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(1));
+        assert_eq!(world(&app).pvp_rule(), 1);
+        // FrontEnd::begin restarts the state then replaces the receiver.
+        // Exercise receive's actual held batch across that same boundary.
+        app.world_mut().resource_mut::<OnlineState>().restart();
+        let (new_sender, receiver) = std::sync::mpsc::channel();
+        *app.world().resource::<Updates>().0.lock().unwrap() = Some(receiver);
+        assert!(old_sender.send(rules_update(8)).is_err());
+        app.insert_resource(crate::loading::Loading::waiting_for_gesture(false));
+        new_sender
+            .send(WorldUpdate::Connection(
+                eq_client_core::world::Link::Connected,
+            ))
+            .unwrap();
+        app.update();
+        assert_eq!(world(&app).session_id(), None);
+        assert!(world(&app).player().is_none());
+        assert_eq!(world(&app).pvp_rule(), 0);
+        new_sender.send(rules_update(2)).unwrap();
+        new_sender.send(held_entry(3)).unwrap();
+        app.update();
+        assert_eq!(world(&app).session_id(), Some(3));
+        assert_eq!(world(&app).pvp_rule(), 2);
     }
 
     #[test]

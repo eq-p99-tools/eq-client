@@ -49,9 +49,7 @@ impl Wardrobe {
     ) -> Asset<Handle<StandardMaterial>> {
         let base_name = base_name.to_ascii_uppercase();
         let tint = outfit::tint(&base_name, helm, look);
-        let name = Some(outfit::dressed(&base_name, look))
-            .filter(|name| asset.has_material(name))
-            .unwrap_or_else(|| base_name.clone());
+        let name = outfit::material(&base_name, helm, look, |name| asset.has_material(name));
         if name == base_name && tint.is_none() {
             return Asset::Ready(base.clone());
         }

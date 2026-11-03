@@ -1,17 +1,8 @@
 //! Producer-bound spell-table facts crossing the worker/presentation boundary.
 pub use eq_network_game::spell_tables::{
-    Assignment, Context, Event, SpellId, Stage, Table, Update,
+    Assignment, Context, Event, ProviderPolicy as Policy, SpellId, Stage, Table, Update,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Which selected server policy may use this provider.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Policy {
-    /// Installed definitions without P99's replay policy.
-    Installed,
-    /// P99's source snapshots and zone replay.
-    Project1999,
-}
 
 /// An opaque provider lifetime, allocated when the actual producer is created.
 /// A queued event retains this binding even after the active producer changes.
@@ -59,6 +50,12 @@ pub enum Fact {
         /// Actual network attempt identity, shared with table contexts.
         run_id: u64,
         /// Monotonic start number assigned by this producer before enqueue.
+        attempt: u64,
+    },
+    /// A Connecting snapshot had no independently known numeric run identity.
+    /// It cannot bind table order or retain previously ready spell mechanics.
+    RunUnavailable {
+        /// Monotonic start number captured by the originating producer.
         attempt: u64,
     },
     /// A real zone connection is beginning; source snapshots remain intact.

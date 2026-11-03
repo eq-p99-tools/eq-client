@@ -134,8 +134,9 @@ impl SpellNames {
         self.0.bind(binding);
     }
 
-    pub(super) fn receive(&mut self, fact: &eq_client_core::spell_tables::Envelope) {
-        self.0.receive(fact);
+    /// True only on the first failure transition in this provider lifetime.
+    pub(super) fn receive(&mut self, fact: &eq_client_core::spell_tables::Envelope) -> bool {
+        self.0.receive(fact)
     }
 
     pub(super) fn ready(&self) -> bool {
@@ -888,6 +889,10 @@ fn prepare_scribe(
     use anyhow::{Context, ensure};
     let online = online.context("Connect to scribe a scroll")?;
     let stamp = stamp.context("Connect to scribe a scroll")?;
+    ensure!(
+        !online.world().inventory_moves_pending(),
+        "Wait for queued item moves before scribing"
+    );
     let inventory = online.world().inventory();
     ensure!(
         inventory.received() && !inventory.stale(),

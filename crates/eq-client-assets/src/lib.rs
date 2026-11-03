@@ -13,6 +13,7 @@ pub mod regions;
 pub mod scale;
 pub mod sidl;
 mod skeleton;
+pub mod skills;
 pub mod sounds;
 pub mod spells;
 pub mod strings;
@@ -96,8 +97,17 @@ pub struct ZoneModel {
     pub name: String,
     /// Model geometry grouped by material.
     pub primitives: Vec<ZonePrimitive>,
+    /// Authored draw flags, in the order of `primitives`.
+    pub materials: Vec<ObjectMaterial>,
     /// Solid triangles, including invisible collision surfaces.
     pub collision: Vec<[[f32; 3]; 3]>,
+}
+
+/// Authored sidedness of a placed-object draw call, independent of its alpha mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObjectMaterial {
+    /// Whether WLD material fragment 0x30 permits drawing its back face.
+    pub double_sided: bool,
 }
 
 /// One placed instance from `objects.wld`.
@@ -381,18 +391,12 @@ fn terrain_material(
     textures: &mut Vec<ZoneTexture>,
     texture_indices: &mut HashMap<String, usize>,
 ) -> Result<TerrainMaterial, LoadError> {
-    use libeq::wld::parser::MaterialDef;
     let mut result = TerrainMaterial {
         // Keep the previous rendering when the source material cannot be found.
         double_sided: true,
         animation: None,
     };
-    let Some(material) = doc.fragment_iter::<MaterialDef>().find(|material| {
-        name.is_some_and(|name| {
-            doc.get_string(material.name_reference)
-                .is_some_and(|source| source.eq_ignore_ascii_case(name))
-        })
-    }) else {
+    let Some(material) = material_definition(doc, name) else {
         return Ok(result);
     };
     result.double_sided = material.flags.is_two_sided();
@@ -440,6 +444,19 @@ fn terrain_material(
         skip_frames: flags & 0x40 != 0,
     });
     Ok(result)
+}
+
+/// Terrain and object archives use the same authored WLD material definition.
+fn material_definition<'a>(
+    doc: &'a libeq::wld::parser::WldDoc,
+    name: Option<&str>,
+) -> Option<&'a libeq::wld::parser::MaterialDef> {
+    let name = name?;
+    doc.fragment_iter::<libeq::wld::parser::MaterialDef>()
+        .find(|material| {
+            doc.get_string(material.name_reference)
+                .is_some_and(|source| source.eq_ignore_ascii_case(name))
+        })
 }
 
 fn material_mode(method: RenderMethod) -> Option<MaterialMode> {
@@ -582,7 +599,8 @@ fn load_object_models(
             continue;
         };
         let staged = stage_mesh(&mesh);
-        let Some(primitives) = realize_object(
+        let Some(realized) = realize_object(
+            &doc,
             staged,
             textures_read,
             &mut archive,
@@ -595,7 +613,8 @@ fn load_object_models(
         model_indices.insert(name.to_owned(), models.len());
         models.push(ZoneModel {
             name: name.to_owned(),
-            primitives,
+            primitives: realized.primitives,
+            materials: realized.materials,
             collision: mesh_collision(&mesh),
         });
     }
@@ -614,7 +633,8 @@ fn load_object_models(
             continue;
         };
         report.skins_skipped += posed.skins_skipped;
-        let Some(primitives) = realize_object(
+        let Some(realized) = realize_object(
+            &doc,
             posed.staged,
             textures_read,
             &mut archive,
@@ -627,7 +647,8 @@ fn load_object_models(
         model_indices.insert(name.to_owned(), models.len());
         models.push(ZoneModel {
             name: name.to_owned(),
-            primitives,
+            primitives: realized.primitives,
+            materials: realized.materials,
             collision: posed.collision,
         });
     }
@@ -651,25 +672,40 @@ fn load_object_models(
     Ok((models, objects, report))
 }
 
-/// An object's primitives, or None when it draws nothing, so both reads
+struct RealizedObject {
+    primitives: Vec<ZonePrimitive>,
+    materials: Vec<ObjectMaterial>,
+}
+
+/// An object's primitives and draw flags, or None when it draws nothing, so both reads
 /// place the same objects.
 fn realize_object(
+    doc: &libeq::wld::parser::WldDoc,
     staged: Vec<StagedPrimitive>,
     textures_read: Textures,
     archive: &mut PfsReader<File>,
     textures: &mut Vec<ZoneTexture>,
     texture_indices: &mut HashMap<String, usize>,
-) -> Result<Option<Vec<ZonePrimitive>>, LoadError> {
+) -> Result<Option<RealizedObject>, LoadError> {
     if staged.is_empty() {
         return Ok(None);
     }
-    Ok(Some(match textures_read {
-        Textures::Realize => staged
-            .into_iter()
-            .map(|primitive| primitive.realize(archive, textures, texture_indices))
-            .collect::<Result<_, _>>()?,
-        Textures::Skip => Vec::new(),
-    }))
+    let mut result = RealizedObject {
+        primitives: Vec::new(),
+        materials: Vec::new(),
+    };
+    if textures_read == Textures::Realize {
+        for primitive in staged {
+            result.materials.push(ObjectMaterial {
+                double_sided: material_definition(doc, primitive.material.as_deref())
+                    .is_none_or(|material| material.flags.is_two_sided()),
+            });
+            result
+                .primitives
+                .push(primitive.realize(archive, textures, texture_indices)?);
+        }
+    }
+    Ok(Some(result))
 }
 
 /// A hierarchical object's drawn primitives, one per material, and its solid
@@ -1245,8 +1281,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn write_hierarchical_zone(install: &Path) {
         use crate::test_world::{
-            Coordinates, OLD_FORMAT, WorldFile, material, mesh, palette, palette_of,
-            skinned_triangle, triangle, write_archive,
+            Coordinates, OLD_FORMAT, WorldFile, material, material_with_flags, mesh, palette,
+            palette_of, skinned_triangle, triangle, write_archive,
         };
         let words = |words: &[u32]| -> Vec<u8> {
             words.iter().flat_map(|word| word.to_le_bytes()).collect()
@@ -1279,7 +1315,7 @@ mod tests {
 
         let mut objects = WorldFile::new(OLD_FORMAT);
         let (w, p) = (objects.name("W_MDF"), objects.name("P_MP"));
-        let solid = objects.fragment(0x30, material(w, 0x8000_0001));
+        let solid = objects.fragment(0x30, material_with_flags(w, 0x8000_0001, 0x2));
         let object_palette = objects.fragment(0x31, palette(p, solid));
         let tri = objects.name("TRI_DMSPRITEDEF");
         let tri = objects.fragment(0x36, triangle(tri, object_palette, &coordinates, 1));
@@ -1379,7 +1415,7 @@ mod tests {
         // bone, followed by another mesh of the same name with fewer
         // vertices, which the skin doesn't name.
         let (w2, p2) = (objects.name("W2_MDF"), objects.name("P2_MP"));
-        let second = objects.fragment(0x30, material(w2, 0x8000_0001));
+        let second = objects.fragment(0x30, material_with_flags(w2, 0x8000_0001, 0x3));
         let two = objects.fragment(0x31, palette_of(p2, &[solid, second]));
         let leaf = objects.name("LEAF_DMSPRITEDEF");
         let leaf_mesh = objects.fragment(
@@ -1496,6 +1532,26 @@ mod tests {
             .iter()
             .find(|object| zone.models[object.model].name == "OBJ_ACTORDEF");
         assert!(placed.is_some());
+    }
+
+    #[test]
+    fn object_material_sidedness_survives_static_and_posed_loading() {
+        let zone = load_hierarchical_zone("object-sidedness");
+        let materials = |name: &str| {
+            let model = zone.models.iter().find(|model| model.name == name).unwrap();
+            assert_eq!(model.materials.len(), model.primitives.len());
+            model
+                .materials
+                .iter()
+                .map(|material| material.double_sided)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(materials("OBJ_ACTORDEF"), [false]);
+        // The rigid mesh and skin merge under their shared material.
+        assert_eq!(materials("TREE_ACTORDEF"), [false]);
+        // The skin's two materials retain their distinct bit0 values; bit1
+        // is set on both and must not be interpreted as two-sided.
+        assert_eq!(materials("BUSH_ACTORDEF"), [false, true]);
     }
 
     #[test]

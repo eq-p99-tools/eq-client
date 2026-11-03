@@ -20,6 +20,7 @@ pub(super) enum Readiness {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Failure {
     Network,
+    RunIdentity,
     Order,
     Stage,
     RegistrationMissing,
@@ -113,11 +114,30 @@ impl Provider {
 
     /// Receives the producer's original binding; stale producers cannot retag
     /// their queued Connecting or table facts as the replacement provider.
-    pub(super) fn receive(&mut self, envelope: &Envelope) {
+    /// Whether this fact first made the provider unavailable. Sticky failures
+    /// do not repeat the transition; explicit replacement rearms it.
+    pub(super) fn receive(&mut self, envelope: &Envelope) -> bool {
+        let was_unavailable = matches!(self.readiness, Readiness::Unavailable(_));
+        self.apply_event(envelope);
+        !was_unavailable && matches!(self.readiness, Readiness::Unavailable(_))
+    }
+
+    fn apply_event(&mut self, envelope: &Envelope) {
         if envelope.binding() != self.binding || self.binding.policy() != Policy::Project1999 {
             return;
         }
         match envelope.fact() {
+            Fact::RunUnavailable { attempt } => {
+                if *attempt <= self.attempt {
+                    return;
+                }
+                self.attempt = *attempt;
+                self.run_id = None;
+                self.revision = 0;
+                self.zone = None;
+                self.zone_pending = false;
+                self.fail(Failure::RunIdentity);
+            }
             Fact::RunStarted { run_id, attempt } => {
                 if *attempt <= self.attempt {
                     return;

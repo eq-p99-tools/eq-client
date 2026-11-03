@@ -85,7 +85,7 @@ updates can mark inventory stale and stop further moves/autoinventory. If the
 server cannot restore a coherent snapshot, reconnect instead of retrying an
 uncertain move. No application-level retry silently repeats inventory actions.
 
-On Quarm, the pacing delay does not confirm an item move: prediction labels and
+On Quarm, submitting an item move does not confirm it: prediction labels and
 origins persist until covering authoritative updates or a full snapshot. A
 contradiction requires a complete snapshot. Quarm item/coin moves and personal
 banking are offered independently of merchants, meals and exchanges, which

@@ -320,7 +320,7 @@ pub(super) fn say_refusals(
 pub(super) fn input(
     keys: crate::keys::Keys,
     mouse: Res<ButtonInput<MouseButton>>,
-    online: Res<super::online::OnlineState>,
+    mut online: ResMut<super::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
     (mut shown, skinned, mut trade): (
         ResMut<super::windows::Shown>,
@@ -375,7 +375,7 @@ pub(super) fn input(
             .items()
             .contains_key(&InventorySlot::CURSOR)
         {
-            state.click_slot(stack.0, false, &online, &sender);
+            state.click_slot(stack.0, false, &mut online, &sender);
         } else {
             state.select_split(stack.0, online.world().inventory());
         }
@@ -385,9 +385,9 @@ pub(super) fn input(
         state.actions.split = None;
         state.actions.auto_store = true;
     }
-    state.store_cursor(&online, &sender);
+    state.store_cursor(&mut online, &sender);
     for action in split_buttons.iter() {
-        state.split_action(*action, &online, &sender);
+        state.split_action(*action, &mut online, &sender);
     }
     for tab in tabs.iter() {
         if tab.0 != Tab::Bank || state.bank_open {
@@ -432,7 +432,7 @@ pub(super) fn input(
             // and its Sell button suggest; the official client's click there
             // is not checked yet.
         } else {
-            state.click_slot(*slot, false, &online, &sender);
+            state.click_slot(*slot, false, &mut online, &sender);
         }
     }
 }

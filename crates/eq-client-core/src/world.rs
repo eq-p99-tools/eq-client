@@ -14,6 +14,7 @@ mod casting;
 mod changes;
 mod character;
 mod group;
+mod inventory_moves;
 mod items;
 mod landings;
 mod link;
@@ -210,6 +211,10 @@ pub struct ClientWorld {
     /// its rules last said: 0 until they say. The Titanium program keeps it
     /// from its start, whatever zone or character follows (0x4a4cd5).
     pvp_rule: u32,
+    /// The received world setting choosing language zero's installed name.
+    /// Like the world's other rules it survives zone/character admission,
+    /// and a new session's restart clears it to unknown.
+    language_zero_selector: Option<crate::rules::LanguageZeroSelector>,
     /// The zone header's gravity, once this admission's header came.
     zone_gravity: Option<f32>,
     /// The zone header's top (`max_z`) and lowest height (its underworld),
@@ -277,6 +282,7 @@ pub struct ClientWorld {
     player: Option<PlayerState>,
     vitals: Vitals,
     inventory: Inventory,
+    inventory_moves: inventory_moves::Moves,
     /// Where the player's coins are, as the session keeps and tells them.
     wallet: crate::money::Wallet,
     /// Cursor receipt is independent of the bank balance, which is not carried.
@@ -623,9 +629,15 @@ impl ClientWorld {
                 self.created(name, *outcome, news);
             }
 
-            // The world's player-versus-player ruleset decides names' colours.
+            // The world's own rules stay with it across admissions.
             WorldEvent::Rules(rules) => {
                 self.pvp_rule = rules.pvp;
+                if let Some(selector) = rules.language_zero_selector
+                    && self.language_zero_selector != Some(selector)
+                {
+                    self.language_zero_selector = Some(selector);
+                    self.skills_revision = self.skills_revision.wrapping_add(1);
+                }
                 if let Some(enabled) = rules.name_generator { self.name_generator = Some(enabled); }
             }
             WorldEvent::NameSuggestion { selection_id, request_id, name } => {
@@ -704,6 +716,12 @@ impl ClientWorld {
             WorldEvent::Consideration(consideration) => {
                 news.notices.push(self.zone.consider(consideration));
             }
+            WorldEvent::LootRequest {
+                session_id,
+                created,
+                request,
+                status,
+            } => self.loot_request_result(*session_id, *created, *request, status, news),
             WorldEvent::CombatRequest {
                 session_id, status, ..
             } => {
@@ -864,12 +882,12 @@ impl ClientWorld {
             WorldEvent::InventoryAction {
                 session_id,
                 revision,
+                sequence,
+                update,
                 error,
-            } => news.replies.push(Reply::InventoryMove {
-                session_id: *session_id,
-                revision: *revision,
-                error: error.clone(),
-            }),
+            } => self.inventory_move_result(
+                (*session_id, *revision, *sequence), update.as_ref(), error.as_ref(), news,
+            ),
             WorldEvent::ItemUseAction {
                 session_id,
                 request_id,
@@ -1186,6 +1204,7 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        self.inventory_moves.clear();
         self.accepted_speed_inputs = None;
         // A refused transfer resumes this same admission. Retain its revision
         // while suspended so later input changes can still be reported.

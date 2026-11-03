@@ -58,6 +58,17 @@ pub enum Reply {
         /// Why it was refused.
         error: Option<String>,
     },
+    /// Local disposition of the original loot action; never server completion.
+    LootRequest {
+        /// The admission named by the original command.
+        session_id: u64,
+        /// Original open/item creation time; existing close commands have none.
+        created: Option<std::time::Instant>,
+        /// Every original corpse/player/place/placement parameter.
+        request: crate::loot::LootRequest,
+        /// Transport submission or local refusal, separate from server updates.
+        status: crate::loot::LootRequestStatus,
+    },
     /// The server received a request and retired its corpse-view place.
     /// This says nothing about delivery; ordinary inventory events alone
     /// establish what the player holds.

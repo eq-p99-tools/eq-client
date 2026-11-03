@@ -73,7 +73,7 @@ impl ClientWorld {
             .map_or_else(|_| self.carried_weight(), |tenths| tenths as f32 / 10.0)
     }
 
-    /// Changes when the player's skills or their admission are replaced.
+    /// Changes when the player's skills, languages, level or admission change.
     /// Unrelated movement, chat and resource updates leave it unchanged.
     #[must_use]
     pub const fn skills_revision(&self) -> u64 {
@@ -245,6 +245,14 @@ impl ClientWorld {
     #[must_use]
     pub const fn pvp_rule(&self) -> u32 {
         self.pvp_rule
+    }
+
+    /// The world's received language-zero name selector. None means no
+    /// selector has been established in this session; received zero stays
+    /// Some, separately from `PvP`. A new session's restart clears this fact.
+    #[must_use]
+    pub const fn language_zero_selector(&self) -> Option<crate::rules::LanguageZeroSelector> {
+        self.language_zero_selector
     }
 
     /// The zone header's minimum clip, the nearest its far plane comes;
@@ -481,10 +489,13 @@ impl ClientWorld {
     }
 
     /// The player's inventory, bank and cursor as the server reported them,
-    /// with any local predictions the session marked.
+    /// with the ordered local projection of successfully queued moves.
     #[must_use]
-    pub const fn inventory(&self) -> &Inventory {
-        &self.inventory
+    pub fn inventory(&self) -> &Inventory {
+        self.inventory_moves
+            .projected
+            .as_ref()
+            .unwrap_or(&self.inventory)
     }
 
     /// The corpse the player is looting.

@@ -61,6 +61,316 @@ fn item(slot: i32, weight: u32, strength: i32) -> InventoryItem {
     item
 }
 
+/// Queue through the actual host owner while retaining the worker result.
+fn queue_equipment_move(
+    state: &mut OnlineState,
+    from: i32,
+    to: i32,
+) -> (eq_client_core::inventory::InventoryMove, InventoryUpdate) {
+    use eq_client_core::inventory::{InventoryActor, InventoryMove, MoveQuantity, MoveRules};
+    let before = state.world().inventory().clone();
+    let player = state.world().player().unwrap();
+    let actor = InventoryActor {
+        bank_access: false,
+        deity: player.deity,
+        dual_wield: None,
+        class: player.class,
+        race: player.race,
+        level: player.level,
+        trade_slots: 0,
+        trade_no_drop: false,
+        world_container: false,
+    };
+    let request = InventoryMove {
+        session_id: state.world().session_id().unwrap(),
+        revision: before.revision(),
+        sequence: None,
+        from: InventorySlot(from),
+        to: InventorySlot(to),
+        quantity: MoveQuantity::Whole,
+        created: std::time::Instant::now(),
+    };
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let outbox = Outbox::new(Some(tx));
+    state.queue_inventory_move(request, actor, &outbox).unwrap();
+    let ClientCommand::MoveInventory(request) = rx.try_recv().unwrap() else {
+        panic!("Expected one inventory request");
+    };
+    let update = before
+        .plan_move_for(MoveRules::Quarm, &request, actor)
+        .unwrap();
+    (request, update)
+}
+
+fn equipment_move_result(
+    request: &eq_client_core::inventory::InventoryMove,
+    update: Option<InventoryUpdate>,
+    error: Option<String>,
+) -> WorldEvent {
+    WorldEvent::InventoryAction {
+        session_id: request.session_id,
+        revision: request.revision,
+        sequence: request.sequence,
+        update,
+        error,
+    }
+}
+
+fn submit_equipment_move(state: &mut OnlineState, from: i32, to: i32) {
+    let (request, update) = queue_equipment_move(state, from, to);
+    testing::news(state, [equipment_move_result(&request, Some(update), None)]);
+}
+
+#[test]
+fn known_stat_neutral_equipment_keeps_readiness_without_confirming_placement() {
+    let mut state = online();
+    ready(&mut state);
+    let original = item(24, 37, 0);
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            original.clone(),
+        ]))],
+    );
+    let expected = SpeedInputs {
+        rate: 0,
+        weight: 3,
+        capacity: 90,
+    };
+    assert_eq!(calculate(state.world(), effects), Ok(expected));
+    for (from, to) in [(24, 30), (30, 13), (13, 30), (30, 24)] {
+        submit_equipment_move(&mut state, from, to);
+        assert_eq!(calculate(state.world(), effects), Ok(expected));
+        assert!(state.world().inventory().predicted());
+    }
+    assert_eq!(
+        state.world().inventory().items()[&InventorySlot(24)],
+        original
+    );
+    assert_eq!(state.world().inventory().unresolved_predictions(), 4);
+    assert!(
+        state
+            .world()
+            .inventory()
+            .prediction_origins()
+            .any(|(slot, origin)| slot == InventorySlot(13) && origin.is_none())
+    );
+    assert_eq!(state.world().accepted_speed_inputs(), None);
+}
+
+#[test]
+fn affecting_intermediate_equipment_stays_unavailable_after_a_net_zero_round_trip() {
+    for strength in [-7, 7] {
+        let mut state = online();
+        ready(&mut state);
+        let original = item(24, 37, strength);
+        testing::news(
+            &mut state,
+            [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+                original.clone(),
+            ]))],
+        );
+        submit_equipment_move(&mut state, 24, 30);
+        submit_equipment_move(&mut state, 30, 13);
+        assert_eq!(state.world().movement_weight(), Ok(37));
+        assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
+        submit_equipment_move(&mut state, 13, 30);
+        submit_equipment_move(&mut state, 30, 24);
+        assert_eq!(
+            state.world().inventory().items()[&InventorySlot(24)],
+            original
+        );
+        assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
+        assert!(state.world().inventory().predicted());
+        testing::news(
+            &mut state,
+            [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+                original,
+            ]))],
+        );
+        assert!(calculate(state.world(), effects).is_ok());
+    }
+}
+
+#[test]
+fn authoritative_equipment_with_missing_metadata_remains_an_inventory_failure() {
+    for missing_rules in [false, true] {
+        let mut state = online();
+        ready(&mut state);
+        let mut incomplete = item(13, 37, 0);
+        if missing_rules {
+            incomplete.details.equipment = None;
+        } else {
+            incomplete.details.bonuses = None;
+        }
+        testing::news(
+            &mut state,
+            [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+                incomplete,
+            ]))],
+        );
+        assert_eq!(state.world().movement_weight(), Ok(37));
+        assert_eq!(calculate(state.world(), effects), Err(Missing::Inventory));
+    }
+}
+
+#[test]
+fn original_strength_equipment_out_and_back_cannot_regrant_from_equal_endpoints() {
+    for strength in [-7, 7] {
+        let mut state = online();
+        ready(&mut state);
+        let original = item(13, 37, strength);
+        testing::news(
+            &mut state,
+            [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+                original.clone(),
+            ]))],
+        );
+        assert!(calculate(state.world(), effects).is_ok());
+        submit_equipment_move(&mut state, 13, 30);
+        assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
+        submit_equipment_move(&mut state, 30, 13);
+        assert_eq!(
+            state.world().inventory().items()[&InventorySlot(13)],
+            original
+        );
+        assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
+        assert_eq!(state.world().movement_weight(), Ok(37));
+        assert_eq!(state.world().accepted_speed_inputs(), None);
+        testing::news(
+            &mut state,
+            [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+                original,
+            ]))],
+        );
+        assert!(calculate(state.world(), effects).is_ok());
+    }
+}
+
+#[test]
+fn unversioned_partial_coverage_does_not_certify_affecting_equipment_inputs() {
+    let mut state = online();
+    ready(&mut state);
+    let original = item(24, 37, 7);
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            original.clone(),
+        ]))],
+    );
+    for (from, to) in [(24, 30), (30, 13), (13, 30), (30, 24)] {
+        submit_equipment_move(&mut state, from, to);
+    }
+    testing::news(
+        &mut state,
+        [
+            WorldEvent::Inventory(InventoryUpdate::Remove(InventorySlot(13))),
+            WorldEvent::Inventory(InventoryUpdate::Set(vec![original.clone()])),
+            WorldEvent::Inventory(InventoryUpdate::Remove(InventorySlot::CURSOR)),
+        ],
+    );
+    assert!(!state.world().inventory().predicted());
+    assert!(!state.world().inventory().stale());
+    assert!(state.world().inventory().equipment_stats_uncertain());
+    assert_eq!(state.world().movement_weight(), Ok(37));
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
+    assert_eq!(state.world().accepted_speed_inputs(), None);
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            original,
+        ]))],
+    );
+    assert!(calculate(state.world(), effects).is_ok());
+}
+
+#[test]
+fn projected_affecting_tail_keeps_its_history_through_partial_correction_and_drain() {
+    let mut state = online();
+    ready(&mut state);
+    let original = item(24, 37, -7);
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            original.clone(),
+        ]))],
+    );
+    let (first, first_update) = queue_equipment_move(&mut state, 24, 30);
+    let (second, second_update) = queue_equipment_move(&mut state, 30, 13);
+    let (third, _) = queue_equipment_move(&mut state, 13, 30);
+    let (fourth, _) = queue_equipment_move(&mut state, 30, 24);
+    let projected = state.world().inventory().clone();
+    assert_eq!(projected.items()[&InventorySlot(24)], original);
+    assert!(projected.equipment_stats_uncertain());
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
+    testing::news(
+        &mut state,
+        [
+            equipment_move_result(&first, Some(first_update), None),
+            equipment_move_result(&second, Some(second_update), None),
+        ],
+    );
+    assert!(state.world().inventory().equipment_stats_uncertain());
+    // The worker prefix is equipped, so this older empty slot record is a
+    // correction. The local overlay must drop; later queued requests drain.
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Remove(
+            InventorySlot(13),
+        ))],
+    );
+    assert!(state.world().inventory().stale());
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Inventory));
+    testing::news(
+        &mut state,
+        [
+            equipment_move_result(&third, None, Some("Revision changed".into())),
+            equipment_move_result(&fourth, None, Some("Predecessor refused".into())),
+        ],
+    );
+    assert!(!state.world().inventory_moves_pending());
+    assert!(state.world().inventory().equipment_stats_uncertain());
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            original,
+        ]))],
+    );
+    assert!(!state.world().inventory().equipment_stats_uncertain());
+    assert!(projected.equipment_stats_uncertain());
+    assert!(calculate(state.world(), effects).is_ok());
+    assert_eq!(state.world().accepted_speed_inputs(), None);
+}
+
+#[test]
+fn new_admission_and_partial_items_cannot_reuse_unrecorded_neutrality() {
+    let mut state = online();
+    ready(&mut state);
+    let original = item(24, 37, 7);
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            original,
+        ]))],
+    );
+    submit_equipment_move(&mut state, 24, 30);
+    submit_equipment_move(&mut state, 30, 13);
+    let old = state.world().inventory().clone();
+    testing::admit(&mut state, 2, testing::player(7));
+    assert!(!state.world().inventory().received());
+    assert!(!state.world().inventory().equipment_stats_uncertain());
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Inventory));
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Set(vec![item(
+            13, 37, 0,
+        )]))],
+    );
+    assert!(!state.world().inventory().received());
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Inventory));
+    assert!(old.equipment_stats_uncertain());
+}
+
 fn effects(spell: u32) -> Option<Vec<Effect>> {
     let (id, base, maximum, formula) = match spell {
         1 => (3, 10, 50, 102),

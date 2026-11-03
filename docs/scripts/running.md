@@ -33,7 +33,7 @@ Typing in the workbench belongs to the editor, not movement or chat. While a scr
 
 A parse error prevents a run from starting. Runtime failure retains its explanation and source line. A file error leaves the editor buffer intact. If Save reports an external change, save to a new path to preserve both versions, or explicitly reload the disk version.
 
-Inventory clicks use the ordinary item controller and current inventory revision. Each valid move sends immediately after the preceding local result is available; scripts need no fixed wait for earlier server replies. The displayed placement remains a prediction until server evidence resolves it. A correction can require a fresh inventory snapshot. An explicit `wait` step still pauses for the requested duration.
+Inventory clicks use the ordinary item controller and current inventory revision. Valid moves apply to the local projection and enqueue in order, with no wait between moves for worker or server replies. Scribing still requires preceding moves to be submitted locally. A local rejection or intervening inventory update discards speculative descendants; queued results drain before another selection can start. The displayed placement remains a prediction until server evidence resolves it. A correction can require a fresh inventory snapshot. An explicit `wait` step still pauses for the requested duration.
 
 ## Privacy
 

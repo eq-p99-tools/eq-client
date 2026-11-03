@@ -22,6 +22,8 @@ pub(super) fn state(
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
+    let inventory = online.world().inventory();
+    let prediction_inputs = prediction_inputs(inventory);
     let slots: Vec<u32> = online
         .world()
         .buffs()
@@ -34,17 +36,7 @@ pub(super) fn state(
         .player()
         .and_then(|player| online.world().posture(player.spawn_id));
     let items = items(online);
-    let book: Vec<(usize, u32)> = online
-        .world()
-        .spell_book()
-        .map(|book| {
-            book.slots()
-                .iter()
-                .enumerate()
-                .filter_map(|(slot, spell)| spell.map(|spell| (slot, spell)))
-                .collect()
-        })
-        .unwrap_or_default();
+    let book = book(online);
     let pet = pet(online);
     let gems = online.world().gems();
     // Milliseconds until each memorized gem can be cast again.
@@ -87,6 +79,14 @@ pub(super) fn state(
         ?items,
         inventory_predicted = online.world().inventory().predicted(),
         inventory_stale = online.world().inventory().stale(),
+        inventory_equipment_uncertain = online.world().inventory().equipment_stats_uncertain(),
+        inventory_prediction_inputs = ?prediction_inputs,
+        inventory_origins = ?online.world().inventory().prediction_origins()
+            .map(|(slot, item)| (slot.0, item.map(|item| item.details.id)))
+            .collect::<Vec<_>>(),
+        movement_weight = ?online.world().movement_weight(),
+        equipment_inputs = ?equipment_inputs(online, inventory),
+        movement_inputs = ?spells.as_deref().map(|spells| crate::speed::inputs(online.world(), spells)),
         cursor_queued = online.world().inventory().queued().count(),
         exchange = ?online.world().exchange(),
         abilities = ?online.world().abilities(),
@@ -121,6 +121,60 @@ pub(super) fn state(
         raid_invitation = ?online.world().raid_invitation(),
         "Script report"
     );
+}
+
+/// Attached origin and current metadata for each unconfirmed inventory slot.
+fn prediction_inputs(inventory: &eq_client_core::inventory::Inventory) -> impl std::fmt::Debug {
+    let item_inputs = |item: &eq_client_core::inventory::InventoryItem| {
+        (
+            item.details.id,
+            item.details.weight_tenths,
+            item.details.equipment,
+            item.details.bonuses,
+        )
+    };
+    inventory
+        .prediction_origins()
+        .map(|(slot, origin)| {
+            (
+                slot.0,
+                origin.map(item_inputs),
+                inventory.items().get(&slot).map(item_inputs),
+            )
+        })
+        .collect::<Vec<_>>()
+}
+
+/// The same typed equipment contribution result the movement calculation uses.
+fn equipment_inputs(
+    online: &crate::online::OnlineState,
+    inventory: &eq_client_core::inventory::Inventory,
+) -> Option<impl std::fmt::Debug> {
+    online.world().player().and_then(|player| {
+        player.class.map(|class| {
+            eq_client_core::resources::eqemu_equipped_modifiers(
+                inventory,
+                class,
+                player.race,
+                u16::from(player.level),
+            )
+        })
+    })
+}
+
+/// The occupied spell-book slots and their spell identifiers.
+fn book(online: &crate::online::OnlineState) -> Vec<(usize, u32)> {
+    online
+        .world()
+        .spell_book()
+        .map(|book| {
+            book.slots()
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, spell)| spell.map(|spell| (slot, spell)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// What the player carries and can carry, as the speed inputs count them.

@@ -132,7 +132,12 @@ fn calculate(
         player.race,
         u16::from(player.level),
     )
-    .map_err(|_| Missing::Inventory)?;
+    .map_err(|reason| match reason {
+        eq_client_core::resources::EquipmentUnavailable::UnconfirmedInventory => {
+            Missing::Prediction
+        }
+        _ => Missing::Inventory,
+    })?;
     let mut modifiers = food(inventory, u16::from(player.level))?;
     for (_, item) in equipped {
         modifiers.strength += i64::from(item.bonuses.strength);
@@ -205,7 +210,11 @@ fn calculate(
     })
 }
 
-fn inputs(world: &ClientWorld, spells: &crate::spellbook::SpellNames) -> SpeedInputState {
+/// The same typed readiness result for movement reporting and script diagnostics.
+pub(crate) fn inputs(
+    world: &ClientWorld,
+    spells: &crate::spellbook::SpellNames,
+) -> SpeedInputState {
     match calculate(world, |id| spells.mechanics(id).map(|m| m.effects.to_vec())) {
         Ok(inputs) => SpeedInputState::Ready(inputs),
         Err(reason) => SpeedInputState::Unavailable(reason),
@@ -227,6 +236,13 @@ fn readiness_reason(world: &ClientWorld, reason: Missing) -> &'static str {
             "Movement paused: waiting for carried coin information."
         }
         Missing::Coins => "Movement paused: waiting for cursor coin information.",
+        // An affecting equipment history with no live prediction left to
+        // confirm ends only with a full inventory snapshot or a settlement.
+        Missing::Prediction
+            if world.inventory().equipment_stats_uncertain() && !world.inventory().predicted() =>
+        {
+            "Movement paused: equipment changes need a full inventory refresh."
+        }
         Missing::Prediction => "Movement paused: waiting for item changes to be confirmed.",
         Missing::Effects if world.buffs().slots().is_none() => {
             "Movement paused: waiting for buff information."

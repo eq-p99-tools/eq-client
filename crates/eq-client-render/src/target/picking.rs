@@ -414,6 +414,7 @@ mod tests {
         let held = crate::create_render_primitives(
             vec![primitive],
             &[],
+            &[],
             &mut world.resource_mut::<Assets<Mesh>>(),
             &mut materials,
             true,

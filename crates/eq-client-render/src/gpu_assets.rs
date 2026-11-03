@@ -4,8 +4,11 @@ use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
-use eq_client_assets::{BlendOpacity, MaterialMode, TerrainMaterial, ZonePrimitive};
+use eq_client_assets::{
+    BlendOpacity, MaterialMode, ObjectMaterial, TerrainMaterial, ZonePrimitive,
+};
 use image::{RgbaImage, imageops::FilterType};
+use std::collections::HashMap;
 pub(super) struct TextureImages {
     opaque: Handle<Image>,
     masked: Handle<Image>,
@@ -205,8 +208,11 @@ pub(super) fn generate_mip_chain(width: u32, height: u32, pixels: Vec<u8>) -> (V
 /// Builds a model's or zone's draw calls. `usage` says where the meshes' data
 /// lives: zones draw only, while models hung under a spawn keep theirs in
 /// the main world too, where clicks are picked against them.
+/// `authored` follows the input primitives before empty geometry is filtered.
+/// Callers without object material metadata keep the existing two-sided draw.
 pub(super) fn create_render_primitives(
     primitives: Vec<ZonePrimitive>,
+    authored: &[ObjectMaterial],
     texture_images: &[TextureImages],
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -215,15 +221,48 @@ pub(super) fn create_render_primitives(
 ) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
     primitives
         .into_iter()
-        .filter(drawn)
-        .map(|primitive| {
+        .enumerate()
+        .filter(|(_, primitive)| drawn(primitive))
+        .map(|(index, primitive)| {
             let texture = primitive
                 .texture
                 .and_then(|index| texture_images.get(index));
             let material = create_material(primitive.material_mode, texture, materials, unlit);
+            if let Some(source) = authored.get(index) {
+                let mut value = materials.get_mut(&material).expect("just added material");
+                value.double_sided = source.double_sided;
+                value.cull_mode = (!source.double_sided).then_some(Face::Back);
+            }
             (meshes.add(create_mesh(primitive, usage)), material)
         })
         .collect()
+}
+
+/// A reflected placement reverses raster winding. Unbatched objects keep their
+/// transform for transparency sorting, so reverse their cull face in a shared
+/// variant rather than changing the source material or duplicating geometry.
+pub(super) fn mirrored_material(
+    handle: &Handle<StandardMaterial>,
+    materials: &mut Assets<StandardMaterial>,
+    cache: &mut HashMap<AssetId<StandardMaterial>, Handle<StandardMaterial>>,
+) -> Handle<StandardMaterial> {
+    let Some(source) = materials.get(handle) else {
+        return handle.clone();
+    };
+    let Some(face) = source.cull_mode else {
+        return handle.clone();
+    };
+    if let Some(mirrored) = cache.get(&handle.id()) {
+        return mirrored.clone();
+    }
+    let mut mirrored = source.clone();
+    mirrored.cull_mode = Some(match face {
+        Face::Back => Face::Front,
+        Face::Front => Face::Back,
+    });
+    let mirrored = materials.add(mirrored);
+    cache.insert(handle.id(), mirrored.clone());
+    mirrored
 }
 
 /// A primitive's geometry as a Bevy mesh; its texture and material are the

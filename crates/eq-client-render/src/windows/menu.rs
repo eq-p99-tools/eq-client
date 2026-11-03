@@ -344,6 +344,240 @@ mod tests {
         assert!(!available(WindowId::PetInfo, true, &shown));
     }
 
+    /// Minimal laid-out controls using the real driver, release click rule,
+    /// menu handler, shared window toggle and presentation in production order.
+    fn scripted_menu() -> (App, Entity, Entity) {
+        use crate::script::{ClickTarget, Script, Step};
+        let mut app = crate::testing::app();
+        app.insert_resource(Time::<Real>::new(std::time::Instant::now()))
+            .init_resource::<crate::windows::Moves>()
+            .init_resource::<crate::script::RunStatus>()
+            .init_resource::<crate::script::RunControl>()
+            .add_message::<bevy::input::keyboard::KeyboardInput>()
+            .add_message::<bevy::window::WindowFocused>()
+            .add_message::<AppExit>()
+            .insert_resource(Script::new(vec![Step::Click(ClickTarget::Toggle(
+                "inventory",
+            ))]))
+            .add_systems(PreUpdate, crate::script::drive.before(crate::clicks::track))
+            .add_systems(
+                Update,
+                (
+                    super::super::stack::toggle,
+                    input,
+                    present,
+                    crate::script::observe,
+                )
+                    .chain(),
+            );
+        {
+            let mut state = app.world_mut().resource_mut::<crate::online::OnlineState>();
+            state.enabled = true;
+            crate::online::testing::admit(&mut state, 1, crate::online::testing::player(7));
+        }
+        let geometry = |at: Vec2, side: f32, stack| {
+            (
+                InheritedVisibility::VISIBLE,
+                ComputedNode {
+                    size: Vec2::splat(side),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(at.x, at.y),
+                bevy::ui::ComputedStackIndex(stack),
+            )
+        };
+        let launcher = app
+            .world_mut()
+            .spawn((
+                Button,
+                Launcher,
+                GlobalZIndex(0),
+                crate::skinned::SkinId {
+                    window: WindowId::Selector,
+                    id: "EQButton".into(),
+                },
+                geometry(Vec2::new(1200.0, 680.0), 40.0, 1),
+            ))
+            .id();
+        let panel = app
+            .world_mut()
+            .spawn((
+                Panel,
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+                geometry(Vec2::new(400.0, 300.0), 200.0, 10),
+            ))
+            .id();
+        app.world_mut().spawn((
+            Button,
+            Entry(WindowId::Inventory),
+            super::super::SelectorButton(WindowId::Inventory),
+            ChildOf(panel),
+            geometry(Vec2::new(400.0, 300.0), 40.0, 11),
+        ));
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(bevy::math::DVec2::new(100.0, 100.0)));
+        (app, window, launcher)
+    }
+
+    fn menu_frame(app: &mut App, ms: u64) {
+        // The input plugin clears edge flags before each frame in the real app.
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        let mut time = app.world_mut().resource_mut::<Time<Real>>();
+        let startup = time.startup();
+        time.update_with_instant(startup + std::time::Duration::from_millis(ms));
+        app.update();
+    }
+
+    fn hand_off_pointer(app: &mut App, window: Entity) {
+        menu_frame(app, 0);
+        // A focused Window flag alone is not an attended focus report.
+        // Let the actual driver observe the matching backend event next frame.
+        assert_eq!(
+            app.world().resource::<crate::script::RunStatus>().phase(),
+            crate::script::Phase::WaitingForFocus
+        );
+        assert!(
+            app.world_mut()
+                .write_message(bevy::window::WindowFocused {
+                    window,
+                    focused: true,
+                })
+                .is_some()
+        );
+        menu_frame(app, 1);
+        menu_frame(app, 42_000);
+        assert_eq!(
+            app.world().resource::<crate::script::RunStatus>().phase(),
+            crate::script::Phase::WaitingForPointer
+        );
+        assert!(!app.world().resource::<Menu>().open);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(None);
+        for ms in [42_001, 42_251, 42_252] {
+            menu_frame(app, ms);
+        }
+    }
+
+    #[test]
+    fn a_scripted_menu_entry_survives_pointer_wait_and_observes_release_before_delivery() {
+        let (mut app, window, _) = scripted_menu();
+        hand_off_pointer(&mut app, window);
+        // The real handler opens it in Update, after the driver's PreUpdate
+        // release. The old queued timestamp failed the run earlier that frame
+        // even though this menu is now visible.
+        assert!(app.world().resource::<Menu>().open);
+        assert!(
+            app.world()
+                .resource::<crate::script::RunStatus>()
+                .phase()
+                .active()
+        );
+        assert!(
+            !app.world()
+                .resource::<Shown>()
+                .displayed(WindowId::Inventory)
+        );
+        for ms in [42_253, 42_254, 42_504, 42_505] {
+            menu_frame(&mut app, ms);
+        }
+        // Visibility alone does not establish the requested action: the
+        // actual shared toggle must receive the entry's own release.
+        assert!(
+            app.world()
+                .resource::<Shown>()
+                .displayed(WindowId::Inventory)
+        );
+        assert!(!app.world().resource::<Menu>().open);
+        assert_ne!(
+            app.world().resource::<crate::script::RunStatus>().phase(),
+            crate::script::Phase::Failed
+        );
+    }
+
+    #[test]
+    fn an_unhandled_menu_opener_still_fails_one_second_after_its_release() {
+        let (mut app, window, launcher) = scripted_menu();
+        // It remains a reachable matching button, but no menu handler owns
+        // it. Releasing input must not count as opening the menu.
+        app.world_mut().entity_mut(launcher).remove::<Launcher>();
+        hand_off_pointer(&mut app, window);
+        for ms in [42_253, 43_251] {
+            menu_frame(&mut app, ms);
+            assert!(
+                app.world()
+                    .resource::<crate::script::RunStatus>()
+                    .phase()
+                    .active()
+            );
+            assert!(!app.world().resource::<Menu>().open);
+        }
+        menu_frame(&mut app, 43_252);
+        let status = app.world().resource::<crate::script::RunStatus>();
+        assert_eq!(status.phase(), crate::script::Phase::Failed);
+        assert_eq!(
+            status.events().back().unwrap().message,
+            "the EQ menu did not open for the click"
+        );
+        assert!(
+            !app.world()
+                .resource::<Shown>()
+                .displayed(WindowId::Inventory)
+        );
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+    }
+
+    #[test]
+    fn a_covered_menu_opener_still_refuses_the_scripted_click() {
+        let (mut app, window, _) = scripted_menu();
+        app.world_mut().spawn((
+            Node::default(),
+            bevy::ui::FocusPolicy::Block,
+            InheritedVisibility::VISIBLE,
+            ComputedNode {
+                size: Vec2::splat(60.0),
+                ..default()
+            },
+            UiGlobalTransform::from_xy(1200.0, 680.0),
+            bevy::ui::ComputedStackIndex(20),
+        ));
+        hand_off_pointer(&mut app, window);
+        let status = app.world().resource::<crate::script::RunStatus>();
+        assert_eq!(status.phase(), crate::script::Phase::Failed);
+        assert_eq!(
+            status.events().back().unwrap().message,
+            "the click target is covered"
+        );
+        assert!(!app.world().resource::<Menu>().open);
+        assert!(
+            !app.world()
+                .resource::<Shown>()
+                .displayed(WindowId::Inventory)
+        );
+    }
+
     #[test]
     fn menu_opens_scripts_through_the_shared_toggle_and_dismisses() {
         let mut app = crate::testing::app();
