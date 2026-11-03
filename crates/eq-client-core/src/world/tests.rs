@@ -4351,6 +4351,71 @@ fn list_revisions_track_their_own_inputs_and_survive_restart() {
 }
 
 #[test]
+fn skills_list_revision_follows_language_and_level_events_without_unrelated_resets() {
+    let mut world = admitted();
+    world.player.as_mut().unwrap().languages = Some(vec![0; 32]);
+    let unrelated = (world.training_revision(), world.merchant_revision());
+    let before = world.skills_revision();
+    let changes = game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 100,
+            value: 50,
+        },
+    );
+    assert_eq!(world.player().unwrap().languages.as_ref().unwrap()[0], 50);
+    assert!(world.skills_revision() > before);
+    assert_eq!(changes.notices, Vec::new());
+    let language = world.skills_revision();
+    for (skill_id, value) in [(100, 50), (100, 256), (132, 20)] {
+        game(&mut world, WorldEvent::Skill { skill_id, value });
+        assert_eq!(world.skills_revision(), language);
+    }
+    let current = world.player().unwrap().level.saturating_add(1);
+    game(
+        &mut world,
+        WorldEvent::Level {
+            current,
+            previous: current - 1,
+            experience: 1,
+        },
+    );
+    assert!(world.skills_revision() > language);
+    let level = world.skills_revision();
+    game(
+        &mut world,
+        WorldEvent::Level {
+            current,
+            previous: current,
+            experience: 2,
+        },
+    );
+    assert_eq!(world.skills_revision(), level);
+    assert_eq!(
+        (world.training_revision(), world.merchant_revision()),
+        unrelated
+    );
+    connection(&mut world, false, false);
+    let disconnected = world.skills_revision();
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 101,
+            value: 50,
+        },
+    );
+    game(
+        &mut world,
+        WorldEvent::Level {
+            current: current + 1,
+            previous: current,
+            experience: 3,
+        },
+    );
+    assert_eq!(world.skills_revision(), disconnected);
+}
+
+#[test]
 fn merchant_revisions_include_stock_removal_and_local_closure() {
     use crate::merchant::{MerchantItem, MerchantUpdate};
     let mut world = admitted();

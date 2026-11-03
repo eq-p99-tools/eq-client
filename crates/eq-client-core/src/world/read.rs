@@ -73,7 +73,7 @@ impl ClientWorld {
             .map_or_else(|_| self.carried_weight(), |tenths| tenths as f32 / 10.0)
     }
 
-    /// Changes when the player's skills or their admission are replaced.
+    /// Changes when the player's skills, languages, level or admission change.
     /// Unrelated movement, chat and resource updates leave it unchanged.
     #[must_use]
     pub const fn skills_revision(&self) -> u64 {

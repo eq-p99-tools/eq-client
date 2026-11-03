@@ -13,6 +13,7 @@ pub mod regions;
 pub mod scale;
 pub mod sidl;
 mod skeleton;
+pub mod skills;
 pub mod sounds;
 pub mod spells;
 pub mod strings;

@@ -340,6 +340,13 @@ impl InstalledClient {
         }
     }
 
+    /// This generation's constructor-derived skill data and Skills-window
+    /// rules; names and rank words still come from the installation.
+    #[must_use]
+    pub fn skill_rules(self) -> &'static crate::skills::SkillRules {
+        crate::skills::for_client(self)
+    }
+
     /// The top-level files only this client's installation has, by name in
     /// lower case, and the extension of files only it has: the Mac-era
     /// client's own program files; Titanium's spell file and its newer

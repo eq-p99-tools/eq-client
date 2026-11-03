@@ -1,5 +1,24 @@
 //! News about the player character: level, skills, hit points and health.
 use super::{Changes, ClientWorld, ReportedHp, vitals};
+use eq_network_game::world::LANGUAGE_SKILLS;
+
+/// The current value in an existing skill or language slot.
+fn skill_value(player: &crate::PlayerState, skill_id: u32) -> Option<u32> {
+    if let Some(language) = skill_id.checked_sub(LANGUAGE_SKILLS) {
+        player
+            .languages
+            .as_ref()?
+            .get(usize::try_from(language).ok()?)
+            .copied()
+            .map(u32::from)
+    } else {
+        player
+            .skills
+            .as_ref()?
+            .get(usize::try_from(skill_id).ok()?)
+            .copied()
+    }
+}
 
 impl ClientWorld {
     /// The player's level and experience; what items give can depend on
@@ -7,6 +26,9 @@ impl ClientWorld {
     pub(super) fn level_news(&mut self, current: u8, experience: u32, changes: &mut Changes) {
         match self.player.as_mut() {
             Some(player) if self.connected => {
+                if player.level != current {
+                    self.skills_revision = self.skills_revision.wrapping_add(1);
+                }
                 player.level = current;
                 self.vitals.experience = Some(experience);
                 self.refresh_item_hp();
@@ -20,21 +42,13 @@ impl ClientWorld {
     pub(super) fn skill_news(&mut self, skill_id: u32, value: u32, changes: &mut Changes) {
         match self.player.as_mut() {
             Some(player) if self.connected => {
-                let before = player
-                    .skills
-                    .as_ref()
-                    .and_then(|skills| skills.get(usize::try_from(skill_id).ok()?))
-                    .copied();
+                let before = skill_value(player, skill_id);
                 player.apply_skill(skill_id, value);
-                let after = player
-                    .skills
-                    .as_ref()
-                    .and_then(|skills| skills.get(usize::try_from(skill_id).ok()?))
-                    .copied();
+                let after = skill_value(player, skill_id);
                 if before != after {
                     self.skills_revision = self.skills_revision.wrapping_add(1);
                 }
-                if before.is_some_and(|before| value > before) {
+                if skill_id < LANGUAGE_SKILLS && before.is_some_and(|before| value > before) {
                     changes.notices.push(super::Notice::SkillUp {
                         skill: skill_id,
                         value,
