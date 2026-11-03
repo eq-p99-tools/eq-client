@@ -130,14 +130,9 @@ impl SessionWorker {
     /// account too long for the server type.
     pub fn start(login: Login, options: &SessionOptions) -> Result<eq_client_render::Session> {
         let protocol = login.protocol;
-        let spell_provider = eq_client_core::spell_tables::Binding::new(
-            if protocol == ServerProtocol::Project1999 {
-                eq_client_core::spell_tables::Policy::Project1999
-            } else {
-                eq_client_core::spell_tables::Policy::Installed
-            },
-        );
         let client = client(login, options)?;
+        let spell_provider =
+            eq_client_core::spell_tables::Binding::new(client.spell_table_policy());
         let install = options.install.clone();
         let settings = options.settings.clone();
         let cancel = CancellationToken::default();
@@ -267,15 +262,19 @@ impl SpellBridge {
             ClientEvent::Status(status) if status.state == ConnectionState::Connecting => {
                 // Events.reset creates this ID immediately before the actual
                 // login attempt. World/zone handoffs do not call that reset.
-                let run_id = u64::from_str_radix(&status.session_id, 16)?;
                 self.attempt = self
                     .attempt
                     .checked_add(1)
                     .ok_or_else(|| anyhow::anyhow!("spell provider attempt sequence exhausted"))?;
-                self.run_id = Some(run_id);
-                Fact::RunStarted {
-                    run_id,
-                    attempt: self.attempt,
+                self.run_id = status.run_id;
+                match status.run_id {
+                    Some(run_id) => Fact::RunStarted {
+                        run_id,
+                        attempt: self.attempt,
+                    },
+                    None => Fact::RunUnavailable {
+                        attempt: self.attempt,
+                    },
                 }
             }
             ClientEvent::Progress(ConnectionStage::ConnectingZone) => {
@@ -468,18 +467,17 @@ mod tests {
         use eq_network::client::SessionStatus;
         let binding = Binding::new(Policy::Project1999);
         let mut bridge = SpellBridge::new(binding);
+        let mut status =
+            SessionStatus::new(ConnectionState::Connecting, "original display").with_run_id(7);
+        status.session_id = "a display label, not hexadecimal".into();
         let first = bridge
-            .capture(&ClientEvent::Status(SessionStatus::new(
-                ConnectionState::Connecting,
-                "0000000000000007",
-            )))
+            .capture(&ClientEvent::Status(status))
             .unwrap()
             .unwrap();
         let second = bridge
-            .capture(&ClientEvent::Status(SessionStatus::new(
-                ConnectionState::Connecting,
-                "0000000000000008",
-            )))
+            .capture(&ClientEvent::Status(
+                SessionStatus::new(ConnectionState::Connecting, "another display").with_run_id(8),
+            ))
             .unwrap()
             .unwrap();
         assert_eq!(first.binding(), binding);
@@ -532,6 +530,45 @@ mod tests {
         drop(receiver);
         enqueue(&sender, &cancel, WorldUpdate::SpellTable(fact)).unwrap();
         assert!(cancel.is_cancelled());
+    }
+
+    #[test]
+    fn spell_bridge_unknown_identity_does_not_abort_or_reuse_an_old_run() {
+        use eq_client_core::spell_tables::{Binding, Fact, Policy};
+        use eq_network::client::{ConnectionStage, SessionStatus};
+        let mut bridge = SpellBridge::new(Binding::new(Policy::Project1999));
+        bridge
+            .capture(&ClientEvent::Status(
+                SessionStatus::new(ConnectionState::Connecting, "known").with_run_id(7),
+            ))
+            .unwrap();
+        let legacy = bridge
+            .capture(&ClientEvent::Status(SessionStatus::new(
+                ConnectionState::Connecting,
+                "legacy non-hex label",
+            )))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(legacy.fact(), Fact::RunUnavailable { attempt: 2 }));
+        assert!(
+            bridge
+                .capture(&ClientEvent::Progress(ConnectionStage::ConnectingZone))
+                .unwrap()
+                .is_none()
+        );
+        let known = bridge
+            .capture(&ClientEvent::Status(
+                SessionStatus::new(ConnectionState::Connecting, "another label").with_run_id(8),
+            ))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            known.fact(),
+            Fact::RunStarted {
+                run_id: 8,
+                attempt: 3
+            }
+        ));
     }
 
     #[test]

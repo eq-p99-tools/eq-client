@@ -346,3 +346,33 @@ fn replay_before_any_registration_is_unavailable_even_if_it_is_empty() {
         &Readiness::Unavailable(Failure::RegistrationMissing)
     );
 }
+
+#[test]
+fn unknown_run_identity_withdraws_ready_mechanics_without_clearing_snapshots() {
+    let mut provider = provider();
+    register(&mut provider, &[1]);
+    pending(&mut provider);
+    replay(&mut provider, 11, &[]);
+    let binding = provider.binding;
+    let missing = binding.envelope(Fact::RunUnavailable { attempt: 2 });
+    assert!(provider.receive(&missing));
+    assert!(!provider.receive(&missing));
+    assert_eq!(provider.run_id, None);
+    assert_eq!(provider.snapshots.len(), 1);
+    assert_eq!(provider.get(1), None);
+    assert_eq!(
+        provider.readiness(),
+        &Readiness::Unavailable(Failure::RunIdentity)
+    );
+    fact(
+        &mut provider,
+        Fact::RunStarted {
+            run_id: 8,
+            attempt: 3,
+        },
+    );
+    assert_eq!(
+        provider.readiness(),
+        &Readiness::Unavailable(Failure::RunIdentity)
+    );
+}

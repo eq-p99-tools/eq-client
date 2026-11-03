@@ -10,6 +10,9 @@ use eq_client_core::{
 };
 use std::sync::{LazyLock, Mutex, mpsc::Receiver};
 
+const SPELL_DATA_UNAVAILABLE_NOTICE: &str =
+    "Spell data unavailable; spell-dependent actions are paused.";
+
 #[derive(Resource)]
 pub(super) struct Updates(pub Mutex<Option<Receiver<WorldUpdate>>>);
 
@@ -469,8 +472,12 @@ pub(super) fn receive(
     // is retained verbatim, including for old queued Connecting notifications.
     .filter(|update| {
         if let WorldUpdate::SpellTable(fact) = update {
-            if let Some(spells) = spell_names.as_deref_mut() {
-                spells.receive(fact);
+            if spell_names
+                .as_deref_mut()
+                .is_some_and(|spells| spells.receive(fact))
+            {
+                chat.history
+                    .push(super::chat::system_line(SPELL_DATA_UNAVAILABLE_NOTICE));
             }
             false
         } else {
@@ -992,6 +999,8 @@ mod tests {
     use super::*;
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
     use eq_client_core::PlayerState;
+
+    mod spell_notices;
 
     #[test]
     fn a_camp_to_the_desktop_ends_the_program_once_camped_and_a_plain_one_does_not() {
