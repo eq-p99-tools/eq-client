@@ -211,6 +211,10 @@ pub struct ClientWorld {
     /// its rules last said: 0 until they say. The Titanium program keeps it
     /// from its start, whatever zone or character follows (0x4a4cd5).
     pvp_rule: u32,
+    /// The received world setting choosing language zero's installed name.
+    /// Like the world's other rules it survives zone/character admission,
+    /// and a new session's restart clears it to unknown.
+    language_zero_selector: Option<crate::rules::LanguageZeroSelector>,
     /// The zone header's gravity, once this admission's header came.
     zone_gravity: Option<f32>,
     /// The zone header's top (`max_z`) and lowest height (its underworld),
@@ -625,9 +629,15 @@ impl ClientWorld {
                 self.created(name, *outcome, news);
             }
 
-            // The world's player-versus-player ruleset decides names' colours.
+            // The world's own rules stay with it across admissions.
             WorldEvent::Rules(rules) => {
                 self.pvp_rule = rules.pvp;
+                if let Some(selector) = rules.language_zero_selector
+                    && self.language_zero_selector != Some(selector)
+                {
+                    self.language_zero_selector = Some(selector);
+                    self.skills_revision = self.skills_revision.wrapping_add(1);
+                }
                 if let Some(enabled) = rules.name_generator { self.name_generator = Some(enabled); }
             }
             WorldEvent::NameSuggestion { selection_id, request_id, name } => {

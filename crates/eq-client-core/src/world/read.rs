@@ -247,6 +247,14 @@ impl ClientWorld {
         self.pvp_rule
     }
 
+    /// The world's received language-zero name selector. None means no
+    /// selector has been established in this session; received zero stays
+    /// Some, separately from `PvP`. A new session's restart clears this fact.
+    #[must_use]
+    pub const fn language_zero_selector(&self) -> Option<crate::rules::LanguageZeroSelector> {
+        self.language_zero_selector
+    }
+
     /// The zone header's minimum clip, the nearest its far plane comes;
     /// None until this admission's header comes.
     #[must_use]

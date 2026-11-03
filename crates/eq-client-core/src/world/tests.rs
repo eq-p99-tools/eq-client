@@ -4541,3 +4541,94 @@ fn the_worlds_pvp_ruleset_stays_through_zones_and_characters() {
     game(&mut world, entered(1));
     assert_eq!(world.pvp_rule(), 4);
 }
+
+fn titanium_language_rules(raw: u32) -> WorldEvent {
+    let mut body = [0_u8; 264];
+    body[..4].copy_from_slice(&raw.to_le_bytes());
+    // The nearby PvP/no-drop flags must not choose the language name.
+    body[4] = u8::from(raw == 0);
+    body[8] = u8::from(raw == 0);
+    WorldEvent::Rules(crate::rules::titanium_rules(&body).unwrap())
+}
+
+#[test]
+fn skills_language_selector_keeps_received_zero_raw_changes_and_absence_distinct() {
+    use crate::rules::{LanguageZeroSelector, WorldRules};
+    let mut world = ClientWorld::default();
+    assert_eq!(world.language_zero_selector(), None);
+    let unrelated = (world.training_revision(), world.merchant_revision());
+    for raw in [0_u32, 1, 0x100, 0x8000_0000, u32::MAX, 0] {
+        let before = world.skills_revision();
+        game(&mut world, titanium_language_rules(raw));
+        assert_eq!(
+            world.language_zero_selector(),
+            Some(LanguageZeroSelector(raw))
+        );
+        assert_ne!(world.skills_revision(), before);
+        assert_eq!(world.pvp_rule(), u32::from(raw == 0));
+        assert_eq!(
+            (world.training_revision(), world.merchant_revision()),
+            unrelated
+        );
+
+        let received = world.skills_revision();
+        game(&mut world, titanium_language_rules(raw));
+        assert_eq!(world.skills_revision(), received);
+        // An unrelated rules copy has no selector and cannot erase a
+        // received fact or silently substitute its PvP value.
+        game(
+            &mut world,
+            WorldEvent::Rules(WorldRules {
+                pvp: 4,
+                ..WorldRules::default()
+            }),
+        );
+        assert_eq!(
+            world.language_zero_selector(),
+            Some(LanguageZeroSelector(raw))
+        );
+        assert_eq!(world.skills_revision(), received);
+    }
+}
+
+#[test]
+fn skills_language_selector_follows_the_world_rules_lifetime() {
+    use crate::rules::LanguageZeroSelector;
+    let mut world = ClientWorld::default();
+    world.carry_as(crate::GameDialect::Titanium);
+    game(&mut world, titanium_language_rules(0x8000_0000));
+    let received = Some(LanguageZeroSelector(0x8000_0000));
+    game(&mut world, entered(1));
+    assert_eq!(world.language_zero_selector(), received);
+    connection(&mut world, false, false);
+    assert_eq!(world.language_zero_selector(), received);
+    game(&mut world, entered(2));
+    assert_eq!(world.language_zero_selector(), received);
+    game(&mut world, WorldEvent::Camp(CampStatus::Camped));
+    assert_eq!(world.language_zero_selector(), received);
+    game(&mut world, entered(3));
+    assert_eq!(world.language_zero_selector(), received);
+
+    let before_restart = world.skills_revision();
+    world.restart();
+    assert_eq!(world.language_zero_selector(), None);
+    assert_ne!(world.skills_revision(), before_restart);
+    game(&mut world, entered(4));
+    assert_eq!(world.language_zero_selector(), None);
+    // Neither an EQMac world copy nor its zone copy supplies the missing
+    // mapping, even when their first words are nonzero.
+    for length in [24, 244] {
+        let mut body = vec![0; length];
+        body[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        game(
+            &mut world,
+            WorldEvent::Rules(crate::rules::eqmac_rules(&body).unwrap()),
+        );
+        assert_eq!(world.language_zero_selector(), None);
+    }
+    game(&mut world, titanium_language_rules(0));
+    assert_eq!(
+        world.language_zero_selector(),
+        Some(LanguageZeroSelector(0))
+    );
+}
